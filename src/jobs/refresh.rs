@@ -10,7 +10,10 @@ use std::time::Duration;
 use anyhow::Result;
 
 use crate::{
-    db::{repo, to_rfc3339},
+    db::{
+        repo::{self, job},
+        to_rfc3339,
+    },
     domain::{MediaItem, MediaKind},
     service::{movie, series},
     state::AppState,
@@ -115,6 +118,14 @@ pub async fn run(state: AppState) {
         "refresh scheduler started"
     );
 
+    // A run is only ever closed by the task that opened it, so a process killed
+    // mid-sweep leaves one behind. Close those before opening any more.
+    match job::fail_orphaned(&state.db).await {
+        Ok(0) => {}
+        Ok(closed) => tracing::warn!(closed, "closed job runs left open by a previous stop"),
+        Err(e) => tracing::warn!(error = %e, "could not close orphaned job runs"),
+    }
+
     // Let the server finish starting before the first sweep.
     tokio::time::sleep(Duration::from_secs(30)).await;
 
@@ -124,9 +135,7 @@ pub async fn run(state: AppState) {
     loop {
         ticker.tick().await;
 
-        if let Err(e) = sweep(&state, cfg.batch_size as i64).await {
-            tracing::error!(error = ?e, "refresh sweep failed");
-        }
+        run_sweep(&state, cfg.batch_size as i64).await;
 
         // Expired sessions accumulate otherwise; this is as good a moment as any.
         if let Err(e) = repo::user::purge_expired_sessions(&state.db).await {
@@ -137,14 +146,45 @@ pub async fn run(state: AppState) {
         state.limiter.prune();
 
         prune_audit(&state).await;
+        prune_jobs(&state).await;
     }
 }
 
-async fn sweep(state: &AppState, batch: i64) -> Result<()> {
+/// Run one sweep, recording it as a job so an operator can see it happened.
+async fn run_sweep(state: &AppState, batch: i64) {
+    let record = match job::start(&state.db, job::kinds::REFRESH_SWEEP, None).await {
+        Ok(id) => Some(id),
+        Err(e) => {
+            // Losing the record must not stop the work.
+            tracing::warn!(error = %e, "could not open a job run");
+            None
+        }
+    };
+
+    let outcome = sweep(state, batch).await;
+
+    let Some(record) = record else { return };
+
+    let closed = match &outcome {
+        Ok(summary) => job::finish(&state.db, &record, Some(summary), None).await,
+        Err(e) => job::finish(&state.db, &record, None, Some(&e.to_string())).await,
+    };
+
+    if let Err(e) = closed {
+        tracing::warn!(error = %e, "could not close the job run");
+    }
+
+    if let Err(e) = outcome {
+        tracing::error!(error = ?e, "refresh sweep failed");
+    }
+}
+
+/// Refresh what is due, returning a one-line summary of what happened.
+async fn sweep(state: &AppState, batch: i64) -> Result<String> {
     let due = repo::item::due_for_refresh(&state.db, batch).await?;
 
     if due.is_empty() {
-        return Ok(());
+        return Ok("nothing was due".to_string());
     }
 
     tracing::info!(count = due.len(), "refreshing entries");
@@ -174,7 +214,23 @@ async fn sweep(state: &AppState, batch: i64) -> Result<()> {
     }
 
     tracing::info!(succeeded, failed, "refresh sweep finished");
-    Ok(())
+    Ok(format!("{succeeded} refreshed, {failed} failed"))
+}
+
+/// Drop job runs past the retention window, which shares the audit setting.
+async fn prune_jobs(state: &AppState) {
+    let days = state.config.security.audit_retention_days;
+    if days == 0 {
+        return;
+    }
+
+    let cutoff = to_rfc3339(chrono::Utc::now() - chrono::Duration::days(i64::from(days)));
+
+    match job::prune(&state.db, &cutoff).await {
+        Ok(0) => {}
+        Ok(removed) => tracing::info!(removed, "pruned job runs"),
+        Err(e) => tracing::warn!(error = %e, "could not prune job runs"),
+    }
 }
 
 /// Drop audit entries past the retention window.

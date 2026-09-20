@@ -113,6 +113,28 @@ step "the OpenAPI spec is behind the same guard"
 [ "$(curl -s -o /dev/null -w '%{http_code}' "${BASE}/api/openapi.json")" = "401" ]
 curl -fsS -b "$COOKIES" "${BASE}/api/openapi.json" | grep -q '"openapi"'; ok
 
+step "a manual credit is added and survives a refresh"
+CREDIT=$(curl -fsS -b "$COOKIES" -X POST "${BASE}/api/v1/items/${ID}/credits" \
+  -H 'content-type: application/json' \
+  -d '{"personName":"Added By Hand","characterName":"A Role"}' \
+  | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+[ -n "$CREDIT" ]
+curl -fsS -b "$COOKIES" "${BASE}/api/v1/items/${ID}" | grep -q 'Added By Hand'; ok
+
+step "a provider row cannot be removed, a manual one can"
+# There is no provider row here, so this checks the shape of the refusal: an
+# identifier that is not a manual row of this work must 404 rather than delete.
+[ "$(curl -s -b "$COOKIES" -o /dev/null -w '%{http_code}' -X DELETE \
+    "${BASE}/api/v1/items/${ID}/credits/not-a-real-id")" = "404" ]
+curl -fsS -b "$COOKIES" -o /dev/null -X DELETE "${BASE}/api/v1/items/${ID}/credits/${CREDIT}"; ok
+
+step "the nfo document is generated"
+curl -fsS -b "$COOKIES" "${BASE}/api/v1/items/${ID}/nfo" | grep -q '<tvshow>'; ok
+
+step "the job history records a hand-triggered refresh"
+curl -s -b "$COOKIES" -o /dev/null -X POST "${BASE}/api/v1/items/${ID}/refresh"
+curl -fsS -b "$COOKIES" "${BASE}/api/v1/jobs" | grep -q 'refresh.item'; ok
+
 step "unlocking restores the provider value"
 curl -fsS -b "$COOKIES" -o /dev/null -X DELETE "${BASE}/api/v1/items/${ID}/overrides/item/title"
 curl -fsS -b "$COOKIES" "${BASE}/api/v1/items/${ID}" | grep -q 'Smoke Test Series'; ok

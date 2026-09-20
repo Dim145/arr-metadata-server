@@ -37,6 +37,15 @@ export interface Credit {
   characterName?: string
   image?: string
   sortOrder: number
+  isManual: boolean
+}
+
+export interface AlternativeTitle {
+  id: string
+  title: string
+  titleType?: string
+  language?: string
+  isManual: boolean
 }
 
 export interface Season {
@@ -102,6 +111,7 @@ export interface MediaItem {
   episodes?: Episode[]
   images?: Image[]
   credits?: Credit[]
+  alternativeTitles?: AlternativeTitle[]
   ratings?: Rating[]
   lockedFields?: string[]
 }
@@ -165,6 +175,30 @@ export interface AuditResponse {
   actions: string[]
 }
 
+export interface Job {
+  id: string
+  kind: string
+  target?: string
+  status: 'running' | 'succeeded' | 'failed'
+  startedAt?: string
+  finishedAt?: string
+  error?: string
+  detail?: string
+  createdAt: string
+}
+
+export interface JobsResponse {
+  jobs: Job[]
+  total: number
+}
+
+export interface ExportSummary {
+  root: string
+  works: number
+  episodes: number
+  failed: number
+}
+
 export interface Stats {
   series: number
   movies: number
@@ -172,6 +206,7 @@ export interface Stats {
   overrides: number
   clients: number
   auditEntries: number
+  jobs: number
   cachedItems: number
   cachedSearches: number
 }

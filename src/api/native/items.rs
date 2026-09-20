@@ -371,9 +371,38 @@ async fn refresh(
         .await?
         .ok_or(AppError::NotFound)?;
 
-    let refreshed = crate::jobs::refresh::refresh_one(&state, &item)
+    // Someone is waiting on this one, so it earns a row of its own rather than
+    // being folded into a sweep summary.
+    let record = repo::job::start(&state.db, repo::job::kinds::REFRESH_ITEM, Some(&id))
         .await
-        .map_err(AppError::UpstreamUnavailable)?;
+        .inspect_err(|e| tracing::warn!(error = %e, "could not open a job run"))
+        .ok();
+
+    let outcome = crate::jobs::refresh::refresh_one(&state, &item).await;
+
+    if let Some(record) = record {
+        let closed = match &outcome {
+            Ok(Some(_)) => {
+                repo::job::finish(&state.db, &record, Some("refreshed from a provider"), None).await
+            }
+            Ok(None) => {
+                repo::job::finish(
+                    &state.db,
+                    &record,
+                    Some("no provider could resolve it"),
+                    None,
+                )
+                .await
+            }
+            Err(e) => repo::job::finish(&state.db, &record, None, Some(&e.to_string())).await,
+        };
+
+        if let Err(e) = closed {
+            tracing::warn!(error = %e, "could not close the job run");
+        }
+    }
+
+    let refreshed = outcome.map_err(AppError::UpstreamUnavailable)?;
 
     audit::record(
         &state,

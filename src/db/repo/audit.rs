@@ -32,6 +32,7 @@ pub enum Action {
     SignedOut,
     PasswordChanged,
     CacheCleared,
+    NfoExported,
 }
 
 impl Action {
@@ -52,6 +53,7 @@ impl Action {
             Self::SignedOut => "auth.signed_out",
             Self::PasswordChanged => "auth.password_changed",
             Self::CacheCleared => "cache.cleared",
+            Self::NfoExported => "export.nfo",
         }
     }
 }

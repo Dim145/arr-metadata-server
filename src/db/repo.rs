@@ -2,8 +2,10 @@
 //! [`crate::db::Db::sql`] so it works on both engines.
 
 pub mod audit;
+pub mod child;
 pub mod client;
 pub mod item;
+pub mod job;
 pub mod override_field;
 pub mod snapshot;
 pub mod user;

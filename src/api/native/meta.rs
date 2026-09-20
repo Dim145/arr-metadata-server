@@ -1,8 +1,12 @@
 //! Server metadata: what is editable, what is stored, how it is configured.
 
-use axum::{Extension, Json, extract::State, http::StatusCode};
-use serde::Serialize;
-use utoipa::ToSchema;
+use axum::{
+    Extension, Json,
+    extract::{Query, State},
+    http::StatusCode,
+};
+use serde::{Deserialize, Serialize};
+use utoipa::{IntoParams, ToSchema};
 use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::{
@@ -27,6 +31,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(stats))
         .routes(routes!(settings))
         .routes(routes!(clear_cache))
+        .routes(routes!(jobs))
 }
 
 #[derive(Serialize, ToSchema)]
@@ -61,6 +66,7 @@ pub struct Stats {
     pub overrides: i64,
     pub clients: i64,
     pub audit_entries: i64,
+    pub jobs: i64,
     pub cached_items: u64,
     pub cached_searches: u64,
 }
@@ -78,6 +84,7 @@ async fn stats(State(state): State<AppState>) -> AppResult<Json<Stats>> {
         overrides: repo::override_field::count(&state.db).await?,
         clients: repo::client::count(&state.db).await?,
         audit_entries: repo::audit::count(&state.db).await?,
+        jobs: repo::job::count(&state.db).await?,
         cached_items: state.caches.items.entry_count(),
         cached_searches: state.caches.searches.entry_count(),
     }))
@@ -121,6 +128,58 @@ async fn settings(State(state): State<AppState>) -> Json<Settings> {
         tmdb_policy: policy_name(state.config.policy_for(Surface::Tmdb)),
         arr_policy: policy_name(state.config.policy_for(Surface::Arr)),
     })
+}
+
+#[derive(Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+#[serde(rename_all = "camelCase")]
+pub struct JobQuery {
+    /// `refresh.sweep` or `refresh.item`.
+    pub kind: Option<String>,
+    /// `running`, `succeeded` or `failed`.
+    pub status: Option<String>,
+    #[serde(default, deserialize_with = "crate::api::extract::empty_as_none")]
+    pub limit: Option<i64>,
+    #[serde(default, deserialize_with = "crate::api::extract::empty_as_none")]
+    pub offset: Option<i64>,
+}
+
+#[derive(Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct JobsResponse {
+    pub jobs: Vec<repo::job::Job>,
+    pub total: i64,
+}
+
+/// What the scheduler has been doing, newest first.
+///
+/// One row per run: a sweep over twenty-five entries is one job with a summary,
+/// because twenty-five rows every fifteen minutes would bury the one that
+/// failed. A refresh someone asked for by hand gets its own row.
+#[utoipa::path(
+    get, path = "/jobs", tag = TAG,
+    params(JobQuery),
+    responses((status = 200, body = JobsResponse)),
+)]
+async fn jobs(
+    State(state): State<AppState>,
+    Query(query): Query<JobQuery>,
+) -> AppResult<Json<JobsResponse>> {
+    let jobs = repo::job::list(
+        &state.db,
+        &repo::job::Query {
+            kind: query.kind,
+            status: query.status,
+            limit: query.limit.unwrap_or(50),
+            offset: query.offset.unwrap_or(0),
+        },
+    )
+    .await?;
+
+    Ok(Json(JobsResponse {
+        jobs,
+        total: repo::job::count(&state.db).await?,
+    }))
 }
 
 /// Drop every cached entity and search result.

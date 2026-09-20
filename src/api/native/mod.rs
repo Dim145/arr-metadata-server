@@ -5,7 +5,9 @@
 //! directly.
 
 pub mod auth;
+pub mod children;
 pub mod clients;
+pub mod export;
 pub mod items;
 pub mod meta;
 pub mod overrides;
@@ -18,6 +20,8 @@ use crate::state::AppState;
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .merge(items::router())
+        .merge(children::router())
+        .merge(export::router())
         .merge(overrides::router())
         .merge(clients::router())
         .merge(meta::router())

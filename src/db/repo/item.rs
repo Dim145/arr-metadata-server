@@ -434,16 +434,24 @@ pub async fn search(db: &Db, q: &Query) -> Result<Vec<MediaItem>> {
 
     if let Some(term) = q.term.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
         let pattern = format!("%{}%", term.to_lowercase());
+
+        // The stored title is the provider's. Someone who renamed a work will
+        // look for it by the name they gave it, so overrides are searched too:
+        // the value is JSON, but a substring match over the encoded string finds
+        // it either way.
         sql.push_str(
             " AND (LOWER(title) LIKE ? OR LOWER(COALESCE(sort_title, '')) LIKE ?
                    OR id IN (SELECT media_id FROM media_alternative_title
-                             WHERE LOWER(title) LIKE ?))",
+                             WHERE LOWER(title) LIKE ?)
+                   OR id IN (SELECT media_id FROM media_override
+                             WHERE field IN ('title', 'sortTitle', 'originalTitle')
+                               AND LOWER(COALESCE(value, '')) LIKE ?))",
         );
-        args.add(pattern.clone())
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
-        args.add(pattern.clone())
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
-        args.add(pattern).map_err(|e| anyhow::anyhow!("{e}"))?;
+
+        for _ in 0..4 {
+            args.add(pattern.clone())
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+        }
     }
 
     sql.push_str(" ORDER BY popularity DESC NULLS LAST, title ASC LIMIT ? OFFSET ?");
@@ -1140,6 +1148,66 @@ mod tests {
         assert_eq!(read.title, "Round Trip, Revised");
         assert_eq!(read.runtime, Some(101));
         assert_eq!(read.created_at, item.created_at);
+    }
+
+    #[tokio::test]
+    async fn a_work_is_found_by_the_name_someone_gave_it() {
+        // Renaming a work and then not being able to find it is the kind of gap
+        // that makes an editor distrust the whole thing.
+        let db = db().await;
+        let item = sample();
+
+        upsert(
+            &db,
+            ItemWrite {
+                item: &item,
+                replace_children: false,
+            },
+        )
+        .await
+        .unwrap();
+
+        crate::db::repo::override_field::set(
+            &db,
+            &item.id,
+            crate::domain::fields::Scope::Item,
+            "title",
+            Some(&serde_json::json!("Renamed By Hand")),
+            None,
+        )
+        .await
+        .unwrap();
+
+        let found = |term: &str| {
+            let db = &db;
+            let term = term.to_string();
+            async move {
+                search(
+                    db,
+                    &Query {
+                        term: Some(term),
+                        limit: 10,
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap()
+                .len()
+            }
+        };
+
+        assert_eq!(
+            found("Round Trip").await,
+            1,
+            "the provider's title still matches"
+        );
+        assert_eq!(
+            found("Renamed By Hand").await,
+            1,
+            "and so does the edited one"
+        );
+        assert_eq!(found("renamed by hand").await, 1, "case does not matter");
+        assert_eq!(found("Something Else").await, 0);
     }
 
     #[tokio::test]

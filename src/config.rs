@@ -46,6 +46,7 @@ pub struct Config {
     pub skyhook: Skyhook,
     pub cache: Cache,
     pub refresh: Refresh,
+    pub export: Export,
 }
 
 #[derive(Clone, Debug)]
@@ -119,6 +120,12 @@ pub struct Cache {
     pub max_entries: u64,
     pub item_ttl: Duration,
     pub search_ttl: Duration,
+}
+
+#[derive(Clone, Debug)]
+pub struct Export {
+    /// Where `POST /api/v1/export/nfo` writes. Unset disables that endpoint.
+    pub nfo_path: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug)]
@@ -220,6 +227,9 @@ impl Config {
                 max_entries: num(&["AMS_CACHE_MAX_ENTRIES"], 10_000)?,
                 item_ttl: secs(&["AMS_CACHE_ITEM_TTL", "REDIS_TTL"], 3_600)?,
                 search_ttl: secs(&["AMS_CACHE_SEARCH_TTL", "REDIS_SEARCH_TTL"], 1_800)?,
+            },
+            export: Export {
+                nfo_path: opt(&["AMS_NFO_EXPORT_PATH"]).map(PathBuf::from),
             },
             refresh: Refresh {
                 enabled: flag(&["AMS_REFRESH_ENABLED"], true)?,

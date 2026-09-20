@@ -13,6 +13,7 @@
 //! RFC 3339 in UTC sorts lexicographically, so range predicates still work.
 
 pub mod repo;
+pub mod transfer;
 
 use std::{borrow::Cow, path::Path, time::Duration};
 

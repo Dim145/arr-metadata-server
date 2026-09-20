@@ -147,6 +147,7 @@ const ACTIONS: &[Action] = &[
     Action::SignedOut,
     Action::PasswordChanged,
     Action::CacheCleared,
+    Action::NfoExported,
 ];
 
 #[cfg(test)]

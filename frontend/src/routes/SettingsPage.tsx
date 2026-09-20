@@ -1,6 +1,7 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
 
 import { api } from '../lib/api'
+import { Jobs, NfoExport } from '../components/Jobs'
 import type { Settings } from '../lib/types'
 import {
   Alert,
@@ -80,15 +81,25 @@ export function SettingsPage() {
           </dl>
           <div className="border-t border-line px-5 py-4">
             <p className="text-[12px] leading-relaxed text-faint">
-              <Mono className="text-dim">allowlist</Mono> means the caller's address must match
-              AMS_ARR_ALLOWLIST. Sonarr and Radarr have their metadata URLs compiled in and cannot
-              present a key, so that is the only control available to them.
+              <Mono className="text-dim">allowlist</Mono> means the caller's address must match{' '}
+              <Mono className="text-dim">AMS_ALLOWLIST</Mono>. Sonarr and Radarr have their metadata
+              URLs compiled in and cannot present a key; some TMDB clients compile theirs in too.
+              For those, an address is the only control there is.
             </p>
           </div>
         </Panel>
       </div>
 
-      <Panel className="reveal mt-6" style={{ animationDelay: '140ms' }}>
+      <div className="mt-6">
+        <Jobs />
+      </div>
+
+      <Panel className="reveal mt-6" style={{ animationDelay: '200ms' }}>
+        <PanelHead title="Plex and other .nfo readers" />
+        <NfoExport />
+      </Panel>
+
+      <Panel className="reveal mt-6" style={{ animationDelay: '240ms' }}>
         <PanelHead title="API documentation" />
         <div className="flex flex-wrap items-center justify-between gap-4 p-5">
           <div>
@@ -109,7 +120,7 @@ export function SettingsPage() {
         </div>
       </Panel>
 
-      <Panel className="reveal mt-6" style={{ animationDelay: '180ms' }}>
+      <Panel className="reveal mt-6" style={{ animationDelay: '280ms' }}>
         <PanelHead title="Maintenance" />
         <div className="flex flex-wrap items-center justify-between gap-4 p-5">
           <div>

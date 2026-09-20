@@ -5,6 +5,7 @@ import { Link, useParams } from 'react-router'
 import { api } from '../lib/api'
 import { cn } from '../lib/cn'
 import type { FieldDef, FieldRegistry, MediaItem, Override } from '../lib/types'
+import { ManualChildren } from '../components/ManualChildren'
 import {
   Alert,
   Button,
@@ -117,6 +118,9 @@ export function ItemDetail() {
                 Unlock all
               </Button>
             )}
+            <a href={`/api/v1/items/${id}/nfo`} target="_blank" rel="noreferrer">
+              <Button title="A Kodi/XBMC document — the route to Plex">.nfo</Button>
+            </a>
           </div>
 
           {refresh.isError && (
@@ -156,6 +160,10 @@ export function ItemDetail() {
           ))}
         </ul>
       </Panel>
+
+      <div className="mt-6">
+        <ManualChildren item={work} onChanged={invalidate} />
+      </div>
 
       <div className="mt-6 grid gap-6 lg:grid-cols-2">
         <Panel className="reveal" style={{ animationDelay: '140ms' }}>
