@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Link, useParams } from 'react-router'
 
-import { api } from '../lib/api'
+import { api, query } from '../lib/api'
 import { cn } from '../lib/cn'
 import type { FieldDef, FieldRegistry, MediaItem, Override } from '../lib/types'
 import { ManualChildren } from '../components/ManualChildren'
@@ -16,18 +16,36 @@ import {
   Mono,
   Panel,
   PanelHead,
+  Select,
   Spinner,
   Tag,
   Textarea,
 } from '../components/ui'
 
+/** Languages worth offering without asking the server what it holds. */
+const LANGUAGES = [
+  { code: '', label: 'as stored' },
+  { code: 'en', label: 'English' },
+  { code: 'fr', label: 'Français' },
+  { code: 'de', label: 'Deutsch' },
+  { code: 'es', label: 'Español' },
+  { code: 'it', label: 'Italiano' },
+  { code: 'pt', label: 'Português' },
+  { code: 'nl', label: 'Nederlands' },
+  { code: 'ja', label: '日本語' },
+  { code: 'ko', label: '한국어' },
+  { code: 'zh', label: '中文' },
+  { code: 'ru', label: 'Русский' },
+]
+
 export function ItemDetail() {
   const { id = '' } = useParams()
   const queryClient = useQueryClient()
+  const [language, setLanguage] = useState('')
 
   const item = useQuery({
-    queryKey: ['item', id],
-    queryFn: () => api.get<MediaItem>(`/items/${id}`),
+    queryKey: ['item', id, language],
+    queryFn: () => api.get<MediaItem>(`/items/${id}${query({ language })}`),
   })
   const registry = useQuery({
     queryKey: ['fields'],
@@ -109,6 +127,12 @@ export function ItemDetail() {
             </p>
           )}
 
+          {language !== '' && (
+            <p className="mt-2 font-mono text-[10px] tracking-[0.12em] text-faint uppercase">
+              showing {language} — edits still apply to the work itself
+            </p>
+          )}
+
           <div className="mt-4 flex flex-wrap items-center gap-2">
             <Button onClick={() => refresh.mutate()} disabled={refresh.isPending}>
               {refresh.isPending ? <Spinner /> : 'Refresh from providers'}
@@ -121,6 +145,19 @@ export function ItemDetail() {
             <a href={`/api/v1/items/${id}/nfo`} target="_blank" rel="noreferrer">
               <Button title="A Kodi/XBMC document — the route to Plex">.nfo</Button>
             </a>
+
+            <Select
+              value={language}
+              onChange={(event) => setLanguage(event.target.value)}
+              title="Show this work in another language, where a translation is held"
+              className="py-1.5"
+            >
+              {LANGUAGES.map((entry) => (
+                <option key={entry.code} value={entry.code}>
+                  {entry.label}
+                </option>
+              ))}
+            </Select>
           </div>
 
           {refresh.isError && (

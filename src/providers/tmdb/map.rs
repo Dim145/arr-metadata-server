@@ -115,6 +115,12 @@ pub fn tv_to_item(tv: &models::Tv, seasons: &[models::Season]) -> MediaItem {
         })
         .collect();
 
+    item.translations = tv
+        .translations
+        .as_ref()
+        .map(|t| translations(&t.translations))
+        .unwrap_or_default();
+
     item.episodes = episodes(seasons);
     item.updated_at = now();
 

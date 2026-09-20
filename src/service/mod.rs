@@ -13,6 +13,7 @@
 //! can edit it.
 
 pub mod ids;
+pub mod language;
 pub mod movie;
 pub mod series;
 
@@ -144,6 +145,14 @@ pub async fn persist(
 
     if let Some(payload) = payload {
         repo::snapshot::put(&state.db, &item.id, provider, payload, None).await?;
+    }
+
+    // A refresh can add episodes, so whatever was fetched for another language
+    // no longer covers the whole run. The stored text stays — it is keyed by
+    // episode number and still correct for the episodes it names — but the
+    // marker goes, so the next request in that language fills in the rest.
+    if let Err(e) = repo::translation::clear_fetched(&state.db, &item.id).await {
+        tracing::warn!(id = %item.id, error = %e, "could not reset the language markers");
     }
 
     state

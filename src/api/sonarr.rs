@@ -14,7 +14,7 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::{
     error::{AppError, AppResult},
-    service::series,
+    service::{language, series},
     state::AppState,
     wire::sonarr::{ShowResource, from_item},
 };
@@ -66,9 +66,14 @@ async fn show(
     State(state): State<AppState>,
     Path(ShowPath { language, tvdb_id }): Path<ShowPath>,
 ) -> AppResult<Json<ShowResource>> {
-    let item = series::by_client_id(&state, tvdb_id, &language)
+    let mut item = series::by_client_id(&state, tvdb_id, &language)
         .await?
         .ok_or(AppError::NotFound)?;
+
+    // Sonarr puts the language in the URL, which is the only place in this
+    // protocol it appears. Episode text for a language nobody has asked for yet
+    // is fetched here, once, and stored.
+    language::apply(&state, &mut item, &language).await?;
 
     // Echo back the id the client asked for: Sonarr has already stored it, and
     // a different one in the response would orphan the series.
@@ -99,7 +104,13 @@ async fn search(
 ) -> AppResult<Json<Vec<ShowResource>>> {
     let term = query.term.unwrap_or_default();
 
-    let items = series::search(&state, &term, &language).await?;
+    let mut items = series::search(&state, &term, &language).await?;
+
+    // Only the work's own title here: fetching a season of episode text for
+    // each of ten search results would turn one search into dozens of calls.
+    for item in &mut items {
+        language::apply_shallow(&state, item, &language);
+    }
 
     // A result Sonarr cannot address is worse than no result: it would show in
     // the list and then fail on add.

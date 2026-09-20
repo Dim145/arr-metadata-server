@@ -27,6 +27,10 @@ It replaces and merges two earlier projects: `the earlier TMDB relay` and
   refreshed on a schedule that adapts to its status.
 - **Client management.** Named API keys, scopes, expiry, per-surface policy, and
   an escape hatch to turn authentication off entirely.
+- **Per-language answers.** Sonarr asks in its URL, the native API takes
+  `?language=`. Translations are fetched the first time a language is asked for
+  and kept. A locked field stays locked in every language.
+- **`.nfo` export**, which is the only route to Plex.
 
 ## Requirements
 
@@ -67,6 +71,20 @@ surfaces — is documented at `/api/docs`, with the spec at `/api/openapi.json`.
 Both are generated from the handlers themselves, so they cannot drift from what
 is actually served, and both sit behind the same credential as the rest of the
 native API.
+
+## Languages
+
+Entries are stored in `AMS_TMDB_LANGUAGE`. Any other language is fetched the
+first time a client asks for it and kept from then on:
+
+```bash
+curl 'http://localhost:8080/v1/tvdb/shows/fr/81189'      # Sonarr's own form
+curl 'http://localhost:8080/api/v1/items/{id}?language=ja'
+```
+
+A translation never overwrites a field someone locked — that would undo a rename
+the moment a client asked in another language. Lock the field again per language
+if you want different text in each.
 
 ## Audit trail
 
@@ -114,7 +132,7 @@ here — see [`docs/integration.md`](docs/integration.md) and the runnable
 ## Development
 
 ```bash
-cargo test                      # 139 tests; the repository ones use an in-memory SQLite
+cargo test                      # 175 tests; the repository ones use an in-memory SQLite
 cargo clippy --all-targets
 cargo fmt --check
 
@@ -132,6 +150,18 @@ cargo build
 ```
 
 CI runs both, plus the container image.
+
+## Moving between databases
+
+Changing `AMS_DATABASE_URL` points the server at a different database; it does
+not carry your catalogue across. To move it:
+
+```bash
+arr-metadata-server transfer 'sqlite://data/ams.db' 'postgres://ams:secret@localhost/ams'
+```
+
+The target is migrated first and must be empty, unless you pass `--force` to add
+to what is already there.
 
 ## Licence
 

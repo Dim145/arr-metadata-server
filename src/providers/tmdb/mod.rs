@@ -168,7 +168,7 @@ impl TmdbClient {
             ("language", language.to_string()),
             (
                 "append_to_response",
-                "external_ids,credits,content_ratings,alternative_titles,keywords,videos,images"
+                "external_ids,credits,content_ratings,alternative_titles,keywords,videos,images,translations"
                     .to_string(),
             ),
             // Posters and logos in the configured language plus language-neutral art.
@@ -229,6 +229,40 @@ impl TmdbClient {
         let url = format!("{}/tv/{id}/season/{number}", self.base);
         self.fetch(&url, &[("language", language.to_string())])
             .await
+    }
+
+    /// Every season's episodes in one specific language.
+    ///
+    /// Used to fill in a language somebody asked for. Unlike [`Self::tv_seasons`]
+    /// this does not fall back to en-US: the caller wants this language or
+    /// nothing, and a silent English fallback would look like a translation that
+    /// exists when it does not.
+    pub async fn tv_seasons_in(
+        &self,
+        id: i64,
+        numbers: &[i32],
+        language: &str,
+    ) -> Vec<models::Season> {
+        let results = join_all(numbers.iter().map(|&n| self.fetch_season(id, n, language))).await;
+
+        results
+            .into_iter()
+            .zip(numbers)
+            .filter_map(|(result, number)| match result {
+                Ok(Some(raw)) => match Self::typed::<models::Season>(&raw, "season") {
+                    Ok(season) => Some(season),
+                    Err(e) => {
+                        tracing::warn!(tmdb_id = id, season = number, error = %e, "season parse failed");
+                        None
+                    }
+                },
+                Ok(None) => None,
+                Err(e) => {
+                    tracing::warn!(tmdb_id = id, season = number, %language, error = %e, "season fetch failed");
+                    None
+                }
+            })
+            .collect()
     }
 
     pub async fn tv_external_ids(&self, id: i64) -> Result<models::ExternalIds> {

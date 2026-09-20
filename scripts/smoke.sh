@@ -128,6 +128,13 @@ step "a provider row cannot be removed, a manual one can"
     "${BASE}/api/v1/items/${ID}/credits/not-a-real-id")" = "404" ]
 curl -fsS -b "$COOKIES" -o /dev/null -X DELETE "${BASE}/api/v1/items/${ID}/credits/${CREDIT}"; ok
 
+step "asking in another language does not clobber a locked value"
+# No TMDB key here, so there is nothing to overlay — which is the point: a
+# language we hold nothing for must leave the text alone, and in particular must
+# not lose the override set a few steps above.
+curl -fsS "${BASE}/v1/tvdb/shows/fr/999777" | grep -q 'Locked Title'
+curl -fsS -b "$COOKIES" "${BASE}/api/v1/items/${ID}?language=fr" | grep -q 'Locked Title'; ok
+
 step "the nfo document is generated"
 curl -fsS -b "$COOKIES" "${BASE}/api/v1/items/${ID}/nfo" | grep -q '<tvshow>'; ok
 

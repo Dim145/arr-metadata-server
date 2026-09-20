@@ -108,13 +108,22 @@ async fn list(
     Ok(Json(ListResponse { items, total }))
 }
 
+#[derive(Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+#[serde(rename_all = "camelCase")]
+pub struct DetailQuery {
+    /// Serve the work in this language, if a translation is held. `fr`, `fr-FR`
+    /// and `fra` all mean the same thing.
+    pub language: Option<String>,
+}
+
 /// One work in full.
 ///
 /// Seasons, episodes, images, credits and ratings are included, with every
 /// manual override applied. `lockedFields` lists what a human has claimed.
 #[utoipa::path(
     get, path = "/items/{id}", tag = TAG,
-    params(("id" = String, Path, description = "The work's identifier")),
+    params(("id" = String, Path, description = "The work's identifier"), DetailQuery),
     responses(
         (status = 200, body = MediaItem),
         (status = 404, description = "No such work"),
@@ -123,11 +132,17 @@ async fn list(
 async fn detail(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Query(query): Query<DetailQuery>,
 ) -> AppResult<Json<MediaItem>> {
-    service::load(&state, &id)
+    let mut item = service::load(&state, &id)
         .await?
-        .map(Json)
-        .ok_or(AppError::NotFound)
+        .ok_or(AppError::NotFound)?;
+
+    if let Some(language) = query.language.as_deref().filter(|l| !l.is_empty()) {
+        crate::service::language::apply(&state, &mut item, language).await?;
+    }
+
+    Ok(Json(item))
 }
 
 #[derive(Deserialize, ToSchema)]

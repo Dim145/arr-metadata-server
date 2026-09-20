@@ -110,6 +110,7 @@ pub struct Tv {
     pub keywords: Option<KeywordsTv>,
     pub videos: Option<Results<Video>>,
     pub images: Option<Images>,
+    pub translations: Option<Translations>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
