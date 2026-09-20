@@ -74,17 +74,32 @@ native API.
 
 ## Languages
 
-Entries are stored in `AMS_TMDB_LANGUAGE`. Any other language is fetched the
-first time a client asks for it and kept from then on:
+Entries are stored in whatever `AMS_TMDB_LANGUAGE` is set to. **If you want your
+stack in French, set that** — it is what every client gets by default, and it is
+almost certainly the setting you want:
 
 ```bash
-curl 'http://localhost:8080/v1/tvdb/shows/fr/81189'      # Sonarr's own form
+AMS_TMDB_LANGUAGE=fr-FR
+```
+
+Any *other* language is fetched the first time something asks for it and kept
+from then on:
+
+```bash
+curl 'http://localhost:8080/v1/tvdb/shows/fr/81189'       # the Skyhook form
 curl 'http://localhost:8080/api/v1/items/{id}?language=ja'
 ```
 
-A translation never overwrites a field someone locked — that would undo a rename
-the moment a client asked in another language. Lock the field again per language
-if you want different text in each.
+One caveat worth knowing before you rely on the per-request form: **Sonarr does
+not use it.** Its request builder sets the language segment to `en` once and
+never changes it, so every Sonarr request arrives as English whatever its own UI
+language says. Per-request language is therefore for the web UI, for anything
+calling this server directly, and for TMDB clients — which do send `language=`
+and get it forwarded. For Sonarr, `AMS_TMDB_LANGUAGE` is the knob.
+
+A translation never overwrites a field someone locked. That would undo a rename
+the moment a client asked in another language, which is the one thing locking
+exists to prevent. Lock a field per language if you want different text in each.
 
 ## Audit trail
 

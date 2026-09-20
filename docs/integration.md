@@ -176,6 +176,18 @@ server had wrong — see the commit history.
 
 ---
 
+## A note on languages
+
+Sonarr's request builder pins the language segment to `en` and nothing in Sonarr
+changes it, so asking this server for French through Sonarr is not possible from
+Sonarr's side. Set `AMS_TMDB_LANGUAGE` instead: entries are stored in that
+language and every client gets it.
+
+Radarr has no language in its protocol at all, and the same applies.
+
+TMDB clients do send `language=`, and it is forwarded upstream, so those get
+whatever they ask for with your edits patched in.
+
 ## What about Plex?
 
 Plex has no configurable metadata source. Since the legacy agents were removed,
