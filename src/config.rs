@@ -45,6 +45,8 @@ pub struct Config {
     pub tmdb: Tmdb,
     pub skyhook: Skyhook,
     pub radarr_metadata: RadarrMetadata,
+    pub fanart: Fanart,
+    pub tvdb: Tvdb,
     /// Which provider wins when two disagree, most trusted first.
     pub provider_priority: Vec<String>,
     pub cache: Cache,
@@ -120,6 +122,24 @@ pub struct Skyhook {
     /// could answer. Costs one call per refresh and fills gaps TMDB leaves —
     /// air time, TVMaze and AniList ids, and episode ordering hints.
     pub enrich: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct Tvdb {
+    pub upstream: String,
+    /// Without a key the provider is skipped.
+    pub api_key: Option<String>,
+    /// Only a subscriber key needs one; a project key must not send it.
+    pub pin: Option<String>,
+    pub enabled: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct Fanart {
+    pub upstream: String,
+    /// Without a key the provider is simply skipped.
+    pub api_key: Option<String>,
+    pub enabled: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -250,6 +270,21 @@ impl Config {
                 .to_string(),
                 fallback: flag(&["AMS_RADARR_METADATA_FALLBACK"], true)?,
                 enrich: flag(&["AMS_RADARR_METADATA_ENRICH"], true)?,
+            },
+            fanart: Fanart {
+                upstream: var_or(&["AMS_FANART_UPSTREAM"], "https://webservice.fanart.tv/v3")
+                    .trim_end_matches('/')
+                    .to_string(),
+                api_key: opt(&["AMS_FANART_API_KEY", "FANARTTV_API_KEY"]),
+                enabled: flag(&["AMS_FANART_ENABLED"], true)?,
+            },
+            tvdb: Tvdb {
+                upstream: var_or(&["AMS_TVDB_UPSTREAM"], "https://api4.thetvdb.com/v4")
+                    .trim_end_matches('/')
+                    .to_string(),
+                api_key: opt(&["AMS_TVDB_API_KEY", "TVDB_API_KEY"]),
+                pin: opt(&["AMS_TVDB_PIN"]),
+                enabled: flag(&["AMS_TVDB_ENABLED"], true)?,
             },
             provider_priority: {
                 let configured = list(&["AMS_PROVIDER_PRIORITY"]);

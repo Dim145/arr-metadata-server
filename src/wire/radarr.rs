@@ -9,8 +9,21 @@ use utoipa::ToSchema;
 
 use crate::domain::{Credit, CreditType, Image, MediaItem, Rating};
 
+/// A list that the upstream sometimes writes as `null`.
+///
+/// api.radarr.video answers `"Parts": null` for a collection it has not
+/// expanded, and `#[serde(default)]` does not cover that: it fills in a missing
+/// field, not a present one holding null.
+fn list_or_null<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    Ok(Option::<Vec<T>>::deserialize(deserializer)?.unwrap_or_default())
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "PascalCase")]
 pub struct MovieResource {
     pub tmdb_id: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -22,17 +35,17 @@ pub struct MovieResource {
     pub original_title: Option<String>,
     pub title_slug: String,
     /// Deprecated upstream but still read by older Radarr versions.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "list_or_null")]
     pub ratings: Vec<RatingItem>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub movie_ratings: Option<RatingResource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runtime: Option<i32>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "list_or_null")]
     pub images: Vec<ImageResource>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "list_or_null")]
     pub genres: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "list_or_null")]
     pub keywords: Vec<String>,
     pub year: i32,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -43,9 +56,9 @@ pub struct MovieResource {
     pub physical_release: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub digital_release: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "list_or_null")]
     pub alternative_titles: Vec<AlternativeTitleResource>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "list_or_null")]
     pub translations: Vec<TranslationResource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub credits: Option<Credits>,
@@ -53,23 +66,27 @@ pub struct MovieResource {
     pub studio: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub youtube_trailer_id: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "list_or_null")]
     pub certifications: Vec<CertificationResource>,
-    pub status: String,
+    /// Always written, but read as optional: the real api.radarr.video sends
+    /// `"Status": null` for films it has no status for, and a client that
+    /// tolerates that from the upstream must tolerate it from us.
+    #[serde(default)]
+    pub status: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub collection: Option<CollectionResource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub original_language: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub homepage: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "list_or_null")]
     pub recommendations: Vec<RecommendationResource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub popularity: Option<f64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "PascalCase")]
 pub struct RatingResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tmdb: Option<RatingItem>,
@@ -84,36 +101,47 @@ pub struct RatingResource {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "PascalCase")]
 pub struct RatingItem {
     pub count: i64,
     pub value: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub origin: Option<String>,
-    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
-    pub rating_type: Option<String>,
+    /// `User`, as api.radarr.video writes it. Radarr parses this into an enum
+    /// and throws on a null, so it is always written and never optional.
+    #[serde(rename = "Type", default = "user_rating")]
+    pub rating_type: String,
+}
+
+fn user_rating() -> String {
+    "User".to_string()
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "PascalCase")]
 pub struct ImageResource {
     pub cover_type: String,
     pub url: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "PascalCase")]
 pub struct AlternativeTitleResource {
     pub title: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(rename = "type")]
-    pub title_type: Option<String>,
+    /// Where the title came from, in Radarr's spelling. Another enum it parses,
+    /// so it carries a value even when the provider did not name one.
+    #[serde(rename = "Type", default = "tmdb_source")]
+    pub title_type: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
 }
 
+fn tmdb_source() -> String {
+    "Tmdb".to_string()
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "PascalCase")]
 pub struct TranslationResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
@@ -123,23 +151,23 @@ pub struct TranslationResource {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "PascalCase")]
 pub struct CertificationResource {
     pub country: String,
     pub certification: String,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "PascalCase")]
 pub struct Credits {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "list_or_null")]
     pub cast: Vec<CastResource>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "list_or_null")]
     pub crew: Vec<CrewResource>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "PascalCase")]
 pub struct CastResource {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -150,12 +178,12 @@ pub struct CastResource {
     pub tmdb_id: Option<i64>,
     /// Radarr stores this with a NOT NULL constraint.
     pub credit_id: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "list_or_null")]
     pub images: Vec<ImageResource>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "PascalCase")]
 pub struct CrewResource {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -168,28 +196,28 @@ pub struct CrewResource {
     pub tmdb_id: Option<i64>,
     /// Radarr stores this with a NOT NULL constraint.
     pub credit_id: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "list_or_null")]
     pub images: Vec<ImageResource>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "PascalCase")]
 pub struct CollectionResource {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub overview: Option<String>,
     pub tmdb_id: i64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "list_or_null")]
     pub images: Vec<ImageResource>,
     /// A movie may belong to a collection, and a collection holds movies. That
     /// loop makes schema collection recurse forever unless it is cut here.
-    #[serde(default)]
     #[schema(no_recursion)]
+    #[serde(default, deserialize_with = "list_or_null")]
     pub parts: Vec<MovieResource>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "PascalCase")]
 pub struct RecommendationResource {
     pub tmdb_id: i64,
     pub title: String,
@@ -209,7 +237,7 @@ pub fn from_item(item: &MediaItem) -> MovieResource {
         count: 0,
         value: 0.0,
         origin: Some("tmdb".to_string()),
-        rating_type: Some("user".to_string()),
+        rating_type: user_rating(),
     });
     let imdb_rating = item.rating("imdb").map(rating_item);
 
@@ -244,7 +272,7 @@ pub fn from_item(item: &MediaItem) -> MovieResource {
             .iter()
             .map(|t| AlternativeTitleResource {
                 title: t.title.clone(),
-                title_type: t.title_type.clone(),
+                title_type: t.title_type.clone().unwrap_or_else(tmdb_source),
                 language: t.language.clone(),
             })
             .collect(),
@@ -270,7 +298,7 @@ pub fn from_item(item: &MediaItem) -> MovieResource {
             }],
             _ => Vec::new(),
         },
-        status: radarr_status(item.status.as_deref()),
+        status: Some(radarr_status(item.status.as_deref())),
         collection: None,
         original_language: item.original_language.clone(),
         homepage: item.homepage.clone(),
@@ -348,7 +376,7 @@ fn rating_item(rating: &Rating) -> RatingItem {
         count: rating.votes.unwrap_or(0),
         value: rating.value.unwrap_or(0.0),
         origin: Some(rating.source.clone()),
-        rating_type: rating.rating_type.clone(),
+        rating_type: rating.rating_type.clone().unwrap_or_else(user_rating),
     }
 }
 
@@ -399,7 +427,7 @@ pub fn to_item(resource: &MovieResource) -> MediaItem {
     item.popularity = resource.popularity;
     item.genres = resource.genres.clone();
     item.keywords = resource.keywords.clone();
-    item.status = Some(resource.status.to_ascii_lowercase());
+    item.status = resource.status.as_deref().map(str::to_ascii_lowercase);
     item.in_cinemas =
         non_empty(resource.in_cinema.as_deref()).or_else(|| non_empty(resource.premier.as_deref()));
     item.physical_release = non_empty(resource.physical_release.as_deref());
@@ -452,7 +480,7 @@ pub fn to_item(resource: &MovieResource) -> MediaItem {
         .map(|t| AlternativeTitle {
             id: new_id(),
             title: t.title.clone(),
-            title_type: t.title_type.clone(),
+            title_type: Some(t.title_type.clone()),
             language: t.language.clone(),
             is_manual: false,
         })
@@ -499,7 +527,7 @@ fn collect_ratings(resource: &MovieResource) -> Vec<Rating> {
             source: source.to_string(),
             value: Some(item.value),
             votes: Some(item.count),
-            rating_type: item.rating_type.clone(),
+            rating_type: Some(item.rating_type.clone()),
         })
     })
     .collect()
@@ -704,7 +732,7 @@ mod tests {
         assert_eq!(tmdb.count, 0);
         assert_eq!(tmdb.value, 0.0);
         // Radarr parses this into an enum; a null would throw.
-        assert_eq!(tmdb.rating_type.as_deref(), Some("user"));
+        assert_eq!(tmdb.rating_type, "User");
     }
 
     #[test]
@@ -747,13 +775,55 @@ mod tests {
     }
 
     #[test]
+    fn the_upstreams_nulls_are_read_as_empty_lists() {
+        // api.radarr.video answers exactly this for The Matrix: a status it has
+        // no value for, and a collection whose lists are null rather than [].
+        let body = serde_json::json!({
+            "TmdbId": 603,
+            "Title": "The Matrix",
+            "TitleSlug": "603",
+            "Year": 1999,
+            "Status": null,
+            "Collection": {
+                "TmdbId": 2344,
+                "Name": "The Matrix Collection",
+                "Images": null,
+                "Overview": null,
+                "Translations": null,
+                "Parts": null
+            }
+        });
+
+        let movie: MovieResource = serde_json::from_value(body).expect("reads");
+
+        assert_eq!(movie.title, "The Matrix");
+        assert_eq!(movie.status, None);
+
+        let collection = movie.collection.expect("collection");
+        assert!(collection.parts.is_empty());
+        assert!(collection.images.is_empty());
+    }
+
+    #[test]
+    fn a_rating_without_a_type_is_read_as_a_user_rating() {
+        // The field is an enum on Radarr's side; it must never reach it empty.
+        let item: RatingItem =
+            serde_json::from_value(serde_json::json!({ "Count": 1, "Value": 8.0 })).unwrap();
+
+        assert_eq!(item.rating_type, "User");
+    }
+
+    #[test]
     fn the_wire_form_serialises_to_radarrs_field_names() {
+        // api.radarr.video answers in PascalCase, and this server stands in for
+        // it: the same names have to come back, or reading its replies and
+        // writing our own would need two different shapes of this type.
         let json = serde_json::to_value(from_item(&item())).unwrap();
 
-        assert_eq!(json["tmdbId"], 329865);
-        assert_eq!(json["titleSlug"], "arrival-2016");
-        assert_eq!(json["inCinema"], "2016-11-11");
-        assert_eq!(json["digitalRelease"], "2017-01-31");
-        assert_eq!(json["youtubeTrailerId"], serde_json::Value::Null);
+        assert_eq!(json["TmdbId"], 329865);
+        assert_eq!(json["TitleSlug"], "arrival-2016");
+        assert_eq!(json["InCinema"], "2016-11-11");
+        assert_eq!(json["DigitalRelease"], "2017-01-31");
+        assert_eq!(json["YoutubeTrailerId"], serde_json::Value::Null);
     }
 }

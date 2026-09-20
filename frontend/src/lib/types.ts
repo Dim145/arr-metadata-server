@@ -235,5 +235,6 @@ export interface Snapshot {
   provider: string
   fetchedAt: string
   etag?: string
-  payload: unknown
+  /** Absent when the caller asked for `payload=false`. */
+  payload?: unknown
 }

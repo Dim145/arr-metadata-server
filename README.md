@@ -78,10 +78,17 @@ native API.
 
 ## Where the data comes from
 
-TMDB is the base. Sonarr's Skyhook and Radarr's metadata service are merged on
-top, which is worth more than it sounds: for *Breaking Bad* that is the
-difference between 71 episodes and 84, and between having absolute episode
-numbers — the thing Sonarr matches anime on — and not.
+Four sources are asked at once and merged into one entity:
+
+| Source | Brings |
+| --- | --- |
+| **TMDB** | overviews, stills and translations, in the configured language |
+| **TheTVDB** v4 | the season and episode numbering, absolute numbers, air-order hints, broadcast time of day, per-country certifications |
+| **Skyhook** (Sonarr) / **api.radarr.video** | the same view the arr stack would have got on its own, including ratings it carries and TMDB does not |
+| **Fanart.tv** | transparent logos, clearart and banners — artwork only |
+
+Only TMDB is really needed to start. The rest are optional and on by default;
+each costs one extra call per refresh.
 
 The merge is field by field, in `AMS_PROVIDER_PRIORITY` order:
 
@@ -90,11 +97,36 @@ The merge is field by field, in `AMS_PROVIDER_PRIORITY` order:
 - **Artwork, alternative titles, ratings and translations** are unioned.
 - **Credits** come from one provider; nothing identifies a person across
   providers, so a union would list the same actor twice.
-- **Episodes** are merged by number, which is where the gain is: TMDB brings
-  overviews and stills, Skyhook brings absolute numbering and air-order hints.
+- **Episodes and seasons** are the exception, and the one rule worth knowing.
+
+### Whose episode numbering wins
+
+The **list** of episodes and seasons always comes from TheTVDB, or from Skyhook
+which republishes its numbering. Every other provider may fill fields on those
+episodes; none may add one.
+
+This is not configurable, because it is not really a preference. A client
+addresses a series by its TVDB id and expects the numbering that goes with it,
+and the providers do not agree on where seasons end — so serving TMDB's
+boundaries under a TVDB id makes Sonarr map files to the wrong episodes.
+
+Taking the union of both is worse still: episodes that are the same hour of
+television sit at different numbers in each scheme, so none of them match and
+every one is kept twice. That is not hypothetical — it is what this server did
+before the rule existed, and for *One Piece* it answered with 2352 episodes for
+a show that has 1179.
+
+Measured against the live APIs with TheTVDB, Skyhook and Fanart.tv configured:
+
+| Series | Numbered episodes | With absolute numbers |
+| --- | --- | --- |
+| Breaking Bad | 62 | 62 |
+| Attack on Titan | 89 | 89 |
+| One Piece | 1179 | 1178 |
 
 Enrichment is on by default and costs one extra call per refresh per provider.
-Turn it off with `AMS_SKYHOOK_ENRICH=false` / `AMS_RADARR_METADATA_ENRICH=false`.
+Turn it off with `AMS_SKYHOOK_ENRICH=false`, `AMS_RADARR_METADATA_ENRICH=false`,
+`AMS_TVDB_ENABLED=false` or `AMS_FANART_ENABLED=false`.
 
 > If you redirect `skyhook.sonarr.tv` or `api.radarr.video` at this server
 > through your **resolver** rather than per container, it resolves those names

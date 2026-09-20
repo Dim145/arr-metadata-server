@@ -444,7 +444,23 @@ pub struct SnapshotSummary {
     pub provider: String,
     pub fetched_at: String,
     pub etag: Option<String>,
-    pub payload: serde_json::Value,
+    /// Omitted when `payload=false` was asked for.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payload: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshotQuery {
+    /// Include each provider's raw document. On by default; a series with a
+    /// thousand episodes carries megabytes of it, which a caller that only
+    /// wants to know *who* answered does not need.
+    #[serde(default = "yes")]
+    pub payload: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// The raw provider documents behind an entry.
@@ -452,12 +468,13 @@ pub struct SnapshotSummary {
 /// Useful for diagnosing a mapping that produced the wrong canonical value.
 #[utoipa::path(
     get, path = "/items/{id}/snapshots", tag = TAG,
-    params(("id" = String, Path, description = "The work's identifier")),
+    params(("id" = String, Path, description = "The work's identifier"), SnapshotQuery),
     responses((status = 200, body = Vec<SnapshotSummary>)),
 )]
 async fn snapshots(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Query(query): Query<SnapshotQuery>,
 ) -> AppResult<Json<Vec<SnapshotSummary>>> {
     let snapshots = repo::snapshot::list(&state.db, &id).await?;
 
@@ -468,7 +485,7 @@ async fn snapshots(
                 provider: s.provider,
                 fetched_at: s.fetched_at,
                 etag: s.etag,
-                payload: s.payload,
+                payload: query.payload.then_some(s.payload),
             })
             .collect(),
     ))

@@ -509,7 +509,42 @@ pub async fn upsert(db: &Db, write: ItemWrite<'_>) -> Result<()> {
     Ok(())
 }
 
+/// A slug no other work of this kind is already using.
+///
+/// Slugs come from the title and year, and two different films genuinely share
+/// both — there are several unrelated *Ram (2023)*. The column is unique so a
+/// slug addresses one work, which means the collision has to be resolved here
+/// rather than rejected: an entry nobody can look up is worth less than one
+/// under `ram-2023-2`.
+async fn free_slug(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaItem) -> Result<String> {
+    let sql = "SELECT id FROM media_item WHERE kind = ? AND slug = ? LIMIT 1";
+
+    for attempt in 1..=50 {
+        let candidate = match attempt {
+            1 => item.slug.clone(),
+            n => format!("{}-{n}", item.slug),
+        };
+
+        let taken: Option<String> = sqlx::query_scalar(db.sql(sql))
+            .bind(item.kind.as_str())
+            .bind(&candidate)
+            .fetch_optional(&mut **tx)
+            .await
+            .context("failed to check whether a slug was free")?;
+
+        // Ours already, or nobody's.
+        if taken.as_deref().is_none_or(|owner| owner == item.id) {
+            return Ok(candidate);
+        }
+    }
+
+    // Fifty works sharing a title and year is not a collision any more.
+    Ok(format!("{}-{}", item.slug, &item.id[..8]))
+}
+
 async fn upsert_row(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaItem) -> Result<()> {
+    let slug = free_slug(db, tx, item).await?;
+
     // `created_at` is preserved on conflict; everything else is overwritten.
     let sql = "
         INSERT INTO media_item (
@@ -560,7 +595,7 @@ async fn upsert_row(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaItem) ->
     sqlx::query(db.sql(sql))
         .bind(&item.id)
         .bind(item.kind.as_str())
-        .bind(&item.slug)
+        .bind(&slug)
         .bind(&item.title)
         .bind(&item.sort_title)
         .bind(&item.original_title)
@@ -1061,6 +1096,68 @@ mod tests {
             rating_type: Some("user".into()),
         }];
         item
+    }
+
+    #[tokio::test]
+    async fn two_works_sharing_a_title_and_year_both_get_stored() {
+        // Films do share a title and a year. Before this, the second one made
+        // the write fail and the request answer 500.
+        let db = db().await;
+
+        let mut first = sample();
+        first.id = crate::db::new_id();
+
+        let mut second = sample();
+        second.id = crate::db::new_id();
+        second.external_ids = ExternalIds {
+            tmdb: Some(9999),
+            ..Default::default()
+        };
+
+        for item in [&first, &second] {
+            upsert(
+                &db,
+                ItemWrite {
+                    item,
+                    replace_children: false,
+                },
+            )
+            .await
+            .expect("both writes succeed");
+        }
+
+        let stored = get(&db, &second.id).await.unwrap().expect("second item");
+        assert_eq!(
+            stored.slug, "round-trip-2026-2",
+            "disambiguated, not rejected"
+        );
+
+        let kept = get(&db, &first.id).await.unwrap().expect("first item");
+        assert_eq!(
+            kept.slug, "round-trip-2026",
+            "the first keeps the plain one"
+        );
+    }
+
+    #[tokio::test]
+    async fn rewriting_the_same_work_keeps_its_slug() {
+        let db = db().await;
+        let item = sample();
+
+        for _ in 0..2 {
+            upsert(
+                &db,
+                ItemWrite {
+                    item: &item,
+                    replace_children: false,
+                },
+            )
+            .await
+            .expect("write");
+        }
+
+        let stored = get(&db, &item.id).await.unwrap().expect("item");
+        assert_eq!(stored.slug, "round-trip-2026", "not bumped by its own row");
     }
 
     #[tokio::test]

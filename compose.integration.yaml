@@ -4,6 +4,7 @@
 # Prerequisites
 #   1. ./docker/gen-certs.sh
 #   2. A .env with AMS_TMDB_API_KEY, AMS_ADMIN_USERNAME, AMS_ADMIN_PASSWORD
+#      (and, recommended, TVDB_API_KEY and FANARTTV_API_KEY)
 #
 # Run
 #   docker compose -f compose.integration.yaml up -d
@@ -27,6 +28,11 @@ services:
       AMS_TLS_KEY: /certs/server.key
       AMS_DATABASE_URL: sqlite:///data/ams.db?mode=rwc
       AMS_TMDB_API_KEY: ${AMS_TMDB_API_KEY:?AMS_TMDB_API_KEY is required}
+      # TheTVDB settles the episode and season numbering, which is what Sonarr
+      # matches files against. Optional, but without it anime is misnumbered.
+      AMS_TVDB_API_KEY: ${AMS_TVDB_API_KEY:-${TVDB_API_KEY:-}}
+      # Fanart.tv adds transparent logos, clearart and banners. Optional.
+      AMS_FANART_API_KEY: ${AMS_FANART_API_KEY:-${FANARTTV_API_KEY:-}}
       AMS_ADMIN_USERNAME: ${AMS_ADMIN_USERNAME:?}
       AMS_ADMIN_PASSWORD: ${AMS_ADMIN_PASSWORD:?}
       AMS_ALLOWLIST: 172.31.0.0/24

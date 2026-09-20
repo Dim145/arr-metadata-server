@@ -37,12 +37,17 @@ pub async fn series(
     tvdb_id: Option<i64>,
     language: &str,
 ) -> Result<Option<MediaItem>> {
-    let (from_tmdb, from_skyhook) = tokio::join!(
+    let (from_tmdb, from_tvdb, from_skyhook, from_fanart) = tokio::join!(
         series_from_tmdb(state, tmdb_id),
+        series_from_tvdb(state, tvdb_id),
         series_from_skyhook(state, tvdb_id, language),
+        series_from_fanart(state, tvdb_id),
     );
 
-    let answers: Vec<Answer> = [from_tmdb, from_skyhook].into_iter().flatten().collect();
+    let answers: Vec<Answer> = [from_tmdb, from_tvdb, from_skyhook, from_fanart]
+        .into_iter()
+        .flatten()
+        .collect();
 
     store(state, answers).await
 }
@@ -53,12 +58,16 @@ pub async fn movie(
     tmdb_id: Option<i64>,
     imdb_id: Option<&str>,
 ) -> Result<Option<MediaItem>> {
-    let (from_tmdb, from_radarr) = tokio::join!(
+    let (from_tmdb, from_radarr, from_fanart) = tokio::join!(
         movie_from_tmdb(state, tmdb_id),
         movie_from_radarr(state, tmdb_id, imdb_id),
+        movie_from_fanart(state, tmdb_id, imdb_id),
     );
 
-    let answers: Vec<Answer> = [from_tmdb, from_radarr].into_iter().flatten().collect();
+    let answers: Vec<Answer> = [from_tmdb, from_radarr, from_fanart]
+        .into_iter()
+        .flatten()
+        .collect();
 
     store(state, answers).await
 }
@@ -89,6 +98,15 @@ async fn store(state: &AppState, answers: Vec<Answer>) -> Result<Option<MediaIte
         return Ok(None);
     };
 
+    // Fanart.tv answers with artwork and nothing else, so when it is the only
+    // provider that replied there is no work here to speak of — just pictures
+    // filed under an id. Storing that would put a nameless row in the catalogue
+    // and hand the client an entry it cannot display.
+    if merged.title.trim().is_empty() {
+        tracing::warn!(?providers, "no provider named this work; not storing it");
+        return Ok(None);
+    }
+
     Ok(Some(persist(state, merged, &snapshots).await?))
 }
 
@@ -104,7 +122,11 @@ async fn series_from_tmdb(state: &AppState, tmdb_id: Option<i64>) -> Option<Answ
         Ok(Some(found)) => found,
         Ok(None) => return None,
         Err(e) => {
-            tracing::warn!(tmdb_id, error = %e, "TMDB series fetch failed");
+            tracing::warn!(
+                tmdb_id,
+                error = format_args!("{e:#}"),
+                "TMDB series fetch failed"
+            );
             return None;
         }
     };
@@ -141,7 +163,92 @@ async fn series_from_skyhook(
         }),
         Ok(None) => None,
         Err(e) => {
-            tracing::warn!(tvdb_id, error = %e, "Skyhook enrichment failed");
+            tracing::warn!(
+                tvdb_id,
+                error = format_args!("{e:#}"),
+                "Skyhook enrichment failed"
+            );
+            None
+        }
+    }
+}
+
+/// TheTVDB, which is where absolute episode numbering comes from.
+async fn series_from_tvdb(state: &AppState, tvdb_id: Option<i64>) -> Option<Answer> {
+    let tvdb_id = tvdb_id?;
+    if !state.tvdb.is_enabled() {
+        return None;
+    }
+
+    match state.tvdb.series(tvdb_id).await {
+        Ok(Some((raw, item))) => Some(Answer {
+            provider: names::TVDB,
+            payload: raw,
+            item,
+        }),
+        Ok(None) => None,
+        Err(e) => {
+            tracing::warn!(
+                tvdb_id,
+                error = format_args!("{e:#}"),
+                "TheTVDB lookup failed"
+            );
+            None
+        }
+    }
+}
+
+/// Fanart.tv, which contributes artwork and nothing else.
+///
+/// It indexes television on TVDB ids only, so a series with no TVDB id cannot
+/// be looked up there at all.
+async fn series_from_fanart(state: &AppState, tvdb_id: Option<i64>) -> Option<Answer> {
+    let tvdb_id = tvdb_id?;
+    if !state.fanart.is_enabled() {
+        return None;
+    }
+
+    match state.fanart.series(tvdb_id).await {
+        Ok(Some((raw, item))) => Some(Answer {
+            provider: names::FANART,
+            payload: raw,
+            item,
+        }),
+        Ok(None) => None,
+        Err(e) => {
+            tracing::warn!(
+                tvdb_id,
+                error = format_args!("{e:#}"),
+                "Fanart.tv lookup failed"
+            );
+            None
+        }
+    }
+}
+
+async fn movie_from_fanart(
+    state: &AppState,
+    tmdb_id: Option<i64>,
+    imdb_id: Option<&str>,
+) -> Option<Answer> {
+    if !state.fanart.is_enabled() {
+        return None;
+    }
+
+    // It accepts either key; TMDB's is the one more titles are indexed under.
+    let key = tmdb_id
+        .map(|id| id.to_string())
+        .or_else(|| imdb_id.map(String::from))?;
+
+    match state.fanart.movie(&key).await {
+        Ok(Some((raw, item))) => Some(Answer {
+            provider: names::FANART,
+            payload: raw,
+            item,
+        }),
+        Ok(None) => None,
+        Err(e) => {
+            tracing::warn!(%key, error = format_args!("{e:#}"), "Fanart.tv lookup failed");
             None
         }
     }
@@ -161,7 +268,11 @@ async fn movie_from_tmdb(state: &AppState, tmdb_id: Option<i64>) -> Option<Answe
         }),
         Ok(None) => None,
         Err(e) => {
-            tracing::warn!(tmdb_id, error = %e, "TMDB movie fetch failed");
+            tracing::warn!(
+                tmdb_id,
+                error = format_args!("{e:#}"),
+                "TMDB movie fetch failed"
+            );
             None
         }
     }
@@ -196,7 +307,11 @@ async fn movie_from_radarr(
         }),
         Ok(None) => None,
         Err(e) => {
-            tracing::warn!(?tmdb_id, error = %e, "Radarr metadata enrichment failed");
+            tracing::warn!(
+                ?tmdb_id,
+                error = format_args!("{e:#}"),
+                "Radarr metadata enrichment failed"
+            );
             None
         }
     }

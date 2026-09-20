@@ -1106,7 +1106,7 @@ mod fixtures {
         assert_eq!(resource.imdb_id.as_deref(), Some("tt2543164"));
         assert_eq!(resource.title_slug, "arrival-2016");
         assert_eq!(resource.year, 2016);
-        assert_eq!(resource.status, "released");
+        assert_eq!(resource.status.as_deref(), Some("released"));
         assert_eq!(resource.in_cinema.as_deref(), Some("2016-11-11"));
         assert_eq!(resource.certifications.len(), 1);
 
@@ -1130,9 +1130,10 @@ mod fixtures {
         assert_eq!(series["title"], "Breaking Bad");
         assert!(series["episodes"].as_array().unwrap().len() == 3);
 
+        // Radarr's own service answers in PascalCase; Sonarr's Skyhook does not.
         let film = serde_json::to_value(radarr::from_item(&movie_to_item(&movie()))).unwrap();
-        assert_eq!(film["tmdbId"], 329865);
-        assert_eq!(film["titleSlug"], "arrival-2016");
-        assert_eq!(film["physicalRelease"], "2017-02-14");
+        assert_eq!(film["TmdbId"], 329865);
+        assert_eq!(film["TitleSlug"], "arrival-2016");
+        assert_eq!(film["PhysicalRelease"], "2017-02-14");
     }
 }

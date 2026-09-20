@@ -269,6 +269,12 @@ pub enum CoverType {
     Banner,
     Fanart,
     Clearlogo,
+    /// Character artwork on a transparent background. Kodi and Jellyfin use it;
+    /// Sonarr and Radarr map anything they do not know to `Unknown`, which is
+    /// harmless — they simply ignore it.
+    Clearart,
+    /// Wide 16:9 artwork, `<thumb aspect="landscape">` in a Kodi document.
+    Landscape,
     Screenshot,
     Headshot,
     Unknown,
@@ -283,9 +289,11 @@ impl CoverType {
             Self::Fanart => 1,
             Self::Banner => 2,
             Self::Clearlogo => 3,
-            Self::Screenshot => 4,
-            Self::Headshot => 5,
-            Self::Unknown => 6,
+            Self::Clearart => 4,
+            Self::Landscape => 5,
+            Self::Screenshot => 6,
+            Self::Headshot => 7,
+            Self::Unknown => 8,
         }
     }
 
@@ -295,6 +303,8 @@ impl CoverType {
             Self::Banner => "banner",
             Self::Fanart => "fanart",
             Self::Clearlogo => "clearlogo",
+            Self::Clearart => "clearart",
+            Self::Landscape => "landscape",
             Self::Screenshot => "screenshot",
             Self::Headshot => "headshot",
             Self::Unknown => "unknown",
@@ -313,6 +323,8 @@ impl FromStr for CoverType {
             "banner" => Self::Banner,
             "fanart" | "backdrop" => Self::Fanart,
             "clearlogo" | "logo" => Self::Clearlogo,
+            "clearart" | "art" => Self::Clearart,
+            "landscape" | "thumb" => Self::Landscape,
             "screenshot" | "still" => Self::Screenshot,
             "headshot" | "profile" => Self::Headshot,
             _ => Self::Unknown,
@@ -478,6 +490,7 @@ mod tests {
         let mut types = vec![
             CoverType::Clearlogo,
             CoverType::Unknown,
+            CoverType::Landscape,
             CoverType::Fanart,
             CoverType::Poster,
             CoverType::Banner,
@@ -491,6 +504,7 @@ mod tests {
                 CoverType::Fanart,
                 CoverType::Banner,
                 CoverType::Clearlogo,
+                CoverType::Landscape,
                 CoverType::Unknown,
             ]
         );

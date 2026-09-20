@@ -9,7 +9,10 @@ use crate::{
     cache::Caches,
     config::Config,
     db::{Db, repo},
-    providers::{radarr::RadarrMetadataClient, skyhook::SkyhookClient, tmdb::TmdbClient},
+    providers::{
+        fanart::FanartClient, radarr::RadarrMetadataClient, skyhook::SkyhookClient,
+        tmdb::TmdbClient, tvdb::TvdbClient,
+    },
 };
 
 #[derive(Clone)]
@@ -23,6 +26,8 @@ pub struct Inner {
     pub tmdb: TmdbClient,
     pub skyhook: SkyhookClient,
     pub radarr_metadata: RadarrMetadataClient,
+    pub fanart: FanartClient,
+    pub tvdb: TvdbClient,
     pub limiter: Limiter,
     /// Identifies this process on outbound calls to hostnames it also answers
     /// on, so a request that loops back can be recognised and refused.
@@ -61,6 +66,19 @@ impl AppState {
         let skyhook = SkyhookClient::new(http.clone(), &config.skyhook, instance.clone());
         let radarr_metadata =
             RadarrMetadataClient::new(http.clone(), &config.radarr_metadata, instance.clone());
+        let fanart = FanartClient::new(http.clone(), &config.fanart, &config.tmdb.language);
+        let tvdb = TvdbClient::new(http.clone(), &config.tvdb, &config.tmdb.language);
+
+        if config.fanart.enabled && !fanart.is_configured() {
+            tracing::info!("no Fanart.tv key configured; artwork enrichment is off");
+        }
+
+        if config.tvdb.enabled && !tvdb.is_configured() {
+            tracing::info!(
+                "no TheTVDB key configured; absolute episode numbering will only come \
+                 from Skyhook where it has it"
+            );
+        }
 
         if !tmdb.is_configured() {
             tracing::warn!(
@@ -77,6 +95,8 @@ impl AppState {
             tmdb,
             skyhook,
             radarr_metadata,
+            fanart,
+            tvdb,
             limiter,
             instance,
         }));

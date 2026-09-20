@@ -12,9 +12,12 @@
 //! * **Credits** come from one provider — the highest-priority one that has any.
 //!   Unioning them would list the same actor two or three times, since nothing
 //!   reliably identifies a person across providers.
-//! * **Episodes** are merged field by field, keyed by season and episode number.
-//!   This is where the value is: TVDB knows absolute numbering and TMDB does
-//!   not, so an episode ends up with both.
+//! * **Episodes and seasons** take their *list* from one provider and their
+//!   *fields* from all of them. Merging two lists by season and episode number
+//!   sounds right and is not: providers disagree about where a season ends, so
+//!   unioning One Piece's 1179 TVDB episodes with TMDB's 1181 produced 2352,
+//!   most of them phantoms Sonarr would then hunt for files of. One list, many
+//!   opinions about each entry.
 
 use crate::domain::{
     AlternativeTitle, CoverType, Episode, ExternalIds, Image, MediaItem, Rating, Season,
@@ -26,6 +29,15 @@ pub struct Contribution {
     pub provider: String,
     pub item: MediaItem,
 }
+
+/// Providers whose episode numbering is TVDB's.
+///
+/// Sonarr addresses a series by its TVDB id and expects the episode numbering
+/// that goes with it. TMDB numbers the same series differently — it splits One
+/// Piece into 23 seasons where TVDB has 21 — so serving TMDB's numbering under
+/// a TVDB id would have Sonarr map files to the wrong episodes. When one of
+/// these has a list, it is the list, whatever the general priority says.
+const TVDB_NUMBERED: &[&str] = &["tvdb", "skyhook"];
 
 /// Fold contributions into one entity, most trusted first.
 ///
@@ -46,11 +58,48 @@ pub fn combine(mut contributions: Vec<Contribution>, priority: &[String]) -> Opt
 
     contributions.sort_by_key(|c| rank(&c.provider));
 
+    // Decide whose episode numbering this is before anything is folded, because
+    // every later provider fills fields *into* that list.
+    let answered = |c: &Contribution| !c.item.episodes.is_empty() || !c.item.seasons.is_empty();
+
+    let spine = contributions
+        .iter()
+        .position(|c| TVDB_NUMBERED.contains(&c.provider.as_str()) && answered(c))
+        .or_else(|| contributions.iter().position(answered));
+
+    let (seasons, episodes) = match spine {
+        Some(index) => {
+            let item = &mut contributions[index].item;
+            (
+                std::mem::take(&mut item.seasons),
+                std::mem::take(&mut item.episodes),
+            )
+        }
+        None => (Vec::new(), Vec::new()),
+    };
+
     let mut merged = contributions.remove(0).item;
+
+    // The most trusted provider loses the numbering to the spine, but not what
+    // it knows about each episode: TMDB carries overviews and stills that TVDB
+    // rarely has. Its own lists fold back in as a field source like any other.
+    let displaced_seasons = std::mem::replace(&mut merged.seasons, seasons);
+    let displaced_episodes = std::mem::replace(&mut merged.episodes, episodes);
+    merge_seasons(&mut merged.seasons, displaced_seasons);
+    merge_episodes(&mut merged.episodes, displaced_episodes);
 
     for contribution in contributions {
         fold(&mut merged, contribution.item);
     }
+
+    // Whichever provider ended up supplying the spine, a client reads it in order.
+    merged.seasons.sort_by_key(|s| s.season_number);
+    merged
+        .episodes
+        .sort_by_key(|e| (e.season_number, e.episode_number));
+    merged
+        .images
+        .sort_by_key(|i| (i.cover_type.priority(), i.sort_order));
 
     Some(merged)
 }
@@ -114,8 +163,19 @@ fn fold(into: &mut MediaItem, other: MediaItem) {
         into.credits = other.credits;
     }
 
-    merge_seasons(&mut into.seasons, other.seasons);
-    merge_episodes(&mut into.episodes, other.episodes);
+    // The spine: whichever provider came first and had a list keeps it. Only
+    // when it had none does a later provider supply one.
+    if into.seasons.is_empty() {
+        into.seasons = other.seasons;
+    } else {
+        merge_seasons(&mut into.seasons, other.seasons);
+    }
+
+    if into.episodes.is_empty() {
+        into.episodes = other.episodes;
+    } else {
+        merge_episodes(&mut into.episodes, other.episodes);
+    }
 }
 
 /// Fill an absent or blank optional string.
@@ -204,25 +264,24 @@ fn union_translations(into: &mut Vec<Translation>, other: Vec<Translation>) {
     }
 }
 
-fn merge_seasons(into: &mut Vec<Season>, other: Vec<Season>) {
+/// Fill seasons the spine already has. A season only another provider knows
+/// about is dropped, for the same reason as episodes.
+fn merge_seasons(into: &mut [Season], other: Vec<Season>) {
     for season in other {
-        match into
+        let Some(existing) = into
             .iter_mut()
             .find(|s| s.season_number == season.season_number)
-        {
-            Some(existing) => {
-                fill(&mut existing.title, season.title);
-                fill(&mut existing.overview, season.overview);
-                fill(&mut existing.air_date, season.air_date);
-                existing.tmdb_id = existing.tmdb_id.or(season.tmdb_id);
-                existing.tvdb_id = existing.tvdb_id.or(season.tvdb_id);
-                union_images(&mut existing.images, season.images);
-            }
-            None => into.push(season),
-        }
-    }
+        else {
+            continue;
+        };
 
-    into.sort_by_key(|s| s.season_number);
+        fill(&mut existing.title, season.title);
+        fill(&mut existing.overview, season.overview);
+        fill(&mut existing.air_date, season.air_date);
+        existing.tmdb_id = existing.tmdb_id.or(season.tmdb_id);
+        existing.tvdb_id = existing.tvdb_id.or(season.tvdb_id);
+        union_images(&mut existing.images, season.images);
+    }
 }
 
 /// Merge episodes field by field, keyed by their numbering.
@@ -230,47 +289,42 @@ fn merge_seasons(into: &mut Vec<Season>, other: Vec<Season>) {
 /// This is where a second provider earns its place: TVDB carries absolute
 /// numbering and air-order hints that TMDB has no field for, while TMDB carries
 /// overviews and stills that TVDB often lacks.
-fn merge_episodes(into: &mut Vec<Episode>, other: Vec<Episode>) {
+fn merge_episodes(into: &mut [Episode], other: Vec<Episode>) {
     for episode in other {
         let existing = into.iter_mut().find(|e| {
             e.season_number == episode.season_number && e.episode_number == episode.episode_number
         });
 
-        match existing {
-            Some(existing) => {
-                if existing.title.trim().is_empty() {
-                    existing.title = episode.title;
-                }
-                fill(&mut existing.overview, episode.overview);
-                fill(&mut existing.air_date, episode.air_date);
-                fill(&mut existing.air_date_utc, episode.air_date_utc);
-                fill(&mut existing.finale_type, episode.finale_type);
-                fill(&mut existing.image, episode.image);
-
-                existing.runtime = existing.runtime.or(episode.runtime);
-                existing.tvdb_id = existing.tvdb_id.or(episode.tvdb_id);
-                existing.tmdb_id = existing.tmdb_id.or(episode.tmdb_id);
-                existing.rating = existing.rating.or(episode.rating);
-
-                // The reason this merge exists.
-                existing.absolute_episode_number = existing
-                    .absolute_episode_number
-                    .or(episode.absolute_episode_number);
-                existing.aired_after_season_number = existing
-                    .aired_after_season_number
-                    .or(episode.aired_after_season_number);
-                existing.aired_before_season_number = existing
-                    .aired_before_season_number
-                    .or(episode.aired_before_season_number);
-                existing.aired_before_episode_number = existing
-                    .aired_before_episode_number
-                    .or(episode.aired_before_episode_number);
+        if let Some(existing) = existing {
+            if existing.title.trim().is_empty() {
+                existing.title = episode.title;
             }
-            None => into.push(episode),
+            fill(&mut existing.overview, episode.overview);
+            fill(&mut existing.air_date, episode.air_date);
+            fill(&mut existing.air_date_utc, episode.air_date_utc);
+            fill(&mut existing.finale_type, episode.finale_type);
+            fill(&mut existing.image, episode.image);
+
+            existing.runtime = existing.runtime.or(episode.runtime);
+            existing.tvdb_id = existing.tvdb_id.or(episode.tvdb_id);
+            existing.tmdb_id = existing.tmdb_id.or(episode.tmdb_id);
+            existing.rating = existing.rating.or(episode.rating);
+
+            // The reason this merge exists.
+            existing.absolute_episode_number = existing
+                .absolute_episode_number
+                .or(episode.absolute_episode_number);
+            existing.aired_after_season_number = existing
+                .aired_after_season_number
+                .or(episode.aired_after_season_number);
+            existing.aired_before_season_number = existing
+                .aired_before_season_number
+                .or(episode.aired_before_season_number);
+            existing.aired_before_episode_number = existing
+                .aired_before_episode_number
+                .or(episode.aired_before_episode_number);
         }
     }
-
-    into.sort_by_key(|e| (e.season_number, e.episode_number));
 }
 
 /// Artwork a provider contributed that nothing else did, for logging.
@@ -474,7 +528,8 @@ mod tests {
 
     #[test]
     fn an_episode_gathers_what_each_provider_knows() {
-        // TMDB has the overview and the still; TVDB has the absolute number.
+        // TVDB supplies the list and the absolute number; TMDB fills the gaps
+        // in it — the overview and the still TVDB often lacks.
         let mut a = base("tmdb", "T");
         let mut from_tmdb = episode(1, 1);
         from_tmdb.title = "Pilot".into();
@@ -484,7 +539,6 @@ mod tests {
 
         let mut b = base("tvdb", "T");
         let mut from_tvdb = episode(1, 1);
-        from_tvdb.title = "Pilot (TVDB)".into();
         from_tvdb.absolute_episode_number = Some(1);
         from_tvdb.tvdb_id = Some(349232);
         from_tvdb.runtime = Some(58);
@@ -494,42 +548,132 @@ mod tests {
         assert_eq!(merged.episodes.len(), 1);
 
         let e = &merged.episodes[0];
-        assert_eq!(e.title, "Pilot", "the trusted provider's title");
+        assert_eq!(e.title, "Pilot", "TVDB had none, so TMDB's filled in");
         assert_eq!(e.overview.as_deref(), Some("It begins."));
-        assert_eq!(e.absolute_episode_number, Some(1), "filled from TVDB");
+        assert_eq!(e.image.as_deref(), Some("https://tmdb/still.jpg"));
+        assert_eq!(e.absolute_episode_number, Some(1));
         assert_eq!(e.tvdb_id, Some(349232));
         assert_eq!(e.runtime, Some(58));
     }
 
     #[test]
-    fn an_episode_only_one_provider_knows_about_is_added() {
-        let mut a = base("tmdb", "T");
-        a.item.episodes = vec![episode(1, 1)];
+    fn the_episode_list_comes_from_a_tvdb_numbered_provider() {
+        // Clients address a series by its TVDB id, so the numbering has to be
+        // TVDB's even though TMDB outranks it for everything else.
+        let mut tmdb = base("tmdb", "From TMDB");
+        tmdb.item.episodes = vec![episode(1, 1), episode(1, 2), episode(1, 3)];
 
-        let mut b = base("skyhook", "T");
-        b.item.episodes = vec![episode(1, 1), episode(1, 2)];
+        let mut skyhook = base("skyhook", "From Skyhook");
+        let mut only = episode(1, 1);
+        only.title = "TVDB numbering".into();
+        skyhook.item.episodes = vec![only];
 
-        let merged = combine(vec![a, b], &priority()).unwrap();
+        let merged = combine(vec![tmdb, skyhook], &priority()).unwrap();
 
-        assert_eq!(merged.episodes.len(), 2);
-        assert_eq!(merged.episodes[1].episode_number, 2);
+        assert_eq!(merged.title, "From TMDB", "scalars still follow priority");
+        assert_eq!(merged.episodes.len(), 1, "but the list is Skyhook's");
+        assert_eq!(merged.episodes[0].title, "TVDB numbering");
     }
 
     #[test]
-    fn episodes_come_back_in_order() {
-        let mut a = base("tmdb", "T");
-        a.item.episodes = vec![episode(2, 1), episode(1, 3)];
-        let mut b = base("skyhook", "T");
-        b.item.episodes = vec![episode(1, 1), episode(0, 1)];
+    fn tmdbs_numbering_is_used_when_nothing_tvdb_numbered_answered() {
+        let mut tmdb = base("tmdb", "T");
+        tmdb.item.episodes = vec![episode(1, 1), episode(1, 2)];
+        let fanart = base("fanart", "T");
 
+        let merged = combine(vec![tmdb, fanart], &priority()).unwrap();
+        assert_eq!(merged.episodes.len(), 2);
+    }
+
+    #[test]
+    fn a_second_provider_does_not_add_episodes_to_the_list() {
+        // Providers disagree about season boundaries. Unioning One Piece's 1179
+        // TVDB episodes with TMDB's 1181 produced 2352, most of them phantoms.
+        let mut a = base("tmdb", "T");
+        a.item.episodes = vec![episode(1, 1)];
+
+        let mut b = base("tvdb", "T");
+        b.item.episodes = vec![episode(1, 1), episode(1, 2), episode(9, 9)];
+
+        // TVDB supplies the list here, so TMDB's single episode is what gets
+        // dropped — the rule is one list, not "the first one".
         let merged = combine(vec![a, b], &priority()).unwrap();
+
+        assert_eq!(merged.episodes.len(), 3);
+    }
+
+    #[test]
+    fn the_list_comes_from_the_next_provider_when_the_first_has_none() {
+        // Fanart.tv contributes artwork and no episodes at all; that must not
+        // leave a series with an empty run.
+        let a = base("fanart", "T");
+        let mut b = base("tmdb", "T");
+        b.item.episodes = vec![episode(2, 1), episode(1, 1)];
+
+        // Ordered so the episode-less provider is folded in first.
+        let merged = combine(vec![b, a], &priority()).unwrap();
+
+        assert_eq!(merged.episodes.len(), 2);
         let order: Vec<(i32, i32)> = merged
             .episodes
             .iter()
             .map(|e| (e.season_number, e.episode_number))
             .collect();
+        assert_eq!(order, vec![(1, 1), (2, 1)]);
+    }
 
-        assert_eq!(order, vec![(0, 1), (1, 1), (1, 3), (2, 1)]);
+    #[test]
+    fn a_season_outside_the_spine_is_not_added() {
+        // TMDB outranks Skyhook everywhere else, and still cannot add a season
+        // to a list Skyhook owns — only fill the ones already in it.
+        let mut a = base("tmdb", "T");
+        a.item.seasons = vec![
+            Season {
+                id: "s".into(),
+                season_number: 1,
+                title: Some("Named".into()),
+                overview: None,
+                air_date: None,
+                tmdb_id: None,
+                tvdb_id: Some(7),
+                is_manual: false,
+                images: Vec::new(),
+            },
+            Season {
+                id: "s".into(),
+                season_number: 42,
+                title: None,
+                overview: None,
+                air_date: None,
+                tmdb_id: None,
+                tvdb_id: None,
+                is_manual: false,
+                images: Vec::new(),
+            },
+        ];
+
+        let mut b = base("skyhook", "T");
+        b.item.seasons = vec![Season {
+            id: "s".into(),
+            season_number: 1,
+            title: None,
+            overview: None,
+            air_date: None,
+            tmdb_id: None,
+            tvdb_id: None,
+            is_manual: false,
+            images: Vec::new(),
+        }];
+
+        let merged = combine(vec![a, b], &priority()).unwrap();
+
+        assert_eq!(merged.seasons.len(), 1);
+        assert_eq!(
+            merged.seasons[0].title.as_deref(),
+            Some("Named"),
+            "fields still fill"
+        );
+        assert_eq!(merged.seasons[0].tvdb_id, Some(7));
     }
 
     #[test]
@@ -601,15 +745,16 @@ mod tests {
         });
         a.item.episodes = vec![rated];
 
-        let mut b = base("skyhook", "T");
+        let mut b = base("tvdb", "T");
         let mut other = episode(1, 1);
         other.rating = Some(RatingValue {
-            value: 1.0,
-            votes: 1,
+            value: 9.0,
+            votes: 20,
         });
         b.item.episodes = vec![other];
 
+        // TVDB owns the list here, so its rating is the one already in place.
         let merged = combine(vec![a, b], &priority()).unwrap();
-        assert_eq!(merged.episodes[0].rating.map(|r| r.value), Some(8.0));
+        assert_eq!(merged.episodes[0].rating.map(|r| r.value), Some(9.0));
     }
 }

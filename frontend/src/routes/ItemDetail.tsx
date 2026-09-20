@@ -4,7 +4,7 @@ import { Link, useParams } from 'react-router'
 
 import { api, query } from '../lib/api'
 import { cn } from '../lib/cn'
-import type { FieldDef, FieldRegistry, MediaItem, Override } from '../lib/types'
+import type { FieldDef, FieldRegistry, MediaItem, Override, Snapshot } from '../lib/types'
 import { ManualChildren } from '../components/ManualChildren'
 import {
   Alert,
@@ -51,6 +51,11 @@ export function ItemDetail() {
     queryKey: ['fields'],
     queryFn: () => api.get<FieldRegistry>('/fields'),
     staleTime: Infinity,
+  })
+  // Only who answered and when; the raw documents run to megabytes.
+  const snapshots = useQuery({
+    queryKey: ['item', id, 'snapshots'],
+    queryFn: () => api.get<Snapshot[]>(`/items/${id}/snapshots?payload=false`),
   })
   const overrides = useQuery({
     queryKey: ['overrides', id],
@@ -202,7 +207,7 @@ export function ItemDetail() {
         <ManualChildren item={work} onChanged={invalidate} />
       </div>
 
-      <div className="mt-6 grid gap-6 lg:grid-cols-2">
+      <div className="mt-6 grid gap-6 lg:grid-cols-3">
         <Panel className="reveal" style={{ animationDelay: '140ms' }}>
           <PanelHead title="Identifiers" />
           <dl className="divide-y divide-line">
@@ -236,8 +241,49 @@ export function ItemDetail() {
             )}
           </dl>
         </Panel>
+
+        <Sources snapshots={snapshots.data} isManual={work.isManual} />
       </div>
     </div>
+  )
+}
+
+/** Mirrors `TVDB_NUMBERED` in the merge engine: these supply the episode list. */
+const NUMBERING = new Set(['tvdb', 'skyhook'])
+
+/** Providers that answered for this work, most recently fetched first. */
+function Sources({ snapshots, isManual }: { snapshots?: Snapshot[]; isManual?: boolean }) {
+  const sorted = [...(snapshots ?? [])].sort((a, b) => b.fetchedAt.localeCompare(a.fetchedAt))
+
+  return (
+    <Panel className="reveal" style={{ animationDelay: '220ms' }}>
+      <PanelHead title="Sources" />
+      {sorted.length === 0 ? (
+        <p className="px-5 py-4 text-sm text-dim">
+          {isManual
+            ? 'Entered by hand. No provider stands behind this entry.'
+            : 'No provider has answered for this entry yet.'}
+        </p>
+      ) : (
+        <dl className="divide-y divide-line">
+          {sorted.map((snapshot) => (
+            <div
+              key={snapshot.provider}
+              className="flex items-baseline justify-between gap-4 px-5 py-2.5"
+            >
+              <Label>{snapshot.provider}</Label>
+              <Mono className="text-dim">{formatTime(snapshot.fetchedAt)}</Mono>
+            </div>
+          ))}
+        </dl>
+      )}
+      {sorted.some((snapshot) => NUMBERING.has(snapshot.provider)) && (
+        <p className="border-t border-line px-5 py-3 text-xs leading-relaxed text-dim">
+          Episode and season numbering comes from TheTVDB, or from Skyhook, which republishes it.
+          The others fill in fields without adding episodes.
+        </p>
+      )}
+    </Panel>
   )
 }
 

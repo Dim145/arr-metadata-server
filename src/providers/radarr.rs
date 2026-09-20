@@ -64,9 +64,13 @@ impl RadarrMetadataClient {
             return Ok(None);
         };
 
-        let movie: MovieResource = serde_json::from_value(value.clone()).context(
-            "Radarr's metadata service returned a movie this server could not interpret",
-        )?;
+        // serde's message names the offending field and line, which is the
+        // only thing that makes an upstream schema change diagnosable.
+        let movie: MovieResource = serde_json::from_value(value.clone()).with_context(|| {
+            format!(
+                "Radarr's metadata service returned a movie this server could not interpret: {url}"
+            )
+        })?;
 
         Ok(Some((value, movie)))
     }
