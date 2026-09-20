@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::domain::{CreditType, Credit, Image, MediaItem, Rating};
+use crate::domain::{Credit, CreditType, Image, MediaItem, Rating};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

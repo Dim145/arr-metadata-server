@@ -31,7 +31,11 @@ impl SkyhookClient {
 
     /// One show by TVDB id. Returns the raw body alongside the parsed one so the
     /// caller can snapshot it.
-    pub async fn show(&self, language: &str, tvdb_id: i64) -> Result<Option<(Value, ShowResource)>> {
+    pub async fn show(
+        &self,
+        language: &str,
+        tvdb_id: i64,
+    ) -> Result<Option<(Value, ShowResource)>> {
         if !self.enabled {
             return Ok(None);
         }

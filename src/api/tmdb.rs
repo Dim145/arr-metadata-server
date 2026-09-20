@@ -86,7 +86,8 @@ async fn proxy(State(state): State<AppState>, request: Request) -> AppResult<Res
         .await
         .map_err(|e| AppError::UpstreamUnavailable(e.into()))?;
 
-    let status = StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+    let status =
+        StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
     let headers = response.headers().clone();
 
     let bytes = response
@@ -96,14 +97,12 @@ async fn proxy(State(state): State<AppState>, request: Request) -> AppResult<Res
 
     // Only JSON documents for a known title are worth inspecting; images,
     // configuration and errors pass through untouched.
-    if let Some(target) = patch_target(parts.uri.path()) {
-        if is_json(&headers) {
-            if let Ok(mut document) = serde_json::from_slice::<Value>(&bytes) {
-                if patch(&state, &mut document, target).await? {
-                    return Ok((status, response_headers(&headers), axum::Json(document)).into_response());
-                }
-            }
-        }
+    if let Some(target) = patch_target(parts.uri.path())
+        && is_json(&headers)
+        && let Ok(mut document) = serde_json::from_slice::<Value>(&bytes)
+        && patch(&state, &mut document, target).await?
+    {
+        return Ok((status, response_headers(&headers), axum::Json(document)).into_response());
     }
 
     Ok((status, response_headers(&headers), Body::from(bytes)).into_response())
@@ -222,7 +221,8 @@ fn patch_target(path: &str) -> Option<PatchTarget> {
 async fn patch(state: &AppState, document: &mut Value, target: PatchTarget) -> AppResult<bool> {
     let source = ExternalSource::tmdb_for(target.kind);
 
-    let Some(id) = repo::item::find_id_by_external(&state.db, source, &target.tmdb_id.to_string()).await?
+    let Some(id) =
+        repo::item::find_id_by_external(&state.db, source, &target.tmdb_id.to_string()).await?
     else {
         return Ok(false);
     };
@@ -264,7 +264,10 @@ fn tmdb_fields(item: &MediaItem, kind: MediaKind) -> Vec<(&'static str, Value)> 
             push_text(&mut out, "last_air_date", &item.last_aired);
 
             if let Some(status) = item.status.as_deref() {
-                out.push(("status", Value::String(tmdb_series_status(status).to_string())));
+                out.push((
+                    "status",
+                    Value::String(tmdb_series_status(status).to_string()),
+                ));
             }
             if let Some(runtime) = item.runtime {
                 out.push(("episode_run_time", json!([runtime])));
@@ -318,15 +321,24 @@ mod tests {
     fn detail_paths_are_recognised() {
         assert_eq!(
             patch_target("/3/tv/1396"),
-            Some(PatchTarget { kind: MediaKind::Series, tmdb_id: 1396 })
+            Some(PatchTarget {
+                kind: MediaKind::Series,
+                tmdb_id: 1396
+            })
         );
         assert_eq!(
             patch_target("/3/movie/329865"),
-            Some(PatchTarget { kind: MediaKind::Movie, tmdb_id: 329865 })
+            Some(PatchTarget {
+                kind: MediaKind::Movie,
+                tmdb_id: 329865
+            })
         );
         assert_eq!(
             patch_target("/3/tv/1396/"),
-            Some(PatchTarget { kind: MediaKind::Series, tmdb_id: 1396 })
+            Some(PatchTarget {
+                kind: MediaKind::Series,
+                tmdb_id: 1396
+            })
         );
     }
 

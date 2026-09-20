@@ -77,7 +77,11 @@ pub async fn limit(
                 .extensions()
                 .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
                 .map(|ci| ci.0);
-            ip::resolve(connect, request.headers(), &state.config.server.trusted_proxies)
+            ip::resolve(
+                connect,
+                request.headers(),
+                &state.config.server.trusted_proxies,
+            )
         })
         .unwrap_or(UNKNOWN_PEER);
 

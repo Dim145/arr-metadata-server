@@ -46,12 +46,11 @@ async fn refresh_series(state: &AppState, item: &MediaItem) -> Result<Option<Med
     let ids = &item.external_ids;
 
     // Prefer the provider that holds the richest document for this work.
-    if let Some(tmdb_id) = ids.tmdb {
-        if state.tmdb.is_configured() {
-            if let Some(refreshed) = force_series_from_tmdb(state, tmdb_id).await? {
-                return Ok(Some(refreshed));
-            }
-        }
+    if let Some(tmdb_id) = ids.tmdb
+        && state.tmdb.is_configured()
+        && let Some(refreshed) = force_series_from_tmdb(state, tmdb_id).await?
+    {
+        return Ok(Some(refreshed));
     }
 
     if let Some(tvdb_id) = ids.tvdb {

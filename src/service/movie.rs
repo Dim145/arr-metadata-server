@@ -30,10 +30,10 @@ pub async fn by_imdb_id(state: &AppState, imdb_id: &str) -> Result<Option<MediaI
         return Ok(None);
     };
 
-    if let Some(item) = local(state, ExternalSource::Imdb, &normalized).await? {
-        if item.kind == MediaKind::Movie {
-            return Ok(Some(item));
-        }
+    if let Some(item) = local(state, ExternalSource::Imdb, &normalized).await?
+        && item.kind == MediaKind::Movie
+    {
+        return Ok(Some(item));
     }
 
     if !state.tmdb.is_configured() {
@@ -73,7 +73,9 @@ pub async fn bulk(state: &AppState, tmdb_ids: &[i64]) -> Result<Vec<MediaItem>> 
 pub async fn search(state: &AppState, term: &str, year: Option<i32>) -> Result<Vec<MediaItem>> {
     match ids::classify(term) {
         ids::TermLookup::Tmdb(id) => return Ok(by_tmdb_id(state, id).await?.into_iter().collect()),
-        ids::TermLookup::Imdb(id) => return Ok(by_imdb_id(state, &id).await?.into_iter().collect()),
+        ids::TermLookup::Imdb(id) => {
+            return Ok(by_imdb_id(state, &id).await?.into_iter().collect());
+        }
         ids::TermLookup::Text(_) => {}
         // A movie has no TVDB, MAL or AniList identity worth resolving here.
         _ => {}
@@ -94,7 +96,11 @@ pub async fn search(state: &AppState, term: &str, year: Option<i32>) -> Result<V
         let mut results = local_search(state, term, year).await?;
 
         if state.tmdb.is_configured() {
-            match state.tmdb.search_movie(term, year, state.config.tmdb.search_limit).await {
+            match state
+                .tmdb
+                .search_movie(term, year, state.config.tmdb.search_limit)
+                .await
+            {
                 Ok(hits) => {
                     for hit in &hits {
                         let candidate = tmdb_map::movie_summary_to_item(hit);
@@ -119,7 +125,10 @@ pub async fn search(state: &AppState, term: &str, year: Option<i32>) -> Result<V
 ///
 /// The parts come back as search-level detail: fetching each in full would be
 /// dozens of upstream calls for a list Radarr only uses to offer suggestions.
-pub async fn collection(state: &AppState, tmdb_id: i64) -> Result<Option<(String, Option<String>, Vec<MediaItem>)>> {
+pub async fn collection(
+    state: &AppState,
+    tmdb_id: i64,
+) -> Result<Option<(String, Option<String>, Vec<MediaItem>)>> {
     if !state.tmdb.is_configured() {
         return Ok(None);
     }

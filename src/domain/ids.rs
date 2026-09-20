@@ -71,7 +71,6 @@ impl ExternalSource {
             MediaKind::Movie => Self::TvdbMovie,
         }
     }
-
 }
 
 impl fmt::Display for ExternalSource {
@@ -199,12 +198,14 @@ pub fn normalize_imdb_id(raw: &str) -> Option<String> {
     let s = s
         .rsplit('/')
         .find(|seg| {
-            !seg.is_empty()
-                && (seg.starts_with("tt") || seg.chars().all(|c| c.is_ascii_digit()))
+            !seg.is_empty() && (seg.starts_with("tt") || seg.chars().all(|c| c.is_ascii_digit()))
         })
         .unwrap_or(s);
 
-    let digits = s.strip_prefix("tt").or_else(|| s.strip_prefix("TT")).unwrap_or(s);
+    let digits = s
+        .strip_prefix("tt")
+        .or_else(|| s.strip_prefix("TT"))
+        .unwrap_or(s);
 
     if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) {
         return None;
@@ -262,7 +263,10 @@ mod tests {
 
     #[test]
     fn a_movie_stores_its_tmdb_id_under_the_movie_namespace() {
-        let ids = ExternalIds { tmdb: Some(42), ..Default::default() };
+        let ids = ExternalIds {
+            tmdb: Some(42),
+            ..Default::default()
+        };
         assert_eq!(
             ids.rows(MediaKind::Movie),
             vec![(ExternalSource::TmdbMovie, "42".to_string())]

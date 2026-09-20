@@ -34,9 +34,9 @@ impl Dialect {
         match scheme {
             "sqlite" => Ok(Self::Sqlite),
             "postgres" | "postgresql" => Ok(Self::Postgres),
-            other => bail!(
-                "unsupported database scheme {other:?}; expected sqlite:// or postgres://"
-            ),
+            other => {
+                bail!("unsupported database scheme {other:?}; expected sqlite:// or postgres://")
+            }
         }
     }
 
@@ -196,11 +196,12 @@ fn ensure_sqlite_parent_dir(url: &str) -> Result<()> {
         return Ok(());
     }
 
-    if let Some(parent) = Path::new(path).parent() {
-        if !parent.as_os_str().is_empty() && !parent.exists() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("cannot create database directory {}", parent.display()))?;
-        }
+    if let Some(parent) = Path::new(path).parent()
+        && !parent.as_os_str().is_empty()
+        && !parent.exists()
+    {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("cannot create database directory {}", parent.display()))?;
     }
 
     Ok(())
@@ -357,7 +358,10 @@ mod tests {
 
     #[test]
     fn dialect_detection() {
-        assert_eq!(Dialect::from_url("sqlite://data/a.db").unwrap(), Dialect::Sqlite);
+        assert_eq!(
+            Dialect::from_url("sqlite://data/a.db").unwrap(),
+            Dialect::Sqlite
+        );
         assert_eq!(
             Dialect::from_url("postgres://u:p@h/db").unwrap(),
             Dialect::Postgres

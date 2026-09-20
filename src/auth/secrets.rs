@@ -43,7 +43,11 @@ pub fn generate_api_key() -> Result<GeneratedKey> {
     let prefix = plaintext.chars().take(DISPLAY_PREFIX_LEN).collect();
     let hash = hash_api_key(&plaintext);
 
-    Ok(GeneratedKey { plaintext, prefix, hash })
+    Ok(GeneratedKey {
+        plaintext,
+        prefix,
+        hash,
+    })
 }
 
 /// Hex SHA-256 of a key, which is what the database stores and indexes.
@@ -103,10 +107,12 @@ pub fn verify_password(password: &str, phc: &str) -> bool {
 fn hex(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
 
-    bytes.iter().fold(String::with_capacity(bytes.len() * 2), |mut acc, b| {
-        let _ = write!(acc, "{b:02x}");
-        acc
-    })
+    bytes
+        .iter()
+        .fold(String::with_capacity(bytes.len() * 2), |mut acc, b| {
+            let _ = write!(acc, "{b:02x}");
+            acc
+        })
 }
 
 #[cfg(test)]
@@ -128,7 +134,10 @@ mod tests {
     fn a_key_hashes_to_its_stored_value() {
         let key = generate_api_key().unwrap();
         assert_eq!(hash_api_key(&key.plaintext), key.hash);
-        assert!(api_key_hash_matches(&hash_api_key(&key.plaintext), &key.hash));
+        assert!(api_key_hash_matches(
+            &hash_api_key(&key.plaintext),
+            &key.hash
+        ));
     }
 
     #[test]

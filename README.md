@@ -8,10 +8,10 @@ manual edits permanently protected from automatic refreshes.
 It replaces and merges two earlier projects: `the earlier TMDB relay` and
 `the earlier Skyhook stand-in`.
 
-> **Status: early development.** The foundations (storage, domain model,
-> override engine, credentials) are in place and tested on both database
-> engines. The compatibility surfaces and the web UI are being built. See the
-> commit history for what currently works.
+> **Status: working, not yet battle-tested.** Every surface is implemented and
+> exercised by tests on both database engines, and the container runs read-only
+> as a non-root user. What has *not* happened yet is a live TMDB call or a run
+> against a real Sonarr/Radarr — see `docs/integration.md` for how to try it.
 
 ## What it does
 
@@ -78,13 +78,41 @@ key to a request, so those surfaces are guarded by network policy instead. Set
 `AMS_AUTH_DISABLED=true` opens every surface. It exists for closed networks and
 first-run setup; do not use it on anything reachable from outside.
 
+## Running it in containers
+
+```bash
+docker compose up -d                                        # SQLite
+docker compose -f compose.yaml -f compose.postgres.yaml up -d   # PostgreSQL
+```
+
+The image is distroless: 67 MB, no shell, non-root, and it runs with a read-only
+root filesystem and every capability dropped. It answers its own health check.
+
+To put a whole stack behind it — Sonarr, Radarr and Jellyseerr all served from
+here — see [`docs/integration.md`](docs/integration.md) and the runnable
+[`compose.integration.yaml`](compose.integration.yaml).
+
 ## Development
 
 ```bash
-cargo test          # unit tests, no database required
+cargo test                      # 114 unit tests, no database required
 cargo clippy --all-targets
 cargo fmt --check
+
+cd frontend && npm ci && npm run dev   # UI on :5173, proxying to :8080
 ```
+
+`scripts/smoke.sh` starts the server against a database URL and walks the paths
+that matter — sign-in, a manual entry, the Sonarr surface, locking, key
+authentication — then stops it:
+
+```bash
+cargo build
+./scripts/smoke.sh 'sqlite://data/smoke.db?mode=rwc'
+./scripts/smoke.sh 'postgres://ams:ams@127.0.0.1:5432/ams'
+```
+
+CI runs both, plus the container image.
 
 ## Licence
 

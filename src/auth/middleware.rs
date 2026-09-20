@@ -67,7 +67,11 @@ async fn authorize(
         .get::<axum::extract::ConnectInfo<SocketAddr>>()
         .map(|ci| ci.0);
 
-    let client_ip = ip::resolve(peer, request.headers(), &state.config.server.trusted_proxies);
+    let client_ip = ip::resolve(
+        peer,
+        request.headers(),
+        &state.config.server.trusted_proxies,
+    );
 
     let identity = match state.config.policy_for(surface) {
         SurfacePolicy::Open => Identity::Anonymous,
@@ -120,12 +124,16 @@ fn extract_key(headers: &HeaderMap, query: Option<&str>) -> Option<String> {
         }
     }
 
-    if let Some(value) = headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()) {
-        if let Some(token) = value.strip_prefix("Bearer ").or_else(|| value.strip_prefix("bearer ")) {
-            let token = token.trim();
-            if !token.is_empty() {
-                return Some(token.to_string());
-            }
+    if let Some(value) = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        && let Some(token) = value
+            .strip_prefix("Bearer ")
+            .or_else(|| value.strip_prefix("bearer "))
+    {
+        let token = token.trim();
+        if !token.is_empty() {
+            return Some(token.to_string());
         }
     }
 
@@ -166,11 +174,11 @@ async fn resolve_key(
         return Err(AppError::Forbidden);
     }
 
-    if let Some(expires_at) = &found.client.expires_at {
-        if expires_at.as_str() <= crate::db::now().as_str() {
-            tracing::warn!(client = %found.client.name, "rejected: key has expired");
-            return Err(AppError::Forbidden);
-        }
+    if let Some(expires_at) = &found.client.expires_at
+        && expires_at.as_str() <= crate::db::now().as_str()
+    {
+        tracing::warn!(client = %found.client.name, "rejected: key has expired");
+        return Err(AppError::Forbidden);
     }
 
     let ip_text = client_ip.map(|ip| ip.to_string());
@@ -241,13 +249,19 @@ mod tests {
             extract_key(&h, Some("language=en&api_key=ams_abc")).as_deref(),
             Some("ams_abc")
         );
-        assert_eq!(extract_key(&h, Some("apikey=ams_abc")).as_deref(), Some("ams_abc"));
+        assert_eq!(
+            extract_key(&h, Some("apikey=ams_abc")).as_deref(),
+            Some("ams_abc")
+        );
     }
 
     #[test]
     fn a_url_encoded_key_is_decoded() {
         let h = HeaderMap::new();
-        assert_eq!(extract_key(&h, Some("api_key=ams%5Fabc")).as_deref(), Some("ams_abc"));
+        assert_eq!(
+            extract_key(&h, Some("api_key=ams%5Fabc")).as_deref(),
+            Some("ams_abc")
+        );
     }
 
     #[test]

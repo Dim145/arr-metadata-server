@@ -16,7 +16,11 @@ use crate::{
 ///
 /// The id is either a real TVDB id or one this server synthesised for a
 /// TMDB-only show — see [`crate::service::ids`].
-pub async fn by_client_id(state: &AppState, requested_id: i64, language: &str) -> Result<Option<MediaItem>> {
+pub async fn by_client_id(
+    state: &AppState,
+    requested_id: i64,
+    language: &str,
+) -> Result<Option<MediaItem>> {
     if let Some(tmdb_id) = ids::from_synthetic(requested_id) {
         return by_tmdb_id(state, tmdb_id).await;
     }
@@ -24,7 +28,11 @@ pub async fn by_client_id(state: &AppState, requested_id: i64, language: &str) -
     by_tvdb_id(state, requested_id, language).await
 }
 
-pub async fn by_tvdb_id(state: &AppState, tvdb_id: i64, language: &str) -> Result<Option<MediaItem>> {
+pub async fn by_tvdb_id(
+    state: &AppState,
+    tvdb_id: i64,
+    language: &str,
+) -> Result<Option<MediaItem>> {
     if let Some(item) = local(state, ExternalSource::TvdbSeries, &tvdb_id.to_string()).await? {
         return Ok(Some(item));
     }
@@ -42,7 +50,9 @@ pub async fn by_tvdb_id(state: &AppState, tvdb_id: i64, language: &str) -> Resul
     match state.skyhook.show(language, tvdb_id).await {
         Ok(Some((raw, show))) => {
             let item = sonarr::to_item(&show);
-            Ok(Some(persist(state, item, names::SKYHOOK, Some(&raw)).await?))
+            Ok(Some(
+                persist(state, item, names::SKYHOOK, Some(&raw)).await?,
+            ))
         }
         Ok(None) => Ok(None),
         Err(e) => {
@@ -61,10 +71,10 @@ pub async fn by_tmdb_id(state: &AppState, tmdb_id: i64) -> Result<Option<MediaIt
 }
 
 pub async fn by_imdb_id(state: &AppState, imdb_id: &str) -> Result<Option<MediaItem>> {
-    if let Some(item) = local(state, ExternalSource::Imdb, imdb_id).await? {
-        if item.kind == MediaKind::Series {
-            return Ok(Some(item));
-        }
+    if let Some(item) = local(state, ExternalSource::Imdb, imdb_id).await?
+        && item.kind == MediaKind::Series
+    {
+        return Ok(Some(item));
     }
 
     if !state.tmdb.is_configured() {
@@ -83,14 +93,24 @@ pub async fn by_imdb_id(state: &AppState, imdb_id: &str) -> Result<Option<MediaI
 pub async fn search(state: &AppState, term: &str, language: &str) -> Result<Vec<MediaItem>> {
     // A prefixed term is a lookup, not a search: answer with the one match.
     match ids::classify(term) {
-        ids::TermLookup::Tvdb(id) => return Ok(by_tvdb_id(state, id, language).await?.into_iter().collect()),
+        ids::TermLookup::Tvdb(id) => {
+            return Ok(by_tvdb_id(state, id, language).await?.into_iter().collect());
+        }
         ids::TermLookup::Tmdb(id) => return Ok(by_tmdb_id(state, id).await?.into_iter().collect()),
-        ids::TermLookup::Imdb(id) => return Ok(by_imdb_id(state, &id).await?.into_iter().collect()),
+        ids::TermLookup::Imdb(id) => {
+            return Ok(by_imdb_id(state, &id).await?.into_iter().collect());
+        }
         ids::TermLookup::Mal(id) => {
-            return Ok(local(state, ExternalSource::Mal, &id.to_string()).await?.into_iter().collect());
+            return Ok(local(state, ExternalSource::Mal, &id.to_string())
+                .await?
+                .into_iter()
+                .collect());
         }
         ids::TermLookup::AniList(id) => {
-            return Ok(local(state, ExternalSource::AniList, &id.to_string()).await?.into_iter().collect());
+            return Ok(local(state, ExternalSource::AniList, &id.to_string())
+                .await?
+                .into_iter()
+                .collect());
         }
         ids::TermLookup::Text(_) => {}
     }
@@ -219,8 +239,10 @@ async fn tmdb_search(state: &AppState, term: &str) -> Result<Vec<MediaItem>> {
             let mut item = tmdb_map::tv_summary_to_item(hit);
             if let Ok(ids) = ids {
                 item.external_ids.tvdb = ids.tvdb_id;
-                item.external_ids.imdb =
-                    ids.imdb_id.as_deref().and_then(crate::domain::ids::normalize_imdb_id);
+                item.external_ids.imdb = ids
+                    .imdb_id
+                    .as_deref()
+                    .and_then(crate::domain::ids::normalize_imdb_id);
                 item.external_ids.tvrage = ids.tvrage_id;
             }
             item
@@ -263,7 +285,11 @@ mod tests {
 
     fn series(tmdb: Option<i64>, tvdb: Option<i64>) -> MediaItem {
         let mut item = MediaItem::empty(MediaKind::Series);
-        item.external_ids = ExternalIds { tmdb, tvdb, ..Default::default() };
+        item.external_ids = ExternalIds {
+            tmdb,
+            tvdb,
+            ..Default::default()
+        };
         item
     }
 
@@ -289,8 +315,8 @@ mod tests {
         merge_results(
             &mut results,
             vec![
-                series(Some(1), None),   // same TMDB id
-                series(None, Some(10)),  // same TVDB id
+                series(Some(1), None),  // same TMDB id
+                series(None, Some(10)), // same TVDB id
                 series(Some(2), Some(20)),
             ],
         );

@@ -76,7 +76,9 @@ async fn login(
         &token_hash,
         &user.id,
         chrono::Duration::hours(SESSION_TTL_HOURS),
-        headers.get(header::USER_AGENT).and_then(|v| v.to_str().ok()),
+        headers
+            .get(header::USER_AGENT)
+            .and_then(|v| v.to_str().ok()),
         None,
     )
     .await?;
@@ -103,10 +105,7 @@ async fn login(
 const DUMMY_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$c29tZXNhbHR2YWx1ZQ$\
                           YQqCqZ1bQZ3vLQ4mJ0Xz0xKZ8p1n3sVQ1kJ2m9Y7bWc";
 
-async fn logout(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> AppResult<impl IntoResponse> {
+async fn logout(State(state): State<AppState>, headers: HeaderMap) -> AppResult<impl IntoResponse> {
     if let Some(token) = headers
         .get_all(header::COOKIE)
         .iter()

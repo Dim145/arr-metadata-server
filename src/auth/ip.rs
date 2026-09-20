@@ -19,11 +19,8 @@ const FORWARDED_FOR: &str = "x-forwarded-for";
 /// proxy, `X-Forwarded-For` is walked right-to-left and the first address that
 /// is *not* itself a trusted proxy is returned.
 pub fn resolve(peer: Option<SocketAddr>, headers: &HeaderMap, trusted: &[IpNet]) -> Option<IpAddr> {
-    let peer_ip = peer.map(|addr| addr.ip());
-
-    let Some(peer_ip) = peer_ip else {
-        return None;
-    };
+    // No peer address means no basis for a decision; the caller denies.
+    let peer_ip = peer?.ip();
 
     if !is_trusted(peer_ip, trusted) {
         // The peer is the client. Anything it claims in a header is its own
@@ -62,17 +59,17 @@ fn parse_entry(entry: &str) -> Option<IpAddr> {
     }
 
     // `[2001:db8::1]:443`
-    if let Some(rest) = entry.strip_prefix('[') {
-        if let Some((addr, _)) = rest.split_once(']') {
-            return addr.parse().ok();
-        }
+    if let Some(rest) = entry.strip_prefix('[')
+        && let Some((addr, _)) = rest.split_once(']')
+    {
+        return addr.parse().ok();
     }
 
     // `203.0.113.7:51234`
-    if let Some((addr, _)) = entry.rsplit_once(':') {
-        if let Ok(ip) = addr.parse::<IpAddr>() {
-            return Some(ip);
-        }
+    if let Some((addr, _)) = entry.rsplit_once(':')
+        && let Ok(ip) = addr.parse::<IpAddr>()
+    {
+        return Some(ip);
     }
 
     None
@@ -147,10 +144,22 @@ mod tests {
 
     #[test]
     fn entries_with_ports_or_brackets_still_parse() {
-        assert_eq!(parse_entry("203.0.113.5"), Some("203.0.113.5".parse().unwrap()));
-        assert_eq!(parse_entry("203.0.113.5:443"), Some("203.0.113.5".parse().unwrap()));
-        assert_eq!(parse_entry("[2001:db8::1]:443"), Some("2001:db8::1".parse().unwrap()));
-        assert_eq!(parse_entry("2001:db8::1"), Some("2001:db8::1".parse().unwrap()));
+        assert_eq!(
+            parse_entry("203.0.113.5"),
+            Some("203.0.113.5".parse().unwrap())
+        );
+        assert_eq!(
+            parse_entry("203.0.113.5:443"),
+            Some("203.0.113.5".parse().unwrap())
+        );
+        assert_eq!(
+            parse_entry("[2001:db8::1]:443"),
+            Some("2001:db8::1".parse().unwrap())
+        );
+        assert_eq!(
+            parse_entry("2001:db8::1"),
+            Some("2001:db8::1".parse().unwrap())
+        );
         assert_eq!(parse_entry("not-an-ip"), None);
     }
 

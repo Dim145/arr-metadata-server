@@ -8,7 +8,7 @@
 use crate::{
     db::{new_id, now},
     domain::{
-        AlternativeTitle, Credit, CreditType, CoverType, Episode, ExternalIds, Image, MediaItem,
+        AlternativeTitle, CoverType, Credit, CreditType, Episode, ExternalIds, Image, MediaItem,
         MediaKind, Rating, RatingValue, Season, Translation, make_slug,
     },
     providers::{
@@ -70,7 +70,11 @@ pub fn tv_to_item(tv: &models::Tv, seasons: &[models::Season]) -> MediaItem {
     };
 
     item.ratings = vote_rating(tv.vote_average, tv.vote_count);
-    item.images = artwork(tv.poster_path.as_deref(), tv.backdrop_path.as_deref(), tv.images.as_ref());
+    item.images = artwork(
+        tv.poster_path.as_deref(),
+        tv.backdrop_path.as_deref(),
+        tv.images.as_ref(),
+    );
     item.credits = cast(tv.credits.as_ref());
     item.alternative_titles = tv
         .alternative_titles
@@ -94,7 +98,12 @@ pub fn tv_to_item(tv: &models::Tv, seasons: &[models::Season]) -> MediaItem {
                 .poster_path
                 .as_deref()
                 .map(|p| {
-                    vec![image(CoverType::Poster, &image_url(p), Some(s.season_number), 0)]
+                    vec![image(
+                        CoverType::Poster,
+                        &image_url(p),
+                        Some(s.season_number),
+                        0,
+                    )]
                 })
                 .unwrap_or_default(),
         })
@@ -122,9 +131,16 @@ pub fn tv_summary_to_item(summary: &models::TvSummary) -> MediaItem {
     // for anything it has not fetched in full.
     item.status = Some("continuing".to_string());
     item.slug = make_slug(&item.title, item.year);
-    item.external_ids = ExternalIds { tmdb: Some(summary.id), ..Default::default() };
+    item.external_ids = ExternalIds {
+        tmdb: Some(summary.id),
+        ..Default::default()
+    };
     item.ratings = vote_rating(summary.vote_average, summary.vote_count);
-    item.images = artwork(summary.poster_path.as_deref(), summary.backdrop_path.as_deref(), None);
+    item.images = artwork(
+        summary.poster_path.as_deref(),
+        summary.backdrop_path.as_deref(),
+        None,
+    );
 
     item
 }
@@ -178,7 +194,10 @@ pub fn movie_to_item(movie: &models::Movie) -> MediaItem {
     item.overview = non_empty(movie.overview.as_deref());
     item.homepage = non_empty(movie.homepage.as_deref());
     item.original_language = movie.original_language.as_deref().map(iso_639_1_to_3);
-    item.original_country = movie.production_countries.first().map(|c| iso_3166_2_to_3(&c.iso_3166_1));
+    item.original_country = movie
+        .production_countries
+        .first()
+        .map(|c| iso_3166_2_to_3(&c.iso_3166_1));
     item.runtime = movie.runtime;
     item.year = year_of(movie.release_date.as_deref());
     item.popularity = movie.popularity;
@@ -189,7 +208,10 @@ pub fn movie_to_item(movie: &models::Movie) -> MediaItem {
         .as_ref()
         .map(|k| k.keywords.iter().map(|n| n.name.clone()).collect())
         .unwrap_or_default();
-    item.trailer_youtube_id = movie.videos.as_ref().and_then(|v| youtube_trailer(&v.results));
+    item.trailer_youtube_id = movie
+        .videos
+        .as_ref()
+        .and_then(|v| youtube_trailer(&v.results));
     item.collection_tmdb_id = movie.belongs_to_collection.as_ref().map(|c| c.id);
     item.slug = make_slug(&item.title, item.year);
 
@@ -213,7 +235,12 @@ pub fn movie_to_item(movie: &models::Movie) -> MediaItem {
         imdb: movie
             .imdb_id
             .as_deref()
-            .or_else(|| movie.external_ids.as_ref().and_then(|e| e.imdb_id.as_deref()))
+            .or_else(|| {
+                movie
+                    .external_ids
+                    .as_ref()
+                    .and_then(|e| e.imdb_id.as_deref())
+            })
             .and_then(crate::domain::ids::normalize_imdb_id),
         tvdb: movie.external_ids.as_ref().and_then(|e| e.tvdb_id),
         ..Default::default()
@@ -260,9 +287,16 @@ pub fn movie_summary_to_item(summary: &models::MovieSummary) -> MediaItem {
         .to_string(),
     );
     item.slug = make_slug(&item.title, item.year);
-    item.external_ids = ExternalIds { tmdb: Some(summary.id), ..Default::default() };
+    item.external_ids = ExternalIds {
+        tmdb: Some(summary.id),
+        ..Default::default()
+    };
     item.ratings = vote_rating(summary.vote_average, summary.vote_count);
-    item.images = artwork(summary.poster_path.as_deref(), summary.backdrop_path.as_deref(), None);
+    item.images = artwork(
+        summary.poster_path.as_deref(),
+        summary.backdrop_path.as_deref(),
+        None,
+    );
 
     item
 }
@@ -350,7 +384,11 @@ fn series_status(status: Option<&str>) -> &'static str {
 }
 
 /// Radarr's vocabulary: `tba`, `announced`, `inCinemas`, `released`.
-fn movie_status(status: Option<&str>, in_cinemas: Option<&str>, releases: &Releases) -> &'static str {
+fn movie_status(
+    status: Option<&str>,
+    in_cinemas: Option<&str>,
+    releases: &Releases,
+) -> &'static str {
     let home_release = releases.physical.is_some() || releases.digital.is_some();
 
     match status {
@@ -430,14 +468,15 @@ fn artwork(
     let mut out = Vec::new();
     let mut seen: Vec<String> = Vec::new();
 
-    let push = |out: &mut Vec<Image>, seen: &mut Vec<String>, kind: CoverType, path: &str, order: i32| {
-        let url = image_url(path);
-        if seen.contains(&url) {
-            return;
-        }
-        seen.push(url.clone());
-        out.push(image(kind, &url, None, order));
-    };
+    let push =
+        |out: &mut Vec<Image>, seen: &mut Vec<String>, kind: CoverType, path: &str, order: i32| {
+            let url = image_url(path);
+            if seen.contains(&url) {
+                return;
+            }
+            seen.push(url.clone());
+            out.push(image(kind, &url, None, order));
+        };
 
     if let Some(path) = poster {
         push(&mut out, &mut seen, CoverType::Poster, path, 0);
@@ -448,13 +487,31 @@ fn artwork(
 
     if let Some(images) = extra {
         for (order, p) in images.posters.iter().take(5).enumerate() {
-            push(&mut out, &mut seen, CoverType::Poster, &p.file_path, order as i32 + 1);
+            push(
+                &mut out,
+                &mut seen,
+                CoverType::Poster,
+                &p.file_path,
+                order as i32 + 1,
+            );
         }
         for (order, b) in images.backdrops.iter().take(5).enumerate() {
-            push(&mut out, &mut seen, CoverType::Fanart, &b.file_path, order as i32 + 1);
+            push(
+                &mut out,
+                &mut seen,
+                CoverType::Fanart,
+                &b.file_path,
+                order as i32 + 1,
+            );
         }
         for (order, l) in images.logos.iter().take(3).enumerate() {
-            push(&mut out, &mut seen, CoverType::Clearlogo, &l.file_path, order as i32);
+            push(
+                &mut out,
+                &mut seen,
+                CoverType::Clearlogo,
+                &l.file_path,
+                order as i32,
+            );
         }
     }
 
@@ -462,7 +519,9 @@ fn artwork(
 }
 
 fn cast(credits: Option<&models::Credits>) -> Vec<Credit> {
-    let Some(credits) = credits else { return Vec::new() };
+    let Some(credits) = credits else {
+        return Vec::new();
+    };
 
     let mut out: Vec<Credit> = credits
         .cast
@@ -580,21 +639,36 @@ mod tests {
 
     #[test]
     fn a_movie_with_a_home_release_is_released() {
-        let releases = Releases { digital: Some("2020-01-01".into()), ..Default::default() };
-        assert_eq!(movie_status(Some("Released"), Some("2019-06-01"), &releases), "released");
+        let releases = Releases {
+            digital: Some("2020-01-01".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            movie_status(Some("Released"), Some("2019-06-01"), &releases),
+            "released"
+        );
     }
 
     #[test]
     fn a_movie_only_in_theatres_says_so() {
         let releases = Releases::default();
-        assert_eq!(movie_status(Some("Released"), Some("2019-06-01"), &releases), "inCinemas");
+        assert_eq!(
+            movie_status(Some("Released"), Some("2019-06-01"), &releases),
+            "inCinemas"
+        );
     }
 
     #[test]
     fn an_unreleased_movie_is_announced_or_tba() {
         let releases = Releases::default();
-        assert_eq!(movie_status(Some("Post Production"), None, &releases), "announced");
-        assert_eq!(movie_status(None, Some("2999-01-01"), &releases), "announced");
+        assert_eq!(
+            movie_status(Some("Post Production"), None, &releases),
+            "announced"
+        );
+        assert_eq!(
+            movie_status(None, Some("2999-01-01"), &releases),
+            "announced"
+        );
         assert_eq!(movie_status(None, None, &releases), "tba");
     }
 
@@ -678,5 +752,207 @@ mod tests {
     fn dates_are_trimmed_to_their_day() {
         assert_eq!(trim_to_date("2020-05-01T00:00:00.000Z"), "2020-05-01");
         assert_eq!(trim_to_date("2020-05-01"), "2020-05-01");
+    }
+}
+
+// ─── against real-shaped TMDB documents ──────────────────────────────────────
+//
+// These fixtures are trimmed copies of what TMDB actually returns, kept whole
+// enough to exercise the awkward parts: an empty episode, a non-US release
+// block, a translation with nothing in it. They are what stands in for calling
+// the live API in CI.
+
+#[cfg(test)]
+mod fixtures {
+    use super::*;
+    use crate::{
+        domain::{CoverType, CreditType, MediaKind},
+        wire::{radarr, sonarr},
+    };
+
+    fn tv() -> models::Tv {
+        serde_json::from_str(include_str!("fixtures/tv.json")).expect("tv fixture")
+    }
+
+    fn season() -> models::Season {
+        serde_json::from_str(include_str!("fixtures/season.json")).expect("season fixture")
+    }
+
+    fn movie() -> models::Movie {
+        serde_json::from_str(include_str!("fixtures/movie.json")).expect("movie fixture")
+    }
+
+    #[test]
+    fn a_series_document_maps_to_the_canonical_model() {
+        let item = tv_to_item(&tv(), &[season()]);
+
+        assert_eq!(item.kind, MediaKind::Series);
+        assert_eq!(item.title, "Breaking Bad");
+        assert_eq!(item.slug, "breaking-bad-2008");
+        assert_eq!(item.year, Some(2008));
+        assert_eq!(item.status.as_deref(), Some("ended"));
+        // The first entry of episode_run_time, not the last.
+        assert_eq!(item.runtime, Some(45));
+        assert_eq!(item.network.as_deref(), Some("AMC"));
+        assert_eq!(item.original_language.as_deref(), Some("eng"));
+        assert_eq!(item.original_country.as_deref(), Some("usa"));
+        assert_eq!(item.genres, vec!["Drama", "Crime"]);
+        assert_eq!(item.keywords, vec!["new mexico", "drug dealer"]);
+        assert_eq!(item.trailer_youtube_id.as_deref(), Some("HhesaQXLuRY"));
+    }
+
+    #[test]
+    fn external_ids_are_lifted_out_of_the_appended_block() {
+        let item = tv_to_item(&tv(), &[]);
+
+        assert_eq!(item.external_ids.tmdb, Some(1396));
+        assert_eq!(item.external_ids.tvdb, Some(81189));
+        assert_eq!(item.external_ids.imdb.as_deref(), Some("tt0903747"));
+        assert_eq!(item.external_ids.tvrage, Some(18164));
+    }
+
+    #[test]
+    fn the_us_content_rating_is_preferred() {
+        // The fixture lists GB first; US is what Sonarr expects to see.
+        assert_eq!(tv_to_item(&tv(), &[]).content_rating.as_deref(), Some("TV-MA"));
+    }
+
+    #[test]
+    fn episodes_carry_dates_titles_and_ratings() {
+        let item = tv_to_item(&tv(), &[season()]);
+        assert_eq!(item.episodes.len(), 3);
+
+        let first = &item.episodes[0];
+        assert_eq!(first.title, "Pilot");
+        assert_eq!(first.season_number, 1);
+        assert_eq!(first.air_date.as_deref(), Some("2008-01-20"));
+        assert_eq!(first.air_date_utc.as_deref(), Some("2008-01-20T00:00:00Z"));
+        assert_eq!(first.runtime, Some(58));
+        assert_eq!(first.rating.map(|r| r.votes), Some(260));
+        assert!(first.image.as_deref().unwrap().starts_with("https://image.tmdb.org"));
+    }
+
+    #[test]
+    fn an_unaired_episode_keeps_its_place_without_inventing_data() {
+        // TMDB lists announced episodes with empty strings and zero votes.
+        let item = tv_to_item(&tv(), &[season()]);
+        let third = &item.episodes[2];
+
+        assert_eq!(third.episode_number, 3);
+        assert_eq!(third.title, "");
+        assert_eq!(third.air_date, None);
+        assert_eq!(third.overview, None);
+        assert!(third.rating.is_none(), "zero votes must not become a rating of 0");
+    }
+
+    #[test]
+    fn seasons_carry_their_own_poster() {
+        let item = tv_to_item(&tv(), &[]);
+        assert_eq!(item.seasons.len(), 2);
+
+        let specials = &item.seasons[0];
+        assert_eq!(specials.season_number, 0);
+        assert_eq!(specials.images.len(), 1);
+        assert_eq!(specials.images[0].season_number, Some(0));
+        assert_eq!(specials.images[0].cover_type, CoverType::Poster);
+    }
+
+    #[test]
+    fn cast_and_directors_are_separated() {
+        let item = tv_to_item(&tv(), &[]);
+
+        let actors: Vec<_> = item.credits.iter().filter(|c| c.credit_type == CreditType::Actor).collect();
+        assert_eq!(actors.len(), 2);
+        assert_eq!(actors[0].person_name, "Bryan Cranston");
+        assert_eq!(actors[0].character_name.as_deref(), Some("Walter White"));
+
+        let directors: Vec<_> = item.credits.iter().filter(|c| c.credit_type == CreditType::Director).collect();
+        assert_eq!(directors.len(), 1);
+        assert_eq!(directors[0].person_name, "Vince Gilligan");
+    }
+
+    #[test]
+    fn a_movie_document_maps_to_the_canonical_model() {
+        let item = movie_to_item(&movie());
+
+        assert_eq!(item.kind, MediaKind::Movie);
+        assert_eq!(item.title, "Arrival");
+        assert_eq!(item.slug, "arrival-2016");
+        assert_eq!(item.year, Some(2016));
+        assert_eq!(item.runtime, Some(116));
+        assert_eq!(item.studio.as_deref(), Some("21 Laps Entertainment"));
+        assert_eq!(item.external_ids.imdb.as_deref(), Some("tt2543164"));
+        assert_eq!(item.trailer_youtube_id.as_deref(), Some("tFMo3UJ4B4g"));
+    }
+
+    #[test]
+    fn release_dates_are_split_by_type_from_the_us_block() {
+        let item = movie_to_item(&movie());
+
+        // Type 3 is theatrical, 4 digital, 5 physical. Type 1 (premiere) is not
+        // a release date and must not become inCinemas.
+        assert_eq!(item.in_cinemas.as_deref(), Some("2016-11-11"));
+        assert_eq!(item.digital_release.as_deref(), Some("2017-01-31"));
+        assert_eq!(item.physical_release.as_deref(), Some("2017-02-14"));
+        assert_eq!(item.content_rating.as_deref(), Some("PG-13"));
+        assert_eq!(item.status.as_deref(), Some("released"));
+    }
+
+    #[test]
+    fn empty_translations_are_dropped() {
+        let item = movie_to_item(&movie());
+
+        // The fixture has three: one full, one title-only, one empty.
+        assert_eq!(item.translations.len(), 2);
+        let french = item.translations.iter().find(|t| t.language == "fra").unwrap();
+        assert_eq!(french.title.as_deref(), Some("Premier Contact"));
+    }
+
+    #[test]
+    fn a_mapped_series_survives_the_trip_to_sonarrs_wire_format() {
+        let item = tv_to_item(&tv(), &[season()]);
+        let resource = sonarr::from_item(&item, 81189, "en");
+
+        assert_eq!(resource.tvdb_id, 81189);
+        assert_eq!(resource.tmdb_id, Some(1396));
+        assert_eq!(resource.title, "Breaking Bad");
+        assert_eq!(resource.status, "Ended");
+        assert_eq!(resource.episodes.len(), 3);
+        assert_eq!(resource.seasons.len(), 2);
+        assert_eq!(resource.actors.len(), 2);
+        assert_eq!(resource.rating.as_ref().unwrap().value, "8.9");
+        // Every episode must carry the id the client asked for.
+        assert!(resource.episodes.iter().all(|e| e.tvdb_show_id == 81189));
+    }
+
+    #[test]
+    fn a_mapped_movie_survives_the_trip_to_radarrs_wire_format() {
+        let item = movie_to_item(&movie());
+        let resource = radarr::from_item(&item);
+
+        assert_eq!(resource.tmdb_id, 329865);
+        assert_eq!(resource.imdb_id.as_deref(), Some("tt2543164"));
+        assert_eq!(resource.title_slug, "arrival-2016");
+        assert_eq!(resource.year, 2016);
+        assert_eq!(resource.status, "released");
+        assert_eq!(resource.in_cinema.as_deref(), Some("2016-11-11"));
+        assert_eq!(resource.certifications.len(), 1);
+
+        let credits = resource.credits.unwrap();
+        assert_eq!(credits.cast.len(), 2);
+        assert_eq!(credits.crew.len(), 1);
+    }
+
+    #[test]
+    fn the_wire_forms_serialise_without_losing_required_fields() {
+        let series = serde_json::to_value(sonarr::from_item(&tv_to_item(&tv(), &[season()]), 81189, "en")).unwrap();
+        assert_eq!(series["tvdbId"], 81189);
+        assert_eq!(series["title"], "Breaking Bad");
+        assert!(series["episodes"].as_array().unwrap().len() == 3);
+
+        let film = serde_json::to_value(radarr::from_item(&movie_to_item(&movie()))).unwrap();
+        assert_eq!(film["tmdbId"], 329865);
+        assert_eq!(film["titleSlug"], "arrival-2016");
+        assert_eq!(film["physicalRelease"], "2017-02-14");
     }
 }

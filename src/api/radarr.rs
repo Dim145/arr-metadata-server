@@ -88,7 +88,9 @@ async fn changed(
     Query(query): Query<ChangedQuery>,
 ) -> AppResult<Json<Vec<i64>>> {
     let Some(since) = query.since else {
-        return Err(AppError::BadRequest("the `since` parameter is required".into()));
+        return Err(AppError::BadRequest(
+            "the `since` parameter is required".into(),
+        ));
     };
 
     Ok(Json(movie::changed_since(&state, &since).await?))
@@ -112,9 +114,21 @@ async fn collection(
 }
 
 async fn popular(State(state): State<AppState>) -> AppResult<Json<Vec<MovieResource>>> {
-    Ok(Json(movie::popular(&state).await?.iter().map(from_item).collect()))
+    Ok(Json(
+        movie::popular(&state)
+            .await?
+            .iter()
+            .map(from_item)
+            .collect(),
+    ))
 }
 
 async fn trending(State(state): State<AppState>) -> AppResult<Json<Vec<MovieResource>>> {
-    Ok(Json(movie::trending(&state).await?.iter().map(from_item).collect()))
+    Ok(Json(
+        movie::trending(&state)
+            .await?
+            .iter()
+            .map(from_item)
+            .collect(),
+    ))
 }

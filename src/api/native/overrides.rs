@@ -24,7 +24,10 @@ pub fn router() -> Router<AppState> {
         .route("/items/{id}/overrides/{scope}/{field}", delete(unset))
 }
 
-async fn list(State(state): State<AppState>, Path(id): Path<String>) -> AppResult<Json<Vec<Override>>> {
+async fn list(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> AppResult<Json<Vec<Override>>> {
     Ok(Json(repo::override_field::list(&state.db, &id).await?))
 }
 
@@ -70,7 +73,9 @@ async fn set(
 
     // Refuse to attach an override to something that is not there: it would
     // silently do nothing on read.
-    let item = service::load(&state, &id).await?.ok_or(AppError::NotFound)?;
+    let item = service::load(&state, &id)
+        .await?
+        .ok_or(AppError::NotFound)?;
 
     match scope {
         Scope::Season(n) if !item.seasons.iter().any(|s| s.season_number == n) => {
@@ -104,9 +109,13 @@ async fn set(
         "locked a field with a manual edit"
     );
 
-    let updated = service::load(&state, &id).await?.ok_or(AppError::NotFound)?;
+    let updated = service::load(&state, &id)
+        .await?
+        .ok_or(AppError::NotFound)?;
 
-    Ok(Json(SetResponse { locked_fields: updated.locked_fields }))
+    Ok(Json(SetResponse {
+        locked_fields: updated.locked_fields,
+    }))
 }
 
 /// Unlock one field, handing it back to provider data on the next refresh.
@@ -154,5 +163,8 @@ async fn clear(
 }
 
 fn require_write(identity: &Identity) -> AppResult<()> {
-    identity.can_write().then_some(()).ok_or(AppError::Forbidden)
+    identity
+        .can_write()
+        .then_some(())
+        .ok_or(AppError::Forbidden)
 }

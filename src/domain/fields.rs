@@ -77,7 +77,11 @@ pub struct FieldDef {
 }
 
 const fn f(name: &'static str, field_type: FieldType, label: &'static str) -> FieldDef {
-    FieldDef { name, field_type, label }
+    FieldDef {
+        name,
+        field_type,
+        label,
+    }
 }
 
 use FieldType::*;
@@ -135,7 +139,10 @@ pub enum Scope {
     /// The work itself.
     Item,
     Season(i32),
-    Episode { season: i32, episode: i32 },
+    Episode {
+        season: i32,
+        episode: i32,
+    },
 }
 
 impl Scope {
@@ -181,9 +188,9 @@ impl FromStr for Scope {
         }
 
         if let Some(rest) = s.strip_prefix("episode:") {
-            let (season, episode) = rest
-                .split_once('x')
-                .ok_or_else(|| anyhow::anyhow!("episode scope must look like episode:1x2, got {s:?}"))?;
+            let (season, episode) = rest.split_once('x').ok_or_else(|| {
+                anyhow::anyhow!("episode scope must look like episode:1x2, got {s:?}")
+            })?;
             return Ok(Self::Episode {
                 season: season
                     .parse()
@@ -223,10 +230,7 @@ pub fn validate(scope: Scope, field: &str, value: Option<&Value>) -> Result<(), 
     match value {
         None => Ok(()),
         Some(v) if def.field_type.accepts(v) => Ok(()),
-        Some(_) => Err(format!(
-            "{field:?} expects {}",
-            def.field_type.describe()
-        )),
+        Some(_) => Err(format!("{field:?} expects {}", def.field_type.describe())),
     }
 }
 
@@ -304,7 +308,10 @@ pub fn apply(item: &mut MediaItem, overrides: &[Override]) -> Result<(), serde_j
 }
 
 /// Merge `patch` into `target`'s JSON form and deserialize back over it.
-fn patch_in_place<T>(target: &mut T, patch: serde_json::Map<String, Value>) -> Result<(), serde_json::Error>
+fn patch_in_place<T>(
+    target: &mut T,
+    patch: serde_json::Map<String, Value>,
+) -> Result<(), serde_json::Error>
 where
     T: Serialize + serde::de::DeserializeOwned,
 {
@@ -390,7 +397,11 @@ mod tests {
         let mut it = item();
         apply(
             &mut it,
-            &[ov("item", "genres", Some(serde_json::json!(["Comedy", "Sci-Fi"])))],
+            &[ov(
+                "item",
+                "genres",
+                Some(serde_json::json!(["Comedy", "Sci-Fi"])),
+            )],
         )
         .unwrap();
         assert_eq!(it.genres, vec!["Comedy", "Sci-Fi"]);
@@ -407,7 +418,11 @@ mod tests {
     #[test]
     fn a_wrongly_typed_override_is_skipped() {
         let mut it = item();
-        apply(&mut it, &[ov("item", "runtime", Some("not a number".into()))]).unwrap();
+        apply(
+            &mut it,
+            &[ov("item", "runtime", Some("not a number".into()))],
+        )
+        .unwrap();
         assert_eq!(it.runtime, Some(42));
     }
 
@@ -418,7 +433,17 @@ mod tests {
         assert!(validate(Scope::Item, "runtime", Some(&"nope".into())).is_err());
         assert!(validate(Scope::Item, "nonexistent", Some(&"x".into())).is_err());
         // `network` belongs to the work, not to an episode.
-        assert!(validate(Scope::Episode { season: 1, episode: 1 }, "network", Some(&"x".into())).is_err());
+        assert!(
+            validate(
+                Scope::Episode {
+                    season: 1,
+                    episode: 1
+                },
+                "network",
+                Some(&"x".into())
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -426,7 +451,10 @@ mod tests {
         for s in [
             Scope::Item,
             Scope::Season(3),
-            Scope::Episode { season: 3, episode: 7 },
+            Scope::Episode {
+                season: 3,
+                episode: 7,
+            },
         ] {
             assert_eq!(s.to_string().parse::<Scope>().unwrap(), s);
         }
@@ -440,24 +468,52 @@ mod tests {
         let mut it = item();
         it.episodes = vec![
             Episode {
-                id: "a".into(), season_number: 1, episode_number: 1,
-                absolute_episode_number: None, aired_after_season_number: None,
-                aired_before_season_number: None, aired_before_episode_number: None,
-                title: "One".into(), overview: None, air_date: None, air_date_utc: None,
-                runtime: None, finale_type: None, image: None, tvdb_id: None, tmdb_id: None,
-                rating: None, is_manual: false,
+                id: "a".into(),
+                season_number: 1,
+                episode_number: 1,
+                absolute_episode_number: None,
+                aired_after_season_number: None,
+                aired_before_season_number: None,
+                aired_before_episode_number: None,
+                title: "One".into(),
+                overview: None,
+                air_date: None,
+                air_date_utc: None,
+                runtime: None,
+                finale_type: None,
+                image: None,
+                tvdb_id: None,
+                tmdb_id: None,
+                rating: None,
+                is_manual: false,
             },
             Episode {
-                id: "b".into(), season_number: 1, episode_number: 2,
-                absolute_episode_number: None, aired_after_season_number: None,
-                aired_before_season_number: None, aired_before_episode_number: None,
-                title: "Two".into(), overview: None, air_date: None, air_date_utc: None,
-                runtime: None, finale_type: None, image: None, tvdb_id: None, tmdb_id: None,
-                rating: None, is_manual: false,
+                id: "b".into(),
+                season_number: 1,
+                episode_number: 2,
+                absolute_episode_number: None,
+                aired_after_season_number: None,
+                aired_before_season_number: None,
+                aired_before_episode_number: None,
+                title: "Two".into(),
+                overview: None,
+                air_date: None,
+                air_date_utc: None,
+                runtime: None,
+                finale_type: None,
+                image: None,
+                tvdb_id: None,
+                tmdb_id: None,
+                rating: None,
+                is_manual: false,
             },
         ];
 
-        apply(&mut it, &[ov("episode:1x2", "title", Some("Patched".into()))]).unwrap();
+        apply(
+            &mut it,
+            &[ov("episode:1x2", "title", Some("Patched".into()))],
+        )
+        .unwrap();
 
         assert_eq!(it.episodes[0].title, "One");
         assert_eq!(it.episodes[1].title, "Patched");

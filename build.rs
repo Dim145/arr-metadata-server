@@ -37,10 +37,14 @@ fn main() {
         return;
     }
 
-    if let Err(e) = fs::create_dir_all(dist).and_then(|_| fs::write(dist.join("index.html"), PLACEHOLDER)) {
+    if let Err(e) =
+        fs::create_dir_all(dist).and_then(|_| fs::write(dist.join("index.html"), PLACEHOLDER))
+    {
         println!("cargo:warning=could not create the web UI placeholder: {e}");
         return;
     }
 
-    println!("cargo:warning=frontend/dist was empty; embedding a placeholder page instead of the web UI");
+    println!(
+        "cargo:warning=frontend/dist was empty; embedding a placeholder page instead of the web UI"
+    );
 }

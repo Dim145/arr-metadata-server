@@ -132,12 +132,21 @@ impl Config {
     pub fn from_env() -> Result<Self> {
         Ok(Self {
             server: Server {
-                bind: var_or(&["AMS_BIND_ADDRESS", "BIND_ADDRESS", "LISTEN_ADDR"], "0.0.0.0:8080")
-                    .parse()
-                    .context("AMS_BIND_ADDRESS is not a valid socket address")?,
+                bind: var_or(
+                    &["AMS_BIND_ADDRESS", "BIND_ADDRESS", "LISTEN_ADDR"],
+                    "0.0.0.0:8080",
+                )
+                .parse()
+                .context("AMS_BIND_ADDRESS is not a valid socket address")?,
                 public_url: opt(&["AMS_PUBLIC_URL"]).map(|u| u.trim_end_matches('/').to_string()),
-                tls: match (opt(&["AMS_TLS_CERT", "LEGACY_TLS_CERT"]), opt(&["AMS_TLS_KEY", "LEGACY_TLS_KEY"])) {
-                    (Some(cert), Some(key)) => Some(Tls { cert: cert.into(), key: key.into() }),
+                tls: match (
+                    opt(&["AMS_TLS_CERT", "LEGACY_TLS_CERT"]),
+                    opt(&["AMS_TLS_KEY", "LEGACY_TLS_KEY"]),
+                ) {
+                    (Some(cert), Some(key)) => Some(Tls {
+                        cert: cert.into(),
+                        key: key.into(),
+                    }),
                     (None, None) => None,
                     _ => bail!("AMS_TLS_CERT and AMS_TLS_KEY must be set together"),
                 },
@@ -146,7 +155,10 @@ impl Config {
                 trusted_proxies: nets(&["AMS_TRUSTED_PROXIES"], &[])?,
             },
             database: Database {
-                url: var_or(&["AMS_DATABASE_URL", "DATABASE_URL"], "sqlite://data/ams.db?mode=rwc"),
+                url: var_or(
+                    &["AMS_DATABASE_URL", "DATABASE_URL"],
+                    "sqlite://data/ams.db?mode=rwc",
+                ),
                 max_connections: num(&["AMS_DATABASE_MAX_CONNECTIONS"], 10)?,
                 acquire_timeout: secs(&["AMS_DATABASE_ACQUIRE_TIMEOUT"], 30)?,
             },
@@ -158,9 +170,17 @@ impl Config {
                 arr_allowlist: nets(
                     &["AMS_ARR_ALLOWLIST"],
                     // RFC1918 + loopback + the usual container ranges.
-                    &["127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"],
+                    &[
+                        "127.0.0.0/8",
+                        "::1/128",
+                        "10.0.0.0/8",
+                        "172.16.0.0/12",
+                        "192.168.0.0/16",
+                        "fc00::/7",
+                    ],
                 )?,
-                bootstrap_admin: match (opt(&["AMS_ADMIN_USERNAME"]), opt(&["AMS_ADMIN_PASSWORD"])) {
+                bootstrap_admin: match (opt(&["AMS_ADMIN_USERNAME"]), opt(&["AMS_ADMIN_PASSWORD"]))
+                {
                     (Some(u), Some(p)) => Some((u, p)),
                     (None, None) => None,
                     _ => bail!("AMS_ADMIN_USERNAME and AMS_ADMIN_PASSWORD must be set together"),
@@ -169,18 +189,24 @@ impl Config {
             },
             tmdb: Tmdb {
                 api_key: opt(&["AMS_TMDB_API_KEY", "TMDB_API_KEY"]),
-                upstream: var_or(&["AMS_TMDB_UPSTREAM", "TMDB_UPSTREAM"], "https://api.themoviedb.org")
-                    .trim_end_matches('/')
-                    .to_string(),
+                upstream: var_or(
+                    &["AMS_TMDB_UPSTREAM", "TMDB_UPSTREAM"],
+                    "https://api.themoviedb.org",
+                )
+                .trim_end_matches('/')
+                .to_string(),
                 language: var_or(&["AMS_TMDB_LANGUAGE", "TMDB_LANGUAGE"], "en-US"),
                 include_adult: flag(&["AMS_TMDB_INCLUDE_ADULT", "TMDB_INCLUDE_ADULT"], false)?,
                 search_limit: num::<usize>(&["AMS_TMDB_SEARCH_LIMIT", "TMDB_SEARCH_LIMIT"], 10)?,
                 passthrough: flag(&["AMS_TMDB_PASSTHROUGH"], true)?,
             },
             skyhook: Skyhook {
-                upstream: var_or(&["AMS_SKYHOOK_UPSTREAM", "SKYHOOK_BASE_URL"], "https://skyhook.sonarr.tv")
-                    .trim_end_matches('/')
-                    .to_string(),
+                upstream: var_or(
+                    &["AMS_SKYHOOK_UPSTREAM", "SKYHOOK_BASE_URL"],
+                    "https://skyhook.sonarr.tv",
+                )
+                .trim_end_matches('/')
+                .to_string(),
                 fallback: flag(&["AMS_SKYHOOK_FALLBACK"], true)?,
             },
             cache: Cache {

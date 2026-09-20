@@ -11,7 +11,7 @@ use sqlx::{Any, Arguments, Transaction, any::AnyArguments};
 use crate::{
     db::{Db, RowExt, from_bool, new_id, now, text_list},
     domain::{
-        AlternativeTitle, Credit, CreditType, CoverType, Episode, ExternalIds, ExternalSource,
+        AlternativeTitle, CoverType, Credit, CreditType, Episode, ExternalIds, ExternalSource,
         Image, MediaItem, MediaKind, Rating, RatingValue, Season, Translation,
     },
 };
@@ -102,9 +102,9 @@ pub async fn get(db: &Db, id: &str) -> Result<Option<MediaItem>> {
 }
 
 pub async fn load_external_ids(db: &Db, media_id: &str) -> Result<ExternalIds> {
-    let rows = sqlx::query(db.sql(
-        "SELECT source, value FROM media_external_id WHERE media_id = ? ORDER BY source",
-    ))
+    let rows = sqlx::query(
+        db.sql("SELECT source, value FROM media_external_id WHERE media_id = ? ORDER BY source"),
+    )
     .bind(media_id)
     .fetch_all(db.pool())
     .await?;
@@ -129,15 +129,17 @@ pub async fn find_id_by_external(
     source: ExternalSource,
     value: &str,
 ) -> Result<Option<String>> {
-    let row = sqlx::query(db.sql(
-        "SELECT media_id FROM media_external_id WHERE source = ? AND value = ?",
-    ))
+    let row = sqlx::query(
+        db.sql("SELECT media_id FROM media_external_id WHERE source = ? AND value = ?"),
+    )
     .bind(source.as_str())
     .bind(value)
     .fetch_optional(db.pool())
     .await?;
 
-    row.map(|r| r.text("media_id")).transpose().map_err(Into::into)
+    row.map(|r| r.text("media_id"))
+        .transpose()
+        .map_err(Into::into)
 }
 
 pub async fn find_id_by_slug(db: &Db, kind: MediaKind, slug: &str) -> Result<Option<String>> {
@@ -229,7 +231,10 @@ async fn load_episodes(db: &Db, media_id: &str) -> Result<Vec<Episode>> {
     rows.iter()
         .map(|row| {
             let rating = match (row.opt_real("rating_value")?, row.opt_big("rating_count")?) {
-                (Some(value), votes) => Some(RatingValue { value, votes: votes.unwrap_or(0) }),
+                (Some(value), votes) => Some(RatingValue {
+                    value,
+                    votes: votes.unwrap_or(0),
+                }),
                 _ => None,
             };
 
@@ -337,9 +342,9 @@ async fn load_alternative_titles(db: &Db, media_id: &str) -> Result<Vec<Alternat
 }
 
 async fn load_ratings(db: &Db, media_id: &str) -> Result<Vec<Rating>> {
-    let rows = sqlx::query(db.sql(
-        "SELECT source, value, votes, rating_type FROM media_rating WHERE media_id = ?",
-    ))
+    let rows = sqlx::query(
+        db.sql("SELECT source, value, votes, rating_type FROM media_rating WHERE media_id = ?"),
+    )
     .bind(media_id)
     .fetch_all(db.pool())
     .await?;
@@ -404,12 +409,14 @@ pub async fn search(db: &Db, q: &Query) -> Result<Vec<MediaItem>> {
 
     if let Some(kind) = q.kind {
         sql.push_str(" AND kind = ?");
-        args.add(kind.as_str().to_string()).map_err(|e| anyhow::anyhow!("{e}"))?;
+        args.add(kind.as_str().to_string())
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
     }
 
     if let Some(year) = q.year {
         sql.push_str(" AND year = ?");
-        args.add(i64::from(year)).map_err(|e| anyhow::anyhow!("{e}"))?;
+        args.add(i64::from(year))
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
     }
 
     if q.manual_only {
@@ -423,14 +430,18 @@ pub async fn search(db: &Db, q: &Query) -> Result<Vec<MediaItem>> {
                    OR id IN (SELECT media_id FROM media_alternative_title
                              WHERE LOWER(title) LIKE ?))",
         );
-        args.add(pattern.clone()).map_err(|e| anyhow::anyhow!("{e}"))?;
-        args.add(pattern.clone()).map_err(|e| anyhow::anyhow!("{e}"))?;
+        args.add(pattern.clone())
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        args.add(pattern.clone())
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
         args.add(pattern).map_err(|e| anyhow::anyhow!("{e}"))?;
     }
 
     sql.push_str(" ORDER BY popularity DESC NULLS LAST, title ASC LIMIT ? OFFSET ?");
-    args.add(q.limit.clamp(1, 500)).map_err(|e| anyhow::anyhow!("{e}"))?;
-    args.add(q.offset.max(0)).map_err(|e| anyhow::anyhow!("{e}"))?;
+    args.add(q.limit.clamp(1, 500))
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    args.add(q.offset.max(0))
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
 
     let rows = sqlx::query_with(db.sql(&sql), args)
         .fetch_all(db.pool())
@@ -646,7 +657,11 @@ async fn replace_children(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaIt
                  tvdb_id = excluded.tvdb_id,
                  updated_at = excluded.updated_at",
         ))
-        .bind(if season.id.is_empty() { new_id() } else { season.id.clone() })
+        .bind(if season.id.is_empty() {
+            new_id()
+        } else {
+            season.id.clone()
+        })
         .bind(&item.id)
         .bind(season.season_number)
         .bind(&season.title)
@@ -691,7 +706,11 @@ async fn replace_children(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaIt
                  rating_count = excluded.rating_count,
                  updated_at = excluded.updated_at",
         ))
-        .bind(if ep.id.is_empty() { new_id() } else { ep.id.clone() })
+        .bind(if ep.id.is_empty() {
+            new_id()
+        } else {
+            ep.id.clone()
+        })
         .bind(&item.id)
         .bind(ep.season_number)
         .bind(ep.episode_number)
@@ -734,7 +753,11 @@ async fn replace_children(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaIt
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
              ON CONFLICT (media_id, cover_type, url) DO NOTHING",
         ))
-        .bind(if image.id.is_empty() { new_id() } else { image.id.clone() })
+        .bind(if image.id.is_empty() {
+            new_id()
+        } else {
+            image.id.clone()
+        })
         .bind(&item.id)
         .bind(image.season_number)
         .bind(image.cover_type.as_str())
@@ -758,7 +781,11 @@ async fn replace_children(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaIt
                   tmdb_person_id, sort_order, is_manual, created_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)",
         ))
-        .bind(if credit.id.is_empty() { new_id() } else { credit.id.clone() })
+        .bind(if credit.id.is_empty() {
+            new_id()
+        } else {
+            credit.id.clone()
+        })
         .bind(&item.id)
         .bind(credit.credit_type.as_str())
         .bind(&credit.person_name)
@@ -782,7 +809,11 @@ async fn replace_children(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaIt
              VALUES (?, ?, ?, ?, ?, 0, ?)
              ON CONFLICT DO NOTHING",
         ))
-        .bind(if alt.id.is_empty() { new_id() } else { alt.id.clone() })
+        .bind(if alt.id.is_empty() {
+            new_id()
+        } else {
+            alt.id.clone()
+        })
         .bind(&item.id)
         .bind(&alt.title)
         .bind(&alt.title_type)
@@ -846,14 +877,13 @@ pub async fn delete(db: &Db, id: &str) -> Result<bool> {
 }
 
 pub async fn set_enabled(db: &Db, id: &str, enabled: bool) -> Result<bool> {
-    let result = sqlx::query(db.sql(
-        "UPDATE media_item SET is_enabled = ?, updated_at = ? WHERE id = ?",
-    ))
-    .bind(from_bool(enabled))
-    .bind(now())
-    .bind(id)
-    .execute(db.pool())
-    .await?;
+    let result =
+        sqlx::query(db.sql("UPDATE media_item SET is_enabled = ?, updated_at = ? WHERE id = ?"))
+            .bind(from_bool(enabled))
+            .bind(now())
+            .bind(id)
+            .execute(db.pool())
+            .await?;
 
     Ok(result.rows_affected() > 0)
 }

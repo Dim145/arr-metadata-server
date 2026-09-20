@@ -113,7 +113,10 @@ async fn create(
 
     Ok((
         StatusCode::CREATED,
-        Json(CreateResponse { client, key: generated.plaintext }),
+        Json(CreateResponse {
+            client,
+            key: generated.plaintext,
+        }),
     ))
 }
 
@@ -131,10 +134,10 @@ async fn update(
 ) -> AppResult<Json<ApiClient>> {
     require_admin(&identity)?;
 
-    if let Some(enabled) = request.is_enabled {
-        if !repo::client::set_enabled(&state.db, &id, enabled).await? {
-            return Err(AppError::NotFound);
-        }
+    if let Some(enabled) = request.is_enabled
+        && !repo::client::set_enabled(&state.db, &id, enabled).await?
+    {
+        return Err(AppError::NotFound);
     }
 
     repo::client::get(&state.db, &id)
@@ -152,12 +155,12 @@ async fn remove(
 
     // Refuse to delete the key currently being used: it would lock the caller
     // out mid-session with no way back in.
-    if let Identity::Client(current) = &identity {
-        if current.id == id {
-            return Err(AppError::Conflict(
-                "this is the key you are authenticated with; disable it from another session".into(),
-            ));
-        }
+    if let Identity::Client(current) = &identity
+        && current.id == id
+    {
+        return Err(AppError::Conflict(
+            "this is the key you are authenticated with; disable it from another session".into(),
+        ));
     }
 
     if !repo::client::delete(&state.db, &id).await? {

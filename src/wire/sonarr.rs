@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     db::{new_id, now},
     domain::{
-        AlternativeTitle, Credit, CreditType, CoverType, Episode, ExternalIds, Image, MediaItem,
+        AlternativeTitle, CoverType, Credit, CreditType, Episode, ExternalIds, Image, MediaItem,
         MediaKind, Rating, RatingValue, Season, make_slug,
     },
 };
@@ -185,7 +185,9 @@ pub fn from_item(item: &MediaItem, tvdb_id: i64, language: &str) -> ShowResource
         alternative_titles: item
             .alternative_titles
             .iter()
-            .map(|t| AlternativeTitleResource { title: t.title.clone() })
+            .map(|t| AlternativeTitleResource {
+                title: t.title.clone(),
+            })
             .collect(),
         actors: item
             .credits
@@ -293,10 +295,16 @@ pub fn to_item(show: &ShowResource) -> MediaItem {
     item.original_language = show.original_language.clone();
     item.first_aired = show.first_aired.clone();
     item.last_aired = show.last_aired.clone();
-    item.year = show.first_aired.as_deref().and_then(|d| d.get(0..4)?.parse().ok());
+    item.year = show
+        .first_aired
+        .as_deref()
+        .and_then(|d| d.get(0..4)?.parse().ok());
     item.status = Some(show.status.to_ascii_lowercase());
     item.runtime = show.runtime;
-    item.network = show.network.clone().or_else(|| show.original_network.clone());
+    item.network = show
+        .network
+        .clone()
+        .or_else(|| show.original_network.clone());
     item.content_rating = show.content_rating.clone();
     item.genres = show.genres.clone();
     item.air_time = show
@@ -313,7 +321,10 @@ pub fn to_item(show: &ShowResource) -> MediaItem {
     item.external_ids = ExternalIds {
         tvdb: Some(show.tvdb_id),
         tmdb: show.tmdb_id,
-        imdb: show.imdb_id.as_deref().and_then(crate::domain::ids::normalize_imdb_id),
+        imdb: show
+            .imdb_id
+            .as_deref()
+            .and_then(crate::domain::ids::normalize_imdb_id),
         tvmaze: show.tv_maze_id,
         tvrage: show.tv_rage_id,
         mal: show.mal_ids.clone(),
@@ -321,15 +332,15 @@ pub fn to_item(show: &ShowResource) -> MediaItem {
         trakt: None,
     };
 
-    if let Some(rating) = &show.rating {
-        if rating.count > 0 {
-            item.ratings = vec![Rating {
-                source: "tvdb".to_string(),
-                value: rating.value.parse().ok(),
-                votes: Some(rating.count),
-                rating_type: Some("user".to_string()),
-            }];
-        }
+    if let Some(rating) = &show.rating
+        && rating.count > 0
+    {
+        item.ratings = vec![Rating {
+            source: "tvdb".to_string(),
+            value: rating.value.parse().ok(),
+            votes: Some(rating.count),
+            rating_type: Some("user".to_string()),
+        }];
     }
 
     item.images = show

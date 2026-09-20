@@ -11,8 +11,8 @@ mod service;
 mod state;
 mod telemetry;
 mod ui;
-mod wire;
 mod web;
+mod wire;
 
 use anyhow::{Context, Result};
 
@@ -55,7 +55,11 @@ async fn healthcheck() -> Result<()> {
     let port = bind.rsplit(':').next().unwrap_or("8080");
 
     // TLS terminates here when configured, so probe the same scheme.
-    let scheme = if std::env::var("AMS_TLS_CERT").is_ok() { "https" } else { "http" };
+    let scheme = if std::env::var("AMS_TLS_CERT").is_ok() {
+        "https"
+    } else {
+        "http"
+    };
     let url = format!("{scheme}://127.0.0.1:{port}/health");
 
     let client = reqwest::Client::builder()

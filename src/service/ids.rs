@@ -115,16 +115,28 @@ mod tests {
         assert_eq!(classify("tmdb:1396"), TermLookup::Tmdb(1396));
         assert_eq!(classify("mal:5114"), TermLookup::Mal(5114));
         assert_eq!(classify("anilist:9253"), TermLookup::AniList(9253));
-        assert_eq!(classify("imdb:tt0903747"), TermLookup::Imdb("tt0903747".into()));
-        assert_eq!(classify("IMDB:903747"), TermLookup::Imdb("tt0903747".into()));
+        assert_eq!(
+            classify("imdb:tt0903747"),
+            TermLookup::Imdb("tt0903747".into())
+        );
+        assert_eq!(
+            classify("IMDB:903747"),
+            TermLookup::Imdb("tt0903747".into())
+        );
     }
 
     #[test]
     fn a_malformed_prefix_falls_back_to_a_text_search() {
         // "Face/Off: the sequel" must not be read as a provider lookup.
-        assert_eq!(classify("tvdb:not-a-number"), TermLookup::Text("tvdb:not-a-number"));
+        assert_eq!(
+            classify("tvdb:not-a-number"),
+            TermLookup::Text("tvdb:not-a-number")
+        );
         assert_eq!(classify("imdb:nope"), TermLookup::Text("imdb:nope"));
-        assert_eq!(classify("Alien: Romulus"), TermLookup::Text("Alien: Romulus"));
+        assert_eq!(
+            classify("Alien: Romulus"),
+            TermLookup::Text("Alien: Romulus")
+        );
         assert_eq!(classify("  spaced  "), TermLookup::Text("spaced"));
     }
 }

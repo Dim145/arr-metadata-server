@@ -9,8 +9,8 @@ use axum::{
 };
 use tower_http::{
     catch_panic::CatchPanicLayer, compression::CompressionLayer, cors::CorsLayer,
-    limit::RequestBodyLimitLayer, normalize_path::NormalizePathLayer, set_header::SetResponseHeaderLayer,
-    timeout::TimeoutLayer, trace::TraceLayer,
+    limit::RequestBodyLimitLayer, normalize_path::NormalizePathLayer,
+    set_header::SetResponseHeaderLayer, timeout::TimeoutLayer, trace::TraceLayer,
 };
 
 use crate::{api, state::AppState};
@@ -92,7 +92,10 @@ fn build_router(state: AppState) -> Router {
         .layer(security_headers())
         .layer(RequestBodyLimitLayer::new(MAX_BODY_BYTES))
         .layer(CompressionLayer::new())
-        .layer(TimeoutLayer::with_status_code(StatusCode::GATEWAY_TIMEOUT, timeout))
+        .layer(TimeoutLayer::with_status_code(
+            StatusCode::GATEWAY_TIMEOUT,
+            timeout,
+        ))
         .layer(CatchPanicLayer::new())
         .layer(TraceLayer::new_for_http())
         // Sonarr sends some of these paths with a trailing slash and some
@@ -106,10 +109,7 @@ fn build_router(state: AppState) -> Router {
 /// policy can be strict. Images are the exception: posters come from TMDB.
 fn security_headers() -> impl tower::Layer<
     axum::routing::Route,
-    Service = tower_http::set_header::SetResponseHeader<
-        axum::routing::Route,
-        HeaderValue,
-    >,
+    Service = tower_http::set_header::SetResponseHeader<axum::routing::Route, HeaderValue>,
 > + Clone {
     SetResponseHeaderLayer::overriding(
         header::X_CONTENT_TYPE_OPTIONS,
@@ -146,7 +146,11 @@ fn cors(state: &AppState) -> CorsLayer {
             axum::http::Method::PATCH,
             axum::http::Method::DELETE,
         ])
-        .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION, "x-api-key".parse().unwrap()])
+        .allow_headers([
+            header::CONTENT_TYPE,
+            header::AUTHORIZATION,
+            "x-api-key".parse().unwrap(),
+        ])
 }
 
 async fn health() -> StatusCode {

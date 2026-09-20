@@ -1,0 +1,132 @@
+# Read by both GitHub Actions and Gitea/Forgejo Actions.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  # Debug info is the bulk of the target directory and nothing here reads it.
+  CARGO_PROFILE_DEV_DEBUG: 0
+
+jobs:
+  backend:
+    name: Backend
+    runs-on: ubuntu-latest
+
+    services:
+      # The schema is maintained separately per engine, so CI has to apply both.
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: ams
+          POSTGRES_PASSWORD: ams
+          POSTGRES_DB: ams
+        options: >-
+          --health-cmd "pg_isready -U ams"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Lint
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      - name: Test
+        run: cargo test --locked
+
+      - name: Build
+        run: cargo build --locked
+
+      - name: Apply migrations on SQLite
+        run: |
+          ./scripts/smoke.sh "sqlite://$(mktemp -d)/ci.db?mode=rwc"
+
+      - name: Apply migrations on PostgreSQL
+        run: |
+          ./scripts/smoke.sh "postgres://ams:ams@127.0.0.1:5432/ams"
+
+  frontend:
+    name: Web UI
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install
+        working-directory: frontend
+        run: npm ci --no-audit --no-fund
+
+      - name: Typecheck
+        working-directory: frontend
+        run: npm run typecheck
+
+      - name: Build
+        working-directory: frontend
+        run: npm run build
+
+  image:
+    name: Container image
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: arr-metadata-server:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Start it and check it answers
+        run: |
+          docker run -d --name ci -p 8080:8080 \
+            -e AMS_ADMIN_USERNAME=ci \
+            -e AMS_ADMIN_PASSWORD=ci-password-long-enough \
+            -e AMS_REFRESH_ENABLED=false \
+            --read-only --tmpfs /tmp \
+            --security-opt no-new-privileges:true --cap-drop ALL \
+            arr-metadata-server:ci
+
+          for _ in $(seq 1 40); do
+            curl -sf -o /dev/null http://127.0.0.1:8080/health && break
+            sleep 1
+          done
+
+          curl -fsS http://127.0.0.1:8080/health
+          curl -fsS http://127.0.0.1:8080/ready
+          # The UI must be embedded, not the placeholder page.
+          curl -fsS http://127.0.0.1:8080/ | grep -q '/assets/' \
+            || { echo "the web UI was not embedded"; exit 1; }
+          docker exec ci /usr/local/bin/arr-metadata-server healthcheck
+
+          docker rm -f ci

@@ -419,7 +419,11 @@ pub struct Translation {
 /// for a given (title, year) pair.
 pub fn make_slug(title: &str, year: Option<i32>) -> String {
     let base = slug::slugify(title);
-    let base = if base.is_empty() { "untitled".to_string() } else { base };
+    let base = if base.is_empty() {
+        "untitled".to_string()
+    } else {
+        base
+    };
 
     match year {
         Some(y) => format!("{base}-{y}"),

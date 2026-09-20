@@ -89,7 +89,13 @@ mod tests {
 
     #[test]
     fn api_paths_are_not_ui_paths() {
-        for path in ["/api/v1/items", "/v1/tvdb/search/en", "/3/tv/1", "/health", "/ready"] {
+        for path in [
+            "/api/v1/items",
+            "/v1/tvdb/search/en",
+            "/3/tv/1",
+            "/health",
+            "/ready",
+        ] {
             assert!(!is_ui_path(&path.parse::<Uri>().unwrap()), "{path}");
         }
     }

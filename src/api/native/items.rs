@@ -81,7 +81,10 @@ async fn list(
 }
 
 /// One work, with children and manual overrides applied.
-async fn detail(State(state): State<AppState>, Path(id): Path<String>) -> AppResult<Json<MediaItem>> {
+async fn detail(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> AppResult<Json<MediaItem>> {
     service::load(&state, &id)
         .await?
         .map(Json)
@@ -146,7 +149,10 @@ async fn create(
     item.slug = unique_slug(&state, kind, title, request.year).await?;
 
     for (source, value) in item.external_ids.rows(kind) {
-        if repo::item::find_id_by_external(&state.db, source, &value).await?.is_some() {
+        if repo::item::find_id_by_external(&state.db, source, &value)
+            .await?
+            .is_some()
+        {
             return Err(AppError::Conflict(format!(
                 "another entry already claims {source}={value}"
             )));
@@ -155,7 +161,10 @@ async fn create(
 
     repo::item::upsert(
         &state.db,
-        repo::item::ItemWrite { item: &item, replace_children: false },
+        repo::item::ItemWrite {
+            item: &item,
+            replace_children: false,
+        },
     )
     .await?;
 
@@ -190,7 +199,10 @@ async fn update(
         state.caches.items.invalidate(&format!("item:{id}")).await;
     }
 
-    service::load(&state, &id).await?.map(Json).ok_or(AppError::NotFound)
+    service::load(&state, &id)
+        .await?
+        .map(Json)
+        .ok_or(AppError::NotFound)
 }
 
 async fn remove(
@@ -218,7 +230,9 @@ async fn refresh(
 ) -> AppResult<Json<MediaItem>> {
     require_write(&identity)?;
 
-    let item = service::load(&state, &id).await?.ok_or(AppError::NotFound)?;
+    let item = service::load(&state, &id)
+        .await?
+        .ok_or(AppError::NotFound)?;
 
     let refreshed = crate::jobs::refresh::refresh_one(&state, &item)
         .await
@@ -259,7 +273,10 @@ async fn snapshots(
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
 fn require_write(identity: &Identity) -> AppResult<()> {
-    identity.can_write().then_some(()).ok_or(AppError::Forbidden)
+    identity
+        .can_write()
+        .then_some(())
+        .ok_or(AppError::Forbidden)
 }
 
 /// A slug not already taken by another work of the same kind.
@@ -274,13 +291,19 @@ async fn unique_slug(
 ) -> AppResult<String> {
     let base = make_slug(title, year);
 
-    if repo::item::find_id_by_slug(&state.db, kind, &base).await?.is_none() {
+    if repo::item::find_id_by_slug(&state.db, kind, &base)
+        .await?
+        .is_none()
+    {
         return Ok(base);
     }
 
     for suffix in 2..=50 {
         let candidate = format!("{base}-{suffix}");
-        if repo::item::find_id_by_slug(&state.db, kind, &candidate).await?.is_none() {
+        if repo::item::find_id_by_slug(&state.db, kind, &candidate)
+            .await?
+            .is_none()
+        {
             return Ok(candidate);
         }
     }

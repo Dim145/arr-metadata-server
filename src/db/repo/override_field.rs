@@ -70,9 +70,9 @@ pub async fn set(
 
 /// Remove an override, handing the field back to provider data.
 pub async fn unset(db: &Db, media_id: &str, scope: Scope, field: &str) -> Result<bool> {
-    let result = sqlx::query(db.sql(
-        "DELETE FROM media_override WHERE media_id = ? AND scope = ? AND field = ?",
-    ))
+    let result = sqlx::query(
+        db.sql("DELETE FROM media_override WHERE media_id = ? AND scope = ? AND field = ?"),
+    )
     .bind(media_id)
     .bind(scope.to_string())
     .bind(field)
@@ -124,13 +124,15 @@ pub async fn list_for_many(
 
         for row in query.fetch_all(db.pool()).await? {
             let raw: Option<String> = row.opt_text("value")?;
-            out.entry(row.text("media_id")?).or_default().push(Override {
-                scope: row.text("scope")?,
-                field: row.text("field")?,
-                value: raw.and_then(|s| serde_json::from_str(&s).ok()),
-                updated_at: row.text("updated_at")?,
-                updated_by: row.opt_text("updated_by")?,
-            });
+            out.entry(row.text("media_id")?)
+                .or_default()
+                .push(Override {
+                    scope: row.text("scope")?,
+                    field: row.text("field")?,
+                    value: raw.and_then(|s| serde_json::from_str(&s).ok()),
+                    updated_at: row.text("updated_at")?,
+                    updated_by: row.opt_text("updated_by")?,
+                });
         }
     }
 

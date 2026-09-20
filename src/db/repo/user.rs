@@ -23,7 +23,12 @@ pub struct Credentials {
     pub password_hash: String,
 }
 
-pub async fn create(db: &Db, username: &str, password_hash: &str, is_admin: bool) -> Result<AdminUser> {
+pub async fn create(
+    db: &Db,
+    username: &str,
+    password_hash: &str,
+    is_admin: bool,
+) -> Result<AdminUser> {
     let id = new_id();
     let created = now();
 

@@ -93,16 +93,15 @@ async fn find_existing(state: &AppState, item: &MediaItem) -> Result<Option<Stri
         }
     }
 
-    if let Some(imdb) = &item.external_ids.imdb {
-        if let Some(id) =
+    if let Some(imdb) = &item.external_ids.imdb
+        && let Some(id) =
             repo::item::find_id_by_external(&state.db, ExternalSource::Imdb, imdb).await?
+    {
+        // An IMDb id is only decisive when the kinds agree.
+        if let Some(existing) = repo::item::get(&state.db, &id).await?
+            && existing.kind == item.kind
         {
-            // An IMDb id is only decisive when the kinds agree.
-            if let Some(existing) = repo::item::get(&state.db, &id).await? {
-                if existing.kind == item.kind {
-                    return Ok(Some(id));
-                }
-            }
+            return Ok(Some(id));
         }
     }
 
@@ -121,13 +120,13 @@ pub async fn persist(
     provider: &str,
     payload: Option<&Value>,
 ) -> Result<MediaItem> {
-    if let Some(existing_id) = find_existing(state, &item).await? {
-        if let Some(existing) = repo::item::get(&state.db, &existing_id).await? {
-            item.id = existing.id;
-            item.created_at = existing.created_at;
-            item.is_manual = existing.is_manual;
-            item.is_enabled = existing.is_enabled;
-        }
+    if let Some(existing_id) = find_existing(state, &item).await?
+        && let Some(existing) = repo::item::get(&state.db, &existing_id).await?
+    {
+        item.id = existing.id;
+        item.created_at = existing.created_at;
+        item.is_manual = existing.is_manual;
+        item.is_enabled = existing.is_enabled;
     }
 
     item.refreshed_at = Some(crate::db::now());
@@ -136,7 +135,10 @@ pub async fn persist(
 
     repo::item::upsert(
         &state.db,
-        repo::item::ItemWrite { item: &item, replace_children: true },
+        repo::item::ItemWrite {
+            item: &item,
+            replace_children: true,
+        },
     )
     .await?;
 
@@ -144,7 +146,11 @@ pub async fn persist(
         repo::snapshot::put(&state.db, &item.id, provider, payload, None).await?;
     }
 
-    state.caches.items.invalidate(&format!("item:{}", item.id)).await;
+    state
+        .caches
+        .items
+        .invalidate(&format!("item:{}", item.id))
+        .await;
 
     // Re-read so the caller sees the same thing every later request will: the
     // stored row, with manual overrides applied on top.
@@ -171,7 +177,11 @@ fn next_refresh(state: &AppState, item: &MediaItem) -> String {
 
 /// Whether a stored work is due a refresh.
 pub fn is_stale(item: &MediaItem) -> bool {
-    match item.refresh_after.as_deref().and_then(crate::db::parse_rfc3339) {
+    match item
+        .refresh_after
+        .as_deref()
+        .and_then(crate::db::parse_rfc3339)
+    {
         Some(due) => due <= chrono::Utc::now(),
         // Never scheduled: manual entries, or something written before the
         // scheduler existed. Not stale — there may be nothing to refresh from.
@@ -196,10 +206,10 @@ where
 
     // An empty result is not cached: it is usually a provider hiccup, and
     // caching it would keep a title invisible for the whole TTL.
-    if !items.is_empty() {
-        if let Ok(encoded) = serde_json::to_string(&items) {
-            state.caches.searches.insert(key, encoded).await;
-        }
+    if !items.is_empty()
+        && let Ok(encoded) = serde_json::to_string(&items)
+    {
+        state.caches.searches.insert(key, encoded).await;
     }
 
     Ok(items)

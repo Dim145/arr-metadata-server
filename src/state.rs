@@ -93,7 +93,10 @@ impl AppState {
             return Ok(());
         };
 
-        if repo::user::find_by_username(&self.db, &username).await?.is_some() {
+        if repo::user::find_by_username(&self.db, &username)
+            .await?
+            .is_some()
+        {
             tracing::debug!(%username, "administrator already exists");
             return Ok(());
         }

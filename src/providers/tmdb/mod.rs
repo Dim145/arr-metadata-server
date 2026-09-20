@@ -72,7 +72,11 @@ impl TmdbClient {
 
     /// Perform a GET and return the parsed body, or `None` on 404.
     async fn fetch(&self, url: &str, params: &[(&str, String)]) -> Result<Option<Value>> {
-        let _permit = self.permits.acquire().await.expect("semaphore is never closed");
+        let _permit = self
+            .permits
+            .acquire()
+            .await
+            .expect("semaphore is never closed");
 
         let response = self
             .get(url)?
@@ -114,7 +118,11 @@ impl TmdbClient {
     // ─── lookup ──────────────────────────────────────────────────────────────
 
     /// Resolve an id from another provider, e.g. `tvdb_id` or `imdb_id`.
-    pub async fn find(&self, external_source: &str, external_id: &str) -> Result<models::FindResponse> {
+    pub async fn find(
+        &self,
+        external_source: &str,
+        external_id: &str,
+    ) -> Result<models::FindResponse> {
         let url = format!("{}/find/{external_id}", self.base);
         let params = [
             ("external_source", external_source.to_string()),
@@ -142,14 +150,13 @@ impl TmdbClient {
         // TMDB returns an empty overview rather than falling back when a title
         // has no translation in the requested language. Backfill from en-US so
         // a French-configured server still gets a description.
-        if self.language != "en-US" && tv.overview.as_deref().unwrap_or_default().is_empty() {
-            if let Ok(Some(fallback_raw)) = self.fetch_tv(id, "en-US").await {
-                if let Ok(fallback) = Self::typed::<models::Tv>(&fallback_raw, "series") {
-                    if tv.overview.as_deref().unwrap_or_default().is_empty() {
-                        tv.overview = fallback.overview;
-                    }
-                }
-            }
+        if self.language != "en-US"
+            && tv.overview.as_deref().unwrap_or_default().is_empty()
+            && let Ok(Some(fallback_raw)) = self.fetch_tv(id, "en-US").await
+            && let Ok(fallback) = Self::typed::<models::Tv>(&fallback_raw, "series")
+            && tv.overview.as_deref().unwrap_or_default().is_empty()
+        {
+            tv.overview = fallback.overview;
         }
 
         Ok(Some((raw, tv)))
@@ -165,7 +172,10 @@ impl TmdbClient {
                     .to_string(),
             ),
             // Posters and logos in the configured language plus language-neutral art.
-            ("include_image_language", format!("{},null", crate::providers::lang::base_language(language))),
+            (
+                "include_image_language",
+                format!("{},null", crate::providers::lang::base_language(language)),
+            ),
         ];
 
         self.fetch(&url, &params).await
@@ -204,12 +214,12 @@ impl TmdbClient {
             .iter()
             .any(|e| e.name.as_deref().unwrap_or_default().is_empty());
 
-        if self.language != "en-US" && missing_titles {
-            if let Ok(Some(fallback_raw)) = self.fetch_season(id, number, "en-US").await {
-                if let Ok(fallback) = Self::typed::<models::Season>(&fallback_raw, "season") {
-                    backfill_episodes(&mut season, &fallback);
-                }
-            }
+        if self.language != "en-US"
+            && missing_titles
+            && let Ok(Some(fallback_raw)) = self.fetch_season(id, number, "en-US").await
+            && let Ok(fallback) = Self::typed::<models::Season>(&fallback_raw, "season")
+        {
+            backfill_episodes(&mut season, &fallback);
         }
 
         Ok(Some(season))
@@ -217,7 +227,8 @@ impl TmdbClient {
 
     async fn fetch_season(&self, id: i64, number: i32, language: &str) -> Result<Option<Value>> {
         let url = format!("{}/tv/{id}/season/{number}", self.base);
-        self.fetch(&url, &[("language", language.to_string())]).await
+        self.fetch(&url, &[("language", language.to_string())])
+            .await
     }
 
     pub async fn tv_external_ids(&self, id: i64) -> Result<models::ExternalIds> {
@@ -255,12 +266,12 @@ impl TmdbClient {
 
         let mut movie: models::Movie = Self::typed(&raw, "movie")?;
 
-        if self.language != "en-US" && movie.overview.as_deref().unwrap_or_default().is_empty() {
-            if let Ok(Some(fallback_raw)) = self.fetch_movie(id, "en-US").await {
-                if let Ok(fallback) = Self::typed::<models::Movie>(&fallback_raw, "movie") {
-                    movie.overview = fallback.overview;
-                }
-            }
+        if self.language != "en-US"
+            && movie.overview.as_deref().unwrap_or_default().is_empty()
+            && let Ok(Some(fallback_raw)) = self.fetch_movie(id, "en-US").await
+            && let Ok(fallback) = Self::typed::<models::Movie>(&fallback_raw, "movie")
+        {
+            movie.overview = fallback.overview;
         }
 
         Ok(Some((raw, movie)))
@@ -320,11 +331,13 @@ impl TmdbClient {
     // ─── lists ───────────────────────────────────────────────────────────────
 
     pub async fn popular_movies(&self, page: i32) -> Result<Vec<models::MovieSummary>> {
-        self.movie_list(&format!("{}/movie/popular", self.base), page).await
+        self.movie_list(&format!("{}/movie/popular", self.base), page)
+            .await
     }
 
     pub async fn trending_movies(&self) -> Result<Vec<models::MovieSummary>> {
-        self.movie_list(&format!("{}/trending/movie/week", self.base), 1).await
+        self.movie_list(&format!("{}/trending/movie/week", self.base), 1)
+            .await
     }
 
     async fn movie_list(&self, url: &str, page: i32) -> Result<Vec<models::MovieSummary>> {
