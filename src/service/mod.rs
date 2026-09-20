@@ -57,6 +57,28 @@ pub async fn load(state: &AppState, id: &str) -> Result<Option<MediaItem>> {
     Ok(Some(item))
 }
 
+/// Apply stored overrides to a batch of works.
+///
+/// Every path that returns more than one item goes through this. Without it a
+/// list view would show provider values while the detail view showed edited
+/// ones — the lock would look like it had not taken.
+pub async fn apply_overrides(state: &AppState, items: &mut [MediaItem]) -> Result<()> {
+    if items.is_empty() {
+        return Ok(());
+    }
+
+    let ids: Vec<String> = items.iter().map(|i| i.id.clone()).collect();
+    let by_item = repo::override_field::list_for_many(&state.db, &ids).await?;
+
+    for item in items.iter_mut() {
+        if let Some(overrides) = by_item.get(&item.id) {
+            fields::apply(item, overrides)?;
+        }
+    }
+
+    Ok(())
+}
+
 /// Find the local work matching any of `item`'s external ids.
 ///
 /// Checked in order of how strongly each id identifies a single work: an IMDb

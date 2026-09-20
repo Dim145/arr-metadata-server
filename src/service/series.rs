@@ -170,6 +170,8 @@ async fn local_search(state: &AppState, term: &str) -> Result<Vec<MediaItem>> {
         repo::item::load_children(&state.db, item).await?;
     }
 
+    crate::service::apply_overrides(state, &mut items).await?;
+
     Ok(items)
 }
 

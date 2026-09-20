@@ -92,6 +92,51 @@ pub async fn clear(db: &Db, media_id: &str) -> Result<u64> {
     Ok(result.rows_affected())
 }
 
+/// Overrides for several works at once, keyed by media id.
+///
+/// A list view needs every item's edits applied; doing that one query per row
+/// turns a page of fifty into fifty round trips.
+pub async fn list_for_many(
+    db: &Db,
+    media_ids: &[String],
+) -> Result<std::collections::HashMap<String, Vec<Override>>> {
+    use std::collections::HashMap;
+
+    let mut out: HashMap<String, Vec<Override>> = HashMap::new();
+
+    if media_ids.is_empty() {
+        return Ok(out);
+    }
+
+    // Chunked to stay well inside every engine's bind-parameter limit.
+    for chunk in media_ids.chunks(200) {
+        let placeholders = vec!["?"; chunk.len()].join(", ");
+        let sql = format!(
+            "SELECT media_id, scope, field, value, updated_at, updated_by
+             FROM media_override WHERE media_id IN ({placeholders})
+             ORDER BY media_id, scope, field"
+        );
+
+        let mut query = sqlx::query(db.sql(&sql));
+        for id in chunk {
+            query = query.bind(id);
+        }
+
+        for row in query.fetch_all(db.pool()).await? {
+            let raw: Option<String> = row.opt_text("value")?;
+            out.entry(row.text("media_id")?).or_default().push(Override {
+                scope: row.text("scope")?,
+                field: row.text("field")?,
+                value: raw.and_then(|s| serde_json::from_str(&s).ok()),
+                updated_at: row.text("updated_at")?,
+                updated_by: row.opt_text("updated_by")?,
+            });
+        }
+    }
+
+    Ok(out)
+}
+
 pub async fn count(db: &Db) -> Result<i64> {
     let row = sqlx::query(db.sql("SELECT COUNT(*) AS n FROM media_override"))
         .fetch_one(db.pool())

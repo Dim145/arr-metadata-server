@@ -1,0 +1,151 @@
+@import "tailwindcss";
+
+/* ───────────────────────────────────────────────────────────────────────────
+   A broadcast control room, not an admin panel.
+
+   Warm near-black rather than the cold blue-grey every dashboard defaults to,
+   with a phosphor amber that only ever means one thing: a human touched this.
+   Provider data stays neutral. The contrast between the two IS the interface.
+   ─────────────────────────────────────────────────────────────────────────── */
+
+@theme {
+  --color-void: #0a0908;
+  --color-pit: #100e0c;
+  --color-surface: #16130f;
+  --color-raised: #1d1915;
+  --color-line: #2a241d;
+  --color-line-bright: #3a3229;
+
+  --color-paper: #ede8df;
+  --color-dim: #a29a8d;
+  --color-faint: #6d655a;
+
+  /* Phosphor amber — manual edits, locks, anything a person owns. */
+  --color-phos: #e8a33d;
+  --color-phos-dim: #8a6220;
+  --color-phos-glow: #ffc96b;
+
+  /* Cool slate — provider data, automation, anything the machine owns. */
+  --color-signal: #6f97b8;
+  --color-signal-dim: #3c556b;
+
+  --color-sage: #93b071;
+  --color-rust: #d1624a;
+
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", monospace;
+  --font-display: "Instrument Serif", Georgia, serif;
+
+  --radius-sharp: 2px;
+}
+
+@layer base {
+  html {
+    color-scheme: dark;
+  }
+
+  body {
+    background-color: var(--color-void);
+    color: var(--color-paper);
+    font-family: var(--font-sans);
+    font-feature-settings: "cv05" 1, "ss03" 1;
+    -webkit-font-smoothing: antialiased;
+    margin: 0;
+    min-height: 100dvh;
+  }
+
+  /* Film grain. Fixed, so the texture belongs to the screen rather than to the
+     content scrolling under it. */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    pointer-events: none;
+    opacity: 0.032;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+
+  ::selection {
+    background: var(--color-phos);
+    color: var(--color-void);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-phos);
+    outline-offset: 2px;
+  }
+
+  /* A scrollbar that belongs to the room. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-line-bright) transparent;
+  }
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-line-bright);
+    border: 3px solid var(--color-void);
+    border-radius: 99px;
+  }
+}
+
+@layer utilities {
+  /* Fine horizontal rules, like a printed register. */
+  .rule-top {
+    box-shadow: inset 0 1px 0 var(--color-line);
+  }
+
+  /* The signature: a hairline down the left edge that lights up on hover. */
+  .edge {
+    box-shadow: inset 2px 0 0 var(--color-line);
+    transition: box-shadow 180ms ease;
+  }
+  .edge:hover {
+    box-shadow: inset 2px 0 0 var(--color-line-bright);
+  }
+  .edge-locked {
+    box-shadow: inset 2px 0 0 var(--color-phos);
+  }
+
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Staggered page entrance. One orchestrated reveal beats a dozen
+     micro-interactions. */
+  .reveal {
+    animation: reveal 520ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
+  }
+
+  @keyframes reveal {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .reveal {
+      animation: none;
+    }
+    * {
+      transition-duration: 1ms !important;
+    }
+  }
+
+  /* Faint amber bloom behind the active nav item. */
+  .bloom {
+    background-image: radial-gradient(
+      120% 100% at 0% 50%,
+      color-mix(in srgb, var(--color-phos) 12%, transparent),
+      transparent 70%
+    );
+  }
+}

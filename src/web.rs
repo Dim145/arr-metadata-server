@@ -85,6 +85,8 @@ fn build_router(state: AppState) -> Router {
                     crate::auth::ratelimit::limit,
                 )),
         )
+        // The UI's fallback must be last: it answers every path the API did not.
+        .merge(crate::ui::router())
         .with_state(state.clone())
         .layer(cors(&state))
         .layer(security_headers())

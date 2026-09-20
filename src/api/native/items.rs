@@ -57,7 +57,7 @@ async fn list(
         .transpose()
         .map_err(|e| AppError::BadRequest(e.to_string()))?;
 
-    let items = repo::item::search(
+    let mut items = repo::item::search(
         &state.db,
         &repo::item::Query {
             term: query.term,
@@ -70,6 +70,10 @@ async fn list(
         },
     )
     .await?;
+
+    // Without this the list would show provider values while the detail view
+    // showed edited ones, and a lock would look like it had not taken.
+    service::apply_overrides(&state, &mut items).await?;
 
     let total = repo::item::count(&state.db, kind).await?;
 

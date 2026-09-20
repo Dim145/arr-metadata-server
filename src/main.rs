@@ -10,6 +10,7 @@ mod providers;
 mod service;
 mod state;
 mod telemetry;
+mod ui;
 mod wire;
 mod web;
 
