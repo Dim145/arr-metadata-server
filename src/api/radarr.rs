@@ -76,6 +76,8 @@ async fn by_imdb(
 #[derive(Deserialize)]
 struct SearchQuery {
     q: Option<String>,
+    // Radarr always emits this parameter, empty when the user gave no year.
+    #[serde(default, deserialize_with = "crate::api::extract::empty_as_none")]
     year: Option<i32>,
 }
 

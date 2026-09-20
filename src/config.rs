@@ -11,9 +11,9 @@ use ipnet::IpNet;
 
 /// Which authentication a given API surface enforces.
 ///
-/// Sonarr and Radarr hard-code their metadata URLs, so they can never attach an
-/// `X-Api-Key` header. Those surfaces are therefore guarded by network policy
-/// rather than by a credential — see [`Security::arr_allowlist`].
+/// Some clients cannot present a credential at all: Sonarr and Radarr hard-code
+/// their metadata URLs, and most TMDB clients compile their key in. Those are
+/// guarded by network policy instead — see [`Security::allowlist`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SurfacePolicy {
     /// Requires a valid API key (header, or `api_key`/`apikey` query parameter).
@@ -81,8 +81,12 @@ pub struct Security {
     pub native_policy: SurfacePolicy,
     pub tmdb_policy: SurfacePolicy,
     pub arr_policy: SurfacePolicy,
-    /// Peers allowed to reach the Sonarr/Radarr compatibility surfaces.
-    pub arr_allowlist: Vec<IpNet>,
+    /// Peers allowed to reach any surface whose policy is
+    /// [`SurfacePolicy::Allowlist`].
+    ///
+    /// Not only the arr surfaces: a TMDB client whose key is compiled in — which
+    /// is most of them — can only be let through by address either.
+    pub allowlist: Vec<IpNet>,
     /// Bootstrap administrator, created on first start when no admin exists.
     pub bootstrap_admin: Option<(String, String)>,
     /// Requests per minute per peer on the native API. `0` disables the limiter.
@@ -169,8 +173,8 @@ impl Config {
                 native_policy: policy(&["AMS_NATIVE_AUTH"], SurfacePolicy::ApiKey)?,
                 tmdb_policy: policy(&["AMS_TMDB_AUTH"], SurfacePolicy::ApiKey)?,
                 arr_policy: policy(&["AMS_ARR_AUTH"], SurfacePolicy::Allowlist)?,
-                arr_allowlist: nets(
-                    &["AMS_ARR_ALLOWLIST"],
+                allowlist: nets(
+                    &["AMS_ALLOWLIST", "AMS_ARR_ALLOWLIST"],
                     // RFC1918 + loopback + the usual container ranges.
                     &[
                         "127.0.0.0/8",

@@ -71,7 +71,9 @@ pub struct ListQuery {
     pub actor: Option<String>,
     pub target: Option<String>,
     pub since: Option<String>,
+    #[serde(default, deserialize_with = "crate::api::extract::empty_as_none")]
     pub limit: Option<i64>,
+    #[serde(default, deserialize_with = "crate::api::extract::empty_as_none")]
     pub offset: Option<i64>,
 }
 

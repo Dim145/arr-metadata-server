@@ -2,11 +2,12 @@
 
 use anyhow::{Context, Result};
 use axum::{
-    Json, Router,
-    extract::State,
+    Json, Router, ServiceExt,
+    extract::{Request, State},
     http::{HeaderValue, StatusCode, header},
     routing::get,
 };
+use tower::Layer;
 use utoipa_swagger_ui::SwaggerUi;
 
 use tower_http::{
@@ -28,7 +29,12 @@ pub async fn serve(state: AppState) -> Result<()> {
         tokio::spawn(crate::jobs::refresh::run(state.clone()));
     }
 
-    let router = build_router(state.clone());
+    // Sonarr builds its URLs from `.../v1/tvdb/{route}/{language}/` — with a
+    // trailing slash — and its hostname is compiled in, so there is no way to
+    // ask it not to. `NormalizePathLayer` applied with `Router::layer` runs
+    // *after* routing and so cannot help; it has to wrap the whole router as a
+    // service, before a path is ever matched.
+    let router = NormalizePathLayer::trim_trailing_slash().layer(build_router(state.clone()));
 
     match state.config.server.tls.clone() {
         Some(tls) => {
@@ -45,7 +51,11 @@ pub async fn serve(state: AppState) -> Result<()> {
             tracing::info!(%bind, "listening (TLS)");
 
             axum_server::bind_rustls(bind, config)
-                .serve(router.into_make_service_with_connect_info::<std::net::SocketAddr>())
+                .serve(
+                    ServiceExt::<Request>::into_make_service_with_connect_info::<
+                        std::net::SocketAddr,
+                    >(router),
+                )
                 .await
                 .context("server error")?;
         }
@@ -58,7 +68,9 @@ pub async fn serve(state: AppState) -> Result<()> {
 
             axum::serve(
                 listener,
-                router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+                ServiceExt::<Request>::into_make_service_with_connect_info::<std::net::SocketAddr>(
+                    router,
+                ),
             )
             .with_graceful_shutdown(shutdown_signal())
             .await
@@ -103,9 +115,6 @@ fn build_router(state: AppState) -> Router {
         ))
         .layer(CatchPanicLayer::new())
         .layer(TraceLayer::new_for_http())
-        // Sonarr sends some of these paths with a trailing slash and some
-        // without; normalising before routing avoids registering each twice.
-        .layer(NormalizePathLayer::trim_trailing_slash())
 }
 
 /// Headers applied to every response.

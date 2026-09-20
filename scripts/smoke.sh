@@ -68,6 +68,15 @@ ID=$(printf '%s' "$ITEM" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
 step "Sonarr's surface serves it"
 curl -fsS "${BASE}/v1/tvdb/shows/en/999777" | grep -q 'Smoke Test Series'; ok
 
+step "Sonarr's trailing-slash search URL is accepted"
+# Sonarr builds `.../v1/tvdb/{route}/{language}/` with a trailing slash and its
+# hostname is compiled in, so this exact shape has to work.
+curl -fsS "${BASE}/v1/tvdb/search/en/?term=smoke" >/dev/null; ok
+
+step "Radarr's empty year parameter is tolerated"
+# Radarr always emits `year=`, empty when the user gave none.
+curl -fsS "${BASE}/v1/search?q=smoke&year=" >/dev/null; ok
+
 step "an override locks the field"
 curl -fsS -b "$COOKIES" -o /dev/null -X PUT "${BASE}/api/v1/items/${ID}/overrides" \
   -H 'content-type: application/json' \
@@ -92,6 +101,13 @@ curl -fsS -o /dev/null -H "x-api-key: ${KEY}" "${BASE}/api/v1/stats"; ok
 
 step "a wrong key does not"
 [ "$(curl -s -o /dev/null -w '%{http_code}' -H 'x-api-key: ams_wrong' "${BASE}/api/v1/stats")" = "401" ]; ok
+
+step "the TMDB relay matches a multi-segment path"
+# Without a TMDB key the relay answers 503. What matters is that it is reached
+# at all: a route that only matches one segment falls through to the web UI's
+# 404 instead, which is how the whole surface once went quietly dead.
+code=$(curl -s -o /dev/null -w '%{http_code}' -H "x-api-key: ${KEY}" "${BASE}/3/movie/329865?language=en-US")
+[ "$code" = "503" ] || { printf 'expected 503, got %s\n' "$code"; exit 1; }; ok
 
 step "the OpenAPI spec is behind the same guard"
 [ "$(curl -s -o /dev/null -w '%{http_code}' "${BASE}/api/openapi.json")" = "401" ]

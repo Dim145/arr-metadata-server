@@ -94,6 +94,9 @@ pub struct MediaItem {
     pub studio: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content_rating: Option<String>,
+    /// ISO 3166-1 alpha-2, uppercase — the form Radarr matches against.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_rating_country: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub homepage: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -170,6 +173,7 @@ impl MediaItem {
             network: None,
             studio: None,
             content_rating: None,
+            content_rating_country: None,
             homepage: None,
             trailer_youtube_id: None,
             popularity: None,
@@ -380,6 +384,10 @@ pub struct Credit {
     pub image: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tmdb_person_id: Option<i64>,
+    /// TMDB's identifier for *this role*, distinct from the person's id. Radarr
+    /// requires it and rejects a credit without one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub credit_tmdb_id: Option<String>,
     pub sort_order: i32,
     pub is_manual: bool,
 }

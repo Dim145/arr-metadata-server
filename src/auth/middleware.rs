@@ -77,7 +77,7 @@ async fn authorize(
         SurfacePolicy::Open => Identity::Anonymous,
 
         SurfacePolicy::Allowlist => {
-            if !ip::is_allowed(client_ip, &state.config.security.arr_allowlist) {
+            if !ip::is_allowed(client_ip, &state.config.security.allowlist) {
                 tracing::warn!(
                     ?client_ip,
                     path = %request.uri().path(),

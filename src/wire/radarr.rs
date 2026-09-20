@@ -148,6 +148,8 @@ pub struct CastResource {
     pub order: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tmdb_id: Option<i64>,
+    /// Radarr stores this with a NOT NULL constraint.
+    pub credit_id: String,
     #[serde(default)]
     pub images: Vec<ImageResource>,
 }
@@ -161,7 +163,11 @@ pub struct CrewResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub department: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub order: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub tmdb_id: Option<i64>,
+    /// Radarr stores this with a NOT NULL constraint.
+    pub credit_id: String,
     #[serde(default)]
     pub images: Vec<ImageResource>,
 }
@@ -192,7 +198,19 @@ pub struct RecommendationResource {
 // ─── canonical → wire ────────────────────────────────────────────────────────
 
 pub fn from_item(item: &MediaItem) -> MovieResource {
-    let tmdb_rating = item.rating("tmdb").map(rating_item);
+    // Radarr dereferences `resource.Ratings.FirstOrDefault()` without a null
+    // check when `movieRatings.tmdb` is absent (SkyHookProxy.cs:285), so an
+    // unrated title takes down the whole search response rather than just
+    // itself. Always emit a TMDB entry here — zeroed when there are no votes.
+    //
+    // The canonical model still records no rating for an unrated title; this is
+    // a concession to one client's parser, made where that client is served.
+    let tmdb_rating = item.rating("tmdb").map(rating_item).unwrap_or(RatingItem {
+        count: 0,
+        value: 0.0,
+        origin: Some("tmdb".to_string()),
+        rating_type: Some("user".to_string()),
+    });
     let imdb_rating = item.rating("imdb").map(rating_item);
 
     MovieResource {
@@ -204,9 +222,9 @@ pub fn from_item(item: &MediaItem) -> MovieResource {
         title_slug: item.slug.clone(),
         // Radarr reads `ratings` on older versions and `movieRatings` on newer
         // ones; emitting both keeps either working.
-        ratings: tmdb_rating.clone().into_iter().collect(),
-        movie_ratings: (tmdb_rating.is_some() || imdb_rating.is_some()).then(|| RatingResource {
-            tmdb: tmdb_rating,
+        ratings: vec![tmdb_rating.clone()],
+        movie_ratings: Some(RatingResource {
+            tmdb: Some(tmdb_rating),
             imdb: imdb_rating,
             metacritic: item.rating("metacritic").map(rating_item),
             rotten_tomatoes: item.rating("rottenTomatoes").map(rating_item),
@@ -242,19 +260,16 @@ pub fn from_item(item: &MediaItem) -> MovieResource {
         credits: Some(credits(&item.credits)),
         studio: item.studio.clone(),
         youtube_trailer_id: item.trailer_youtube_id.clone(),
-        certifications: item
-            .content_rating
-            .as_ref()
-            .map(|c| {
-                vec![CertificationResource {
-                    country: item
-                        .original_country
-                        .clone()
-                        .unwrap_or_else(|| "usa".to_string()),
-                    certification: c.clone(),
-                }]
-            })
-            .unwrap_or_default(),
+        // Radarr looks this up by country code and compares against its own
+        // setting, which is ISO 3166-1 alpha-2 uppercase. The production
+        // country is not the certification country, and must not stand in for it.
+        certifications: match (&item.content_rating, &item.content_rating_country) {
+            (Some(rating), Some(country)) => vec![CertificationResource {
+                country: country.clone(),
+                certification: rating.clone(),
+            }],
+            _ => Vec::new(),
+        },
         status: radarr_status(item.status.as_deref()),
         collection: None,
         original_language: item.original_language.clone(),
@@ -264,28 +279,39 @@ pub fn from_item(item: &MediaItem) -> MovieResource {
     }
 }
 
+/// Radarr writes every credit into a table where `CreditTmdbId` is NOT NULL, so
+/// one credit missing that identifier aborts the whole movie refresh inside
+/// Radarr's database. Credits we cannot identify are dropped instead: losing one
+/// name is better than losing the movie.
 fn credits(all: &[Credit]) -> Credits {
     Credits {
         cast: all
             .iter()
             .filter(|c| c.credit_type == CreditType::Actor)
-            .map(|c| CastResource {
-                name: c.person_name.clone(),
-                character: c.character_name.clone(),
-                order: Some(c.sort_order),
-                tmdb_id: c.tmdb_person_id,
-                images: person_image(c.image.as_deref()),
+            .filter_map(|c| {
+                Some(CastResource {
+                    name: c.person_name.clone(),
+                    character: c.character_name.clone(),
+                    order: Some(c.sort_order),
+                    tmdb_id: c.tmdb_person_id,
+                    credit_id: c.credit_tmdb_id.clone()?,
+                    images: person_image(c.image.as_deref()),
+                })
             })
             .collect(),
         crew: all
             .iter()
             .filter(|c| c.credit_type != CreditType::Actor)
-            .map(|c| CrewResource {
-                name: c.person_name.clone(),
-                job: Some(capitalize(c.credit_type.as_str())),
-                department: Some(department_for(c.credit_type)),
-                tmdb_id: c.tmdb_person_id,
-                images: person_image(c.image.as_deref()),
+            .filter_map(|c| {
+                Some(CrewResource {
+                    name: c.person_name.clone(),
+                    job: Some(capitalize(c.credit_type.as_str())),
+                    department: Some(department_for(c.credit_type)),
+                    order: Some(c.sort_order),
+                    tmdb_id: c.tmdb_person_id,
+                    credit_id: c.credit_tmdb_id.clone()?,
+                    images: person_image(c.image.as_deref()),
+                })
             })
             .collect(),
     }
@@ -361,6 +387,7 @@ mod tests {
         it.digital_release = Some("2017-01-31".into());
         it.content_rating = Some("PG-13".into());
         it.original_country = Some("usa".into());
+        it.content_rating_country = Some("US".into());
         it.external_ids = ExternalIds {
             tmdb: Some(329865),
             imdb: Some("tt2543164".into()),
@@ -380,6 +407,7 @@ mod tests {
                 character_name: Some("Louise Banks".into()),
                 image: Some("https://example.invalid/a.jpg".into()),
                 tmdb_person_id: Some(9273),
+                credit_tmdb_id: Some("52fe4726c3a36847f812048b".into()),
                 sort_order: 0,
                 is_manual: false,
             },
@@ -390,6 +418,7 @@ mod tests {
                 character_name: None,
                 image: None,
                 tmdb_person_id: Some(137427),
+                credit_tmdb_id: Some("5751b41cc3a3685ba7002c1f".into()),
                 sort_order: 0,
                 is_manual: false,
             },
@@ -427,6 +456,25 @@ mod tests {
     }
 
     #[test]
+    fn a_credit_with_no_identifier_is_dropped_rather_than_sent() {
+        // Radarr's Credits.CreditTmdbId is NOT NULL: sending one without it
+        // fails the whole movie refresh, not just that credit.
+        let mut it = item();
+        it.credits[0].credit_tmdb_id = None;
+
+        let credits = from_item(&it).credits.unwrap();
+        assert_eq!(credits.cast.len(), 0);
+        assert_eq!(credits.crew.len(), 1, "the crew credit still has its id");
+    }
+
+    #[test]
+    fn credit_identifiers_are_emitted() {
+        let credits = from_item(&item()).credits.unwrap();
+        assert_eq!(credits.cast[0].credit_id, "52fe4726c3a36847f812048b");
+        assert_eq!(credits.crew[0].credit_id, "5751b41cc3a3685ba7002c1f");
+    }
+
+    #[test]
     fn cast_and_crew_are_separated() {
         let credits = from_item(&item()).credits.unwrap();
 
@@ -448,21 +496,39 @@ mod tests {
     }
 
     #[test]
-    fn a_content_rating_becomes_a_certification() {
+    fn a_content_rating_becomes_a_certification_with_an_alpha2_country() {
+        // Radarr matches on `country == "US"`; the alpha-3 production country
+        // would never match and the certification would silently vanish.
         let resource = from_item(&item());
         assert_eq!(resource.certifications.len(), 1);
         assert_eq!(resource.certifications[0].certification, "PG-13");
-        assert_eq!(resource.certifications[0].country, "usa");
+        assert_eq!(resource.certifications[0].country, "US");
     }
 
     #[test]
-    fn a_movie_with_no_ratings_omits_both_shapes() {
+    fn a_rating_with_no_known_country_is_not_guessed_at() {
+        let mut it = item();
+        it.content_rating_country = None;
+        assert!(from_item(&it).certifications.is_empty());
+    }
+
+    #[test]
+    fn an_unrated_movie_still_carries_a_zeroed_tmdb_rating() {
+        // Radarr dereferences this without a null check; leaving it out fails
+        // the entire search response, not just this one title.
         let mut it = item();
         it.ratings.clear();
 
         let resource = from_item(&it);
-        assert!(resource.ratings.is_empty());
-        assert!(resource.movie_ratings.is_none());
+
+        assert_eq!(resource.ratings.len(), 1);
+        assert_eq!(resource.ratings[0].count, 0);
+
+        let tmdb = resource.movie_ratings.unwrap().tmdb.unwrap();
+        assert_eq!(tmdb.count, 0);
+        assert_eq!(tmdb.value, 0.0);
+        // Radarr parses this into an enum; a null would throw.
+        assert_eq!(tmdb.rating_type.as_deref(), Some("user"));
     }
 
     #[test]

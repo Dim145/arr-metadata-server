@@ -39,12 +39,15 @@ pub fn router() -> OpenApiRouter<AppState> {
 pub struct ListQuery {
     pub term: Option<String>,
     pub kind: Option<String>,
+    #[serde(default, deserialize_with = "crate::api::extract::empty_as_none")]
     pub year: Option<i32>,
     #[serde(default)]
     pub manual_only: bool,
     #[serde(default)]
     pub include_disabled: bool,
+    #[serde(default, deserialize_with = "crate::api::extract::empty_as_none")]
     pub limit: Option<i64>,
+    #[serde(default, deserialize_with = "crate::api::extract::empty_as_none")]
     pub offset: Option<i64>,
 }
 

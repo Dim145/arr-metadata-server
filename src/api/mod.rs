@@ -45,6 +45,9 @@ requirement are those; they are not open.",
         version = env!("CARGO_PKG_VERSION"),
         license(name = "MIT"),
     ),
+    // The TMDB relay is registered with an axum wildcard, which `routes!` cannot
+    // collect; name it here so it still reaches the spec.
+    paths(tmdb::proxy),
     modifiers(&SecurityAddon),
     security(("apiKey" = []), ("apiKeyQuery" = []), ("session" = [])),
     tags(

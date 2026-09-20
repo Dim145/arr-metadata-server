@@ -50,7 +50,9 @@ pub fn tv_to_item(tv: &models::Tv, seasons: &[models::Season]) -> MediaItem {
         .first()
         .map(|c| c.name.clone())
         .or_else(|| item.network.clone());
-    item.content_rating = content_rating(tv.content_ratings.as_ref());
+    let (rating, rating_country) = content_rating(tv.content_ratings.as_ref());
+    item.content_rating = rating;
+    item.content_rating_country = rating_country;
     item.popularity = tv.popularity;
     item.genres = tv.genres.iter().map(|g| g.name.clone()).collect();
     item.keywords = tv
@@ -233,6 +235,7 @@ pub fn movie_to_item(movie: &models::Movie) -> MediaItem {
     item.physical_release = releases.physical;
     item.digital_release = releases.digital;
     item.content_rating = releases.certification;
+    item.content_rating_country = releases.certification_country;
 
     item.external_ids = ExternalIds {
         tmdb: Some(movie.id),
@@ -311,6 +314,8 @@ struct Releases {
     physical: Option<String>,
     digital: Option<String>,
     certification: Option<String>,
+    /// ISO 3166-1 alpha-2, uppercase.
+    certification_country: Option<String>,
 }
 
 /// Split TMDB's per-country release list into the dates Radarr tracks.
@@ -348,6 +353,9 @@ fn release_dates(movie: &models::Movie) -> Releases {
 
         if out.certification.is_none() {
             out.certification = non_empty(entry.certification.as_deref());
+            if out.certification.is_some() {
+                out.certification_country = Some(block.iso_3166_1.to_ascii_uppercase());
+            }
         }
     }
 
@@ -453,16 +461,30 @@ fn finale_type(episode_type: Option<&str>) -> Option<String> {
     }
 }
 
-fn content_rating(ratings: Option<&models::Results<models::ContentRating>>) -> Option<String> {
-    let ratings = ratings?;
+/// The content rating, and the country it applies to.
+///
+/// The country matters: Radarr matches certifications against its configured
+/// `CertificationCountry`, an ISO 3166-1 alpha-2 uppercase code. Labelling a
+/// French rating as American would be worse than reporting none.
+fn content_rating(
+    ratings: Option<&models::Results<models::ContentRating>>,
+) -> (Option<String>, Option<String>) {
+    let Some(ratings) = ratings else {
+        return (None, None);
+    };
 
     ratings
         .results
         .iter()
-        .find(|r| r.iso_3166_1 == PREFERRED_REGION)
+        .find(|r| r.iso_3166_1 == PREFERRED_REGION && !r.rating.is_empty())
         .or_else(|| ratings.results.iter().find(|r| !r.rating.is_empty()))
-        .map(|r| r.rating.clone())
-        .filter(|r| !r.is_empty())
+        .map(|r| {
+            (
+                Some(r.rating.clone()),
+                Some(r.iso_3166_1.to_ascii_uppercase()),
+            )
+        })
+        .unwrap_or((None, None))
 }
 
 fn vote_rating(average: Option<f64>, votes: Option<i64>) -> Vec<Rating> {
@@ -573,6 +595,7 @@ fn cast(credits: Option<&models::Credits>) -> Vec<Credit> {
             character_name: non_empty(member.character.as_deref()),
             image: member.profile_path.as_deref().map(image_url),
             tmdb_person_id: member.id,
+            credit_tmdb_id: member.credit_id.clone(),
             sort_order: member.order.unwrap_or(i as i32),
             is_manual: false,
         })
@@ -593,6 +616,7 @@ fn cast(credits: Option<&models::Credits>) -> Vec<Credit> {
                 character_name: None,
                 image: member.profile_path.as_deref().map(image_url),
                 tmdb_person_id: member.id,
+                credit_tmdb_id: member.credit_id.clone(),
                 sort_order: i as i32,
                 is_manual: false,
             }),
@@ -995,6 +1019,10 @@ mod fixtures {
         assert_eq!(actors.len(), 2);
         assert_eq!(actors[0].person_name, "Bryan Cranston");
         assert_eq!(actors[0].character_name.as_deref(), Some("Walter White"));
+        assert_eq!(
+            actors[0].credit_tmdb_id.as_deref(),
+            Some("52542282760ee313280017f9")
+        );
 
         let directors: Vec<_> = item
             .credits
@@ -1079,6 +1107,9 @@ mod fixtures {
         let credits = resource.credits.unwrap();
         assert_eq!(credits.cast.len(), 2);
         assert_eq!(credits.crew.len(), 1);
+        // Radarr rejects a credit without this.
+        assert!(credits.cast.iter().all(|c| !c.credit_id.is_empty()));
+        assert!(credits.crew.iter().all(|c| !c.credit_id.is_empty()));
     }
 
     #[test]

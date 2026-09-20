@@ -4,8 +4,14 @@
   "belongs_to_collection": null,
   "budget": 47000000,
   "genres": [
-    { "id": 878, "name": "Science Fiction" },
-    { "id": 18, "name": "Drama" }
+    {
+      "id": 878,
+      "name": "Science Fiction"
+    },
+    {
+      "id": 18,
+      "name": "Drama"
+    }
   ],
   "homepage": "http://www.arrivalmovie.com/",
   "id": 329865,
@@ -15,8 +21,18 @@
   "overview": "Taking place after alien crafts land around the world, an expert linguist is recruited by the military.",
   "popularity": 46.1,
   "poster_path": "/x2FJsf1ElAgr63Y3PNPtJrcmpoe.jpg",
-  "production_companies": [{ "id": 25120, "name": "21 Laps Entertainment" }],
-  "production_countries": [{ "iso_3166_1": "US", "name": "United States of America" }],
+  "production_companies": [
+    {
+      "id": 25120,
+      "name": "21 Laps Entertainment"
+    }
+  ],
+  "production_countries": [
+    {
+      "iso_3166_1": "US",
+      "name": "United States of America"
+    }
+  ],
   "release_date": "2016-11-10",
   "runtime": 116,
   "status": "Released",
@@ -24,15 +40,46 @@
   "title": "Arrival",
   "vote_average": 7.6,
   "vote_count": 18052,
-  "external_ids": { "imdb_id": "tt2543164", "wikidata_id": "Q21062142" },
+  "external_ids": {
+    "imdb_id": "tt2543164",
+    "wikidata_id": "Q21062142"
+  },
   "credits": {
     "cast": [
-      { "id": 9273, "name": "Amy Adams", "character": "Louise Banks", "order": 0, "profile_path": "/rpEBqdFvUuKl7to9Pmg4NdDqZ4F.jpg" },
-      { "id": 17051, "name": "Jeremy Renner", "character": "Ian Donnelly", "order": 1, "profile_path": "/ilAr5AxIlgrEQ3rHvnCJq6CM2Lz.jpg" }
+      {
+        "id": 9273,
+        "name": "Amy Adams",
+        "character": "Louise Banks",
+        "order": 0,
+        "profile_path": "/rpEBqdFvUuKl7to9Pmg4NdDqZ4F.jpg",
+        "credit_id": "5751b3c49251414f5d001453"
+      },
+      {
+        "id": 17051,
+        "name": "Jeremy Renner",
+        "character": "Ian Donnelly",
+        "order": 1,
+        "profile_path": "/ilAr5AxIlgrEQ3rHvnCJq6CM2Lz.jpg",
+        "credit_id": "5751b3d3c3a3685bad002f5a"
+      }
     ],
     "crew": [
-      { "id": 137427, "name": "Denis Villeneuve", "job": "Director", "department": "Directing", "profile_path": "/zdDx9Xs93UbBXKla4Ur3E0dbId4.jpg" },
-      { "id": 1223247, "name": "Eric Heisserer", "job": "Screenplay", "department": "Writing", "profile_path": null }
+      {
+        "id": 137427,
+        "name": "Denis Villeneuve",
+        "job": "Director",
+        "department": "Directing",
+        "profile_path": "/zdDx9Xs93UbBXKla4Ur3E0dbId4.jpg",
+        "credit_id": "5751b41cc3a3685ba7002c1f"
+      },
+      {
+        "id": 1223247,
+        "name": "Eric Heisserer",
+        "job": "Screenplay",
+        "department": "Writing",
+        "profile_path": null,
+        "credit_id": "56e2f0c6c3a3684b4d0020f3"
+      }
     ]
   },
   "release_dates": {
@@ -40,38 +87,110 @@
       {
         "iso_3166_1": "FR",
         "release_dates": [
-          { "certification": "", "iso_639_1": "", "release_date": "2016-12-07T00:00:00.000Z", "type": 3 }
+          {
+            "certification": "",
+            "iso_639_1": "",
+            "release_date": "2016-12-07T00:00:00.000Z",
+            "type": 3
+          }
         ]
       },
       {
         "iso_3166_1": "US",
         "release_dates": [
-          { "certification": "PG-13", "iso_639_1": "", "release_date": "2016-09-01T00:00:00.000Z", "type": 1 },
-          { "certification": "PG-13", "iso_639_1": "", "release_date": "2016-11-11T00:00:00.000Z", "type": 3 },
-          { "certification": "PG-13", "iso_639_1": "", "release_date": "2017-01-31T00:00:00.000Z", "type": 4 },
-          { "certification": "PG-13", "iso_639_1": "", "release_date": "2017-02-14T00:00:00.000Z", "type": 5 }
+          {
+            "certification": "PG-13",
+            "iso_639_1": "",
+            "release_date": "2016-09-01T00:00:00.000Z",
+            "type": 1
+          },
+          {
+            "certification": "PG-13",
+            "iso_639_1": "",
+            "release_date": "2016-11-11T00:00:00.000Z",
+            "type": 3
+          },
+          {
+            "certification": "PG-13",
+            "iso_639_1": "",
+            "release_date": "2017-01-31T00:00:00.000Z",
+            "type": 4
+          },
+          {
+            "certification": "PG-13",
+            "iso_639_1": "",
+            "release_date": "2017-02-14T00:00:00.000Z",
+            "type": 5
+          }
         ]
       }
     ]
   },
   "alternative_titles": {
     "titles": [
-      { "iso_3166_1": "FR", "title": "Premier Contact", "type": "" },
-      { "iso_3166_1": "DE", "title": "Arrival", "type": "" }
+      {
+        "iso_3166_1": "FR",
+        "title": "Premier Contact",
+        "type": ""
+      },
+      {
+        "iso_3166_1": "DE",
+        "title": "Arrival",
+        "type": ""
+      }
     ]
   },
-  "keywords": { "keywords": [{ "id": 9951, "name": "alien" }, { "id": 4565, "name": "dystopia" }] },
+  "keywords": {
+    "keywords": [
+      {
+        "id": 9951,
+        "name": "alien"
+      },
+      {
+        "id": 4565,
+        "name": "dystopia"
+      }
+    ]
+  },
   "videos": {
     "results": [
-      { "key": "tFMo3UJ4B4g", "site": "YouTube", "type": "Trailer", "official": true, "size": 1080 }
+      {
+        "key": "tFMo3UJ4B4g",
+        "site": "YouTube",
+        "type": "Trailer",
+        "official": true,
+        "size": 1080
+      }
     ]
   },
-  "images": { "backdrops": [], "logos": [], "posters": [] },
+  "images": {
+    "backdrops": [],
+    "logos": [],
+    "posters": []
+  },
   "translations": {
     "translations": [
-      { "iso_639_1": "fr", "data": { "title": "Premier Contact", "overview": "Quand un mystérieux vaisseau atterrit." } },
-      { "iso_639_1": "de", "data": { "title": "Arrival", "overview": "" } },
-      { "iso_639_1": "xx", "data": { "title": "", "overview": "" } }
+      {
+        "iso_639_1": "fr",
+        "data": {
+          "title": "Premier Contact",
+          "overview": "Quand un mystérieux vaisseau atterrit."
+        }
+      },
+      {
+        "iso_639_1": "de",
+        "data": {
+          "title": "Arrival",
+          "overview": ""
+        }
+      },
+      {
+        "iso_639_1": "xx",
+        "data": {
+          "title": "",
+          "overview": ""
+        }
+      }
     ]
   }
 }

@@ -86,6 +86,8 @@ utoipa-swagger-ui = { version = "9.0.2", features = ["axum", "vendored"] }
 
 [dev-dependencies]
 tokio = { version = "1.53.1", features = ["full", "test-util"] }
+# What axum's `Query` extractor parses with; used to test the same path.
+serde_urlencoded = "0.7"
 
 [profile.release]
 opt-level = 3

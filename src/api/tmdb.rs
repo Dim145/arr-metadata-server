@@ -15,9 +15,10 @@ use axum::{
     extract::{Request, State},
     http::{HeaderMap, HeaderName, HeaderValue, StatusCode, Uri, header},
     response::{IntoResponse, Response},
+    routing::any,
 };
 use serde_json::{Value, json};
-use utoipa_axum::{router::OpenApiRouter, routes};
+use utoipa_axum::router::OpenApiRouter;
 
 use crate::{
     db::repo,
@@ -49,7 +50,11 @@ const OVERRIDDEN_PARAMS: &[&str] = &["api_key", "include_adult"];
 pub const TAG: &str = "TMDB compatibility";
 
 pub fn router() -> OpenApiRouter<AppState> {
-    OpenApiRouter::new().routes(routes!(proxy))
+    // Registered by hand rather than through `routes!`: this needs axum's
+    // wildcard (`{*path}`) to match every TMDB path, and OpenAPI has no
+    // wildcard syntax to express that. The documented path is attached to the
+    // spec separately, in `ApiDoc`.
+    OpenApiRouter::new().route("/3/{*path}", any(proxy))
 }
 
 /// Relay any TMDB v3 request, with this server's edits applied on the way back.
@@ -64,6 +69,7 @@ pub fn router() -> OpenApiRouter<AppState> {
 /// shapes. Only `/3/tv/{id}` and `/3/movie/{id}` are patched.
 #[utoipa::path(
     get, path = "/3/{path}", tag = TAG,
+    // Registered against axum as `/3/{*path}`; see `router` above.
     params(("path" = String, Path, description = "A TMDB v3 path, e.g. `tv/1396` or `search/movie`")),
     responses(
         (status = 200, description = "TMDB's response, with local edits applied where any exist"),
@@ -71,7 +77,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         (status = 503, description = "This server has no TMDB API key configured"),
     ),
 )]
-async fn proxy(State(state): State<AppState>, request: Request) -> AppResult<Response> {
+pub async fn proxy(State(state): State<AppState>, request: Request) -> AppResult<Response> {
     if !state.config.tmdb.passthrough {
         return Err(AppError::ProviderNotConfigured);
     }

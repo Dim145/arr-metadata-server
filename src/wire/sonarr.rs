@@ -307,6 +307,8 @@ pub fn to_item(show: &ShowResource) -> MediaItem {
         .clone()
         .or_else(|| show.original_network.clone());
     item.content_rating = show.content_rating.clone();
+    // Skyhook sends a bare rating with no country; Sonarr never uses one.
+    item.content_rating_country = None;
     item.genres = show.genres.clone();
     item.air_time = show
         .time_of_day
@@ -362,6 +364,8 @@ pub fn to_item(show: &ShowResource) -> MediaItem {
             character_name: actor.character.clone(),
             image: actor.image.clone(),
             tmdb_person_id: None,
+            // Skyhook carries no credit identifier.
+            credit_tmdb_id: None,
             sort_order: i as i32,
             is_manual: false,
         })

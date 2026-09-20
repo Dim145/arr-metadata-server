@@ -29,7 +29,10 @@ services:
       AMS_TMDB_API_KEY: ${AMS_TMDB_API_KEY:?AMS_TMDB_API_KEY is required}
       AMS_ADMIN_USERNAME: ${AMS_ADMIN_USERNAME:?}
       AMS_ADMIN_PASSWORD: ${AMS_ADMIN_PASSWORD:?}
-      AMS_ARR_ALLOWLIST: 172.31.0.0/24
+      AMS_ALLOWLIST: 172.31.0.0/24
+      # Jellyseerr compiles its TMDB key in and cannot be given one of ours, so
+      # its surface is guarded by address like Sonarr's and Radarr's.
+      AMS_TMDB_AUTH: allowlist
       TZ: ${TZ:-UTC}
 
     volumes:
@@ -63,8 +66,10 @@ services:
 
     volumes:
       - sonarr-config:/config
-      # linuxserver images run update-ca-certificates over this directory at start.
+      # Mounting the CA is not enough: these images do not rebuild the trust
+      # bundle on their own. The init script below is what does it.
       - ./docker/certs/ca.crt:/usr/local/share/ca-certificates/arr-metadata.crt:ro
+      - ./docker/trust-ca.sh:/custom-cont-init.d/10-trust-arr-metadata-ca:ro
 
     # Sonarr's metadata URL is compiled in; this is what redirects it.
     extra_hosts:
@@ -88,6 +93,7 @@ services:
     volumes:
       - radarr-config:/config
       - ./docker/certs/ca.crt:/usr/local/share/ca-certificates/arr-metadata.crt:ro
+      - ./docker/trust-ca.sh:/custom-cont-init.d/10-trust-arr-metadata-ca:ro
 
     extra_hosts:
       - "api.radarr.video:172.31.0.10"

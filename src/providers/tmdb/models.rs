@@ -264,6 +264,8 @@ pub struct Credits {
 #[derive(Debug, Clone, Deserialize)]
 pub struct CastMember {
     pub id: Option<i64>,
+    /// Identifies the role, not the person.
+    pub credit_id: Option<String>,
     #[serde(default)]
     pub name: String,
     pub character: Option<String>,
@@ -274,6 +276,7 @@ pub struct CastMember {
 #[derive(Debug, Clone, Deserialize)]
 pub struct CrewMember {
     pub id: Option<i64>,
+    pub credit_id: Option<String>,
     #[serde(default)]
     pub name: String,
     pub job: Option<String>,

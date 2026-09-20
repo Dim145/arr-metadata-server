@@ -21,9 +21,17 @@ frontend/.vite/
 .env
 .env.*
 !.env.example
-/certs/*.key
-/certs/*.crt
-/certs/*.srl
+
+# Certificates, wherever they are generated. ca.key is the private key of an
+# authority the whole stack trusts; committing it would hand anyone who reads
+# the repository the ability to impersonate every provider.
+certs/
+docker/certs/
+*.key
+*.crt
+*.csr
+*.srl
+*.pem
 
 # --- Editors / OS ---
 .idea/

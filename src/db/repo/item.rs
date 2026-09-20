@@ -29,7 +29,7 @@ const ITEM_COLUMNS: &str = "
     id, kind, slug, title, sort_title, original_title, overview, status,
     original_language, original_country, runtime, year, first_aired, last_aired,
     in_cinemas, physical_release, digital_release, air_time, network, studio,
-    content_rating, homepage, trailer_youtube_id, popularity, genres, keywords,
+    content_rating, content_rating_country, homepage, trailer_youtube_id, popularity, genres, keywords,
     collection_tmdb_id, is_manual, is_enabled, created_at, updated_at,
     refreshed_at, refresh_after, refresh_error
 ";
@@ -59,6 +59,7 @@ fn map_item(row: &sqlx::any::AnyRow) -> Result<MediaItem> {
         network: row.opt_text("network")?,
         studio: row.opt_text("studio")?,
         content_rating: row.opt_text("content_rating")?,
+        content_rating_country: row.opt_text("content_rating_country")?,
         homepage: row.opt_text("homepage")?,
         trailer_youtube_id: row.opt_text("trailer_youtube_id")?,
         popularity: row.opt_real("popularity")?,
@@ -300,7 +301,7 @@ async fn load_images(db: &Db, media_id: &str) -> Result<Vec<Image>> {
 async fn load_credits(db: &Db, media_id: &str) -> Result<Vec<Credit>> {
     let rows = sqlx::query(db.sql(
         "SELECT id, credit_type, person_name, character_name, image,
-                tmdb_person_id, sort_order, is_manual
+                tmdb_person_id, credit_tmdb_id, sort_order, is_manual
          FROM media_credit WHERE media_id = ? ORDER BY credit_type, sort_order",
     ))
     .bind(media_id)
@@ -319,6 +320,7 @@ async fn load_credits(db: &Db, media_id: &str) -> Result<Vec<Credit>> {
                 character_name: row.opt_text("character_name")?,
                 image: row.opt_text("image")?,
                 tmdb_person_id: row.opt_big("tmdb_person_id")?,
+                credit_tmdb_id: row.opt_text("credit_tmdb_id")?,
                 sort_order: row.int("sort_order")?,
                 is_manual: row.flag("is_manual")?,
             })
@@ -506,11 +508,11 @@ async fn upsert_row(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaItem) ->
             id, kind, slug, title, sort_title, original_title, overview, status,
             original_language, original_country, runtime, year, first_aired, last_aired,
             in_cinemas, physical_release, digital_release, air_time, network, studio,
-            content_rating, homepage, trailer_youtube_id, popularity, genres, keywords,
-            collection_tmdb_id, is_manual, is_enabled, created_at, updated_at,
-            refreshed_at, refresh_after, refresh_error
+            content_rating, content_rating_country, homepage, trailer_youtube_id,
+            popularity, genres, keywords, collection_tmdb_id, is_manual, is_enabled,
+            created_at, updated_at, refreshed_at, refresh_after, refresh_error
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (id) DO UPDATE SET
             kind = excluded.kind,
             slug = excluded.slug,
@@ -532,6 +534,7 @@ async fn upsert_row(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaItem) ->
             network = excluded.network,
             studio = excluded.studio,
             content_rating = excluded.content_rating,
+            content_rating_country = excluded.content_rating_country,
             homepage = excluded.homepage,
             trailer_youtube_id = excluded.trailer_youtube_id,
             popularity = excluded.popularity,
@@ -568,6 +571,7 @@ async fn upsert_row(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaItem) ->
         .bind(&item.network)
         .bind(&item.studio)
         .bind(&item.content_rating)
+        .bind(&item.content_rating_country)
         .bind(&item.homepage)
         .bind(&item.trailer_youtube_id)
         .bind(item.popularity)
@@ -622,6 +626,14 @@ async fn upsert_external_ids(
 }
 
 /// Replace provider-sourced children; manual rows (`is_manual = 1`) are kept.
+///
+/// This is the refresh path, so it only ever *writes* provider rows: the loops
+/// below skip anything flagged manual. Credits, images and alternative titles
+/// have no natural key, so re-inserting a manual row read back from the database
+/// would duplicate it on every refresh.
+///
+/// Creating a manual child therefore needs its own write path, which does not
+/// exist yet — the native API can only add whole works by hand today.
 async fn replace_children(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaItem) -> Result<()> {
     for table in [
         "media_season",
@@ -785,8 +797,8 @@ async fn replace_children(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaIt
         sqlx::query(db.sql(
             "INSERT INTO media_credit
                  (id, media_id, credit_type, person_name, character_name, image,
-                  tmdb_person_id, sort_order, is_manual, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)",
+                  tmdb_person_id, credit_tmdb_id, sort_order, is_manual, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)",
         ))
         .bind(if credit.id.is_empty() {
             new_id()
@@ -799,6 +811,7 @@ async fn replace_children(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaIt
         .bind(&credit.character_name)
         .bind(&credit.image)
         .bind(credit.tmdb_person_id)
+        .bind(&credit.credit_tmdb_id)
         .bind(credit.sort_order)
         .bind(&created)
         .execute(&mut **tx)
@@ -941,4 +954,291 @@ pub async fn mark_refreshed(
     .await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        config,
+        domain::{CoverType, ExternalIds, RatingValue},
+    };
+
+    /// A real database, in memory, with the real migrations applied.
+    ///
+    /// These queries are built by hand and bound positionally, so a column added
+    /// to the list without a matching placeholder compiles cleanly and fails at
+    /// runtime — which is how `34 values for 35 columns` reached a running
+    /// server. A round trip through an actual engine is what catches that.
+    async fn db() -> Db {
+        let db = Db::connect(&config::Database {
+            url: "sqlite::memory:".into(),
+            max_connections: 1,
+            acquire_timeout: std::time::Duration::from_secs(5),
+        })
+        .await
+        .expect("in-memory database");
+
+        db.migrate().await.expect("migrations");
+        db
+    }
+
+    fn sample() -> MediaItem {
+        let mut item = MediaItem::empty(MediaKind::Movie);
+        item.title = "Round Trip".into();
+        item.slug = "round-trip-2026".into();
+        item.year = Some(2026);
+        item.overview = Some("Everything set, so everything is checked.".into());
+        item.status = Some("released".into());
+        item.runtime = Some(97);
+        item.content_rating = Some("PG-13".into());
+        item.content_rating_country = Some("US".into());
+        item.in_cinemas = Some("2026-01-05".into());
+        item.genres = vec!["Drama".into(), "Mystery".into()];
+        item.keywords = vec!["test".into()];
+        item.popularity = Some(12.5);
+        item.external_ids = ExternalIds {
+            tmdb: Some(4242),
+            imdb: Some("tt4242424".into()),
+            ..Default::default()
+        };
+        item.credits = vec![Credit {
+            id: String::new(),
+            credit_type: CreditType::Actor,
+            person_name: "A Person".into(),
+            character_name: Some("A Role".into()),
+            image: None,
+            tmdb_person_id: Some(7),
+            credit_tmdb_id: Some("52fe4726c3a36847f812048b".into()),
+            sort_order: 0,
+            is_manual: false,
+        }];
+        item.images = vec![Image {
+            id: String::new(),
+            season_number: None,
+            cover_type: CoverType::Poster,
+            url: "https://example.invalid/p.jpg".into(),
+            language: None,
+            sort_order: 0,
+            source: Some("tmdb".into()),
+            is_manual: false,
+        }];
+        item.episodes = vec![Episode {
+            id: String::new(),
+            season_number: 1,
+            episode_number: 1,
+            absolute_episode_number: None,
+            aired_after_season_number: None,
+            aired_before_season_number: None,
+            aired_before_episode_number: None,
+            title: "One".into(),
+            overview: None,
+            air_date: Some("2026-01-05".into()),
+            air_date_utc: Some("2026-01-05T00:00:00Z".into()),
+            runtime: Some(42),
+            finale_type: None,
+            image: None,
+            tvdb_id: None,
+            tmdb_id: Some(99),
+            rating: Some(RatingValue {
+                value: 8.0,
+                votes: 10,
+            }),
+            is_manual: false,
+        }];
+        item.ratings = vec![Rating {
+            source: "tmdb".into(),
+            value: Some(7.5),
+            votes: Some(100),
+            rating_type: Some("user".into()),
+        }];
+        item
+    }
+
+    #[tokio::test]
+    async fn an_item_survives_a_round_trip_through_the_database() {
+        let db = db().await;
+        let written = sample();
+
+        upsert(
+            &db,
+            ItemWrite {
+                item: &written,
+                replace_children: true,
+            },
+        )
+        .await
+        .expect("write");
+
+        let mut read = get(&db, &written.id).await.expect("read").expect("present");
+        load_children(&db, &mut read).await.expect("children");
+
+        // Every scalar the insert lists must come back, or a column has drifted
+        // out of alignment with its placeholder.
+        assert_eq!(read.title, written.title);
+        assert_eq!(read.slug, written.slug);
+        assert_eq!(read.year, written.year);
+        assert_eq!(read.overview, written.overview);
+        assert_eq!(read.status, written.status);
+        assert_eq!(read.runtime, written.runtime);
+        assert_eq!(read.content_rating, written.content_rating);
+        assert_eq!(read.content_rating_country, written.content_rating_country);
+        assert_eq!(read.in_cinemas, written.in_cinemas);
+        assert_eq!(read.genres, written.genres);
+        assert_eq!(read.keywords, written.keywords);
+        assert_eq!(read.popularity, written.popularity);
+        assert_eq!(read.external_ids, written.external_ids);
+
+        assert_eq!(read.credits.len(), 1);
+        assert_eq!(read.credits[0].person_name, "A Person");
+        assert_eq!(
+            read.credits[0].credit_tmdb_id.as_deref(),
+            Some("52fe4726c3a36847f812048b")
+        );
+
+        assert_eq!(read.images.len(), 1);
+        assert_eq!(read.images[0].cover_type, CoverType::Poster);
+
+        assert_eq!(read.episodes.len(), 1);
+        assert_eq!(read.episodes[0].title, "One");
+        assert_eq!(read.episodes[0].rating.map(|r| r.votes), Some(10));
+
+        assert_eq!(read.ratings.len(), 1);
+        assert_eq!(read.ratings[0].value, Some(7.5));
+    }
+
+    #[tokio::test]
+    async fn an_upsert_keeps_the_identity_of_the_row_it_replaces() {
+        let db = db().await;
+        let mut item = sample();
+
+        upsert(
+            &db,
+            ItemWrite {
+                item: &item,
+                replace_children: true,
+            },
+        )
+        .await
+        .unwrap();
+
+        item.title = "Round Trip, Revised".into();
+        item.runtime = Some(101);
+        upsert(
+            &db,
+            ItemWrite {
+                item: &item,
+                replace_children: true,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(count(&db, Some(MediaKind::Movie)).await.unwrap(), 1);
+
+        let read = get(&db, &item.id).await.unwrap().unwrap();
+        assert_eq!(read.title, "Round Trip, Revised");
+        assert_eq!(read.runtime, Some(101));
+        assert_eq!(read.created_at, item.created_at);
+    }
+
+    #[tokio::test]
+    async fn a_work_is_found_by_any_of_its_external_ids() {
+        let db = db().await;
+        let item = sample();
+
+        upsert(
+            &db,
+            ItemWrite {
+                item: &item,
+                replace_children: false,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            find_id_by_external(&db, ExternalSource::TmdbMovie, "4242")
+                .await
+                .unwrap(),
+            Some(item.id.clone())
+        );
+        assert_eq!(
+            find_id_by_external(&db, ExternalSource::Imdb, "tt4242424")
+                .await
+                .unwrap(),
+            Some(item.id.clone())
+        );
+        // A movie's TMDB id must not resolve in the series namespace.
+        assert_eq!(
+            find_id_by_external(&db, ExternalSource::TmdbTv, "4242")
+                .await
+                .unwrap(),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn a_refresh_replaces_provider_children_but_spares_manual_ones() {
+        let db = db().await;
+        let item = sample();
+
+        upsert(
+            &db,
+            ItemWrite {
+                item: &item,
+                replace_children: true,
+            },
+        )
+        .await
+        .unwrap();
+
+        // Stand in for a write path that does not exist yet: the refresh loops
+        // deliberately skip manual rows, so nothing else can create one. What is
+        // under test is that the refresh's DELETE spares them.
+        sqlx::query(db.sql(
+            "INSERT INTO media_credit
+                 (id, media_id, credit_type, person_name, character_name, image,
+                  tmdb_person_id, credit_tmdb_id, sort_order, is_manual, created_at)
+             VALUES (?, ?, 'actor', 'Added By Hand', NULL, NULL, NULL, NULL, 1, 1, ?)",
+        ))
+        .bind(new_id())
+        .bind(&item.id)
+        .bind(now())
+        .execute(db.pool())
+        .await
+        .unwrap();
+
+        // A refresh carries only what the provider returned.
+        let mut refreshed = sample();
+        refreshed.id = item.id.clone();
+        refreshed.credits[0].person_name = "A Person, Renamed Upstream".into();
+        upsert(
+            &db,
+            ItemWrite {
+                item: &refreshed,
+                replace_children: true,
+            },
+        )
+        .await
+        .unwrap();
+
+        let mut read = get(&db, &item.id).await.unwrap().unwrap();
+        load_children(&db, &mut read).await.unwrap();
+
+        let names: Vec<&str> = read
+            .credits
+            .iter()
+            .map(|c| c.person_name.as_str())
+            .collect();
+        assert!(
+            names.contains(&"A Person, Renamed Upstream"),
+            "provider row replaced"
+        );
+        assert!(
+            names.contains(&"Added By Hand"),
+            "manual row survives a refresh"
+        );
+        assert_eq!(read.credits.len(), 2, "no duplicates");
+    }
 }

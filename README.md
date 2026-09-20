@@ -8,10 +8,10 @@ manual edits permanently protected from automatic refreshes.
 It replaces and merges two earlier projects: `the earlier TMDB relay` and
 `the earlier Skyhook stand-in`.
 
-> **Status: working, not yet battle-tested.** Every surface is implemented and
-> exercised by tests on both database engines, and the container runs read-only
-> as a non-root user. What has *not* happened yet is a live TMDB call or a run
-> against a real Sonarr/Radarr — see `docs/integration.md` for how to try it.
+> **Status: working.** Every surface is implemented, exercised by tests on both
+> database engines, and verified against the live TMDB API and against real
+> Sonarr, Radarr and Jellyseerr containers — including that a refresh leaves
+> manually locked fields alone. See [`docs/integration.md`](docs/integration.md).
 
 ## What it does
 
@@ -90,8 +90,9 @@ what they can send:
 | Sonarr / Radarr compatible | `/v1/*` | IP allowlist |
 
 Sonarr and Radarr have their metadata URLs compiled in and cannot attach an API
-key to a request, so those surfaces are guarded by network policy instead. Set
-`AMS_ARR_ALLOWLIST` to the networks your stack runs on.
+key, so those surfaces are guarded by network policy instead. Some TMDB clients
+compile their key in too — Jellyseerr does — and need the same treatment. Set
+`AMS_ALLOWLIST` to the networks your stack runs on.
 
 `AMS_AUTH_DISABLED=true` opens every surface. It exists for closed networks and
 first-run setup; do not use it on anything reachable from outside.
@@ -113,7 +114,7 @@ here — see [`docs/integration.md`](docs/integration.md) and the runnable
 ## Development
 
 ```bash
-cargo test                      # 129 unit tests, no database required
+cargo test                      # 139 tests; the repository ones use an in-memory SQLite
 cargo clippy --all-targets
 cargo fmt --check
 
