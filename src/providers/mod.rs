@@ -12,13 +12,4 @@ pub mod tmdb;
 pub mod names {
     pub const TMDB: &str = "tmdb";
     pub const SKYHOOK: &str = "skyhook";
-    pub const MANUAL: &str = "manual";
-}
-
-/// A provider result: what to store, and what it maps to.
-pub struct Fetched {
-    /// The raw upstream document.
-    pub payload: serde_json::Value,
-    /// The canonical entity mapped from it.
-    pub item: crate::domain::MediaItem,
 }

@@ -57,23 +57,6 @@ impl ExternalSource {
         }
     }
 
-    /// Which kind of work this source can address, when it is unambiguous.
-    ///
-    /// IMDb ids span both, so it returns `None` there.
-    pub const fn kind(self) -> Option<MediaKind> {
-        match self {
-            Self::TmdbTv
-            | Self::TvdbSeries
-            | Self::TvMaze
-            | Self::TvRage
-            | Self::Mal
-            | Self::AniList
-            | Self::TraktShow => Some(MediaKind::Series),
-            Self::TmdbMovie | Self::TvdbMovie | Self::TraktMovie => Some(MediaKind::Movie),
-            Self::Imdb => None,
-        }
-    }
-
     /// The source that names `kind` on the given provider.
     pub const fn tmdb_for(kind: MediaKind) -> Self {
         match kind {
@@ -89,10 +72,6 @@ impl ExternalSource {
         }
     }
 
-    /// Whether values are integers. IMDb ids are `tt`-prefixed strings.
-    pub const fn is_numeric(self) -> bool {
-        !matches!(self, Self::Imdb)
-    }
 }
 
 impl fmt::Display for ExternalSource {

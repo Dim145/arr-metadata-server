@@ -65,17 +65,6 @@ pub async fn find_by_username(db: &Db, username: &str) -> Result<Option<Credenti
     }))
 }
 
-pub async fn get(db: &Db, id: &str) -> Result<Option<AdminUser>> {
-    let row = sqlx::query(db.sql(
-        "SELECT id, username, is_admin, created_at, last_login_at FROM admin_user WHERE id = ?",
-    ))
-    .bind(id)
-    .fetch_optional(db.pool())
-    .await?;
-
-    row.as_ref().map(map).transpose()
-}
-
 pub async fn count(db: &Db) -> Result<i64> {
     let row = sqlx::query(db.sql("SELECT COUNT(*) AS n FROM admin_user"))
         .fetch_one(db.pool())

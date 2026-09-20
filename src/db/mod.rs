@@ -14,7 +14,7 @@
 
 pub mod repo;
 
-use std::{borrow::Cow, path::Path, str::FromStr, time::Duration};
+use std::{borrow::Cow, path::Path, time::Duration};
 
 use anyhow::{Context, Result, bail};
 // `AnyPool` is re-exported at the crate root, `AnyPoolOptions` under `any`.
@@ -307,10 +307,6 @@ pub fn parse_rfc3339(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
 
 pub fn new_id() -> String {
     uuid::Uuid::now_v7().to_string()
-}
-
-pub fn parse_id(s: &str) -> Option<uuid::Uuid> {
-    uuid::Uuid::from_str(s).ok()
 }
 
 /// SQLite has no boolean type; both engines round-trip through 0/1 safely.

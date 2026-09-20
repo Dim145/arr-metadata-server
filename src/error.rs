@@ -29,10 +29,6 @@ pub enum AppError {
     #[error("{0}")]
     Conflict(String),
 
-    /// A field the caller tried to write is locked by a manual override.
-    #[error("field {0} is locked by a manual override")]
-    Locked(String),
-
     #[error("upstream provider unavailable")]
     UpstreamUnavailable(#[source] anyhow::Error),
 
@@ -54,7 +50,6 @@ impl AppError {
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
             Self::Forbidden => StatusCode::FORBIDDEN,
             Self::Conflict(_) => StatusCode::CONFLICT,
-            Self::Locked(_) => StatusCode::CONFLICT,
             Self::UpstreamUnavailable(_) => StatusCode::BAD_GATEWAY,
             Self::ProviderNotConfigured => StatusCode::SERVICE_UNAVAILABLE,
             Self::RateLimited => StatusCode::TOO_MANY_REQUESTS,
@@ -70,7 +65,6 @@ impl AppError {
             Self::Unauthorized => "unauthorized",
             Self::Forbidden => "forbidden",
             Self::Conflict(_) => "conflict",
-            Self::Locked(_) => "locked",
             Self::UpstreamUnavailable(_) => "upstream_unavailable",
             Self::ProviderNotConfigured => "provider_not_configured",
             Self::RateLimited => "rate_limited",
@@ -87,7 +81,6 @@ impl AppError {
             | Self::Unauthorized
             | Self::Forbidden
             | Self::Conflict(_)
-            | Self::Locked(_)
             | Self::ProviderNotConfigured
             | Self::RateLimited => self.to_string(),
             // These wrap a cause that may name hosts, queries or credentials.

@@ -4,6 +4,11 @@
 //! `#[serde(default)]`: TMDB omits fields freely depending on the title, and a
 //! missing one must not fail the whole fetch.
 
+// These mirror TMDB's documents. Some fields are declared but not yet mapped;
+// they are kept because the struct doubles as documentation of what upstream
+// returns, and because adding one back later is a one-line change.
+#![allow(dead_code)]
+
 use serde::Deserialize;
 
 // ─── search & find ───────────────────────────────────────────────────────────

@@ -44,19 +44,6 @@ pub async fn put(
     Ok(())
 }
 
-pub async fn get(db: &Db, media_id: &str, provider: &str) -> Result<Option<Snapshot>> {
-    let row = sqlx::query(db.sql(
-        "SELECT provider, payload, fetched_at, etag
-         FROM media_provider_snapshot WHERE media_id = ? AND provider = ?",
-    ))
-    .bind(media_id)
-    .bind(provider)
-    .fetch_optional(db.pool())
-    .await?;
-
-    row.as_ref().map(map).transpose()
-}
-
 /// Every snapshot for a work, newest first.
 pub async fn list(db: &Db, media_id: &str) -> Result<Vec<Snapshot>> {
     let rows = sqlx::query(db.sql(
@@ -68,18 +55,6 @@ pub async fn list(db: &Db, media_id: &str) -> Result<Vec<Snapshot>> {
     .await?;
 
     rows.iter().map(map).collect()
-}
-
-pub async fn delete(db: &Db, media_id: &str, provider: &str) -> Result<bool> {
-    let result = sqlx::query(db.sql(
-        "DELETE FROM media_provider_snapshot WHERE media_id = ? AND provider = ?",
-    ))
-    .bind(media_id)
-    .bind(provider)
-    .execute(db.pool())
-    .await?;
-
-    Ok(result.rows_affected() > 0)
 }
 
 fn map(row: &sqlx::any::AnyRow) -> Result<Snapshot> {

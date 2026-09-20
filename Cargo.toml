@@ -64,7 +64,7 @@ base64 = "0.23.1"
 sha2 = "0.11.0"
 subtle = "2.6.1"
 ipnet = { version = "2.12.2", features = ["serde"] }
-tower_governor = "0.8.0"
+governor = "0.10.4"
 
 # ── Utilities ────────────────────────────────────────────────────────────────
 chrono = { version = "0.4.45", default-features = false, features = ["std", "clock", "serde"] }

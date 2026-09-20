@@ -430,7 +430,7 @@ fn artwork(
     let mut out = Vec::new();
     let mut seen: Vec<String> = Vec::new();
 
-    let mut push = |out: &mut Vec<Image>, seen: &mut Vec<String>, kind: CoverType, path: &str, order: i32| {
+    let push = |out: &mut Vec<Image>, seen: &mut Vec<String>, kind: CoverType, path: &str, order: i32| {
         let url = image_url(path);
         if seen.contains(&url) {
             return;

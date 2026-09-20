@@ -194,14 +194,6 @@ impl MediaItem {
         }
     }
 
-    /// First image of the requested cover type, honouring `sort_order`.
-    pub fn image(&self, cover_type: CoverType) -> Option<&Image> {
-        self.images
-            .iter()
-            .filter(|i| i.cover_type == cover_type && i.season_number.is_none())
-            .min_by_key(|i| i.sort_order)
-    }
-
     pub fn rating(&self, source: &str) -> Option<&Rating> {
         self.ratings.iter().find(|r| r.source == source)
     }

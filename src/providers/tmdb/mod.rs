@@ -14,7 +14,7 @@ use futures::future::join_all;
 use serde_json::Value;
 use tokio::sync::Semaphore;
 
-use crate::{config, domain::MediaKind, error::AppError};
+use crate::{config, domain::MediaKind};
 
 pub const IMAGE_BASE: &str = "https://image.tmdb.org/t/p/original";
 
@@ -399,11 +399,6 @@ fn backfill_episodes(target: &mut models::Season, fallback: &models::Season) {
             episode.overview = source.overview.clone();
         }
     }
-}
-
-/// Turn a provider failure into the error a handler should return.
-pub fn provider_error(e: anyhow::Error) -> AppError {
-    AppError::UpstreamUnavailable(e)
 }
 
 /// Absolute URL for a TMDB image path.
