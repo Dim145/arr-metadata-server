@@ -1,0 +1,49 @@
+# PostgreSQL instead of SQLite.
+#
+#   docker compose -f compose.yaml -f compose.postgres.yaml up -d
+#
+# The schema is maintained separately per engine and applied at startup, so
+# switching is a matter of pointing AMS_DATABASE_URL somewhere else. Existing
+# SQLite data is not migrated across.
+
+services:
+  metadata:
+    environment:
+      AMS_DATABASE_URL: postgres://${POSTGRES_USER:-ams}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-ams}
+      AMS_DATABASE_MAX_CONNECTIONS: ${AMS_DATABASE_MAX_CONNECTIONS:-20}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:18-alpine
+    container_name: arr-metadata-postgres
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ams}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${POSTGRES_DB:-ams}
+      # Without this, initdb picks a locale-dependent collation that makes index
+      # behaviour depend on the host.
+      POSTGRES_INITDB_ARGS: "--locale-provider=icu --icu-locale=und-x-icu"
+
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ams} -d ${POSTGRES_DB:-ams}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+    security_opt:
+      - no-new-privileges:true
+
+    # Not published: only the metadata server needs to reach it.
+    expose:
+      - "5432"
+
+volumes:
+  postgres-data:

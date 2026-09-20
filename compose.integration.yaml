@@ -1,0 +1,133 @@
+# A worked example: Sonarr, Radarr and Jellyseerr all served by this metadata
+# server instead of by the public ones.
+#
+# Prerequisites
+#   1. ./docker/gen-certs.sh
+#   2. A .env with AMS_TMDB_API_KEY, AMS_ADMIN_USERNAME, AMS_ADMIN_PASSWORD
+#
+# Run
+#   docker compose -f compose.integration.yaml up -d
+#
+# How it works: each client resolves the metadata hostname it has compiled in to
+# this server's address on the shared network (extra_hosts), and trusts the CA
+# that issued its certificate. Nothing in the clients is reconfigured — they
+# cannot be. See docs/integration.md.
+
+services:
+  metadata:
+    build: .
+    image: arr-metadata-server:latest
+    container_name: arr-metadata-server
+    restart: unless-stopped
+
+    environment:
+      # 443 so the clients reach it on the port they expect.
+      AMS_BIND_ADDRESS: 0.0.0.0:443
+      AMS_TLS_CERT: /certs/server.crt
+      AMS_TLS_KEY: /certs/server.key
+      AMS_DATABASE_URL: sqlite:///data/ams.db?mode=rwc
+      AMS_TMDB_API_KEY: ${AMS_TMDB_API_KEY:?AMS_TMDB_API_KEY is required}
+      AMS_ADMIN_USERNAME: ${AMS_ADMIN_USERNAME:?}
+      AMS_ADMIN_PASSWORD: ${AMS_ADMIN_PASSWORD:?}
+      AMS_ARR_ALLOWLIST: 172.31.0.0/24
+      TZ: ${TZ:-UTC}
+
+    volumes:
+      - metadata-data:/data
+      - ./docker/certs:/certs:ro
+
+    ports:
+      # The web UI, on the host. The clients reach :443 over the shared network.
+      - "${AMS_PORT:-8080}:443"
+
+    networks:
+      stack:
+        ipv4_address: 172.31.0.10
+
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+
+  sonarr:
+    image: lscr.io/linuxserver/sonarr:latest
+    container_name: sonarr
+    restart: unless-stopped
+    depends_on: [metadata]
+
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-UTC}
+
+    volumes:
+      - sonarr-config:/config
+      # linuxserver images run update-ca-certificates over this directory at start.
+      - ./docker/certs/ca.crt:/usr/local/share/ca-certificates/arr-metadata.crt:ro
+
+    # Sonarr's metadata URL is compiled in; this is what redirects it.
+    extra_hosts:
+      - "skyhook.sonarr.tv:172.31.0.10"
+
+    ports:
+      - "${SONARR_PORT:-8989}:8989"
+    networks: [stack]
+
+  radarr:
+    image: lscr.io/linuxserver/radarr:latest
+    container_name: radarr
+    restart: unless-stopped
+    depends_on: [metadata]
+
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-UTC}
+
+    volumes:
+      - radarr-config:/config
+      - ./docker/certs/ca.crt:/usr/local/share/ca-certificates/arr-metadata.crt:ro
+
+    extra_hosts:
+      - "api.radarr.video:172.31.0.10"
+
+    ports:
+      - "${RADARR_PORT:-7878}:7878"
+    networks: [stack]
+
+  jellyseerr:
+    image: fallenbagel/jellyseerr:latest
+    container_name: jellyseerr
+    restart: unless-stopped
+    depends_on: [metadata]
+
+    environment:
+      # Node merges this PEM with its built-in roots, which is why this works on
+      # the slim Alpine image without touching /etc/ssl.
+      NODE_EXTRA_CA_CERTS: /etc/arr-metadata-ca.crt
+      TZ: ${TZ:-UTC}
+
+    volumes:
+      - jellyseerr-config:/app/config
+      - ./docker/certs/ca.crt:/etc/arr-metadata-ca.crt:ro
+
+    extra_hosts:
+      - "api.themoviedb.org:172.31.0.10"
+
+    ports:
+      - "${JELLYSEERR_PORT:-5055}:5055"
+    networks: [stack]
+
+networks:
+  stack:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.31.0.0/24
+
+volumes:
+  metadata-data:
+  sonarr-config:
+  radarr-config:
+  jellyseerr-config:

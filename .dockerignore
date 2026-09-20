@@ -1,0 +1,28 @@
+# Build outputs
+target/
+frontend/dist/
+frontend/node_modules/
+node_modules/
+
+# Runtime state — never bake a database into an image
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# Secrets
+.env
+.env.*
+!.env.example
+certs/
+docker/certs/
+
+# Local noise
+.git/
+.github/
+.idea/
+.vscode/
+.claude/
+.remember/
+**/.DS_Store
+PROJECT_STATUS.md
