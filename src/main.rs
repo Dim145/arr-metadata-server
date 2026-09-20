@@ -7,6 +7,7 @@ mod domain;
 mod error;
 mod export;
 mod jobs;
+mod merge;
 mod providers;
 mod service;
 mod state;

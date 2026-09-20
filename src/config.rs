@@ -44,6 +44,9 @@ pub struct Config {
     pub security: Security,
     pub tmdb: Tmdb,
     pub skyhook: Skyhook,
+    pub radarr_metadata: RadarrMetadata,
+    /// Which provider wins when two disagree, most trusted first.
+    pub provider_priority: Vec<String>,
     pub cache: Cache,
     pub refresh: Refresh,
     pub export: Export,
@@ -111,8 +114,22 @@ pub struct Tmdb {
 #[derive(Clone, Debug)]
 pub struct Skyhook {
     pub upstream: String,
-    /// Fall back to the real skyhook.sonarr.tv when we cannot answer.
+    /// Answer from the real skyhook.sonarr.tv when nothing else can.
     pub fallback: bool,
+    /// Also merge its data into every series, not only the ones nothing else
+    /// could answer. Costs one call per refresh and fills gaps TMDB leaves —
+    /// air time, TVMaze and AniList ids, and episode ordering hints.
+    pub enrich: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct RadarrMetadata {
+    pub upstream: String,
+    /// Answer from the real api.radarr.video when nothing else can.
+    pub fallback: bool,
+    /// Also merge its data into every movie. It is a curated view of TMDB with
+    /// certifications and extra ratings already resolved.
+    pub enrich: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -222,6 +239,31 @@ impl Config {
                 .trim_end_matches('/')
                 .to_string(),
                 fallback: flag(&["AMS_SKYHOOK_FALLBACK"], true)?,
+                enrich: flag(&["AMS_SKYHOOK_ENRICH"], true)?,
+            },
+            radarr_metadata: RadarrMetadata {
+                upstream: var_or(
+                    &["AMS_RADARR_METADATA_UPSTREAM"],
+                    "https://api.radarr.video",
+                )
+                .trim_end_matches('/')
+                .to_string(),
+                fallback: flag(&["AMS_RADARR_METADATA_FALLBACK"], true)?,
+                enrich: flag(&["AMS_RADARR_METADATA_ENRICH"], true)?,
+            },
+            provider_priority: {
+                let configured = list(&["AMS_PROVIDER_PRIORITY"]);
+                if configured.is_empty() {
+                    // TMDB first because it is the broadest and the one holding a
+                    // key; the arr services then fill what it leaves; artwork
+                    // providers last, since they only ever add images.
+                    ["tmdb", "tvdb", "skyhook", "radarr", "fanart"]
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect()
+                } else {
+                    configured
+                }
             },
             cache: Cache {
                 max_entries: num(&["AMS_CACHE_MAX_ENTRIES"], 10_000)?,

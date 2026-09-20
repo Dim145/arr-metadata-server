@@ -5,6 +5,7 @@
 //! both means a mapping bug can be fixed and replayed without re-fetching.
 
 pub mod lang;
+pub mod radarr;
 pub mod skyhook;
 pub mod tmdb;
 
@@ -12,4 +13,5 @@ pub mod tmdb;
 pub mod names {
     pub const TMDB: &str = "tmdb";
     pub const SKYHOOK: &str = "skyhook";
+    pub const RADARR: &str = "radarr";
 }

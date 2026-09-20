@@ -146,7 +146,12 @@ pub fn build(state: AppState) -> (Router<AppState>, utoipa::openapi::OpenApi) {
             state.clone(),
             crate::auth::ratelimit::limit,
         )))
-        .merge(arr.layer(from_fn_with_state(state.clone(), guards::guard_arr)))
+        .merge(
+            arr.layer(from_fn_with_state(state.clone(), guards::guard_arr))
+                // Outermost on this surface: a loop has to be caught before any
+                // work is done, and before the allowlist rejects our own address.
+                .layer(from_fn_with_state(state.clone(), guards::reject_self_calls)),
+        )
         .merge(tmdb.layer(from_fn_with_state(state, guards::guard_tmdb)));
 
     (router, api)

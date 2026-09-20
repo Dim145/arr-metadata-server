@@ -6,8 +6,8 @@ use futures::future::join_all;
 use crate::{
     db::repo,
     domain::{ExternalSource, MediaItem, MediaKind},
-    providers::{names, tmdb::map as tmdb_map},
-    service::{cached_search, ids, is_stale, load, persist},
+    providers::tmdb::map as tmdb_map,
+    service::{cached_search, gather, ids, is_stale, load},
     state::AppState,
 };
 
@@ -36,16 +36,18 @@ pub async fn by_imdb_id(state: &AppState, imdb_id: &str) -> Result<Option<MediaI
         return Ok(Some(item));
     }
 
-    if !state.tmdb.is_configured() {
-        return Ok(None);
-    }
-
-    let found = state.tmdb.find("imdb_id", &normalized).await?;
-    let Some(summary) = found.movie_results.first() else {
-        return Ok(None);
+    let tmdb_id = match state.tmdb.is_configured() {
+        true => state
+            .tmdb
+            .find("imdb_id", &normalized)
+            .await?
+            .movie_results
+            .first()
+            .map(|r| r.id),
+        false => None,
     };
 
-    fetch_from_tmdb(state, summary.id).await
+    gather::movie(state, tmdb_id, Some(&normalized)).await
 }
 
 /// Several movies at once, in the order requested.
@@ -103,16 +105,23 @@ pub async fn search(state: &AppState, term: &str, year: Option<i32>) -> Result<V
             {
                 Ok(hits) => {
                     for hit in &hits {
-                        let candidate = tmdb_map::movie_summary_to_item(hit);
-                        let known = results
-                            .iter()
-                            .any(|r| r.external_ids.tmdb == candidate.external_ids.tmdb);
-                        if !known {
-                            results.push(candidate);
-                        }
+                        add_unseen(&mut results, tmdb_map::movie_summary_to_item(hit));
                     }
                 }
                 Err(e) => tracing::warn!(term, error = %e, "TMDB movie search failed"),
+            }
+        }
+
+        // Radarr's own search finds titles TMDB's ranking buries, so it is worth
+        // asking even when TMDB answered.
+        if state.radarr_metadata.enriches() {
+            match state.radarr_metadata.search(term, year).await {
+                Ok(hits) => {
+                    for hit in hits.iter().take(state.config.tmdb.search_limit) {
+                        add_unseen(&mut results, crate::wire::radarr::to_item(hit));
+                    }
+                }
+                Err(e) => tracing::warn!(term, error = %e, "Radarr metadata search failed"),
             }
         }
 
@@ -184,6 +193,21 @@ pub async fn changed_since(state: &AppState, since: &str) -> Result<Vec<i64>> {
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
+/// Append a result unless the same work is already listed.
+///
+/// A work with no TMDB id cannot be compared this way, so it is kept: two
+/// unidentifiable results are more likely two works than one duplicate.
+fn add_unseen(results: &mut Vec<MediaItem>, candidate: MediaItem) {
+    let duplicate = match candidate.external_ids.tmdb {
+        Some(id) => results.iter().any(|r| r.external_ids.tmdb == Some(id)),
+        None => false,
+    };
+
+    if !duplicate {
+        results.push(candidate);
+    }
+}
+
 async fn local(state: &AppState, source: ExternalSource, value: &str) -> Result<Option<MediaItem>> {
     let Some(id) = repo::item::find_id_by_external(&state.db, source, value).await? else {
         return Ok(None);
@@ -225,15 +249,5 @@ async fn local_search(state: &AppState, term: &str, year: Option<i32>) -> Result
 }
 
 async fn fetch_from_tmdb(state: &AppState, tmdb_id: i64) -> Result<Option<MediaItem>> {
-    if !state.tmdb.is_configured() {
-        return Ok(None);
-    }
-
-    let Some((raw, movie)) = state.tmdb.movie(tmdb_id).await? else {
-        return Ok(None);
-    };
-
-    let item = tmdb_map::movie_to_item(&movie);
-
-    Ok(Some(persist(state, item, names::TMDB, Some(&raw)).await?))
+    gather::movie(state, Some(tmdb_id), None).await
 }

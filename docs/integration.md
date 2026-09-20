@@ -176,6 +176,29 @@ server had wrong — see the commit history.
 
 ---
 
+## If you redirect at the resolver
+
+Everything above redirects per container, with `extra_hosts`. If instead you add
+the records to your local DNS resolver, **this server resolves them too** — and
+it calls `skyhook.sonarr.tv` and `api.radarr.video` itself, because they are
+providers as well as protocols it speaks.
+
+It recognises the loop and answers `508 Loop Detected` rather than recursing, so
+nothing hangs. But the enrichment is then dead. Either point the upstreams at
+the real services by address:
+
+```bash
+AMS_SKYHOOK_UPSTREAM=https://<real-skyhook-address>
+AMS_RADARR_METADATA_UPSTREAM=https://<real-api.radarr.video-address>
+```
+
+or turn enrichment off:
+
+```bash
+AMS_SKYHOOK_ENRICH=false
+AMS_RADARR_METADATA_ENRICH=false
+```
+
 ## A note on languages
 
 Sonarr's request builder pins the language segment to `en` and nothing in Sonarr

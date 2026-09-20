@@ -9,7 +9,7 @@ use crate::{
     cache::Caches,
     config::Config,
     db::{Db, repo},
-    providers::{skyhook::SkyhookClient, tmdb::TmdbClient},
+    providers::{radarr::RadarrMetadataClient, skyhook::SkyhookClient, tmdb::TmdbClient},
 };
 
 #[derive(Clone)]
@@ -22,7 +22,11 @@ pub struct Inner {
     pub http: reqwest::Client,
     pub tmdb: TmdbClient,
     pub skyhook: SkyhookClient,
+    pub radarr_metadata: RadarrMetadataClient,
     pub limiter: Limiter,
+    /// Identifies this process on outbound calls to hostnames it also answers
+    /// on, so a request that loops back can be recognised and refused.
+    pub instance: String,
 }
 
 impl std::ops::Deref for AppState {
@@ -52,8 +56,11 @@ impl AppState {
 
         let caches = Caches::new(&config.cache);
         let limiter = Limiter::new(config.security.rate_limit_per_minute);
+        let instance = crate::db::new_id();
         let tmdb = TmdbClient::new(http.clone(), &config.tmdb);
-        let skyhook = SkyhookClient::new(http.clone(), &config.skyhook);
+        let skyhook = SkyhookClient::new(http.clone(), &config.skyhook, instance.clone());
+        let radarr_metadata =
+            RadarrMetadataClient::new(http.clone(), &config.radarr_metadata, instance.clone());
 
         if !tmdb.is_configured() {
             tracing::warn!(
@@ -69,7 +76,9 @@ impl AppState {
             http,
             tmdb,
             skyhook,
+            radarr_metadata,
             limiter,
+            instance,
         }));
 
         state.bootstrap_admin().await?;

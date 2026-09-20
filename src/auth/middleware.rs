@@ -111,6 +111,35 @@ async fn authorize(
     Ok(next.run(request).await)
 }
 
+/// Refuse a request this server sent to itself.
+///
+/// `skyhook.sonarr.tv` and `api.radarr.video` are hostnames this server both
+/// impersonates *and*, when enrichment is on, calls. Redirecting them per
+/// container is fine; doing it at the resolver means this server resolves the
+/// same name and calls itself, and nothing about the resulting request looks
+/// unusual. Outbound calls carry this process's id, so the loop is visible here.
+pub async fn reject_self_calls(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> AppResult<Response> {
+    let caller = request
+        .headers()
+        .get(crate::providers::radarr::LOOP_HEADER)
+        .and_then(|v| v.to_str().ok());
+
+    if caller == Some(state.instance.as_str()) {
+        tracing::error!(
+            path = %request.uri().path(),
+            "this server resolved an upstream provider to itself; set the upstream to \
+             somewhere else, or turn enrichment off"
+        );
+        return Err(AppError::LoopDetected);
+    }
+
+    Ok(next.run(request).await)
+}
+
 /// The resolved caller address, for handlers that log or audit.
 #[derive(Clone, Copy, Debug)]
 pub struct ClientAddr(pub std::net::IpAddr);

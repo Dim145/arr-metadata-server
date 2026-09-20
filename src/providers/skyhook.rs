@@ -14,19 +14,30 @@ pub struct SkyhookClient {
     http: reqwest::Client,
     base: String,
     enabled: bool,
+    enrich: bool,
+    instance: String,
 }
 
 impl SkyhookClient {
-    pub fn new(http: reqwest::Client, cfg: &config::Skyhook) -> Self {
+    pub fn new(http: reqwest::Client, cfg: &config::Skyhook, instance: String) -> Self {
         Self {
             http,
             base: cfg.upstream.clone(),
             enabled: cfg.fallback,
+            enrich: cfg.enrich,
+            instance,
         }
     }
 
+    /// Whether it may be used at all.
     pub fn is_enabled(&self) -> bool {
-        self.enabled
+        self.enabled || self.enrich
+    }
+
+    /// Whether every series should be enriched with it, not just the ones
+    /// nothing else could answer.
+    pub fn enriches(&self) -> bool {
+        self.enrich
     }
 
     /// One show by TVDB id. Returns the raw body alongside the parsed one so the
@@ -36,7 +47,7 @@ impl SkyhookClient {
         language: &str,
         tvdb_id: i64,
     ) -> Result<Option<(Value, ShowResource)>> {
-        if !self.enabled {
+        if !self.is_enabled() {
             return Ok(None);
         }
 
@@ -53,7 +64,7 @@ impl SkyhookClient {
     }
 
     pub async fn search(&self, language: &str, term: &str) -> Result<Vec<ShowResource>> {
-        if !self.enabled {
+        if !self.is_enabled() {
             return Ok(Vec::new());
         }
 
@@ -73,6 +84,9 @@ impl SkyhookClient {
             .http
             .get(url)
             .query(query)
+            // See `providers::radarr::LOOP_HEADER`: this hostname is one we also
+            // answer on, so a resolver-level redirect would have us call ourselves.
+            .header(crate::providers::radarr::LOOP_HEADER, &self.instance)
             .timeout(std::time::Duration::from_secs(20))
             .send()
             .await
@@ -80,6 +94,13 @@ impl SkyhookClient {
 
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
+        }
+
+        if response.status() == reqwest::StatusCode::LOOP_DETECTED {
+            anyhow::bail!(
+                "skyhook.sonarr.tv resolves to this server — set AMS_SKYHOOK_UPSTREAM to \
+                 somewhere else, or turn the provider off"
+            );
         }
 
         let status = response.status();

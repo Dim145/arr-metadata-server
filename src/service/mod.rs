@@ -12,6 +12,7 @@
 //! becomes a local entry, so the next request is served from step 1 and a human
 //! can edit it.
 
+pub mod gather;
 pub mod ids;
 pub mod language;
 pub mod movie;
@@ -118,8 +119,7 @@ async fn find_existing(state: &AppState, item: &MediaItem) -> Result<Option<Stri
 pub async fn persist(
     state: &AppState,
     mut item: MediaItem,
-    provider: &str,
-    payload: Option<&Value>,
+    snapshots: &[(String, Value)],
 ) -> Result<MediaItem> {
     if let Some(existing_id) = find_existing(state, &item).await?
         && let Some(existing) = repo::item::get(&state.db, &existing_id).await?
@@ -143,7 +143,9 @@ pub async fn persist(
     )
     .await?;
 
-    if let Some(payload) = payload {
+    // Every provider's raw answer is kept, so a mapping fix can be replayed
+    // without spending the calls again.
+    for (provider, payload) in snapshots {
         repo::snapshot::put(&state.db, &item.id, provider, payload, None).await?;
     }
 

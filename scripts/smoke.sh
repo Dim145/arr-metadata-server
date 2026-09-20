@@ -24,6 +24,8 @@ AMS_ADMIN_USERNAME=smoke \
 AMS_ADMIN_PASSWORD="$PASSWORD" \
 AMS_REFRESH_ENABLED=false \
 AMS_LOG="${AMS_LOG:-warn}" \
+AMS_SKYHOOK_UPSTREAM="${BASE}" \
+AMS_RADARR_METADATA_UPSTREAM="${BASE}" \
   "$BINARY" &
 SERVER=$!
 
@@ -42,6 +44,9 @@ done
 step() { printf '  %-46s' "$1"; }
 ok()   { printf 'ok\n'; }
 
+# The upstreams above point at this same server on purpose: it keeps the suite
+# from reaching the internet, and it exercises the loop guard, which is the
+# thing that stops a resolver-level redirect turning into infinite recursion.
 echo "smoke: ${DATABASE_URL%%\?*}"
 
 step "health"
@@ -134,6 +139,13 @@ step "asking in another language does not clobber a locked value"
 # not lose the override set a few steps above.
 curl -fsS "${BASE}/v1/tvdb/shows/fr/999777" | grep -q 'Locked Title'
 curl -fsS -b "$COOKIES" "${BASE}/api/v1/items/${ID}?language=fr" | grep -q 'Locked Title'; ok
+
+step "an upstream pointing at this server is refused, not recursed"
+# Both upstreams resolve here. A request that would enrich from them has to come
+# back promptly with an answer rather than recursing.
+start_ns=$(date +%s)
+curl -fsS --max-time 10 "${BASE}/v1/tvdb/shows/en/999777" | grep -q 'Locked Title'
+[ $(( $(date +%s) - start_ns )) -lt 10 ]; ok
 
 step "the nfo document is generated"
 curl -fsS -b "$COOKIES" "${BASE}/api/v1/items/${ID}/nfo" | grep -q '<tvshow>'; ok

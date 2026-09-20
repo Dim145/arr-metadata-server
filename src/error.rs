@@ -38,6 +38,10 @@ pub enum AppError {
     #[error("too many requests")]
     RateLimited,
 
+    /// This server called a hostname that resolves back to itself.
+    #[error("this request came from this server; an upstream provider resolves to it")]
+    LoopDetected,
+
     #[error(transparent)]
     Internal(#[from] anyhow::Error),
 }
@@ -53,6 +57,7 @@ impl AppError {
             Self::UpstreamUnavailable(_) => StatusCode::BAD_GATEWAY,
             Self::ProviderNotConfigured => StatusCode::SERVICE_UNAVAILABLE,
             Self::RateLimited => StatusCode::TOO_MANY_REQUESTS,
+            Self::LoopDetected => StatusCode::LOOP_DETECTED,
             Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -68,6 +73,7 @@ impl AppError {
             Self::UpstreamUnavailable(_) => "upstream_unavailable",
             Self::ProviderNotConfigured => "provider_not_configured",
             Self::RateLimited => "rate_limited",
+            Self::LoopDetected => "loop_detected",
             Self::Internal(_) => "internal",
         }
     }
@@ -82,7 +88,8 @@ impl AppError {
             | Self::Forbidden
             | Self::Conflict(_)
             | Self::ProviderNotConfigured
-            | Self::RateLimited => self.to_string(),
+            | Self::RateLimited
+            | Self::LoopDetected => self.to_string(),
             // These wrap a cause that may name hosts, queries or credentials.
             Self::UpstreamUnavailable(_) => "upstream provider unavailable".into(),
             Self::Internal(_) => "internal server error".into(),

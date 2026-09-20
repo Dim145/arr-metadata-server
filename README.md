@@ -17,6 +17,10 @@ It replaces and merges two earlier projects: `the earlier TMDB relay` and
 
 - **One metadata source for the whole stack.** Sonarr's Skyhook API, Radarr's
   metadata API and the TMDB v3 API are all served from the same store.
+- **Several sources behind it.** TMDB, plus Sonarr's and Radarr's own metadata
+  services, merged field by field. They carry what TMDB has no field for: air
+  time, TVMaze and AniList ids, absolute episode numbering, certifications by
+  country, and IMDb/Metacritic/Rotten Tomatoes ratings.
 - **Its own canonical database.** Provider payloads are kept verbatim as
   snapshots and merged into a canonical entity; nothing downstream depends on a
   provider being reachable.
@@ -71,6 +75,32 @@ surfaces — is documented at `/api/docs`, with the spec at `/api/openapi.json`.
 Both are generated from the handlers themselves, so they cannot drift from what
 is actually served, and both sit behind the same credential as the rest of the
 native API.
+
+## Where the data comes from
+
+TMDB is the base. Sonarr's Skyhook and Radarr's metadata service are merged on
+top, which is worth more than it sounds: for *Breaking Bad* that is the
+difference between 71 episodes and 84, and between having absolute episode
+numbers — the thing Sonarr matches anime on — and not.
+
+The merge is field by field, in `AMS_PROVIDER_PRIORITY` order:
+
+- **Scalars** take the first provider that has anything, so a lower-priority
+  source fills a gap rather than overwriting an answer.
+- **Artwork, alternative titles, ratings and translations** are unioned.
+- **Credits** come from one provider; nothing identifies a person across
+  providers, so a union would list the same actor twice.
+- **Episodes** are merged by number, which is where the gain is: TMDB brings
+  overviews and stills, Skyhook brings absolute numbering and air-order hints.
+
+Enrichment is on by default and costs one extra call per refresh per provider.
+Turn it off with `AMS_SKYHOOK_ENRICH=false` / `AMS_RADARR_METADATA_ENRICH=false`.
+
+> If you redirect `skyhook.sonarr.tv` or `api.radarr.video` at this server
+> through your **resolver** rather than per container, it resolves those names
+> to itself and would call itself forever. It detects that and answers `508`
+> with the fix in the message — but point the upstreams elsewhere, or turn
+> enrichment off, when that is your setup.
 
 ## Languages
 

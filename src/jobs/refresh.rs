@@ -15,7 +15,7 @@ use crate::{
         to_rfc3339,
     },
     domain::{MediaItem, MediaKind},
-    service::{movie, series},
+    service::series,
     state::AppState,
 };
 
@@ -48,10 +48,10 @@ async fn refresh_series(state: &AppState, item: &MediaItem) -> Result<Option<Med
     let language = state.tmdb.language().to_string();
     let ids = &item.external_ids;
 
-    // Prefer the provider that holds the richest document for this work.
-    if let Some(tmdb_id) = ids.tmdb
-        && state.tmdb.is_configured()
-        && let Some(refreshed) = force_series_from_tmdb(state, tmdb_id).await?
+    // Both ids are already known here, so every provider is asked at once
+    // rather than one resolving the other first.
+    if (ids.tmdb.is_some() || ids.tvdb.is_some())
+        && let Some(refreshed) = force_series(state, ids.tmdb, ids.tvdb).await?
     {
         return Ok(Some(refreshed));
     }
@@ -63,44 +63,23 @@ async fn refresh_series(state: &AppState, item: &MediaItem) -> Result<Option<Med
     Ok(None)
 }
 
-/// Refetch from TMDB unconditionally, bypassing the local-first ladder.
-async fn force_series_from_tmdb(state: &AppState, tmdb_id: i64) -> Result<Option<MediaItem>> {
-    let Some((raw, tv)) = state.tmdb.tv(tmdb_id).await? else {
-        return Ok(None);
-    };
-
-    let numbers: Vec<i32> = tv.seasons.iter().map(|s| s.season_number).collect();
-    let seasons = state.tmdb.tv_seasons(tmdb_id, &numbers).await;
-
-    let mapped = crate::providers::tmdb::map::tv_to_item(&tv, &seasons);
-
-    Ok(Some(
-        crate::service::persist(state, mapped, crate::providers::names::TMDB, Some(&raw)).await?,
-    ))
+/// Refetch from every provider, bypassing the local-first ladder.
+async fn force_series(
+    state: &AppState,
+    tmdb_id: Option<i64>,
+    tvdb_id: Option<i64>,
+) -> Result<Option<MediaItem>> {
+    crate::service::gather::series(state, tmdb_id, tvdb_id, state.tmdb.language()).await
 }
 
 async fn refresh_movie(state: &AppState, item: &MediaItem) -> Result<Option<MediaItem>> {
-    if !state.tmdb.is_configured() {
+    let ids = &item.external_ids;
+
+    if ids.tmdb.is_none() && ids.imdb.is_none() {
         return Ok(None);
     }
 
-    let Some(tmdb_id) = item.external_ids.tmdb else {
-        // Resolve through IMDb, which also links the TMDB id for next time.
-        return match &item.external_ids.imdb {
-            Some(imdb) => movie::by_imdb_id(state, imdb).await,
-            None => Ok(None),
-        };
-    };
-
-    let Some((raw, movie)) = state.tmdb.movie(tmdb_id).await? else {
-        return Ok(None);
-    };
-
-    let mapped = crate::providers::tmdb::map::movie_to_item(&movie);
-
-    Ok(Some(
-        crate::service::persist(state, mapped, crate::providers::names::TMDB, Some(&raw)).await?,
-    ))
+    crate::service::gather::movie(state, ids.tmdb, ids.imdb.as_deref()).await
 }
 
 /// Run the scheduler until the process shuts down.

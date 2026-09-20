@@ -7,7 +7,7 @@ use crate::{
     db::repo,
     domain::{ExternalSource, MediaItem, MediaKind},
     providers::{names, tmdb::map as tmdb_map},
-    service::{cached_search, ids, is_stale, load, persist},
+    service::{cached_search, gather, ids, is_stale, load, persist},
     state::AppState,
     wire::sonarr,
 };
@@ -37,29 +37,39 @@ pub async fn by_tvdb_id(
         return Ok(Some(item));
     }
 
-    // TMDB can resolve a TVDB id, which keeps one provider serving both key spaces.
-    if state.tmdb.is_configured() {
-        match tmdb_by_tvdb_id(state, tvdb_id).await {
-            Ok(Some(item)) => return Ok(Some(item)),
+    // TMDB indexes by its own ids, so ask it which work this TVDB id is before
+    // gathering: knowing both lets every provider be asked at once.
+    let tmdb_id = if state.tmdb.is_configured() {
+        match state.tmdb.find("tvdb_id", &tvdb_id.to_string()).await {
+            Ok(found) => found.tv_results.first().map(|r| r.id),
+            Err(e) => {
+                tracing::warn!(tvdb_id, error = %e, "TMDB lookup failed");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    if let Some(item) = gather::series(state, tmdb_id, Some(tvdb_id), language).await? {
+        return Ok(Some(item));
+    }
+
+    // Nothing had it. Skyhook is asked again here only when enrichment is off;
+    // otherwise `gather` already tried it.
+    if state.skyhook.is_enabled() && !state.skyhook.enriches() {
+        match state.skyhook.show(language, tvdb_id).await {
+            Ok(Some((raw, show))) => {
+                let item = sonarr::to_item(&show);
+                let snapshots = vec![(names::SKYHOOK.to_string(), raw)];
+                return Ok(Some(persist(state, item, &snapshots).await?));
+            }
             Ok(None) => {}
-            Err(e) => tracing::warn!(tvdb_id, error = %e, "TMDB lookup failed, falling back"),
+            Err(e) => tracing::warn!(tvdb_id, error = %e, "Skyhook fallback failed"),
         }
     }
 
-    // Last resort: the real Skyhook. A TVDB-only series lives here.
-    match state.skyhook.show(language, tvdb_id).await {
-        Ok(Some((raw, show))) => {
-            let item = sonarr::to_item(&show);
-            Ok(Some(
-                persist(state, item, names::SKYHOOK, Some(&raw)).await?,
-            ))
-        }
-        Ok(None) => Ok(None),
-        Err(e) => {
-            tracing::warn!(tvdb_id, error = %e, "Skyhook fallback failed");
-            Ok(None)
-        }
-    }
+    Ok(None)
 }
 
 pub async fn by_tmdb_id(state: &AppState, tmdb_id: i64) -> Result<Option<MediaItem>> {
@@ -195,28 +205,19 @@ async fn local_search(state: &AppState, term: &str) -> Result<Vec<MediaItem>> {
     Ok(items)
 }
 
-async fn tmdb_by_tvdb_id(state: &AppState, tvdb_id: i64) -> Result<Option<MediaItem>> {
-    let found = state.tmdb.find("tvdb_id", &tvdb_id.to_string()).await?;
-
-    let Some(summary) = found.tv_results.first() else {
-        return Ok(None);
-    };
-
-    fetch_from_tmdb(state, summary.id).await
-}
-
-/// Fetch a series in full from TMDB and store it.
+/// Fetch a series known only by its TMDB id.
+///
+/// Its TVDB id comes from TMDB's own external ids, so Skyhook can be asked too.
 async fn fetch_from_tmdb(state: &AppState, tmdb_id: i64) -> Result<Option<MediaItem>> {
-    let Some((raw, tv)) = state.tmdb.tv(tmdb_id).await? else {
-        return Ok(None);
+    let tvdb_id = match state.tmdb.tv_external_ids(tmdb_id).await {
+        Ok(ids) => ids.tvdb_id,
+        Err(e) => {
+            tracing::warn!(tmdb_id, error = %e, "could not resolve the TVDB id");
+            None
+        }
     };
 
-    let season_numbers: Vec<i32> = tv.seasons.iter().map(|s| s.season_number).collect();
-    let seasons = state.tmdb.tv_seasons(tmdb_id, &season_numbers).await;
-
-    let item = tmdb_map::tv_to_item(&tv, &seasons);
-
-    Ok(Some(persist(state, item, names::TMDB, Some(&raw)).await?))
+    gather::series(state, Some(tmdb_id), tvdb_id, state.tmdb.language()).await
 }
 
 /// Map TMDB search hits, resolving each one's TVDB id so Sonarr can address it.
