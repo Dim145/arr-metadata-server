@@ -1,0 +1,907 @@
+//! Reads and writes for works and their children.
+//!
+//! Writes distinguish **provider-sourced** rows from **manual** ones: a refresh
+//! deletes and re-inserts only `is_manual = 0` children, so anything a human
+//! added by hand survives every refresh. Manual *edits* to provider rows live in
+//! `media_override` and are applied on read, never written back here.
+
+use anyhow::{Context, Result};
+use sqlx::{Any, Arguments, Transaction, any::AnyArguments};
+
+use crate::{
+    db::{Db, RowExt, from_bool, new_id, now, text_list},
+    domain::{
+        AlternativeTitle, Credit, CreditType, CoverType, Episode, ExternalIds, ExternalSource,
+        Image, MediaItem, MediaKind, Rating, RatingValue, Season, Translation,
+    },
+};
+
+/// Everything written for one work in a single transaction.
+pub struct ItemWrite<'a> {
+    pub item: &'a MediaItem,
+    /// When true, existing provider-sourced children are replaced.
+    pub replace_children: bool,
+}
+
+// ─── reads ───────────────────────────────────────────────────────────────────
+
+const ITEM_COLUMNS: &str = "
+    id, kind, slug, title, sort_title, original_title, overview, status,
+    original_language, original_country, runtime, year, first_aired, last_aired,
+    in_cinemas, physical_release, digital_release, air_time, network, studio,
+    content_rating, homepage, trailer_youtube_id, popularity, genres, keywords,
+    collection_tmdb_id, is_manual, is_enabled, created_at, updated_at,
+    refreshed_at, refresh_after, refresh_error
+";
+
+fn map_item(row: &sqlx::any::AnyRow) -> Result<MediaItem> {
+    let kind: MediaKind = row.text("kind")?.parse()?;
+
+    Ok(MediaItem {
+        id: row.text("id")?,
+        kind,
+        slug: row.text("slug")?,
+        title: row.text("title")?,
+        sort_title: row.opt_text("sort_title")?,
+        original_title: row.opt_text("original_title")?,
+        overview: row.opt_text("overview")?,
+        status: row.opt_text("status")?,
+        original_language: row.opt_text("original_language")?,
+        original_country: row.opt_text("original_country")?,
+        runtime: row.opt_int("runtime")?,
+        year: row.opt_int("year")?,
+        first_aired: row.opt_text("first_aired")?,
+        last_aired: row.opt_text("last_aired")?,
+        in_cinemas: row.opt_text("in_cinemas")?,
+        physical_release: row.opt_text("physical_release")?,
+        digital_release: row.opt_text("digital_release")?,
+        air_time: row.opt_text("air_time")?,
+        network: row.opt_text("network")?,
+        studio: row.opt_text("studio")?,
+        content_rating: row.opt_text("content_rating")?,
+        homepage: row.opt_text("homepage")?,
+        trailer_youtube_id: row.opt_text("trailer_youtube_id")?,
+        popularity: row.opt_real("popularity")?,
+        collection_tmdb_id: row.opt_big("collection_tmdb_id")?,
+        genres: row.text_list("genres")?,
+        keywords: row.text_list("keywords")?,
+        external_ids: ExternalIds::default(),
+        is_manual: row.flag("is_manual")?,
+        is_enabled: row.flag("is_enabled")?,
+        created_at: row.text("created_at")?,
+        updated_at: row.text("updated_at")?,
+        refreshed_at: row.opt_text("refreshed_at")?,
+        refresh_after: row.opt_text("refresh_after")?,
+        refresh_error: row.opt_text("refresh_error")?,
+        seasons: Vec::new(),
+        episodes: Vec::new(),
+        images: Vec::new(),
+        credits: Vec::new(),
+        alternative_titles: Vec::new(),
+        ratings: Vec::new(),
+        translations: Vec::new(),
+        locked_fields: Vec::new(),
+    })
+}
+
+/// One work, without children. External ids are always loaded: they are what
+/// every compatibility surface keys on.
+pub async fn get(db: &Db, id: &str) -> Result<Option<MediaItem>> {
+    let sql = format!("SELECT {ITEM_COLUMNS} FROM media_item WHERE id = ?");
+
+    let row = sqlx::query(db.sql(&sql))
+        .bind(id)
+        .fetch_optional(db.pool())
+        .await?;
+
+    let Some(row) = row else { return Ok(None) };
+    let mut item = map_item(&row)?;
+    item.external_ids = load_external_ids(db, id).await?;
+
+    Ok(Some(item))
+}
+
+pub async fn load_external_ids(db: &Db, media_id: &str) -> Result<ExternalIds> {
+    let rows = sqlx::query(db.sql(
+        "SELECT source, value FROM media_external_id WHERE media_id = ? ORDER BY source",
+    ))
+    .bind(media_id)
+    .fetch_all(db.pool())
+    .await?;
+
+    let mut ids = ExternalIds::default();
+    for row in &rows {
+        let raw = row.text("source")?;
+        match raw.parse::<ExternalSource>() {
+            Ok(source) => ids.apply(source, &row.text("value")?),
+            // The CHECK constraint makes this unreachable today; if a future
+            // migration adds a source this build does not know, skip it.
+            Err(e) => tracing::warn!(error = %e, "ignoring unknown external id source"),
+        }
+    }
+
+    Ok(ids)
+}
+
+/// Resolve a work by one of its external identifiers.
+pub async fn find_id_by_external(
+    db: &Db,
+    source: ExternalSource,
+    value: &str,
+) -> Result<Option<String>> {
+    let row = sqlx::query(db.sql(
+        "SELECT media_id FROM media_external_id WHERE source = ? AND value = ?",
+    ))
+    .bind(source.as_str())
+    .bind(value)
+    .fetch_optional(db.pool())
+    .await?;
+
+    row.map(|r| r.text("media_id")).transpose().map_err(Into::into)
+}
+
+pub async fn find_id_by_slug(db: &Db, kind: MediaKind, slug: &str) -> Result<Option<String>> {
+    let row = sqlx::query(db.sql("SELECT id FROM media_item WHERE kind = ? AND slug = ?"))
+        .bind(kind.as_str())
+        .bind(slug)
+        .fetch_optional(db.pool())
+        .await?;
+
+    row.map(|r| r.text("id")).transpose().map_err(Into::into)
+}
+
+/// Load every child collection onto `item`.
+pub async fn load_children(db: &Db, item: &mut MediaItem) -> Result<()> {
+    let (seasons, episodes, images, credits, alt_titles, ratings, translations) = tokio::try_join!(
+        load_seasons(db, &item.id),
+        load_episodes(db, &item.id),
+        load_images(db, &item.id),
+        load_credits(db, &item.id),
+        load_alternative_titles(db, &item.id),
+        load_ratings(db, &item.id),
+        load_translations(db, &item.id),
+    )?;
+
+    // Season-scoped images belong on their season, not on the work.
+    let (season_images, item_images): (Vec<Image>, Vec<Image>) =
+        images.into_iter().partition(|i| i.season_number.is_some());
+
+    let mut seasons = seasons;
+    for season in &mut seasons {
+        season.images = season_images
+            .iter()
+            .filter(|i| i.season_number == Some(season.season_number))
+            .cloned()
+            .collect();
+    }
+
+    item.seasons = seasons;
+    item.episodes = episodes;
+    item.images = item_images;
+    item.credits = credits;
+    item.alternative_titles = alt_titles;
+    item.ratings = ratings;
+    item.translations = translations;
+
+    Ok(())
+}
+
+async fn load_seasons(db: &Db, media_id: &str) -> Result<Vec<Season>> {
+    let rows = sqlx::query(db.sql(
+        "SELECT id, season_number, title, overview, air_date, tmdb_id, tvdb_id, is_manual
+         FROM media_season WHERE media_id = ? ORDER BY season_number",
+    ))
+    .bind(media_id)
+    .fetch_all(db.pool())
+    .await?;
+
+    rows.iter()
+        .map(|row| {
+            Ok(Season {
+                id: row.text("id")?,
+                season_number: row.int("season_number")?,
+                title: row.opt_text("title")?,
+                overview: row.opt_text("overview")?,
+                air_date: row.opt_text("air_date")?,
+                tmdb_id: row.opt_big("tmdb_id")?,
+                tvdb_id: row.opt_big("tvdb_id")?,
+                is_manual: row.flag("is_manual")?,
+                images: Vec::new(),
+            })
+        })
+        .collect()
+}
+
+async fn load_episodes(db: &Db, media_id: &str) -> Result<Vec<Episode>> {
+    let rows = sqlx::query(db.sql(
+        "SELECT id, season_number, episode_number, absolute_episode_number,
+                aired_after_season_number, aired_before_season_number,
+                aired_before_episode_number, title, overview, air_date, air_date_utc,
+                runtime, finale_type, image, tvdb_id, tmdb_id, rating_value,
+                rating_count, is_manual
+         FROM media_episode WHERE media_id = ?
+         ORDER BY season_number, episode_number",
+    ))
+    .bind(media_id)
+    .fetch_all(db.pool())
+    .await?;
+
+    rows.iter()
+        .map(|row| {
+            let rating = match (row.opt_real("rating_value")?, row.opt_big("rating_count")?) {
+                (Some(value), votes) => Some(RatingValue { value, votes: votes.unwrap_or(0) }),
+                _ => None,
+            };
+
+            Ok(Episode {
+                id: row.text("id")?,
+                season_number: row.int("season_number")?,
+                episode_number: row.int("episode_number")?,
+                absolute_episode_number: row.opt_int("absolute_episode_number")?,
+                aired_after_season_number: row.opt_int("aired_after_season_number")?,
+                aired_before_season_number: row.opt_int("aired_before_season_number")?,
+                aired_before_episode_number: row.opt_int("aired_before_episode_number")?,
+                title: row.text("title")?,
+                overview: row.opt_text("overview")?,
+                air_date: row.opt_text("air_date")?,
+                air_date_utc: row.opt_text("air_date_utc")?,
+                runtime: row.opt_int("runtime")?,
+                finale_type: row.opt_text("finale_type")?,
+                image: row.opt_text("image")?,
+                tvdb_id: row.opt_big("tvdb_id")?,
+                tmdb_id: row.opt_big("tmdb_id")?,
+                rating,
+                is_manual: row.flag("is_manual")?,
+            })
+        })
+        .collect()
+}
+
+async fn load_images(db: &Db, media_id: &str) -> Result<Vec<Image>> {
+    let rows = sqlx::query(db.sql(
+        "SELECT id, season_number, cover_type, url, language, sort_order, source, is_manual
+         FROM media_image WHERE media_id = ? ORDER BY cover_type, sort_order",
+    ))
+    .bind(media_id)
+    .fetch_all(db.pool())
+    .await?;
+
+    rows.iter()
+        .map(|row| {
+            Ok(Image {
+                id: row.text("id")?,
+                season_number: row.opt_int("season_number")?,
+                cover_type: row
+                    .text("cover_type")?
+                    .parse::<CoverType>()
+                    .unwrap_or(CoverType::Unknown),
+                url: row.text("url")?,
+                language: row.opt_text("language")?,
+                sort_order: row.int("sort_order")?,
+                source: row.opt_text("source")?,
+                is_manual: row.flag("is_manual")?,
+            })
+        })
+        .collect()
+}
+
+async fn load_credits(db: &Db, media_id: &str) -> Result<Vec<Credit>> {
+    let rows = sqlx::query(db.sql(
+        "SELECT id, credit_type, person_name, character_name, image,
+                tmdb_person_id, sort_order, is_manual
+         FROM media_credit WHERE media_id = ? ORDER BY credit_type, sort_order",
+    ))
+    .bind(media_id)
+    .fetch_all(db.pool())
+    .await?;
+
+    rows.iter()
+        .map(|row| {
+            Ok(Credit {
+                id: row.text("id")?,
+                credit_type: row
+                    .text("credit_type")?
+                    .parse::<CreditType>()
+                    .unwrap_or(CreditType::Actor),
+                person_name: row.text("person_name")?,
+                character_name: row.opt_text("character_name")?,
+                image: row.opt_text("image")?,
+                tmdb_person_id: row.opt_big("tmdb_person_id")?,
+                sort_order: row.int("sort_order")?,
+                is_manual: row.flag("is_manual")?,
+            })
+        })
+        .collect()
+}
+
+async fn load_alternative_titles(db: &Db, media_id: &str) -> Result<Vec<AlternativeTitle>> {
+    let rows = sqlx::query(db.sql(
+        "SELECT id, title, title_type, language, is_manual
+         FROM media_alternative_title WHERE media_id = ? ORDER BY title",
+    ))
+    .bind(media_id)
+    .fetch_all(db.pool())
+    .await?;
+
+    rows.iter()
+        .map(|row| {
+            Ok(AlternativeTitle {
+                id: row.text("id")?,
+                title: row.text("title")?,
+                title_type: row.opt_text("title_type")?,
+                language: row.opt_text("language")?,
+                is_manual: row.flag("is_manual")?,
+            })
+        })
+        .collect()
+}
+
+async fn load_ratings(db: &Db, media_id: &str) -> Result<Vec<Rating>> {
+    let rows = sqlx::query(db.sql(
+        "SELECT source, value, votes, rating_type FROM media_rating WHERE media_id = ?",
+    ))
+    .bind(media_id)
+    .fetch_all(db.pool())
+    .await?;
+
+    rows.iter()
+        .map(|row| {
+            Ok(Rating {
+                source: row.text("source")?,
+                value: row.opt_real("value")?,
+                votes: row.opt_big("votes")?,
+                rating_type: row.opt_text("rating_type")?,
+            })
+        })
+        .collect()
+}
+
+async fn load_translations(db: &Db, media_id: &str) -> Result<Vec<Translation>> {
+    let rows = sqlx::query(db.sql(
+        "SELECT language, title, overview, is_manual FROM media_translation WHERE media_id = ?",
+    ))
+    .bind(media_id)
+    .fetch_all(db.pool())
+    .await?;
+
+    rows.iter()
+        .map(|row| {
+            Ok(Translation {
+                language: row.text("language")?,
+                title: row.opt_text("title")?,
+                overview: row.opt_text("overview")?,
+                is_manual: row.flag("is_manual")?,
+            })
+        })
+        .collect()
+}
+
+// ─── search & listing ────────────────────────────────────────────────────────
+
+#[derive(Debug, Default)]
+pub struct Query {
+    pub term: Option<String>,
+    pub kind: Option<MediaKind>,
+    pub year: Option<i32>,
+    pub manual_only: bool,
+    pub include_disabled: bool,
+    pub limit: i64,
+    pub offset: i64,
+}
+
+/// Shallow search over the canonical store.
+///
+/// Matching is a case-insensitive substring over the title, the sort title and
+/// every alternative title, which is what clients searching by a localised name
+/// need. Anything more (ranking, typo tolerance) belongs in a later FTS index.
+pub async fn search(db: &Db, q: &Query) -> Result<Vec<MediaItem>> {
+    let mut sql = format!("SELECT {ITEM_COLUMNS} FROM media_item WHERE 1 = 1");
+    let mut args = AnyArguments::default();
+
+    if !q.include_disabled {
+        sql.push_str(" AND is_enabled = 1");
+    }
+
+    if let Some(kind) = q.kind {
+        sql.push_str(" AND kind = ?");
+        args.add(kind.as_str().to_string()).map_err(|e| anyhow::anyhow!("{e}"))?;
+    }
+
+    if let Some(year) = q.year {
+        sql.push_str(" AND year = ?");
+        args.add(i64::from(year)).map_err(|e| anyhow::anyhow!("{e}"))?;
+    }
+
+    if q.manual_only {
+        sql.push_str(" AND is_manual = 1");
+    }
+
+    if let Some(term) = q.term.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+        let pattern = format!("%{}%", term.to_lowercase());
+        sql.push_str(
+            " AND (LOWER(title) LIKE ? OR LOWER(COALESCE(sort_title, '')) LIKE ?
+                   OR id IN (SELECT media_id FROM media_alternative_title
+                             WHERE LOWER(title) LIKE ?))",
+        );
+        args.add(pattern.clone()).map_err(|e| anyhow::anyhow!("{e}"))?;
+        args.add(pattern.clone()).map_err(|e| anyhow::anyhow!("{e}"))?;
+        args.add(pattern).map_err(|e| anyhow::anyhow!("{e}"))?;
+    }
+
+    sql.push_str(" ORDER BY popularity DESC NULLS LAST, title ASC LIMIT ? OFFSET ?");
+    args.add(q.limit.clamp(1, 500)).map_err(|e| anyhow::anyhow!("{e}"))?;
+    args.add(q.offset.max(0)).map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    let rows = sqlx::query_with(db.sql(&sql), args)
+        .fetch_all(db.pool())
+        .await?;
+
+    let mut items = Vec::with_capacity(rows.len());
+    for row in &rows {
+        let mut item = map_item(row)?;
+        item.external_ids = load_external_ids(db, &item.id).await?;
+        items.push(item);
+    }
+
+    Ok(items)
+}
+
+pub async fn count(db: &Db, kind: Option<MediaKind>) -> Result<i64> {
+    let row = match kind {
+        Some(k) => {
+            sqlx::query(db.sql("SELECT COUNT(*) AS n FROM media_item WHERE kind = ?"))
+                .bind(k.as_str())
+                .fetch_one(db.pool())
+                .await?
+        }
+        None => {
+            sqlx::query(db.sql("SELECT COUNT(*) AS n FROM media_item"))
+                .fetch_one(db.pool())
+                .await?
+        }
+    };
+
+    Ok(row.big("n")?)
+}
+
+// ─── writes ──────────────────────────────────────────────────────────────────
+
+/// Insert or update a work and, optionally, its provider-sourced children.
+pub async fn upsert(db: &Db, write: ItemWrite<'_>) -> Result<()> {
+    let mut tx = db.pool().begin().await?;
+
+    upsert_row(db, &mut tx, write.item).await?;
+    upsert_external_ids(db, &mut tx, write.item).await?;
+
+    if write.replace_children {
+        replace_children(db, &mut tx, write.item).await?;
+    }
+
+    tx.commit().await.context("failed to commit item write")?;
+    Ok(())
+}
+
+async fn upsert_row(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaItem) -> Result<()> {
+    // `created_at` is preserved on conflict; everything else is overwritten.
+    let sql = "
+        INSERT INTO media_item (
+            id, kind, slug, title, sort_title, original_title, overview, status,
+            original_language, original_country, runtime, year, first_aired, last_aired,
+            in_cinemas, physical_release, digital_release, air_time, network, studio,
+            content_rating, homepage, trailer_youtube_id, popularity, genres, keywords,
+            collection_tmdb_id, is_manual, is_enabled, created_at, updated_at,
+            refreshed_at, refresh_after, refresh_error
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (id) DO UPDATE SET
+            kind = excluded.kind,
+            slug = excluded.slug,
+            title = excluded.title,
+            sort_title = excluded.sort_title,
+            original_title = excluded.original_title,
+            overview = excluded.overview,
+            status = excluded.status,
+            original_language = excluded.original_language,
+            original_country = excluded.original_country,
+            runtime = excluded.runtime,
+            year = excluded.year,
+            first_aired = excluded.first_aired,
+            last_aired = excluded.last_aired,
+            in_cinemas = excluded.in_cinemas,
+            physical_release = excluded.physical_release,
+            digital_release = excluded.digital_release,
+            air_time = excluded.air_time,
+            network = excluded.network,
+            studio = excluded.studio,
+            content_rating = excluded.content_rating,
+            homepage = excluded.homepage,
+            trailer_youtube_id = excluded.trailer_youtube_id,
+            popularity = excluded.popularity,
+            genres = excluded.genres,
+            keywords = excluded.keywords,
+            collection_tmdb_id = excluded.collection_tmdb_id,
+            is_manual = excluded.is_manual,
+            is_enabled = excluded.is_enabled,
+            updated_at = excluded.updated_at,
+            refreshed_at = excluded.refreshed_at,
+            refresh_after = excluded.refresh_after,
+            refresh_error = excluded.refresh_error
+    ";
+
+    sqlx::query(db.sql(sql))
+        .bind(&item.id)
+        .bind(item.kind.as_str())
+        .bind(&item.slug)
+        .bind(&item.title)
+        .bind(&item.sort_title)
+        .bind(&item.original_title)
+        .bind(&item.overview)
+        .bind(&item.status)
+        .bind(&item.original_language)
+        .bind(&item.original_country)
+        .bind(item.runtime)
+        .bind(item.year)
+        .bind(&item.first_aired)
+        .bind(&item.last_aired)
+        .bind(&item.in_cinemas)
+        .bind(&item.physical_release)
+        .bind(&item.digital_release)
+        .bind(&item.air_time)
+        .bind(&item.network)
+        .bind(&item.studio)
+        .bind(&item.content_rating)
+        .bind(&item.homepage)
+        .bind(&item.trailer_youtube_id)
+        .bind(item.popularity)
+        .bind(text_list(&item.genres))
+        .bind(text_list(&item.keywords))
+        .bind(item.collection_tmdb_id)
+        .bind(from_bool(item.is_manual))
+        .bind(from_bool(item.is_enabled))
+        .bind(&item.created_at)
+        .bind(&item.updated_at)
+        .bind(&item.refreshed_at)
+        .bind(&item.refresh_after)
+        .bind(&item.refresh_error)
+        .execute(&mut **tx)
+        .await
+        .context("failed to write media_item")?;
+
+    Ok(())
+}
+
+async fn upsert_external_ids(
+    db: &Db,
+    tx: &mut Transaction<'_, Any>,
+    item: &MediaItem,
+) -> Result<()> {
+    // Ids this work no longer claims must go, or a stale row keeps resolving to it.
+    sqlx::query(db.sql("DELETE FROM media_external_id WHERE media_id = ?"))
+        .bind(&item.id)
+        .execute(&mut **tx)
+        .await?;
+
+    let created = now();
+
+    for (source, value) in item.external_ids.rows(item.kind) {
+        // Another work may already claim this id — for instance two TMDB entries
+        // sharing an IMDb id. Last writer wins rather than aborting the refresh.
+        sqlx::query(db.sql(
+            "INSERT INTO media_external_id (media_id, source, value, created_at)
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT (source, value) DO UPDATE SET media_id = excluded.media_id",
+        ))
+        .bind(&item.id)
+        .bind(source.as_str())
+        .bind(&value)
+        .bind(&created)
+        .execute(&mut **tx)
+        .await
+        .with_context(|| format!("failed to write external id {source}={value}"))?;
+    }
+
+    Ok(())
+}
+
+/// Replace provider-sourced children; manual rows (`is_manual = 1`) are kept.
+async fn replace_children(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaItem) -> Result<()> {
+    for table in [
+        "media_season",
+        "media_episode",
+        "media_image",
+        "media_credit",
+        "media_alternative_title",
+        "media_translation",
+    ] {
+        sqlx::query(db.sql(&format!(
+            "DELETE FROM {table} WHERE media_id = ? AND is_manual = 0"
+        )))
+        .bind(&item.id)
+        .execute(&mut **tx)
+        .await?;
+    }
+
+    // Ratings carry no manual flag: they are wholly provider-derived.
+    sqlx::query(db.sql("DELETE FROM media_rating WHERE media_id = ?"))
+        .bind(&item.id)
+        .execute(&mut **tx)
+        .await?;
+
+    let created = now();
+
+    for season in &item.seasons {
+        if season.is_manual {
+            continue;
+        }
+        sqlx::query(db.sql(
+            "INSERT INTO media_season
+                 (id, media_id, season_number, title, overview, air_date, tmdb_id,
+                  tvdb_id, is_manual, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+             ON CONFLICT (media_id, season_number) DO UPDATE SET
+                 title = excluded.title,
+                 overview = excluded.overview,
+                 air_date = excluded.air_date,
+                 tmdb_id = excluded.tmdb_id,
+                 tvdb_id = excluded.tvdb_id,
+                 updated_at = excluded.updated_at",
+        ))
+        .bind(if season.id.is_empty() { new_id() } else { season.id.clone() })
+        .bind(&item.id)
+        .bind(season.season_number)
+        .bind(&season.title)
+        .bind(&season.overview)
+        .bind(&season.air_date)
+        .bind(season.tmdb_id)
+        .bind(season.tvdb_id)
+        .bind(&created)
+        .bind(&created)
+        .execute(&mut **tx)
+        .await
+        .context("failed to write season")?;
+    }
+
+    for ep in &item.episodes {
+        if ep.is_manual {
+            continue;
+        }
+        sqlx::query(db.sql(
+            "INSERT INTO media_episode
+                 (id, media_id, season_number, episode_number, absolute_episode_number,
+                  aired_after_season_number, aired_before_season_number,
+                  aired_before_episode_number, title, overview, air_date, air_date_utc,
+                  runtime, finale_type, image, tvdb_id, tmdb_id, rating_value,
+                  rating_count, is_manual, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+             ON CONFLICT (media_id, season_number, episode_number) DO UPDATE SET
+                 absolute_episode_number = excluded.absolute_episode_number,
+                 aired_after_season_number = excluded.aired_after_season_number,
+                 aired_before_season_number = excluded.aired_before_season_number,
+                 aired_before_episode_number = excluded.aired_before_episode_number,
+                 title = excluded.title,
+                 overview = excluded.overview,
+                 air_date = excluded.air_date,
+                 air_date_utc = excluded.air_date_utc,
+                 runtime = excluded.runtime,
+                 finale_type = excluded.finale_type,
+                 image = excluded.image,
+                 tvdb_id = excluded.tvdb_id,
+                 tmdb_id = excluded.tmdb_id,
+                 rating_value = excluded.rating_value,
+                 rating_count = excluded.rating_count,
+                 updated_at = excluded.updated_at",
+        ))
+        .bind(if ep.id.is_empty() { new_id() } else { ep.id.clone() })
+        .bind(&item.id)
+        .bind(ep.season_number)
+        .bind(ep.episode_number)
+        .bind(ep.absolute_episode_number)
+        .bind(ep.aired_after_season_number)
+        .bind(ep.aired_before_season_number)
+        .bind(ep.aired_before_episode_number)
+        .bind(&ep.title)
+        .bind(&ep.overview)
+        .bind(&ep.air_date)
+        .bind(&ep.air_date_utc)
+        .bind(ep.runtime)
+        .bind(&ep.finale_type)
+        .bind(&ep.image)
+        .bind(ep.tvdb_id)
+        .bind(ep.tmdb_id)
+        .bind(ep.rating.map(|r| r.value))
+        .bind(ep.rating.map(|r| r.votes))
+        .bind(&created)
+        .bind(&created)
+        .execute(&mut **tx)
+        .await
+        .context("failed to write episode")?;
+    }
+
+    // Season-scoped images are stored alongside item-scoped ones.
+    let images = item
+        .images
+        .iter()
+        .chain(item.seasons.iter().flat_map(|s| s.images.iter()));
+
+    for image in images {
+        if image.is_manual {
+            continue;
+        }
+        sqlx::query(db.sql(
+            "INSERT INTO media_image
+                 (id, media_id, season_number, cover_type, url, language, sort_order,
+                  source, is_manual, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+             ON CONFLICT (media_id, cover_type, url) DO NOTHING",
+        ))
+        .bind(if image.id.is_empty() { new_id() } else { image.id.clone() })
+        .bind(&item.id)
+        .bind(image.season_number)
+        .bind(image.cover_type.as_str())
+        .bind(&image.url)
+        .bind(&image.language)
+        .bind(image.sort_order)
+        .bind(&image.source)
+        .bind(&created)
+        .execute(&mut **tx)
+        .await
+        .context("failed to write image")?;
+    }
+
+    for credit in &item.credits {
+        if credit.is_manual {
+            continue;
+        }
+        sqlx::query(db.sql(
+            "INSERT INTO media_credit
+                 (id, media_id, credit_type, person_name, character_name, image,
+                  tmdb_person_id, sort_order, is_manual, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)",
+        ))
+        .bind(if credit.id.is_empty() { new_id() } else { credit.id.clone() })
+        .bind(&item.id)
+        .bind(credit.credit_type.as_str())
+        .bind(&credit.person_name)
+        .bind(&credit.character_name)
+        .bind(&credit.image)
+        .bind(credit.tmdb_person_id)
+        .bind(credit.sort_order)
+        .bind(&created)
+        .execute(&mut **tx)
+        .await
+        .context("failed to write credit")?;
+    }
+
+    for alt in &item.alternative_titles {
+        if alt.is_manual {
+            continue;
+        }
+        sqlx::query(db.sql(
+            "INSERT INTO media_alternative_title
+                 (id, media_id, title, title_type, language, is_manual, created_at)
+             VALUES (?, ?, ?, ?, ?, 0, ?)
+             ON CONFLICT DO NOTHING",
+        ))
+        .bind(if alt.id.is_empty() { new_id() } else { alt.id.clone() })
+        .bind(&item.id)
+        .bind(&alt.title)
+        .bind(&alt.title_type)
+        .bind(&alt.language)
+        .bind(&created)
+        .execute(&mut **tx)
+        .await
+        .context("failed to write alternative title")?;
+    }
+
+    for rating in &item.ratings {
+        sqlx::query(db.sql(
+            "INSERT INTO media_rating (media_id, source, value, votes, rating_type)
+             VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT (media_id, source) DO UPDATE SET
+                 value = excluded.value,
+                 votes = excluded.votes,
+                 rating_type = excluded.rating_type",
+        ))
+        .bind(&item.id)
+        .bind(&rating.source)
+        .bind(rating.value)
+        .bind(rating.votes)
+        .bind(&rating.rating_type)
+        .execute(&mut **tx)
+        .await
+        .context("failed to write rating")?;
+    }
+
+    for tr in &item.translations {
+        if tr.is_manual {
+            continue;
+        }
+        sqlx::query(db.sql(
+            "INSERT INTO media_translation (media_id, language, title, overview, is_manual)
+             VALUES (?, ?, ?, ?, 0)
+             ON CONFLICT (media_id, language) DO UPDATE SET
+                 title = excluded.title,
+                 overview = excluded.overview",
+        ))
+        .bind(&item.id)
+        .bind(&tr.language)
+        .bind(&tr.title)
+        .bind(&tr.overview)
+        .execute(&mut **tx)
+        .await
+        .context("failed to write translation")?;
+    }
+
+    Ok(())
+}
+
+pub async fn delete(db: &Db, id: &str) -> Result<bool> {
+    // Every child table cascades from media_item.
+    let result = sqlx::query(db.sql("DELETE FROM media_item WHERE id = ?"))
+        .bind(id)
+        .execute(db.pool())
+        .await?;
+
+    Ok(result.rows_affected() > 0)
+}
+
+pub async fn set_enabled(db: &Db, id: &str, enabled: bool) -> Result<bool> {
+    let result = sqlx::query(db.sql(
+        "UPDATE media_item SET is_enabled = ?, updated_at = ? WHERE id = ?",
+    ))
+    .bind(from_bool(enabled))
+    .bind(now())
+    .bind(id)
+    .execute(db.pool())
+    .await?;
+
+    Ok(result.rows_affected() > 0)
+}
+
+// ─── refresh bookkeeping ─────────────────────────────────────────────────────
+
+/// Works whose `refresh_after` has passed, oldest first.
+///
+/// Manual-only entries are excluded: with no external id there is nothing to
+/// refresh from.
+pub async fn due_for_refresh(db: &Db, limit: i64) -> Result<Vec<(String, MediaKind)>> {
+    let rows = sqlx::query(db.sql(
+        "SELECT id, kind FROM media_item
+         WHERE is_enabled = 1
+           AND refresh_after IS NOT NULL
+           AND refresh_after <= ?
+           AND EXISTS (SELECT 1 FROM media_external_id e WHERE e.media_id = media_item.id)
+         ORDER BY refresh_after ASC
+         LIMIT ?",
+    ))
+    .bind(now())
+    .bind(limit.clamp(1, 500))
+    .fetch_all(db.pool())
+    .await?;
+
+    rows.iter()
+        .map(|row| Ok((row.text("id")?, row.text("kind")?.parse()?)))
+        .collect()
+}
+
+pub async fn mark_refreshed(
+    db: &Db,
+    id: &str,
+    next_refresh: Option<&str>,
+    error: Option<&str>,
+) -> Result<()> {
+    sqlx::query(db.sql(
+        "UPDATE media_item
+         SET refreshed_at = ?, refresh_after = ?, refresh_error = ?, updated_at = ?
+         WHERE id = ?",
+    ))
+    .bind(now())
+    .bind(next_refresh)
+    .bind(error)
+    .bind(now())
+    .bind(id)
+    .execute(db.pool())
+    .await?;
+
+    Ok(())
+}

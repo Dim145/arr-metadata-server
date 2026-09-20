@@ -1,0 +1,37 @@
+# --- Rust ---
+/target
+**/*.rs.bk
+*.pdb
+
+# --- Node / frontend ---
+node_modules/
+frontend/dist/
+frontend/.vite/
+*.tsbuildinfo
+
+# --- Runtime data ---
+/data
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# --- Secrets / local config ---
+.env
+.env.*
+!.env.example
+/certs/*.key
+/certs/*.crt
+/certs/*.srl
+
+# --- Editors / OS ---
+.idea/
+.vscode/
+.DS_Store
+*.swp
+
+# --- Local working notes (not part of the repo) ---
+PROJECT_STATUS.md
+.remember/
+.claude/

@@ -1,0 +1,97 @@
+[package]
+name = "arr-metadata-server"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94"
+description = "Self-hosted, provider-agnostic metadata server compatible with the *arr stack, TMDB clients and manual curation."
+license = "MIT"
+repository = "https://github.com/Dim145/arr-metadata-server"
+default-run = "arr-metadata-server"
+
+[[bin]]
+name = "arr-metadata-server"
+path = "src/main.rs"
+
+[dependencies]
+# ── HTTP server ──────────────────────────────────────────────────────────────
+axum = { version = "0.8.9", features = ["macros", "http2"] }
+axum-extra = { version = "0.12.6", features = ["typed-header", "cookie", "cookie-private"] }
+axum-server = { version = "0.8.0", features = ["tls-rustls-no-provider"] }
+tower = { version = "0.5.3", features = ["util", "limit", "timeout"] }
+tower-http = { version = "0.7.1", features = [
+    "trace", "cors", "compression-gzip", "compression-br", "normalize-path",
+    "set-header", "timeout", "request-id", "catch-panic", "limit",
+] }
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "signal", "time", "fs", "sync"] }
+hyper = "1.8"
+http-body-util = "0.1.5"
+bytes = "1.12.1"
+
+# ── TLS ──────────────────────────────────────────────────────────────────────
+rustls = { version = "0.23.45", default-features = false, features = ["aws-lc-rs", "logging", "std", "tls12"] }
+
+# ── HTTP client ──────────────────────────────────────────────────────────────
+reqwest = { version = "0.13.5", default-features = false, features = [
+    "json", "rustls", "gzip", "brotli", "stream", "charset", "http2", "query",
+] }
+
+# ── Database ─────────────────────────────────────────────────────────────────
+sqlx = { version = "0.9.0", default-features = false, features = [
+    "runtime-tokio", "tls-rustls-aws-lc-rs", "any", "sqlite", "postgres",
+    # `macros` is what provides `sqlx::migrate!`; `migrate` alone only ships the runtime.
+    "macros", "migrate", "json",
+] }
+
+# ── Serialization ────────────────────────────────────────────────────────────
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.151", features = ["preserve_order"] }
+serde_with = "3"
+
+# ── Observability ────────────────────────────────────────────────────────────
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "json"] }
+
+# ── Errors ───────────────────────────────────────────────────────────────────
+anyhow = "1.0.104"
+thiserror = "2.0.20"
+
+# ── Security ─────────────────────────────────────────────────────────────────
+# Default features already pull in `alloc`, `getrandom` and `password-hash`,
+# which is everything the PHC-string API needs.
+argon2 = "0.6.0"
+getrandom = "0.4.3"
+base64 = "0.23.1"
+sha2 = "0.11.0"
+subtle = "2.6.1"
+ipnet = { version = "2.12.2", features = ["serde"] }
+tower_governor = "0.8.0"
+
+# ── Utilities ────────────────────────────────────────────────────────────────
+chrono = { version = "0.4.45", default-features = false, features = ["std", "clock", "serde"] }
+uuid = { version = "1.26.1", features = ["v4", "v7", "serde"] }
+futures = "0.3.34"
+moka = { version = "0.12.16", features = ["future"] }
+slug = "0.1.6"
+urlencoding = "2.1.3"
+dotenvy = "0.15.7"
+mime_guess = "2.0.5"
+rust-embed = { version = "8.12.0", features = ["mime-guess"] }
+
+# ── OpenAPI ──────────────────────────────────────────────────────────────────
+utoipa = { version = "5.5.0", features = ["axum_extras", "chrono", "uuid", "preserve_order"] }
+utoipa-swagger-ui = { version = "9.0.2", features = ["axum", "vendored"] }
+
+[dev-dependencies]
+tokio = { version = "1.53.1", features = ["full", "test-util"] }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+
+[profile.dev]
+# Keep incremental debug builds usable on a large dependency tree.
+opt-level = 0
+debug = 1
