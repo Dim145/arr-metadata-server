@@ -90,16 +90,16 @@ fn overlay_item(item: &mut MediaItem, language: &str) {
         .clone()
         .filter(|o| !o.trim().is_empty());
 
-    if let Some(title) = title {
-        if !locked(item, "item/title") {
-            item.title = title;
-        }
+    if let Some(title) = title
+        && !locked(item, "item/title")
+    {
+        item.title = title;
     }
 
-    if let Some(overview) = overview {
-        if !locked(item, "item/overview") {
-            item.overview = Some(overview);
-        }
+    if let Some(overview) = overview
+        && !locked(item, "item/overview")
+    {
+        item.overview = Some(overview);
     }
 }
 
@@ -134,16 +134,16 @@ async fn overlay_episodes(state: &AppState, item: &mut MediaItem, language: &str
             continue;
         };
 
-        if !is_locked(episode.season_number, episode.episode_number, "title") {
-            if let Some(title) = text.title.as_deref().filter(|t| !t.trim().is_empty()) {
-                episode.title = title.to_string();
-            }
+        if !is_locked(episode.season_number, episode.episode_number, "title")
+            && let Some(title) = text.title.as_deref().filter(|t| !t.trim().is_empty())
+        {
+            episode.title = title.to_string();
         }
 
-        if !is_locked(episode.season_number, episode.episode_number, "overview") {
-            if let Some(overview) = text.overview.as_deref().filter(|o| !o.trim().is_empty()) {
-                episode.overview = Some(overview.to_string());
-            }
+        if !is_locked(episode.season_number, episode.episode_number, "overview")
+            && let Some(overview) = text.overview.as_deref().filter(|o| !o.trim().is_empty())
+        {
+            episode.overview = Some(overview.to_string());
         }
     }
 
