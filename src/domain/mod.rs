@@ -270,6 +270,20 @@ pub enum CoverType {
 }
 
 impl CoverType {
+    /// Display order. Clients look images up by type, but anything that takes
+    /// `images[0]` should get the poster, not whichever type sorts first.
+    pub const fn priority(self) -> u8 {
+        match self {
+            Self::Poster => 0,
+            Self::Fanart => 1,
+            Self::Banner => 2,
+            Self::Clearlogo => 3,
+            Self::Screenshot => 4,
+            Self::Headshot => 5,
+            Self::Unknown => 6,
+        }
+    }
+
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Poster => "poster",
@@ -448,6 +462,29 @@ mod tests {
         assert_eq!("poster".parse::<CoverType>().unwrap(), CoverType::Poster);
         assert_eq!("backdrop".parse::<CoverType>().unwrap(), CoverType::Fanart);
         assert_eq!("sideways".parse::<CoverType>().unwrap(), CoverType::Unknown);
+    }
+
+    #[test]
+    fn posters_lead_the_image_order() {
+        let mut types = vec![
+            CoverType::Clearlogo,
+            CoverType::Unknown,
+            CoverType::Fanart,
+            CoverType::Poster,
+            CoverType::Banner,
+        ];
+        types.sort_by_key(|t| t.priority());
+
+        assert_eq!(
+            types,
+            vec![
+                CoverType::Poster,
+                CoverType::Fanart,
+                CoverType::Banner,
+                CoverType::Clearlogo,
+                CoverType::Unknown,
+            ]
+        );
     }
 
     #[test]

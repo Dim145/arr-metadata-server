@@ -39,7 +39,11 @@ pub fn tv_to_item(tv: &models::Tv, seasons: &[models::Season]) -> MediaItem {
     item.first_aired = non_empty(tv.first_air_date.as_deref());
     item.last_aired = non_empty(tv.last_air_date.as_deref());
     item.year = year_of(tv.first_air_date.as_deref());
-    item.runtime = tv.episode_run_time.first().copied();
+    item.runtime = tv
+        .episode_run_time
+        .first()
+        .copied()
+        .or_else(|| typical_runtime(seasons));
     item.network = tv.networks.first().map(|n| n.name.clone());
     item.studio = tv
         .production_companies
@@ -354,6 +358,40 @@ fn release_dates(movie: &models::Movie) -> Releases {
 
 fn non_empty(s: Option<&str>) -> Option<String> {
     s.map(str::trim).filter(|s| !s.is_empty()).map(String::from)
+}
+
+/// The runtime to report for a series whose `episode_run_time` is empty.
+///
+/// TMDB has stopped populating that field for many shows — Breaking Bad returns
+/// `[]` today — and Sonarr uses runtime when matching releases, so leaving it
+/// unset degrades matching. The most common episode length is a better answer
+/// than the mean: one feature-length finale should not drag the figure up.
+///
+/// Specials are excluded. They run to whatever length they like (a three-minute
+/// webisode is still season 0) and would skew the count.
+fn typical_runtime(seasons: &[models::Season]) -> Option<i32> {
+    let mut counts: Vec<(i32, usize)> = Vec::new();
+
+    let runtimes = seasons
+        .iter()
+        .flat_map(|s| s.episodes.iter())
+        .filter(|e| e.season_number > 0)
+        .filter_map(|e| e.runtime)
+        .filter(|&r| r > 0);
+
+    for runtime in runtimes {
+        match counts.iter_mut().find(|(value, _)| *value == runtime) {
+            Some((_, count)) => *count += 1,
+            None => counts.push((runtime, 1)),
+        }
+    }
+
+    // Ties go to the shorter runtime, which is the safer guess for a series that
+    // mixes standard episodes with longer finales.
+    counts
+        .into_iter()
+        .max_by(|a, b| a.1.cmp(&b.1).then(b.0.cmp(&a.0)))
+        .map(|(runtime, _)| runtime)
 }
 
 /// Leading `YYYY` of a date string.
@@ -748,6 +786,82 @@ mod tests {
         assert_eq!(youtube_trailer(&videos), None);
     }
 
+    fn ep(season: i32, number: i32, runtime: Option<i32>) -> models::Episode {
+        models::Episode {
+            id: None,
+            season_number: season,
+            episode_number: number,
+            name: None,
+            overview: None,
+            air_date: None,
+            runtime,
+            still_path: None,
+            vote_average: None,
+            vote_count: None,
+            episode_type: None,
+        }
+    }
+
+    fn season_of(episodes: Vec<models::Episode>) -> models::Season {
+        models::Season {
+            season_number: 1,
+            episodes,
+        }
+    }
+
+    #[test]
+    fn runtime_falls_back_to_the_most_common_episode_length() {
+        // TMDB returns an empty episode_run_time for many shows now, so this is
+        // the only source of a runtime for them.
+        let seasons = vec![season_of(vec![
+            ep(1, 1, Some(47)),
+            ep(1, 2, Some(47)),
+            ep(1, 3, Some(45)),
+            ep(1, 4, Some(75)), // a long finale must not win
+        ])];
+
+        assert_eq!(typical_runtime(&seasons), Some(47));
+    }
+
+    #[test]
+    fn specials_do_not_skew_the_runtime() {
+        // A three-minute webisode is still season 0.
+        let seasons = vec![
+            models::Season {
+                season_number: 0,
+                episodes: vec![ep(0, 1, Some(3)), ep(0, 2, Some(3)), ep(0, 3, Some(3))],
+            },
+            season_of(vec![ep(1, 1, Some(52)), ep(1, 2, Some(52))]),
+        ];
+
+        assert_eq!(typical_runtime(&seasons), Some(52));
+    }
+
+    #[test]
+    fn a_tie_picks_the_shorter_runtime() {
+        let seasons = vec![season_of(vec![ep(1, 1, Some(60)), ep(1, 2, Some(30))])];
+        assert_eq!(typical_runtime(&seasons), Some(30));
+    }
+
+    #[test]
+    fn no_usable_episode_runtime_yields_nothing() {
+        assert_eq!(typical_runtime(&[]), None);
+        assert_eq!(
+            typical_runtime(&[season_of(vec![ep(1, 1, None), ep(1, 2, Some(0))])]),
+            None
+        );
+    }
+
+    #[test]
+    fn an_explicit_episode_run_time_still_wins() {
+        // The fixture declares [45, 47]; the episodes say 58 and 48.
+        let item = super::tv_to_item(
+            &serde_json::from_str(include_str!("fixtures/tv.json")).unwrap(),
+            &[serde_json::from_str(include_str!("fixtures/season.json")).unwrap()],
+        );
+        assert_eq!(item.runtime, Some(45));
+    }
+
     #[test]
     fn dates_are_trimmed_to_their_day() {
         assert_eq!(trim_to_date("2020-05-01T00:00:00.000Z"), "2020-05-01");
@@ -814,7 +928,10 @@ mod fixtures {
     #[test]
     fn the_us_content_rating_is_preferred() {
         // The fixture lists GB first; US is what Sonarr expects to see.
-        assert_eq!(tv_to_item(&tv(), &[]).content_rating.as_deref(), Some("TV-MA"));
+        assert_eq!(
+            tv_to_item(&tv(), &[]).content_rating.as_deref(),
+            Some("TV-MA")
+        );
     }
 
     #[test]
@@ -829,7 +946,13 @@ mod fixtures {
         assert_eq!(first.air_date_utc.as_deref(), Some("2008-01-20T00:00:00Z"));
         assert_eq!(first.runtime, Some(58));
         assert_eq!(first.rating.map(|r| r.votes), Some(260));
-        assert!(first.image.as_deref().unwrap().starts_with("https://image.tmdb.org"));
+        assert!(
+            first
+                .image
+                .as_deref()
+                .unwrap()
+                .starts_with("https://image.tmdb.org")
+        );
     }
 
     #[test]
@@ -842,7 +965,10 @@ mod fixtures {
         assert_eq!(third.title, "");
         assert_eq!(third.air_date, None);
         assert_eq!(third.overview, None);
-        assert!(third.rating.is_none(), "zero votes must not become a rating of 0");
+        assert!(
+            third.rating.is_none(),
+            "zero votes must not become a rating of 0"
+        );
     }
 
     #[test]
@@ -861,12 +987,20 @@ mod fixtures {
     fn cast_and_directors_are_separated() {
         let item = tv_to_item(&tv(), &[]);
 
-        let actors: Vec<_> = item.credits.iter().filter(|c| c.credit_type == CreditType::Actor).collect();
+        let actors: Vec<_> = item
+            .credits
+            .iter()
+            .filter(|c| c.credit_type == CreditType::Actor)
+            .collect();
         assert_eq!(actors.len(), 2);
         assert_eq!(actors[0].person_name, "Bryan Cranston");
         assert_eq!(actors[0].character_name.as_deref(), Some("Walter White"));
 
-        let directors: Vec<_> = item.credits.iter().filter(|c| c.credit_type == CreditType::Director).collect();
+        let directors: Vec<_> = item
+            .credits
+            .iter()
+            .filter(|c| c.credit_type == CreditType::Director)
+            .collect();
         assert_eq!(directors.len(), 1);
         assert_eq!(directors[0].person_name, "Vince Gilligan");
     }
@@ -904,7 +1038,11 @@ mod fixtures {
 
         // The fixture has three: one full, one title-only, one empty.
         assert_eq!(item.translations.len(), 2);
-        let french = item.translations.iter().find(|t| t.language == "fra").unwrap();
+        let french = item
+            .translations
+            .iter()
+            .find(|t| t.language == "fra")
+            .unwrap();
         assert_eq!(french.title.as_deref(), Some("Premier Contact"));
     }
 
@@ -945,7 +1083,12 @@ mod fixtures {
 
     #[test]
     fn the_wire_forms_serialise_without_losing_required_fields() {
-        let series = serde_json::to_value(sonarr::from_item(&tv_to_item(&tv(), &[season()]), 81189, "en")).unwrap();
+        let series = serde_json::to_value(sonarr::from_item(
+            &tv_to_item(&tv(), &[season()]),
+            81189,
+            "en",
+        ))
+        .unwrap();
         assert_eq!(series["tvdbId"], 81189);
         assert_eq!(series["title"], "Breaking Bad");
         assert!(series["episodes"].as_array().unwrap().len() == 3);

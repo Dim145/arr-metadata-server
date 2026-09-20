@@ -271,7 +271,8 @@ async fn load_images(db: &Db, media_id: &str) -> Result<Vec<Image>> {
     .fetch_all(db.pool())
     .await?;
 
-    rows.iter()
+    let mut images: Vec<Image> = rows
+        .iter()
         .map(|row| {
             Ok(Image {
                 id: row.text("id")?,
@@ -287,7 +288,13 @@ async fn load_images(db: &Db, media_id: &str) -> Result<Vec<Image>> {
                 is_manual: row.flag("is_manual")?,
             })
         })
-        .collect()
+        .collect::<Result<_>>()?;
+
+    // SQL orders by the cover type's *name*, which puts clearlogo before poster.
+    // Sort by meaning instead.
+    images.sort_by_key(|i| (i.cover_type.priority(), i.sort_order));
+
+    Ok(images)
 }
 
 async fn load_credits(db: &Db, media_id: &str) -> Result<Vec<Credit>> {
