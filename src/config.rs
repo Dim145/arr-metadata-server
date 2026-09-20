@@ -87,6 +87,8 @@ pub struct Security {
     pub bootstrap_admin: Option<(String, String)>,
     /// Requests per minute per peer on the native API. `0` disables the limiter.
     pub rate_limit_per_minute: u32,
+    /// Days of audit history to keep. `0` keeps everything.
+    pub audit_retention_days: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -186,6 +188,7 @@ impl Config {
                     _ => bail!("AMS_ADMIN_USERNAME and AMS_ADMIN_PASSWORD must be set together"),
                 },
                 rate_limit_per_minute: num(&["AMS_RATE_LIMIT_PER_MINUTE"], 600)?,
+                audit_retention_days: num(&["AMS_AUDIT_RETENTION_DAYS"], 90)?,
             },
             tmdb: Tmdb {
                 api_key: opt(&["AMS_TMDB_API_KEY", "TMDB_API_KEY"]),

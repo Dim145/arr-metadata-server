@@ -9,8 +9,12 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    api::{
+        audit::{self, Event},
+        extract::ClientIp,
+    },
     auth::Identity,
-    db::repo,
+    db::repo::{self, audit::Action},
     domain::{ExternalIds, MediaItem, MediaKind, make_slug},
     error::{AppError, AppResult},
     service,
@@ -119,6 +123,7 @@ pub struct CreateRequest {
 async fn create(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
+    ip: ClientIp,
     Json(request): Json<CreateRequest>,
 ) -> AppResult<(StatusCode, Json<MediaItem>)> {
     require_write(&identity)?;
@@ -170,6 +175,18 @@ async fn create(
 
     tracing::info!(id = %item.id, actor = %identity.label(), "created a manual entry");
 
+    audit::record(
+        &state,
+        Event {
+            identity: Some(&identity),
+            ip: &ip,
+            action: Action::ItemCreated,
+            target: Some(&item.id),
+            detail: Some(&format!("{} \"{}\"", item.kind, item.title)),
+        },
+    )
+    .await;
+
     let stored = service::load(&state, &item.id)
         .await?
         .ok_or_else(|| AppError::Internal(anyhow::anyhow!("entry vanished after being created")))?;
@@ -187,6 +204,7 @@ pub struct UpdateRequest {
 async fn update(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
+    ip: ClientIp,
     Path(id): Path<String>,
     Json(request): Json<UpdateRequest>,
 ) -> AppResult<Json<MediaItem>> {
@@ -197,6 +215,18 @@ async fn update(
             return Err(AppError::NotFound);
         }
         state.caches.items.invalidate(&format!("item:{id}")).await;
+
+        audit::record(
+            &state,
+            Event {
+                identity: Some(&identity),
+                ip: &ip,
+                action: Action::ItemUpdated,
+                target: Some(&id),
+                detail: Some(if enabled { "enabled" } else { "disabled" }),
+            },
+        )
+        .await;
     }
 
     service::load(&state, &id)
@@ -208,9 +238,14 @@ async fn update(
 async fn remove(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
+    ip: ClientIp,
     Path(id): Path<String>,
 ) -> AppResult<StatusCode> {
     require_write(&identity)?;
+
+    // Read the title before it goes, so the trail says what was deleted rather
+    // than only which id.
+    let title = service::load(&state, &id).await?.map(|i| i.title);
 
     if !repo::item::delete(&state.db, &id).await? {
         return Err(AppError::NotFound);
@@ -219,6 +254,18 @@ async fn remove(
     state.caches.items.invalidate(&format!("item:{id}")).await;
     tracing::info!(%id, actor = %identity.label(), "deleted an entry");
 
+    audit::record(
+        &state,
+        Event {
+            identity: Some(&identity),
+            ip: &ip,
+            action: Action::ItemDeleted,
+            target: Some(&id),
+            detail: title.as_deref(),
+        },
+    )
+    .await;
+
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -226,6 +273,7 @@ async fn remove(
 async fn refresh(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
+    ip: ClientIp,
     Path(id): Path<String>,
 ) -> AppResult<Json<MediaItem>> {
     require_write(&identity)?;
@@ -237,6 +285,22 @@ async fn refresh(
     let refreshed = crate::jobs::refresh::refresh_one(&state, &item)
         .await
         .map_err(AppError::UpstreamUnavailable)?;
+
+    audit::record(
+        &state,
+        Event {
+            identity: Some(&identity),
+            ip: &ip,
+            action: Action::ItemRefreshed,
+            target: Some(&id),
+            detail: Some(if refreshed.is_some() {
+                "refreshed from a provider"
+            } else {
+                "no provider could resolve this entry"
+            }),
+        },
+    )
+    .await;
 
     Ok(Json(refreshed.unwrap_or(item)))
 }

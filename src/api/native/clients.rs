@@ -9,8 +9,12 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    api::{
+        audit::{self, Event},
+        extract::ClientIp,
+    },
     auth::{Identity, secrets},
-    db::repo::{self, client::ApiClient},
+    db::repo::{self, audit::Action, client::ApiClient},
     error::{AppError, AppResult},
     state::AppState,
 };
@@ -68,6 +72,7 @@ pub struct CreateResponse {
 async fn create(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
+    ip: ClientIp,
     Json(request): Json<CreateRequest>,
 ) -> AppResult<(StatusCode, Json<CreateResponse>)> {
     require_admin(&identity)?;
@@ -111,6 +116,23 @@ async fn create(
 
     tracing::info!(client = %client.name, actor = %identity.label(), "issued an API key");
 
+    audit::record(
+        &state,
+        Event {
+            identity: Some(&identity),
+            ip: &ip,
+            action: Action::ClientCreated,
+            // The prefix, never the key.
+            target: Some(&client.name),
+            detail: Some(&format!(
+                "{} [{}]",
+                client.key_prefix,
+                client.scopes.join(", ")
+            )),
+        },
+    )
+    .await;
+
     Ok((
         StatusCode::CREATED,
         Json(CreateResponse {
@@ -149,9 +171,12 @@ async fn update(
 async fn remove(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
+    ip: ClientIp,
     Path(id): Path<String>,
 ) -> AppResult<StatusCode> {
     require_admin(&identity)?;
+
+    let name = repo::client::get(&state.db, &id).await?.map(|c| c.name);
 
     // Refuse to delete the key currently being used: it would lock the caller
     // out mid-session with no way back in.
@@ -168,6 +193,20 @@ async fn remove(
     }
 
     tracing::info!(%id, actor = %identity.label(), "revoked an API key");
+
+    audit::record(
+        &state,
+        Event {
+            identity: Some(&identity),
+            ip: &ip,
+            action: Action::ClientRevoked,
+            // Named, not identified: the row is gone, and the name is what the
+            // trail is read for. Matches Action::ClientCreated.
+            target: name.as_deref(),
+            detail: Some(&id),
+        },
+    )
+    .await;
 
     Ok(StatusCode::NO_CONTENT)
 }

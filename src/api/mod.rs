@@ -4,6 +4,8 @@
 //! routers because they have separate authentication policies — see
 //! [`crate::config::Surface`].
 
+pub mod audit;
+pub mod extract;
 pub mod native;
 pub mod radarr;
 pub mod sonarr;

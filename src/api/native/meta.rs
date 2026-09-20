@@ -9,9 +9,13 @@ use axum::{
 use serde::Serialize;
 
 use crate::{
+    api::{
+        audit::{self, Event},
+        extract::ClientIp,
+    },
     auth::Identity,
     config::{Surface, SurfacePolicy},
-    db::repo,
+    db::repo::{self, audit::Action},
     domain::{MediaKind, fields},
     error::AppResult,
     state::AppState,
@@ -49,6 +53,7 @@ pub struct Stats {
     pub total: i64,
     pub overrides: i64,
     pub clients: i64,
+    pub audit_entries: i64,
     pub cached_items: u64,
     pub cached_searches: u64,
 }
@@ -63,6 +68,7 @@ async fn stats(State(state): State<AppState>) -> AppResult<Json<Stats>> {
         total: series + movies,
         overrides: repo::override_field::count(&state.db).await?,
         clients: repo::client::count(&state.db).await?,
+        audit_entries: repo::audit::count(&state.db).await?,
         cached_items: state.caches.items.entry_count(),
         cached_searches: state.caches.searches.entry_count(),
     }))
@@ -112,6 +118,7 @@ async fn settings(State(state): State<AppState>) -> Json<Settings> {
 async fn clear_cache(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
+    ip: ClientIp,
 ) -> AppResult<StatusCode> {
     if !identity.can_write() {
         return Err(crate::error::AppError::Forbidden);
@@ -119,6 +126,18 @@ async fn clear_cache(
 
     state.caches.invalidate_all().await;
     tracing::info!(actor = %identity.label(), "cleared the in-process cache");
+
+    audit::record(
+        &state,
+        Event {
+            identity: Some(&identity),
+            ip: &ip,
+            action: Action::CacheCleared,
+            target: None,
+            detail: None,
+        },
+    )
+    .await;
 
     Ok(StatusCode::NO_CONTENT)
 }

@@ -3,6 +3,7 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router'
 
 import { ApiError } from './lib/api'
 import { Shell } from './components/Shell'
+import { Audit } from './routes/Audit'
 import { Catalogue } from './routes/Catalogue'
 import { Clients } from './routes/Clients'
 import { Dashboard } from './routes/Dashboard'
@@ -35,6 +36,7 @@ export function App() {
             <Route path="/catalogue" element={<Catalogue />} />
             <Route path="/catalogue/:id" element={<ItemDetail />} />
             <Route path="/clients" element={<Clients />} />
+            <Route path="/audit" element={<Audit />} />
             <Route path="/settings" element={<SettingsPage />} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />

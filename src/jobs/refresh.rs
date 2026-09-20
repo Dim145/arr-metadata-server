@@ -135,6 +135,8 @@ pub async fn run(state: AppState) {
 
         // One rate-limit bucket is kept per address seen; drop the quiet ones.
         state.limiter.prune();
+
+        prune_audit(&state).await;
     }
 }
 
@@ -173,6 +175,25 @@ async fn sweep(state: &AppState, batch: i64) -> Result<()> {
 
     tracing::info!(succeeded, failed, "refresh sweep finished");
     Ok(())
+}
+
+/// Drop audit entries past the retention window.
+///
+/// The trail is append-only and grows with use; without this a long-running
+/// instance accumulates it forever. `0` days means the operator wants it kept.
+async fn prune_audit(state: &AppState) {
+    let days = state.config.security.audit_retention_days;
+    if days == 0 {
+        return;
+    }
+
+    let cutoff = to_rfc3339(chrono::Utc::now() - chrono::Duration::days(i64::from(days)));
+
+    match repo::audit::prune(&state.db, &cutoff).await {
+        Ok(0) => {}
+        Ok(removed) => tracing::info!(removed, retention_days = days, "pruned audit entries"),
+        Err(e) => tracing::warn!(error = %e, "could not prune the audit log"),
+    }
 }
 
 async fn mark_failure(state: &AppState, id: &str, error: &str) {

@@ -11,6 +11,7 @@ const NAV = [
   { to: '/', label: 'Overview', end: true },
   { to: '/catalogue', label: 'Catalogue', end: false },
   { to: '/clients', label: 'Clients', end: false },
+  { to: '/audit', label: 'Audit', end: false },
   { to: '/settings', label: 'Settings', end: false },
 ]
 

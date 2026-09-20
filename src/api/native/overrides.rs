@@ -10,8 +10,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
+    api::{
+        audit::{self, Event},
+        extract::ClientIp,
+    },
     auth::Identity,
-    db::repo,
+    db::repo::{self, audit::Action},
     domain::fields::{self, Override, Scope},
     error::{AppError, AppResult},
     service,
@@ -58,6 +62,7 @@ pub struct SetResponse {
 async fn set(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
+    ip: ClientIp,
     Path(id): Path<String>,
     Json(request): Json<SetRequest>,
 ) -> AppResult<Json<SetResponse>> {
@@ -109,6 +114,24 @@ async fn set(
         "locked a field with a manual edit"
     );
 
+    audit::record(
+        &state,
+        Event {
+            identity: Some(&identity),
+            ip: &ip,
+            action: Action::OverrideSet,
+            target: Some(&format!("{id}#{scope}/{}", request.field)),
+            // The value itself is not recorded: an overview runs to paragraphs,
+            // and the current value is one read away.
+            detail: Some(if request.value.is_some() {
+                "set"
+            } else {
+                "cleared"
+            }),
+        },
+    )
+    .await;
+
     let updated = service::load(&state, &id)
         .await?
         .ok_or(AppError::NotFound)?;
@@ -122,6 +145,7 @@ async fn set(
 async fn unset(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
+    ip: ClientIp,
     Path((id, scope, field)): Path<(String, String, String)>,
 ) -> AppResult<StatusCode> {
     require_write(&identity)?;
@@ -137,6 +161,18 @@ async fn unset(
     state.caches.items.invalidate(&format!("item:{id}")).await;
     tracing::info!(%id, %scope, %field, actor = %identity.label(), "unlocked a field");
 
+    audit::record(
+        &state,
+        Event {
+            identity: Some(&identity),
+            ip: &ip,
+            action: Action::OverrideRemoved,
+            target: Some(&format!("{id}#{scope}/{field}")),
+            detail: None,
+        },
+    )
+    .await;
+
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -150,6 +186,7 @@ pub struct ClearResponse {
 async fn clear(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
+    ip: ClientIp,
     Path(id): Path<String>,
 ) -> AppResult<Json<ClearResponse>> {
     require_write(&identity)?;
@@ -158,6 +195,18 @@ async fn clear(
 
     state.caches.items.invalidate(&format!("item:{id}")).await;
     tracing::info!(%id, removed, actor = %identity.label(), "unlocked every field");
+
+    audit::record(
+        &state,
+        Event {
+            identity: Some(&identity),
+            ip: &ip,
+            action: Action::OverridesCleared,
+            target: Some(&id),
+            detail: Some(&format!("{removed} fields unlocked")),
+        },
+    )
+    .await;
 
     Ok(Json(ClearResponse { removed }))
 }

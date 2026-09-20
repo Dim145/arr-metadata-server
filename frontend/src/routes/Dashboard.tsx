@@ -40,7 +40,11 @@ export function Dashboard() {
             <Metric label="Series" value={stats.data.series} />
             <Metric label="Movies" value={stats.data.movies} />
             <Metric label="API clients" value={stats.data.clients} />
-            <Metric label="Cached" value={stats.data.cachedItems} hint="entities in memory" />
+            <Metric
+              label="Audit entries"
+              value={stats.data.auditEntries}
+              hint="changes recorded"
+            />
           </div>
 
           <div className="mt-8 grid gap-6 lg:grid-cols-2">

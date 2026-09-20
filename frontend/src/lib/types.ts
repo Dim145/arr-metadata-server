@@ -149,12 +149,29 @@ export interface ApiClient {
   note?: string
 }
 
+export interface AuditEntry {
+  id: string
+  at: string
+  actor?: string
+  action: string
+  target?: string
+  detail?: string
+  ip?: string
+}
+
+export interface AuditResponse {
+  entries: AuditEntry[]
+  total: number
+  actions: string[]
+}
+
 export interface Stats {
   series: number
   movies: number
   total: number
   overrides: number
   clients: number
+  auditEntries: number
   cachedItems: number
   cachedSearches: number
 }

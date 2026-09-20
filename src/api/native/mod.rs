@@ -22,6 +22,7 @@ pub fn router() -> Router<AppState> {
         .nest("/api/v1", clients::router())
         .nest("/api/v1", meta::router())
         .nest("/api/v1", auth::authenticated_router())
+        .nest("/api/v1", crate::api::audit::router())
 }
 
 /// Routes that must stay reachable without a credential, or nobody could ever

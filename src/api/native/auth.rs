@@ -10,8 +10,12 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    api::{
+        audit::{self, Event},
+        extract::ClientIp,
+    },
     auth::{Identity, middleware::SESSION_COOKIE, secrets},
-    db::repo,
+    db::repo::{self, audit::Action},
     error::{AppError, AppResult},
     state::AppState,
 };
@@ -46,6 +50,7 @@ pub struct LoginResponse {
 
 async fn login(
     State(state): State<AppState>,
+    ip: ClientIp,
     headers: HeaderMap,
     Json(request): Json<LoginRequest>,
 ) -> AppResult<impl IntoResponse> {
@@ -66,6 +71,21 @@ async fn login(
 
     let (Some(user), true) = (user, ok) else {
         tracing::warn!(username = %request.username, "failed sign-in attempt");
+
+        // Recorded deliberately: a run of these is the one thing in this log
+        // worth alerting on. The attempted username is kept; the password is not.
+        audit::record(
+            &state,
+            Event {
+                identity: None,
+                ip: &ip,
+                action: Action::SignInFailed,
+                target: Some(request.username.trim()),
+                detail: None,
+            },
+        )
+        .await;
+
         return Err(AppError::Unauthorized);
     };
 
@@ -79,11 +99,24 @@ async fn login(
         headers
             .get(header::USER_AGENT)
             .and_then(|v| v.to_str().ok()),
-        None,
+        ip.as_text().as_deref(),
     )
     .await?;
 
     repo::user::mark_login(&state.db, &user.id).await?;
+
+    let identity = Identity::Admin(Box::new(user.clone()));
+    audit::record(
+        &state,
+        Event {
+            identity: Some(&identity),
+            ip: &ip,
+            action: Action::SignedIn,
+            target: Some(&user.username),
+            detail: None,
+        },
+    )
+    .await;
 
     let cookie = format!(
         "{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={}",
@@ -105,7 +138,12 @@ async fn login(
 const DUMMY_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$c29tZXNhbHR2YWx1ZQ$\
                           YQqCqZ1bQZ3vLQ4mJ0Xz0xKZ8p1n3sVQ1kJ2m9Y7bWc";
 
-async fn logout(State(state): State<AppState>, headers: HeaderMap) -> AppResult<impl IntoResponse> {
+async fn logout(
+    State(state): State<AppState>,
+    identity: Option<Extension<Identity>>,
+    ip: ClientIp,
+    headers: HeaderMap,
+) -> AppResult<impl IntoResponse> {
     if let Some(token) = headers
         .get_all(header::COOKIE)
         .iter()
@@ -117,6 +155,18 @@ async fn logout(State(state): State<AppState>, headers: HeaderMap) -> AppResult<
     {
         repo::user::delete_session(&state.db, &secrets::hash_api_key(&token)).await?;
     }
+
+    audit::record(
+        &state,
+        Event {
+            identity: identity.as_ref().map(|Extension(i)| i),
+            ip: &ip,
+            action: Action::SignedOut,
+            target: None,
+            detail: None,
+        },
+    )
+    .await;
 
     let cookie = format!("{SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0");
 
@@ -149,6 +199,7 @@ pub struct ChangePasswordRequest {
 async fn change_password(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
+    ip: ClientIp,
     Json(request): Json<ChangePasswordRequest>,
 ) -> AppResult<StatusCode> {
     let Identity::Admin(user) = &identity else {
@@ -172,6 +223,18 @@ async fn change_password(
 
     // Every existing session was authorised under the old password.
     repo::user::delete_sessions_for_user(&state.db, &user.id).await?;
+
+    audit::record(
+        &state,
+        Event {
+            identity: Some(&identity),
+            ip: &ip,
+            action: Action::PasswordChanged,
+            target: Some(&user.username),
+            detail: Some("all sessions invalidated"),
+        },
+    )
+    .await;
 
     Ok(StatusCode::NO_CONTENT)
 }
