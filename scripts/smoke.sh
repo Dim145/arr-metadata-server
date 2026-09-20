@@ -93,6 +93,10 @@ curl -fsS -o /dev/null -H "x-api-key: ${KEY}" "${BASE}/api/v1/stats"; ok
 step "a wrong key does not"
 [ "$(curl -s -o /dev/null -w '%{http_code}' -H 'x-api-key: ams_wrong' "${BASE}/api/v1/stats")" = "401" ]; ok
 
+step "the OpenAPI spec is behind the same guard"
+[ "$(curl -s -o /dev/null -w '%{http_code}' "${BASE}/api/openapi.json")" = "401" ]
+curl -fsS -b "$COOKIES" "${BASE}/api/openapi.json" | grep -q '"openapi"'; ok
+
 step "unlocking restores the provider value"
 curl -fsS -b "$COOKIES" -o /dev/null -X DELETE "${BASE}/api/v1/items/${ID}/overrides/item/title"
 curl -fsS -b "$COOKIES" "${BASE}/api/v1/items/${ID}" | grep -q 'Smoke Test Series'; ok

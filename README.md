@@ -60,6 +60,24 @@ Every option is an environment variable prefixed `AMS_`. See
 two predecessor projects (`TMDB_API_KEY`, `BIND_ADDRESS`, `SKYHOOK_BASE_URL`, …)
 are still accepted, so an existing `.env` keeps working.
 
+## API documentation
+
+Every route the server answers — its own API plus the three compatibility
+surfaces — is documented at `/api/docs`, with the spec at `/api/openapi.json`.
+Both are generated from the handlers themselves, so they cannot drift from what
+is actually served, and both sit behind the same credential as the rest of the
+native API.
+
+## Audit trail
+
+Every action that changes what the server serves is recorded: who did it, to
+what, and from where. Reads are not — one row per metadata request would bury
+everything that matters under Sonarr's refresh traffic. Failed sign-ins are.
+
+Browse it under **Audit** in the web UI, or at `GET /api/v1/audit`.
+`AMS_AUDIT_RETENTION_DAYS` bounds how much is kept (90 days by default; `0`
+keeps everything).
+
 ## Authentication
 
 Authentication is configured **per API surface**, because the clients differ in
@@ -95,7 +113,7 @@ here — see [`docs/integration.md`](docs/integration.md) and the runnable
 ## Development
 
 ```bash
-cargo test                      # 114 unit tests, no database required
+cargo test                      # 129 unit tests, no database required
 cargo clippy --all-targets
 cargo fmt --check
 

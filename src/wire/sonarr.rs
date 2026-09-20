@@ -6,6 +6,7 @@
 //! camelCase, so that is what we emit too.
 
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 use crate::{
     db::{new_id, now},
@@ -15,7 +16,7 @@ use crate::{
     },
 };
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ShowResource {
     pub tvdb_id: i64,
@@ -73,25 +74,25 @@ pub struct ShowResource {
     pub episodes: Vec<EpisodeResource>,
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, ToSchema)]
 pub struct TimeOfDay {
     pub hours: i32,
     pub minutes: i32,
 }
 
 /// Sonarr reads `value` as a string and parses it itself.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 pub struct RatingResource {
     pub count: i64,
     pub value: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 pub struct AlternativeTitleResource {
     pub title: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 pub struct ActorResource {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -100,14 +101,14 @@ pub struct ActorResource {
     pub image: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ImageResource {
     pub cover_type: String,
     pub url: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SeasonResource {
     pub season_number: i32,
@@ -115,7 +116,7 @@ pub struct SeasonResource {
     pub images: Vec<ImageResource>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct EpisodeResource {
     pub tvdb_show_id: i64,

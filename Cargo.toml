@@ -78,7 +78,10 @@ mime_guess = "2.0.5"
 rust-embed = { version = "8.12.0", features = ["mime-guess"] }
 
 # ── OpenAPI ──────────────────────────────────────────────────────────────────
-utoipa = { version = "5.5.0", features = ["axum_extras", "chrono", "uuid", "preserve_order"] }
+utoipa = { version = "5.5.0", features = ["axum_extras", "preserve_order"] }
+# Collects handlers and their `#[utoipa::path]` annotations into one spec, so a
+# route cannot exist without appearing in the documentation.
+utoipa-axum = "0.2.0"
 utoipa-swagger-ui = { version = "9.0.2", features = ["axum", "vendored"] }
 
 [dev-dependencies]

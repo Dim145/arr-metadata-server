@@ -89,6 +89,27 @@ export function SettingsPage() {
       </div>
 
       <Panel className="reveal mt-6" style={{ animationDelay: '140ms' }}>
+        <PanelHead title="API documentation" />
+        <div className="flex flex-wrap items-center justify-between gap-4 p-5">
+          <div>
+            <p className="text-[14px] text-paper">Every route this server answers</p>
+            <p className="mt-1 max-w-prose text-[12px] text-faint">
+              The native API, plus the Sonarr, Radarr and TMDB compatibility surfaces. Generated
+              from the handlers themselves, so it cannot drift from what is actually served.
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <a href="/api/docs" target="_blank" rel="noreferrer">
+              <Button variant="primary">Open</Button>
+            </a>
+            <a href="/api/openapi.json" target="_blank" rel="noreferrer">
+              <Button>openapi.json</Button>
+            </a>
+          </div>
+        </div>
+      </Panel>
+
+      <Panel className="reveal mt-6" style={{ animationDelay: '180ms' }}>
         <PanelHead title="Maintenance" />
         <div className="flex flex-wrap items-center justify-between gap-4 p-5">
           <div>

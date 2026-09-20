@@ -5,10 +5,11 @@
 
 use anyhow::Result;
 use serde::Serialize;
+use utoipa::ToSchema;
 
 use crate::db::{Db, RowExt, from_bool, new_id, now, text_list};
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ApiClient {
     pub id: String,

@@ -10,10 +10,11 @@ pub mod ids;
 use std::{fmt, str::FromStr};
 
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 pub use ids::{ExternalIds, ExternalSource};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum MediaKind {
     Series,
@@ -48,7 +49,7 @@ impl FromStr for MediaKind {
 }
 
 /// A work, with whatever children the caller asked to load.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct MediaItem {
     pub id: String,
@@ -199,7 +200,7 @@ impl MediaItem {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Season {
     pub id: String,
@@ -219,7 +220,7 @@ pub struct Season {
     pub images: Vec<Image>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Episode {
     pub id: String,
@@ -257,7 +258,7 @@ pub struct Episode {
 
 /// Cover types, using Sonarr and Radarr's spelling so the compatibility
 /// surfaces can emit them without a translation table.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum CoverType {
     Poster,
@@ -315,7 +316,7 @@ impl FromStr for CoverType {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Image {
     pub id: String,
@@ -331,7 +332,7 @@ pub struct Image {
     pub is_manual: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum CreditType {
     Actor,
@@ -367,7 +368,7 @@ impl FromStr for CreditType {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Credit {
     pub id: String,
@@ -383,7 +384,7 @@ pub struct Credit {
     pub is_manual: bool,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AlternativeTitle {
     pub id: String,
@@ -395,14 +396,14 @@ pub struct AlternativeTitle {
     pub is_manual: bool,
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RatingValue {
     pub value: f64,
     pub votes: i64,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Rating {
     /// `tmdb`, `imdb`, `metacritic`, `rottenTomatoes`, `trakt`, …
@@ -416,7 +417,7 @@ pub struct Rating {
     pub rating_type: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Translation {
     pub language: String,

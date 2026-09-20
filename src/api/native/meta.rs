@@ -1,12 +1,9 @@
 //! Server metadata: what is editable, what is stored, how it is configured.
 
-use axum::{
-    Extension, Json, Router,
-    extract::State,
-    http::StatusCode,
-    routing::{get, post},
-};
+use axum::{Extension, Json, extract::State, http::StatusCode};
 use serde::Serialize;
+use utoipa::ToSchema;
+use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::{
     api::{
@@ -21,22 +18,32 @@ use crate::{
     state::AppState,
 };
 
-pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/fields", get(field_registry))
-        .route("/stats", get(stats))
-        .route("/settings", get(settings))
-        .route("/cache/clear", post(clear_cache))
+/// The tag every route here is filed under in the documentation.
+pub const TAG: &str = "Server";
+
+pub fn router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(field_registry))
+        .routes(routes!(stats))
+        .routes(routes!(settings))
+        .routes(routes!(clear_cache))
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct FieldRegistry {
     pub item: &'static [fields::FieldDef],
     pub season: &'static [fields::FieldDef],
     pub episode: &'static [fields::FieldDef],
 }
 
-/// What the web UI renders its edit form from.
+/// Which fields are editable, and what type each holds.
+///
+/// This is the authority: an override naming a field absent from here is
+/// refused. The web UI builds its edit form from it.
+#[utoipa::path(
+    get, path = "/fields", tag = TAG,
+    responses((status = 200, body = FieldRegistry)),
+)]
 async fn field_registry() -> Json<FieldRegistry> {
     Json(FieldRegistry {
         item: fields::ITEM_FIELDS,
@@ -45,7 +52,7 @@ async fn field_registry() -> Json<FieldRegistry> {
     })
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Stats {
     pub series: i64,
@@ -58,6 +65,8 @@ pub struct Stats {
     pub cached_searches: u64,
 }
 
+/// How much this server is holding.
+#[utoipa::path(get, path = "/stats", tag = TAG, responses((status = 200, body = Stats)))]
 async fn stats(State(state): State<AppState>) -> AppResult<Json<Stats>> {
     let series = repo::item::count(&state.db, Some(MediaKind::Series)).await?;
     let movies = repo::item::count(&state.db, Some(MediaKind::Movie)).await?;
@@ -74,7 +83,7 @@ async fn stats(State(state): State<AppState>) -> AppResult<Json<Stats>> {
     }))
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
     pub version: &'static str,
@@ -90,8 +99,11 @@ pub struct Settings {
     pub arr_policy: &'static str,
 }
 
-/// Effective configuration. Deliberately carries no secrets: the TMDB key is
-/// reported as a boolean, never echoed.
+/// Effective configuration.
+///
+/// Deliberately carries no secrets: the TMDB key is reported as a boolean,
+/// never echoed.
+#[utoipa::path(get, path = "/settings", tag = TAG, responses((status = 200, body = Settings)))]
 async fn settings(State(state): State<AppState>) -> Json<Settings> {
     Json(Settings {
         version: env!("CARGO_PKG_VERSION"),
@@ -115,6 +127,13 @@ async fn settings(State(state): State<AppState>) -> Json<Settings> {
 ///
 /// The database is untouched — this only discards the in-process layer in front
 /// of it, so the next request re-reads and re-applies overrides.
+#[utoipa::path(
+    post, path = "/cache/clear", tag = TAG,
+    responses(
+        (status = 204, description = "Cleared"),
+        (status = 403, description = "The caller may not write"),
+    ),
+)]
 async fn clear_cache(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,

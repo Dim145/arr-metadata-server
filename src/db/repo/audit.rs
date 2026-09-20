@@ -9,6 +9,7 @@
 
 use anyhow::Result;
 use serde::Serialize;
+use utoipa::ToSchema;
 
 use crate::db::{Db, RowExt, new_id, now};
 
@@ -61,8 +62,12 @@ impl std::fmt::Display for Action {
     }
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
+// Named explicitly: several modules declare a type with this name, and
+// utoipa keys schemas on the leaf name alone — a collision silently
+// drops one of them from the spec.
+#[schema(as = AuditEntry)]
 pub struct Entry {
     pub id: String,
     pub at: String,

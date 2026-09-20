@@ -4,11 +4,11 @@
 //! Sonarr, the host is compiled in, so reaching this server means overriding DNS.
 
 use axum::{
-    Json, Router,
+    Json,
     extract::{Path, Query, State},
-    routing::{get, post},
 };
 use serde::Deserialize;
+use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::{
     error::{AppError, AppResult},
@@ -17,20 +17,34 @@ use crate::{
     wire::radarr::{CollectionResource, MovieResource, from_item},
 };
 
-pub fn router() -> Router<AppState> {
-    Router::new()
-        // Static segments are matched before the `{tmdb_id}` route, so these
-        // three do not need to be ordered by hand.
-        .route("/v1/movie/bulk", post(bulk))
-        .route("/v1/movie/changed", get(changed))
-        .route("/v1/movie/imdb/{imdb_id}", get(by_imdb))
-        .route("/v1/movie/collection/{tmdb_id}", get(collection))
-        .route("/v1/movie/{tmdb_id}", get(by_tmdb))
-        .route("/v1/search", get(search))
-        .route("/v1/list/tmdb/popular", get(popular))
-        .route("/v1/list/tmdb/trending", get(trending))
+/// The tag every route here is filed under in the documentation.
+pub const TAG: &str = "Radarr compatibility";
+
+pub fn router() -> OpenApiRouter<AppState> {
+    // Static segments are matched before the `{tmdb_id}` route, so these do not
+    // need to be ordered by hand.
+    OpenApiRouter::new()
+        .routes(routes!(bulk))
+        .routes(routes!(changed))
+        .routes(routes!(by_imdb))
+        .routes(routes!(collection))
+        .routes(routes!(by_tmdb))
+        .routes(routes!(search))
+        .routes(routes!(popular))
+        .routes(routes!(trending))
 }
 
+/// A movie by TMDB id, in Radarr's format.
+#[utoipa::path(
+    get, path = "/v1/movie/{tmdb_id}", tag = TAG,
+    params(("tmdb_id" = i64, Path, description = "TMDB movie id")),
+    responses(
+        (status = 200, body = MovieResource),
+        (status = 403, description = "The caller's address is not in the allowlist"),
+        (status = 404, description = "No provider could resolve this id"),
+    ),
+    security(),
+)]
 async fn by_tmdb(
     State(state): State<AppState>,
     Path(tmdb_id): Path<i64>,
@@ -43,6 +57,13 @@ async fn by_tmdb(
 }
 
 /// Radarr expects an array here even though it only ever uses the first entry.
+/// A movie by IMDb id. Radarr expects an array even though it reads only the first.
+#[utoipa::path(
+    get, path = "/v1/movie/imdb/{imdb_id}", tag = TAG,
+    params(("imdb_id" = String, Path, description = "IMDb id, with or without the `tt` prefix")),
+    responses((status = 200, body = Vec<MovieResource>)),
+    security(),
+)]
 async fn by_imdb(
     State(state): State<AppState>,
     Path(imdb_id): Path<String>,
@@ -58,6 +79,16 @@ struct SearchQuery {
     year: Option<i32>,
 }
 
+/// Search movies, in Radarr's format.
+#[utoipa::path(
+    get, path = "/v1/search", tag = TAG,
+    params(
+        ("q" = Option<String>, Query, description = "Free text, or `tmdb:`/`imdb:` followed by an id"),
+        ("year" = Option<i32>, Query, description = "Narrow to a release year"),
+    ),
+    responses((status = 200, body = Vec<MovieResource>)),
+    security(),
+)]
 async fn search(
     State(state): State<AppState>,
     Query(query): Query<SearchQuery>,
@@ -69,6 +100,17 @@ async fn search(
     Ok(Json(items.iter().map(from_item).collect()))
 }
 
+/// Several movies at once.
+///
+/// A title that cannot be resolved is skipped rather than failing the batch,
+/// which is what Radarr expects when one entry has gone away upstream. Capped
+/// at 100 ids per request.
+#[utoipa::path(
+    post, path = "/v1/movie/bulk", tag = TAG,
+    request_body = Vec<i64>,
+    responses((status = 200, body = Vec<MovieResource>)),
+    security(),
+)]
 async fn bulk(
     State(state): State<AppState>,
     Json(tmdb_ids): Json<Vec<i64>>,
@@ -83,6 +125,16 @@ struct ChangedQuery {
     since: Option<String>,
 }
 
+/// TMDB ids changed since a date, which Radarr polls to know what to refetch.
+#[utoipa::path(
+    get, path = "/v1/movie/changed", tag = TAG,
+    params(("since" = String, Query, description = "A date or timestamp; only the date part is used")),
+    responses(
+        (status = 200, body = Vec<i64>),
+        (status = 400, description = "`since` was not supplied"),
+    ),
+    security(),
+)]
 async fn changed(
     State(state): State<AppState>,
     Query(query): Query<ChangedQuery>,
@@ -96,6 +148,19 @@ async fn changed(
     Ok(Json(movie::changed_since(&state, &since).await?))
 }
 
+/// A collection and the movies in it.
+///
+/// The parts carry search-level detail only: fetching each in full would be
+/// dozens of upstream calls for a list Radarr uses to offer suggestions.
+#[utoipa::path(
+    get, path = "/v1/movie/collection/{tmdb_id}", tag = TAG,
+    params(("tmdb_id" = i64, Path, description = "TMDB collection id")),
+    responses(
+        (status = 200, body = CollectionResource),
+        (status = 404, description = "No such collection, or no TMDB key is configured"),
+    ),
+    security(),
+)]
 async fn collection(
     State(state): State<AppState>,
     Path(tmdb_id): Path<i64>,
@@ -113,6 +178,12 @@ async fn collection(
     }))
 }
 
+/// TMDB's popular movies.
+#[utoipa::path(
+    get, path = "/v1/list/tmdb/popular", tag = TAG,
+    responses((status = 200, body = Vec<MovieResource>)),
+    security(),
+)]
 async fn popular(State(state): State<AppState>) -> AppResult<Json<Vec<MovieResource>>> {
     Ok(Json(
         movie::popular(&state)
@@ -123,6 +194,12 @@ async fn popular(State(state): State<AppState>) -> AppResult<Json<Vec<MovieResou
     ))
 }
 
+/// TMDB's trending movies for the week.
+#[utoipa::path(
+    get, path = "/v1/list/tmdb/trending", tag = TAG,
+    responses((status = 200, body = Vec<MovieResource>)),
+    security(),
+)]
 async fn trending(State(state): State<AppState>) -> AppResult<Json<Vec<MovieResource>>> {
     Ok(Json(
         movie::trending(&state)

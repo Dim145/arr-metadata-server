@@ -13,11 +13,12 @@ use std::{fmt, str::FromStr};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use utoipa::ToSchema;
 
 use crate::domain::{Episode, MediaItem, Season};
 
 /// What a field holds. Drives validation here and the input widget in the UI.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum FieldType {
     /// Single-line text.
@@ -66,7 +67,7 @@ impl FieldType {
     }
 }
 
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Copy, Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct FieldDef {
     /// The entity's serde name; also the key stored in `media_override.field`.
@@ -208,7 +209,7 @@ impl FromStr for Scope {
 // ─── overrides ───────────────────────────────────────────────────────────────
 
 /// One stored manual edit.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Override {
     pub scope: String,

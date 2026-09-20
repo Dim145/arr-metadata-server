@@ -11,14 +11,13 @@
 //! operator's corrections applied.
 
 use axum::{
-    Router,
     body::Body,
     extract::{Request, State},
     http::{HeaderMap, HeaderName, HeaderValue, StatusCode, Uri, header},
     response::{IntoResponse, Response},
-    routing::any,
 };
 use serde_json::{Value, json};
+use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::{
     db::repo,
@@ -46,10 +45,32 @@ const HOP_HEADERS: &[&str] = &[
 /// Query parameters this server controls and the client does not.
 const OVERRIDDEN_PARAMS: &[&str] = &["api_key", "include_adult"];
 
-pub fn router() -> Router<AppState> {
-    Router::new().route("/3/{*path}", any(proxy))
+/// The tag every route here is filed under in the documentation.
+pub const TAG: &str = "TMDB compatibility";
+
+pub fn router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new().routes(routes!(proxy))
 }
 
+/// Relay any TMDB v3 request, with this server's edits applied on the way back.
+///
+/// The request goes upstream with this server's own credentials substituted for
+/// whatever the client sent. If the path addresses a title that has manual
+/// overrides stored here, those fields are rewritten in the upstream document
+/// before it is returned — so the client gets TMDB's full response with the
+/// operator's corrections in it.
+///
+/// Every TMDB v3 path is accepted; see TMDB's own documentation for their
+/// shapes. Only `/3/tv/{id}` and `/3/movie/{id}` are patched.
+#[utoipa::path(
+    get, path = "/3/{path}", tag = TAG,
+    params(("path" = String, Path, description = "A TMDB v3 path, e.g. `tv/1396` or `search/movie`")),
+    responses(
+        (status = 200, description = "TMDB's response, with local edits applied where any exist"),
+        (status = 401, description = "No valid credential was presented"),
+        (status = 503, description = "This server has no TMDB API key configured"),
+    ),
+)]
 async fn proxy(State(state): State<AppState>, request: Request) -> AppResult<Response> {
     if !state.config.tmdb.passthrough {
         return Err(AppError::ProviderNotConfigured);

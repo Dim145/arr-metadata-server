@@ -1,12 +1,13 @@
 //! API client management.
 
 use axum::{
-    Extension, Json, Router,
+    Extension, Json,
     extract::{Path, State},
     http::StatusCode,
-    routing::get,
 };
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
+use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::{
     api::{
@@ -22,12 +23,23 @@ use crate::{
 /// Scopes a key may carry. `read` is implied by existing at all.
 const KNOWN_SCOPES: &[&str] = &["read", "write", "admin"];
 
-pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/clients", get(list).post(create))
-        .route("/clients/{id}", get(detail).patch(update).delete(remove))
+/// The tag every route here is filed under in the documentation.
+pub const TAG: &str = "Clients";
+
+pub fn router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(list, create))
+        .routes(routes!(detail, update, remove))
 }
 
+/// Every issued key. The keys themselves are not recoverable.
+#[utoipa::path(
+    get, path = "/clients", tag = TAG,
+    responses(
+        (status = 200, body = Vec<ApiClient>),
+        (status = 403, description = "The caller is not an administrator"),
+    ),
+)]
 async fn list(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
@@ -37,6 +49,16 @@ async fn list(
     Ok(Json(repo::client::list(&state.db).await?))
 }
 
+/// One client.
+#[utoipa::path(
+    get, path = "/clients/{id}", tag = TAG,
+    params(("id" = String, Path, description = "The client's identifier")),
+    responses(
+        (status = 200, body = ApiClient),
+        (status = 403, description = "The caller is not an administrator"),
+        (status = 404, description = "No such client"),
+    ),
+)]
 async fn detail(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
@@ -50,8 +72,12 @@ async fn detail(
         .ok_or(AppError::NotFound)
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
+// Named explicitly: several modules declare a type with this name, and
+// utoipa keys schemas on the leaf name alone — a collision silently
+// drops one of them from the spec.
+#[schema(as = CreateClientRequest)]
 pub struct CreateRequest {
     pub name: String,
     #[serde(default)]
@@ -60,8 +86,12 @@ pub struct CreateRequest {
     pub note: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
+// Named explicitly: several modules declare a type with this name, and
+// utoipa keys schemas on the leaf name alone — a collision silently
+// drops one of them from the spec.
+#[schema(as = CreateClientResponse)]
 pub struct CreateResponse {
     #[serde(flatten)]
     pub client: ApiClient,
@@ -69,6 +99,20 @@ pub struct CreateResponse {
     pub key: String,
 }
 
+/// Issue a key.
+///
+/// The response carries the key in the clear. It is the only time it is ever
+/// shown: only a SHA-256 of it is stored.
+#[utoipa::path(
+    post, path = "/clients", tag = TAG,
+    request_body = CreateRequest,
+    responses(
+        (status = 201, description = "The key, shown once", body = CreateResponse),
+        (status = 400, description = "Empty name or unknown scope"),
+        (status = 403, description = "The caller is not an administrator"),
+        (status = 409, description = "A client already has that name"),
+    ),
+)]
 async fn create(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
@@ -142,24 +186,55 @@ async fn create(
     ))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
+// Named explicitly: several modules declare a type with this name, and
+// utoipa keys schemas on the leaf name alone — a collision silently
+// drops one of them from the spec.
+#[schema(as = UpdateClientRequest)]
 pub struct UpdateRequest {
     pub is_enabled: Option<bool>,
 }
 
+/// Enable or disable a key without revoking it.
+#[utoipa::path(
+    patch, path = "/clients/{id}", tag = TAG,
+    params(("id" = String, Path, description = "The client's identifier")),
+    request_body = UpdateRequest,
+    responses(
+        (status = 200, body = ApiClient),
+        (status = 403, description = "The caller is not an administrator"),
+        (status = 404, description = "No such client"),
+    ),
+)]
 async fn update(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
+    ip: ClientIp,
     Path(id): Path<String>,
     Json(request): Json<UpdateRequest>,
 ) -> AppResult<Json<ApiClient>> {
     require_admin(&identity)?;
 
-    if let Some(enabled) = request.is_enabled
-        && !repo::client::set_enabled(&state.db, &id, enabled).await?
-    {
-        return Err(AppError::NotFound);
+    if let Some(enabled) = request.is_enabled {
+        // Read the name first: the trail is read by humans, who know the name.
+        let name = repo::client::get(&state.db, &id).await?.map(|c| c.name);
+
+        if !repo::client::set_enabled(&state.db, &id, enabled).await? {
+            return Err(AppError::NotFound);
+        }
+
+        audit::record(
+            &state,
+            Event {
+                identity: Some(&identity),
+                ip: &ip,
+                action: Action::ClientUpdated,
+                target: name.as_deref(),
+                detail: Some(if enabled { "enabled" } else { "disabled" }),
+            },
+        )
+        .await;
     }
 
     repo::client::get(&state.db, &id)
@@ -168,6 +243,17 @@ async fn update(
         .ok_or(AppError::NotFound)
 }
 
+/// Revoke a key permanently.
+#[utoipa::path(
+    delete, path = "/clients/{id}", tag = TAG,
+    params(("id" = String, Path, description = "The client's identifier")),
+    responses(
+        (status = 204, description = "Revoked"),
+        (status = 403, description = "The caller is not an administrator"),
+        (status = 404, description = "No such client"),
+        (status = 409, description = "That is the key this request authenticated with"),
+    ),
+)]
 async fn remove(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,

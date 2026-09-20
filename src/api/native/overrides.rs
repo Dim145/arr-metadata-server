@@ -1,13 +1,14 @@
 //! Manual edits and the locks they create.
 
 use axum::{
-    Extension, Json, Router,
+    Extension, Json,
     extract::{Path, State},
     http::StatusCode,
-    routing::{delete, get},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use utoipa::ToSchema;
+use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::{
     api::{
@@ -22,12 +23,21 @@ use crate::{
     state::AppState,
 };
 
-pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/items/{id}/overrides", get(list).put(set).delete(clear))
-        .route("/items/{id}/overrides/{scope}/{field}", delete(unset))
+/// The tag every route here is filed under in the documentation.
+pub const TAG: &str = "Locks";
+
+pub fn router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(list, set, clear))
+        .routes(routes!(unset))
 }
 
+/// Every manual edit stored against a work.
+#[utoipa::path(
+    get, path = "/items/{id}/overrides", tag = TAG,
+    params(("id" = String, Path, description = "The work's identifier")),
+    responses((status = 200, body = Vec<Override>)),
+)]
 async fn list(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -35,7 +45,7 @@ async fn list(
     Ok(Json(repo::override_field::list(&state.db, &id).await?))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SetRequest {
     /// `item`, `season:3`, `episode:3x7`. Defaults to the work itself.
@@ -51,14 +61,28 @@ fn default_scope() -> String {
     "item".to_string()
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SetResponse {
     pub locked_fields: Vec<String>,
 }
 
-/// Record an edit. From this point the field is locked: every refresh leaves it
-/// alone until the override is deleted.
+/// Record an edit, locking the field.
+///
+/// From this point every refresh leaves the field alone. Sending a `null` value
+/// stores an explicit "cleared" state, which still locks it; to hand the field
+/// back to the provider, delete the override instead.
+#[utoipa::path(
+    put, path = "/items/{id}/overrides", tag = TAG,
+    params(("id" = String, Path, description = "The work's identifier")),
+    request_body = SetRequest,
+    responses(
+        (status = 200, description = "Every field now locked on this work", body = SetResponse),
+        (status = 400, description = "Unknown field, wrong type, or unparsable scope"),
+        (status = 403, description = "The caller may not write"),
+        (status = 404, description = "No such work, season or episode"),
+    ),
+)]
 async fn set(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
@@ -142,6 +166,20 @@ async fn set(
 }
 
 /// Unlock one field, handing it back to provider data on the next refresh.
+#[utoipa::path(
+    delete, path = "/items/{id}/overrides/{scope}/{field}", tag = TAG,
+    params(
+        ("id" = String, Path, description = "The work's identifier"),
+        ("scope" = String, Path, description = "`item`, `season:3` or `episode:3x7`"),
+        ("field" = String, Path, description = "The field name, as the registry reports it"),
+    ),
+    responses(
+        (status = 204, description = "Unlocked"),
+        (status = 400, description = "Unparsable scope"),
+        (status = 403, description = "The caller may not write"),
+        (status = 404, description = "No such override"),
+    ),
+)]
 async fn unset(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
@@ -176,13 +214,21 @@ async fn unset(
     Ok(StatusCode::NO_CONTENT)
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ClearResponse {
     pub removed: u64,
 }
 
 /// Unlock every field of a work at once.
+#[utoipa::path(
+    delete, path = "/items/{id}/overrides", tag = TAG,
+    params(("id" = String, Path, description = "The work's identifier")),
+    responses(
+        (status = 200, body = ClearResponse),
+        (status = 403, description = "The caller may not write"),
+    ),
+)]
 async fn clear(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,

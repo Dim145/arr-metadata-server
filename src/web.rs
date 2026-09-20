@@ -7,6 +7,8 @@ use axum::{
     http::{HeaderValue, StatusCode, header},
     routing::get,
 };
+use utoipa_swagger_ui::SwaggerUi;
+
 use tower_http::{
     catch_panic::CatchPanicLayer, compression::CompressionLayer, cors::CorsLayer,
     limit::RequestBodyLimitLayer, normalize_path::NormalizePathLayer,
@@ -71,18 +73,21 @@ pub async fn serve(state: AppState) -> Result<()> {
 fn build_router(state: AppState) -> Router {
     let timeout = state.config.server.request_timeout;
 
+    // Each surface carries its own authentication policy, applied inside; the
+    // spec is collected from the same handlers, so it cannot drift from them.
+    let (surfaces, openapi) = api::build(state.clone());
+
     Router::new()
         .route("/health", get(health))
         .route("/ready", get(ready))
-        // Each surface carries its own authentication policy, applied inside.
-        .merge(api::arr_router(state.clone()))
-        .merge(api::tmdb_router(state.clone()))
+        .merge(surfaces)
+        // Documentation sits behind the native guard: it is an administrative
+        // view of the server, and the UI reaches it with its session cookie.
         .merge(
-            api::native_router(state.clone())
-                .merge(api::native::public_router())
+            Router::<AppState>::from(SwaggerUi::new("/api/docs").url("/api/openapi.json", openapi))
                 .layer(axum::middleware::from_fn_with_state(
                     state.clone(),
-                    crate::auth::ratelimit::limit,
+                    crate::auth::middleware::guard_native,
                 )),
         )
         // The UI's fallback must be last: it answers every path the API did not.

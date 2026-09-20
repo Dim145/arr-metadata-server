@@ -1,12 +1,13 @@
 //! Browsing, creating and refreshing works.
 
 use axum::{
-    Extension, Json, Router,
+    Extension, Json,
     extract::{Path, Query, State},
     http::StatusCode,
-    routing::{get, post},
 };
 use serde::{Deserialize, Serialize};
+use utoipa::{IntoParams, ToSchema};
+use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::{
     api::{
@@ -21,15 +22,19 @@ use crate::{
     state::AppState,
 };
 
-pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/items", get(list).post(create))
-        .route("/items/{id}", get(detail).patch(update).delete(remove))
-        .route("/items/{id}/refresh", post(refresh))
-        .route("/items/{id}/snapshots", get(snapshots))
+/// The tag every route here is filed under in the documentation.
+pub const TAG: &str = "Catalogue";
+
+pub fn router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(list, create))
+        .routes(routes!(detail, update, remove))
+        .routes(routes!(refresh))
+        .routes(routes!(snapshots))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
 #[serde(rename_all = "camelCase")]
 pub struct ListQuery {
     pub term: Option<String>,
@@ -43,13 +48,29 @@ pub struct ListQuery {
     pub offset: Option<i64>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
+// Named explicitly: several modules declare a type with this name, and
+// utoipa keys schemas on the leaf name alone — a collision silently
+// drops one of them from the spec.
+#[schema(as = ItemListResponse)]
 pub struct ListResponse {
     pub items: Vec<MediaItem>,
     pub total: i64,
 }
 
+/// List and search stored works.
+///
+/// Searches this server's own store only — it does not reach out to a provider.
+/// Manual overrides are applied, so what you see here is what clients are served.
+#[utoipa::path(
+    get, path = "/items", tag = TAG,
+    params(ListQuery),
+    responses(
+        (status = 200, description = "Matching works, newest first", body = ListResponse),
+        (status = 401, description = "No valid credential was presented"),
+    ),
+)]
 async fn list(
     State(state): State<AppState>,
     Query(query): Query<ListQuery>,
@@ -84,7 +105,18 @@ async fn list(
     Ok(Json(ListResponse { items, total }))
 }
 
-/// One work, with children and manual overrides applied.
+/// One work in full.
+///
+/// Seasons, episodes, images, credits and ratings are included, with every
+/// manual override applied. `lockedFields` lists what a human has claimed.
+#[utoipa::path(
+    get, path = "/items/{id}", tag = TAG,
+    params(("id" = String, Path, description = "The work's identifier")),
+    responses(
+        (status = 200, body = MediaItem),
+        (status = 404, description = "No such work"),
+    ),
+)]
 async fn detail(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -95,8 +127,12 @@ async fn detail(
         .ok_or(AppError::NotFound)
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
+// Named explicitly: several modules declare a type with this name, and
+// utoipa keys schemas on the leaf name alone — a collision silently
+// drops one of them from the spec.
+#[schema(as = CreateItemRequest)]
 pub struct CreateRequest {
     pub kind: String,
     pub title: String,
@@ -120,6 +156,16 @@ pub struct CreateRequest {
 /// protects its children from being replaced. If external ids are supplied it
 /// still becomes refreshable — a manual entry can be a stub that later fills in
 /// from a provider without losing what was typed.
+#[utoipa::path(
+    post, path = "/items", tag = TAG,
+    request_body = CreateRequest,
+    responses(
+        (status = 201, description = "Created", body = MediaItem),
+        (status = 400, description = "The kind or title was not usable"),
+        (status = 403, description = "The caller may not write"),
+        (status = 409, description = "Another entry already claims one of the external ids"),
+    ),
+)]
 async fn create(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
@@ -194,13 +240,30 @@ async fn create(
     Ok((StatusCode::CREATED, Json(stored)))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
+// Named explicitly: several modules declare a type with this name, and
+// utoipa keys schemas on the leaf name alone — a collision silently
+// drops one of them from the spec.
+#[schema(as = UpdateItemRequest)]
 pub struct UpdateRequest {
     pub is_enabled: Option<bool>,
 }
 
-/// Change an entry's own state. Field edits go through the override endpoints.
+/// Enable or disable an entry.
+///
+/// A disabled entry stays in the database and stops being served. Editing a
+/// *field* is a different operation — see the override endpoints.
+#[utoipa::path(
+    patch, path = "/items/{id}", tag = TAG,
+    params(("id" = String, Path, description = "The work's identifier")),
+    request_body = UpdateRequest,
+    responses(
+        (status = 200, body = MediaItem),
+        (status = 403, description = "The caller may not write"),
+        (status = 404, description = "No such work"),
+    ),
+)]
 async fn update(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
@@ -235,6 +298,16 @@ async fn update(
         .ok_or(AppError::NotFound)
 }
 
+/// Delete an entry and everything attached to it, overrides included.
+#[utoipa::path(
+    delete, path = "/items/{id}", tag = TAG,
+    params(("id" = String, Path, description = "The work's identifier")),
+    responses(
+        (status = 204, description = "Deleted"),
+        (status = 403, description = "The caller may not write"),
+        (status = 404, description = "No such work"),
+    ),
+)]
 async fn remove(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
@@ -270,6 +343,19 @@ async fn remove(
 }
 
 /// Refetch from providers now, ignoring the refresh schedule.
+///
+/// Provider data and provider-sourced children are replaced. Manual overrides
+/// are not touched — that is the point of them.
+#[utoipa::path(
+    post, path = "/items/{id}/refresh", tag = TAG,
+    params(("id" = String, Path, description = "The work's identifier")),
+    responses(
+        (status = 200, description = "The work as it now stands", body = MediaItem),
+        (status = 403, description = "The caller may not write"),
+        (status = 404, description = "No such work"),
+        (status = 502, description = "The provider could not be reached"),
+    ),
+)]
 async fn refresh(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
@@ -305,7 +391,7 @@ async fn refresh(
     Ok(Json(refreshed.unwrap_or(item)))
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SnapshotSummary {
     pub provider: String,
@@ -314,7 +400,14 @@ pub struct SnapshotSummary {
     pub payload: serde_json::Value,
 }
 
-/// The raw provider documents behind an entry, for diagnosing a bad mapping.
+/// The raw provider documents behind an entry.
+///
+/// Useful for diagnosing a mapping that produced the wrong canonical value.
+#[utoipa::path(
+    get, path = "/items/{id}/snapshots", tag = TAG,
+    params(("id" = String, Path, description = "The work's identifier")),
+    responses((status = 200, body = Vec<SnapshotSummary>)),
+)]
 async fn snapshots(
     State(state): State<AppState>,
     Path(id): Path<String>,

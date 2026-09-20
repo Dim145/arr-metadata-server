@@ -1,13 +1,14 @@
 //! Administrator sign-in.
 
 use axum::{
-    Extension, Json, Router,
+    Extension, Json,
     extract::State,
     http::{HeaderMap, StatusCode, header},
     response::IntoResponse,
-    routing::{get, post},
 };
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
+use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::{
     api::{
@@ -24,30 +25,47 @@ use crate::{
 /// short enough that a forgotten browser tab stops working.
 const SESSION_TTL_HOURS: i64 = 12;
 
-pub fn public_router() -> Router<AppState> {
-    Router::new().route("/auth/login", post(login))
+/// The tag every route here is filed under in the documentation.
+pub const TAG: &str = "Session";
+
+/// Reachable without a credential — nothing else could ever obtain one.
+pub fn public_router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new().routes(routes!(login))
 }
 
-pub fn authenticated_router() -> Router<AppState> {
-    Router::new()
-        .route("/auth/me", get(me))
-        .route("/auth/logout", post(logout))
-        .route("/auth/password", post(change_password))
+pub fn authenticated_router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(me))
+        .routes(routes!(logout))
+        .routes(routes!(change_password))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct LoginRequest {
     pub username: String,
     pub password: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct LoginResponse {
     pub username: String,
     pub expires_at: String,
 }
 
+/// Sign in and receive a session cookie.
+///
+/// A wrong username and a wrong password are indistinguishable, by design: the
+/// password is verified either way so the two take the same time.
+#[utoipa::path(
+    post, path = "/auth/login", tag = TAG,
+    request_body = LoginRequest,
+    responses(
+        (status = 200, description = "Signed in; a session cookie is set", body = LoginResponse),
+        (status = 401, description = "Those credentials were not accepted"),
+    ),
+    security(),
+)]
 async fn login(
     State(state): State<AppState>,
     ip: ClientIp,
@@ -138,6 +156,11 @@ async fn login(
 const DUMMY_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$c29tZXNhbHR2YWx1ZQ$\
                           YQqCqZ1bQZ3vLQ4mJ0Xz0xKZ8p1n3sVQ1kJ2m9Y7bWc";
 
+/// Sign out, invalidating this session server-side.
+#[utoipa::path(
+    post, path = "/auth/logout", tag = TAG,
+    responses((status = 204, description = "Signed out")),
+)]
 async fn logout(
     State(state): State<AppState>,
     identity: Option<Extension<Identity>>,
@@ -173,7 +196,7 @@ async fn logout(
     Ok((StatusCode::NO_CONTENT, [(header::SET_COOKIE, cookie)]))
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct MeResponse {
     pub identity: String,
@@ -181,6 +204,14 @@ pub struct MeResponse {
     pub is_admin: bool,
 }
 
+/// Who this request is authenticated as, and what it may do.
+#[utoipa::path(
+    get, path = "/auth/me", tag = TAG,
+    responses(
+        (status = 200, body = MeResponse),
+        (status = 401, description = "No valid credential was presented"),
+    ),
+)]
 async fn me(Extension(identity): Extension<Identity>) -> Json<MeResponse> {
     Json(MeResponse {
         identity: identity.label(),
@@ -189,13 +220,27 @@ async fn me(Extension(identity): Extension<Identity>) -> Json<MeResponse> {
     })
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ChangePasswordRequest {
     pub current_password: String,
     pub new_password: String,
 }
 
+/// Change the signed-in administrator's password.
+///
+/// Every existing session is invalidated: they were all authorised under the
+/// old password.
+#[utoipa::path(
+    post, path = "/auth/password", tag = TAG,
+    request_body = ChangePasswordRequest,
+    responses(
+        (status = 204, description = "Changed; sign in again"),
+        (status = 400, description = "The new password was rejected"),
+        (status = 401, description = "The current password was wrong"),
+        (status = 403, description = "An API key has no password to change"),
+    ),
+)]
 async fn change_password(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,

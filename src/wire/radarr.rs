@@ -5,10 +5,11 @@
 //! returns, so matching it exactly is what makes the substitution invisible.
 
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 use crate::domain::{Credit, CreditType, Image, MediaItem, Rating};
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct MovieResource {
     pub tmdb_id: i64,
@@ -67,7 +68,7 @@ pub struct MovieResource {
     pub popularity: Option<f64>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RatingResource {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -82,7 +83,7 @@ pub struct RatingResource {
     pub trakt: Option<RatingItem>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RatingItem {
     pub count: i64,
@@ -93,14 +94,14 @@ pub struct RatingItem {
     pub rating_type: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ImageResource {
     pub cover_type: String,
     pub url: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AlternativeTitleResource {
     pub title: String,
@@ -111,7 +112,7 @@ pub struct AlternativeTitleResource {
     pub language: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TranslationResource {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -121,14 +122,14 @@ pub struct TranslationResource {
     pub language: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CertificationResource {
     pub country: String,
     pub certification: String,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Credits {
     #[serde(default)]
@@ -137,7 +138,7 @@ pub struct Credits {
     pub crew: Vec<CrewResource>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CastResource {
     pub name: String,
@@ -151,7 +152,7 @@ pub struct CastResource {
     pub images: Vec<ImageResource>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CrewResource {
     pub name: String,
@@ -165,7 +166,7 @@ pub struct CrewResource {
     pub images: Vec<ImageResource>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CollectionResource {
     pub name: String,
@@ -174,11 +175,14 @@ pub struct CollectionResource {
     pub tmdb_id: i64,
     #[serde(default)]
     pub images: Vec<ImageResource>,
+    /// A movie may belong to a collection, and a collection holds movies. That
+    /// loop makes schema collection recurse forever unless it is cut here.
     #[serde(default)]
+    #[schema(no_recursion)]
     pub parts: Vec<MovieResource>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RecommendationResource {
     pub tmdb_id: i64,

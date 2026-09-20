@@ -7,10 +7,11 @@
 use std::{fmt, str::FromStr};
 
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 use crate::domain::MediaKind;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ExternalSource {
     TmdbMovie,
@@ -97,7 +98,7 @@ impl FromStr for ExternalSource {
 pub struct UnknownSource(pub String);
 
 /// The identifiers known for one work, in the shape the compatibility surfaces need.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct ExternalIds {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tmdb: Option<i64>,

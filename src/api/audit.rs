@@ -1,11 +1,12 @@
 //! Recording and reading the audit trail.
 
 use axum::{
-    Extension, Json, Router,
+    Extension, Json,
     extract::{Query as AxumQuery, State},
-    routing::get,
 };
 use serde::{Deserialize, Serialize};
+use utoipa::{IntoParams, ToSchema};
+use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::{
     api::extract::ClientIp,
@@ -55,11 +56,15 @@ pub async fn record(state: &AppState, event: Event<'_>) {
 
 // ─── endpoint ────────────────────────────────────────────────────────────────
 
-pub fn router() -> Router<AppState> {
-    Router::new().route("/audit", get(list))
+/// The tag every route here is filed under in the documentation.
+pub const TAG: &str = "Audit";
+
+pub fn router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new().routes(routes!(list))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
 #[serde(rename_all = "camelCase")]
 pub struct ListQuery {
     pub action: Option<String>,
@@ -70,8 +75,12 @@ pub struct ListQuery {
     pub offset: Option<i64>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
+// Named explicitly: several modules declare a type with this name, and
+// utoipa keys schemas on the leaf name alone — a collision silently
+// drops one of them from the spec.
+#[schema(as = AuditListResponse)]
 pub struct ListResponse {
     pub entries: Vec<Entry>,
     pub total: i64,
@@ -79,7 +88,18 @@ pub struct ListResponse {
     pub actions: Vec<&'static str>,
 }
 
-/// The trail is administrative: it names who did what, so it is admin-only.
+/// Read the audit trail, newest first.
+///
+/// Administrative: it names who did what, so it requires an administrator or a
+/// key carrying the `admin` scope.
+#[utoipa::path(
+    get, path = "/audit", tag = TAG,
+    params(ListQuery),
+    responses(
+        (status = 200, body = ListResponse),
+        (status = 403, description = "The caller is not an administrator"),
+    ),
+)]
 async fn list(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
