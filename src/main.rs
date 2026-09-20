@@ -10,6 +10,7 @@ mod merge;
 mod providers;
 mod state;
 mod telemetry;
+mod wire;
 mod web;
 
 use anyhow::{Context, Result};
