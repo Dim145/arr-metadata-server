@@ -31,6 +31,7 @@ import {
   Tr,
 } from '../../components/ui'
 import { NetworkAccess } from '../../components/NetworkAccess'
+import { ScopeSettingsDialog } from '../../components/ScopeSettings'
 import { api } from '../../lib/api'
 import { cn } from '../../lib/cn'
 import * as fmt from '../../lib/format'
@@ -47,6 +48,7 @@ export function Clients() {
   const [scopes, setScopes] = useState<string[]>(['read'])
   const [issued, setIssued] = useState<{ name: string; key: string } | null>(null)
   const [asking, setAsking] = useState<Asking | null>(null)
+  const [tuning, setTuning] = useState<ApiClient | null>(null)
 
   const clients = useQuery({ queryKey: ['clients'], queryFn: () => api.get<ApiClient[]>('/clients') })
 
@@ -233,6 +235,11 @@ export function Clients() {
                     <Td align="right">
                       <span className="flex items-center justify-end gap-0.5">
                         <IconButton
+                          glyph="settings"
+                          label={t.settings.openFor(client.name)}
+                          onClick={() => setTuning(client)}
+                        />
+                        <IconButton
                           glyph="power"
                           label={client.isEnabled ? t.admin.works.disable : t.admin.works.enable}
                           busy={setEnabled.isPending && setEnabled.variables.id === client.id}
@@ -307,6 +314,15 @@ export function Clients() {
       >
         {asking ? t.admin.keys.disableBody(asking.client.name) : null}
       </Dialog>
+
+      {/* What this one client is answered differently. The key is the handle:
+          a client that presents one is identified on every request, so the
+          server can look its settings up before it answers. */}
+      <ScopeSettingsDialog
+        at={tuning ? { scope: 'client', id: tuning.id } : null}
+        who={tuning?.name ?? ''}
+        onClose={() => setTuning(null)}
+      />
     </div>
   )
 }

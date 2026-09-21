@@ -79,6 +79,7 @@ export function Dashboard() {
             label={t.stats.auditEntries}
             value={stats.data.auditEntries}
             hint={t.stats.changesRecorded}
+            to="/admin/audit"
           />
         </div>
       )}
@@ -92,17 +93,26 @@ export function Dashboard() {
   )
 }
 
+/**
+ * A figure, with its caption.
+ *
+ * `to` makes the caption the way into the section the figure counts, which is
+ * how the audit trail and the job history stay reachable on a phone: the bottom
+ * bar holds five places and neither of them earns one.
+ */
 function Metric({
   label,
   value,
   hint,
   big,
+  to,
   className,
 }: {
   label: string
   value: number
   hint?: string
   big?: boolean
+  to?: string
   className?: string
 }) {
   const { locale } = useI18n()
@@ -117,7 +127,17 @@ function Metric({
         className,
       )}
     >
-      <Label>{label}</Label>
+      {to ? (
+        <Link
+          to={to}
+          className="label inline-flex min-h-11 w-fit items-center gap-1.5 transition-colors duration-150 hover:text-vermillion"
+        >
+          {label}
+          <Glyph name="chevronRight" className="size-3" />
+        </Link>
+      ) : (
+        <Label>{label}</Label>
+      )}
       <div>
         <p
           className={cn(

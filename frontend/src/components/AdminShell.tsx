@@ -30,14 +30,17 @@ type Entry = {
   tab?: boolean
 }
 
-// Jobs is the one section left off the bottom bar: it is a read-only history,
-// and the dashboard puts its last runs — and a link to the rest — one tap away.
+// The bottom bar holds five. Jobs was already off it and the audit trail now
+// joins it: both are read-only histories, consulted rather than operated, and
+// the dashboard's figures link to each. Importing takes the place that frees,
+// because adding a work is an errand somebody actually runs from a phone.
 const NAV: Entry[] = [
   { to: '/admin', glyph: 'gauge', label: (t) => t.admin.dashboard, end: true, tab: true },
   { to: '/admin/catalogue', glyph: 'list', label: (t) => t.admin.catalogue, tab: true },
+  { to: '/admin/discover', glyph: 'discover', label: (t) => t.admin.discover, tab: true },
   { to: '/admin/clients', glyph: 'key', label: (t) => t.admin.clients, tab: true },
   { to: '/admin/jobs', glyph: 'clock', label: (t) => t.admin.jobs },
-  { to: '/admin/audit', glyph: 'journal', label: (t) => t.admin.audit, tab: true },
+  { to: '/admin/audit', glyph: 'journal', label: (t) => t.admin.audit },
   { to: '/admin/settings', glyph: 'settings', label: (t) => t.admin.settings, tab: true },
 ]
 

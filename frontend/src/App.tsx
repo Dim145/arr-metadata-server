@@ -14,6 +14,7 @@ import { Audit } from './routes/admin/Audit'
 import { Catalogue } from './routes/admin/Catalogue'
 import { Clients } from './routes/admin/Clients'
 import { Dashboard } from './routes/admin/Dashboard'
+import { Discover } from './routes/admin/Discover'
 import { Jobs } from './routes/admin/Jobs'
 import { Settings } from './routes/admin/Settings'
 import { WorkEditor } from './routes/admin/WorkEditor'
@@ -70,6 +71,7 @@ function Router() {
         <Route index element={<Dashboard />} />
         <Route path="catalogue" element={<Catalogue />} />
         <Route path="catalogue/:id" element={<WorkEditor />} />
+        <Route path="discover" element={<Discover />} />
         <Route path="clients" element={<Clients />} />
         <Route path="jobs" element={<Jobs />} />
         <Route path="audit" element={<Audit />} />

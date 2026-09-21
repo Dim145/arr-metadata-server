@@ -1,10 +1,12 @@
 /**
- * How this server is actually running.
+ * What this server does, and how it was started.
  *
- * Read-only on purpose: configuration comes from the environment and is read
- * once at startup, so a form that appeared to change it here would be lying.
- * What this page does offer are the three things an operator genuinely performs
- * at runtime — empty the cache, write the .nfo documents, change the password.
+ * Two kinds of fact, and the page is ordered by which one an operator came for.
+ * The settings come first and are live: the server keeps them in a table it
+ * re-reads on every request, so a change applies to the next one. Below them
+ * sit the things that really were read once from the environment — the version,
+ * the database, whether a TMDB key exists, what stands at each door — and those
+ * stay read-only, because a form that appeared to change them would be lying.
  */
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -25,6 +27,7 @@ import {
   Skeleton,
   Spinner,
 } from '../../components/ui'
+import { ServerSettings } from '../../components/ScopeSettings'
 import { ApiError, api } from '../../lib/api'
 import { useI18n } from '../../lib/i18n'
 import type { ExportSummary, Settings as Config } from '../../lib/types'
@@ -84,8 +87,14 @@ export function Settings() {
         </p>
       ) : null}
 
-      <div className="grid gap-6 lg:grid-cols-2">
-        <Panel className="rise" style={{ animationDelay: '60ms' }}>
+      <p className="rise mb-4 max-w-prose text-sm leading-relaxed text-bone-dim">
+        {t.settings.lead}
+      </p>
+
+      <ServerSettings delay={40} />
+
+      <div className="mt-6 grid gap-6 lg:grid-cols-2">
+        <Panel className="rise" style={{ animationDelay: '260ms' }}>
           <PanelHead title={t.admin.config.runtime} />
           <dl className="divide-y divide-rule">
             <Field label={t.admin.config.version}>
@@ -103,7 +112,7 @@ export function Settings() {
               {config.tmdbConfigured ? (
                 <Chip>
                   <Glyph name="check" className="size-3" />
-                  {t.admin.config.tmdbConfigured(config.tmdbLanguage)}
+                  {t.admin.config.tmdbReady}
                 </Chip>
               ) : (
                 <Chip tone="accent">
@@ -112,19 +121,16 @@ export function Settings() {
                 </Chip>
               )}
             </Field>
-            <Field label={t.admin.config.skyhook}>
-              <State on={config.skyhookFallback} />
-            </Field>
-            <Field label={t.admin.config.autoRefresh}>
-              <State on={config.refreshEnabled} />
-            </Field>
             <Field label={t.admin.config.publicBrowse}>
               <State on={config.publicBrowse} />
             </Field>
           </dl>
+          <p className="border-t border-rule px-5 py-4 text-xs leading-relaxed text-bone-faint">
+            {t.admin.config.runtimeHint}
+          </p>
         </Panel>
 
-        <Panel className="rise" style={{ animationDelay: '100ms' }}>
+        <Panel className="rise" style={{ animationDelay: '300ms' }}>
           <PanelHead title={t.admin.config.policy} />
           <dl className="divide-y divide-rule">
             {(
@@ -148,7 +154,7 @@ export function Settings() {
         </Panel>
       </div>
 
-      <Panel className="rise mt-6" style={{ animationDelay: '140ms' }}>
+      <Panel className="rise mt-6" style={{ animationDelay: '340ms' }}>
         <PanelHead
           title={t.admin.config.export}
           action={
@@ -163,7 +169,7 @@ export function Settings() {
         <NfoExport />
       </Panel>
 
-      <Panel className="rise mt-6" style={{ animationDelay: '180ms' }}>
+      <Panel className="rise mt-6" style={{ animationDelay: '380ms' }}>
         <PanelHead title={t.admin.config.docs} />
         <div className="flex flex-wrap items-center justify-between gap-4 p-5">
           <div className="min-w-0">
@@ -184,12 +190,12 @@ export function Settings() {
         </div>
       </Panel>
 
-      <Panel className="rise mt-6" style={{ animationDelay: '220ms' }}>
+      <Panel className="rise mt-6" style={{ animationDelay: '420ms' }}>
         <PanelHead title={t.admin.config.maintenance} />
         <ClearCache />
       </Panel>
 
-      <Panel className="rise mt-6 mb-4" style={{ animationDelay: '260ms' }}>
+      <Panel className="rise mt-6 mb-4" style={{ animationDelay: '460ms' }}>
         <PanelHead title={t.admin.config.password} />
         <ChangePassword />
       </Panel>

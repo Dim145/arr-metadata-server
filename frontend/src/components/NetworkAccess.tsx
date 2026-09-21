@@ -8,6 +8,11 @@
  * The two panels are meant to be read together. The callers table is where a
  * refused container appears with its name and its address, and the button
  * beside it is the fix — which is the whole reason for keeping refusals.
+ *
+ * A rule can also be named, and that is more than a label: settings hang off
+ * the name, because the address a container calls from changes every time it
+ * restarts and the name does not. An unnamed rule therefore says it is unnamed
+ * and asks to be, rather than leaving a blank where a name would go.
  */
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -24,6 +29,7 @@ import {
   EmptyState,
   FormField,
   Glyph,
+  IconButton,
   Input,
   Label,
   Panel,
@@ -33,6 +39,7 @@ import {
   Tr,
   TableScroll,
 } from './ui'
+import { ScopeSettingsDialog, type Scope } from './ScopeSettings'
 
 export function NetworkAccess() {
   const { t } = useI18n()
@@ -41,6 +48,9 @@ export function NetworkAccess() {
   const [cidr, setCidr] = useState('')
   const [note, setNote] = useState('')
   const [removing, setRemoving] = useState<NetworkRule | null>(null)
+  const [naming, setNaming] = useState<NetworkRule | null>(null)
+  const [draft, setDraft] = useState('')
+  const [tuning, setTuning] = useState<{ at: Scope; who: string } | null>(null)
 
   const rules = useQuery({
     queryKey: ['network', 'rules'],
@@ -72,6 +82,15 @@ export function NetworkAccess() {
     mutationFn: (id: string) => api.delete(`/network/rules/${id}`),
     onSuccess: () => {
       setRemoving(null)
+      invalidate()
+    },
+  })
+
+  const rename = useMutation({
+    mutationFn: ({ id, name }: { id: string; name: string }) =>
+      api.patch<NetworkRule>(`/network/rules/${id}`, { name: name.trim() || null }),
+    onSuccess: () => {
+      setNaming(null)
       invalidate()
     },
   })
@@ -144,23 +163,118 @@ export function NetworkAccess() {
           </div>
         ) : (
           <ul className="border-t border-rule">
-            {(rules.data ?? []).map((rule) => (
-              <li
-                key={rule.id}
-                className="flex items-center justify-between gap-4 border-b border-rule px-5 py-3 last:border-0"
-              >
-                <div className="min-w-0">
-                  <p className="font-mono text-sm text-bone tabular-nums">{rule.cidr}</p>
-                  <p className="mt-0.5 truncate text-xs text-bone-faint">
-                    {rule.note === 'from AMS_ALLOWLIST' ? t.admin.network.seeded : rule.note}
-                  </p>
-                </div>
+            {(rules.data ?? []).map((rule) => {
+              const editing = naming?.id === rule.id
 
-                <Button size="sm" variant="danger" onClick={() => setRemoving(rule)}>
-                  {t.admin.network.remove}
-                </Button>
-              </li>
-            ))}
+              return (
+                <li key={rule.id} className="border-b border-rule px-5 py-3 last:border-0">
+                  <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+                    <div className="min-w-40 flex-1">
+                      <p className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                        <span className="font-mono text-sm text-bone tabular-nums">{rule.cidr}</span>
+                        {editing ? null : rule.name ? (
+                          <span className="text-sm text-bone-dim">{rule.name}</span>
+                        ) : (
+                          <Chip>{t.admin.network.noName}</Chip>
+                        )}
+                      </p>
+                      <p className="mt-0.5 truncate text-xs text-bone-faint">
+                        {rule.note === 'from AMS_ALLOWLIST' ? t.admin.network.seeded : rule.note}
+                      </p>
+                      {rule.name || editing ? null : (
+                        <p className="mt-0.5 text-xs text-bone-faint">{t.admin.network.nameWhy}</p>
+                      )}
+                    </div>
+
+                    {editing ? null : (
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {rule.name ? (
+                          <>
+                            <Button
+                              size="sm"
+                              onClick={() =>
+                                setTuning({
+                                  at: { scope: 'peer', id: rule.id },
+                                  who: rule.name ?? rule.cidr,
+                                })
+                              }
+                            >
+                              <Glyph name="settings" className="size-3.5" />
+                              {t.settings.open}
+                            </Button>
+                            <IconButton
+                              glyph="pencil"
+                              label={t.admin.network.rename}
+                              onClick={() => {
+                                rename.reset()
+                                setDraft(rule.name ?? '')
+                                setNaming(rule)
+                              }}
+                            />
+                          </>
+                        ) : (
+                          <Button
+                            size="sm"
+                            onClick={() => {
+                              rename.reset()
+                              setDraft('')
+                              setNaming(rule)
+                            }}
+                          >
+                            <Glyph name="pencil" className="size-3.5" />
+                            {t.admin.network.nameThis}
+                          </Button>
+                        )}
+
+                        <Button size="sm" variant="danger" onClick={() => setRemoving(rule)}>
+                          {t.admin.network.remove}
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* The form sits under the address rather than replacing it:
+                      nobody can name the client behind 172.31.0.7 while the row
+                      has stopped saying which address they are naming. */}
+                  {editing ? (
+                    <form
+                      className="mt-3 flex flex-wrap items-start gap-3"
+                      onSubmit={(event) => {
+                        event.preventDefault()
+                        rename.mutate({ id: rule.id, name: draft })
+                      }}
+                    >
+                      <div className="min-w-48 flex-1">
+                        <FormField
+                          label={t.admin.network.name}
+                          htmlFor={`rule-name-${rule.id}`}
+                          hint={t.admin.network.nameHint}
+                          error={rename.isError ? rename.error.message : undefined}
+                        >
+                          <Input
+                            id={`rule-name-${rule.id}`}
+                            autoFocus
+                            value={draft}
+                            onChange={(event) => setDraft(event.target.value)}
+                          />
+                        </FormField>
+                      </div>
+                      <Button
+                        type="submit"
+                        variant="primary"
+                        className="mt-6"
+                        disabled={rename.isPending}
+                      >
+                        {t.common.save}
+                      </Button>
+                      <Button type="button" className="mt-6" onClick={() => setNaming(null)}>
+                        {t.common.cancel}
+                      </Button>
+                    </form>
+                  ) : null}
+                </li>
+              )
+            })}
           </ul>
         )}
       </Panel>
@@ -226,6 +340,12 @@ export function NetworkAccess() {
       >
         {removing ? t.admin.network.removeBody(removing.cidr) : null}
       </Dialog>
+
+      <ScopeSettingsDialog
+        at={tuning?.at ?? null}
+        who={tuning?.who ?? ''}
+        onClose={() => setTuning(null)}
+      />
     </>
   )
 }

@@ -365,6 +365,66 @@ export function Select({ className, ...props }: React.SelectHTMLAttributes<HTMLS
   )
 }
 
+/**
+ * A flag, as a switch.
+ *
+ * Exists because a boolean rendered as a two-option `Select` makes the reader
+ * parse "enabled/disabled" to find out what it is doing now, where a switch
+ * says it at a glance. The name is compulsory: the caller writes it beside the
+ * track, and it reaches a screen reader through `aria-label`, because a track
+ * on its own means nothing to either kind of reader.
+ */
+export function Toggle({
+  id,
+  checked,
+  label,
+  onChange,
+  disabled,
+}: {
+  id?: string
+  checked: boolean
+  label: string
+  onChange: (next: boolean) => void
+  disabled?: boolean
+}) {
+  return (
+    <button
+      type="button"
+      id={id}
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className={cn(
+        // 44px of target around a 24px track: the track is what it looks like,
+        // not what a thumb has to find.
+        'inline-flex h-11 w-14 shrink-0 cursor-pointer items-center justify-center rounded-card',
+        'transition-colors duration-150 hover:bg-ink-high',
+        'disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent',
+      )}
+    >
+      <span
+        aria-hidden
+        className={cn(
+          'relative block h-6 w-11 rounded-full border transition-colors duration-150',
+          checked ? 'border-vermillion bg-vermillion/25' : 'border-rule-bright bg-ink',
+        )}
+      >
+        {/* The knob travels by transform rather than by `left`: the second
+            would lay the row out again on every frame of a 150ms slide. */}
+        <span
+          className={cn(
+            'absolute top-1/2 left-0.5 size-4 -translate-y-1/2 rounded-full',
+            'transition-[transform,background-color] duration-150',
+            checked ? 'translate-x-5 bg-vermillion' : 'bg-bone-faint',
+          )}
+        />
+      </span>
+    </button>
+  )
+}
+
 /** A labelled form control. The label is always visible, never a placeholder. */
 export function FormField({
   label,
@@ -514,6 +574,12 @@ export function Spinner({ className }: { className?: string }) {
  * an inert background, none of which is worth reimplementing for the half-dozen
  * places this interface has to ask. Being in the top layer, it also escapes the
  * `overflow-x-clip` the shells impose on everything else.
+ *
+ * The body is what scrolls, not the dialog: a form long enough to overflow a
+ * phone would otherwise push its own footer past the bottom of the screen, and
+ * the way out of a dialog has to be on screen the whole time it is open. The
+ * two caps have to agree — the element's, so the browser centres a short one on
+ * its content, and the column's, so a tall one gives the middle the remainder.
  */
 export function Dialog({
   open,
@@ -543,17 +609,19 @@ export function Dialog({
       ref={ref}
       onClose={onClose}
       className={cn(
-        'm-auto w-[calc(100vw-2rem)] max-w-md rounded-panel border border-rule',
-        'bg-ink-raised p-0 text-bone backdrop:bg-ink/80',
+        'm-auto max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-md overflow-hidden',
+        'rounded-panel border border-rule bg-ink-raised p-0 text-bone backdrop:bg-ink/80',
       )}
     >
       {open ? (
-        <div className="fade-in">
-          <header className="border-b border-rule px-5 py-4">
+        <div className="fade-in flex max-h-[calc(100dvh-2rem)] flex-col">
+          <header className="shrink-0 border-b border-rule px-5 py-4">
             <h2 className="font-display text-lg font-medium text-bone">{title}</h2>
           </header>
-          <div className="px-5 py-4 text-sm leading-relaxed text-bone-dim">{children}</div>
-          <footer className="flex flex-wrap items-center justify-end gap-2 border-t border-rule px-5 py-3">
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4 text-sm leading-relaxed text-bone-dim">
+            {children}
+          </div>
+          <footer className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-rule px-5 py-3">
             {footer}
           </footer>
         </div>
@@ -711,6 +779,22 @@ const PATHS = {
       <ellipse cx="8" cy="3.8" rx="5.5" ry="2" />
       <path d="M2.5 3.8v8.4c0 1.1 2.5 2 5.5 2s5.5-.9 5.5-2V3.8" />
       <path d="M13.5 8c0 1.1-2.5 2-5.5 2s-5.5-.9-5.5-2" />
+    </>
+  ),
+  /** A value that follows another scope's, rather than being set here. */
+  link: (
+    <>
+      <path d="M6.4 9.6 9.6 6.4" />
+      <path d="M7.2 4.7 8.6 3.3a2.9 2.9 0 0 1 4.1 4.1l-1.4 1.4" />
+      <path d="M8.8 11.3 7.4 12.7a2.9 2.9 0 0 1-4.1-4.1l1.4-1.4" />
+    </>
+  ),
+  /** Searching a provider in order to take something from it. */
+  discover: (
+    <>
+      <path d="M11 11 15 15" />
+      <circle cx="7" cy="7" r="5.5" />
+      <path d="M7 4.6v4.8M4.6 7h4.8" />
     </>
   ),
   pencil: (

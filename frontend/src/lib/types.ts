@@ -248,6 +248,8 @@ export interface ItemPage {
 export interface NetworkRule {
   id: string
   cidr: string
+  /** What the client behind the address is called. Its settings hang off this. */
+  name?: string
   note?: string
   createdAt: string
   createdBy?: string
@@ -265,4 +267,49 @@ export interface NetworkCaller {
   refusals: number
   firstSeen: string
   lastSeen: string
+}
+
+/**
+ * A setting, as the server describes it.
+ *
+ * The interface renders controls from `kind` rather than from a list of its
+ * own, so a setting added to the server appears here without this code being
+ * touched — which is the only reason the registry is served at all.
+ */
+export type SettingKind =
+  | { type: 'bool' }
+  | { type: 'int'; min: number; max: number }
+  | { type: 'text' }
+  | { type: 'choice'; options: string[] }
+
+export type SettingScope = 'server' | 'client' | 'peer'
+
+export interface SettingDef {
+  key: string
+  kind: SettingKind
+  /** Where it may be set. Anything narrower than the first entry overrides. */
+  scopes: SettingScope[]
+}
+
+export interface EffectiveSetting {
+  key: string
+  value: string
+  /** The scope the value came from, which is `server` unless this one set it. */
+  source: SettingScope
+  overridden: boolean
+}
+
+/** A work a provider has, before this server holds it. */
+export interface Found {
+  kind: MediaKind
+  title: string
+  year?: number
+  overview?: string
+  poster?: string
+  tmdbId?: number
+  tvdbId?: number
+  imdbId?: string
+  /** Whether this server already holds it, so the screen can say so. */
+  stored: boolean
+  isAdult: boolean
 }

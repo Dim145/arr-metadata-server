@@ -212,6 +212,53 @@ otherwise. Administration is never reachable this way.
 It is off by default, because turning it on publishes what this server knows to
 whoever can reach the port.
 
+### What is a setting, and what is not
+
+The environment configures the **deployment** — the port, the database, the
+provider keys — and belongs beside the compose file. How the server **behaves**
+is a setting, stored in the database and changed under **Settings** without a
+restart: the language answers are given in, whether Sonarr's and Radarr's own
+metadata services are used, whether refresh runs and how often, and whether
+adult titles are served at all. The matching `AMS_*` variables seed those once,
+the first time the server starts against an empty table, and are ignored after.
+
+A setting can be answered at three scopes, narrowest first:
+
+```
+peer      an allowlist rule — how a client that sends no credential is known
+ ↳ client an API key
+    ↳ server
+```
+
+That is how one Sonarr answers in French while everything else answers in
+English. A client that presents a key is identified by it; Sonarr and Radarr
+present nothing, so they are identified by the address they call from — which is
+what an allowlist rule already records. Name the rule and it can carry settings;
+the narrowest matching rule wins, so one container can differ from the network
+around it. A name is used rather than an address because a container takes a new
+address whenever it restarts.
+
+### Adult titles
+
+Off unless somebody turns them on. Four things decide who sees one, in order:
+
+1. **the server** — `hidden` means nobody, whatever anything else says;
+2. **the client's own policy** — `allow`, `deny`, or inherit the server's;
+3. **whether the request gets a say** — `adult.force` discards the client's own
+   `include_adult` and uses this server's answer instead, both towards the
+   providers and when filtering the reply;
+4. **what the request asked for**, where it still has a say.
+
+Silence means no unless somebody said otherwise: a client that never mentions
+adult titles is not asking for them.
+
+### Putting something in the catalogue on purpose
+
+The catalogue otherwise fills itself — a client asks for a work, this server
+fetches it. **Import** searches the providers directly and pulls in the one you
+meant, down the same path a client's request takes, so an imported work is
+indistinguishable from one that arrived on its own.
+
 ### Who may call, and who has tried
 
 Sonarr and Radarr have their metadata URLs compiled in and cannot attach an API
