@@ -51,20 +51,37 @@ export function SectionTitle({
 
 /* ── Containers ───────────────────────────────────────────────────────────── */
 
+/**
+ * A panel.
+ *
+ * With a `label` it is a landmark a screen reader can jump to; without one it
+ * is a plain box. That is the rule rather than a preference: an unnamed
+ * `<section>` is not a region to assistive technology, so rendering one would
+ * only add an element nobody can navigate to and everybody has to step through.
+ */
 export function Panel({
   children,
   className,
   style,
+  label,
 }: {
   children: ReactNode
   className?: string
   style?: React.CSSProperties
+  label?: string
 }) {
+  const shell = cn('plate rounded-panel border border-rule bg-ink-raised', className)
+
+  if (!label) {
+    return (
+      <div style={style} className={shell}>
+        {children}
+      </div>
+    )
+  }
+
   return (
-    <section
-      style={style}
-      className={cn('plate rounded-panel border border-rule bg-ink-raised', className)}
-    >
+    <section aria-label={label} style={style} className={shell}>
       {children}
     </section>
   )

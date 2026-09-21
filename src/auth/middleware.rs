@@ -3,7 +3,12 @@
 //! Each guard resolves the caller, applies its surface's policy, and inserts an
 //! [`Identity`] into the request extensions for handlers to read.
 
-use std::net::SocketAddr;
+use std::{
+    collections::HashMap,
+    net::{IpAddr, SocketAddr},
+    sync::{LazyLock, Mutex},
+    time::{Duration, Instant},
+};
 
 use axum::{
     extract::{Request, State},
@@ -77,7 +82,14 @@ async fn authorize(
         SurfacePolicy::Open => Identity::Anonymous,
 
         SurfacePolicy::Allowlist => {
-            if !ip::is_allowed(client_ip, &state.config.security.allowlist) {
+            let allowed = ip::is_allowed(client_ip, &state.allowlist());
+
+            // Recorded either way. A refusal is the only trace a client that
+            // cannot reach this server leaves anywhere, and an operator needs
+            // its address to do anything about it.
+            note_caller(&state, client_ip, &request, surface, allowed);
+
+            if !allowed {
                 tracing::warn!(
                     ?client_ip,
                     path = %request.uri().path(),
@@ -85,6 +97,7 @@ async fn authorize(
                 );
                 return Err(AppError::Forbidden);
             }
+
             Identity::Network
         }
 
@@ -117,6 +130,97 @@ async fn authorize(
     }
 
     Ok(next.run(request).await)
+}
+
+/// How often the same address is written back to the callers table.
+///
+/// Sonarr refreshing a library is hundreds of reads a minute, and turning each
+/// into a write would make the diagnostic cost more than the diagnosis. A
+/// refusal is never throttled: the first one is the one somebody is looking for.
+const SIGHTING_INTERVAL: Duration = Duration::from_secs(60);
+
+static LAST_NOTED: LazyLock<Mutex<HashMap<IpAddr, Instant>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Record that somebody called a guarded surface, off the request path.
+///
+/// Spawned rather than awaited: a caller being served must not wait on a note
+/// about them, and a database that is busy must not turn into a refusal.
+fn note_caller(
+    state: &AppState,
+    client_ip: Option<IpAddr>,
+    request: &Request,
+    surface: Surface,
+    allowed: bool,
+) {
+    let Some(ip) = client_ip else { return };
+
+    if allowed && !due(ip) {
+        return;
+    }
+
+    let user_agent = request
+        .headers()
+        .get(header::USER_AGENT)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.chars().take(200).collect::<String>());
+
+    let path = request.uri().path().to_string();
+    let surface = format!("{surface:?}").to_lowercase();
+    let state = state.clone();
+
+    tokio::spawn(async move {
+        // `getnameinfo` blocks on a network round trip, so it goes to a thread
+        // that is allowed to. Only when the name is stale — which, for a
+        // container that keeps its address, is about once an hour.
+        let hostname = match state.resolver.cached(ip) {
+            Some(name) => Some(name),
+            None if state.resolver.is_stale(ip) => {
+                let resolver = state.resolver.clone();
+                tokio::task::spawn_blocking(move || resolver.resolve(ip))
+                    .await
+                    .ok()
+                    .flatten()
+            }
+            None => None,
+        };
+
+        let sighting = repo::network::Sighting {
+            ip,
+            hostname: hostname.as_deref(),
+            user_agent: user_agent.as_deref(),
+            surface: &surface,
+            path: &path,
+            allowed,
+        };
+
+        if let Err(e) = repo::network::saw(&state.db, sighting).await {
+            tracing::debug!(%ip, error = %e, "could not record the caller");
+        }
+    });
+}
+
+/// Whether enough time has passed to write this address down again.
+fn due(ip: IpAddr) -> bool {
+    let Ok(mut last) = LAST_NOTED.lock() else {
+        return false;
+    };
+
+    let now = Instant::now();
+
+    match last.get(&ip) {
+        Some(at) if now.duration_since(*at) < SIGHTING_INTERVAL => false,
+        _ => {
+            last.insert(ip, now);
+
+            // Bounded, because the keys come from whoever can reach the port.
+            if last.len() > 4096 {
+                last.retain(|_, at| now.duration_since(*at) < SIGHTING_INTERVAL);
+            }
+
+            true
+        }
+    }
 }
 
 /// Whether a request with no credential may be served to a visitor.

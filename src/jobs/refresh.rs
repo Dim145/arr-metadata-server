@@ -126,6 +126,7 @@ pub async fn run(state: AppState) {
 
         prune_audit(&state).await;
         prune_jobs(&state).await;
+        prune_callers(&state).await;
     }
 }
 
@@ -209,6 +210,21 @@ async fn prune_jobs(state: &AppState) {
         Ok(0) => {}
         Ok(removed) => tracing::info!(removed, "pruned job runs"),
         Err(e) => tracing::warn!(error = %e, "could not prune job runs"),
+    }
+}
+
+/// Forget callers nobody has seen for a fortnight.
+///
+/// The table is meant to answer "what is using this server", not "what ever
+/// touched it". A client that has been gone two weeks is not the answer to
+/// either question, and its address may well belong to something else by now.
+async fn prune_callers(state: &AppState) {
+    let cutoff = to_rfc3339(chrono::Utc::now() - chrono::Duration::days(14));
+
+    match repo::network::prune(&state.db, &cutoff).await {
+        Ok(0) => {}
+        Ok(removed) => tracing::info!(removed, "forgot callers not seen recently"),
+        Err(e) => tracing::warn!(error = %e, "could not prune the callers table"),
     }
 }
 

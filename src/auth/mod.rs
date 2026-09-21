@@ -5,6 +5,7 @@
 
 pub mod ip;
 pub mod middleware;
+pub mod naming;
 pub mod ratelimit;
 pub mod secrets;
 

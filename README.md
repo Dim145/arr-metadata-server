@@ -212,8 +212,22 @@ otherwise. Administration is never reachable this way.
 It is off by default, because turning it on publishes what this server knows to
 whoever can reach the port.
 
+### Who may call, and who has tried
+
 Sonarr and Radarr have their metadata URLs compiled in and cannot attach an API
-key, so those surfaces are guarded by network policy instead. Some TMDB clients
+key, so those surfaces are guarded by address. That list lives in the database
+and is edited under **Access** in the web UI, beside the API keys — it is the
+same decision said a different way — and a change applies from the next request
+without a restart. `AMS_ALLOWLIST` seeds it once, the first time the server
+starts against an empty table, and is ignored afterwards.
+
+The same screen shows **who has been calling**: every address that has reached a
+guarded route, refused ones included. A refused client leaves no other trace,
+and its address is the one thing needed to let it in — so each row carries the
+name the hosts file or the system resolver gives that address (inside a compose
+network, the container's name), what the caller called itself (`Sonarr/4.0.20`),
+how many times it has called, how many times it was turned away, and a button
+that allows it. Some TMDB clients
 compile their key in too — Jellyseerr does — and need the same treatment. Set
 `AMS_ALLOWLIST` to the networks your stack runs on.
 

@@ -16,7 +16,7 @@ const PASSWORD = process.env.AMS_E2E_PASSWORD
 const SCREENS = [
   ['/admin', /dashboard|tableau de bord/i],
   ['/admin/catalogue', /catalogue/i],
-  ['/admin/clients', /clients/i],
+  ['/admin/clients', /^(access|accès)$/i],
   ['/admin/jobs', /jobs|tâches/i],
   ['/admin/audit', /audit|journal/i],
   ['/admin/settings', /settings|réglages/i],
@@ -145,5 +145,78 @@ test.describe('a locked field', () => {
 
     await row.getByRole('button', { name: /^(unlock|déverrouiller)$/i }).click()
     await expect(locked).toHaveCount(0)
+  })
+})
+
+test.describe('network access', () => {
+  test.skip(!USERNAME || !PASSWORD, 'needs a credential; see above')
+
+  /**
+   * A documentation range, so a rule left behind by a failed run cannot let
+   * anything real through — and one address per project, because the two run
+   * at the same time against the same server.
+   */
+  const probe = (project: string) => `203.0.113.${project === 'mobile' ? 21 : 20}`
+
+  test('lets an address in and out again without a restart', async ({ page }, info) => {
+    const address = probe(info.project.name)
+    await signIn(page)
+    await page.goto('/admin/clients')
+
+    const rules = page.getByRole('region').filter({ hasText: /allowed addresses|adresses autorisées/i })
+    await expect(rules).toBeVisible()
+
+    // Clean up after a run that failed partway, or this one starts from a
+    // state it did not create.
+    const existing = rules.locator('li').filter({ hasText: address })
+    if (await existing.count()) {
+      await existing.getByRole('button').click()
+      await page.getByRole('button', { name: /stop allowing|retirer/i }).last().click()
+      await expect(existing).toHaveCount(0)
+    }
+
+    await page.getByLabel(/address or block|adresse ou plage/i).fill(address)
+    await page.getByLabel(/^(note)$/i).fill('e2e probe')
+    await page.getByRole('button', { name: /^(allow|autoriser)$/i }).click()
+
+    const added = rules.locator('li').filter({ hasText: address })
+    await expect(added).toBeVisible()
+
+    // It has to survive a reload, or it was never written down.
+    await page.reload()
+    await expect(rules.locator('li').filter({ hasText: address })).toBeVisible()
+
+    await rules.locator('li').filter({ hasText: address }).getByRole('button').click()
+    await page.getByRole('button', { name: /stop allowing|retirer/i }).last().click()
+    await expect(rules.locator('li').filter({ hasText: address })).toHaveCount(0)
+  })
+
+  test('refuses something that is not an address, beside the field', async ({ page }) => {
+    await signIn(page)
+    await page.goto('/admin/clients')
+
+    await page.getByLabel(/address or block|adresse ou plage/i).fill('everyone')
+    await page.getByRole('button', { name: /^(allow|autoriser)$/i }).click()
+
+    await expect(page.getByRole('alert').filter({ hasText: /CIDR/i })).toBeVisible()
+  })
+
+  test('names the callers it has seen', async ({ page, request }) => {
+    await signIn(page)
+
+    // Knock on a guarded route so there is something to show.
+    await request.get('/v1/tvdb/shows/en/81189', {
+      headers: { 'user-agent': 'Sonarr/4.0.20.3014 (e2e)' },
+    })
+
+    await page.goto('/admin/clients')
+    const callers = page.getByRole('region').filter({ hasText: /who has been calling|qui appelle/i })
+    await expect(callers).toBeVisible()
+
+    // The address alone is not actionable; the name and the client are what
+    // tell an operator which container to fix.
+    await expect(callers.getByText('127.0.0.1').first()).toBeVisible()
+    await expect(callers.getByText(/localhost/).first()).toBeVisible()
+    await expect(callers.getByText(/Sonarr\//).first()).toBeVisible()
   })
 })

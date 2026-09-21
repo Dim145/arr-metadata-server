@@ -244,3 +244,25 @@ export interface ItemPage {
   items: MediaItem[]
   total: number
 }
+
+export interface NetworkRule {
+  id: string
+  cidr: string
+  note?: string
+  createdAt: string
+  createdBy?: string
+}
+
+export interface NetworkCaller {
+  ip: string
+  /** From the hosts file or the system resolver; often a container name. */
+  hostname?: string
+  userAgent?: string
+  lastSurface: string
+  lastPath?: string
+  lastAllowed: boolean
+  hits: number
+  refusals: number
+  firstSeen: string
+  lastSeen: string
+}

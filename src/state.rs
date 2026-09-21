@@ -1,11 +1,11 @@
 //! Process-wide shared state, built once at startup and cloned into handlers.
 
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use anyhow::{Context, Result};
 
 use crate::{
-    auth::ratelimit::Limiter,
+    auth::{naming::Resolver, ratelimit::Limiter},
     cache::Caches,
     config::Config,
     db::{Db, repo},
@@ -29,6 +29,14 @@ pub struct Inner {
     pub fanart: FanartClient,
     pub tvdb: TvdbClient,
     pub limiter: Limiter,
+    /// Who may call the address-guarded surfaces, as the database holds it.
+    ///
+    /// Cached because the guard reads it on every request to those surfaces and
+    /// it changes about once a year; [`AppState::reload_allowlist`] is the only
+    /// way it moves, and every write path calls it.
+    allowlist: Arc<RwLock<Vec<ipnet::IpNet>>>,
+    /// Puts a container name to an address, for the callers table.
+    pub resolver: Resolver,
     /// Identifies this process on outbound calls to hostnames it also answers
     /// on, so a request that loops back can be recognised and refused.
     pub instance: String,
@@ -88,6 +96,8 @@ impl AppState {
         }
 
         let state = Self(Arc::new(Inner {
+            allowlist: Arc::new(RwLock::new(Vec::new())),
+            resolver: Resolver::new(),
             config,
             db,
             caches,
@@ -102,8 +112,52 @@ impl AppState {
         }));
 
         state.bootstrap_admin().await?;
+        state.bootstrap_allowlist().await?;
 
         Ok(state)
+    }
+
+    /// The addresses allowed to call the arr surfaces, right now.
+    pub fn allowlist(&self) -> Vec<ipnet::IpNet> {
+        match self.0.allowlist.read() {
+            Ok(list) => list.clone(),
+            // A poisoned lock would otherwise let everyone through; an empty
+            // list refuses everyone instead, which is the safe direction.
+            Err(_) => Vec::new(),
+        }
+    }
+
+    /// Re-read the rules. Called after every change to them.
+    pub async fn reload_allowlist(&self) -> Result<()> {
+        let nets = repo::network::effective(&self.db).await?;
+
+        if let Ok(mut list) = self.0.allowlist.write() {
+            *list = nets;
+        }
+
+        Ok(())
+    }
+
+    /// Put the environment's list into the table, once.
+    ///
+    /// `AMS_ALLOWLIST` seeds an empty table so an existing deployment keeps
+    /// working across the upgrade. After that the table is the truth and the
+    /// variable is ignored: two sources for one decision is how a server ends
+    /// up refusing a client nobody can explain.
+    async fn bootstrap_allowlist(&self) -> Result<()> {
+        if repo::network::count_rules(&self.db).await? == 0 {
+            let seeded = repo::network::seed(&self.db, &self.config.security.allowlist).await?;
+
+            if seeded > 0 {
+                tracing::info!(
+                    rules = seeded,
+                    "seeded the network allowlist from AMS_ALLOWLIST; it is editable \
+                     from the interface now and the variable is no longer read"
+                );
+            }
+        }
+
+        self.reload_allowlist().await
     }
 
     /// Create the administrator named in the environment, if there is none yet.

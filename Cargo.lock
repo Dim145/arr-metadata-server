@@ -130,6 +130,7 @@ dependencies = [
  "base64 0.23.1",
  "bytes",
  "chrono",
+ "dns-lookup",
  "dotenvy",
  "futures",
  "getrandom 0.4.3",
@@ -839,6 +840,18 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.6",
+]
+
+[[package]]
+name = "dns-lookup"
+version = "4.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6120e7e5dcd1c90098e349def389e2797377cdbe6b465ad8fdd115c0c99d5cf2"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "socket2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

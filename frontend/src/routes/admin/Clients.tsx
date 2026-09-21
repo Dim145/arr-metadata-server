@@ -30,6 +30,7 @@ import {
   Th,
   Tr,
 } from '../../components/ui'
+import { NetworkAccess } from '../../components/NetworkAccess'
 import { api } from '../../lib/api'
 import { cn } from '../../lib/cn'
 import * as fmt from '../../lib/format'
@@ -256,6 +257,13 @@ export function Clients() {
           </TableScroll>
         )}
       </Panel>
+
+      {/* The address list belongs on this page, not a page of its own: a key
+          and an allowed address are the same decision said two ways, and
+          Sonarr and Radarr can only make it the second way. */}
+      <div className="mt-6">
+        <NetworkAccess />
+      </div>
 
       <Dialog
         open={asking?.what === 'revoke'}

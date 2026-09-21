@@ -6,6 +6,7 @@ pub mod child;
 pub mod client;
 pub mod item;
 pub mod job;
+pub mod network;
 pub mod override_field;
 pub mod snapshot;
 pub mod translation;
