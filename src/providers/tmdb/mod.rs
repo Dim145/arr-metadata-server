@@ -27,9 +27,18 @@ pub struct TmdbClient {
     http: reqwest::Client,
     api_key: Option<String>,
     base: String,
+    /// The language and adult flag sent to TMDB. Both are settings, so both can
+    /// change while the server runs; holding them behind a lock rather than
+    /// threading them through eight call sites keeps the change where it
+    /// belongs, which is one method.
+    tuning: parking_lot::RwLock<Tuning>,
+    permits: Arc<Semaphore>,
+}
+
+#[derive(Clone)]
+struct Tuning {
     language: String,
     include_adult: bool,
-    permits: Arc<Semaphore>,
 }
 
 impl TmdbClient {
@@ -38,10 +47,27 @@ impl TmdbClient {
             http,
             api_key: cfg.api_key.clone(),
             base: format!("{}/3", cfg.upstream),
-            language: cfg.language.clone(),
-            include_adult: cfg.include_adult,
+            tuning: parking_lot::RwLock::new(Tuning {
+                language: cfg.language.clone(),
+                include_adult: cfg.include_adult,
+            }),
             permits: Arc::new(Semaphore::new(MAX_CONCURRENT)),
         }
+    }
+
+    /// Follow the settings. Called at boot and whenever one of them changes.
+    pub fn tune(&self, language: &str, include_adult: bool) {
+        let mut tuning = self.tuning.write();
+        tuning.language = language.to_string();
+        tuning.include_adult = include_adult;
+    }
+
+    fn language(&self) -> String {
+        self.tuning.read().language.clone()
+    }
+
+    fn include_adult(&self) -> bool {
+        self.tuning.read().include_adult
     }
 
     pub fn is_configured(&self) -> bool {
@@ -122,7 +148,7 @@ impl TmdbClient {
         let url = format!("{}/find/{external_id}", self.base);
         let params = [
             ("external_source", external_source.to_string()),
-            ("language", self.language.clone()),
+            ("language", self.language()),
         ];
 
         match self.fetch(&url, &params).await? {
@@ -137,7 +163,7 @@ impl TmdbClient {
     ///
     /// Returns the raw body alongside the typed one so the caller can snapshot it.
     pub async fn tv(&self, id: i64) -> Result<Option<(Value, models::Tv)>> {
-        let Some(raw) = self.fetch_tv(id, &self.language).await? else {
+        let Some(raw) = self.fetch_tv(id, &self.language()).await? else {
             return Ok(None);
         };
 
@@ -146,7 +172,7 @@ impl TmdbClient {
         // TMDB returns an empty overview rather than falling back when a title
         // has no translation in the requested language. Backfill from en-US so
         // a French-configured server still gets a description.
-        if self.language != "en-US"
+        if self.language() != "en-US"
             && tv.overview.as_deref().unwrap_or_default().is_empty()
             && let Ok(Some(fallback_raw)) = self.fetch_tv(id, "en-US").await
             && let Ok(fallback) = Self::typed::<models::Tv>(&fallback_raw, "series")
@@ -199,7 +225,7 @@ impl TmdbClient {
     }
 
     async fn tv_season(&self, id: i64, number: i32) -> Result<Option<models::Season>> {
-        let Some(raw) = self.fetch_season(id, number, &self.language).await? else {
+        let Some(raw) = self.fetch_season(id, number, &self.language()).await? else {
             return Ok(None);
         };
 
@@ -210,7 +236,7 @@ impl TmdbClient {
             .iter()
             .any(|e| e.name.as_deref().unwrap_or_default().is_empty());
 
-        if self.language != "en-US"
+        if self.language() != "en-US"
             && missing_titles
             && let Ok(Some(fallback_raw)) = self.fetch_season(id, number, "en-US").await
             && let Ok(fallback) = Self::typed::<models::Season>(&fallback_raw, "season")
@@ -274,8 +300,8 @@ impl TmdbClient {
         let url = format!("{}/search/tv", self.base);
         let params = [
             ("query", query.to_string()),
-            ("language", self.language.clone()),
-            ("include_adult", self.include_adult.to_string()),
+            ("language", self.language()),
+            ("include_adult", self.include_adult().to_string()),
             ("page", "1".to_string()),
         ];
 
@@ -290,13 +316,13 @@ impl TmdbClient {
     // ─── movie ───────────────────────────────────────────────────────────────
 
     pub async fn movie(&self, id: i64) -> Result<Option<(Value, models::Movie)>> {
-        let Some(raw) = self.fetch_movie(id, &self.language).await? else {
+        let Some(raw) = self.fetch_movie(id, &self.language()).await? else {
             return Ok(None);
         };
 
         let mut movie: models::Movie = Self::typed(&raw, "movie")?;
 
-        if self.language != "en-US"
+        if self.language() != "en-US"
             && movie.overview.as_deref().unwrap_or_default().is_empty()
             && let Ok(Some(fallback_raw)) = self.fetch_movie(id, "en-US").await
             && let Ok(fallback) = Self::typed::<models::Movie>(&fallback_raw, "movie")
@@ -331,8 +357,8 @@ impl TmdbClient {
         let url = format!("{}/search/movie", self.base);
         let mut params = vec![
             ("query", query.to_string()),
-            ("language", self.language.clone()),
-            ("include_adult", self.include_adult.to_string()),
+            ("language", self.language()),
+            ("include_adult", self.include_adult().to_string()),
             ("page", "1".to_string()),
         ];
 
@@ -350,7 +376,7 @@ impl TmdbClient {
 
     pub async fn collection(&self, id: i64) -> Result<Option<models::Collection>> {
         let url = format!("{}/collection/{id}", self.base);
-        let params = [("language", self.language.clone())];
+        let params = [("language", self.language())];
 
         match self.fetch(&url, &params).await? {
             Some(value) => Ok(Some(Self::typed(&value, "collection")?)),
@@ -372,7 +398,7 @@ impl TmdbClient {
 
     async fn movie_list(&self, url: &str, page: i32) -> Result<Vec<models::MovieSummary>> {
         let params = [
-            ("language", self.language.clone()),
+            ("language", self.language()),
             ("page", page.max(1).to_string()),
         ];
 

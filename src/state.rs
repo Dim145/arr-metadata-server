@@ -168,7 +168,26 @@ impl AppState {
             tracing::info!("seeded the settings from the environment; they are editable now");
         }
 
+        self.sync_providers().await;
         Ok(())
+    }
+
+    /// Push the settings that providers hold onto them.
+    ///
+    /// The TMDB client sends a language and an adult flag with every call, and
+    /// both are settings now. It keeps them rather than being handed them on
+    /// each call, so something has to tell it when they move — and forgetting
+    /// to is invisible: the interface would show the new value while the
+    /// provider was still asked with the old one.
+    pub async fn sync_providers(&self) {
+        self.tmdb
+            .tune(&self.language(None, None), self.adult_visible());
+
+        // A cached search was computed under the old settings. The key carries
+        // the language and the adult flag so a stale entry can never be served
+        // to the wrong caller, but leaving them to expire would mean an
+        // operator changing a setting and seeing nothing happen for an hour.
+        self.caches.searches.invalidate_all();
     }
 
     /// The language to answer a caller in.

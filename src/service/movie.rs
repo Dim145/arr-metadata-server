@@ -88,10 +88,12 @@ pub async fn search(state: &AppState, term: &str, year: Option<i32>) -> Result<V
         return Ok(Vec::new());
     }
 
-    let key = format!(
-        "movie:{}:{}",
-        year.map(|y| y.to_string()).unwrap_or_default(),
-        term.to_lowercase()
+    let key = crate::service::search_key(
+        "movie",
+        &state.language(None, None),
+        state.adult_visible(),
+        &year.map(|y| y.to_string()).unwrap_or_default(),
+        term,
     );
 
     cached_search(state, key, || async {

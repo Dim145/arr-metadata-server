@@ -201,6 +201,19 @@ pub fn is_stale(item: &MediaItem) -> bool {
 }
 
 /// Serve from cache, or run `fetch` and cache its result.
+/// The key a search is cached under.
+///
+/// Everything that shapes the answer has to be in it. The adult flag
+/// especially: without it a result computed for a caller who may see adult
+/// titles would be handed to one who may not, and the cache would quietly undo
+/// the policy — which is the kind of bug that looks like it works.
+pub fn search_key(kind: &str, language: &str, adult: bool, extra: &str, term: &str) -> String {
+    format!(
+        "{kind}:{language}:{adult}:{extra}:{}",
+        term.trim().to_lowercase()
+    )
+}
+
 async fn cached_search<F, Fut>(state: &AppState, key: String, fetch: F) -> Result<Vec<MediaItem>>
 where
     F: FnOnce() -> Fut,
@@ -224,4 +237,35 @@ where
     }
 
     Ok(items)
+}
+
+#[cfg(test)]
+mod cache_key_tests {
+    use super::search_key;
+
+    #[test]
+    fn two_policies_never_share_an_entry() {
+        // The one that matters: same term, same language, different answer to
+        // "may this caller see adult titles".
+        assert_ne!(
+            search_key("movie", "en-US", false, "", "matrix"),
+            search_key("movie", "en-US", true, "", "matrix"),
+        );
+    }
+
+    #[test]
+    fn two_languages_never_share_an_entry() {
+        assert_ne!(
+            search_key("series", "en-US", false, "", "matrix"),
+            search_key("series", "fr-FR", false, "", "matrix"),
+        );
+    }
+
+    #[test]
+    fn the_same_search_is_the_same_key() {
+        assert_eq!(
+            search_key("movie", "en-US", false, "1999", " The Matrix "),
+            search_key("movie", "en-US", false, "1999", "the matrix"),
+        );
+    }
 }

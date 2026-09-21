@@ -133,6 +133,7 @@ pub fn tv_summary_to_item(summary: &models::TvSummary) -> MediaItem {
     let mut item = MediaItem::empty(MediaKind::Series);
 
     item.title = summary.name.clone();
+    item.is_adult = summary.adult.unwrap_or(false);
     item.original_title = non_empty(summary.original_name.as_deref());
     item.overview = non_empty(summary.overview.as_deref());
     item.first_aired = non_empty(summary.first_air_date.as_deref());
@@ -287,6 +288,7 @@ pub fn movie_summary_to_item(summary: &models::MovieSummary) -> MediaItem {
     let mut item = MediaItem::empty(MediaKind::Movie);
 
     item.title = summary.title.clone();
+    item.is_adult = summary.adult.unwrap_or(false);
     item.original_title = non_empty(summary.original_title.as_deref());
     item.overview = non_empty(summary.overview.as_deref());
     item.in_cinemas = non_empty(summary.release_date.as_deref());

@@ -130,7 +130,7 @@ pub async fn search(state: &AppState, term: &str, language: &str) -> Result<Vec<
         return Ok(Vec::new());
     }
 
-    let key = format!("series:{language}:{}", term.to_lowercase());
+    let key = crate::service::search_key("series", language, state.adult_visible(), "", term);
 
     cached_search(state, key, || async {
         let mut results = local_search(state, term).await?;

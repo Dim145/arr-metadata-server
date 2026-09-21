@@ -116,8 +116,16 @@ async fn search(
         }
     }
 
-    // What the caller may see, decided the same way as anywhere else.
-    let adult = state.adult_for(identity.client_id(), identity.peer_id(), None);
+    // Silence from a client means no — one that never mentions adult titles is
+    // not asking for them. It cannot mean that here: this is the operator's own
+    // screen, and they said what they wanted when they set `adult.mode`. Asking
+    // for what the server allows is what makes the setting visible from the
+    // place it is set.
+    let adult = state.adult_for(
+        identity.client_id(),
+        identity.peer_id(),
+        Some(state.adult_visible()),
+    );
     found.retain(|hit| adult || !hit.is_adult);
 
     // Whether each is already held, asked of the store rather than inferred

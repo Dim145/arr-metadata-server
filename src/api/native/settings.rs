@@ -119,6 +119,8 @@ async fn put(
         }
     }
 
+    state.sync_providers().await;
+
     audit::record(
         &state,
         Event {
@@ -167,6 +169,7 @@ async fn clear(
     }
 
     state.settings.forget(scope, &id).await?;
+    state.sync_providers().await;
 
     Ok(StatusCode::NO_CONTENT)
 }
