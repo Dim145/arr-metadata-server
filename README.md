@@ -139,9 +139,19 @@ in the absolute numbering. A real Radarr 6.4.4 searched by id and by text and
 added films with their studio, genres, certification and IMDb/TMDB/Trakt
 ratings. Jellyseerr's ten TMDB endpoints all answer through the relay.
 
-Enrichment is on by default and costs one extra call per refresh per provider.
-Turn it off with `AMS_SKYHOOK_ENRICH=false`, `AMS_RADARR_METADATA_ENRICH=false`,
-`AMS_TVDB_ENABLED=false` or `AMS_FANART_ENABLED=false`.
+**Enrichment** is asking a provider on every fetch and merging what it says.
+It is on by default and costs one extra call per refresh per provider. **Fallback**
+is asking only when nothing else could answer, so with enrichment on it never
+fires — the answer is already in hand, and a second call would buy it twice.
+
+Both are settings, changed under **Settings** without a restart; the `AMS_*`
+variables only seed them the first time the server starts.
+
+A search is a ladder rather than a fan-out, because search results are cheap to
+get and expensive to merge: what is already stored, then TMDB, then TheTVDB, then
+Skyhook — each rung tried only while the ones above it found nothing. So a series
+TMDB has never heard of is still found, and a deployment with no TMDB key at all
+still answers.
 
 > If you redirect `skyhook.sonarr.tv` or `api.radarr.video` at this server
 > through your **resolver** rather than per container, it resolves those names
@@ -230,7 +240,7 @@ peer      an allowlist rule — how a client that sends no credential is known
     ↳ server
 ```
 
-That is how one Sonarr answers in French while everything else answers in
+That is how one Radarr answers in French while everything else answers in
 English. A client that presents a key is identified by it; Sonarr and Radarr
 present nothing, so they are identified by the address they call from — which is
 what an allowlist rule already records. Name the rule and it can carry settings;

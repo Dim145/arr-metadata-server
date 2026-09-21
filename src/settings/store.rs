@@ -213,24 +213,25 @@ impl Store {
         self.reload().await
     }
 
-    /// Whether the server scope has ever been written.
-    pub async fn is_empty(&self) -> Result<bool> {
-        let row = sqlx::query(
-            self.db
-                .sql("SELECT COUNT(*) AS n FROM setting WHERE scope = 'server'"),
-        )
-        .fetch_one(self.db.pool())
-        .await?;
+    /// Give the server scope a value for every key that has none yet.
+    ///
+    /// Runs on every start, not only against an empty table, because the
+    /// registry grows: a setting added in a later version would otherwise never
+    /// exist for an already-running deployment, and would be invisible in the
+    /// interface even though the code reading it had a default in hand.
+    ///
+    /// Only absent keys are written. An operator's change must never be undone
+    /// by a restart reapplying what the environment happened to say.
+    pub async fn seed_missing(&self, defaults: &[(&str, String)]) -> Result<usize> {
+        let mut written = 0;
 
-        Ok(row.big("n")? == 0)
-    }
-
-    /// Write the defaults the environment gave, once.
-    pub async fn seed(&self, defaults: &[(&str, String)]) -> Result<()> {
         for (key, value) in defaults {
-            self.set(Scope::Server, "", key, value, None).await?;
+            if self.at(Scope::Server, "", key).is_none() {
+                self.set(Scope::Server, "", key, value, None).await?;
+                written += 1;
+            }
         }
 
-        Ok(())
+        Ok(written)
     }
 }

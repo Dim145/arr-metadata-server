@@ -81,6 +81,11 @@ pub const REGISTRY: &[Definition] = &[
     },
     // ── Providers ────────────────────────────────────────────────────────────
     Definition {
+        key: "tvdb.searchFallback",
+        kind: Kind::Bool,
+        scopes: SERVER_ONLY,
+    },
+    Definition {
         key: "skyhook.fallback",
         kind: Kind::Bool,
         scopes: SERVER_ONLY,

@@ -22,11 +22,10 @@ use crate::{config, wire::radarr::MovieResource};
 /// which turns an unbounded recursion into one clear error.
 pub const LOOP_HEADER: &str = "x-ams-instance";
 
+/// As with Skyhook: the client speaks HTTP, the caller decides whether to.
 pub struct RadarrMetadataClient {
     http: reqwest::Client,
     base: String,
-    enabled: bool,
-    enrich: bool,
     instance: String,
 }
 
@@ -35,23 +34,12 @@ impl RadarrMetadataClient {
         Self {
             http,
             base: cfg.upstream.clone(),
-            enabled: cfg.fallback,
-            enrich: cfg.enrich,
             instance,
         }
     }
 
-    /// Whether it may be used at all.
-    pub fn is_enabled(&self) -> bool {
-        self.enabled || self.enrich
-    }
-
     /// One movie by TMDB id. Returns the raw body alongside the parsed one.
     pub async fn movie(&self, tmdb_id: i64) -> Result<Option<(Value, MovieResource)>> {
-        if !self.is_enabled() {
-            return Ok(None);
-        }
-
         let url = format!("{}/v1/movie/{tmdb_id}", self.base);
 
         let Some(value) = self.fetch(&url, &[]).await? else {
@@ -70,10 +58,6 @@ impl RadarrMetadataClient {
     }
 
     pub async fn by_imdb_id(&self, imdb_id: &str) -> Result<Option<(Value, MovieResource)>> {
-        if !self.is_enabled() {
-            return Ok(None);
-        }
-
         let url = format!("{}/v1/movie/imdb/{imdb_id}", self.base);
 
         let Some(value) = self.fetch(&url, &[]).await? else {
@@ -87,10 +71,6 @@ impl RadarrMetadataClient {
     }
 
     pub async fn search(&self, term: &str, year: Option<i32>) -> Result<Vec<MovieResource>> {
-        if !self.is_enabled() {
-            return Ok(Vec::new());
-        }
-
         let url = format!("{}/v1/search", self.base);
         let year = year.map(|y| y.to_string()).unwrap_or_default();
         let query: Vec<(&str, &str)> = vec![("q", term), ("year", &year)];

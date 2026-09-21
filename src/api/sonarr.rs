@@ -66,7 +66,7 @@ async fn show(
     State(state): State<AppState>,
     Path(ShowPath { language, tvdb_id }): Path<ShowPath>,
 ) -> AppResult<Json<ShowResource>> {
-    let mut item = series::by_client_id(&state, tvdb_id, &language)
+    let mut item = series::by_client_id(&state, tvdb_id)
         .await?
         .ok_or(AppError::NotFound)?;
 
@@ -104,7 +104,7 @@ async fn search(
 ) -> AppResult<Json<Vec<ShowResource>>> {
     let term = query.term.unwrap_or_default();
 
-    let mut items = series::search(&state, &term, &language).await?;
+    let mut items = series::search(&state, &term).await?;
 
     // Only the work's own title here: fetching a season of episode text for
     // each of ten search results would turn one search into dozens of calls.

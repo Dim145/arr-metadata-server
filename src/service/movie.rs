@@ -7,7 +7,7 @@ use crate::{
     db::repo,
     domain::{ExternalSource, MediaItem, MediaKind},
     providers::tmdb::map as tmdb_map,
-    service::{cached_search, gather, ids, is_stale, load},
+    service::{cached_search, gather, ids, is_stale, load, persist},
     state::AppState,
 };
 
@@ -47,7 +47,11 @@ pub async fn by_imdb_id(state: &AppState, imdb_id: &str) -> Result<Option<MediaI
         false => None,
     };
 
-    gather::movie(state, tmdb_id, Some(&normalized)).await
+    if let Some(item) = gather::movie(state, tmdb_id, Some(&normalized)).await? {
+        return Ok(Some(item));
+    }
+
+    from_radarr(state, tmdb_id, Some(&normalized)).await
 }
 
 /// Several movies at once, in the order requested.
@@ -251,5 +255,49 @@ async fn local_search(state: &AppState, term: &str, year: Option<i32>) -> Result
 }
 
 async fn fetch_from_tmdb(state: &AppState, tmdb_id: i64) -> Result<Option<MediaItem>> {
-    gather::movie(state, Some(tmdb_id), None).await
+    if let Some(item) = gather::movie(state, Some(tmdb_id), None).await? {
+        return Ok(Some(item));
+    }
+
+    from_radarr(state, Some(tmdb_id), None).await
+}
+
+/// Radarr's own service, asked alone when nothing else could answer.
+///
+/// The mirror of the Skyhook fallback for series, and the thing
+/// `radarr.fallback` actually switches. It only fires when enrichment is off:
+/// with enrichment on, `gather` has already asked and a second call would buy
+/// the same answer twice.
+async fn from_radarr(
+    state: &AppState,
+    tmdb_id: Option<i64>,
+    imdb_id: Option<&str>,
+) -> Result<Option<MediaItem>> {
+    if !state.flag("radarr.fallback", true) || state.flag("radarr.enrich", true) {
+        return Ok(None);
+    }
+
+    let found = match (tmdb_id, imdb_id) {
+        (Some(id), _) => state.radarr_metadata.movie(id).await,
+        (_, Some(id)) => state.radarr_metadata.by_imdb_id(id).await,
+        _ => return Ok(None),
+    };
+
+    match found {
+        Ok(Some((raw, movie))) => {
+            let item = crate::wire::radarr::to_item(&movie);
+            let snapshots = vec![(crate::providers::names::RADARR.to_string(), raw)];
+
+            Ok(Some(persist(state, item, &snapshots).await?))
+        }
+        Ok(None) => Ok(None),
+        Err(e) => {
+            tracing::warn!(
+                ?tmdb_id,
+                error = format_args!("{e:#}"),
+                "Radarr fallback failed"
+            );
+            Ok(None)
+        }
+    }
 }

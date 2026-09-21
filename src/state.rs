@@ -126,46 +126,55 @@ impl AppState {
 
     /// Put the environment's values into the settings table, once.
     ///
-    /// Same bargain as the allowlist: the variables seed an empty table so an
-    /// existing deployment keeps its behaviour, and are ignored afterwards.
-    /// Anything still read from `config` is about the deployment rather than
-    /// the behaviour — a port, a key, a database URL — and stays there.
+    /// Same bargain as the allowlist: a variable gives a setting its starting
+    /// value so an existing deployment keeps its behaviour, and is ignored from
+    /// then on. Every key is checked on every start rather than only an empty
+    /// table, so a setting added in a later version exists for a deployment that
+    /// was already running. Anything still read from `config` is about the
+    /// deployment rather than the behaviour — a port, a key, a database URL —
+    /// and stays there.
     async fn bootstrap_settings(&self) -> Result<()> {
         self.settings.reload().await?;
 
-        if self.settings.is_empty().await? {
-            let cfg = &self.config;
+        let cfg = &self.config;
 
-            self.settings
-                .seed(&[
-                    ("tmdb.language", cfg.tmdb.language.clone()),
-                    ("tmdb.searchLimit", cfg.tmdb.search_limit.to_string()),
-                    ("skyhook.fallback", cfg.skyhook.fallback.to_string()),
-                    ("skyhook.enrich", cfg.skyhook.enrich.to_string()),
-                    ("radarr.fallback", cfg.radarr_metadata.fallback.to_string()),
-                    ("radarr.enrich", cfg.radarr_metadata.enrich.to_string()),
-                    ("refresh.enabled", cfg.refresh.enabled.to_string()),
-                    (
-                        "refresh.intervalSeconds",
-                        cfg.refresh.interval.as_secs().to_string(),
-                    ),
-                    ("refresh.batchSize", cfg.refresh.batch_size.to_string()),
-                    // Off unless somebody turns it on. A server that started
-                    // serving adult titles because it was upgraded would be a
-                    // surprise of the worst kind.
-                    (
-                        "adult.mode",
-                        if cfg.tmdb.include_adult {
-                            "visible".to_string()
-                        } else {
-                            "hidden".to_string()
-                        },
-                    ),
-                    ("adult.force", "false".to_string()),
-                ])
-                .await?;
+        let written = self
+            .settings
+            .seed_missing(&[
+                ("tmdb.language", cfg.tmdb.language.clone()),
+                ("tmdb.searchLimit", cfg.tmdb.search_limit.to_string()),
+                ("tvdb.searchFallback", cfg.tvdb.enabled.to_string()),
+                ("skyhook.fallback", cfg.skyhook.fallback.to_string()),
+                ("skyhook.enrich", cfg.skyhook.enrich.to_string()),
+                ("radarr.fallback", cfg.radarr_metadata.fallback.to_string()),
+                ("radarr.enrich", cfg.radarr_metadata.enrich.to_string()),
+                ("refresh.enabled", cfg.refresh.enabled.to_string()),
+                (
+                    "refresh.intervalSeconds",
+                    cfg.refresh.interval.as_secs().to_string(),
+                ),
+                ("refresh.batchSize", cfg.refresh.batch_size.to_string()),
+                // Off unless somebody turns it on. A server that started
+                // serving adult titles because it was upgraded would be a
+                // surprise of the worst kind.
+                (
+                    "adult.mode",
+                    if cfg.tmdb.include_adult {
+                        "visible".to_string()
+                    } else {
+                        "hidden".to_string()
+                    },
+                ),
+                ("adult.force", "false".to_string()),
+            ])
+            .await?;
 
-            tracing::info!("seeded the settings from the environment; they are editable now");
+        if written > 0 {
+            tracing::info!(
+                settings = written,
+                "gave the settings a starting value from the environment; they are \
+                 editable now, and the variables are not read again"
+            );
         }
 
         self.sync_providers().await;

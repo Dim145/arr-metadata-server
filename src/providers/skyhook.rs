@@ -10,11 +10,23 @@ use serde_json::Value;
 
 use crate::{config, wire::sonarr::ShowResource};
 
+/// The only language Skyhook answers in.
+///
+/// Not a simplification — it is all it accepts. `en-US`, `fr` and `es` are each
+/// a 400 or a 404 on both its endpoints, so passing the caller's language
+/// through meant Skyhook silently contributing nothing to every request that
+/// was not made in exactly `en`. What it is here for is structural anyway:
+/// absolute numbering, air-order hints, ids. The prose is translated by the
+/// language overlay, from providers that do speak other languages.
+const LANGUAGE: &str = "en";
+
+/// The client only speaks HTTP. Whether it is spoken to at all is a setting,
+/// read by the caller — keeping the switch in one place rather than half here
+/// and half there, which is how `skyhook.fallback` came to be a setting that
+/// changed nothing.
 pub struct SkyhookClient {
     http: reqwest::Client,
     base: String,
-    enabled: bool,
-    enrich: bool,
     instance: String,
 }
 
@@ -23,29 +35,14 @@ impl SkyhookClient {
         Self {
             http,
             base: cfg.upstream.clone(),
-            enabled: cfg.fallback,
-            enrich: cfg.enrich,
             instance,
         }
     }
 
-    /// Whether it may be used at all.
-    pub fn is_enabled(&self) -> bool {
-        self.enabled || self.enrich
-    }
-
     /// One show by TVDB id. Returns the raw body alongside the parsed one so the
     /// caller can snapshot it.
-    pub async fn show(
-        &self,
-        language: &str,
-        tvdb_id: i64,
-    ) -> Result<Option<(Value, ShowResource)>> {
-        if !self.is_enabled() {
-            return Ok(None);
-        }
-
-        let url = format!("{}/v1/tvdb/shows/{language}/{tvdb_id}", self.base);
+    pub async fn show(&self, tvdb_id: i64) -> Result<Option<(Value, ShowResource)>> {
+        let url = format!("{}/v1/tvdb/shows/{LANGUAGE}/{tvdb_id}", self.base);
 
         let Some(value) = self.fetch(&url, &[]).await? else {
             return Ok(None);
@@ -57,12 +54,8 @@ impl SkyhookClient {
         Ok(Some((value, show)))
     }
 
-    pub async fn search(&self, language: &str, term: &str) -> Result<Vec<ShowResource>> {
-        if !self.is_enabled() {
-            return Ok(Vec::new());
-        }
-
-        let url = format!("{}/v1/tvdb/search/{language}", self.base);
+    pub async fn search(&self, term: &str) -> Result<Vec<ShowResource>> {
+        let url = format!("{}/v1/tvdb/search/{LANGUAGE}", self.base);
 
         let Some(value) = self.fetch(&url, &[("term", term)]).await? else {
             return Ok(Vec::new());

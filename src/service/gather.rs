@@ -31,16 +31,17 @@ struct Answer {
 /// Fetch a series from everything that can address it, and store the result.
 ///
 /// `tmdb_id` and `tvdb_id` are what resolution worked out; either may be absent.
+/// No language: each provider now reads the one setting that says which, and
+/// Skyhook speaks only English whatever anyone asks for.
 pub async fn series(
     state: &AppState,
     tmdb_id: Option<i64>,
     tvdb_id: Option<i64>,
-    language: &str,
 ) -> Result<Option<MediaItem>> {
     let (from_tmdb, from_tvdb, from_skyhook, from_fanart) = tokio::join!(
         series_from_tmdb(state, tmdb_id),
         series_from_tvdb(state, tvdb_id),
-        series_from_skyhook(state, tvdb_id, language),
+        series_from_skyhook(state, tvdb_id),
         series_from_fanart(state, tvdb_id),
     );
 
@@ -145,17 +146,13 @@ async fn series_from_tmdb(state: &AppState, tmdb_id: Option<i64>) -> Option<Answ
 ///
 /// It carries things TMDB has no field for: the broadcast time of day, TVMaze
 /// and AniList ids, and the air-order hints Sonarr uses for anime.
-async fn series_from_skyhook(
-    state: &AppState,
-    tvdb_id: Option<i64>,
-    language: &str,
-) -> Option<Answer> {
+async fn series_from_skyhook(state: &AppState, tvdb_id: Option<i64>) -> Option<Answer> {
     let tvdb_id = tvdb_id?;
     if !state.flag("skyhook.enrich", true) {
         return None;
     }
 
-    match state.skyhook.show(language, tvdb_id).await {
+    match state.skyhook.show(tvdb_id).await {
         Ok(Some((raw, show))) => Some(Answer {
             provider: names::SKYHOOK,
             payload: raw,

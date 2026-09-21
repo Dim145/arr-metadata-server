@@ -16,23 +16,19 @@ use crate::{
 ///
 /// The id is either a real TVDB id or one this server synthesised for a
 /// TMDB-only show — see [`crate::service::ids`].
-pub async fn by_client_id(
-    state: &AppState,
-    requested_id: i64,
-    language: &str,
-) -> Result<Option<MediaItem>> {
+///
+/// No language: a work is stored once, in the language the server fetches in,
+/// and [`crate::service::language`] overlays the one the caller asked for on
+/// the way out. Resolution is the same work whoever is asking.
+pub async fn by_client_id(state: &AppState, requested_id: i64) -> Result<Option<MediaItem>> {
     if let Some(tmdb_id) = ids::from_synthetic(requested_id) {
         return by_tmdb_id(state, tmdb_id).await;
     }
 
-    by_tvdb_id(state, requested_id, language).await
+    by_tvdb_id(state, requested_id).await
 }
 
-pub async fn by_tvdb_id(
-    state: &AppState,
-    tvdb_id: i64,
-    language: &str,
-) -> Result<Option<MediaItem>> {
+pub async fn by_tvdb_id(state: &AppState, tvdb_id: i64) -> Result<Option<MediaItem>> {
     if let Some(item) = local(state, ExternalSource::TvdbSeries, &tvdb_id.to_string()).await? {
         return Ok(Some(item));
     }
@@ -51,14 +47,15 @@ pub async fn by_tvdb_id(
         None
     };
 
-    if let Some(item) = gather::series(state, tmdb_id, Some(tvdb_id), language).await? {
+    if let Some(item) = gather::series(state, tmdb_id, Some(tvdb_id)).await? {
         return Ok(Some(item));
     }
 
     // Nothing had it. Skyhook is asked again here only when enrichment is off;
-    // otherwise `gather` already tried it.
-    if state.skyhook.is_enabled() && !state.flag("skyhook.enrich", true) {
-        match state.skyhook.show(language, tvdb_id).await {
+    // otherwise `gather` already tried it, and asking twice would be the same
+    // answer at twice the cost.
+    if state.flag("skyhook.fallback", true) && !state.flag("skyhook.enrich", true) {
+        match state.skyhook.show(tvdb_id).await {
             Ok(Some((raw, show))) => {
                 let item = sonarr::to_item(&show);
                 let snapshots = vec![(names::SKYHOOK.to_string(), raw)];
@@ -100,11 +97,11 @@ pub async fn by_imdb_id(state: &AppState, imdb_id: &str) -> Result<Option<MediaI
 }
 
 /// Search, in the order a client expects results to appear.
-pub async fn search(state: &AppState, term: &str, language: &str) -> Result<Vec<MediaItem>> {
+pub async fn search(state: &AppState, term: &str) -> Result<Vec<MediaItem>> {
     // A prefixed term is a lookup, not a search: answer with the one match.
     match ids::classify(term) {
         ids::TermLookup::Tvdb(id) => {
-            return Ok(by_tvdb_id(state, id, language).await?.into_iter().collect());
+            return Ok(by_tvdb_id(state, id).await?.into_iter().collect());
         }
         ids::TermLookup::Tmdb(id) => return Ok(by_tmdb_id(state, id).await?.into_iter().collect()),
         ids::TermLookup::Imdb(id) => {
@@ -130,7 +127,17 @@ pub async fn search(state: &AppState, term: &str, language: &str) -> Result<Vec<
         return Ok(Vec::new());
     }
 
-    let key = crate::service::search_key("series", language, state.adult_visible(), "", term);
+    // The server's language, not the caller's: these results are whatever the
+    // providers were asked in, and the caller's language is applied to them
+    // afterwards. Keying on what was asked for would split the cache in two
+    // over entries holding the same thing.
+    let key = crate::service::search_key(
+        "series",
+        &state.language(None, None),
+        state.adult_visible(),
+        "",
+        term,
+    );
 
     cached_search(state, key, || async {
         let mut results = local_search(state, term).await?;
@@ -142,8 +149,22 @@ pub async fn search(state: &AppState, term: &str, language: &str) -> Result<Vec<
             }
         }
 
-        if results.is_empty() {
-            match state.skyhook.search(language, term).await {
+        // Fallbacks, in order of authority and only while nothing has been
+        // found. TheTVDB knows series TMDB has never heard of — it is the one
+        // that settles their numbering, after all — and Skyhook republishes its
+        // catalogue without needing a key, so it answers last for a deployment
+        // that has no TheTVDB key at all.
+        if results.is_empty() && state.flag("tvdb.searchFallback", true) {
+            match state.tvdb.search(term, state.search_limit()).await {
+                Ok(hits) => merge_results(&mut results, hits),
+                Err(e) => {
+                    tracing::warn!(term, error = format_args!("{e:#}"), "TheTVDB search failed")
+                }
+            }
+        }
+
+        if results.is_empty() && state.flag("skyhook.fallback", true) {
+            match state.skyhook.search(term).await {
                 Ok(shows) => {
                     for show in shows.iter().take(state.search_limit()) {
                         results.push(sonarr::to_item(show));
@@ -217,7 +238,7 @@ async fn fetch_from_tmdb(state: &AppState, tmdb_id: i64) -> Result<Option<MediaI
         }
     };
 
-    gather::series(state, Some(tmdb_id), tvdb_id, &state.language(None, None)).await
+    gather::series(state, Some(tmdb_id), tvdb_id).await
 }
 
 /// Map TMDB search hits, resolving each one's TVDB id so Sonarr can address it.

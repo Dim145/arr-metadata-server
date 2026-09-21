@@ -45,7 +45,6 @@ pub async fn refresh_one(state: &AppState, item: &MediaItem) -> Result<Option<Me
 }
 
 async fn refresh_series(state: &AppState, item: &MediaItem) -> Result<Option<MediaItem>> {
-    let language = state.language(None, None);
     let ids = &item.external_ids;
 
     // Both ids are already known here, so every provider is asked at once
@@ -57,7 +56,7 @@ async fn refresh_series(state: &AppState, item: &MediaItem) -> Result<Option<Med
     }
 
     if let Some(tvdb_id) = ids.tvdb {
-        return series::by_tvdb_id(state, tvdb_id, &language).await;
+        return series::by_tvdb_id(state, tvdb_id).await;
     }
 
     Ok(None)
@@ -69,7 +68,7 @@ async fn force_series(
     tmdb_id: Option<i64>,
     tvdb_id: Option<i64>,
 ) -> Result<Option<MediaItem>> {
-    crate::service::gather::series(state, tmdb_id, tvdb_id, &state.language(None, None)).await
+    crate::service::gather::series(state, tmdb_id, tvdb_id).await
 }
 
 async fn refresh_movie(state: &AppState, item: &MediaItem) -> Result<Option<MediaItem>> {

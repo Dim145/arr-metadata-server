@@ -28,6 +28,61 @@ use crate::{
     },
 };
 
+/// A search hit. Its fields are snake_case here where the rest of the API is
+/// camelCase, which is TheTVDB's own inconsistency rather than a mistake.
+#[derive(Debug, Deserialize)]
+struct SearchHit {
+    tvdb_id: Option<String>,
+    name: Option<String>,
+    year: Option<String>,
+    overview: Option<String>,
+    image_url: Option<String>,
+    #[serde(default)]
+    remote_ids: Vec<SearchRemoteId>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SearchRemoteId {
+    id: Option<String>,
+    #[serde(rename = "sourceName")]
+    source_name: Option<String>,
+}
+
+/// A hit with no id is not a result: nothing can be fetched from it.
+fn hit_to_item(hit: &SearchHit) -> Option<MediaItem> {
+    let tvdb_id: i64 = hit.tvdb_id.as_deref()?.parse().ok()?;
+    let title = non_empty(hit.name.as_deref())?;
+
+    let mut item = MediaItem::empty(MediaKind::Series);
+
+    item.title = title;
+    item.year = hit.year.as_deref().and_then(|y| y.parse().ok());
+    item.overview = non_empty(hit.overview.as_deref());
+    item.external_ids.tvdb = Some(tvdb_id);
+    item.external_ids.imdb = hit
+        .remote_ids
+        .iter()
+        .find(|remote| remote.source_name.as_deref() == Some("IMDB"))
+        .and_then(|remote| remote.id.as_deref())
+        .and_then(crate::domain::ids::normalize_imdb_id);
+    item.slug = make_slug(&item.title, item.year);
+
+    if let Some(url) = non_empty(hit.image_url.as_deref()) {
+        item.images.push(Image {
+            id: new_id(),
+            season_number: None,
+            cover_type: CoverType::Poster,
+            url,
+            language: None,
+            sort_order: 0,
+            source: Some("tvdb".into()),
+            is_manual: false,
+        });
+    }
+
+    Some(item)
+}
+
 /// One episode's text in a single language.
 pub struct TranslatedEpisode {
     pub season_number: i32,
@@ -135,6 +190,33 @@ impl TvdbClient {
             .context("TheTVDB returned a series this server could not interpret")?;
 
         Ok(Some((raw, to_item(&envelope.data, &self.language))))
+    }
+
+    /// Series matching a term, as TheTVDB ranks them.
+    ///
+    /// Shallow: an id, a name, a year and a poster. Enough to recognise the
+    /// work and to fetch it properly afterwards, which is what a search result
+    /// is for. TheTVDB is the only provider here that knows a series TMDB has
+    /// never heard of, and it was not being asked at all.
+    pub async fn search(&self, term: &str, limit: usize) -> Result<Vec<MediaItem>> {
+        if !self.is_enabled() {
+            return Ok(Vec::new());
+        }
+
+        let path = format!(
+            "search?query={}&type=series&limit={}",
+            urlencoding::encode(term.trim()),
+            limit.clamp(1, 50),
+        );
+
+        let Some(body) = self.get(&path).await? else {
+            return Ok(Vec::new());
+        };
+
+        let envelope: Envelope<Vec<SearchHit>> = serde_json::from_value(body)
+            .context("TheTVDB returned a search this server could not interpret")?;
+
+        Ok(envelope.data.iter().filter_map(hit_to_item).collect())
     }
 
     /// Every episode's title and overview in one language.

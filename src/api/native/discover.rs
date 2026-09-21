@@ -99,11 +99,10 @@ async fn search(
         .transpose()
         .map_err(|e| AppError::BadRequest(e.to_string()))?;
 
-    let language = state.language(None, None);
     let mut found = Vec::new();
 
     if wanted != Some(MediaKind::Movie) {
-        match service::series::search(&state, term, &language).await {
+        match service::series::search(&state, term).await {
             Ok(hits) => found.extend(hits.iter().map(describe)),
             Err(e) => tracing::warn!(term, error = %e, "series search failed"),
         }
@@ -174,11 +173,9 @@ async fn import(
         .parse()
         .map_err(|e: anyhow::Error| AppError::BadRequest(e.to_string()))?;
 
-    let language = state.language(None, None);
-
     let found = match kind {
         MediaKind::Series => match (request.tvdb_id, request.tmdb_id, request.imdb_id.as_deref()) {
-            (Some(tvdb), _, _) => service::series::by_tvdb_id(&state, tvdb, &language).await?,
+            (Some(tvdb), _, _) => service::series::by_tvdb_id(&state, tvdb).await?,
             (_, Some(tmdb), _) => service::series::by_tmdb_id(&state, tmdb).await?,
             (_, _, Some(imdb)) => service::series::by_imdb_id(&state, imdb).await?,
             _ => return Err(AppError::BadRequest("no identifier to fetch by".into())),
