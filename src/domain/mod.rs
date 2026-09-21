@@ -115,6 +115,10 @@ pub struct MediaItem {
 
     pub is_manual: bool,
     pub is_enabled: bool,
+    /// What the provider that supplied this called it. Serving a catalogue
+    /// means being able to decide per request who sees it.
+    #[serde(default)]
+    pub is_adult: bool,
 
     pub created_at: String,
     pub updated_at: String,
@@ -183,6 +187,7 @@ impl MediaItem {
             external_ids: ExternalIds::default(),
             is_manual: false,
             is_enabled: true,
+            is_adult: false,
             created_at: now.clone(),
             updated_at: now,
             refreshed_at: None,

@@ -84,6 +84,7 @@ utoipa = { version = "5.5.0", features = ["axum_extras", "preserve_order"] }
 utoipa-axum = "0.2.0"
 utoipa-swagger-ui = { version = "9.0.2", features = ["axum", "vendored"] }
 dns-lookup = "4.0.1"
+parking_lot = "0.12.5"
 
 [dev-dependencies]
 tokio = { version = "1.53.1", features = ["full", "test-util"] }

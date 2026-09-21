@@ -45,7 +45,7 @@ pub async fn refresh_one(state: &AppState, item: &MediaItem) -> Result<Option<Me
 }
 
 async fn refresh_series(state: &AppState, item: &MediaItem) -> Result<Option<MediaItem>> {
-    let language = state.tmdb.language().to_string();
+    let language = state.language(None, None);
     let ids = &item.external_ids;
 
     // Both ids are already known here, so every provider is asked at once
@@ -69,7 +69,7 @@ async fn force_series(
     tmdb_id: Option<i64>,
     tvdb_id: Option<i64>,
 ) -> Result<Option<MediaItem>> {
-    crate::service::gather::series(state, tmdb_id, tvdb_id, state.tmdb.language()).await
+    crate::service::gather::series(state, tmdb_id, tvdb_id, &state.language(None, None)).await
 }
 
 async fn refresh_movie(state: &AppState, item: &MediaItem) -> Result<Option<MediaItem>> {
@@ -84,16 +84,13 @@ async fn refresh_movie(state: &AppState, item: &MediaItem) -> Result<Option<Medi
 
 /// Run the scheduler until the process shuts down.
 pub async fn run(state: AppState) {
-    let cfg = state.config.refresh.clone();
-
-    if !cfg.enabled {
-        tracing::info!("automatic refresh is disabled");
-        return;
-    }
-
+    // The scheduler always runs. Whether it does anything is a setting now, and
+    // it is read on every tick — an operator who turns refresh off, or moves the
+    // interval, should not have to restart the server for it to take.
     tracing::info!(
-        interval_secs = cfg.interval.as_secs(),
-        batch = cfg.batch_size,
+        interval_secs = interval(&state).as_secs(),
+        batch = batch(&state),
+        enabled = state.flag("refresh.enabled", true),
         "refresh scheduler started"
     );
 
@@ -108,13 +105,22 @@ pub async fn run(state: AppState) {
     // Let the server finish starting before the first sweep.
     tokio::time::sleep(Duration::from_secs(30)).await;
 
-    let mut ticker = tokio::time::interval(cfg.interval);
+    // The tick is the shortest the setting allows, and each wake decides
+    // whether enough time has passed — rather than rebuilding the ticker, which
+    // would mean tracking when it last fired anyway.
+    let mut ticker = tokio::time::interval(Duration::from_secs(30));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut swept = tokio::time::Instant::now();
 
     loop {
         ticker.tick().await;
 
-        run_sweep(&state, cfg.batch_size as i64).await;
+        if state.flag("refresh.enabled", true) && swept.elapsed() >= interval(&state) {
+            swept = tokio::time::Instant::now();
+            run_sweep(&state, batch(&state)).await;
+        } else if !state.flag("refresh.enabled", true) {
+            continue;
+        }
 
         // Expired sessions accumulate otherwise; this is as good a moment as any.
         if let Err(e) = repo::user::purge_expired_sessions(&state.db).await {
@@ -128,6 +134,22 @@ pub async fn run(state: AppState) {
         prune_jobs(&state).await;
         prune_callers(&state).await;
     }
+}
+
+fn interval(state: &AppState) -> Duration {
+    state
+        .settings
+        .int_at("refresh.intervalSeconds", None, None)
+        .and_then(|n| u64::try_from(n).ok())
+        .map(Duration::from_secs)
+        .unwrap_or(state.config.refresh.interval)
+}
+
+fn batch(state: &AppState) -> i64 {
+    state
+        .settings
+        .int_at("refresh.batchSize", None, None)
+        .unwrap_or(i64::from(state.config.refresh.batch_size))
 }
 
 /// Run one sweep, recording it as a job so an operator can see it happened.

@@ -7,11 +7,13 @@
 pub mod auth;
 pub mod children;
 pub mod clients;
+pub mod discover;
 pub mod export;
 pub mod items;
 pub mod meta;
 pub mod network;
 pub mod overrides;
+pub mod settings;
 
 use utoipa_axum::router::OpenApiRouter;
 
@@ -27,6 +29,8 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(clients::router())
         .merge(meta::router())
         .merge(network::router())
+        .merge(settings::router())
+        .merge(discover::router())
         .merge(auth::authenticated_router())
         .merge(crate::api::audit::router())
 }

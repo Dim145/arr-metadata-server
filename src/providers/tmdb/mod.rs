@@ -48,10 +48,6 @@ impl TmdbClient {
         self.api_key.is_some()
     }
 
-    pub fn language(&self) -> &str {
-        &self.language
-    }
-
     /// Build an authenticated request.
     ///
     /// A v4 token is a JWT and goes in `Authorization`; a v3 key goes in the

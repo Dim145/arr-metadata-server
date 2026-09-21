@@ -280,6 +280,11 @@ async fn remove(
 
     tracing::info!(%id, actor = %identity.label(), "revoked an API key");
 
+    // A revoked key's settings would otherwise linger under its id.
+    state
+        .forget_settings(crate::settings::Scope::Client, &id)
+        .await?;
+
     audit::record(
         &state,
         Event {

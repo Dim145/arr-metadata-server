@@ -13,6 +13,7 @@ use crate::{
         fanart::FanartClient, radarr::RadarrMetadataClient, skyhook::SkyhookClient,
         tmdb::TmdbClient, tvdb::TvdbClient,
     },
+    settings::{Scope, Store},
 };
 
 #[derive(Clone)]
@@ -34,9 +35,11 @@ pub struct Inner {
     /// Cached because the guard reads it on every request to those surfaces and
     /// it changes about once a year; [`AppState::reload_allowlist`] is the only
     /// way it moves, and every write path calls it.
-    allowlist: Arc<RwLock<Vec<ipnet::IpNet>>>,
+    allowlist: Arc<RwLock<Vec<(String, ipnet::IpNet)>>>,
     /// Puts a container name to an address, for the callers table.
     pub resolver: Resolver,
+    /// Behaviour an operator can change without restarting.
+    pub settings: Store,
     /// Identifies this process on outbound calls to hostnames it also answers
     /// on, so a request that loops back can be recognised and refused.
     pub instance: String,
@@ -95,9 +98,12 @@ impl AppState {
             );
         }
 
+        let settings = Store::new(db.clone());
+
         let state = Self(Arc::new(Inner {
             allowlist: Arc::new(RwLock::new(Vec::new())),
             resolver: Resolver::new(),
+            settings,
             config,
             db,
             caches,
@@ -113,12 +119,110 @@ impl AppState {
 
         state.bootstrap_admin().await?;
         state.bootstrap_allowlist().await?;
+        state.bootstrap_settings().await?;
 
         Ok(state)
     }
 
+    /// Put the environment's values into the settings table, once.
+    ///
+    /// Same bargain as the allowlist: the variables seed an empty table so an
+    /// existing deployment keeps its behaviour, and are ignored afterwards.
+    /// Anything still read from `config` is about the deployment rather than
+    /// the behaviour — a port, a key, a database URL — and stays there.
+    async fn bootstrap_settings(&self) -> Result<()> {
+        self.settings.reload().await?;
+
+        if self.settings.is_empty().await? {
+            let cfg = &self.config;
+
+            self.settings
+                .seed(&[
+                    ("tmdb.language", cfg.tmdb.language.clone()),
+                    ("tmdb.searchLimit", cfg.tmdb.search_limit.to_string()),
+                    ("skyhook.fallback", cfg.skyhook.fallback.to_string()),
+                    ("skyhook.enrich", cfg.skyhook.enrich.to_string()),
+                    ("radarr.fallback", cfg.radarr_metadata.fallback.to_string()),
+                    ("radarr.enrich", cfg.radarr_metadata.enrich.to_string()),
+                    ("refresh.enabled", cfg.refresh.enabled.to_string()),
+                    (
+                        "refresh.intervalSeconds",
+                        cfg.refresh.interval.as_secs().to_string(),
+                    ),
+                    ("refresh.batchSize", cfg.refresh.batch_size.to_string()),
+                    // Off unless somebody turns it on. A server that started
+                    // serving adult titles because it was upgraded would be a
+                    // surprise of the worst kind.
+                    (
+                        "adult.mode",
+                        if cfg.tmdb.include_adult {
+                            "visible".to_string()
+                        } else {
+                            "hidden".to_string()
+                        },
+                    ),
+                    ("adult.force", "false".to_string()),
+                ])
+                .await?;
+
+            tracing::info!("seeded the settings from the environment; they are editable now");
+        }
+
+        Ok(())
+    }
+
+    /// The language to answer a caller in.
+    pub fn language(&self, client: Option<&str>, peer: Option<&str>) -> String {
+        self.settings
+            .resolve("tmdb.language", client, peer)
+            .unwrap_or_else(|| self.config.tmdb.language.clone())
+    }
+
+    pub fn search_limit(&self) -> usize {
+        self.settings
+            .int_at("tmdb.searchLimit", None, None)
+            .and_then(|n| usize::try_from(n).ok())
+            .unwrap_or(self.config.tmdb.search_limit)
+    }
+
+    pub fn flag(&self, key: &str, fallback: bool) -> bool {
+        self.settings.bool_at(key, None, None).unwrap_or(fallback)
+    }
+
+    /// Whether adult titles exist at all, as far as this server is concerned.
+    pub fn adult_visible(&self) -> bool {
+        self.settings
+            .resolve("adult.mode", None, None)
+            .map(|mode| mode == "visible")
+            .unwrap_or(self.config.tmdb.include_adult)
+    }
+
+    /// What a caller may see, and whether their own request is allowed to say.
+    ///
+    /// Server first: with adult titles hidden, nothing else can turn them on.
+    /// Then the client's own policy, then — unless the answer is forced — what
+    /// the request asked for.
+    pub fn adult_for(&self, client: Option<&str>, peer: Option<&str>, asked: Option<bool>) -> bool {
+        decide_adult(
+            self.adult_visible(),
+            self.settings
+                .resolve("adult.clientPolicy", client, peer)
+                .as_deref()
+                .unwrap_or("inherit"),
+            self.settings
+                .bool_at("adult.force", client, peer)
+                .unwrap_or(false),
+            asked,
+        )
+    }
+
+    /// Forget every setting a key or a rule had, when it is deleted.
+    pub async fn forget_settings(&self, scope: Scope, scope_id: &str) -> Result<()> {
+        self.settings.forget(scope, scope_id).await
+    }
+
     /// The addresses allowed to call the arr surfaces, right now.
-    pub fn allowlist(&self) -> Vec<ipnet::IpNet> {
+    pub fn allowlist(&self) -> Vec<(String, ipnet::IpNet)> {
         match self.0.allowlist.read() {
             Ok(list) => list.clone(),
             // A poisoned lock would otherwise let everyone through; an empty
@@ -191,5 +295,79 @@ impl AppState {
 
         tracing::info!(%username, "created the bootstrap administrator");
         Ok(())
+    }
+}
+
+/// Whether this caller sees adult titles.
+///
+/// Four inputs, in the order they win:
+///
+/// * `visible` — the server. With adult titles hidden nothing below can show
+///   them; that is the point of having a server-wide answer at all.
+/// * `policy` — this client's own standing: `allow`, `deny`, or `inherit`.
+/// * `forced` — whether the request gets a say. Sonarr and Jellyseerr send
+///   `include_adult` themselves; forcing means ignoring it and using this
+///   server's answer, both towards the providers and when filtering the reply.
+/// * `asked` — what the request said, when it is allowed to say anything.
+fn decide_adult(visible: bool, policy: &str, forced: bool, asked: Option<bool>) -> bool {
+    if !visible {
+        return false;
+    }
+
+    match policy {
+        "deny" => false,
+        "allow" if forced => true,
+        // Allowed, and the request may still narrow it — a client that asks for
+        // none should get none. Silence means yes, since somebody said allow.
+        "allow" => asked.unwrap_or(true),
+        // `inherit`: the server permits them, so the request decides, unless
+        // the operator has said the request does not get to.
+        _ if forced => true,
+        // Silence means no. A client that never mentions adult titles is not
+        // asking for them.
+        _ => asked.unwrap_or(false),
+    }
+}
+
+#[cfg(test)]
+mod adult_tests {
+    use super::decide_adult;
+
+    #[test]
+    fn a_server_that_hides_them_hides_them_from_everyone() {
+        for policy in ["inherit", "allow", "deny"] {
+            for forced in [true, false] {
+                for asked in [None, Some(true), Some(false)] {
+                    assert!(
+                        !decide_adult(false, policy, forced, asked),
+                        "{policy}/{forced}/{asked:?} got through a server that hides them",
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_client_told_no_is_told_no_whatever_it_asks() {
+        assert!(!decide_adult(true, "deny", false, Some(true)));
+        assert!(!decide_adult(true, "deny", true, Some(true)));
+    }
+
+    #[test]
+    fn silence_means_no_unless_somebody_said_otherwise() {
+        // A client that never mentions adult titles is not asking for them.
+        assert!(!decide_adult(true, "inherit", false, None));
+        // But one the operator has allowed is.
+        assert!(decide_adult(true, "allow", false, None));
+    }
+
+    #[test]
+    fn the_request_decides_until_it_is_overruled() {
+        assert!(decide_adult(true, "inherit", false, Some(true)));
+        assert!(!decide_adult(true, "allow", false, Some(false)));
+
+        // Forced: what the client sent stops mattering.
+        assert!(decide_adult(true, "inherit", true, Some(false)));
+        assert!(decide_adult(true, "allow", true, Some(false)));
     }
 }

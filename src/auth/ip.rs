@@ -45,11 +45,19 @@ pub fn is_trusted(ip: IpAddr, trusted: &[IpNet]) -> bool {
 }
 
 /// Whether `ip` is inside any of `allowed`.
-pub fn is_allowed(ip: Option<IpAddr>, allowed: &[IpNet]) -> bool {
-    // No resolvable address means no way to make a positive decision; deny.
-    let Some(ip) = ip else { return false };
+/// Which rule let this address through, if any.
+///
+/// The narrowest match wins, so a rule for one address beats the block it sits
+/// in — which is what lets a single container be configured differently from
+/// the network around it.
+pub fn matching_rule(ip: Option<IpAddr>, allowed: &[(String, IpNet)]) -> Option<&str> {
+    let ip = ip?;
 
-    allowed.iter().any(|net| net.contains(&ip))
+    allowed
+        .iter()
+        .filter(|(_, net)| net.contains(&ip))
+        .max_by_key(|(_, net)| net.prefix_len())
+        .map(|(id, _)| id.as_str())
 }
 
 /// One `X-Forwarded-For` element, which may carry a port or be bracketed IPv6.
@@ -174,18 +182,52 @@ mod tests {
         assert_eq!(resolved, Some("10.0.0.2".parse().unwrap()));
     }
 
+    /// The shape the guard holds: each block with the rule that put it there.
+    fn rules(entries: &[(&str, &str)]) -> Vec<(String, IpNet)> {
+        entries
+            .iter()
+            .map(|(id, cidr)| ((*id).to_string(), cidr.parse().unwrap()))
+            .collect()
+    }
+
     #[test]
     fn allowlists_match_on_containment() {
-        let allowed = nets(&["192.168.0.0/16", "127.0.0.1/32"]);
+        let allowed = rules(&[("lan", "192.168.0.0/16"), ("local", "127.0.0.1/32")]);
 
-        assert!(is_allowed(Some("192.168.1.50".parse().unwrap()), &allowed));
-        assert!(is_allowed(Some("127.0.0.1".parse().unwrap()), &allowed));
-        assert!(!is_allowed(Some("8.8.8.8".parse().unwrap()), &allowed));
+        assert_eq!(
+            matching_rule(Some("192.168.1.50".parse().unwrap()), &allowed),
+            Some("lan"),
+        );
+        assert_eq!(
+            matching_rule(Some("127.0.0.1".parse().unwrap()), &allowed),
+            Some("local"),
+        );
+        assert_eq!(
+            matching_rule(Some("8.8.8.8".parse().unwrap()), &allowed),
+            None
+        );
+    }
+
+    #[test]
+    fn the_narrowest_rule_wins() {
+        // A container configured differently from the network around it: the
+        // rule naming that one address has to beat the block containing it, or
+        // its settings would never apply.
+        let allowed = rules(&[("network", "172.31.0.0/24"), ("sonarr", "172.31.0.7/32")]);
+
+        assert_eq!(
+            matching_rule(Some("172.31.0.7".parse().unwrap()), &allowed),
+            Some("sonarr"),
+        );
+        assert_eq!(
+            matching_rule(Some("172.31.0.8".parse().unwrap()), &allowed),
+            Some("network"),
+        );
     }
 
     #[test]
     fn an_unresolvable_address_is_denied() {
         // Failing open here would expose the arr surfaces to anyone.
-        assert!(!is_allowed(None, &nets(&["0.0.0.0/0"])));
+        assert_eq!(matching_rule(None, &rules(&[("all", "0.0.0.0/0")])), None);
     }
 }

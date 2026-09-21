@@ -10,6 +10,7 @@ mod jobs;
 mod merge;
 mod providers;
 mod service;
+mod settings;
 mod state;
 mod telemetry;
 mod ui;

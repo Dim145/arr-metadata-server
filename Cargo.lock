@@ -140,6 +140,7 @@ dependencies = [
  "ipnet",
  "mime_guess",
  "moka",
+ "parking_lot",
  "reqwest",
  "rust-embed",
  "rustls",

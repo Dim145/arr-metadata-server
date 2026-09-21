@@ -38,6 +38,11 @@ pub fn router() -> OpenApiRouter<AppState> {
 #[serde(rename_all = "camelCase")]
 pub struct ListQuery {
     pub term: Option<String>,
+    /// Ask for adult titles. Honoured only as far as the server and this
+    /// caller's own policy allow, and ignored entirely when the operator has
+    /// said the answer is not the client's to give.
+    #[serde(default, deserialize_with = "crate::api::extract::empty_as_none")]
+    pub include_adult: Option<bool>,
     pub kind: Option<String>,
     /// Serve the titles in this language, where a translation is held.
     pub language: Option<String>,
@@ -78,6 +83,7 @@ pub struct ListResponse {
 )]
 async fn list(
     State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
     Query(query): Query<ListQuery>,
 ) -> AppResult<Json<ListResponse>> {
     let kind = query
@@ -95,6 +101,11 @@ async fn list(
         year: query.year,
         manual_only: query.manual_only,
         include_disabled: query.include_disabled,
+        include_adult: state.adult_for(
+            identity.client_id(),
+            identity.peer_id(),
+            query.include_adult,
+        ),
         limit: query.limit.unwrap_or(50),
         offset: query.offset.unwrap_or(0),
     };

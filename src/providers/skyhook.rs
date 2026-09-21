@@ -34,12 +34,6 @@ impl SkyhookClient {
         self.enabled || self.enrich
     }
 
-    /// Whether every series should be enriched with it, not just the ones
-    /// nothing else could answer.
-    pub fn enriches(&self) -> bool {
-        self.enrich
-    }
-
     /// One show by TVDB id. Returns the raw body alongside the parsed one so the
     /// caller can snapshot it.
     pub async fn show(

@@ -82,7 +82,9 @@ async fn authorize(
         SurfacePolicy::Open => Identity::Anonymous,
 
         SurfacePolicy::Allowlist => {
-            let allowed = ip::is_allowed(client_ip, &state.allowlist());
+            let rules = state.allowlist();
+            let matched = ip::matching_rule(client_ip, &rules);
+            let allowed = matched.is_some();
 
             // Recorded either way. A refusal is the only trace a client that
             // cannot reach this server leaves anywhere, and an operator needs
@@ -98,7 +100,7 @@ async fn authorize(
                 return Err(AppError::Forbidden);
             }
 
-            Identity::Network
+            Identity::Network(matched.map(str::to_string))
         }
 
         SurfacePolicy::ApiKey => {

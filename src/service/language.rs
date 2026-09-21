@@ -32,7 +32,7 @@ pub fn normalize(requested: &str) -> String {
 
 /// Whether this is the language the entity is already stored in.
 fn is_default(state: &AppState, language: &str) -> bool {
-    normalize(state.tmdb.language()) == language
+    normalize(&state.language(None, None)) == language
 }
 
 /// Overlay `item` with the requested language, fetching it if we have not yet.

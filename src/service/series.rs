@@ -57,7 +57,7 @@ pub async fn by_tvdb_id(
 
     // Nothing had it. Skyhook is asked again here only when enrichment is off;
     // otherwise `gather` already tried it.
-    if state.skyhook.is_enabled() && !state.skyhook.enriches() {
+    if state.skyhook.is_enabled() && !state.flag("skyhook.enrich", true) {
         match state.skyhook.show(language, tvdb_id).await {
             Ok(Some((raw, show))) => {
                 let item = sonarr::to_item(&show);
@@ -145,7 +145,7 @@ pub async fn search(state: &AppState, term: &str, language: &str) -> Result<Vec<
         if results.is_empty() {
             match state.skyhook.search(language, term).await {
                 Ok(shows) => {
-                    for show in shows.iter().take(state.config.tmdb.search_limit) {
+                    for show in shows.iter().take(state.search_limit()) {
                         results.push(sonarr::to_item(show));
                     }
                 }
@@ -189,7 +189,7 @@ async fn local_search(state: &AppState, term: &str) -> Result<Vec<MediaItem>> {
     let query = repo::item::Query {
         term: Some(term.to_string()),
         kind: Some(MediaKind::Series),
-        limit: state.config.tmdb.search_limit as i64,
+        limit: state.search_limit() as i64,
         ..Default::default()
     };
 
@@ -217,12 +217,12 @@ async fn fetch_from_tmdb(state: &AppState, tmdb_id: i64) -> Result<Option<MediaI
         }
     };
 
-    gather::series(state, Some(tmdb_id), tvdb_id, state.tmdb.language()).await
+    gather::series(state, Some(tmdb_id), tvdb_id, &state.language(None, None)).await
 }
 
 /// Map TMDB search hits, resolving each one's TVDB id so Sonarr can address it.
 async fn tmdb_search(state: &AppState, term: &str) -> Result<Vec<MediaItem>> {
-    let limit = state.config.tmdb.search_limit;
+    let limit = state.search_limit();
     let hits = state.tmdb.search_tv(term, limit).await?;
 
     if hits.is_empty() {

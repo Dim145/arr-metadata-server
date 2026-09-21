@@ -151,7 +151,7 @@ async fn series_from_skyhook(
     language: &str,
 ) -> Option<Answer> {
     let tvdb_id = tvdb_id?;
-    if !state.skyhook.enriches() {
+    if !state.flag("skyhook.enrich", true) {
         return None;
     }
 
@@ -287,7 +287,7 @@ async fn movie_from_radarr(
     tmdb_id: Option<i64>,
     imdb_id: Option<&str>,
 ) -> Option<Answer> {
-    if !state.radarr_metadata.enriches() {
+    if !state.flag("radarr.enrich", true) {
         return None;
     }
 

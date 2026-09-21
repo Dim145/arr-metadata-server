@@ -100,7 +100,7 @@ pub async fn search(state: &AppState, term: &str, year: Option<i32>) -> Result<V
         if state.tmdb.is_configured() {
             match state
                 .tmdb
-                .search_movie(term, year, state.config.tmdb.search_limit)
+                .search_movie(term, year, state.search_limit())
                 .await
             {
                 Ok(hits) => {
@@ -114,10 +114,10 @@ pub async fn search(state: &AppState, term: &str, year: Option<i32>) -> Result<V
 
         // Radarr's own search finds titles TMDB's ranking buries, so it is worth
         // asking even when TMDB answered.
-        if state.radarr_metadata.enriches() {
+        if state.flag("radarr.enrich", true) {
             match state.radarr_metadata.search(term, year).await {
                 Ok(hits) => {
-                    for hit in hits.iter().take(state.config.tmdb.search_limit) {
+                    for hit in hits.iter().take(state.search_limit()) {
                         add_unseen(&mut results, crate::wire::radarr::to_item(hit));
                     }
                 }
@@ -233,7 +233,7 @@ async fn local_search(state: &AppState, term: &str, year: Option<i32>) -> Result
         term: Some(term.to_string()),
         kind: Some(MediaKind::Movie),
         year,
-        limit: state.config.tmdb.search_limit as i64,
+        limit: state.search_limit() as i64,
         ..Default::default()
     };
 

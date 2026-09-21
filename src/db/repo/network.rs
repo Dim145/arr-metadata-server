@@ -20,6 +20,10 @@ pub struct NetworkRule {
     pub id: String,
     /// As the operator wrote it: `172.31.0.0/24`, or a bare address.
     pub cidr: String,
+    /// What the client behind this address is called, once somebody says. It
+    /// is what per-client settings hang off, because an address changes when a
+    /// container restarts and a name does not.
+    pub name: Option<String>,
     pub note: Option<String>,
     pub created_at: String,
     pub created_by: Option<String>,
@@ -60,7 +64,7 @@ pub fn parse_rule(text: &str) -> Result<IpNet> {
 
 pub async fn list_rules(db: &Db) -> Result<Vec<NetworkRule>> {
     let rows = sqlx::query(db.sql(
-        "SELECT id, cidr, note, created_at, created_by
+        "SELECT id, cidr, name, note, created_at, created_by
          FROM network_rule ORDER BY created_at",
     ))
     .fetch_all(db.pool())
@@ -71,6 +75,7 @@ pub async fn list_rules(db: &Db) -> Result<Vec<NetworkRule>> {
             Ok(NetworkRule {
                 id: row.text("id")?,
                 cidr: row.text("cidr")?,
+                name: row.opt_text("name")?,
                 note: row.opt_text("note")?,
                 created_at: row.text("created_at")?,
                 created_by: row.opt_text("created_by")?,
@@ -83,12 +88,12 @@ pub async fn list_rules(db: &Db) -> Result<Vec<NetworkRule>> {
 ///
 /// A row that no longer parses is skipped rather than fatal: it can only get
 /// there by hand, and one bad line should not close the door on the rest.
-pub async fn effective(db: &Db) -> Result<Vec<IpNet>> {
+pub async fn effective(db: &Db) -> Result<Vec<(String, IpNet)>> {
     Ok(list_rules(db)
         .await?
         .iter()
         .filter_map(|rule| match parse_rule(&rule.cidr) {
-            Ok(net) => Some(net),
+            Ok(net) => Some((rule.id.clone(), net)),
             Err(e) => {
                 tracing::warn!(cidr = %rule.cidr, error = %e, "ignoring an unreadable network rule");
                 None
@@ -100,6 +105,7 @@ pub async fn effective(db: &Db) -> Result<Vec<IpNet>> {
 pub async fn add_rule(
     db: &Db,
     cidr: &str,
+    name: Option<&str>,
     note: Option<&str>,
     created_by: Option<&str>,
 ) -> Result<NetworkRule> {
@@ -109,17 +115,19 @@ pub async fn add_rule(
     let rule = NetworkRule {
         id: new_id(),
         cidr: cidr.trim().to_string(),
+        name: name.map(str::to_string).filter(|n| !n.trim().is_empty()),
         note: note.map(str::to_string).filter(|n| !n.trim().is_empty()),
         created_at: now(),
         created_by: created_by.map(str::to_string),
     };
 
     sqlx::query(db.sql(
-        "INSERT INTO network_rule (id, cidr, note, created_at, created_by)
-         VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO network_rule (id, cidr, name, note, created_at, created_by)
+         VALUES (?, ?, ?, ?, ?, ?)",
     ))
     .bind(&rule.id)
     .bind(&rule.cidr)
+    .bind(&rule.name)
     .bind(&rule.note)
     .bind(&rule.created_at)
     .bind(&rule.created_by)
@@ -152,11 +160,22 @@ pub async fn seed(db: &Db, nets: &[IpNet]) -> Result<usize> {
     let mut added = 0;
 
     for net in nets {
-        add_rule(db, &net.to_string(), Some("from AMS_ALLOWLIST"), None).await?;
+        add_rule(db, &net.to_string(), None, Some("from AMS_ALLOWLIST"), None).await?;
         added += 1;
     }
 
     Ok(added)
+}
+
+/// Rename the client an address stands for.
+pub async fn rename(db: &Db, id: &str, name: Option<&str>) -> Result<bool> {
+    let done = sqlx::query(db.sql("UPDATE network_rule SET name = ? WHERE id = ?"))
+        .bind(name.map(str::trim).filter(|n| !n.is_empty()))
+        .bind(id)
+        .execute(db.pool())
+        .await?;
+
+    Ok(done.rows_affected() > 0)
 }
 
 pub struct Sighting<'a> {

@@ -32,7 +32,7 @@ const ITEM_COLUMNS: &str = "
     original_language, original_country, runtime, year, first_aired, last_aired,
     in_cinemas, physical_release, digital_release, air_time, network, studio,
     content_rating, content_rating_country, homepage, trailer_youtube_id, popularity, genres, keywords,
-    collection_tmdb_id, is_manual, is_enabled, created_at, updated_at,
+    collection_tmdb_id, is_manual, is_enabled, is_adult, created_at, updated_at,
     refreshed_at, refresh_after, refresh_error
 ";
 
@@ -70,6 +70,7 @@ fn map_item(row: &sqlx::any::AnyRow) -> Result<MediaItem> {
         keywords: row.text_list("keywords")?,
         external_ids: ExternalIds::default(),
         is_manual: row.flag("is_manual")?,
+        is_adult: row.flag("is_adult").unwrap_or(false),
         is_enabled: row.flag("is_enabled")?,
         created_at: row.text("created_at")?,
         updated_at: row.text("updated_at")?,
@@ -400,6 +401,9 @@ pub struct Query {
     pub year: Option<i32>,
     pub manual_only: bool,
     pub include_disabled: bool,
+    /// Whether adult titles may appear. Defaulting to `false` means a caller
+    /// that forgets to decide gets the safe answer rather than the open one.
+    pub include_adult: bool,
     pub limit: i64,
     pub offset: i64,
 }
@@ -582,6 +586,10 @@ fn narrow(q: &Query, sql: &mut String, args: &mut AnyArguments) -> Result<()> {
         sql.push_str(" AND is_manual = 1");
     }
 
+    if !q.include_adult {
+        sql.push_str(" AND is_adult = 0");
+    }
+
     if let Some(term) = q.term.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
         let pattern = format!("%{}%", term.to_lowercase());
 
@@ -685,10 +693,10 @@ async fn upsert_row(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaItem) ->
             original_language, original_country, runtime, year, first_aired, last_aired,
             in_cinemas, physical_release, digital_release, air_time, network, studio,
             content_rating, content_rating_country, homepage, trailer_youtube_id,
-            popularity, genres, keywords, collection_tmdb_id, is_manual, is_enabled,
+            popularity, genres, keywords, collection_tmdb_id, is_manual, is_enabled, is_adult,
             created_at, updated_at, refreshed_at, refresh_after, refresh_error
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (id) DO UPDATE SET
             kind = excluded.kind,
             slug = excluded.slug,
@@ -719,6 +727,7 @@ async fn upsert_row(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaItem) ->
             collection_tmdb_id = excluded.collection_tmdb_id,
             is_manual = excluded.is_manual,
             is_enabled = excluded.is_enabled,
+            is_adult = excluded.is_adult,
             updated_at = excluded.updated_at,
             refreshed_at = excluded.refreshed_at,
             refresh_after = excluded.refresh_after,
@@ -756,6 +765,7 @@ async fn upsert_row(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaItem) ->
         .bind(item.collection_tmdb_id)
         .bind(from_bool(item.is_manual))
         .bind(from_bool(item.is_enabled))
+        .bind(from_bool(item.is_adult))
         .bind(&item.created_at)
         .bind(&item.updated_at)
         .bind(&item.refreshed_at)

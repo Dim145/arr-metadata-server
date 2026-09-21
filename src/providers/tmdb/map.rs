@@ -30,6 +30,7 @@ pub fn tv_to_item(tv: &models::Tv, seasons: &[models::Season]) -> MediaItem {
     let mut item = MediaItem::empty(MediaKind::Series);
 
     item.title = tv.name.clone();
+    item.is_adult = tv.adult.unwrap_or(false);
     item.original_title = non_empty(tv.original_name.as_deref());
     item.overview = non_empty(tv.overview.as_deref());
     item.homepage = non_empty(tv.homepage.as_deref());
@@ -202,6 +203,7 @@ pub fn movie_to_item(movie: &models::Movie) -> MediaItem {
     let mut item = MediaItem::empty(MediaKind::Movie);
 
     item.title = movie.title.clone();
+    item.is_adult = movie.adult.unwrap_or(false);
     item.original_title = non_empty(movie.original_title.as_deref());
     item.overview = non_empty(movie.overview.as_deref());
     item.homepage = non_empty(movie.homepage.as_deref());

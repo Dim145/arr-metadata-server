@@ -46,12 +46,6 @@ impl RadarrMetadataClient {
         self.enabled || self.enrich
     }
 
-    /// Whether every movie should be enriched with it, not just the ones
-    /// nothing else could answer.
-    pub fn enriches(&self) -> bool {
-        self.enrich
-    }
-
     /// One movie by TMDB id. Returns the raw body alongside the parsed one.
     pub async fn movie(&self, tmdb_id: i64) -> Result<Option<(Value, MovieResource)>> {
         if !self.is_enabled() {

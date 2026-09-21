@@ -29,7 +29,7 @@ pub const TAG: &str = "Network";
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(rules, add))
-        .routes(routes!(remove))
+        .routes(routes!(remove, rename))
         .routes(routes!(callers))
 }
 
@@ -58,6 +58,9 @@ async fn rules(
 pub struct NewRule {
     /// An address (`172.31.0.7`) or a block (`172.31.0.0/24`).
     pub cidr: String,
+    /// What to call the client behind it — `sonarr`, `radarr`. Settings hang
+    /// off this rule, so naming it is what makes per-client settings possible.
+    pub name: Option<String>,
     pub note: Option<String>,
 }
 
@@ -101,6 +104,7 @@ async fn add(
     let rule = repo::network::add_rule(
         &state.db,
         &request.cidr,
+        request.name.as_deref(),
         request.note.as_deref(),
         Some(&identity.label()),
     )
@@ -152,6 +156,11 @@ async fn remove(
         return Err(AppError::NotFound);
     }
 
+    // Its settings would otherwise outlive it and attach to whatever rule
+    // happened to be created next.
+    state
+        .forget_settings(crate::settings::Scope::Peer, &id)
+        .await?;
     state.reload_allowlist().await?;
 
     audit::record(
@@ -167,6 +176,48 @@ async fn remove(
     .await;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Rename {
+    /// What to call the client behind this address. Empty clears it.
+    pub name: Option<String>,
+}
+
+/// Name the client an address stands for.
+///
+/// Naming is what makes per-client settings possible: it is the only stable
+/// handle on a client that presents no credential, since the address it calls
+/// from changes whenever its container restarts.
+#[utoipa::path(
+    patch, path = "/network/rules/{id}", tag = TAG,
+    params(("id" = String, Path, description = "The rule's identifier")),
+    request_body = Rename,
+    responses(
+        (status = 200, body = NetworkRule),
+        (status = 403, description = "The caller is not an administrator"),
+        (status = 404, description = "No such rule"),
+    ),
+)]
+async fn rename(
+    State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
+    Path(id): Path<String>,
+    Json(request): Json<Rename>,
+) -> AppResult<Json<NetworkRule>> {
+    require_admin(&identity)?;
+
+    if !repo::network::rename(&state.db, &id, request.name.as_deref()).await? {
+        return Err(AppError::NotFound);
+    }
+
+    repo::network::list_rules(&state.db)
+        .await?
+        .into_iter()
+        .find(|rule| rule.id == id)
+        .map(Json)
+        .ok_or(AppError::NotFound)
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
