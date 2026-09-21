@@ -150,17 +150,17 @@ async fn overlay_episodes(state: &AppState, item: &mut MediaItem, language: &str
     Ok(())
 }
 
-/// Fetch and store every episode's text in one language.
-///
-/// One provider call per season, so this happens once per work per language and
-/// is then answered from the database. A failure is logged and swallowed: the
-/// caller still gets the work, in the language it was stored in.
-async fn fetch_episodes(state: &AppState, item: &MediaItem, language: &str) {
+/// TMDB's episode text, one call per season.
+async fn from_tmdb(
+    state: &AppState,
+    item: &MediaItem,
+    language: &str,
+) -> Vec<repo::translation::EpisodeText> {
     let Some(tmdb_id) = item.external_ids.tmdb else {
-        return;
+        return Vec::new();
     };
     if !state.tmdb.is_configured() {
-        return;
+        return Vec::new();
     }
 
     // TMDB wants the two-letter form it was given.
@@ -173,14 +173,12 @@ async fn fetch_episodes(state: &AppState, item: &MediaItem, language: &str) {
         n
     };
 
-    tracing::info!(id = %item.id, %language, seasons = numbers.len(), "fetching episode translations");
-
     let seasons = state
         .tmdb
         .tv_seasons_in(tmdb_id, &numbers, &requested)
         .await;
 
-    let texts: Vec<repo::translation::EpisodeText> = seasons
+    seasons
         .iter()
         .flat_map(|s| s.episodes.iter())
         .map(|e| repo::translation::EpisodeText {
@@ -193,7 +191,75 @@ async fn fetch_episodes(state: &AppState, item: &MediaItem, language: &str) {
                 .filter(|t| !is_placeholder(t)),
             overview: e.overview.clone().filter(|o| !o.trim().is_empty()),
         })
-        .collect();
+        .collect()
+}
+
+/// Fill what TMDB left empty from TheTVDB.
+///
+/// TMDB serves a handful of languages well and returns an English placeholder
+/// for the rest; TheTVDB holds dozens. Asking it second means a French request
+/// is answered even when TMDB has no French, without displacing TMDB's text
+/// where it exists — the same fill-do-not-replace rule the merge engine uses.
+async fn fill_from_tvdb(
+    state: &AppState,
+    item: &MediaItem,
+    language: &str,
+    texts: &mut Vec<repo::translation::EpisodeText>,
+) {
+    let Some(tvdb_id) = item.external_ids.tvdb else {
+        return;
+    };
+
+    // Nothing to add to, and nothing missing: skip the call.
+    if !texts.is_empty()
+        && texts
+            .iter()
+            .all(|t| t.title.is_some() && t.overview.is_some())
+    {
+        return;
+    }
+
+    let from_tvdb = match state.tvdb.episode_texts(tvdb_id, language).await {
+        Ok(found) => found,
+        Err(e) => {
+            tracing::debug!(id = %item.id, %language, error = format_args!("{e:#}"), "TheTVDB had no episode text");
+            return;
+        }
+    };
+
+    for episode in from_tvdb {
+        match texts.iter_mut().find(|t| {
+            t.season_number == episode.season_number && t.episode_number == episode.episode_number
+        }) {
+            Some(existing) => {
+                if existing.title.is_none() {
+                    existing.title = episode.title;
+                }
+                if existing.overview.is_none() {
+                    existing.overview = episode.overview;
+                }
+            }
+            None => texts.push(repo::translation::EpisodeText {
+                season_number: episode.season_number,
+                episode_number: episode.episode_number,
+                title: episode.title,
+                overview: episode.overview,
+            }),
+        }
+    }
+}
+
+/// Fetch and store every episode's text in one language.
+///
+/// One provider call per season, so this happens once per work per language and
+/// is then answered from the database. A failure is logged and swallowed: the
+/// caller still gets the work, in the language it was stored in.
+async fn fetch_episodes(state: &AppState, item: &MediaItem, language: &str) {
+    tracing::info!(id = %item.id, %language, "fetching episode translations");
+
+    let mut texts = from_tmdb(state, item, language).await;
+
+    fill_from_tvdb(state, item, language, &mut texts).await;
 
     if let Err(e) = repo::translation::put_episodes(&state.db, &item.id, language, &texts).await {
         tracing::warn!(id = %item.id, %language, error = %e, "could not store episode translations");

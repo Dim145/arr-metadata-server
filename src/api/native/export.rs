@@ -24,7 +24,7 @@ use crate::{
     db::repo::{self, audit::Action, job},
     domain::MediaKind,
     error::{AppError, AppResult},
-    export::nfo,
+    export::{artwork, nfo},
     service,
     state::AppState,
 };
@@ -123,6 +123,9 @@ pub struct ExportSummary {
     pub root: String,
     pub works: usize,
     pub episodes: usize,
+    /// Pictures written. A second export leaves them alone, so this counts what
+    /// was new, not what is there.
+    pub images: usize,
     pub failed: usize,
 }
 
@@ -225,6 +228,7 @@ async fn write_everything(
         root: root.display().to_string(),
         works: 0,
         episodes: 0,
+        images: 0,
         failed: 0,
     };
 
@@ -252,16 +256,55 @@ async fn write_everything(
                 }
             }
         }
+
+        if state.config.export.artwork {
+            let (written, failed) = write_artwork(state, root, &item).await;
+            summary.images += written;
+            summary.failed += failed;
+        }
     }
 
     tracing::info!(
         works = summary.works,
         episodes = summary.episodes,
+        images = summary.images,
         failed = summary.failed,
         "nfo export finished"
     );
 
     Ok(summary)
+}
+
+/// Download one work's artwork into its folder.
+///
+/// A picture that cannot be fetched is counted and skipped: a provider serving
+/// one 404 should not cost the rest of the export.
+async fn write_artwork(
+    state: &AppState,
+    root: &std::path::Path,
+    item: &crate::domain::MediaItem,
+) -> (usize, usize) {
+    let mut written = 0;
+    let mut failed = 0;
+
+    for download in artwork::plan(item) {
+        match artwork::fetch_one(&state.http, root, &download).await {
+            Ok(true) => written += 1,
+            // Already on disk from an earlier export.
+            Ok(false) => {}
+            Err(e) => {
+                tracing::warn!(
+                    id = %item.id,
+                    path = %download.path,
+                    error = format_args!("{e:#}"),
+                    "could not write artwork"
+                );
+                failed += 1;
+            }
+        }
+    }
+
+    (written, failed)
 }
 
 /// Write one document under `root`, refusing anything that would escape it.

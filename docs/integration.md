@@ -222,5 +222,24 @@ files and local artwork. Sonarr and Radarr already write those, so a practical
 setup is: this server feeds Sonarr and Radarr, they write the `.nfo` files, and
 Plex reads them. Your corrections reach Plex, just indirectly.
 
+If nothing else manages the library, `POST /api/v1/export/nfo` writes the whole
+catalogue under `AMS_NFO_EXPORT_PATH`, pictures included:
+
+```
+series/breaking-bad-2008/tvshow.nfo
+series/breaking-bad-2008/poster.jpg      fanart.jpg  banner.jpg  clearlogo.png
+series/breaking-bad-2008/season01-poster.jpg
+series/breaking-bad-2008/.actors/Bryan Cranston.jpg
+series/breaking-bad-2008/Season 01/S01E01.nfo
+series/breaking-bad-2008/Season 01/S01E01-thumb.jpg
+movies/arrival-2016/movie.nfo            poster.jpg  fanart.jpg  …
+```
+
+Those are the names Kodi defined and Plex's agent adopted, which is the point:
+a `.nfo` that only carries image *URLs* leaves the fetching to the consumer, and
+Plex often will not. Copy or link this tree next to your media. Re-running the
+export rewrites the documents and leaves existing pictures alone, so it is cheap
+to repeat. Set `AMS_NFO_EXPORT_ARTWORK=false` for documents only.
+
 Jellyfin and Emby are a different matter — both accept metadata plugins, so a
 direct provider for them is possible. It is not built yet.

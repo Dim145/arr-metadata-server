@@ -163,6 +163,12 @@ pub struct Cache {
 pub struct Export {
     /// Where `POST /api/v1/export/nfo` writes. Unset disables that endpoint.
     pub nfo_path: Option<PathBuf>,
+    /// Also download the artwork the documents point at, beside them.
+    ///
+    /// On, because a `.nfo` whose pictures are remote URLs is half an export:
+    /// Kodi fetches them, Plex's Personal Media agent often does not. Off is for
+    /// someone who only wants the text, or has no room for a library's artwork.
+    pub artwork: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -307,6 +313,7 @@ impl Config {
             },
             export: Export {
                 nfo_path: opt(&["AMS_NFO_EXPORT_PATH"]).map(PathBuf::from),
+                artwork: flag(&["AMS_NFO_EXPORT_ARTWORK"], true)?,
             },
             refresh: Refresh {
                 enabled: flag(&["AMS_REFRESH_ENABLED"], true)?,

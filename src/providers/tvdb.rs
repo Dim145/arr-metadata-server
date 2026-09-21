@@ -12,7 +12,7 @@
 //! Authentication is a token from `/login`, good for about a month. It is
 //! fetched on first use, kept, and refetched when the server rejects it.
 
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
@@ -23,9 +23,18 @@ use crate::{
     config,
     db::{new_id, now},
     domain::{
-        CoverType, Episode, ExternalIds, Image, MediaItem, MediaKind, Rating, Season, make_slug,
+        CoverType, Episode, ExternalIds, Image, MediaItem, MediaKind, Rating, Season, Translation,
+        make_slug,
     },
 };
+
+/// One episode's text in a single language.
+pub struct TranslatedEpisode {
+    pub season_number: i32,
+    pub episode_number: i32,
+    pub title: Option<String>,
+    pub overview: Option<String>,
+}
 
 /// Artwork paths on episodes are relative to this.
 const ARTWORK_BASE: &str = "https://artworks.thetvdb.com";
@@ -126,6 +135,39 @@ impl TvdbClient {
             .context("TheTVDB returned a series this server could not interpret")?;
 
         Ok(Some((raw, to_item(&envelope.data, &self.language))))
+    }
+
+    /// Every episode's title and overview in one language.
+    ///
+    /// This answers a client asking in a language the entity is not stored in.
+    /// TMDB is asked first because it is usually richer, but it has a handful of
+    /// languages where TheTVDB has dozens, so this is what makes a French or
+    /// Czech request work at all for most series.
+    pub async fn episode_texts(
+        &self,
+        tvdb_id: i64,
+        language: &str,
+    ) -> Result<Vec<TranslatedEpisode>> {
+        if !self.is_enabled() {
+            return Ok(Vec::new());
+        }
+
+        let episodes = self.episodes_in(tvdb_id, language).await?;
+
+        Ok(episodes
+            .into_iter()
+            .filter_map(|raw| {
+                let record: EpisodeRecord = serde_json::from_value(raw).ok()?;
+
+                Some(TranslatedEpisode {
+                    season_number: record.season_number?,
+                    episode_number: record.number?,
+                    title: non_empty(record.name.as_deref()),
+                    overview: non_empty(record.overview.as_deref()),
+                })
+            })
+            .filter(|e| e.title.is_some() || e.overview.is_some())
+            .collect())
     }
 
     /// Every episode in one language, following TVDB's paging.
@@ -464,6 +506,53 @@ fn is_named(episode: &Value) -> bool {
         .is_some_and(|name| !name.trim().is_empty())
 }
 
+/// Every language TheTVDB holds this series in.
+///
+/// It carries far more than TMDB — 48 languages for *Attack on Titan* against
+/// TMDB's handful — and they are what answers a client asking in a language the
+/// entity is not stored in. The two lists are keyed by language and joined
+/// here, because TVDB may hold a name without an overview or the reverse.
+fn all_translations(block: &Translations) -> Vec<Translation> {
+    let mut by_language: BTreeMap<&str, Translation> = BTreeMap::new();
+
+    for entry in &block.name_translations {
+        let Some(language) = entry.language.as_deref() else {
+            continue;
+        };
+
+        by_language
+            .entry(language)
+            .or_insert_with(|| blank_translation(language))
+            .title = non_empty(entry.name.as_deref());
+    }
+
+    for entry in &block.overview_translations {
+        let Some(language) = entry.language.as_deref() else {
+            continue;
+        };
+
+        by_language
+            .entry(language)
+            .or_insert_with(|| blank_translation(language))
+            .overview = non_empty(entry.overview.as_deref());
+    }
+
+    // One with neither field is noise.
+    by_language
+        .into_values()
+        .filter(|t| t.title.is_some() || t.overview.is_some())
+        .collect()
+}
+
+fn blank_translation(language: &str) -> Translation {
+    Translation {
+        language: language.to_string(),
+        title: None,
+        overview: None,
+        is_manual: false,
+    }
+}
+
 fn to_item(series: &SeriesExtended, language: &str) -> MediaItem {
     let mut item = MediaItem::empty(MediaKind::Series);
 
@@ -486,6 +575,8 @@ fn to_item(series: &SeriesExtended, language: &str) -> MediaItem {
                 .and_then(|o| non_empty(o.overview.as_deref()))
         })
         .or_else(|| non_empty(series.overview.as_deref()));
+
+    item.translations = translated.map(all_translations).unwrap_or_default();
     item.first_aired = non_empty(series.first_aired.as_deref());
     item.last_aired = non_empty(series.last_aired.as_deref());
     item.year = series.year.as_deref().and_then(|y| y.parse().ok());

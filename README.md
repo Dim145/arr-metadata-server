@@ -33,8 +33,10 @@ It replaces and merges two earlier projects: `the earlier TMDB relay` and
   an escape hatch to turn authentication off entirely.
 - **Per-language answers.** Sonarr asks in its URL, the native API takes
   `?language=`. Translations are fetched the first time a language is asked for
-  and kept. A locked field stays locked in every language.
-- **`.nfo` export**, which is the only route to Plex.
+  and kept — from TMDB, then TheTVDB for the many languages TMDB does not carry.
+  A locked field stays locked in every language.
+- **`.nfo` export with the artwork beside it**, in the layout Kodi defined and
+  Plex's Personal Media agent reads. It is the only route to Plex.
 
 ## Requirements
 
