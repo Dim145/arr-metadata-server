@@ -19,6 +19,9 @@ pub enum Identity {
     Admin(Box<AdminUser>),
     /// Allowed by network policy, with no credential presented.
     Network,
+    /// Someone browsing the catalogue with no credential, when public browsing
+    /// is switched on. Reads a fixed set of paths and nothing else.
+    Visitor,
     /// Authentication is switched off for this surface.
     Anonymous,
 }
@@ -29,6 +32,7 @@ impl Identity {
             Self::Client(c) => format!("client:{}", c.name),
             Self::Admin(u) => format!("admin:{}", u.username),
             Self::Network => "network".to_string(),
+            Self::Visitor => "visitor".to_string(),
             Self::Anonymous => "anonymous".to_string(),
         }
     }
@@ -41,7 +45,7 @@ impl Identity {
         match self {
             Self::Admin(_) | Self::Anonymous => true,
             Self::Client(c) => c.scopes.iter().any(|s| s == "write" || s == "admin"),
-            Self::Network => false,
+            Self::Network | Self::Visitor => false,
         }
     }
 
@@ -51,7 +55,7 @@ impl Identity {
             Self::Admin(u) => u.is_admin,
             Self::Anonymous => true,
             Self::Client(c) => c.scopes.iter().any(|s| s == "admin"),
-            Self::Network => false,
+            Self::Network | Self::Visitor => false,
         }
     }
 }

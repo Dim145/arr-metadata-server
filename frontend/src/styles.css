@@ -1,129 +1,160 @@
 @import "tailwindcss";
 
-/* ───────────────────────────────────────────────────────────────────────────
-   A broadcast control room, not an admin panel.
+/* Self-hosted: this server is meant to run on a machine that may never reach
+   the internet, and a UI whose type only renders when Google is reachable is
+   not one you can rely on. */
+@import "@fontsource/libre-bodoni/400.css";
+@import "@fontsource/libre-bodoni/500.css";
+@import "@fontsource/libre-bodoni/700.css";
+@import "@fontsource/libre-bodoni/400-italic.css";
+@import "@fontsource-variable/public-sans";
+@import "@fontsource-variable/jetbrains-mono";
 
-   Warm near-black rather than the cold blue-grey every dashboard defaults to,
-   with a phosphor amber that only ever means one thing: a human touched this.
-   Provider data stays neutral. The contrast between the two IS the interface.
+/* ───────────────────────────────────────────────────────────────────────────
+   LA CINÉMATHÈQUE
+
+   A private film archive's catalogue, not a streaming service and not a
+   dashboard. The register is the printed repertory programme: a didone for the
+   titles on the marquee, a plain grotesque for the body of the entry, and a
+   monospace for everything that is a number, an identifier or a machine's
+   opinion.
+
+   Ink is warm rather than blue-black — film base, not a terminal. One accent,
+   vermillion, the colour of cinema seating and exit signs; it marks the way
+   through the building and nothing else. Provider data reads in slate, a human
+   hand reads in brass, and neither is ever expressed by colour alone.
    ─────────────────────────────────────────────────────────────────────────── */
 
 @theme {
-  --color-void: #0a0908;
-  --color-pit: #100e0c;
-  --color-surface: #16130f;
-  --color-raised: #1d1915;
-  --color-line: #2a241d;
-  --color-line-bright: #3a3229;
+  /* Surfaces, darkest first. */
+  --color-ink: #0b0b0c;
+  --color-ink-raised: #111113;
+  --color-ink-high: #17171a;
+  --color-ink-top: #1e1e22;
+  --color-rule: #26262b;
+  --color-rule-bright: #35353c;
 
-  --color-paper: #ede8df;
-  --color-dim: #a29a8d;
-  --color-faint: #6d655a;
+  /* Text. Bone rather than white: a printed page, held under a lamp. */
+  --color-bone: #ece8e1;
+  --color-bone-dim: #a5a099;
+  --color-bone-faint: #6c6862;
 
-  /* Phosphor amber — manual edits, locks, anything a person owns. */
-  --color-phos: #e8a33d;
-  --color-phos-dim: #8a6220;
-  --color-phos-glow: #ffc96b;
+  /* The one accent. */
+  --color-vermillion: #e04434;
+  --color-vermillion-bright: #ff6a58;
+  --color-vermillion-deep: #7d1f16;
 
-  /* Cool slate — provider data, automation, anything the machine owns. */
-  --color-signal: #6f97b8;
-  --color-signal-dim: #3c556b;
+  /* Brass: a person decided this. Always with a glyph or a word beside it. */
+  --color-brass: #c9a227;
+  --color-brass-deep: #5f4c10;
 
-  --color-sage: #93b071;
-  --color-rust: #d1624a;
+  /* Slate: a machine decided this. */
+  --color-slate: #7e93a8;
+  --color-slate-deep: #33414e;
 
-  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", monospace;
-  --font-display: "Instrument Serif", Georgia, serif;
+  --color-moss: #6b9a5b;
 
-  --radius-sharp: 2px;
+  --font-display: "Libre Bodoni", "Didot", Georgia, serif;
+  --font-sans: "Public Sans Variable", "Public Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, monospace;
+
+  --radius-card: 3px;
+  --radius-panel: 4px;
+
+  /* One rhythm for every transition in the interface. */
+  --ease-out-soft: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-soft: cubic-bezier(0.7, 0, 0.84, 0);
 }
 
 @layer base {
   html {
     color-scheme: dark;
+    -webkit-text-size-adjust: 100%;
   }
 
   body {
-    background-color: var(--color-void);
-    color: var(--color-paper);
+    background-color: var(--color-ink);
+    color: var(--color-bone);
     font-family: var(--font-sans);
-    font-feature-settings: "cv05" 1, "ss03" 1;
+    font-synthesis-weight: none;
     -webkit-font-smoothing: antialiased;
     margin: 0;
     min-height: 100dvh;
   }
 
-  /* Film grain. Fixed, so the texture belongs to the screen rather than to the
-     content scrolling under it. */
-  body::before {
-    content: "";
-    position: fixed;
-    inset: 0;
-    z-index: 100;
-    pointer-events: none;
-    opacity: 0.032;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+  /* Numbers that sit in columns must not shuffle as they change. */
+  table,
+  [data-tabular] {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* A visible ring on every focusable thing, in the accent, offset so it reads
+     against both a card and the page. */
+  :focus-visible {
+    outline: 2px solid var(--color-vermillion);
+    outline-offset: 2px;
+    border-radius: 2px;
   }
 
   ::selection {
-    background: var(--color-phos);
-    color: var(--color-void);
+    background: var(--color-vermillion);
+    color: var(--color-ink);
   }
 
-  :focus-visible {
-    outline: 2px solid var(--color-phos);
-    outline-offset: 2px;
+  ::placeholder {
+    color: var(--color-bone-faint);
   }
 
-  /* A scrollbar that belongs to the room. */
+  /* The scrollbar belongs to the room too. */
   * {
+    scrollbar-color: var(--color-rule-bright) transparent;
     scrollbar-width: thin;
-    scrollbar-color: var(--color-line-bright) transparent;
   }
-  ::-webkit-scrollbar {
-    width: 10px;
-    height: 10px;
+}
+
+@layer components {
+  /* ── The grain ────────────────────────────────────────────────────────────
+     A still frame has grain; a web page does not, and the difference is most of
+     why screens look sterile next to film. One fixed layer, painted once, so it
+     belongs to the screen rather than to the content scrolling under it. */
+  .grain::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    opacity: 0.035;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
   }
-  ::-webkit-scrollbar-thumb {
-    background: var(--color-line-bright);
-    border: 3px solid var(--color-void);
-    border-radius: 99px;
+
+  /* ── Micro-label ──────────────────────────────────────────────────────────
+     The caption under an index-card field. Mono, small, wide, quiet. */
+  .label {
+    font-family: var(--font-mono);
+    font-size: 0.625rem;
+    font-weight: 500;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--color-bone-faint);
+  }
+
+  /* ── Hairline ─────────────────────────────────────────────────────────────
+     Rules do the work that boxes do elsewhere: they separate without enclosing,
+     which is what a catalogue page does. */
+  .hairline {
+    border-color: var(--color-rule);
   }
 }
 
 @layer utilities {
-  /* Fine horizontal rules, like a printed register. */
-  .rule-top {
-    box-shadow: inset 0 1px 0 var(--color-line);
-  }
-
-  /* The signature: a hairline down the left edge that lights up on hover. */
-  .edge {
-    box-shadow: inset 2px 0 0 var(--color-line);
-    transition: box-shadow 180ms ease;
-  }
-  .edge:hover {
-    box-shadow: inset 2px 0 0 var(--color-line-bright);
-  }
-  .edge-locked {
-    box-shadow: inset 2px 0 0 var(--color-phos);
-  }
-
-  .tabular {
-    font-variant-numeric: tabular-nums;
-  }
-
-  /* Staggered page entrance. One orchestrated reveal beats a dozen
-     micro-interactions. */
-  .reveal {
-    animation: reveal 520ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
-  }
-
-  @keyframes reveal {
+  /* ── Entrance ─────────────────────────────────────────────────────────────
+     One orchestrated reveal per view, staggered by index, rather than motion
+     scattered across the page. Transform and opacity only — nothing here asks
+     the compositor for a new layout. */
+  @keyframes rise {
     from {
       opacity: 0;
-      transform: translateY(10px);
+      transform: translate3d(0, 10px, 0);
     }
     to {
       opacity: 1;
@@ -131,21 +162,96 @@
     }
   }
 
-  @media (prefers-reduced-motion: reduce) {
-    .reveal {
-      animation: none;
+  @keyframes fade {
+    from {
+      opacity: 0;
     }
-    * {
-      transition-duration: 1ms !important;
+    to {
+      opacity: 1;
     }
   }
 
-  /* Faint amber bloom behind the active nav item. */
-  .bloom {
-    background-image: radial-gradient(
-      120% 100% at 0% 50%,
-      color-mix(in srgb, var(--color-phos) 12%, transparent),
-      transparent 70%
+  /* The projector strike: a title arriving as if lit rather than drawn. */
+  @keyframes strike {
+    from {
+      opacity: 0;
+      transform: translate3d(0, 14px, 0) scale(0.985);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  @keyframes sweep {
+    from {
+      transform: translate3d(-100%, 0, 0);
+    }
+    to {
+      transform: translate3d(100%, 0, 0);
+    }
+  }
+
+  .rise {
+    animation: rise 0.42s var(--ease-out-soft) both;
+  }
+
+  .fade-in {
+    animation: fade 0.3s var(--ease-out-soft) both;
+  }
+
+  .strike {
+    animation: strike 0.55s var(--ease-out-soft) both;
+  }
+
+  /* Staggering by class rather than inline style keeps the delay out of the
+     markup, where it would be repeated on every card. */
+  .stagger > * {
+    animation: rise 0.42s var(--ease-out-soft) both;
+  }
+  .stagger > *:nth-child(1) { animation-delay: 0ms; }
+  .stagger > *:nth-child(2) { animation-delay: 35ms; }
+  .stagger > *:nth-child(3) { animation-delay: 70ms; }
+  .stagger > *:nth-child(4) { animation-delay: 105ms; }
+  .stagger > *:nth-child(5) { animation-delay: 140ms; }
+  .stagger > *:nth-child(6) { animation-delay: 175ms; }
+  .stagger > *:nth-child(7) { animation-delay: 210ms; }
+  .stagger > *:nth-child(8) { animation-delay: 245ms; }
+  .stagger > *:nth-child(9) { animation-delay: 280ms; }
+  .stagger > *:nth-child(10) { animation-delay: 315ms; }
+  /* Past ten, everything arrives together: a grid of forty posters should not
+     take two seconds to finish assembling. */
+  .stagger > *:nth-child(n + 11) { animation-delay: 350ms; }
+
+  /* The shimmer on a loading placeholder. */
+  .shimmer {
+    position: relative;
+    overflow: hidden;
+  }
+  .shimmer::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      90deg,
+      transparent,
+      color-mix(in srgb, var(--color-bone) 6%, transparent),
+      transparent
     );
+    animation: sweep 1.4s infinite;
+  }
+
+  /* ── Motion, refused ──────────────────────────────────────────────────────
+     Someone who has asked their system for less movement has asked this
+     interface too. Everything still arrives; it simply arrives already there. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
   }
 }

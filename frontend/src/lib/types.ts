@@ -220,6 +220,7 @@ export interface Settings {
   skyhookFallback: boolean
   refreshEnabled: boolean
   authDisabled: boolean
+  publicBrowse: boolean
   nativePolicy: string
   tmdbPolicy: string
   arrPolicy: string
@@ -237,4 +238,9 @@ export interface Snapshot {
   etag?: string
   /** Absent when the caller asked for `payload=false`. */
   payload?: unknown
+}
+
+export interface ItemPage {
+  items: MediaItem[]
+  total: number
 }

@@ -39,6 +39,8 @@ pub fn router() -> OpenApiRouter<AppState> {
 pub struct ListQuery {
     pub term: Option<String>,
     pub kind: Option<String>,
+    /// Serve the titles in this language, where a translation is held.
+    pub language: Option<String>,
     #[serde(default, deserialize_with = "crate::api::extract::empty_as_none")]
     pub year: Option<i32>,
     #[serde(default)]
@@ -85,25 +87,38 @@ async fn list(
         .transpose()
         .map_err(|e| AppError::BadRequest(e.to_string()))?;
 
-    let mut items = repo::item::search(
-        &state.db,
-        &repo::item::Query {
-            term: query.term,
-            kind,
-            year: query.year,
-            manual_only: query.manual_only,
-            include_disabled: query.include_disabled,
-            limit: query.limit.unwrap_or(50),
-            offset: query.offset.unwrap_or(0),
-        },
-    )
-    .await?;
+    let language = query.language.clone();
+
+    let query_for_count = repo::item::Query {
+        term: query.term,
+        kind,
+        year: query.year,
+        manual_only: query.manual_only,
+        include_disabled: query.include_disabled,
+        limit: query.limit.unwrap_or(50),
+        offset: query.offset.unwrap_or(0),
+    };
+
+    let mut items = repo::item::search(&state.db, &query_for_count).await?;
 
     // Without this the list would show provider values while the detail view
     // showed edited ones, and a lock would look like it had not taken.
     service::apply_overrides(&state, &mut items).await?;
 
-    let total = repo::item::count(&state.db, kind).await?;
+    // A list is drawn as posters, so it needs artwork and a score. Only those:
+    // pulling every child would mean reading a long-running series' whole
+    // episode list to draw one thumbnail.
+    repo::item::load_artwork(&state.db, &mut items).await?;
+
+    // Shallow, not the full overlay: a grid shows titles, and fetching every
+    // work's episode text to draw fifty posters would be absurd.
+    if let Some(language) = language.as_deref().filter(|l| !l.is_empty()) {
+        for item in &mut items {
+            crate::service::language::apply_shallow(&state, item, language);
+        }
+    }
+
+    let total = repo::item::count_matching(&state.db, &query_for_count).await?;
 
     Ok(Json(ListResponse { items, total }))
 }

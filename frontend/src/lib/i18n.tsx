@@ -1,0 +1,927 @@
+/**
+ * Two languages, one shape.
+ *
+ * English is the source of truth: `Dict` is derived from it, so French must
+ * carry every key or the build fails. That is the whole point of doing this
+ * without a library — a missing translation is a type error at the moment it is
+ * introduced, not a stray English word noticed in production six weeks later.
+ *
+ * Values that take an argument are functions rather than templates with
+ * placeholders, so the count or the name is typed too.
+ */
+
+import { createContext, use, useCallback, useEffect, useMemo, useState } from 'react'
+
+export type Lang = 'en' | 'fr'
+
+const STORAGE_KEY = 'ams.lang'
+
+const en = {
+  brand: {
+    name: 'Cinémathèque',
+    tagline: 'One source of truth for the whole stack',
+  },
+  nav: {
+    browse: 'Browse',
+    series: 'Series',
+    films: 'Films',
+    search: 'Search',
+    searchPlaceholder: 'Search the catalogue…',
+    admin: 'Admin',
+    signIn: 'Sign in',
+    signOut: 'Sign out',
+    language: 'Language',
+    menu: 'Menu',
+    close: 'Close',
+    skipToContent: 'Skip to content',
+  },
+  home: {
+    title: 'The catalogue',
+    lead: 'Everything this server knows, gathered from every provider it can reach.',
+    recentlyAdded: 'Recently added',
+    recentlyUpdated: 'Recently updated',
+    allSeries: 'Series',
+    allFilms: 'Films',
+    seeAll: 'See all',
+    empty: 'Nothing here yet.',
+    emptyHint: 'Ask a client for a work, or add one by hand, and it will appear.',
+  },
+  browse: {
+    title: 'Browse',
+    filters: 'Filters',
+    kind: 'Kind',
+    all: 'All',
+    series: 'Series',
+    films: 'Films',
+    year: 'Year',
+    anyYear: 'Any year',
+    sort: 'Sort',
+    sortTitle: 'Title',
+    sortYear: 'Year',
+    sortAdded: 'Recently added',
+    manualOnly: 'Edited by hand',
+    clear: 'Clear filters',
+    results: (n: number) => (n === 1 ? '1 work' : `${n} works`),
+    noResults: 'No work matches these filters.',
+    noResultsHint: 'Widen the year, or clear the filters.',
+    loadMore: 'Load more',
+  },
+  work: {
+    overview: 'Overview',
+    cast: 'Cast',
+    crew: 'Crew',
+    seasons: 'Seasons',
+    episodes: 'Episodes',
+    season: (n: number) => (n === 0 ? 'Specials' : `Season ${n}`),
+    episodeCount: (n: number) => (n === 1 ? '1 episode' : `${n} episodes`),
+    artwork: 'Artwork',
+    details: 'Details',
+    identifiers: 'Identifiers',
+    sources: 'Sources',
+    firstAired: 'First aired',
+    lastAired: 'Last aired',
+    released: 'Released',
+    runtime: 'Runtime',
+    minutes: (n: number) => `${n} min`,
+    status: 'Status',
+    network: 'Network',
+    studio: 'Studio',
+    genres: 'Genres',
+    rating: 'Rating',
+    certification: 'Certification',
+    originalTitle: 'Original title',
+    originalLanguage: 'Original language',
+    alternativeTitles: 'Alternative titles',
+    homepage: 'Homepage',
+    trailer: 'Trailer',
+    noOverview: 'No overview for this work yet.',
+    votes: (n: number) => (n === 1 ? '1 vote' : `${n} votes`),
+    back: 'Back to the catalogue',
+    numbering: 'Episode and season numbering comes from TheTVDB, or from Skyhook.',
+    edited: 'Edited by hand',
+    editedHint: 'A person set this value. No refresh will overwrite it.',
+    fromProvider: 'From a provider',
+    manualEntry: 'Entered by hand',
+    absoluteNumber: 'Abs.',
+  },
+  admin: {
+    title: 'Administration',
+    dashboard: 'Dashboard',
+    catalogue: 'Catalogue',
+    clients: 'Clients',
+    jobs: 'Jobs',
+    audit: 'Audit',
+    settings: 'Settings',
+    backToSite: 'Back to the catalogue',
+    signedInAs: (who: string) => `Signed in as ${who}`,
+    sections: 'Sections',
+    up: 'Back',
+    operator: 'Operator',
+    checking: 'Checking your session…',
+
+    overview: {
+      lead: 'What this server holds, and what it has been doing.',
+      recentRuns: 'Recent runs',
+      allRuns: 'All of them',
+      surfaces: 'Surfaces',
+      thisUi: 'This interface',
+      tmdbClients: 'TMDB clients',
+      configure: 'Configure',
+      statsFailed: 'The figures could not be loaded.',
+      lockingTitle: 'How locking works',
+      lockingProviders:
+        'Providers write into snapshots. Every refresh replaces those wholesale.',
+      lockingYours:
+        'Your edits live in a separate table the refresh path never writes to. That is the lock — structural, not a convention.',
+      lockingUnlock:
+        'Unlock a field and it goes back to whatever the provider says, at the next refresh.',
+    },
+
+    works: {
+      lead: 'Everything this server holds, including what it has stopped serving.',
+      search: 'Search titles',
+      kind: 'Kind',
+      allKinds: 'All kinds',
+      manualOnly: 'Edited by hand',
+      showing: (shown: number, total: number) => `${shown} of ${total}`,
+      newEntry: 'New entry',
+      colTitle: 'Title',
+      colKind: 'Kind',
+      colIds: 'Identifiers',
+      colState: 'State',
+      colUpdated: 'Updated',
+      colActions: 'Actions',
+      open: (title: string) => `Open ${title}`,
+      disabled: 'Disabled',
+      enable: 'Enable',
+      disable: 'Disable',
+      locks: (n: number) => (n === 1 ? '1 lock' : `${n} locks`),
+      empty: 'Nothing here yet',
+      emptyHint: 'Entries appear as clients ask for them, or you create one by hand.',
+      emptyFiltered: 'No stored entry matches',
+      emptyFilteredHint:
+        'Only what this server has stored appears here. A client searching through it still reaches the providers.',
+      loadFailed: 'The catalogue could not be loaded.',
+      deleteTitle: 'Delete this entry?',
+      deleteBody: (title: string) =>
+        `“${title}” and everything attached to it, overrides included, will be removed. This cannot be undone.`,
+      disableTitle: 'Stop serving this entry?',
+      disableBody: (title: string) =>
+        `“${title}” stays in the database and stops being served to every client. You can enable it again at any time.`,
+
+      compose: {
+        title: 'Create an entry by hand',
+        workTitle: 'Title',
+        year: 'Year',
+        overview: 'Overview',
+        tvdb: 'TheTVDB identifier',
+        tmdb: 'TMDB identifier',
+        optional: 'Optional',
+        note: 'An external identifier makes the entry refreshable: a provider fills in what you leave blank, and never touches what you fill in.',
+        submit: 'Create the entry',
+      },
+    },
+
+    editor: {
+      fields: 'Fields',
+      fieldsHint: 'Saving a field locks it',
+      locked: 'Locked',
+      lockedBy: (who: string) => `Locked by ${who}`,
+      lockedOn: (when: string) => `Locked ${when}`,
+      lockCount: (n: number) => (n === 1 ? '1 locked field' : `${n} locked fields`),
+      saveAndLock: 'Save and lock',
+      unlock: 'Unlock',
+      unlockAll: 'Unlock everything',
+      unlockAllTitle: 'Unlock every field?',
+      unlockAllBody:
+        'Each locked field goes back to whatever the providers say at the next refresh, and what you typed is discarded.',
+      refresh: 'Refresh from providers',
+      refreshing: 'Refreshing…',
+      refreshFailed: 'The last refresh failed',
+      nfo: 'Download .nfo',
+      nfoHint: 'A Kodi or XBMC document — the route to Plex',
+      showIn: 'Show in',
+      asStored: 'As stored',
+      translationNote: 'A translation is shown for reading. An edit still applies to the work itself.',
+      listHint: 'Separate with commas',
+      record: 'Record',
+      created: 'Created',
+      updated: 'Updated',
+      refreshed: 'Refreshed',
+      nextRefresh: 'Next refresh',
+      content: 'Content',
+      contentValue: (seasons: number, episodes: number) =>
+        `${seasons} seasons · ${episodes} episodes`,
+      noSources: 'No provider has answered for this entry yet.',
+      handEntered: 'Entered by hand. No provider stands behind this entry.',
+      loadFailed: 'This entry could not be loaded.',
+
+      children: {
+        credits: 'Credits',
+        addCredit: 'Add a credit',
+        personName: 'Name',
+        character: 'Character',
+        role: 'Role',
+        actor: 'Actor',
+        director: 'Director',
+        writer: 'Writer',
+        producer: 'Producer',
+        guest: 'Guest',
+        as: (character: string) => `as ${character}`,
+        titles: 'Alternative titles',
+        titlesHint:
+          'Sonarr and Radarr match release names against these. Adding the spelling a release group actually uses is often what makes a download get recognised.',
+        addTitle: 'Add a title',
+        artwork: 'Artwork',
+        artworkHint: 'An image you add is placed ahead of the providers’, so clients pick it first.',
+        addImage: 'Add an image',
+        imageKind: 'Kind',
+        url: 'Address',
+        poster: 'Poster',
+        fanart: 'Backdrop',
+        banner: 'Banner',
+        clearlogo: 'Logo',
+        seasons: 'Seasons',
+        addSeason: 'Add a season',
+        seasonNumber: 'Season',
+        seasonTitle: 'Title',
+        episodes: 'Episodes',
+        addEpisode: 'Add an episode',
+        episodeNumber: 'Episode',
+        episodeTitle: 'Title',
+        airDate: 'Air date',
+        yours: 'Yours',
+        count: (n: number) => `${n}`,
+        yoursCount: (n: number) => `${n} yours`,
+        removeTitle: 'Remove this row?',
+        removeBody: 'You added it by hand, so no refresh will bring it back.',
+        onlyManual:
+          'Only a row added by hand can be removed here. A provider’s row would simply return at the next refresh.',
+        none: 'Nothing added by hand yet.',
+      },
+    },
+
+    keys: {
+      lead: 'A key authenticates the native API and the TMDB-compatible surface — in a header, or as the api_key parameter a TMDB client already sends. Sonarr and Radarr cannot send one at all, so those routes are guarded by the address allowlist instead.',
+      issue: 'Issue a key',
+      name: 'Name',
+      scopes: 'Scopes',
+      read: 'Read',
+      write: 'Write',
+      administer: 'Administer',
+      issued: 'Issued keys',
+      keyFor: (name: string) => `The key for ${name}`,
+      onlyOnce:
+        'Copy it now. Only a hash of it is stored, and this is the only time it will ever be shown.',
+      theKey: 'The key',
+      copy: 'Copy',
+      copied: 'Copied',
+      copyFailed: 'Select the key and copy it by hand — the browser refused.',
+      dismiss: 'I have copied it',
+      colName: 'Name',
+      colScopes: 'Scopes',
+      colPrefix: 'Prefix',
+      colLastUsed: 'Last used',
+      colActions: 'Actions',
+      neverUsed: 'Never used',
+      revoke: 'Revoke',
+      revokeTitle: 'Revoke this key?',
+      revokeBody: (name: string) =>
+        `“${name}” loses access immediately, and a revoked key cannot be restored. Whatever uses it will need a new one.`,
+      disableTitle: 'Suspend this key?',
+      disableBody: (name: string) =>
+        `“${name}” stops being accepted until you enable it again. The key itself is kept.`,
+      empty: 'No keys yet',
+      emptyHint: 'Issue one above to let a client through.',
+      loadFailed: 'The clients could not be loaded.',
+    },
+
+    runs: {
+      lead: 'What the scheduler has been doing. One row per run, not per work.',
+      colWhen: 'When',
+      colStatus: 'Status',
+      colKind: 'Kind',
+      colDetail: 'Detail',
+      running: 'Running',
+      succeeded: 'Succeeded',
+      failed: 'Failed',
+      empty: 'Nothing has run yet',
+      emptyHint:
+        'A sweep is recorded each time the scheduler wakes, and a refresh you trigger gets its own row.',
+      loadFailed: 'The job history could not be loaded.',
+    },
+
+    trail: {
+      lead: 'Every action that changes what this server serves. Reads are not recorded — one row for each metadata request would bury everything that matters. Failed sign-ins are, because a run of them is the one thing here worth an alert.',
+      action: 'Action',
+      allActions: 'All actions',
+      actor: 'Actor',
+      actorHint: 'For example admin:you',
+      colWhen: 'When',
+      colAction: 'Action',
+      colTarget: 'Target',
+      colActor: 'Actor',
+      anonymous: 'Anonymous',
+      newer: 'Newer',
+      older: 'Older',
+      range: (from: number, to: number, total: number) => `${from}–${to} of ${total}`,
+      empty: 'Nothing recorded',
+      emptyHint: 'Entries appear as soon as anything is created, edited or revoked.',
+      emptyFilteredHint: 'No entry matches that filter.',
+      loadFailed: 'The audit trail could not be loaded.',
+    },
+
+    config: {
+      lead: 'Configuration comes from the environment and is read once at startup. This page reports what took effect; change a value and restart to alter it.',
+      runtime: 'Runtime',
+      version: 'Version',
+      database: 'Database',
+      publicUrl: 'Public address',
+      tmdb: 'TMDB',
+      tmdbConfigured: (language: string) => `Configured · ${language}`,
+      tmdbMissing: 'No API key',
+      skyhook: 'Skyhook fallback',
+      autoRefresh: 'Automatic refresh',
+      publicBrowse: 'Public browsing',
+      enabled: 'Enabled',
+      disabled: 'Disabled',
+      policy: 'Access policy',
+      policyHint:
+        'An allowlist means the caller’s address must match AMS_ALLOWLIST. Sonarr and Radarr have their metadata addresses compiled in and cannot present a key; some TMDB clients compile theirs in too. For those, an address is the only control there is.',
+      authOffTitle: 'Authentication is switched off.',
+      authOffBody:
+        'Every surface is open to anyone who can reach this server. Unset AMS_AUTH_DISABLED before exposing it.',
+      export: 'Plex and other .nfo readers',
+      exportTitle: 'Export every entry as .nfo',
+      exportBody:
+        'Writes Kodi and XBMC documents under AMS_NFO_EXPORT_PATH, which is how your edits reach Plex — it has no configurable metadata source. If Sonarr or Radarr manage the library, switching on their own Kodi metadata writer is simpler: they already write these files beside the media, from what this server gave them.',
+      exportRun: 'Export',
+      exportRunning: 'Exporting…',
+      exportDone: (works: number, episodes: number) => `${works} works, ${episodes} episodes`,
+      exportFailed: (n: number) => `${n} failed`,
+      exportNoPath: 'AMS_NFO_EXPORT_PATH is not set.',
+      docs: 'API documentation',
+      docsTitle: 'Every route this server answers',
+      docsBody:
+        'The native API, plus the Sonarr, Radarr and TMDB compatibility surfaces. Generated from the handlers themselves, so it cannot drift from what is actually served.',
+      open: 'Open',
+      maintenance: 'Maintenance',
+      cacheTitle: 'Clear the in-process cache',
+      cacheBody:
+        'Discards cached entities and search results. The database is untouched: the next request re-reads it and re-applies every lock.',
+      cacheClear: 'Clear',
+      cacheCleared: 'Cleared',
+      password: 'Password',
+      passwordTitle: 'Change the administrator password',
+      passwordBody:
+        'Every session is ended, this one included, so you will be asked to sign in again.',
+      currentPassword: 'Current password',
+      newPassword: 'New password',
+      repeatPassword: 'Repeat the new password',
+      passwordSubmit: 'Change it',
+      passwordRule: 'Twelve characters at least.',
+      passwordMismatch: 'The two entries do not match.',
+      passwordWrong: 'That is not the current password.',
+      loadFailed: 'The settings could not be loaded.',
+    },
+  },
+  stats: {
+    series: 'Series',
+    films: 'Films',
+    lockedFields: 'Locked fields',
+    lockedHint: 'Manual edits no refresh will touch',
+    clients: 'API clients',
+    auditEntries: 'Audit entries',
+    changesRecorded: 'changes recorded',
+  },
+  auth: {
+    signIn: 'Sign in',
+    username: 'Username',
+    password: 'Password',
+    submit: 'Sign in',
+    signingIn: 'Signing in…',
+    failed: 'That username and password did not match.',
+    lead: 'This area manages the metadata the whole stack reads.',
+  },
+  common: {
+    loading: 'Loading…',
+    error: 'Something went wrong.',
+    retry: 'Try again',
+    cancel: 'Cancel',
+    save: 'Save',
+    saving: 'Saving…',
+    delete: 'Delete',
+    confirm: 'Confirm',
+    edit: 'Edit',
+    add: 'Add',
+    none: 'None',
+    notSet: 'Not set',
+    unknown: 'Unknown',
+    yes: 'Yes',
+    no: 'No',
+    refresh: 'Refresh',
+    more: 'More',
+    of: 'of',
+  },
+  a11y: {
+    poster: (title: string) => `Poster for ${title}`,
+    backdrop: (title: string) => `Backdrop for ${title}`,
+    headshot: (name: string) => `Photograph of ${name}`,
+    still: (title: string) => `Still from ${title}`,
+    ratingOf: (value: string) => `Rated ${value} out of 10`,
+    openWork: (title: string) => `Open ${title}`,
+  },
+}
+
+export type Dict = typeof en
+
+const fr: Dict = {
+  brand: {
+    name: 'Cinémathèque',
+    tagline: 'Une seule source de vérité pour toute la pile',
+  },
+  nav: {
+    browse: 'Parcourir',
+    series: 'Séries',
+    films: 'Films',
+    search: 'Rechercher',
+    searchPlaceholder: 'Chercher dans le catalogue…',
+    admin: 'Administration',
+    signIn: 'Se connecter',
+    signOut: 'Se déconnecter',
+    language: 'Langue',
+    menu: 'Menu',
+    close: 'Fermer',
+    skipToContent: 'Aller au contenu',
+  },
+  home: {
+    title: 'Le catalogue',
+    lead: 'Tout ce que ce serveur sait, rassemblé depuis chaque source qu’il peut joindre.',
+    recentlyAdded: 'Ajoutés récemment',
+    recentlyUpdated: 'Mis à jour récemment',
+    allSeries: 'Séries',
+    allFilms: 'Films',
+    seeAll: 'Tout voir',
+    empty: 'Rien ici pour l’instant.',
+    emptyHint: 'Demandez une œuvre depuis un client, ou ajoutez-en une à la main.',
+  },
+  browse: {
+    title: 'Parcourir',
+    filters: 'Filtres',
+    kind: 'Type',
+    all: 'Tout',
+    series: 'Séries',
+    films: 'Films',
+    year: 'Année',
+    anyYear: 'Toutes',
+    sort: 'Tri',
+    sortTitle: 'Titre',
+    sortYear: 'Année',
+    sortAdded: 'Ajout récent',
+    manualOnly: 'Édités à la main',
+    clear: 'Effacer les filtres',
+    results: (n: number) => (n === 1 ? '1 œuvre' : `${n} œuvres`),
+    noResults: 'Aucune œuvre ne correspond à ces filtres.',
+    noResultsHint: 'Élargissez l’année, ou effacez les filtres.',
+    loadMore: 'En charger plus',
+  },
+  work: {
+    overview: 'Synopsis',
+    cast: 'Distribution',
+    crew: 'Équipe',
+    seasons: 'Saisons',
+    episodes: 'Épisodes',
+    season: (n: number) => (n === 0 ? 'Hors-série' : `Saison ${n}`),
+    episodeCount: (n: number) => (n === 1 ? '1 épisode' : `${n} épisodes`),
+    artwork: 'Images',
+    details: 'Fiche',
+    identifiers: 'Identifiants',
+    sources: 'Sources',
+    firstAired: 'Première diffusion',
+    lastAired: 'Dernière diffusion',
+    released: 'Sortie',
+    runtime: 'Durée',
+    minutes: (n: number) => `${n} min`,
+    status: 'Statut',
+    network: 'Chaîne',
+    studio: 'Studio',
+    genres: 'Genres',
+    rating: 'Note',
+    certification: 'Classification',
+    originalTitle: 'Titre original',
+    originalLanguage: 'Langue originale',
+    alternativeTitles: 'Autres titres',
+    homepage: 'Site officiel',
+    trailer: 'Bande-annonce',
+    noOverview: 'Pas encore de synopsis pour cette œuvre.',
+    votes: (n: number) => (n === 1 ? '1 vote' : `${n} votes`),
+    back: 'Retour au catalogue',
+    numbering: 'La numérotation des épisodes et des saisons vient de TheTVDB, ou de Skyhook.',
+    edited: 'Édité à la main',
+    editedHint: 'Une personne a fixé cette valeur. Aucun rafraîchissement ne l’écrasera.',
+    fromProvider: 'Depuis une source',
+    manualEntry: 'Saisi à la main',
+    absoluteNumber: 'Abs.',
+  },
+  admin: {
+    title: 'Administration',
+    dashboard: 'Tableau de bord',
+    catalogue: 'Catalogue',
+    clients: 'Clients',
+    jobs: 'Tâches',
+    audit: 'Journal',
+    settings: 'Réglages',
+    backToSite: 'Retour au catalogue',
+    signedInAs: (who: string) => `Connecté en tant que ${who}`,
+    sections: 'Sections',
+    up: 'Retour',
+    operator: 'Opérateur',
+    checking: 'Vérification de votre session…',
+
+    overview: {
+      lead: 'Ce que ce serveur détient, et ce qu’il a fait dernièrement.',
+      recentRuns: 'Dernières exécutions',
+      allRuns: 'Toutes',
+      surfaces: 'Points d’entrée',
+      thisUi: 'Cette interface',
+      tmdbClients: 'Clients TMDB',
+      configure: 'Configurer',
+      statsFailed: 'Les chiffres n’ont pas pu être chargés.',
+      lockingTitle: 'Comment fonctionne le verrouillage',
+      lockingProviders:
+        'Les sources écrivent dans des instantanés. Chaque rafraîchissement les remplace en bloc.',
+      lockingYours:
+        'Vos modifications vivent dans une table à part, où le rafraîchissement n’écrit jamais. C’est cela, le verrou : une garantie structurelle, pas une convention.',
+      lockingUnlock:
+        'Déverrouillez un champ et il reprend ce que dit la source, dès le prochain rafraîchissement.',
+    },
+
+    works: {
+      lead: 'Tout ce que ce serveur détient, y compris ce qu’il a cessé de servir.',
+      search: 'Chercher un titre',
+      kind: 'Type',
+      allKinds: 'Tous les types',
+      manualOnly: 'Édités à la main',
+      showing: (shown: number, total: number) => `${shown} sur ${total}`,
+      newEntry: 'Nouvelle fiche',
+      colTitle: 'Titre',
+      colKind: 'Type',
+      colIds: 'Identifiants',
+      colState: 'État',
+      colUpdated: 'Mise à jour',
+      colActions: 'Actions',
+      open: (title: string) => `Ouvrir ${title}`,
+      disabled: 'Désactivée',
+      enable: 'Activer',
+      disable: 'Désactiver',
+      locks: (n: number) => (n === 1 ? '1 verrou' : `${n} verrous`),
+      empty: 'Rien ici pour l’instant',
+      emptyHint:
+        'Les fiches apparaissent à mesure que les clients les demandent, ou quand vous en créez une à la main.',
+      emptyFiltered: 'Aucune fiche ne correspond',
+      emptyFilteredHint:
+        'Seul ce que ce serveur a enregistré apparaît ici. Un client qui cherche à travers lui atteint toujours les sources.',
+      loadFailed: 'Le catalogue n’a pas pu être chargé.',
+      deleteTitle: 'Supprimer cette fiche ?',
+      deleteBody: (title: string) =>
+        `« ${title} » et tout ce qui y est rattaché, les surcharges comprises, seront supprimés. C’est irréversible.`,
+      disableTitle: 'Cesser de servir cette fiche ?',
+      disableBody: (title: string) =>
+        `« ${title} » reste en base et n’est plus servie à aucun client. Vous pourrez la réactiver à tout moment.`,
+
+      compose: {
+        title: 'Créer une fiche à la main',
+        workTitle: 'Titre',
+        year: 'Année',
+        overview: 'Synopsis',
+        tvdb: 'Identifiant TheTVDB',
+        tmdb: 'Identifiant TMDB',
+        optional: 'Facultatif',
+        note: 'Un identifiant externe rend la fiche rafraîchissable : une source remplira ce que vous laissez vide, et ne touchera jamais à ce que vous renseignez.',
+        submit: 'Créer la fiche',
+      },
+    },
+
+    editor: {
+      fields: 'Champs',
+      fieldsHint: 'Enregistrer un champ le verrouille',
+      locked: 'Verrouillé',
+      lockedBy: (who: string) => `Verrouillé par ${who}`,
+      lockedOn: (when: string) => `Verrouillé ${when}`,
+      lockCount: (n: number) => (n === 1 ? '1 champ verrouillé' : `${n} champs verrouillés`),
+      saveAndLock: 'Enregistrer et verrouiller',
+      unlock: 'Déverrouiller',
+      unlockAll: 'Tout déverrouiller',
+      unlockAllTitle: 'Déverrouiller tous les champs ?',
+      unlockAllBody:
+        'Chaque champ verrouillé reprendra ce que disent les sources au prochain rafraîchissement, et ce que vous aviez saisi sera perdu.',
+      refresh: 'Rafraîchir depuis les sources',
+      refreshing: 'Rafraîchissement…',
+      refreshFailed: 'Le dernier rafraîchissement a échoué',
+      nfo: 'Télécharger le .nfo',
+      nfoHint: 'Un document Kodi ou XBMC — la route vers Plex',
+      showIn: 'Afficher en',
+      asStored: 'Tel quel',
+      translationNote:
+        'Une traduction est affichée pour lecture. Une modification s’applique toujours à l’œuvre elle-même.',
+      listHint: 'Séparez par des virgules',
+      record: 'Suivi',
+      created: 'Créée',
+      updated: 'Modifiée',
+      refreshed: 'Rafraîchie',
+      nextRefresh: 'Prochain rafraîchissement',
+      content: 'Contenu',
+      contentValue: (seasons: number, episodes: number) =>
+        `${seasons} saisons · ${episodes} épisodes`,
+      noSources: 'Aucune source n’a encore répondu pour cette fiche.',
+      handEntered: 'Saisie à la main. Aucune source ne se porte garante de cette fiche.',
+      loadFailed: 'Cette fiche n’a pas pu être chargée.',
+
+      children: {
+        credits: 'Générique',
+        addCredit: 'Ajouter au générique',
+        personName: 'Nom',
+        character: 'Personnage',
+        role: 'Rôle',
+        actor: 'Acteur',
+        director: 'Réalisation',
+        writer: 'Scénario',
+        producer: 'Production',
+        guest: 'Invité',
+        as: (character: string) => `dans le rôle de ${character}`,
+        titles: 'Autres titres',
+        titlesHint:
+          'Sonarr et Radarr comparent les noms de releases à ces titres. Ajouter l’orthographe qu’un groupe de release emploie réellement suffit souvent à faire reconnaître un téléchargement.',
+        addTitle: 'Ajouter un titre',
+        artwork: 'Images',
+        artworkHint:
+          'Une image que vous ajoutez passe devant celles des sources : les clients la choisissent en premier.',
+        addImage: 'Ajouter une image',
+        imageKind: 'Type',
+        url: 'Adresse',
+        poster: 'Affiche',
+        fanart: 'Image de fond',
+        banner: 'Bannière',
+        clearlogo: 'Logo',
+        seasons: 'Saisons',
+        addSeason: 'Ajouter une saison',
+        seasonNumber: 'Saison',
+        seasonTitle: 'Titre',
+        episodes: 'Épisodes',
+        addEpisode: 'Ajouter un épisode',
+        episodeNumber: 'Épisode',
+        episodeTitle: 'Titre',
+        airDate: 'Date de diffusion',
+        yours: 'À vous',
+        count: (n: number) => `${n}`,
+        yoursCount: (n: number) => `${n} à vous`,
+        removeTitle: 'Retirer cette ligne ?',
+        removeBody: 'Vous l’avez ajoutée à la main : aucun rafraîchissement ne la fera revenir.',
+        onlyManual:
+          'Seule une ligne ajoutée à la main peut être retirée ici. Celle d’une source reviendrait au prochain rafraîchissement.',
+        none: 'Rien d’ajouté à la main pour l’instant.',
+      },
+    },
+
+    keys: {
+      lead: 'Une clé authentifie l’API native et la surface compatible TMDB — dans un en-tête, ou via le paramètre api_key qu’un client TMDB envoie déjà. Sonarr et Radarr ne peuvent en envoyer aucune : ces routes sont gardées par la liste d’adresses autorisées.',
+      issue: 'Émettre une clé',
+      name: 'Nom',
+      scopes: 'Portées',
+      read: 'Lecture',
+      write: 'Écriture',
+      administer: 'Administration',
+      issued: 'Clés émises',
+      keyFor: (name: string) => `La clé de ${name}`,
+      onlyOnce:
+        'Copiez-la maintenant. Seule son empreinte est conservée, et c’est la seule fois qu’elle sera affichée.',
+      theKey: 'La clé',
+      copy: 'Copier',
+      copied: 'Copiée',
+      copyFailed: 'Sélectionnez la clé et copiez-la à la main : le navigateur a refusé.',
+      dismiss: 'Je l’ai copiée',
+      colName: 'Nom',
+      colScopes: 'Portées',
+      colPrefix: 'Préfixe',
+      colLastUsed: 'Dernier usage',
+      colActions: 'Actions',
+      neverUsed: 'Jamais utilisée',
+      revoke: 'Révoquer',
+      revokeTitle: 'Révoquer cette clé ?',
+      revokeBody: (name: string) =>
+        `« ${name} » perd l’accès immédiatement, et une clé révoquée ne se restaure pas. Ce qui s’en sert devra en recevoir une autre.`,
+      disableTitle: 'Suspendre cette clé ?',
+      disableBody: (name: string) =>
+        `« ${name} » cesse d’être acceptée jusqu’à ce que vous la réactiviez. La clé elle-même est conservée.`,
+      empty: 'Aucune clé',
+      emptyHint: 'Émettez-en une ci-dessus pour laisser passer un client.',
+      loadFailed: 'Les clients n’ont pas pu être chargés.',
+    },
+
+    runs: {
+      lead: 'Ce que l’ordonnanceur a fait. Une ligne par exécution, pas par œuvre.',
+      colWhen: 'Quand',
+      colStatus: 'Statut',
+      colKind: 'Type',
+      colDetail: 'Détail',
+      running: 'En cours',
+      succeeded: 'Réussie',
+      failed: 'Échouée',
+      empty: 'Rien n’a encore tourné',
+      emptyHint:
+        'Un balayage est enregistré à chaque réveil de l’ordonnanceur, et un rafraîchissement que vous déclenchez a sa propre ligne.',
+      loadFailed: 'L’historique des tâches n’a pas pu être chargé.',
+    },
+
+    trail: {
+      lead: 'Toute action qui change ce que ce serveur sert. Les lectures ne sont pas enregistrées — une ligne par requête de métadonnées enterrerait tout ce qui compte. Les échecs de connexion, eux, le sont : une série d’échecs est la seule chose ici qui mérite une alerte.',
+      action: 'Action',
+      allActions: 'Toutes les actions',
+      actor: 'Auteur',
+      actorHint: 'Par exemple admin:vous',
+      colWhen: 'Quand',
+      colAction: 'Action',
+      colTarget: 'Cible',
+      colActor: 'Auteur',
+      anonymous: 'Anonyme',
+      newer: 'Plus récent',
+      older: 'Plus ancien',
+      range: (from: number, to: number, total: number) => `${from}–${to} sur ${total}`,
+      empty: 'Rien d’enregistré',
+      emptyHint: 'Les entrées apparaissent dès que quelque chose est créé, modifié ou révoqué.',
+      emptyFilteredHint: 'Aucune entrée ne correspond à ce filtre.',
+      loadFailed: 'Le journal n’a pas pu être chargé.',
+    },
+
+    config: {
+      lead: 'La configuration vient de l’environnement et n’est lue qu’au démarrage. Cette page rapporte ce qui a pris effet ; changez une valeur puis redémarrez pour la modifier.',
+      runtime: 'Exécution',
+      version: 'Version',
+      database: 'Base de données',
+      publicUrl: 'Adresse publique',
+      tmdb: 'TMDB',
+      tmdbConfigured: (language: string) => `Configurée · ${language}`,
+      tmdbMissing: 'Aucune clé d’API',
+      skyhook: 'Secours Skyhook',
+      autoRefresh: 'Rafraîchissement automatique',
+      publicBrowse: 'Consultation publique',
+      enabled: 'Activé',
+      disabled: 'Désactivé',
+      policy: 'Politique d’accès',
+      policyHint:
+        'Une liste d’adresses autorisées impose que l’adresse de l’appelant corresponde à AMS_ALLOWLIST. Sonarr et Radarr ont leurs adresses de métadonnées compilées en dur et ne peuvent présenter aucune clé ; certains clients TMDB aussi. Pour ceux-là, l’adresse est le seul contrôle possible.',
+      authOffTitle: 'L’authentification est désactivée.',
+      authOffBody:
+        'Toutes les surfaces sont ouvertes à quiconque peut joindre ce serveur. Retirez AMS_AUTH_DISABLED avant de l’exposer.',
+      export: 'Plex et les autres lecteurs de .nfo',
+      exportTitle: 'Exporter chaque fiche en .nfo',
+      exportBody:
+        'Écrit des documents Kodi et XBMC sous AMS_NFO_EXPORT_PATH : c’est ainsi que vos modifications atteignent Plex, qui n’a aucune source de métadonnées configurable. Si Sonarr ou Radarr gèrent la bibliothèque, activer leur propre écriture de métadonnées Kodi est plus simple : ils écrivent déjà ces fichiers à côté des médias, à partir de ce que ce serveur leur a donné.',
+      exportRun: 'Exporter',
+      exportRunning: 'Export en cours…',
+      exportDone: (works: number, episodes: number) => `${works} œuvres, ${episodes} épisodes`,
+      exportFailed: (n: number) => `${n} en échec`,
+      exportNoPath: 'AMS_NFO_EXPORT_PATH n’est pas défini.',
+      docs: 'Documentation de l’API',
+      docsTitle: 'Toutes les routes que ce serveur sert',
+      docsBody:
+        'L’API native, plus les surfaces de compatibilité Sonarr, Radarr et TMDB. Générée depuis les gestionnaires eux-mêmes : elle ne peut pas diverger de ce qui est réellement servi.',
+      open: 'Ouvrir',
+      maintenance: 'Maintenance',
+      cacheTitle: 'Vider le cache en mémoire',
+      cacheBody:
+        'Écarte les entités et les résultats de recherche mis en cache. La base n’est pas touchée : la requête suivante la relit et réapplique chaque verrou.',
+      cacheClear: 'Vider',
+      cacheCleared: 'Vidé',
+      password: 'Mot de passe',
+      passwordTitle: 'Changer le mot de passe administrateur',
+      passwordBody:
+        'Toutes les sessions sont closes, celle-ci comprise : il faudra vous reconnecter.',
+      currentPassword: 'Mot de passe actuel',
+      newPassword: 'Nouveau mot de passe',
+      repeatPassword: 'Répétez le nouveau mot de passe',
+      passwordSubmit: 'Changer',
+      passwordRule: 'Douze caractères au minimum.',
+      passwordMismatch: 'Les deux saisies ne correspondent pas.',
+      passwordWrong: 'Ce n’est pas le mot de passe actuel.',
+      loadFailed: 'Les réglages n’ont pas pu être chargés.',
+    },
+  },
+  stats: {
+    series: 'Séries',
+    films: 'Films',
+    lockedFields: 'Champs verrouillés',
+    lockedHint: 'Éditions manuelles qu’aucun rafraîchissement ne touche',
+    clients: 'Clients API',
+    auditEntries: 'Entrées du journal',
+    changesRecorded: 'changements enregistrés',
+  },
+  auth: {
+    signIn: 'Connexion',
+    username: 'Identifiant',
+    password: 'Mot de passe',
+    submit: 'Se connecter',
+    signingIn: 'Connexion…',
+    failed: 'Cet identifiant et ce mot de passe ne correspondent pas.',
+    lead: 'Cet espace gère les métadonnées que toute la pile consulte.',
+  },
+  common: {
+    loading: 'Chargement…',
+    error: 'Quelque chose s’est mal passé.',
+    retry: 'Réessayer',
+    cancel: 'Annuler',
+    save: 'Enregistrer',
+    saving: 'Enregistrement…',
+    delete: 'Supprimer',
+    confirm: 'Confirmer',
+    edit: 'Modifier',
+    add: 'Ajouter',
+    none: 'Aucun',
+    notSet: 'Non renseigné',
+    unknown: 'Inconnu',
+    yes: 'Oui',
+    no: 'Non',
+    refresh: 'Rafraîchir',
+    more: 'Plus',
+    of: 'sur',
+  },
+  a11y: {
+    poster: (title: string) => `Affiche de ${title}`,
+    backdrop: (title: string) => `Image de fond de ${title}`,
+    headshot: (name: string) => `Photographie de ${name}`,
+    still: (title: string) => `Image de ${title}`,
+    ratingOf: (value: string) => `Noté ${value} sur 10`,
+    openWork: (title: string) => `Ouvrir ${title}`,
+  },
+}
+
+const DICTIONARIES: Record<Lang, Dict> = { en, fr }
+
+/** What the browser asked for, if this interface speaks it. */
+function preferred(): Lang {
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY)
+    if (stored === 'en' || stored === 'fr') {
+      return stored
+    }
+  } catch {
+    // Private browsing, or storage disabled. The default is fine.
+  }
+
+  for (const tag of navigator.languages ?? [navigator.language]) {
+    if (tag?.toLowerCase().startsWith('fr')) return 'fr'
+    if (tag?.toLowerCase().startsWith('en')) return 'en'
+  }
+
+  return 'en'
+}
+
+type Value = {
+  lang: Lang
+  t: Dict
+  setLang: (lang: Lang) => void
+  /** The BCP-47 tag, for Intl and for the server's `?language=`. */
+  locale: string
+}
+
+const Context = createContext<Value | null>(null)
+
+export function I18nProvider({ children }: { children: React.ReactNode }) {
+  const [lang, setLangState] = useState<Lang>(() => preferred())
+
+  const setLang = useCallback((next: Lang) => {
+    setLangState(next)
+    try {
+      localStorage.setItem(STORAGE_KEY, next)
+    } catch {
+      // The choice still applies to this visit.
+    }
+  }, [])
+
+  // Assistive technology reads the page in the language the document claims.
+  useEffect(() => {
+    document.documentElement.lang = lang
+  }, [lang])
+
+  const value = useMemo<Value>(
+    () => ({
+      lang,
+      t: DICTIONARIES[lang],
+      setLang,
+      locale: lang === 'fr' ? 'fr-FR' : 'en-GB',
+    }),
+    [lang, setLang],
+  )
+
+  return <Context value={value}>{children}</Context>
+}
+
+export function useI18n(): Value {
+  const value = use(Context)
+
+  if (!value) {
+    throw new Error('useI18n must be used inside <I18nProvider>')
+  }
+
+  return value
+}

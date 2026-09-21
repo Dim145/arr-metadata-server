@@ -97,6 +97,14 @@ async fn authorize(
                 Some(identity) => identity,
                 None => match presented {
                     Some(key) => resolve_key(&state, &key, client_ip).await?,
+                    // Nobody said who they are. That is allowed only for the
+                    // browse paths, and only when an operator asked for it.
+                    None if surface == Surface::Native
+                        && state.config.security.public_browse
+                        && browsable(request.method(), request.uri().path()) =>
+                    {
+                        Identity::Visitor
+                    }
                     None => return Err(AppError::Unauthorized),
                 },
             }
@@ -109,6 +117,28 @@ async fn authorize(
     }
 
     Ok(next.run(request).await)
+}
+
+/// Whether a request with no credential may be served to a visitor.
+///
+/// An allowlist rather than a denylist, so an endpoint added later is closed
+/// until somebody decides it should not be. Everything here is a read of the
+/// catalogue itself: what the work is, and what this server holds in total.
+/// Operational detail — settings, jobs, the audit trail, raw provider payloads,
+/// which fields a person has overridden — stays behind a credential.
+fn browsable(method: &axum::http::Method, path: &str) -> bool {
+    if method != axum::http::Method::GET {
+        return false;
+    }
+
+    match path.trim_end_matches('/') {
+        "/api/v1/items" | "/api/v1/stats" | "/api/v1/auth/me" => true,
+        // One work. Its seasons, episodes, artwork and cast come with it, but
+        // its snapshots and overrides are their own paths and are not listed.
+        rest => rest
+            .strip_prefix("/api/v1/items/")
+            .is_some_and(|id| !id.is_empty() && !id.contains('/')),
+    }
 }
 
 /// Refuse a request this server sent to itself.
@@ -241,6 +271,62 @@ fn session_token(headers: &HeaderMap) -> Option<String> {
         .find(|(name, _)| *name == SESSION_COOKIE)
         .map(|(_, value)| value.trim().to_string())
         .filter(|v| !v.is_empty())
+}
+
+#[cfg(test)]
+mod browse_tests {
+    use super::browsable;
+    use axum::http::Method;
+
+    fn allowed(path: &str) -> bool {
+        browsable(&Method::GET, path)
+    }
+
+    #[test]
+    fn a_visitor_reads_the_catalogue() {
+        assert!(allowed("/api/v1/items"));
+        assert!(allowed(
+            "/api/v1/items/01a0c0e3-4c5d-7738-a2cf-4972b0bc2dcc"
+        ));
+        assert!(allowed("/api/v1/stats"));
+        assert!(allowed("/api/v1/auth/me"));
+    }
+
+    #[test]
+    fn a_visitor_does_not_read_how_the_server_is_run() {
+        // Every one of these would tell a stranger something about the
+        // deployment rather than about the films.
+        assert!(!allowed("/api/v1/settings"));
+        assert!(!allowed("/api/v1/jobs"));
+        assert!(!allowed("/api/v1/audit"));
+        assert!(!allowed("/api/v1/clients"));
+        assert!(!allowed("/api/v1/fields"));
+    }
+
+    #[test]
+    fn a_works_own_sub_paths_stay_closed() {
+        // Snapshots are raw provider payloads and overrides say who edited
+        // what. Both hang off an item id, so the rule has to be narrower than
+        // "anything under /items/".
+        let id = "01a0c0e3-4c5d-7738-a2cf-4972b0bc2dcc";
+
+        assert!(!allowed(&format!("/api/v1/items/{id}/snapshots")));
+        assert!(!allowed(&format!("/api/v1/items/{id}/overrides")));
+        assert!(!allowed(&format!("/api/v1/items/{id}/nfo")));
+    }
+
+    #[test]
+    fn nothing_that_changes_anything_is_browsable() {
+        for method in [Method::POST, Method::PUT, Method::PATCH, Method::DELETE] {
+            assert!(!browsable(&method, "/api/v1/items"), "{method} /items");
+        }
+    }
+
+    #[test]
+    fn a_trailing_slash_does_not_open_a_door() {
+        assert!(allowed("/api/v1/items/"));
+        assert!(!allowed("/api/v1/settings/"));
+    }
 }
 
 #[cfg(test)]

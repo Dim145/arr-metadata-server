@@ -43,3 +43,8 @@ docker/certs/
 PROJECT_STATUS.md
 .remember/
 .claude/
+
+# Playwright leaves these behind only when a run fails.
+frontend/test-results/
+frontend/playwright-report/
+frontend/blob-report/

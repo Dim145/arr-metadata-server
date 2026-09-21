@@ -37,6 +37,10 @@ It replaces and merges two earlier projects: `the earlier TMDB relay` and
   A locked field stays locked in every language.
 - **`.nfo` export with the artwork beside it**, in the layout Kodi defined and
   Plex's Personal Media agent reads. It is the only route to Plex.
+- **Two interfaces, in English or French.** A catalogue anyone can browse —
+  posters, seasons, cast, the record — and an administration side for the
+  people who maintain it. Both switch language from the bar and remember the
+  choice.
 
 ## Requirements
 
@@ -192,8 +196,21 @@ what they can send:
 | Surface | Path | Default policy |
 |---|---|---|
 | Native API and web UI | `/api/v1/*` | API key (header or query) |
+| Public browsing | a fixed subset of `/api/v1/*` | **off** (`AMS_PUBLIC_BROWSE`) |
 | TMDB-compatible | `/3/*` | API key (`api_key` query parameter) |
 | Sonarr / Radarr compatible | `/v1/*` | IP allowlist |
+
+### Letting anyone browse
+
+`AMS_PUBLIC_BROWSE=true` opens the catalogue to a reader with no credential:
+the list of works, one work, and the totals. Nothing else. It is an allowlist
+rather than a denylist, so the settings, the job history, the audit trail, the
+raw provider payloads and the record of who edited what all stay behind a
+credential — and an endpoint added later is closed until somebody decides
+otherwise. Administration is never reachable this way.
+
+It is off by default, because turning it on publishes what this server knows to
+whoever can reach the port.
 
 Sonarr and Radarr have their metadata URLs compiled in and cannot attach an API
 key, so those surfaces are guarded by network policy instead. Some TMDB clients

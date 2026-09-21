@@ -84,6 +84,12 @@ pub struct Database {
 pub struct Security {
     /// Master switch. When true every surface becomes [`SurfacePolicy::Open`].
     pub auth_disabled: bool,
+    /// Let anyone read the catalogue, with no credential.
+    ///
+    /// Off by default: turning it on publishes what this server knows to
+    /// whoever can reach the port. It grants a fixed list of read-only paths
+    /// and nothing else — see `crate::auth::middleware::browsable`.
+    pub public_browse: bool,
     pub native_policy: SurfacePolicy,
     pub tmdb_policy: SurfacePolicy,
     pub arr_policy: SurfacePolicy,
@@ -220,6 +226,7 @@ impl Config {
             },
             security: Security {
                 auth_disabled: flag(&["AMS_AUTH_DISABLED"], false)?,
+                public_browse: flag(&["AMS_PUBLIC_BROWSE"], false)?,
                 native_policy: policy(&["AMS_NATIVE_AUTH"], SurfacePolicy::ApiKey)?,
                 tmdb_policy: policy(&["AMS_TMDB_AUTH"], SurfacePolicy::ApiKey)?,
                 arr_policy: policy(&["AMS_ARR_AUTH"], SurfacePolicy::Allowlist)?,

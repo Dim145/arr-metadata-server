@@ -5,6 +5,8 @@
 //! added by hand survives every refresh. Manual *edits* to provider rows live in
 //! `media_override` and are applied on read, never written back here.
 
+use std::collections::HashMap;
+
 use anyhow::{Context, Result};
 use sqlx::{Any, Arguments, Transaction, any::AnyArguments};
 
@@ -272,24 +274,7 @@ async fn load_images(db: &Db, media_id: &str) -> Result<Vec<Image>> {
     .fetch_all(db.pool())
     .await?;
 
-    let mut images: Vec<Image> = rows
-        .iter()
-        .map(|row| {
-            Ok(Image {
-                id: row.text("id")?,
-                season_number: row.opt_int("season_number")?,
-                cover_type: row
-                    .text("cover_type")?
-                    .parse::<CoverType>()
-                    .unwrap_or(CoverType::Unknown),
-                url: row.text("url")?,
-                language: row.opt_text("language")?,
-                sort_order: row.int("sort_order")?,
-                source: row.opt_text("source")?,
-                is_manual: row.flag("is_manual")?,
-            })
-        })
-        .collect::<Result<_>>()?;
+    let mut images: Vec<Image> = rows.iter().map(map_image).collect::<Result<_>>()?;
 
     // SQL orders by the cover type's *name*, which puts clearlogo before poster.
     // Sort by meaning instead.
@@ -358,16 +343,32 @@ async fn load_ratings(db: &Db, media_id: &str) -> Result<Vec<Rating>> {
     .fetch_all(db.pool())
     .await?;
 
-    rows.iter()
-        .map(|row| {
-            Ok(Rating {
-                source: row.text("source")?,
-                value: row.opt_real("value")?,
-                votes: row.opt_big("votes")?,
-                rating_type: row.opt_text("rating_type")?,
-            })
-        })
-        .collect()
+    rows.iter().map(map_rating).collect()
+}
+
+fn map_image(row: &sqlx::any::AnyRow) -> Result<Image> {
+    Ok(Image {
+        id: row.text("id")?,
+        season_number: row.opt_int("season_number")?,
+        cover_type: row
+            .text("cover_type")?
+            .parse::<CoverType>()
+            .unwrap_or(CoverType::Unknown),
+        url: row.text("url")?,
+        language: row.opt_text("language")?,
+        sort_order: row.int("sort_order")?,
+        source: row.opt_text("source")?,
+        is_manual: row.flag("is_manual")?,
+    })
+}
+
+fn map_rating(row: &sqlx::any::AnyRow) -> Result<Rating> {
+    Ok(Rating {
+        source: row.text("source")?,
+        value: row.opt_real("value")?,
+        votes: row.opt_big("votes")?,
+        rating_type: row.opt_text("rating_type")?,
+    })
 }
 
 async fn load_translations(db: &Db, media_id: &str) -> Result<Vec<Translation>> {
@@ -411,7 +412,156 @@ pub struct Query {
 pub async fn search(db: &Db, q: &Query) -> Result<Vec<MediaItem>> {
     let mut sql = format!("SELECT {ITEM_COLUMNS} FROM media_item WHERE 1 = 1");
     let mut args = AnyArguments::default();
+    narrow(q, &mut sql, &mut args)?;
 
+    sql.push_str(" ORDER BY popularity DESC NULLS LAST, title ASC LIMIT ? OFFSET ?");
+    args.add(q.limit.clamp(1, 500))
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    args.add(q.offset.max(0))
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    let rows = sqlx::query_with(db.sql(&sql), args)
+        .fetch_all(db.pool())
+        .await?;
+
+    let mut items = Vec::with_capacity(rows.len());
+    for row in &rows {
+        let mut item = map_item(row)?;
+        item.external_ids = load_external_ids(db, &item.id).await?;
+        items.push(item);
+    }
+
+    Ok(items)
+}
+
+/// Attach the artwork, scores and translations a list of works needs.
+///
+/// [`search`] returns the rows and nothing hanging off them, which is right for
+/// a table and useless for a grid of posters. Loading every child for fifty
+/// works would mean loading One Piece's twelve hundred episodes to draw one
+/// thumbnail, so this fetches only what a card puts on screen, batched into two
+/// statements rather than two per work.
+pub async fn load_artwork(db: &Db, items: &mut [MediaItem]) -> Result<()> {
+    if items.is_empty() {
+        return Ok(());
+    }
+
+    let ids: Vec<String> = items.iter().map(|i| i.id.clone()).collect();
+    let holes = vec!["?"; ids.len()].join(", ");
+
+    let mut image_args = AnyArguments::default();
+    for id in &ids {
+        image_args
+            .add(id.clone())
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+    }
+
+    // Season artwork belongs to a season, and a card shows the work.
+    let image_sql = format!(
+        "SELECT media_id, id, season_number, cover_type, url, language, sort_order, source, is_manual
+         FROM media_image
+         WHERE media_id IN ({holes}) AND season_number IS NULL
+         ORDER BY cover_type, sort_order"
+    );
+
+    let image_rows = sqlx::query_with(db.sql(&image_sql), image_args)
+        .fetch_all(db.pool())
+        .await?;
+
+    let mut rating_args = AnyArguments::default();
+    for id in &ids {
+        rating_args
+            .add(id.clone())
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+    }
+
+    let rating_sql = format!(
+        "SELECT media_id, source, value, votes, rating_type
+         FROM media_rating WHERE media_id IN ({holes})"
+    );
+
+    let rating_rows = sqlx::query_with(db.sql(&rating_sql), rating_args)
+        .fetch_all(db.pool())
+        .await?;
+
+    let mut translation_args = AnyArguments::default();
+    for id in &ids {
+        translation_args
+            .add(id.clone())
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+    }
+
+    // Without these a list asked for in French would come back in English while
+    // the work's own page came back translated.
+    let translation_sql = format!(
+        "SELECT media_id, language, title, overview, is_manual
+         FROM media_translation WHERE media_id IN ({holes})"
+    );
+
+    let translation_rows = sqlx::query_with(db.sql(&translation_sql), translation_args)
+        .fetch_all(db.pool())
+        .await?;
+
+    let mut images: HashMap<String, Vec<Image>> = HashMap::new();
+    for row in &image_rows {
+        images
+            .entry(row.text("media_id")?)
+            .or_default()
+            .push(map_image(row)?);
+    }
+
+    let mut ratings: HashMap<String, Vec<Rating>> = HashMap::new();
+    for row in &rating_rows {
+        ratings
+            .entry(row.text("media_id")?)
+            .or_default()
+            .push(map_rating(row)?);
+    }
+
+    let mut translations: HashMap<String, Vec<Translation>> = HashMap::new();
+    for row in &translation_rows {
+        translations
+            .entry(row.text("media_id")?)
+            .or_default()
+            .push(Translation {
+                language: row.text("language")?,
+                title: row.opt_text("title")?,
+                overview: row.opt_text("overview")?,
+                is_manual: row.flag("is_manual")?,
+            });
+    }
+
+    for item in items {
+        let mut own = images.remove(&item.id).unwrap_or_default();
+        // SQL ordered by the cover type's name; a card wants the poster first.
+        own.sort_by_key(|i| (i.cover_type.priority(), i.sort_order));
+
+        item.images = own;
+        item.ratings = ratings.remove(&item.id).unwrap_or_default();
+        item.translations = translations.remove(&item.id).unwrap_or_default();
+    }
+
+    Ok(())
+}
+
+/// How many works match, ignoring the page.
+///
+/// The same predicate as [`search`], because a result count that counted
+/// something else would be worse than no count at all.
+pub async fn count_matching(db: &Db, q: &Query) -> Result<i64> {
+    let mut sql = "SELECT COUNT(*) AS n FROM media_item WHERE 1 = 1".to_string();
+    let mut args = AnyArguments::default();
+    narrow(q, &mut sql, &mut args)?;
+
+    let row = sqlx::query_with(db.sql(&sql), args)
+        .fetch_one(db.pool())
+        .await?;
+
+    Ok(row.big("n")?)
+}
+
+/// Append the filters a [`Query`] asks for to a statement being built.
+fn narrow(q: &Query, sql: &mut String, args: &mut AnyArguments) -> Result<()> {
     if !q.include_disabled {
         sql.push_str(" AND is_enabled = 1");
     }
@@ -454,24 +604,7 @@ pub async fn search(db: &Db, q: &Query) -> Result<Vec<MediaItem>> {
         }
     }
 
-    sql.push_str(" ORDER BY popularity DESC NULLS LAST, title ASC LIMIT ? OFFSET ?");
-    args.add(q.limit.clamp(1, 500))
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
-    args.add(q.offset.max(0))
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
-
-    let rows = sqlx::query_with(db.sql(&sql), args)
-        .fetch_all(db.pool())
-        .await?;
-
-    let mut items = Vec::with_capacity(rows.len());
-    for row in &rows {
-        let mut item = map_item(row)?;
-        item.external_ids = load_external_ids(db, &item.id).await?;
-        items.push(item);
-    }
-
-    Ok(items)
+    Ok(())
 }
 
 pub async fn count(db: &Db, kind: Option<MediaKind>) -> Result<i64> {

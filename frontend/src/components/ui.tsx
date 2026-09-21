@@ -1,32 +1,46 @@
-import type { ComponentProps, ReactNode } from 'react'
+/**
+ * The pieces every screen is built from.
+ *
+ * A catalogue page separates with rules rather than enclosing in boxes, so the
+ * panel here is a hairline frame, not a floating card with a shadow. Radii are
+ * nearly square: the register is printed matter.
+ */
+
+import { useEffect, useRef, type ReactNode } from 'react'
+
 import { cn } from '../lib/cn'
 
-/* ── Type ─────────────────────────────────────────────────────────────────── */
+/* ── Text ─────────────────────────────────────────────────────────────────── */
 
-export function Display({ children, className }: { children: ReactNode; className?: string }) {
-  return (
-    <h1 className={cn('font-display text-4xl leading-[1.05] tracking-tight text-paper', className)}>
-      {children}
-    </h1>
-  )
-}
-
-/** Small caps label. Used for every section header and field name. */
+/** The caption above a value on an index card. */
 export function Label({ children, className }: { children: ReactNode; className?: string }) {
-  return (
-    <span
-      className={cn(
-        'font-mono text-[10px] uppercase tracking-[0.18em] text-faint select-none',
-        className,
-      )}
-    >
-      {children}
-    </span>
-  )
+  return <span className={cn('label', className)}>{children}</span>
 }
 
 export function Mono({ children, className }: { children: ReactNode; className?: string }) {
-  return <span className={cn('font-mono text-[13px] tabular', className)}>{children}</span>
+  return (
+    <span className={cn('font-mono text-[0.8125rem] tabular-nums', className)}>{children}</span>
+  )
+}
+
+/** A section heading: rule, then the name in small caps, then the content. */
+export function SectionTitle({
+  children,
+  action,
+  className,
+}: {
+  children: ReactNode
+  action?: ReactNode
+  className?: string
+}) {
+  return (
+    <div className={cn('mb-5 flex items-baseline justify-between gap-4 border-b border-rule pb-3', className)}>
+      <h2 className="font-display text-xl font-medium tracking-tight text-bone sm:text-2xl">
+        {children}
+      </h2>
+      {action}
+    </div>
+  )
 }
 
 /* ── Containers ───────────────────────────────────────────────────────────── */
@@ -34,127 +48,355 @@ export function Mono({ children, className }: { children: ReactNode; className?:
 export function Panel({
   children,
   className,
-  ...rest
-}: ComponentProps<'section'>) {
+  style,
+}: {
+  children: ReactNode
+  className?: string
+  style?: React.CSSProperties
+}) {
   return (
     <section
-      className={cn('border border-line bg-surface rounded-[2px]', className)}
-      {...rest}
+      style={style}
+      className={cn('rounded-panel border border-rule bg-ink-raised', className)}
     >
       {children}
     </section>
   )
 }
 
-export function PanelHead({ title, aside }: { title: ReactNode; aside?: ReactNode }) {
+export function PanelHead({ title, action }: { title: ReactNode; action?: ReactNode }) {
   return (
-    <header className="flex items-baseline justify-between gap-4 border-b border-line px-5 py-3">
+    <header className="flex items-center justify-between gap-4 border-b border-rule px-5 py-3">
       <Label>{title}</Label>
-      {aside}
+      {action}
     </header>
+  )
+}
+
+/**
+ * The fact table.
+ *
+ * Exists because the administration side is four history tables that must read
+ * as one: the row height, the hairline between rows and the right-aligned
+ * figures are decided here rather than re-derived on each screen. The scroller
+ * is part of the set for a reason — a table wide enough to need it must scroll
+ * inside its own frame, never by dragging the page sideways.
+ */
+export function TableScroll({ children, className }: { children: ReactNode; className?: string }) {
+  return (
+    <div className={cn('w-full max-w-full overflow-x-auto overscroll-x-contain', className)}>
+      {children}
+    </div>
+  )
+}
+
+export function Th({
+  children,
+  align = 'left',
+  className,
+}: {
+  children?: ReactNode
+  align?: 'left' | 'right'
+  className?: string
+}) {
+  return (
+    <th
+      scope="col"
+      className={cn(
+        'label border-b border-rule px-4 py-2.5 whitespace-nowrap',
+        align === 'right' ? 'text-right' : 'text-left',
+        className,
+      )}
+    >
+      {children}
+    </th>
+  )
+}
+
+export function Td({
+  children,
+  align = 'left',
+  className,
+}: {
+  children?: ReactNode
+  align?: 'left' | 'right'
+  className?: string
+}) {
+  return (
+    <td
+      className={cn(
+        'px-4 py-2 align-middle text-sm text-bone-dim',
+        align === 'right' ? 'text-right' : 'text-left',
+        className,
+      )}
+    >
+      {children}
+    </td>
+  )
+}
+
+/** A body row: 45px of it, and a colour change on hover. Nothing moves. */
+export function Tr({ children, className }: { children: ReactNode; className?: string }) {
+  return (
+    <tr
+      className={cn(
+        // Positioned so a row's primary link can stretch a pseudo-element over
+        // the whole row: a title is 20px tall and a row is not, and the gap is
+        // where taps land on nothing.
+        'relative h-[45px] border-b border-rule transition-colors duration-150 last:border-0',
+        'hover:bg-ink-high',
+        className,
+      )}
+    >
+      {children}
+    </tr>
+  )
+}
+
+/** A label/value row, the unit a catalogue entry is made of. */
+export function Field({
+  label,
+  children,
+  hint,
+}: {
+  label: ReactNode
+  children: ReactNode
+  hint?: ReactNode
+}) {
+  return (
+    <div className="flex items-baseline justify-between gap-6 px-5 py-2.5">
+      <Label className="shrink-0">{label}</Label>
+      <div className="min-w-0 text-right text-sm text-bone">
+        {children}
+        {hint ? <div className="mt-0.5 text-xs text-bone-faint">{hint}</div> : null}
+      </div>
+    </div>
   )
 }
 
 /* ── Controls ─────────────────────────────────────────────────────────────── */
 
-type ButtonVariant = 'primary' | 'ghost' | 'danger'
-
-const buttonStyles: Record<ButtonVariant, string> = {
-  primary:
-    'bg-phos text-void hover:bg-phos-glow active:translate-y-px disabled:bg-phos-dim disabled:text-void/60',
-  ghost:
-    'border border-line text-dim hover:border-line-bright hover:text-paper active:translate-y-px',
-  danger: 'border border-rust/40 text-rust hover:bg-rust hover:text-void active:translate-y-px',
+type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
+  variant?: 'primary' | 'ghost' | 'quiet' | 'danger'
+  size?: 'sm' | 'md'
 }
 
-export function Button({
-  variant = 'ghost',
-  className,
-  ...rest
-}: ComponentProps<'button'> & { variant?: ButtonVariant }) {
+const BUTTON_BASE =
+  'inline-flex items-center justify-center gap-2 rounded-card font-sans font-medium ' +
+  'transition-colors duration-200 cursor-pointer select-none ' +
+  'disabled:cursor-not-allowed disabled:opacity-45'
+
+const BUTTON_VARIANT: Record<NonNullable<ButtonProps['variant']>, string> = {
+  primary: 'bg-vermillion text-ink hover:bg-vermillion-bright',
+  ghost: 'border border-rule-bright text-bone hover:border-bone-faint hover:bg-ink-high',
+  quiet: 'text-bone-dim hover:text-bone hover:bg-ink-high',
+  danger: 'border border-vermillion-deep text-vermillion hover:bg-vermillion hover:text-ink',
+}
+
+// 44px is the smallest target a finger finds reliably; `sm` keeps that height
+// and only loses horizontal padding, so a dense toolbar is still tappable.
+const BUTTON_SIZE: Record<NonNullable<ButtonProps['size']>, string> = {
+  sm: 'min-h-11 px-3 text-[0.8125rem]',
+  md: 'min-h-11 px-5 text-sm',
+}
+
+export function Button({ variant = 'ghost', size = 'md', className, ...props }: ButtonProps) {
   return (
     <button
-      className={cn(
-        'inline-flex items-center gap-2 rounded-[2px] px-3 py-1.5',
-        'font-mono text-[11px] uppercase tracking-[0.12em]',
-        'transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-60',
-        buttonStyles[variant],
-        className,
-      )}
-      {...rest}
+      type="button"
+      {...props}
+      className={cn(BUTTON_BASE, BUTTON_VARIANT[variant], BUTTON_SIZE[size], className)}
     />
   )
 }
 
-export function Input({ className, ...rest }: ComponentProps<'input'>) {
+/**
+ * A link that has to look like a button.
+ *
+ * Exists because a `<Button>` wrapped in an `<a>` is invalid markup and a
+ * `<button>` that navigates lies to everyone who reads the page with anything
+ * other than their eyes. Downloads and the documentation are navigations, so
+ * they are anchors, dressed from the same three tables above.
+ */
+export function ButtonLink({
+  variant = 'ghost',
+  size = 'md',
+  className,
+  ...props
+}: React.AnchorHTMLAttributes<HTMLAnchorElement> & {
+  variant?: ButtonProps['variant']
+  size?: ButtonProps['size']
+}) {
   return (
-    <input
+    <a
+      {...props}
       className={cn(
-        'w-full rounded-[2px] border border-line bg-pit px-3 py-2',
-        'text-[14px] text-paper placeholder:text-faint',
-        'transition-colors focus:border-phos focus:outline-none',
+        BUTTON_BASE,
+        BUTTON_VARIANT[variant ?? 'ghost'],
+        BUTTON_SIZE[size ?? 'md'],
+        'no-underline',
         className,
       )}
-      {...rest}
     />
   )
 }
 
-export function Textarea({ className, ...rest }: ComponentProps<'textarea'>) {
-  return (
-    <textarea
-      className={cn(
-        'w-full rounded-[2px] border border-line bg-pit px-3 py-2',
-        'text-[14px] leading-relaxed text-paper placeholder:text-faint',
-        'transition-colors focus:border-phos focus:outline-none',
-        className,
-      )}
-      {...rest}
-    />
-  )
-}
-
-export function Select({ className, ...rest }: ComponentProps<'select'>) {
-  return (
-    <select
-      className={cn(
-        'rounded-[2px] border border-line bg-pit px-3 py-2',
-        'font-mono text-[12px] text-paper',
-        'transition-colors focus:border-phos focus:outline-none',
-        className,
-      )}
-      {...rest}
-    />
-  )
-}
-
-/* ── Indicators ───────────────────────────────────────────────────────────── */
-
-type Tone = 'neutral' | 'manual' | 'auto' | 'good' | 'bad'
-
-const toneStyles: Record<Tone, string> = {
-  neutral: 'border-line text-dim',
-  manual: 'border-phos/45 text-phos',
-  auto: 'border-signal/40 text-signal',
-  good: 'border-sage/40 text-sage',
-  bad: 'border-rust/45 text-rust',
-}
-
-export function Tag({
-  tone = 'neutral',
-  children,
+/**
+ * A row action, reduced to its glyph.
+ *
+ * Exists because a register's action column has no room for four verbs, and a
+ * `Button` with only an icon in it loses the thing that makes it usable — its
+ * name. Here the name is compulsory: it reaches the screen reader through
+ * `aria-label` and the mouse through the tooltip, and the target stays 44px
+ * whatever the glyph measures.
+ */
+export function IconButton({
+  glyph,
+  label,
+  onClick,
+  busy,
+  disabled,
+  tone = 'quiet',
   className,
 }: {
-  tone?: Tone
+  glyph: GlyphName
+  label: string
+  onClick: () => void
+  busy?: boolean
+  disabled?: boolean
+  tone?: 'quiet' | 'danger'
+  className?: string
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={busy || disabled}
+      aria-label={label}
+      title={label}
+      className={cn(
+        'grid size-11 shrink-0 cursor-pointer place-items-center rounded-card text-bone-faint',
+        'transition-colors duration-150 hover:bg-ink-high',
+        'disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent',
+        tone === 'danger' ? 'hover:text-vermillion' : 'hover:text-bone',
+        className,
+      )}
+    >
+      {busy ? <Spinner className="size-4" /> : <Glyph name={glyph} className="size-4" />}
+    </button>
+  )
+}
+
+export function Input({ className, ...props }: React.InputHTMLAttributes<HTMLInputElement>) {
+  return (
+    <input
+      {...props}
+      className={cn(
+        'min-h-11 w-full rounded-card border border-rule bg-ink px-3 text-sm text-bone',
+        'transition-colors duration-200 placeholder:text-bone-faint',
+        'hover:border-rule-bright focus:border-vermillion focus:outline-none',
+        className,
+      )}
+    />
+  )
+}
+
+/**
+ * Exists because the administration side edits prose — an overview, a note —
+ * and a one-line box turns a paragraph into a keyhole. Same frame as `Input`,
+ * so a form mixing the two reads as one form.
+ */
+export function Textarea({
+  className,
+  ...props
+}: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  return (
+    <textarea
+      {...props}
+      className={cn(
+        'w-full rounded-card border border-rule bg-ink px-3 py-2.5 text-sm leading-relaxed text-bone',
+        'transition-colors duration-200 placeholder:text-bone-faint',
+        'hover:border-rule-bright focus:border-vermillion focus:outline-none',
+        className,
+      )}
+    />
+  )
+}
+
+export function Select({ className, ...props }: React.SelectHTMLAttributes<HTMLSelectElement>) {
+  return (
+    <select
+      {...props}
+      className={cn(
+        'min-h-11 w-full cursor-pointer appearance-none rounded-card border border-rule bg-ink',
+        'px-3 pr-9 text-sm text-bone transition-colors duration-200',
+        'hover:border-rule-bright focus:border-vermillion focus:outline-none',
+        // The chevron, drawn rather than imported, so it inherits the palette.
+        "bg-[url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5 6 6.5 11 1.5' stroke='%23a5a099' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E\")]",
+        'bg-[length:12px_8px] bg-[position:right_0.75rem_center] bg-no-repeat',
+        className,
+      )}
+    />
+  )
+}
+
+/** A labelled form control. The label is always visible, never a placeholder. */
+export function FormField({
+  label,
+  hint,
+  error,
+  htmlFor,
+  children,
+}: {
+  label: ReactNode
+  hint?: ReactNode
+  error?: ReactNode
+  htmlFor: string
   children: ReactNode
+}) {
+  return (
+    <div className="space-y-1.5">
+      <label htmlFor={htmlFor} className="label block">
+        {label}
+      </label>
+      {children}
+      {hint && !error ? <p className="text-xs text-bone-faint">{hint}</p> : null}
+      {error ? (
+        <p role="alert" className="flex items-center gap-1.5 text-xs text-vermillion">
+          <Glyph name="alert" className="size-3.5 shrink-0" />
+          {error}
+        </p>
+      ) : null}
+    </div>
+  )
+}
+
+/* ── Markers ──────────────────────────────────────────────────────────────── */
+
+type ChipTone = 'neutral' | 'manual' | 'provider' | 'accent'
+
+const CHIP_TONE: Record<ChipTone, string> = {
+  neutral: 'border-rule-bright text-bone-dim',
+  manual: 'border-brass-deep text-brass',
+  provider: 'border-slate-deep text-slate',
+  accent: 'border-vermillion-deep text-vermillion',
+}
+
+export function Chip({
+  children,
+  tone = 'neutral',
+  className,
+}: {
+  children: ReactNode
+  tone?: ChipTone
   className?: string
 }) {
   return (
     <span
       className={cn(
-        'inline-flex items-center gap-1 rounded-[2px] border px-1.5 py-0.5',
-        'font-mono text-[10px] uppercase tracking-[0.12em] whitespace-nowrap',
-        toneStyles[tone],
+        'inline-flex items-center gap-1.5 rounded-card border px-2 py-1',
+        'font-mono text-[0.625rem] font-medium tracking-[0.12em] uppercase',
+        CHIP_TONE[tone],
         className,
       )}
     >
@@ -163,62 +405,283 @@ export function Tag({
   )
 }
 
-/** The padlock. This app's whole premise in 14 pixels. */
-export function Lock({ className }: { className?: string }) {
+/**
+ * Who decided this value.
+ *
+ * Carries a glyph and a word as well as its colour: someone who cannot tell
+ * brass from slate still has to be able to tell a person's edit from a
+ * provider's answer, since that distinction is the point of this server.
+ */
+export function Provenance({ manual, label }: { manual: boolean; label: string }) {
   return (
-    <svg
-      viewBox="0 0 24 24"
-      aria-hidden
-      className={cn('h-[13px] w-[13px] shrink-0', className)}
-      fill="none"
-    >
-      <path
-        d="M8 10V7a4 4 0 0 1 8 0v3"
-        stroke="currentColor"
-        strokeWidth="2.2"
-        strokeLinecap="round"
-      />
-      <rect x="5" y="10" width="14" height="10" rx="2" fill="currentColor" />
-    </svg>
+    <Chip tone={manual ? 'manual' : 'provider'}>
+      <Glyph name={manual ? 'lock' : 'cloud'} className="size-3" />
+      {label}
+    </Chip>
   )
 }
 
+/* ── States ───────────────────────────────────────────────────────────────── */
+
+/**
+ * Work in flight, at the size of the text beside it.
+ *
+ * Exists because the administration side waits on the network in places too
+ * small for a skeleton — inside a button, beside a panel head. Always
+ * decorative: whatever it sits next to says in words what is happening.
+ */
 export function Spinner({ className }: { className?: string }) {
   return (
     <span
-      role="status"
-      aria-label="Loading"
+      aria-hidden
       className={cn(
-        'inline-block h-3.5 w-3.5 animate-spin rounded-full',
-        'border-[1.5px] border-line-bright border-t-phos',
+        'inline-block size-4 shrink-0 animate-spin rounded-full',
+        'border-2 border-current border-t-transparent opacity-50',
         className,
       )}
     />
   )
 }
 
-export function Empty({ title, hint }: { title: string; hint?: string }) {
+/**
+ * Asking before something cannot be taken back.
+ *
+ * Built on `<dialog>`: the platform brings the focus trap, the Escape key and
+ * an inert background, none of which is worth reimplementing for the half-dozen
+ * places this interface has to ask. Being in the top layer, it also escapes the
+ * `overflow-x-clip` the shells impose on everything else.
+ */
+export function Dialog({
+  open,
+  title,
+  onClose,
+  children,
+  footer,
+}: {
+  open: boolean
+  title: ReactNode
+  onClose: () => void
+  children: ReactNode
+  footer: ReactNode
+}) {
+  const ref = useRef<HTMLDialogElement>(null)
+
+  useEffect(() => {
+    const node = ref.current
+    if (!node) return
+
+    if (open && !node.open) node.showModal()
+    if (!open && node.open) node.close()
+  }, [open])
+
   return (
-    <div className="flex flex-col items-center gap-2 px-6 py-16 text-center">
-      <p className="font-display text-2xl text-dim">{title}</p>
-      {hint && <p className="max-w-sm text-[13px] text-faint">{hint}</p>}
+    <dialog
+      ref={ref}
+      onClose={onClose}
+      className={cn(
+        'm-auto w-[calc(100vw-2rem)] max-w-md rounded-panel border border-rule',
+        'bg-ink-raised p-0 text-bone backdrop:bg-ink/80',
+      )}
+    >
+      {open ? (
+        <div className="fade-in">
+          <header className="border-b border-rule px-5 py-4">
+            <h2 className="font-display text-lg font-medium text-bone">{title}</h2>
+          </header>
+          <div className="px-5 py-4 text-sm leading-relaxed text-bone-dim">{children}</div>
+          <footer className="flex flex-wrap items-center justify-end gap-2 border-t border-rule px-5 py-3">
+            {footer}
+          </footer>
+        </div>
+      ) : null}
+    </dialog>
+  )
+}
+
+export function Skeleton({ className }: { className?: string }) {
+  return <div className={cn('shimmer rounded-card bg-ink-high', className)} />
+}
+
+export function EmptyState({
+  title,
+  hint,
+  action,
+}: {
+  title: ReactNode
+  hint?: ReactNode
+  action?: ReactNode
+}) {
+  return (
+    <div className="flex flex-col items-center gap-3 px-6 py-16 text-center">
+      <Glyph name="reel" className="size-8 text-bone-faint" />
+      <p className="font-display text-lg text-bone">{title}</p>
+      {hint ? <p className="max-w-sm text-sm text-bone-dim">{hint}</p> : null}
+      {action}
     </div>
   )
 }
 
-export function Alert({ children, tone = 'bad' }: { children: ReactNode; tone?: Tone }) {
+/* ── Glyphs ───────────────────────────────────────────────────────────────── */
+
+/**
+ * One stroke weight, one corner treatment, drawn here rather than pulled from a
+ * package: the set is small enough that a dependency would cost more than it
+ * saves, and every glyph inherits the palette by using `currentColor`.
+ */
+const PATHS = {
+  search: <path d="M11 11 15 15M7 12.5a5.5 5.5 0 1 0 0-11 5.5 5.5 0 0 0 0 11Z" />,
+  close: <path d="M4 4 12 12M12 4 4 12" />,
+  menu: <path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11" />,
+  chevronRight: <path d="M6 3.5 10.5 8 6 12.5" />,
+  chevronLeft: <path d="M10 3.5 5.5 8 10 12.5" />,
+  chevronDown: <path d="M3.5 6 8 10.5 12.5 6" />,
+  lock: (
+    <>
+      <path d="M5 7V5a3 3 0 1 1 6 0v2" />
+      <rect x="3.5" y="7" width="9" height="6.5" rx="1.5" />
+    </>
+  ),
+  cloud: <path d="M4.5 12.5a3 3 0 0 1 .3-6 4 4 0 0 1 7.6 1.2 2.4 2.4 0 0 1-.4 4.8Z" />,
+  alert: <path d="M8 5v4M8 11.5v.01M8 2 1.5 13.5h13Z" />,
+  reel: (
+    <>
+      <circle cx="8" cy="8" r="6" />
+      <circle cx="8" cy="5.2" r="1.3" />
+      <circle cx="10.4" cy="9.4" r="1.3" />
+      <circle cx="5.6" cy="9.4" r="1.3" />
+    </>
+  ),
+  film: (
+    <>
+      <rect x="2" y="3" width="12" height="10" rx="1.5" />
+      <path d="M5.5 3v10M10.5 3v10" />
+    </>
+  ),
+  tv: (
+    <>
+      <rect x="2" y="4.5" width="12" height="8" rx="1.5" />
+      <path d="M5.5 2 8 4.5 10.5 2" />
+    </>
+  ),
+  star: <path d="m8 2 1.8 3.9 4.2.5-3.1 2.9.8 4.2L8 11.4 4.3 13.5l.8-4.2L2 6.4l4.2-.5Z" />,
+  settings: (
+    <>
+      <circle cx="8" cy="8" r="2.2" />
+      <path d="M8 1.5v1.8M8 12.7v1.8M14.5 8h-1.8M3.3 8H1.5M12.6 3.4l-1.3 1.3M4.7 11.3l-1.3 1.3M12.6 12.6l-1.3-1.3M4.7 4.7 3.4 3.4" />
+    </>
+  ),
+  user: (
+    <>
+      <circle cx="8" cy="5.5" r="2.8" />
+      <path d="M2.8 14a5.2 5.2 0 0 1 10.4 0" />
+    </>
+  ),
+  globe: (
+    <>
+      <circle cx="8" cy="8" r="6" />
+      <path d="M2 8h12M8 2a9 9 0 0 1 0 12M8 2a9 9 0 0 0 0 12" />
+    </>
+  ),
+  arrowLeft: <path d="M13 8H3M6.5 4.5 3 8l3.5 3.5" />,
+  external: <path d="M9 3h4v4M13 3 7 9M11.5 9.5v3h-9v-9h3" />,
+
+  /* The administration side: one glyph per section of the building, then the
+     verbs an operator performs once inside it. */
+  gauge: (
+    <>
+      <path d="M2.5 12a5.5 5.5 0 1 1 11 0" />
+      <path d="M8 12 10.9 8.1" />
+    </>
+  ),
+  list: <path d="M5.5 4h8M5.5 8h8M5.5 12h8M2.6 4h.01M2.6 8h.01M2.6 12h.01" />,
+  key: (
+    <>
+      <circle cx="10.5" cy="5.5" r="3" />
+      <path d="M8.4 7.6 2.5 13.5M4.6 11.4 6.4 13.2" />
+    </>
+  ),
+  clock: (
+    <>
+      <circle cx="8" cy="8" r="6" />
+      <path d="M8 4.5V8l2.6 1.8" />
+    </>
+  ),
+  journal: (
+    <>
+      <rect x="3.5" y="2" width="9" height="12" rx="1.5" />
+      <path d="M6 5.5h4M6 8h4M6 10.5h2.5" />
+    </>
+  ),
+  signOut: <path d="M6.5 14h-3a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1h3M10.5 11.5 14 8l-3.5-3.5M14 8H6" />,
+  plus: <path d="M8 3v10M3 8h10" />,
+  trash: (
+    <>
+      <path d="M2.5 4.5h11" />
+      <path d="M6.3 4.5V3.2a1 1 0 0 1 1-1h1.4a1 1 0 0 1 1 1v1.3" />
+      <path d="M4.1 4.5l.6 8.2a1 1 0 0 0 1 .9h4.6a1 1 0 0 0 1-.9l.6-8.2" />
+    </>
+  ),
+  refresh: (
+    <>
+      <path d="M13.5 8a5.5 5.5 0 1 1-5.5-5.5c1.5 0 2.9.6 4 1.6l1.5 1.4" />
+      <path d="M13.5 2v3.5H10" />
+    </>
+  ),
+  copy: (
+    <>
+      <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
+      <path d="M10.5 5.5v-2a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2" />
+    </>
+  ),
+  check: <path d="M3 8.5 6.4 12 13 4.4" />,
+  unlock: (
+    <>
+      <rect x="3.5" y="7" width="9" height="6.5" rx="1.5" />
+      <path d="M5 7V5a3 3 0 0 1 5.9-.8" />
+    </>
+  ),
+  power: <path d="M8 2.5v5.6M11.9 4.7a5.2 5.2 0 1 1-7.8 0" />,
+  download: <path d="M8 2.5v8M4.6 7.4 8 10.8l3.4-3.4M2.5 13.5h11" />,
+  database: (
+    <>
+      <ellipse cx="8" cy="3.8" rx="5.5" ry="2" />
+      <path d="M2.5 3.8v8.4c0 1.1 2.5 2 5.5 2s5.5-.9 5.5-2V3.8" />
+      <path d="M13.5 8c0 1.1-2.5 2-5.5 2s-5.5-.9-5.5-2" />
+    </>
+  ),
+  pencil: (
+    <>
+      <path d="M2.5 13.5 3 10.8l7.4-7.4a1.7 1.7 0 0 1 2.4 2.4l-7.4 7.4Z" />
+      <path d="M9.6 4.2 12 6.6" />
+    </>
+  ),
+} as const
+
+export type GlyphName = keyof typeof PATHS
+
+export function Glyph({
+  name,
+  className,
+  title,
+}: {
+  name: GlyphName
+  className?: string
+  title?: string
+}) {
   return (
-    <div
-      className={cn(
-        'rounded-[2px] border px-3 py-2 text-[13px]',
-        tone === 'bad' && 'border-rust/40 bg-rust/8 text-rust',
-        tone === 'good' && 'border-sage/40 bg-sage/8 text-sage',
-        tone === 'manual' && 'border-phos/40 bg-phos/8 text-phos',
-        tone === 'neutral' && 'border-line text-dim',
-        tone === 'auto' && 'border-signal/40 text-signal',
-      )}
+    <svg
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden={title ? undefined : true}
+      role={title ? 'img' : undefined}
+      className={cn('size-4 shrink-0', className)}
     >
-      {children}
-    </div>
+      {title ? <title>{title}</title> : null}
+      {PATHS[name]}
+    </svg>
   )
 }
