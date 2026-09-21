@@ -121,6 +121,13 @@ services:
       TZ: ${TZ:-UTC}
 
     volumes:
+      # Jellyseerr logs "the /app/config volume mount was not configured
+      # properly. All data will be cleared" on start. It is wrong here: it
+      # decides by looking for a DOCKER marker file that its image ships in this
+      # directory, and Docker copies an image's contents into a *named* volume
+      # when it creates one, marker included. The database does survive a
+      # restart — verified. A bind mount starts empty and silences the warning,
+      # at the cost of host permissions to get right.
       - jellyseerr-config:/app/config
       - ./docker/certs/ca.crt:/etc/arr-metadata-ca.crt:ro
 

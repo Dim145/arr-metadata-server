@@ -116,13 +116,22 @@ every one is kept twice. That is not hypothetical — it is what this server did
 before the rule existed, and for *One Piece* it answered with 2352 episodes for
 a show that has 1179.
 
-Measured against the live APIs with TheTVDB, Skyhook and Fanart.tv configured:
+Measured against the live APIs with all four providers configured:
 
-| Series | Numbered episodes | With absolute numbers |
-| --- | --- | --- |
-| Breaking Bad | 62 | 62 |
-| Attack on Titan | 89 | 89 |
-| One Piece | 1179 | 1178 |
+| Series | Numbered episodes | With absolute numbers | With overviews |
+| --- | --- | --- | --- |
+| Breaking Bad | 62 | 62 | 62 |
+| Attack on Titan | 89 | 89 | 89 |
+| One Piece | 1179 | 1178 | 1178 |
+
+Removing TMDB and leaving the other three changes none of those counts — that
+is the point of the rule — but costs the artwork TMDB carries: Breaking Bad
+drops from 82 images to 69.
+
+A real Sonarr 4.0.20 served by this server stored those same counts with no gap
+in the absolute numbering. A real Radarr 6.4.4 searched by id and by text and
+added films with their studio, genres, certification and IMDb/TMDB/Trakt
+ratings. Jellyseerr's ten TMDB endpoints all answer through the relay.
 
 Enrichment is on by default and costs one extra call per refresh per provider.
 Turn it off with `AMS_SKYHOOK_ENRICH=false`, `AMS_RADARR_METADATA_ENRICH=false`,
