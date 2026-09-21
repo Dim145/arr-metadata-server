@@ -47,14 +47,20 @@ export function Score({
       aria-label={t.a11y.ratingOf(fmt.score(value, locale) ?? '')}
     >
       <svg viewBox="0 0 36 36" className="size-full -rotate-90">
-        <circle cx="18" cy="18" r={radius} fill="none" stroke="var(--color-rule)" strokeWidth="2" />
+        <defs>
+          <linearGradient id="score-arc" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stopColor="var(--color-vermillion)" />
+            <stop offset="100%" stopColor="var(--color-brass)" />
+          </linearGradient>
+        </defs>
+        <circle cx="18" cy="18" r={radius} fill="none" stroke="var(--color-rule)" strokeWidth="2.4" />
         <circle
           cx="18"
           cy="18"
           r={radius}
           fill="none"
-          stroke="var(--color-vermillion)"
-          strokeWidth="2"
+          stroke="url(#score-arc)"
+          strokeWidth="2.4"
           strokeLinecap="round"
           strokeDasharray={circumference}
           strokeDashoffset={circumference * (1 - fraction)}
@@ -99,8 +105,9 @@ export function PosterCard({ item, to }: { item: MediaItem; to: string }) {
           phone, and the lift adds nothing a border change does not say. */}
       <div
         className={cn(
-          'relative aspect-2/3 overflow-hidden rounded-card border border-rule bg-ink-high',
-          'transition-colors duration-150 group-hover:border-rule-bright',
+          'relative aspect-2/3 overflow-hidden rounded-panel border border-rule bg-ink-high',
+          'shadow-[var(--shadow-lift)] transition-colors duration-150',
+          'group-hover:border-vermillion/45',
         )}
       >
         {art ? (
@@ -120,7 +127,12 @@ export function PosterCard({ item, to }: { item: MediaItem; to: string }) {
         {/* A scrim only where the badges sit, so the artwork is not dimmed. */}
         {rating?.value ? (
           <div className="absolute top-0 right-0 left-0 flex justify-end bg-gradient-to-b from-ink/80 to-transparent p-2">
-            <span className="rounded-card bg-ink/85 px-1.5 py-0.5 font-mono text-[0.6875rem] font-medium text-bone">
+            <span
+              style={{
+                color: `var(--color-stock-${rating.value >= 8 ? 2 : rating.value >= 6.5 ? 3 : 6})`,
+              }}
+              className="rounded-full bg-ink/85 px-2 py-0.5 font-mono text-[0.6875rem] font-medium"
+            >
               {fmt.score(rating.value, locale)}
             </span>
           </div>

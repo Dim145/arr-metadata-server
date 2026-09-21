@@ -193,6 +193,30 @@ test.describe('reaching the interface', () => {
     expect(marked).toBe(true)
   })
 
+  test('marks one section at a time, not every tab sharing a path', async ({ page, isMobile }) => {
+    test.skip(isMobile, 'the tabs are behind the menu at this width')
+
+    // Browse, Series and Films all point at /browse and differ only by a query
+    // parameter, which a path comparison cannot tell apart — so all three lit
+    // at once. One is current, and it is the one whose parameter matches.
+    for (const [path, expected] of [
+      ['/browse', 'Browse'],
+      ['/browse?kind=series', 'Series'],
+      ['/browse?kind=movie', 'Films'],
+    ] as const) {
+      await page.goto(path)
+      await catalogueLoaded(page)
+
+      const current = await page.evaluate(() =>
+        [...document.querySelectorAll('nav a[aria-current="page"]')].map((a) =>
+          (a.textContent ?? '').trim(),
+        ),
+      )
+
+      expect(current, `${path} should mark exactly one tab`).toEqual([expected])
+    }
+  })
+
   test('leaves no console errors behind', async ({ page }) => {
     const errors: string[] = []
     page.on('console', (message) => {

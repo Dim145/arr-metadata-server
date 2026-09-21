@@ -92,7 +92,7 @@ export function AdminShell() {
   return (
     // The same containment the public shell uses, for the same reason: a table
     // wide enough to scroll must not take the page sideways with it.
-    <div className="grain min-h-dvh overflow-x-clip lg:grid lg:grid-cols-[15rem_minmax(0,1fr)]">
+    <div className="grain ambience-quiet min-h-dvh overflow-x-clip lg:grid lg:grid-cols-[15rem_minmax(0,1fr)]">
       <a
         href="#admin-main"
         className="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-50 focus:rounded-card focus:bg-vermillion focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-ink"

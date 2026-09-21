@@ -19,10 +19,13 @@
    monospace for everything that is a number, an identifier or a machine's
    opinion.
 
-   Ink is warm rather than blue-black — film base, not a terminal. One accent,
-   vermillion, the colour of cinema seating and exit signs; it marks the way
-   through the building and nothing else. Provider data reads in slate, a human
-   hand reads in brass, and neither is ever expressed by colour alone.
+   Ink is warm rather than blue-black — film base, not a terminal. Vermillion is
+   the way through the building: the colour of cinema seating and exit signs, and
+   it marks actions and the place you are, nothing else. Provider data reads in
+   slate, a human hand reads in brass, and neither is ever said by colour alone.
+
+   Everything else coloured is earned from the data. A genre tint comes from the
+   genre, a score arc from the score — nothing is tinted to be lively.
    ─────────────────────────────────────────────────────────────────────────── */
 
 @theme {
@@ -58,12 +61,39 @@
   --font-sans: "Public Sans Variable", "Public Sans", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, monospace;
 
-  --radius-card: 3px;
-  --radius-panel: 4px;
+  --radius-card: 10px;
+  --radius-panel: 14px;
+  --radius-plate: 18px;
+
+  /* Shadows carry a little of the accent rather than being neutral black: a
+     pure-black shadow on near-black is a smudge, and a warm one reads as depth. */
+  --shadow-plate: 0 18px 40px -20px rgb(0 0 0 / 0.9), 0 2px 8px -4px rgb(224 68 52 / 0.18);
+  --shadow-lift: 0 10px 28px -16px rgb(0 0 0 / 0.85);
 
   /* One rhythm for every transition in the interface. */
   --ease-out-soft: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-in-soft: cubic-bezier(0.7, 0, 0.84, 0);
+}
+
+/* ── The stock palette ──────────────────────────────────────────────────────
+   Colour has to come from somewhere real or it is decoration. Genres are the one
+   thing every work carries that varies, so each gets a tint and a page about a
+   crime drama does not look like a page about a comedy. These are film-stock
+   colours — the casts you get from Kodak, Fuji and Technicolor — rather than a
+   spectrum picked for evenness.
+
+   Declared here rather than in `@theme` because nothing generates a utility
+   class from them: they are read at runtime from an inline style, and Tailwind
+   drops a theme value no class refers to. */
+:root {
+  --color-stock-1: #d8604a; /* warm red   */
+  --color-stock-2: #d99a3c; /* amber      */
+  --color-stock-3: #a9ad52; /* olive      */
+  --color-stock-4: #6fae72; /* fuji green */
+  --color-stock-5: #48a9a6; /* teal       */
+  --color-stock-6: #5b8fc9; /* sky        */
+  --color-stock-7: #8f7cc8; /* iris       */
+  --color-stock-8: #c46a9a; /* plum       */
 }
 
 @layer base {
@@ -127,6 +157,18 @@
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
   }
 
+  /* Half the wash, for the side of the building where people work. */
+  .ambience-quiet::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    background-image:
+      radial-gradient(60rem 36rem at 4% -8rem, rgb(224 68 52 / 0.12), transparent 64%),
+      radial-gradient(50rem 32rem at 98% 4%, rgb(201 162 39 / 0.07), transparent 62%);
+  }
+
   /* ── Micro-label ──────────────────────────────────────────────────────────
      The caption under an index-card field. Mono, small, wide, quiet. */
   .label {
@@ -143,6 +185,38 @@
      which is what a catalogue page does. */
   .hairline {
     border-color: var(--color-rule);
+  }
+
+  /* ── Plate ────────────────────────────────────────────────────────────────
+     A panel lit from above rather than filled flat. Two stops of a linear
+     gradient cost nothing to paint and are the difference between a surface and
+     a rectangle. */
+  .plate {
+    background-image: linear-gradient(
+      to bottom,
+      color-mix(in srgb, var(--color-bone) 3%, transparent),
+      transparent 45%
+    );
+  }
+
+  /* ── Ambience ─────────────────────────────────────────────────────────────
+     Two washes of the accent, fixed to the viewport behind everything. Painted
+     once and never again — a gradient that scrolled with the page would repaint
+     a full-screen area on every frame, and a `filter` would be worse still.
+
+     It sits under the content because a hero image would otherwise cover it,
+     and its whole job is the rest of the page: an interface this dark reads as
+     a void without something behind it. */
+  .ambience::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    background-image:
+      radial-gradient(70rem 42rem at 6% -6rem, rgb(224 68 52 / 0.3), transparent 66%),
+      radial-gradient(58rem 36rem at 96% 8%, rgb(201 162 39 / 0.17), transparent 64%),
+      radial-gradient(64rem 42rem at 48% 112%, rgb(72 169 166 / 0.14), transparent 68%);
   }
 }
 

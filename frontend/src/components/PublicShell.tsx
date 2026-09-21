@@ -8,7 +8,7 @@
  */
 
 import { useEffect, useState } from 'react'
-import { Link, NavLink, Outlet, useLocation, useNavigate, useSearchParams } from 'react-router'
+import { Link, Outlet, useLocation, useNavigate, useSearchParams } from 'react-router'
 
 import { cn } from '../lib/cn'
 import { useI18n, type Lang } from '../lib/i18n'
@@ -33,7 +33,7 @@ export function PublicShell({ me }: { me?: Me }) {
     // without containment that bleed makes the whole page scroll sideways.
     // `hidden` would contain it too, but it turns this element into a scroll
     // container and the sticky header stops sticking.
-    <div className="grain min-h-dvh overflow-x-clip">
+    <div className="grain ambience min-h-dvh overflow-x-clip">
       <a
         href="#main"
         className="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-50 focus:rounded-card focus:bg-vermillion focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-ink"
@@ -46,9 +46,7 @@ export function PublicShell({ me }: { me?: Me }) {
           <Wordmark />
 
           <nav aria-label={t.nav.browse} className="hidden items-center gap-1 md:flex">
-            <Tab to="/" end>
-              {t.nav.browse}
-            </Tab>
+            <Tab to="/browse">{t.nav.browse}</Tab>
             <Tab to="/browse?kind=series">{t.nav.series}</Tab>
             <Tab to="/browse?kind=movie">{t.nav.films}</Tab>
           </nav>
@@ -99,7 +97,7 @@ export function PublicShell({ me }: { me?: Me }) {
         {open ? (
           <div className="border-t border-rule bg-ink-raised px-4 py-4 md:hidden">
             <nav aria-label={t.nav.browse} className="grid gap-1">
-              <Tab to="/" end block>
+              <Tab to="/browse" block>
                 {t.nav.browse}
               </Tab>
               <Tab to="/browse?kind=series" block>
@@ -140,43 +138,52 @@ function Wordmark() {
   )
 }
 
+/**
+ * A section tab.
+ *
+ * `NavLink` decides what is active from the path alone, and these three tabs
+ * differ only by a query parameter — so on `/browse?kind=series` it lit both
+ * Series and Films. The comparison has to include the parameter, which means
+ * making it here rather than letting the router guess.
+ */
 function Tab({
   to,
   children,
-  end,
   block,
 }: {
   to: string
   children: React.ReactNode
-  end?: boolean
   block?: boolean
 }) {
+  const location = useLocation()
+
+  const [path, search] = to.split('?')
+  const wanted = new URLSearchParams(search).get('kind')
+  const current = new URLSearchParams(location.search).get('kind')
+
+  const isActive =
+    location.pathname === path && (wanted ?? null) === (current ?? null)
+
   return (
-    <NavLink
+    <Link
       to={to}
-      end={end}
-      className={({ isActive }) =>
-        cn(
-          'relative flex min-h-11 items-center rounded-card px-3 text-sm font-medium transition-colors duration-200',
-          block ? 'w-full' : '',
-          isActive ? 'text-bone' : 'text-bone-dim hover:bg-ink-high hover:text-bone',
-        )
-      }
-    >
-      {({ isActive }) => (
-        <>
-          {children}
-          {/* The active mark is a rule, not a pill: a catalogue underlines. */}
-          <span
-            aria-hidden
-            className={cn(
-              'absolute inset-x-3 -bottom-px h-px origin-left bg-vermillion transition-transform duration-300 ease-[var(--ease-out-soft)]',
-              isActive ? 'scale-x-100' : 'scale-x-0',
-            )}
-          />
-        </>
+      aria-current={isActive ? 'page' : undefined}
+      className={cn(
+        'relative flex min-h-11 items-center rounded-full px-3.5 text-sm font-medium transition-colors duration-200',
+        block ? 'w-full' : '',
+        isActive ? 'text-bone' : 'text-bone-dim hover:bg-ink-high hover:text-bone',
       )}
-    </NavLink>
+    >
+      {children}
+      {/* The active mark is a rule, not a pill: a catalogue underlines. */}
+      <span
+        aria-hidden
+        className={cn(
+          'absolute inset-x-3.5 -bottom-0.5 h-0.5 origin-left rounded-full bg-vermillion transition-transform duration-300 ease-[var(--ease-out-soft)]',
+          isActive ? 'scale-x-100' : 'scale-x-0',
+        )}
+      />
+    </Link>
   )
 }
 

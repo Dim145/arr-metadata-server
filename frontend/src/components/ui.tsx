@@ -34,11 +34,17 @@ export function SectionTitle({
   className?: string
 }) {
   return (
-    <div className={cn('mb-5 flex items-baseline justify-between gap-4 border-b border-rule pb-3', className)}>
-      <h2 className="font-display text-xl font-medium tracking-tight text-bone sm:text-2xl">
-        {children}
-      </h2>
-      {action}
+    <div className={cn('mb-5', className)}>
+      <div className="flex items-baseline justify-between gap-4 pb-3">
+        <h2 className="font-display text-xl font-medium tracking-tight text-bone sm:text-2xl">
+          {children}
+        </h2>
+        {action}
+      </div>
+      <div
+        aria-hidden
+        className="h-px bg-[linear-gradient(to_right,var(--color-vermillion),color-mix(in_srgb,var(--color-vermillion)_35%,var(--color-rule))_18%,var(--color-rule)_55%,transparent)]"
+      />
     </div>
   )
 }
@@ -57,7 +63,7 @@ export function Panel({
   return (
     <section
       style={style}
-      className={cn('rounded-panel border border-rule bg-ink-raised', className)}
+      className={cn('plate rounded-panel border border-rule bg-ink-raised', className)}
     >
       {children}
     </section>
@@ -182,12 +188,14 @@ type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
 }
 
 const BUTTON_BASE =
-  'inline-flex items-center justify-center gap-2 rounded-card font-sans font-medium ' +
+  'inline-flex items-center justify-center gap-2 rounded-full font-sans font-medium ' +
   'transition-colors duration-200 cursor-pointer select-none ' +
   'disabled:cursor-not-allowed disabled:opacity-45'
 
 const BUTTON_VARIANT: Record<NonNullable<ButtonProps['variant']>, string> = {
-  primary: 'bg-vermillion text-ink hover:bg-vermillion-bright',
+  primary:
+    'bg-[linear-gradient(135deg,var(--color-vermillion),color-mix(in_srgb,var(--color-vermillion)_70%,var(--color-brass)))] ' +
+    'text-ink shadow-[var(--shadow-lift)] hover:brightness-110',
   ghost: 'border border-rule-bright text-bone hover:border-bone-faint hover:bg-ink-high',
   quiet: 'text-bone-dim hover:text-bone hover:bg-ink-high',
   danger: 'border border-vermillion-deep text-vermillion hover:bg-vermillion hover:text-ink',
@@ -394,7 +402,7 @@ export function Chip({
   return (
     <span
       className={cn(
-        'inline-flex items-center gap-1.5 rounded-card border px-2 py-1',
+        'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1',
         'font-mono text-[0.625rem] font-medium tracking-[0.12em] uppercase',
         CHIP_TONE[tone],
         className,
@@ -403,6 +411,45 @@ export function Chip({
       {children}
     </span>
   )
+}
+
+/**
+ * A genre, in its own colour.
+ *
+ * The tint is a stable function of the name, so Drama is the same green on
+ * every page and in every language of the interface — and a crime thriller does
+ * not look like a comedy. It carries no meaning beyond identity, which is why
+ * the name is always written out rather than the colour standing for it.
+ */
+export function Genre({ name, className }: { name: string; className?: string }) {
+  const stock = stockOf(name)
+
+  return (
+    <span
+      style={{
+        color: `var(--color-stock-${stock})`,
+        borderColor: `color-mix(in srgb, var(--color-stock-${stock}) 35%, transparent)`,
+        backgroundColor: `color-mix(in srgb, var(--color-stock-${stock}) 10%, transparent)`,
+      }}
+      className={cn(
+        'inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium',
+        'transition-colors duration-150',
+        className,
+      )}
+    >
+      {name}
+    </span>
+  )
+}
+
+/** One of eight film-stock tints, the same one every time for a given name. */
+function stockOf(name: string): number {
+  let hash = 0
+  for (let index = 0; index < name.length; index += 1) {
+    hash = (hash * 31 + name.charCodeAt(index)) | 0
+  }
+
+  return (Math.abs(hash) % 8) + 1
 }
 
 /**

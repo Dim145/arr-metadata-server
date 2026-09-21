@@ -11,7 +11,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router'
 
 import { PosterCard, PosterGrid, Score } from '../components/media'
-import { EmptyState, Glyph, Label, SectionTitle, Skeleton } from '../components/ui'
+import { EmptyState, Genre, Glyph, Label, SectionTitle, Skeleton } from '../components/ui'
 import { api, query } from '../lib/api'
 import * as fmt from '../lib/format'
 import { useI18n } from '../lib/i18n'
@@ -117,7 +117,7 @@ function Featured({ item }: { item: MediaItem }) {
               <img
                 src={sheet}
                 alt={t.a11y.poster(item.title)}
-                className="strike hidden w-28 rounded-card border border-rule-bright shadow-2xl shadow-ink sm:block lg:w-36"
+                className="strike hidden w-28 rounded-plate border border-rule-bright shadow-[var(--shadow-plate)] sm:block lg:w-36"
               />
             ) : null}
 
@@ -136,9 +136,7 @@ function Featured({ item }: { item: MediaItem }) {
                   <span className="text-sm text-bone-dim">{fmt.runtime(item.runtime, locale)}</span>
                 ) : null}
                 {item.genres.slice(0, 3).map((genre) => (
-                  <span key={genre} className="text-sm text-bone-dim">
-                    {genre}
-                  </span>
+                  <Genre key={genre} name={genre} />
                 ))}
                 {rating?.value ? <Score value={rating.value} size="sm" /> : null}
               </div>
@@ -151,7 +149,7 @@ function Featured({ item }: { item: MediaItem }) {
 
               <Link
                 to={`/work/${item.id}`}
-                className="mt-5 inline-flex min-h-11 items-center gap-2 rounded-card bg-vermillion px-5 text-sm font-medium text-ink transition-colors duration-200 hover:bg-vermillion-bright"
+                className="mt-5 inline-flex min-h-11 items-center gap-2 rounded-full bg-[linear-gradient(135deg,var(--color-vermillion),color-mix(in_srgb,var(--color-vermillion)_70%,var(--color-brass)))] px-5 text-sm font-medium text-ink shadow-[var(--shadow-lift)] transition-[filter] duration-200 hover:brightness-110"
               >
                 {t.work.details}
                 <Glyph name="chevronRight" className="size-4" />

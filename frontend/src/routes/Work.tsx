@@ -12,6 +12,7 @@ import { Link, useParams } from 'react-router'
 import { Score } from '../components/media'
 import {
   Chip,
+  Genre,
   EmptyState,
   Field,
   Glyph,
@@ -113,10 +114,10 @@ function Plate({ item }: { item: MediaItem }) {
               <img
                 src={sheet}
                 alt={t.a11y.poster(item.title)}
-                className="w-full rounded-card border border-rule-bright shadow-2xl shadow-ink/80"
+                className="w-full rounded-plate border border-rule-bright shadow-[var(--shadow-plate)]"
               />
             ) : (
-              <div className="grid aspect-2/3 w-full place-items-center rounded-card border border-rule bg-ink-high">
+              <div className="grid aspect-2/3 w-full place-items-center rounded-plate border border-rule bg-ink-high">
                 <Glyph name={item.kind === 'series' ? 'tv' : 'film'} className="size-8 text-bone-faint" />
               </div>
             )}
@@ -148,12 +149,14 @@ function Plate({ item }: { item: MediaItem }) {
             <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-3">
               {rating?.value ? <Score value={rating.value} votes={rating.votes} size="md" /> : null}
 
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-bone-dim">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-bone-dim">
                 {fmt.runtime(item.runtime, locale) ? (
                   <span>{fmt.runtime(item.runtime, locale)}</span>
                 ) : null}
                 {item.network ?? item.studio ? <span>{item.network ?? item.studio}</span> : null}
-                {item.genres.length ? <span>{item.genres.slice(0, 4).join(' · ')}</span> : null}
+                {item.genres.slice(0, 4).map((genre) => (
+                  <Genre key={genre} name={genre} />
+                ))}
               </div>
             </div>
           </div>
@@ -319,7 +322,7 @@ function EpisodeCard({
   return (
     <article
       className={cn(
-        'w-60 shrink-0 snap-start overflow-hidden rounded-card border border-rule bg-ink-raised',
+        'w-60 shrink-0 snap-start overflow-hidden rounded-panel border border-rule bg-ink-raised',
         'transition-colors duration-150 hover:border-rule-bright',
       )}
     >
@@ -400,7 +403,7 @@ function Record({ item }: { item: MediaItem }) {
       {item.genres.length ? (
         <div className="flex flex-wrap gap-1.5 border-t border-rule p-4">
           {item.genres.map((genre) => (
-            <Chip key={genre}>{genre}</Chip>
+            <Genre key={genre} name={genre} />
           ))}
         </div>
       ) : null}
