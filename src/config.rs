@@ -65,6 +65,20 @@ pub struct Server {
     pub cors_origins: Vec<String>,
     /// Networks whose `X-Forwarded-For` is honoured when resolving the peer address.
     pub trusted_proxies: Vec<IpNet>,
+    /// Hostnames this server answers to. Empty means it answers to any.
+    ///
+    /// The defence against DNS rebinding, and the only one there is: a name
+    /// with a one-second TTL that resolves to `evil.com` and then to this
+    /// server's address makes the victim's own browser treat `http://evil.com/`
+    /// as *same-origin* with it, so CORS never applies. With the default
+    /// `apikey` policy the attacker's script still has no credential; with
+    /// `allowlist` — a natural choice on a home network — the browser is
+    /// calling from an allowed address, and every read is theirs.
+    ///
+    /// Empty by default because there is no safe guess: this is reached by
+    /// container name, by LAN address, by whatever the router calls it. Naming
+    /// them is the operator's to do.
+    pub allowed_hosts: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -214,6 +228,11 @@ impl Config {
                 },
                 request_timeout: secs(&["AMS_REQUEST_TIMEOUT"], 60)?,
                 cors_origins: list(&["AMS_CORS_ORIGINS"]),
+                allowed_hosts: list(&["AMS_ALLOWED_HOSTS"])
+                    .into_iter()
+                    .map(|h| h.trim().to_ascii_lowercase())
+                    .filter(|h| !h.is_empty())
+                    .collect(),
                 trusted_proxies: nets(&["AMS_TRUSTED_PROXIES"], &[])?,
             },
             database: Database {

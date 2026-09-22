@@ -18,6 +18,8 @@ pub mod language;
 pub mod movie;
 pub mod series;
 
+use std::sync::Arc;
+
 use anyhow::Result;
 use serde_json::Value;
 
@@ -110,6 +112,36 @@ async fn find_existing(state: &AppState, item: &MediaItem) -> Result<Option<Stri
     Ok(None)
 }
 
+/// One write at a time per work.
+///
+/// `replace_children` deletes a work's provider rows and re-inserts them, and
+/// nothing stops a refresh someone asked for by hand from landing on top of the
+/// scheduler's sweep of the same entry. On PostgreSQL, where the two are not
+/// serialised by the engine the way SQLite serialises them, the second
+/// transaction's DELETE only sees the rows its own scan found: the first
+/// transaction's freshly inserted credits survive it, the second adds its own,
+/// and the cast is doubled. `media_credit` is the one child table with no key
+/// to conflict on, so nothing catches it afterwards either.
+///
+/// A lock keyed on the work rather than one lock for all of them: two different
+/// series being refreshed at once is the normal case and has never been a
+/// problem.
+static WRITING: std::sync::LazyLock<
+    parking_lot::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+> = std::sync::LazyLock::new(|| parking_lot::Mutex::new(std::collections::HashMap::new()));
+
+fn write_lock(id: &str) -> Arc<tokio::sync::Mutex<()>> {
+    let mut held = WRITING.lock();
+
+    // Bounded: the keys are work ids, and a busy sweep touches a batch at a
+    // time. Anything nobody else is holding has served its purpose.
+    if held.len() > 256 {
+        held.retain(|_, lock| Arc::strong_count(lock) > 1);
+    }
+
+    Arc::clone(held.entry(id.to_string()).or_default())
+}
+
 /// Carry over every child list this fetch came back empty-handed on.
 ///
 /// The write replaces children wholesale, which is right when the providers
@@ -165,6 +197,9 @@ pub async fn persist(
     item.refresh_after = Some(next_refresh(state, &item));
     item.refresh_error = None;
 
+    let serialised = write_lock(&item.id);
+    let _writing = serialised.lock().await;
+
     repo::item::upsert(
         &state.db,
         repo::item::ItemWrite {
@@ -184,8 +219,17 @@ pub async fn persist(
     // no longer covers the whole run. The stored text stays — it is keyed by
     // episode number and still correct for the episodes it names — but the
     // marker goes, so the next request in that language fills in the rest.
+    // Loud, because the consequence is permanent and invisible: the marker
+    // stays true, so the episodes this refresh added are never fetched in that
+    // language again and nothing ever retries. An operator seeing French titles
+    // stop appearing has nothing else to go on.
     if let Err(e) = repo::translation::clear_fetched(&state.db, &item.id).await {
-        tracing::warn!(id = %item.id, error = %e, "could not reset the language markers");
+        tracing::error!(
+            id = %item.id,
+            error = %e,
+            "could not reset the language markers; episodes added by this refresh will not be \
+             translated until the next successful one"
+        );
     }
 
     state

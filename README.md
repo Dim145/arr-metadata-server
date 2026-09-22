@@ -321,6 +321,14 @@ A few things worth knowing before this is reachable from anywhere:
   reasonable thing to own.
 - **`AMS_CORS_ORIGINS` names origins.** `*` is ignored with a warning rather than
   honoured — this server sends credentials, and the two cannot be combined.
+- **`AMS_ALLOWED_HOSTS` names the hostnames this server answers to**, and is the
+  only defence against DNS rebinding — a name whose TTL is one second, pointing
+  first at an attacker and then at this server, makes a victim's own browser
+  treat the attacker's page as same-origin with it, and CORS never gets a say.
+  Empty by default, because there is no safe guess: this is reached by container
+  name, by LAN address, by whatever the router calls it. Worth setting on
+  anything using `AMS_NATIVE_AUTH=allowlist`, where a browser calling from an
+  allowed address is all the credential an attacker needs.
 
 ## Running it in containers
 

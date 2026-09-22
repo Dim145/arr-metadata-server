@@ -5,6 +5,7 @@ use axum::{
     Json, Router, ServiceExt,
     extract::{Request, State},
     http::{HeaderValue, StatusCode, header},
+    response::{IntoResponse, Response},
     routing::get,
 };
 use tower::Layer;
@@ -105,6 +106,12 @@ fn build_router(state: AppState) -> Router {
         // The UI's fallback must be last: it answers every path the API did not.
         .merge(crate::ui::router())
         .with_state(state.clone())
+        // Outside everything, because a request for a name this server does not
+        // answer to should not reach a guard, let alone a handler.
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            check_host,
+        ))
         .layer(cors(&state))
         .layer(header_layer(
             header::CONTENT_SECURITY_POLICY,
@@ -120,6 +127,60 @@ fn build_router(state: AppState) -> Router {
         ))
         .layer(CatchPanicLayer::new())
         .layer(TraceLayer::new_for_http())
+}
+
+/// Refuse a request addressed to a name this server does not answer to.
+///
+/// The defence against DNS rebinding. A name with a one-second TTL that
+/// resolves first to the attacker's host and then to this server's address
+/// makes the victim's own browser treat the attacker's page as *same-origin*
+/// with this server — CORS does not apply to a same-origin request, so it never
+/// gets a say. What the script can then do depends on the surface policy: with
+/// the default `apikey` it still has no credential, but with `allowlist` the
+/// browser is calling from an address that is on the list.
+///
+/// Off unless `AMS_ALLOWED_HOSTS` names something, because there is no safe
+/// guess — this is reached by container name, LAN address, and whatever the
+/// router calls it.
+async fn check_host(
+    State(state): State<AppState>,
+    request: Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let allowed = &state.config.server.allowed_hosts;
+
+    if allowed.is_empty() {
+        return next.run(request).await;
+    }
+
+    let host = request
+        .headers()
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .map(strip_port)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    if allowed.iter().any(|a| a == &host) {
+        return next.run(request).await;
+    }
+
+    tracing::warn!(%host, "refused a request addressed to a name this server does not answer to");
+    (StatusCode::MISDIRECTED_REQUEST, "unknown host").into_response()
+}
+
+/// `example.com:8080` is `example.com`; `[::1]:8080` is `[::1]`.
+fn strip_port(host: &str) -> &str {
+    let host = host.trim();
+
+    if let Some(end) = host.strip_prefix('[').and_then(|_| host.find(']')) {
+        return &host[..=end];
+    }
+
+    match host.rsplit_once(':') {
+        Some((name, port)) if port.chars().all(|c| c.is_ascii_digit()) => name,
+        _ => host,
+    }
 }
 
 /// What a page here may load, and who may embed it.
@@ -262,4 +323,23 @@ async fn shutdown_signal() {
         _ = ctrl_c => tracing::info!("received SIGINT, shutting down"),
         _ = terminate => tracing::info!("received SIGTERM, shutting down"),
     }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_host_header_is_compared_without_its_port() {
+        assert_eq!(strip_port("metadata.example.com"), "metadata.example.com");
+        assert_eq!(
+            strip_port("metadata.example.com:8080"),
+            "metadata.example.com"
+        );
+        assert_eq!(strip_port(" 192.168.1.50:8080 "), "192.168.1.50");
+        assert_eq!(strip_port("[::1]:8080"), "[::1]");
+        assert_eq!(strip_port("[2001:db8::1]"), "[2001:db8::1]");
+        // Not a port, so not stripped.
+        assert_eq!(strip_port("host:notaport"), "host:notaport");
+    }
+
+    use super::*;
 }
