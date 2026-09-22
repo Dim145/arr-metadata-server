@@ -109,11 +109,10 @@ impl FanartClient {
             anyhow::bail!("Fanart.tv returned {status} for {url}");
         }
 
-        response
-            .json::<Value>()
+        crate::providers::read_json(response)
             .await
             .map(Some)
-            .with_context(|| format!("Fanart.tv returned a malformed body for {url}"))
+            .with_context(|| format!("Fanart.tv returned a body this server could not read: {url}"))
     }
 
     /// An item carrying only artwork; the merge layer folds it into the rest.
@@ -152,6 +151,14 @@ impl FanartClient {
         }
 
         // Season artwork carries the season it belongs to.
+        // Per season, not per kind: `PER_KIND` of each shape for each season,
+        // the same bargain the series-level loop above makes. Uncapped, a
+        // heavily-uploaded anime with eight hundred season posters was eight
+        // hundred database rows, rewritten on every refresh, inside one cache
+        // entry weighed by its own length.
+        let mut per_season: std::collections::HashMap<(CoverType, i32), usize> =
+            std::collections::HashMap::new();
+
         for (entries, cover_type) in [
             (&artwork.seasonposter, CoverType::Poster),
             (&artwork.seasonbanner, CoverType::Banner),
@@ -165,7 +172,15 @@ impl FanartClient {
                     continue;
                 };
 
-                images.push(self.image(entry, cover_type, Some(number), 0));
+                let slot = per_season.entry((cover_type, number)).or_default();
+                if *slot >= PER_KIND {
+                    continue;
+                }
+
+                // And the rank is kept, rather than every one being filed at 0
+                // and the ordering that was just computed thrown away.
+                images.push(self.image(entry, cover_type, Some(number), *slot as i32));
+                *slot += 1;
             }
         }
 
@@ -196,7 +211,9 @@ impl FanartClient {
                 .and_then(|l| l.parse().ok())
                 .unwrap_or(0);
 
-            (group, -likes)
+            // `Reverse`, not `-likes`: the count is parsed from a string a
+            // stranger uploaded, and negating `i64::MIN` overflows.
+            (group, std::cmp::Reverse(likes))
         });
 
         ranked

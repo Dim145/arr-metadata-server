@@ -45,7 +45,14 @@ impl FieldType {
         match (self, value) {
             (_, Value::Null) => true,
             (Self::Text | Self::LongText | Self::Date | Self::TimeOfDay, Value::String(_)) => true,
-            (Self::Integer, Value::Number(n)) => n.is_i64() || n.is_u64(),
+            // In `i32` range, because that is what every integer field is. A
+            // number that is merely a valid JSON integer passes serde on the
+            // way in and fails it on the way out, in `patch_in_place` — which
+            // is inside `load`, so the work, the whole catalogue list and the
+            // refresh sweep all start erroring, permanently, on one bad paste.
+            (Self::Integer, Value::Number(n)) => {
+                n.as_i64().is_some_and(|n| i32::try_from(n).is_ok())
+            }
             (Self::Float, Value::Number(_)) => true,
             (Self::Boolean, Value::Bool(_)) => true,
             (Self::TextList, Value::Array(items)) => items.iter().all(Value::is_string),
@@ -57,7 +64,7 @@ impl FieldType {
         match self {
             Self::Text => "a string",
             Self::LongText => "a string",
-            Self::Integer => "a whole number",
+            Self::Integer => "a whole number between -2147483648 and 2147483647",
             Self::Float => "a number",
             Self::Boolean => "true or false",
             Self::Date => "an ISO-8601 date string",
@@ -362,6 +369,23 @@ mod tests {
             updated_at: "2026-09-20T00:00:00.000Z".into(),
             updated_by: None,
         }
+    }
+
+    #[test]
+    fn a_number_too_big_for_the_field_is_refused_at_the_door() {
+        // Every integer field is an `i32`. A larger one is a valid JSON integer
+        // and passes serde on the way in, then fails it on the way out — inside
+        // `load`, which is how a single pasted timestamp made a work, the whole
+        // catalogue list and the refresh sweep error until somebody found it.
+        assert!(validate(Scope::Item, "year", Some(&Value::from(2026))).is_ok());
+        assert!(validate(Scope::Item, "runtime", Some(&Value::from(-30))).is_ok());
+
+        assert!(validate(Scope::Item, "year", Some(&Value::from(3_000_000_000i64))).is_err());
+        assert!(validate(Scope::Item, "runtime", Some(&Value::from(i64::MIN))).is_err());
+        assert!(
+            validate(Scope::Item, "runtime", Some(&Value::from(u64::MAX))).is_err(),
+            "an unsigned value past i64 is not a runtime either"
+        );
     }
 
     #[test]

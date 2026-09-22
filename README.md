@@ -289,7 +289,38 @@ compile their key in too — Jellyseerr does — and need the same treatment. Se
 `AMS_ALLOWLIST` to the networks your stack runs on.
 
 `AMS_AUTH_DISABLED=true` opens every surface. It exists for closed networks and
-first-run setup; do not use it on anything reachable from outside.
+first-run setup; do not use it on anything reachable from outside. The same goes
+for `AMS_NATIVE_AUTH=open`, which grants administrator rather than reader — key
+issuance, the allowlist and the settings included.
+
+### What is closed, and how
+
+A few things worth knowing before this is reachable from anywhere:
+
+- **Nothing a caller presents here is relayed upstream.** The TMDB relay strips
+  the session cookie and every spelling of an API key before forwarding, so a
+  credential for this server never reaches TMDB's access logs.
+- **The relay reads and does not write.** It exists for Jellyseerr, Overseerr and
+  Plex, which only read; a forwarded `POST` would let any key issued here rate a
+  film, or empty a list, using the operator's TMDB credentials.
+- **The settings, the job history and the audit trail need an administrator**,
+  not merely a credential. A key issued to Jellyseerr cannot read which surface
+  takes which credential or whether authentication is off.
+- **The session cookie** is `HttpOnly`, `SameSite=Strict`, and `Secure` when this
+  server terminates TLS or `AMS_PUBLIC_URL` says `https`.
+- **Every response carries a content security policy** with `frame-ancestors
+  'none'`, so no page elsewhere can frame this one and borrow an administrator's
+  clicks, and `Referrer-Policy: no-referrer`, so the ids of what you are looking
+  at do not travel to the artwork hosts.
+- **Every surface is rate limited**, the arr and TMDB ones included
+  (`AMS_RATE_LIMIT_PER_MINUTE`, 600 by default, per address).
+- **An image URL may not name an address only this server can reach** — loopback,
+  link-local, `169.254.169.254`. The NFO export downloads stored artwork, which
+  makes an image URL a request this server makes on somebody else's say-so.
+  A private LAN address is still allowed: a picture mirror at home is a
+  reasonable thing to own.
+- **`AMS_CORS_ORIGINS` names origins.** `*` is ignored with a warning rather than
+  honoured — this server sends credentials, and the two cannot be combined.
 
 ## Running it in containers
 

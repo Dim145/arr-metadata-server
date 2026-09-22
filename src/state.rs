@@ -67,6 +67,18 @@ impl AppState {
             .timeout(std::time::Duration::from_secs(30))
             .connect_timeout(std::time::Duration::from_secs(10))
             .pool_max_idle_per_host(16)
+            // A redirect is a URL somebody else chose, which is the same
+            // problem as an image URL somebody else stored — and it arrives
+            // after every check has already passed.
+            .redirect(reqwest::redirect::Policy::custom(|attempt| {
+                if crate::outbound::names_internal_host(attempt.url().as_str()) {
+                    return attempt.stop();
+                }
+                if attempt.previous().len() >= 5 {
+                    return attempt.error("too many redirects");
+                }
+                attempt.follow()
+            }))
             .build()
             .context("failed to build the outbound HTTP client")?;
 

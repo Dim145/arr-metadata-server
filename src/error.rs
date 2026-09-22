@@ -43,7 +43,19 @@ pub enum AppError {
     LoopDetected,
 
     #[error(transparent)]
-    Internal(#[from] anyhow::Error),
+    Internal(anyhow::Error),
+}
+
+/// Most failures are internal, but a unique-constraint violation is the caller
+/// being told something is already there — and by the time it arrives here it
+/// has usually been through `anyhow`, so the original has to be dug back out.
+impl From<anyhow::Error> for AppError {
+    fn from(e: anyhow::Error) -> Self {
+        match e.downcast::<sqlx::Error>() {
+            Ok(sql) => Self::from(sql),
+            Err(other) => Self::Internal(other),
+        }
+    }
 }
 
 impl AppError {
@@ -126,6 +138,15 @@ impl IntoResponse for AppError {
 /// where a handler maps it to something more specific first.
 impl From<sqlx::Error> for AppError {
     fn from(e: sqlx::Error) -> Self {
+        if e.as_database_error()
+            .is_some_and(sqlx::error::DatabaseError::is_unique_violation)
+        {
+            // Something is already there. That is a 409 and a sentence the
+            // caller can act on, not a 500 — adding a poster by hand whose URL
+            // a provider had already supplied used to look like a crash.
+            return Self::Conflict("that already exists here".into());
+        }
+
         match e {
             sqlx::Error::RowNotFound => Self::NotFound,
             other => Self::Internal(other.into()),

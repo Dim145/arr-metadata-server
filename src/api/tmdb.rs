@@ -13,7 +13,7 @@
 use axum::{
     body::Body,
     extract::{Request, State},
-    http::{HeaderMap, HeaderName, HeaderValue, StatusCode, Uri, header},
+    http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri, header},
     response::{IntoResponse, Response},
     routing::any,
 };
@@ -44,7 +44,12 @@ const HOP_HEADERS: &[&str] = &[
 ];
 
 /// Query parameters this server controls and the client does not.
-const OVERRIDDEN_PARAMS: &[&str] = &["api_key", "include_adult"];
+///
+/// Every spelling of a key the guard accepts has to be here too. A client may
+/// authenticate with `?apikey=`, and for a while only `?api_key=` was stripped —
+/// so its credential for *this* server was relayed to TMDB, and landed in
+/// TMDB's access logs on every request.
+const OVERRIDDEN_PARAMS: &[&str] = &["api_key", "apikey", "include_adult"];
 
 /// The tag every route here is filed under in the documentation.
 pub const TAG: &str = "TMDB compatibility";
@@ -87,6 +92,20 @@ pub async fn proxy(State(state): State<AppState>, request: Request) -> AppResult
     };
 
     let (parts, body) = request.into_parts();
+
+    // Reading only. The clients this relay exists for — Jellyseerr, Overseerr,
+    // Plex — never write, and a relay that forwards writes is one that lets any
+    // key issued here rate a film, or empty a list, as the operator.
+    if !matches!(parts.method, Method::GET | Method::HEAD) {
+        return Err(AppError::Forbidden);
+    }
+
+    // `..` in any spelling. The path is interpolated after `/3`, and a URL
+    // parser resolves dot segments before the request goes out: `/3/%2e%2e/4/x`
+    // leaves TMDB's v3 API for its v4 one, carrying the operator's credentials.
+    if climbs(parts.uri.path()) {
+        return Err(AppError::BadRequest("that is not a TMDB path".into()));
+    }
 
     let target = upstream_url(&state, &parts.uri, &api_key);
 
@@ -171,6 +190,31 @@ fn upstream_url(state: &AppState, uri: &Uri, api_key: &str) -> String {
     format!("{}{}?{}", state.config.tmdb.upstream, uri.path(), query)
 }
 
+/// Headers that are a credential for *this* server and must not be relayed.
+///
+/// The cookie is the one that matters most: the interface is same-origin with
+/// `/3/*` and the session cookie is `Path=/`, so anything a browser sends here —
+/// an `<img src="/3/...">`, a bookmark — carries a live admin session, and
+/// forwarding it would hand that session to TMDB's logs. `SameSite` does not
+/// help; the request is same-site.
+const OUR_CREDENTIALS: &[&str] = &["x-api-key", "cookie"];
+
+/// Whether any segment of `path` is a dot segment, encoded or not.
+///
+/// Percent-decoded first, because `%2e%2e` and `..` mean the same thing to the
+/// URL parser that builds the outgoing request and different things to a naive
+/// comparison. An un-decodable escape is treated as suspicious rather than
+/// harmless — nothing TMDB addresses needs one.
+fn climbs(path: &str) -> bool {
+    path.split('/').any(|segment| {
+        match urlencoding::decode(segment) {
+            Ok(decoded) => matches!(decoded.as_ref(), "." | ".."),
+            // Not valid UTF-8 once decoded: not a TMDB path either.
+            Err(_) => true,
+        }
+    })
+}
+
 fn forwarded_headers(headers: &HeaderMap) -> HeaderMap {
     headers
         .iter()
@@ -178,7 +222,7 @@ fn forwarded_headers(headers: &HeaderMap) -> HeaderMap {
         // The client's Authorization is its credential for *this* server, not
         // for TMDB; forwarding it would leak it upstream.
         .filter(|(name, _)| *name != header::AUTHORIZATION)
-        .filter(|(name, _)| name.as_str() != "x-api-key")
+        .filter(|(name, _)| !OUR_CREDENTIALS.contains(&name.as_str()))
         .map(|(name, value)| (name.clone(), value.clone()))
         .collect()
 }
@@ -188,6 +232,11 @@ fn response_headers(headers: &HeaderMap) -> HeaderMap {
 
     for (name, value) in headers {
         if HOP_HEADERS.contains(&name.as_str()) {
+            continue;
+        }
+        // A `Set-Cookie` from upstream would be written against *this* origin,
+        // where the session cookie lives. Nothing TMDB sets belongs here.
+        if name == header::SET_COOKIE {
             continue;
         }
         if let (Ok(name), Ok(value)) = (
@@ -342,6 +391,39 @@ fn tmdb_series_status(status: &str) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_path_that_climbs_out_of_v3_is_not_a_tmdb_path() {
+        // The outgoing URL is built by interpolation and parsed by reqwest,
+        // which resolves dot segments — so this one would have left the v3 API
+        // for the v4 one, carrying the operator's credentials with it.
+        assert!(climbs("/3/%2e%2e/4/account"));
+        assert!(climbs("/3/../4/account"));
+        assert!(climbs("/3/tv/%2E%2E/list"));
+        assert!(climbs("/3/./tv/1396"));
+
+        assert!(!climbs("/3/tv/1396"));
+        assert!(!climbs("/3/search/movie"));
+        assert!(!climbs("/3/movie/550/credits"));
+        // A dot inside a segment is just a character.
+        assert!(!climbs("/3/configuration/countries.json"));
+    }
+
+    #[test]
+    fn the_relay_strips_every_credential_the_caller_presented_to_us() {
+        // A key accepted here must never be forwarded upstream, in any of the
+        // spellings the guard accepts — nor the session cookie, which reaches
+        // this route because the interface is same-origin with it.
+        for name in crate::auth::middleware::API_KEY_PARAMS {
+            assert!(
+                OVERRIDDEN_PARAMS.contains(name),
+                "{name} authenticates here but is relayed to TMDB"
+            );
+        }
+
+        assert!(OUR_CREDENTIALS.contains(&"cookie"));
+        assert!(OUR_CREDENTIALS.contains(&"x-api-key"));
+    }
+
     use super::*;
 
     #[test]

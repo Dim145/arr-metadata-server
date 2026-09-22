@@ -106,7 +106,12 @@ fn build_router(state: AppState) -> Router {
         .merge(crate::ui::router())
         .with_state(state.clone())
         .layer(cors(&state))
-        .layer(security_headers())
+        .layer(header_layer(
+            header::CONTENT_SECURITY_POLICY,
+            CONTENT_SECURITY_POLICY,
+        ))
+        .layer(header_layer(header::REFERRER_POLICY, "no-referrer"))
+        .layer(header_layer(header::X_CONTENT_TYPE_OPTIONS, "nosniff"))
         .layer(RequestBodyLimitLayer::new(MAX_BODY_BYTES))
         .layer(CompressionLayer::new())
         .layer(TimeoutLayer::with_status_code(
@@ -117,18 +122,37 @@ fn build_router(state: AppState) -> Router {
         .layer(TraceLayer::new_for_http())
 }
 
-/// Headers applied to every response.
+/// What a page here may load, and who may embed it.
 ///
-/// The UI is served from this same origin and loads no third-party code, so the
-/// policy can be strict. Images are the exception: posters come from TMDB.
-fn security_headers() -> impl tower::Layer<
-    axum::routing::Route,
-    Service = tower_http::set_header::SetResponseHeader<axum::routing::Route, HeaderValue>,
-> + Clone {
-    SetResponseHeaderLayer::overriding(
-        header::X_CONTENT_TYPE_OPTIONS,
-        HeaderValue::from_static("nosniff"),
-    )
+/// The interface is served from this same origin and pulls in no third-party
+/// code, so everything is `'self'`. Two exceptions, both forced:
+///
+/// * **images** come from wherever a provider filed them — TMDB, TheTVDB,
+///   Fanart.tv and whatever host a manual entry names;
+/// * **inline styles** are how React writes a `style` attribute, and the
+///   interface uses them for per-card animation delays and accent colours.
+///
+/// `frame-ancestors 'none'` is the one that earns its place on a server on a
+/// home network: it is what stops a page elsewhere framing this one and
+/// borrowing an administrator's clicks. `base-uri` and `form-action` close the
+/// two ways a stray tag could redirect a relative URL or a form off-origin.
+const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; \
+     img-src 'self' data: https:; \
+     style-src 'self' 'unsafe-inline'; \
+     script-src 'self'; \
+     connect-src 'self'; \
+     font-src 'self' data:; \
+     object-src 'none'; \
+     base-uri 'self'; \
+     form-action 'self'; \
+     frame-ancestors 'none'";
+
+/// One fixed response header, on every answer this server gives.
+fn header_layer(
+    name: header::HeaderName,
+    value: &'static str,
+) -> tower_http::set_header::SetResponseHeaderLayer<HeaderValue> {
+    SetResponseHeaderLayer::overriding(name, HeaderValue::from_static(value))
 }
 
 fn cors(state: &AppState) -> CorsLayer {
@@ -141,6 +165,20 @@ fn cors(state: &AppState) -> CorsLayer {
 
     let parsed: Vec<HeaderValue> = origins
         .iter()
+        // `*` cannot be combined with credentials, and tower-http answers that
+        // by panicking rather than refusing — so a plausible thing to write in
+        // a compose file took the process down at startup instead of being
+        // reported. There is no wildcard to have here: the cookie rides along.
+        .filter(|o| {
+            if o.trim() == "*" {
+                tracing::warn!(
+                    "ignoring `*` in AMS_CORS_ORIGINS: this server sends credentials, \
+                     so every allowed origin has to be named"
+                );
+                return false;
+            }
+            true
+        })
         .filter_map(|o| match o.parse() {
             Ok(value) => Some(value),
             Err(_) => {
@@ -149,6 +187,10 @@ fn cors(state: &AppState) -> CorsLayer {
             }
         })
         .collect();
+
+    if parsed.is_empty() {
+        return CorsLayer::new();
+    }
 
     CorsLayer::new()
         .allow_origin(parsed)

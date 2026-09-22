@@ -167,7 +167,7 @@ fn episodes(seasons: &[models::Season]) -> Vec<Episode> {
             let air_date = non_empty(ep.air_date.as_deref());
             // TMDB gives a date with no time. Midnight UTC is what Skyhook has
             // always emitted here, and Sonarr treats it as a date anyway.
-            let air_date_utc = air_date.as_deref().map(|d| format!("{d}T00:00:00Z"));
+            let air_date_utc = air_date.as_deref().and_then(crate::domain::midnight_utc);
 
             out.push(Episode {
                 id: new_id(),

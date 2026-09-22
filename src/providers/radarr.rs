@@ -110,8 +110,13 @@ impl RadarrMetadataClient {
             anyhow::bail!("Radarr's metadata service returned {status} for {url}");
         }
 
-        response.json::<Value>().await.map(Some).with_context(|| {
-            format!("Radarr's metadata service returned a malformed body for {url}")
-        })
+        crate::providers::read_json(response)
+            .await
+            .map(Some)
+            .with_context(|| {
+                format!(
+                    "Radarr's metadata service returned a body this server could not read: {url}"
+                )
+            })
     }
 }

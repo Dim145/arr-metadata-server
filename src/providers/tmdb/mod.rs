@@ -124,10 +124,9 @@ impl TmdbClient {
             anyhow::bail!("TMDB returned {status} for {url}: {}", body.trim());
         }
 
-        let value = response
-            .json::<Value>()
+        let value = crate::providers::read_json(response)
             .await
-            .with_context(|| format!("TMDB returned a malformed body for {url}"))?;
+            .with_context(|| format!("TMDB returned a body this server could not read: {url}"))?;
 
         Ok(Some(value))
     }

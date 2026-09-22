@@ -248,9 +248,20 @@ async fn callers(
 ) -> AppResult<Json<Vec<Caller>>> {
     require_admin(&identity)?;
 
-    Ok(Json(
-        repo::network::callers(&state.db, query.limit.unwrap_or(100)).await?,
-    ))
+    let mut callers = repo::network::callers(&state.db, query.limit.unwrap_or(100)).await?;
+
+    // Answered here rather than in the interface. Working out whether
+    // 172.31.0.7 falls inside 172.31.0.0/24 is address arithmetic, and it is
+    // already written once, correctly, for the guard that turns callers away.
+    let allowlist = state.allowlist();
+    for caller in &mut callers {
+        caller.covered = caller
+            .ip
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| allowlist.iter().any(|(_, net)| net.contains(&ip)));
+    }
+
+    Ok(Json(callers))
 }
 
 fn require_admin(identity: &Identity) -> AppResult<()> {

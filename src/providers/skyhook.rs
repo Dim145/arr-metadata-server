@@ -95,10 +95,9 @@ impl SkyhookClient {
             anyhow::bail!("Skyhook returned {status} for {url}");
         }
 
-        response
-            .json::<Value>()
+        crate::providers::read_json(response)
             .await
             .map(Some)
-            .with_context(|| format!("Skyhook returned a malformed body for {url}"))
+            .with_context(|| format!("Skyhook returned a body this server could not read: {url}"))
     }
 }

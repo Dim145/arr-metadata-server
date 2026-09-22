@@ -198,6 +198,16 @@ pub async fn fetch_one(http: &reqwest::Client, root: &Path, download: &Download)
         return Ok(false);
     }
 
+    // Again here, and not only where the URL was stored: a name that pointed
+    // somewhere ordinary when it was accepted can point at loopback by the time
+    // this runs, and rows written before the check existed are still in there.
+    if crate::outbound::resolves_internally(&download.url).await {
+        anyhow::bail!(
+            "{} resolves to an address only this server can reach",
+            download.url
+        );
+    }
+
     let response = http
         .get(&download.url)
         .timeout(std::time::Duration::from_secs(30))

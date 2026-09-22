@@ -21,6 +21,13 @@ use crate::{
     wire,
 };
 
+/// The most seasons one series fetch will ask a provider about.
+///
+/// Each is its own HTTP call. Nothing real comes close — the longest-running
+/// television on record is under a hundred — and the number is read off an
+/// answer rather than known in advance.
+const MAX_SEASONS: usize = 200;
+
 /// What one provider returned: its raw body, and the canonical form of it.
 struct Answer {
     provider: &'static str,
@@ -132,7 +139,25 @@ async fn series_from_tmdb(state: &AppState, tmdb_id: Option<i64>) -> Option<Answ
         }
     };
 
-    let numbers: Vec<i32> = tv.seasons.iter().map(|s| s.season_number).collect();
+    // Capped, because this is one outbound call per entry and the pool they
+    // queue in is shared by everything else this process is doing. The season
+    // count comes from the answer, and the answer comes from a URL an operator
+    // can point elsewhere.
+    let numbers: Vec<i32> = tv
+        .seasons
+        .iter()
+        .map(|s| s.season_number)
+        .take(MAX_SEASONS)
+        .collect();
+
+    if tv.seasons.len() > MAX_SEASONS {
+        tracing::warn!(
+            tmdb_id,
+            seasons = tv.seasons.len(),
+            "more seasons than this server will fetch; taking the first {MAX_SEASONS}"
+        );
+    }
+
     let seasons = state.tmdb.tv_seasons(tmdb_id, &numbers).await;
 
     Some(Answer {

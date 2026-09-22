@@ -300,9 +300,13 @@ function SignOut({ className, iconOnly }: { className?: string; iconOnly?: boole
       className={cn('cursor-pointer', className)}
       onClick={async () => {
         // Whatever the server says, the session is over here: everything cached
-        // was answered for somebody who is now gone.
+        // was answered for somebody who is now gone. A server that cannot be
+        // reached is caught rather than left to reject — signing out still
+        // works, and an unhandled rejection would be the only trace of it.
         try {
           await api.post('/auth/logout')
+        } catch {
+          // Nothing to tell the operator: they are being signed out either way.
         } finally {
           queryClient.clear()
           navigate('/login', { replace: true })

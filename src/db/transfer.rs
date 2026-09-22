@@ -19,6 +19,14 @@ use crate::db::Db;
 /// Foreign keys are enforced on SQLite and on PostgreSQL, so the order is not
 /// cosmetic. `_sqlx_migrations` is deliberately absent: the target applies its
 /// own, and copying another engine's checksums would break it.
+///
+/// Every other table the migrations create has to be here. Four were not, and
+/// the copy still reported success: the allowlist arrived empty, which either
+/// refused every Sonarr and Radarr call or — worse — was re-seeded from the
+/// `AMS_ALLOWLIST` variable the operator had long since stopped maintaining,
+/// with fresh rule ids that orphaned every peer-scoped setting hanging off
+/// them. [`tests::every_table_in_the_schema_is_copied`] is what stops it
+/// happening again.
 const TABLES: &[&str] = &[
     "media_item",
     "media_external_id",
@@ -31,11 +39,15 @@ const TABLES: &[&str] = &[
     "media_alternative_title",
     "media_rating",
     "media_translation",
+    "media_episode_translation",
+    "media_language_fetch",
     "api_client",
     "admin_user",
     "admin_session",
     "job_run",
     "audit_log",
+    "network_rule",
+    "network_caller",
     "setting",
     "search_cache",
 ];
@@ -82,14 +94,27 @@ pub async fn run(source: &Db, target: &Db, force: bool) -> Result<Report> {
 
     let mut report = Report { copied: Vec::new() };
 
+    // One transaction for the whole copy. Chunk by chunk and table by table, a
+    // failure part of the way through left the target holding everything before
+    // it — which the emptiness check above then refuses to let you retry, while
+    // `--force` would re-insert the tables that did land and duplicate every row
+    // in the ones with no key to conflict on. All of it, or none of it.
+    let mut tx = target
+        .pool()
+        .begin()
+        .await
+        .context("failed to open the transfer transaction")?;
+
     for table in TABLES {
-        let rows = copy_table(source, target, table)
+        let rows = copy_table(source, target, &mut tx, table)
             .await
             .with_context(|| format!("while copying {table}"))?;
 
         tracing::info!(table, rows, "copied");
         report.copied.push(((*table).to_string(), rows));
     }
+
+    tx.commit().await.context("failed to commit the transfer")?;
 
     Ok(report)
 }
@@ -134,7 +159,12 @@ fn read(row: &sqlx::any::AnyRow, index: usize) -> Result<Value> {
     bail!("column {column} holds a type this transfer does not handle")
 }
 
-async fn copy_table(source: &Db, target: &Db, table: &str) -> Result<u64> {
+async fn copy_table(
+    source: &Db,
+    target: &Db,
+    tx: &mut sqlx::Transaction<'_, sqlx::Any>,
+    table: &str,
+) -> Result<u64> {
     let rows = sqlx::query(source.sql(&format!("SELECT * FROM {table}")))
         .fetch_all(source.pool())
         .await?;
@@ -195,7 +225,7 @@ async fn copy_table(source: &Db, target: &Db, table: &str) -> Result<u64> {
             }
         }
 
-        written += query.execute(target.pool()).await?.rows_affected();
+        written += query.execute(&mut **tx).await?.rows_affected();
     }
 
     Ok(written)
@@ -203,6 +233,56 @@ async fn copy_table(source: &Db, target: &Db, table: &str) -> Result<u64> {
 
 #[cfg(test)]
 mod tests {
+    /// Every table the schema creates is one the transfer carries.
+    ///
+    /// Read off the migrations rather than listed a second time here, because a
+    /// second list is a second thing to forget. A table added in a later
+    /// migration and not added to `TABLES` is silently skipped by a copy that
+    /// still reports success — which is how the allowlist came to be lost.
+    #[test]
+    fn every_table_in_the_schema_is_copied() {
+        let mut in_schema: Vec<String> = Vec::new();
+
+        let mut files: Vec<_> = std::fs::read_dir("migrations/sqlite")
+            .expect("the migrations are beside the crate")
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .collect();
+        files.sort();
+
+        for path in files {
+            let sql = std::fs::read_to_string(&path).expect("a readable migration");
+
+            for line in sql.lines() {
+                let lowered = line.trim().to_ascii_lowercase();
+                let Some(rest) = lowered.strip_prefix("create table ") else {
+                    continue;
+                };
+                let rest = rest.strip_prefix("if not exists ").unwrap_or(rest);
+
+                if let Some(name) = rest.split([' ', '(']).next().filter(|n| !n.is_empty()) {
+                    in_schema.push(name.to_string());
+                }
+            }
+        }
+
+        assert!(
+            in_schema.len() > 10,
+            "the migrations were not read; found {in_schema:?}"
+        );
+
+        let missing: Vec<&String> = in_schema
+            .iter()
+            .filter(|name| name.as_str() != "_sqlx_migrations")
+            .filter(|name| !TABLES.contains(&name.as_str()))
+            .collect();
+
+        assert!(
+            missing.is_empty(),
+            "these tables would be silently dropped by a transfer: {missing:?}"
+        );
+    }
+
     use super::*;
     use crate::{
         config,

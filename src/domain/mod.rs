@@ -457,6 +457,29 @@ pub struct Translation {
 ///
 /// Sonarr and Radarr both key their UI routes on this, so it must stay stable
 /// for a given (title, year) pair.
+/// A calendar date as a UTC timestamp, or nothing if it is not a date.
+///
+/// Sonarr parses `airDateUtc` as a `DateTime`, and this used to be a `format!`
+/// over whatever string the provider put in its date field — so `"2008"`,
+/// `"TBA"` and an already-complete timestamp each came out as something no
+/// parser accepts (`"TBAT00:00:00Z"`). An unusable date is better absent.
+///
+/// The time of day is a known simplification: providers give a broadcast date
+/// in the network's own timezone and the broadcast time separately, so midnight
+/// UTC is a placeholder rather than a claim.
+pub fn midnight_utc(date: &str) -> Option<String> {
+    let date = date.trim();
+
+    // Already a timestamp: keep it rather than stamping it twice.
+    if date.contains('T') {
+        return crate::db::parse_rfc3339(date).map(|_| date.to_string());
+    }
+
+    chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
+        .ok()
+        .map(|d| format!("{d}T00:00:00Z"))
+}
+
 pub fn make_slug(title: &str, year: Option<i32>) -> String {
     let base = slug::slugify(title);
     let base = if base.is_empty() {
@@ -473,6 +496,31 @@ pub fn make_slug(title: &str, year: Option<i32>) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_broadcast_date_that_is_not_a_date_produces_nothing() {
+        // Sonarr parses this field as a timestamp. It used to be built by
+        // sticking `T00:00:00Z` on whatever the provider sent, so a year, a
+        // `TBA` or an already-complete timestamp each came out unparseable.
+        assert_eq!(
+            midnight_utc("2008-01-20").as_deref(),
+            Some("2008-01-20T00:00:00Z")
+        );
+        assert_eq!(
+            midnight_utc("  2008-01-20 ").as_deref(),
+            Some("2008-01-20T00:00:00Z")
+        );
+        assert_eq!(
+            midnight_utc("2008-01-20T21:00:00Z").as_deref(),
+            Some("2008-01-20T21:00:00Z"),
+            "a timestamp is not stamped a second time"
+        );
+
+        assert_eq!(midnight_utc("2008"), None);
+        assert_eq!(midnight_utc("TBA"), None);
+        assert_eq!(midnight_utc(""), None);
+        assert_eq!(midnight_utc("2008-13-45"), None);
+    }
+
     use super::*;
 
     #[test]

@@ -35,7 +35,7 @@ const API_KEY_HEADER: &str = "x-api-key";
 ///
 /// `api_key` is what TMDB clients already send: point one at this server and set
 /// its "TMDB API key" to a key issued here, and it authenticates unchanged.
-const API_KEY_PARAMS: &[&str] = &["api_key", "apikey"];
+pub const API_KEY_PARAMS: &[&str] = &["api_key", "apikey"];
 
 pub async fn guard_native(
     State(state): State<AppState>,
@@ -141,7 +141,7 @@ async fn authorize(
 /// refusal is never throttled: the first one is the one somebody is looking for.
 const SIGHTING_INTERVAL: Duration = Duration::from_secs(60);
 
-static LAST_NOTED: LazyLock<Mutex<HashMap<IpAddr, Instant>>> =
+static LAST_NOTED: LazyLock<Mutex<HashMap<(IpAddr, bool), Instant>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Record that somebody called a guarded surface, off the request path.
@@ -157,7 +157,7 @@ fn note_caller(
 ) {
     let Some(ip) = client_ip else { return };
 
-    if allowed && !due(ip) {
+    if !due(ip, allowed) {
         return;
     }
 
@@ -203,17 +203,27 @@ fn note_caller(
 }
 
 /// Whether enough time has passed to write this address down again.
-fn due(ip: IpAddr) -> bool {
+///
+/// Refusals are throttled separately from acceptances rather than not at all.
+/// Not at all was the point — an operator fixing an allowlist wants the refusal
+/// to appear the moment it happens — but it made every refused request a
+/// database write, and the arr surface it guards is the one reachable without a
+/// credential: a host that is not on the list could turn a flood of `GET /v1/…`
+/// into a flood of UPSERTs and, on SQLite, hold the single write lock against
+/// the clients that *are* allowed. Keyed on the pair, a first refusal is still
+/// recorded at once even from an address that was just served.
+fn due(ip: IpAddr, allowed: bool) -> bool {
     let Ok(mut last) = LAST_NOTED.lock() else {
         return false;
     };
 
     let now = Instant::now();
+    let key = (ip, allowed);
 
-    match last.get(&ip) {
+    match last.get(&key) {
         Some(at) if now.duration_since(*at) < SIGHTING_INTERVAL => false,
         _ => {
-            last.insert(ip, now);
+            last.insert(key, now);
 
             // Bounded, because the keys come from whoever can reach the port.
             if last.len() > 4096 {
@@ -304,7 +314,12 @@ fn extract_key(headers: &HeaderMap, query: Option<&str>) -> Option<String> {
 
     let query = query?;
     for pair in query.split('&') {
-        let (name, value) = pair.split_once('=')?;
+        // `continue`, not `?`: returning here would abandon the whole query on
+        // the first bare flag, so `?adult&api_key=…` answered 401 for a request
+        // that carried a perfectly good key.
+        let Some((name, value)) = pair.split_once('=') else {
+            continue;
+        };
         if API_KEY_PARAMS.contains(&name) {
             let decoded = urlencoding::decode(value).ok()?;
             let trimmed = decoded.trim();

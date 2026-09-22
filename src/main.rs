@@ -8,6 +8,7 @@ mod error;
 mod export;
 mod jobs;
 mod merge;
+mod outbound;
 mod providers;
 mod service;
 mod settings;

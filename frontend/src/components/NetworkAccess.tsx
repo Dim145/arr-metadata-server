@@ -34,6 +34,7 @@ import {
   Label,
   Panel,
   PanelHead,
+  Skeleton,
   Td,
   Th,
   Tr,
@@ -95,8 +96,6 @@ export function NetworkAccess() {
     },
   })
 
-  const allowedAlready = (ip: string) =>
-    (rules.data ?? []).some((rule) => rule.cidr === ip || rule.cidr.startsWith(`${ip}/`))
 
   return (
     <>
@@ -157,7 +156,24 @@ export function NetworkAccess() {
           </Button>
         </form>
 
-        {rules.data?.length === 0 ? (
+        {rules.isPending ? (
+          <div className="space-y-2 border-t border-rule p-4">
+            {Array.from({ length: 2 }, (_, index) => (
+              <Skeleton key={index} className="h-9 w-full" />
+            ))}
+          </div>
+        ) : rules.isError ? (
+          // Not the empty state: "there are no rules" and "we could not ask"
+          // read the same on screen and mean opposite things, and an operator
+          // who believes the first starts adding the allowlist back by hand.
+          <p
+            role="alert"
+            className="flex items-center gap-2 border-t border-rule px-5 py-6 text-sm text-vermillion"
+          >
+            <Glyph name="alert" className="size-4" />
+            {t.admin.network.loadFailed}
+          </p>
+        ) : rules.data.length === 0 ? (
           <div className="border-t border-rule">
             <EmptyState title={t.admin.network.noRules} hint={t.admin.network.noRulesHint} />
           </div>
@@ -286,7 +302,18 @@ export function NetworkAccess() {
           {t.admin.network.callersLead}
         </p>
 
-        {callers.data?.length === 0 ? (
+        {callers.isPending ? (
+          <div className="space-y-2 p-4">
+            {Array.from({ length: 3 }, (_, index) => (
+              <Skeleton key={index} className="h-9 w-full" />
+            ))}
+          </div>
+        ) : callers.isError ? (
+          <p role="alert" className="flex items-center gap-2 px-5 py-6 text-sm text-vermillion">
+            <Glyph name="alert" className="size-4" />
+            {t.admin.network.callersFailed}
+          </p>
+        ) : callers.data.length === 0 ? (
           <EmptyState title={t.admin.network.noCallers} hint={t.admin.network.noCallersHint} />
         ) : (
           <TableScroll>
@@ -305,7 +332,10 @@ export function NetworkAccess() {
                   <CallerRow
                     key={caller.ip}
                     caller={caller}
-                    allowed={allowedAlready(caller.ip)}
+                    // The server's answer, not a string comparison here: it
+                    // holds the rules and already does the address arithmetic
+                    // that decides whether 172.31.0.7 is inside 172.31.0.0/24.
+                    allowed={caller.covered}
                     onAllow={() =>
                       allow.mutate({
                         cidr: caller.ip,

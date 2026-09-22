@@ -117,9 +117,13 @@ pub async fn run(state: AppState) {
         if state.flag("refresh.enabled", true) && swept.elapsed() >= interval(&state) {
             swept = tokio::time::Instant::now();
             run_sweep(&state, batch(&state)).await;
-        } else if !state.flag("refresh.enabled", true) {
-            continue;
         }
+
+        // Below the sweep, and deliberately not inside it. Turning refresh off
+        // is a statement about talking to providers, not about housekeeping —
+        // and it used to skip all of this, so an operator who switched it off
+        // got a rate limiter whose per-address map grew until the process died
+        // and an audit table that was never pruned again.
 
         // Expired sessions accumulate otherwise; this is as good a moment as any.
         if let Err(e) = repo::user::purge_expired_sessions(&state.db).await {
@@ -194,8 +198,20 @@ async fn sweep(state: &AppState, batch: i64) -> Result<String> {
     let mut failed = 0usize;
 
     for (id, _kind) in due {
-        let Some(item) = crate::service::load(state, &id).await? else {
-            continue;
+        // Not `?`. An entry that cannot be read — a bad override, a corrupt row
+        // — would otherwise end the sweep before the rest of the batch was
+        // touched, and never have its own deadline pushed out: it sorts first
+        // by `refresh_after`, so it would be the first entry of every sweep
+        // from then on, and nothing in the library would be refreshed again.
+        let item = match crate::service::load(state, &id).await {
+            Ok(Some(item)) => item,
+            Ok(None) => continue,
+            Err(e) => {
+                tracing::warn!(%id, error = format_args!("{e:#}"), "could not read an entry due for refresh");
+                mark_failure(state, &id, &format!("could not be read: {e}")).await;
+                failed += 1;
+                continue;
+            }
         };
 
         match refresh_one(state, &item).await {
@@ -225,7 +241,10 @@ async fn prune_jobs(state: &AppState) {
         return;
     }
 
-    let cutoff = to_rfc3339(chrono::Utc::now() - chrono::Duration::days(i64::from(days)));
+    let Some(cutoff) = days_ago(i64::from(days)) else {
+        tracing::warn!(days, "the retention window is too long to be a date");
+        return;
+    };
 
     match job::prune(&state.db, &cutoff).await {
         Ok(0) => {}
@@ -240,7 +259,7 @@ async fn prune_jobs(state: &AppState) {
 /// touched it". A client that has been gone two weeks is not the answer to
 /// either question, and its address may well belong to something else by now.
 async fn prune_callers(state: &AppState) {
-    let cutoff = to_rfc3339(chrono::Utc::now() - chrono::Duration::days(14));
+    let Some(cutoff) = days_ago(14) else { return };
 
     match repo::network::prune(&state.db, &cutoff).await {
         Ok(0) => {}
@@ -259,13 +278,27 @@ async fn prune_audit(state: &AppState) {
         return;
     }
 
-    let cutoff = to_rfc3339(chrono::Utc::now() - chrono::Duration::days(i64::from(days)));
+    let Some(cutoff) = days_ago(i64::from(days)) else {
+        tracing::warn!(days, "the retention window is too long to be a date");
+        return;
+    };
 
     match repo::audit::prune(&state.db, &cutoff).await {
         Ok(0) => {}
         Ok(removed) => tracing::info!(removed, retention_days = days, "pruned audit entries"),
         Err(e) => tracing::warn!(error = %e, "could not prune the audit log"),
     }
+}
+
+/// A timestamp that many days ago, or `None` if there is no such date.
+///
+/// `AMS_AUDIT_RETENTION_DAYS` is an operator-supplied `u32` and chrono panics
+/// rather than saturating on a subtraction that leaves the representable range.
+/// A typo in a compose file is a bad reason for the process to abort thirty
+/// seconds after it starts.
+fn days_ago(days: i64) -> Option<String> {
+    let delta = chrono::TimeDelta::try_days(days)?;
+    chrono::Utc::now().checked_sub_signed(delta).map(to_rfc3339)
 }
 
 async fn mark_failure(state: &AppState, id: &str, error: &str) {

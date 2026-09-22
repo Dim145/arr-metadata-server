@@ -110,10 +110,23 @@ pub struct Settings {
 /// Effective configuration.
 ///
 /// Deliberately carries no secrets: the TMDB key is reported as a boolean,
-/// never echoed.
-#[utoipa::path(get, path = "/settings", tag = TAG, responses((status = 200, body = Settings)))]
-async fn settings(State(state): State<AppState>) -> Json<Settings> {
-    Json(Settings {
+/// never echoed. Behind the administrator check all the same — which surface
+/// takes which credential, whether authentication is off and whether anyone may
+/// browse is a map of the way in, and only the interface asks for it.
+#[utoipa::path(
+    get, path = "/settings", tag = TAG,
+    responses(
+        (status = 200, body = Settings),
+        (status = 403, description = "The caller is not an administrator"),
+    ),
+)]
+async fn settings(
+    State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
+) -> AppResult<Json<Settings>> {
+    require_admin(&identity)?;
+
+    Ok(Json(Settings {
         version: env!("CARGO_PKG_VERSION"),
         public_url: state.config.server.public_url.clone(),
         database: match state.db.dialect() {
@@ -129,7 +142,14 @@ async fn settings(State(state): State<AppState>) -> Json<Settings> {
         native_policy: policy_name(state.config.policy_for(Surface::Native)),
         tmdb_policy: policy_name(state.config.policy_for(Surface::Tmdb)),
         arr_policy: policy_name(state.config.policy_for(Surface::Arr)),
-    })
+    }))
+}
+
+fn require_admin(identity: &Identity) -> AppResult<()> {
+    identity
+        .is_admin()
+        .then_some(())
+        .ok_or(crate::error::AppError::Forbidden)
 }
 
 #[derive(Deserialize, IntoParams)]
@@ -161,12 +181,18 @@ pub struct JobsResponse {
 #[utoipa::path(
     get, path = "/jobs", tag = TAG,
     params(JobQuery),
-    responses((status = 200, body = JobsResponse)),
+    responses(
+        (status = 200, body = JobsResponse),
+        (status = 403, description = "The caller is not an administrator"),
+    ),
 )]
 async fn jobs(
     State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
     Query(query): Query<JobQuery>,
 ) -> AppResult<Json<JobsResponse>> {
+    require_admin(&identity)?;
+
     let jobs = repo::job::list(
         &state.db,
         &repo::job::Query {

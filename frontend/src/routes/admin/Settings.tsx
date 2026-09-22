@@ -29,6 +29,7 @@ import {
 } from '../../components/ui'
 import { ServerSettings } from '../../components/ScopeSettings'
 import { ApiError, api } from '../../lib/api'
+import { cn } from '../../lib/cn'
 import { useI18n } from '../../lib/i18n'
 import type { ExportSummary, Settings as Config } from '../../lib/types'
 import { PolicyChip } from './Dashboard'
@@ -226,9 +227,10 @@ function NfoExport() {
     },
   })
 
-  const missingPath =
-    run.error instanceof ApiError &&
-    (run.error.message.includes('TMDB API key') || run.error.code === 'provider_not_configured')
+  // The code alone. On this route `provider_not_configured` has exactly one
+  // cause — no export path is set — and matching on the message text as well
+  // only ever mislabelled something else as that.
+  const missingPath = run.error instanceof ApiError && run.error.code === 'provider_not_configured'
 
   return (
     <div className="flex flex-wrap items-center justify-between gap-4 p-5">
@@ -239,7 +241,14 @@ function NfoExport() {
         </p>
 
         {run.isSuccess ? (
-          <p className="mt-2 font-mono text-xs text-moss">
+          <p
+            className={cn(
+              'mt-2 font-mono text-xs',
+              // Green says "this worked". A run that wrote nothing and failed on
+              // every work did not, whatever status code carried the summary.
+              run.data.works === 0 && run.data.failed > 0 ? 'text-vermillion' : 'text-moss',
+            )}
+          >
             {t.admin.config.exportDone(run.data.works, run.data.episodes)}
             {run.data.failed > 0 ? ` · ${t.admin.config.exportFailed(run.data.failed)}` : ''}
             <span className="mt-0.5 block break-all text-bone-faint">{run.data.root}</span>
@@ -272,6 +281,14 @@ function ClearCache() {
         <p className="mt-1 max-w-prose text-xs leading-relaxed text-bone-faint">
           {t.admin.config.cacheBody}
         </p>
+
+        {/* Without this the button simply goes back to saying "Clear", which
+            reads as "done" — the one thing it must not say when it is not. */}
+        {clear.isError ? (
+          <p role="alert" className="mt-2 text-xs text-vermillion">
+            {clear.error.message}
+          </p>
+        ) : null}
       </div>
       <Button onClick={() => clear.mutate()} disabled={clear.isPending}>
         {clear.isPending ? <Spinner className="size-4" /> : null}

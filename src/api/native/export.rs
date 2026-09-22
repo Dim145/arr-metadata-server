@@ -215,14 +215,39 @@ async fn write_everything(
     state: &AppState,
     root: &std::path::Path,
 ) -> anyhow::Result<ExportSummary> {
-    let items = repo::item::search(
-        &state.db,
-        &repo::item::Query {
-            limit: MAX_WORKS,
-            ..Default::default()
-        },
-    )
-    .await?;
+    // Paged. Asking for `MAX_WORKS` in one call got `MAX_PAGE` of them and no
+    // indication of it, so a three thousand film library exported five hundred
+    // and reported a clean run.
+    let mut items = Vec::new();
+    let mut offset = 0i64;
+
+    loop {
+        let page = repo::item::search(
+            &state.db,
+            &repo::item::Query {
+                limit: repo::item::MAX_PAGE,
+                offset,
+                ..Default::default()
+            },
+        )
+        .await?;
+
+        let read = page.len() as i64;
+        items.extend(page);
+
+        if read < repo::item::MAX_PAGE || items.len() as i64 >= MAX_WORKS {
+            break;
+        }
+
+        offset += read;
+    }
+
+    if items.len() as i64 >= MAX_WORKS {
+        tracing::warn!(
+            limit = MAX_WORKS,
+            "the catalogue is larger than one export pass writes; it was cut short"
+        );
+    }
 
     let mut summary = ExportSummary {
         root: root.display().to_string(),

@@ -44,6 +44,11 @@ pub struct Caller {
     pub refusals: i64,
     pub first_seen: String,
     pub last_seen: String,
+    /// Whether a rule covers this address *now*, which is not the same question
+    /// as `last_allowed` — that one is about the call this row last recorded,
+    /// and a rule added since has not changed it. Filled in by the handler,
+    /// which is the only place that holds the live allowlist.
+    pub covered: bool,
 }
 
 /// Accept a bare address as well as a block, because that is what an operator
@@ -252,6 +257,7 @@ pub async fn callers(db: &Db, limit: i64) -> Result<Vec<Caller>> {
                 refusals: row.big("refusals")?,
                 first_seen: row.text("first_seen")?,
                 last_seen: row.text("last_seen")?,
+                covered: false,
             })
         })
         .collect()

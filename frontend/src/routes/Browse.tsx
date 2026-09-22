@@ -18,6 +18,19 @@ import type { ItemPage } from '../lib/types'
 
 const PAGE = 36
 
+// The most one page will ask for, whatever the URL says. The server clamps at
+// 500; stopping short of it keeps a shared link from being a way to make this
+// server sort its whole catalogue for an anonymous visitor.
+const MAX_SHOWN = 500
+
+/** A number from a URL, made into one that means something. */
+function clamp(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) {
+    return min
+  }
+  return Math.min(Math.max(Math.trunc(value), min), max)
+}
+
 export function Browse() {
   const { t, lang, locale } = useI18n()
   const [params, setParams] = useSearchParams()
@@ -26,7 +39,10 @@ export function Browse() {
   const term = params.get('q') ?? ''
   const year = params.get('year') ?? ''
   const manualOnly = params.get('manual') === '1'
-  const shown = Number(params.get('shown') ?? PAGE)
+  // Straight off the URL, so it can be anything: `?shown=abc` sent `limit=NaN`
+  // and `?shown=99999999` asked a public surface for the whole catalogue in one
+  // page. The server clamps too; this is so the link behaves.
+  const shown = clamp(Number(params.get('shown') ?? PAGE), PAGE, MAX_SHOWN)
 
   const results = useQuery({
     queryKey: ['browse', { kind, term, year, manualOnly, shown, lang }],

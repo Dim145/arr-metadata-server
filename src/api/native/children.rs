@@ -596,16 +596,28 @@ async fn writable(
 }
 
 /// An image URL has to be something a client can actually fetch.
+///
+/// And somewhere this server is willing to go. The NFO export downloads every
+/// stored image, so an image URL is a request this server makes on somebody
+/// else's instruction — which is a fine way to read a cloud instance's
+/// credentials, or this server's own administration API on loopback, from a
+/// credential that should only be able to name a picture.
 fn check_url(url: &str) -> AppResult<()> {
     let trimmed = url.trim();
 
-    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
-        Ok(())
-    } else {
-        Err(AppError::BadRequest(
+    if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
+        return Err(AppError::BadRequest(
             "image URLs must start with http:// or https://".into(),
-        ))
+        ));
     }
+
+    if crate::outbound::names_internal_host(trimmed) {
+        return Err(AppError::BadRequest(
+            "that address is not reachable from anywhere but this server".into(),
+        ));
+    }
+
+    Ok(())
 }
 
 /// Drop the cached copy and record what happened.

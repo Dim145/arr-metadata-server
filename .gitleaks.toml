@@ -1,0 +1,22 @@
+# Secret scanning, with the one thing that is not a secret written down.
+#
+#   gitleaks detect --source . --redact
+#
+# Nothing here loosens a rule globally. The single allowance is a line in the
+# smoke script that reads an API key *out of a response* the script itself just
+# asked the server to create — a `curl … | sed -n 's/.*"key"…'`, which the
+# `curl-auth-header` rule reads as a credential being written down. There is no
+# value in the file to leak.
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "curl-auth-header"
+description = "Credential passed to curl"
+regex = '''curl\b.{0,200}?(-H|--header)\s+['"]?(Authorization|X-Api-Key):'''
+
+  [rules.allowlist]
+  paths = ['''scripts/smoke\.sh''']
+  regexTarget = "line"
+  regexes = ['''sed -n .*"key"''']

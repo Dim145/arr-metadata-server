@@ -263,6 +263,9 @@ export interface NetworkCaller {
   lastSurface: string
   lastPath?: string
   lastAllowed: boolean
+  /** Whether a rule covers this address now — the server's own answer, not the
+   *  last call's outcome, so a rule added since is reflected. */
+  covered: boolean
   hits: number
   refusals: number
   firstSeen: string

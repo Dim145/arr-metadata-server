@@ -412,6 +412,14 @@ pub struct Query {
 ///
 /// Matching is a case-insensitive substring over the title, the sort title and
 /// every alternative title, which is what clients searching by a localised name
+/// The most rows one call will return, whatever it was asked for.
+///
+/// A caller that wants more pages through `offset`. It is public because a
+/// caller that means to read everything needs to know where the ceiling is —
+/// the NFO export asked for ten thousand, was quietly given five hundred, and
+/// reported a complete run over a fifth of the library.
+pub const MAX_PAGE: i64 = 500;
+
 /// need. Anything more (ranking, typo tolerance) belongs in a later FTS index.
 pub async fn search(db: &Db, q: &Query) -> Result<Vec<MediaItem>> {
     let mut sql = format!("SELECT {ITEM_COLUMNS} FROM media_item WHERE 1 = 1");
@@ -419,7 +427,7 @@ pub async fn search(db: &Db, q: &Query) -> Result<Vec<MediaItem>> {
     narrow(q, &mut sql, &mut args)?;
 
     sql.push_str(" ORDER BY popularity DESC NULLS LAST, title ASC LIMIT ? OFFSET ?");
-    args.add(q.limit.clamp(1, 500))
+    args.add(q.limit.clamp(1, MAX_PAGE))
         .map_err(|e| anyhow::anyhow!("{e}"))?;
     args.add(q.offset.max(0))
         .map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -430,12 +438,64 @@ pub async fn search(db: &Db, q: &Query) -> Result<Vec<MediaItem>> {
 
     let mut items = Vec::with_capacity(rows.len());
     for row in &rows {
-        let mut item = map_item(row)?;
-        item.external_ids = load_external_ids(db, &item.id).await?;
-        items.push(item);
+        items.push(map_item(row)?);
     }
 
+    attach_external_ids(db, &mut items).await?;
+
     Ok(items)
+}
+
+/// Fill in every result's identifiers, in one query rather than one each.
+///
+/// The same shape as [`load_artwork`] below and for the same reason: a page of
+/// five hundred was five hundred and one round trips, against a pool of eight
+/// connections, for every catalogue list and every local search.
+async fn attach_external_ids(db: &Db, items: &mut [MediaItem]) -> Result<()> {
+    if items.is_empty() {
+        return Ok(());
+    }
+
+    let ids: Vec<String> = items.iter().map(|i| i.id.clone()).collect();
+    let holes = vec!["?"; ids.len()].join(", ");
+
+    let mut args = AnyArguments::default();
+    for id in &ids {
+        args.add(id.clone()).map_err(|e| anyhow::anyhow!("{e}"))?;
+    }
+
+    let sql = format!(
+        "SELECT media_id, source, value FROM media_external_id
+         WHERE media_id IN ({holes}) ORDER BY source"
+    );
+
+    let rows = sqlx::query_with(db.sql(&sql), args)
+        .fetch_all(db.pool())
+        .await?;
+
+    let mut by_item: std::collections::HashMap<String, ExternalIds> =
+        std::collections::HashMap::new();
+
+    for row in &rows {
+        let raw = row.text("source")?;
+        match raw.parse::<ExternalSource>() {
+            Ok(source) => by_item
+                .entry(row.text("media_id")?)
+                .or_default()
+                .apply(source, &row.text("value")?),
+            // The CHECK constraint makes this unreachable today; if a future
+            // migration adds a source this build does not know, skip it.
+            Err(e) => tracing::warn!(error = %e, "ignoring unknown external id source"),
+        }
+    }
+
+    for item in items {
+        if let Some(ids) = by_item.remove(&item.id) {
+            item.external_ids = ids;
+        }
+    }
+
+    Ok(())
 }
 
 /// Attach the artwork, scores and translations a list of works needs.
@@ -597,8 +657,15 @@ fn narrow(q: &Query, sql: &mut String, args: &mut AnyArguments) -> Result<()> {
         // look for it by the name they gave it, so overrides are searched too:
         // the value is JSON, but a substring match over the encoded string finds
         // it either way.
+        // The slug as well, and it is the one that does the real work for
+        // anything not written in ASCII. `LOWER` is the engines' own, and they
+        // disagree: PostgreSQL folds `Été` to `été`, SQLite folds only ASCII and
+        // leaves it as `Été` — so a search for `été` found the work on one
+        // engine and not the other. The slug was transliterated when the work
+        // was stored, so `ete` matches `Été` on both.
         sql.push_str(
             " AND (LOWER(title) LIKE ? OR LOWER(COALESCE(sort_title, '')) LIKE ?
+                   OR slug LIKE ?
                    OR id IN (SELECT media_id FROM media_alternative_title
                              WHERE LOWER(title) LIKE ?)
                    OR id IN (SELECT media_id FROM media_override
@@ -606,7 +673,9 @@ fn narrow(q: &Query, sql: &mut String, args: &mut AnyArguments) -> Result<()> {
                                AND LOWER(COALESCE(value, '')) LIKE ?))",
         );
 
-        for _ in 0..4 {
+        let slugged = format!("%{}%", crate::domain::make_slug(term, None));
+
+        for pattern in [&pattern, &pattern, &slugged, &pattern, &pattern] {
             args.add(pattern.clone())
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
         }
@@ -1239,6 +1308,44 @@ mod tests {
             rating_type: Some("user".into()),
         }];
         item
+    }
+
+    #[tokio::test]
+    async fn an_accented_title_is_found_by_typing_it_either_way() {
+        // `LOWER` is the engine's own and the two disagree: PostgreSQL folds
+        // `É` to `é`, SQLite folds ASCII only. The slug was transliterated when
+        // the work was stored, so it answers the same on both.
+        let db = db().await;
+
+        let mut item = sample();
+        item.id = crate::db::new_id();
+        item.title = "Été 85".into();
+        item.slug = crate::domain::make_slug(&item.title, item.year);
+
+        upsert(
+            &db,
+            ItemWrite {
+                item: &item,
+                replace_children: false,
+            },
+        )
+        .await
+        .expect("stored");
+
+        for term in ["Été", "été", "ete", "ETE"] {
+            let found = search(
+                &db,
+                &Query {
+                    term: Some(term.to_string()),
+                    limit: 10,
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("searched");
+
+            assert_eq!(found.len(), 1, "{term:?} should have found it");
+        }
     }
 
     #[tokio::test]

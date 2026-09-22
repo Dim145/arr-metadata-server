@@ -35,7 +35,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   const text = await response.text()
-  const body = text ? (JSON.parse(text) as unknown) : null
+  const body = parse(text)
 
   if (!response.ok) {
     const detail = body as { error?: string; message?: string } | null
@@ -46,7 +46,32 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     )
   }
 
+  if (text && body === null) {
+    throw new ApiError(response.status, 'unreadable', response.statusText)
+  }
+
   return body as T
+}
+
+/**
+ * Read a body that is supposed to be JSON, without trusting that it is.
+ *
+ * Not everything that answers is this server: a reverse proxy in front of it
+ * returns an HTML error page, and a captive portal returns a login form. Letting
+ * `JSON.parse` throw there would hand the caller a `SyntaxError` carrying no
+ * status, so a 401 behind a proxy would be retried as if it were a network
+ * blip and reported as "something went wrong" rather than "sign in again".
+ */
+function parse(text: string): unknown {
+  if (!text) {
+    return null
+  }
+
+  try {
+    return JSON.parse(text) as unknown
+  } catch {
+    return null
+  }
 }
 
 const json = (body: unknown): RequestInit => ({ body: JSON.stringify(body) })

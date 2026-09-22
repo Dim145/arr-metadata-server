@@ -304,6 +304,8 @@ const en = {
       removeTitle: 'Stop allowing this address?',
       removeBody: (cidr: string) =>
         `Anything calling from ${cidr} will be refused from the next request. Sonarr or Radarr behind it will stop getting metadata.`,
+      loadFailed: 'The network rules could not be loaded.',
+      callersFailed: 'The callers could not be loaded.',
       noRules: 'Nothing is allowed',
       noRulesHint:
         'Every call to Sonarr’s and Radarr’s routes is being refused. Add the address those containers call from.',
@@ -546,6 +548,7 @@ const en = {
     error: 'Something went wrong.',
     retry: 'Try again',
     cancel: 'Cancel',
+    actionFailed: 'That did not work.',
     save: 'Save',
     saving: 'Saving…',
     delete: 'Delete',
@@ -864,6 +867,8 @@ const fr: Dict = {
       removeTitle: 'Retirer cette autorisation ?',
       removeBody: (cidr: string) =>
         `Tout ce qui appelle depuis ${cidr} sera refusé dès la prochaine requête. Le Sonarr ou le Radarr qui s’y trouve cessera de recevoir des méta-données.`,
+      loadFailed: 'Les autorisations réseau n’ont pas pu être chargées.',
+      callersFailed: 'La liste des appelants n’a pas pu être chargée.',
       noRules: 'Rien n’est autorisé',
       noRulesHint:
         'Tous les appels aux routes de Sonarr et Radarr sont refusés. Ajoutez l’adresse depuis laquelle ces conteneurs appellent.',
@@ -1101,6 +1106,7 @@ const fr: Dict = {
     error: 'Quelque chose s’est mal passé.',
     retry: 'Réessayer',
     cancel: 'Annuler',
+    actionFailed: 'Cela n’a pas fonctionné.',
     save: 'Enregistrer',
     saving: 'Enregistrement…',
     delete: 'Supprimer',

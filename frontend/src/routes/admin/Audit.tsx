@@ -29,6 +29,7 @@ import {
 import { api, query } from '../../lib/api'
 import { cn } from '../../lib/cn'
 import * as fmt from '../../lib/format'
+import { useSettled } from '../../lib/debounce'
 import { useI18n } from '../../lib/i18n'
 import type { AuditEntry, AuditResponse } from '../../lib/types'
 
@@ -41,10 +42,14 @@ export function Audit() {
   const [actor, setActor] = useState('')
   const [page, setPage] = useState(0)
 
+  const settledActor = useSettled(actor)
+
   const log = useQuery({
-    queryKey: ['audit', action, actor, page],
+    queryKey: ['audit', action, settledActor, page],
     queryFn: () =>
-      api.get<AuditResponse>(`/audit${query({ action, actor, limit: PAGE, offset: page * PAGE })}`),
+      api.get<AuditResponse>(
+        `/audit${query({ action, actor: settledActor, limit: PAGE, offset: page * PAGE })}`,
+      ),
     // A trail is only useful if it is current.
     refetchInterval: 30_000,
   })

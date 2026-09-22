@@ -37,13 +37,16 @@ pub async fn record(state: &AppState, event: Event<'_>) {
     let actor = event.identity.map(Identity::label);
     let ip = event.ip.as_text();
 
+    let target = event.target.map(clip);
+    let detail = event.detail.map(clip);
+
     let result = repo::audit::record(
         &state.db,
         repo::audit::Record {
             actor: actor.as_deref(),
             action: event.action,
-            target: event.target,
-            detail: event.detail,
+            target: target.as_deref(),
+            detail: detail.as_deref(),
             ip: ip.as_deref(),
         },
     )
@@ -51,6 +54,22 @@ pub async fn record(state: &AppState, event: Event<'_>) {
 
     if let Err(e) = result {
         tracing::warn!(action = %event.action, error = %e, "could not write the audit entry");
+    }
+}
+
+/// The most of any one field this trail will hold.
+///
+/// Some of what is recorded comes from whoever is calling — the username of a
+/// failed sign-in, most of all, and that one needs no credential at all. Without
+/// a ceiling, a megabyte of it is a megabyte of row, six hundred times a minute,
+/// kept for ninety days.
+const FIELD_LIMIT: usize = 200;
+
+/// Cut a field to [`FIELD_LIMIT`], on a character boundary.
+fn clip(text: &str) -> String {
+    match text.char_indices().nth(FIELD_LIMIT) {
+        Some((at, _)) => format!("{}…", &text[..at]),
+        None => text.to_string(),
     }
 }
 

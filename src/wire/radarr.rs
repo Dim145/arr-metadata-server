@@ -7,6 +7,12 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+/// Ceilings on what one upstream answer may turn into; see the same pair in
+/// [`crate::wire::sonarr`]. `api.radarr.video` is an operator-configurable URL
+/// like every other, and every element here becomes a database row.
+const MAX_IMAGES: usize = 200;
+const MAX_TITLES: usize = 500;
+
 use crate::domain::{Credit, CreditType, Image, MediaItem, Rating};
 
 /// A list that the upstream sometimes writes as `null`.
@@ -460,6 +466,7 @@ pub fn to_item(resource: &MovieResource) -> MediaItem {
     item.images = resource
         .images
         .iter()
+        .take(MAX_IMAGES)
         .enumerate()
         .map(|(i, image)| Image {
             id: new_id(),
@@ -476,6 +483,7 @@ pub fn to_item(resource: &MovieResource) -> MediaItem {
     item.alternative_titles = resource
         .alternative_titles
         .iter()
+        .take(MAX_TITLES)
         .filter(|t| !t.title.trim().is_empty())
         .map(|t| AlternativeTitle {
             id: new_id(),
@@ -489,6 +497,7 @@ pub fn to_item(resource: &MovieResource) -> MediaItem {
     item.translations = resource
         .translations
         .iter()
+        .take(MAX_TITLES)
         .filter(|t| t.title.is_some() || t.overview.is_some())
         .map(|t| Translation {
             language: t.language.clone(),

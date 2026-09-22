@@ -110,6 +110,34 @@ async fn find_existing(state: &AppState, item: &MediaItem) -> Result<Option<Stri
     Ok(None)
 }
 
+/// Carry over every child list this fetch came back empty-handed on.
+///
+/// The write replaces children wholesale, which is right when the providers
+/// answered and wrong when they did not: a rate-limited TMDB and an expired
+/// TheTVDB key between them turn a series with sixty-two episodes, its cast and
+/// its artwork into a title and nothing else, and the row would then claim a
+/// clean refresh. An empty list out of a merge of four providers means nobody
+/// said, not that there are none — so what is already stored stands.
+///
+/// A list that came back with *fewer* entries is left alone. That is a provider
+/// disagreeing rather than a provider missing, and picking a winner there is
+/// what the merge is for.
+fn keep_what_nobody_answered(item: &mut MediaItem, stored: MediaItem) {
+    fn keep<T>(fresh: &mut Vec<T>, stored: Vec<T>) {
+        if fresh.is_empty() {
+            *fresh = stored;
+        }
+    }
+
+    keep(&mut item.seasons, stored.seasons);
+    keep(&mut item.episodes, stored.episodes);
+    keep(&mut item.images, stored.images);
+    keep(&mut item.credits, stored.credits);
+    keep(&mut item.alternative_titles, stored.alternative_titles);
+    keep(&mut item.ratings, stored.ratings);
+    keep(&mut item.translations, stored.translations);
+}
+
 /// Store a freshly fetched work and its raw provider payload.
 ///
 /// If the work already exists locally, its identity is preserved: the same row
@@ -122,12 +150,15 @@ pub async fn persist(
     snapshots: &[(String, Value)],
 ) -> Result<MediaItem> {
     if let Some(existing_id) = find_existing(state, &item).await?
-        && let Some(existing) = repo::item::get(&state.db, &existing_id).await?
+        && let Some(mut existing) = repo::item::get(&state.db, &existing_id).await?
     {
-        item.id = existing.id;
-        item.created_at = existing.created_at;
+        item.id = existing.id.clone();
+        item.created_at = existing.created_at.clone();
         item.is_manual = existing.is_manual;
         item.is_enabled = existing.is_enabled;
+
+        repo::item::load_children(&state.db, &mut existing).await?;
+        keep_what_nobody_answered(&mut item, existing);
     }
 
     item.refreshed_at = Some(crate::db::now());
@@ -182,8 +213,17 @@ fn next_refresh(state: &AppState, item: &MediaItem) -> String {
         _ => cfg.continuing_ttl,
     };
 
-    let ttl = chrono::Duration::from_std(ttl).unwrap_or_else(|_| chrono::Duration::hours(6));
-    to_rfc3339(chrono::Utc::now() + ttl)
+    // Both steps can fail on an operator's typo — a TTL of a hundred million
+    // years converts fine and then leaves the representable range on the add,
+    // which chrono answers with a panic. Six hours is the answer to either.
+    let fallback = chrono::TimeDelta::hours(6);
+    let ttl = chrono::TimeDelta::from_std(ttl).unwrap_or(fallback);
+
+    let due = chrono::Utc::now()
+        .checked_add_signed(ttl)
+        .unwrap_or_else(|| chrono::Utc::now() + fallback);
+
+    to_rfc3339(due)
 }
 
 /// Whether a stored work is due a refresh.
@@ -214,10 +254,31 @@ pub fn search_key(kind: &str, language: &str, adult: bool, extra: &str, term: &s
     )
 }
 
+/// What a search produced, and whether it is the whole answer.
+///
+/// A search asks several providers and logs past the ones that fail, which is
+/// right — one source being down should cost detail, not the result. It is not
+/// a thing to remember for half an hour, though: a TMDB rate limit lasting ten
+/// seconds used to fix one wrong answer in place for the whole TTL, with no way
+/// to tell it from a complete one.
+pub struct Found {
+    pub items: Vec<MediaItem>,
+    pub degraded: bool,
+}
+
+impl Found {
+    pub fn complete(items: Vec<MediaItem>) -> Self {
+        Self {
+            items,
+            degraded: false,
+        }
+    }
+}
+
 async fn cached_search<F, Fut>(state: &AppState, key: String, fetch: F) -> Result<Vec<MediaItem>>
 where
     F: FnOnce() -> Fut,
-    Fut: std::future::Future<Output = Result<Vec<MediaItem>>>,
+    Fut: std::future::Future<Output = Result<Found>>,
 {
     if let Some(cached) = state.caches.searches.get(&key).await {
         if let Ok(items) = serde_json::from_str::<Vec<MediaItem>>(&cached) {
@@ -226,17 +287,19 @@ where
         state.caches.searches.invalidate(&key).await;
     }
 
-    let items = fetch().await?;
+    let found = fetch().await?;
 
     // An empty result is not cached: it is usually a provider hiccup, and
-    // caching it would keep a title invisible for the whole TTL.
-    if !items.is_empty()
-        && let Ok(encoded) = serde_json::to_string(&items)
+    // caching it would keep a title invisible for the whole TTL. Nor is a
+    // partial one, for the same reason with more of it showing.
+    if !found.items.is_empty()
+        && !found.degraded
+        && let Ok(encoded) = serde_json::to_string(&found.items)
     {
         state.caches.searches.insert(key, encoded).await;
     }
 
-    Ok(items)
+    Ok(found.items)
 }
 
 #[cfg(test)]

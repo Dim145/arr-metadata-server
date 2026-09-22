@@ -104,6 +104,28 @@ pub fn verify_password(password: &str, phc: &str) -> bool {
     }
 }
 
+/// [`hash_password`], off the async executor.
+///
+/// argon2's whole point is that it is slow and memory-hungry — around 20 ms of
+/// CPU and 19 MiB per call at the defaults. Run on a tokio worker that is the
+/// worker not running anything else for 20 ms, and a handful of sign-in attempts
+/// stalls every surface this server has, Sonarr's included.
+pub async fn hash_password_async(password: String) -> Result<String> {
+    tokio::task::spawn_blocking(move || hash_password(&password))
+        .await
+        .map_err(|e| anyhow::anyhow!("hashing task failed: {e}"))?
+}
+
+/// [`verify_password`], off the async executor. See [`hash_password_async`].
+pub async fn verify_password_async(password: String, phc: String) -> bool {
+    tokio::task::spawn_blocking(move || verify_password(&password, &phc))
+        .await
+        .unwrap_or_else(|e| {
+            tracing::error!(error = %e, "password verification task failed");
+            false
+        })
+}
+
 fn hex(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
 

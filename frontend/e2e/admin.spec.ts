@@ -318,6 +318,11 @@ test.describe('settings', () => {
     await expect(dialog).toBeVisible()
 
     const language = dialog.getByLabel(/language of the answers|langue des réponses/i)
+
+    // Read once the dialog has its values, not the instant it opens: this is a
+    // plain read with no retry behind it, and an empty one here becomes an
+    // assertion that the field ends up empty at the bottom of this test.
+    await expect(language).not.toHaveValue('')
     const inherited = await language.inputValue()
 
     // Inherited: it says so, it is not editable, and the way out is offered.

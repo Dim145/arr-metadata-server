@@ -351,11 +351,13 @@ impl TvdbClient {
         match response.status() {
             reqwest::StatusCode::NOT_FOUND => Ok(Attempt::Missing),
             reqwest::StatusCode::UNAUTHORIZED => Ok(Attempt::Unauthorized),
-            status if status.is_success() => {
-                Ok(Attempt::Body(response.json().await.with_context(|| {
-                    format!("TheTVDB returned a malformed body for {url}")
-                })?))
-            }
+            status if status.is_success() => Ok(Attempt::Body(
+                crate::providers::read_json(response)
+                    .await
+                    .with_context(|| {
+                        format!("TheTVDB returned a body this server could not read: {url}")
+                    })?,
+            )),
             status => anyhow::bail!("TheTVDB returned {status} for {url}"),
         }
     }
@@ -759,7 +761,8 @@ fn artwork(series: &SeriesExtended) -> Vec<Image> {
     let mut ranked: Vec<&ArtworkRecord> = series.artworks.iter().collect();
 
     // TVDB's score is a community ranking; take the best few of each kind.
-    ranked.sort_by_key(|a| -a.score.unwrap_or(0));
+    // `Reverse` rather than a negation, which overflows on `i64::MIN`.
+    ranked.sort_by_key(|a| std::cmp::Reverse(a.score.unwrap_or(0)));
 
     let mut images = Vec::new();
 
@@ -772,9 +775,12 @@ fn artwork(series: &SeriesExtended) -> Vec<Image> {
         };
 
         let season_number = if is_season {
-            match record.season {
-                Some(n) => Some(n as i32),
-                // Season artwork with no season is unusable.
+            // `try_from`, not `as`: a value past `i32` wraps to a negative
+            // season number and files the artwork under a season that does not
+            // exist, rather than being recognised as nonsense and dropped.
+            match record.season.and_then(|n| i32::try_from(n).ok()) {
+                Some(n) => Some(n),
+                // Season artwork with no usable season is unusable.
                 None => continue,
             }
         } else {
@@ -854,7 +860,7 @@ fn episodes(series: &SeriesExtended) -> Vec<Episode> {
                 aired_before_episode_number: record.airs_before_episode,
                 title: record.name.clone().unwrap_or_default(),
                 overview: non_empty(record.overview.as_deref()),
-                air_date_utc: aired.as_deref().map(|d| format!("{d}T00:00:00Z")),
+                air_date_utc: aired.as_deref().and_then(crate::domain::midnight_utc),
                 air_date: aired,
                 runtime: record.runtime.filter(|r| *r > 0),
                 finale_type: non_empty(record.finale_type.as_deref()),

@@ -150,9 +150,21 @@ pub fn build(state: AppState) -> (Router<AppState>, utoipa::openapi::OpenApi) {
             arr.layer(from_fn_with_state(state.clone(), guards::guard_arr))
                 // Outermost on this surface: a loop has to be caught before any
                 // work is done, and before the allowlist rejects our own address.
-                .layer(from_fn_with_state(state.clone(), guards::reject_self_calls)),
+                .layer(from_fn_with_state(state.clone(), guards::reject_self_calls))
+                // These two surfaces went without one for a while, on the
+                // reasoning that they answer Sonarr and Radarr rather than the
+                // open web. But the allowlist is what decides that, and a host
+                // that is not on it can still spend this server's time being
+                // told so — and the relay spends the operator's TMDB quota.
+                .layer(from_fn_with_state(
+                    state.clone(),
+                    crate::auth::ratelimit::limit,
+                )),
         )
-        .merge(tmdb.layer(from_fn_with_state(state, guards::guard_tmdb)));
+        .merge(
+            tmdb.layer(from_fn_with_state(state.clone(), guards::guard_tmdb))
+                .layer(from_fn_with_state(state, crate::auth::ratelimit::limit)),
+        );
 
     (router, api)
 }

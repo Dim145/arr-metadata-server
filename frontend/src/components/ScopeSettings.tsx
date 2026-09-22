@@ -272,8 +272,14 @@ function SettingRow({
   const save = useMutation({
     mutationFn: (next: string | null) =>
       api.put<EffectiveSetting[]>(`/settings/${at.scope}/${at.id}`, { key: def.key, value: next }),
-    onSuccess: (fresh) => {
-      queryClient.setQueryData(['settings', 'scope', at.scope, at.id], fresh)
+    onSuccess: () => {
+      // Refetched rather than written into the cache from the response. Each
+      // row owns its own mutation, and the response carries the *whole*
+      // collection as it stood when the server computed it — so flipping two
+      // switches quickly and having the first response land last put the
+      // second switch visibly back where it was, while the server had it
+      // right. Asking again cannot be out of order in a way that sticks.
+      void queryClient.invalidateQueries({ queryKey: ['settings', 'scope', at.scope, at.id] })
       // The read-only summary and the sidebar's version line read the same
       // configuration from a different route.
       void queryClient.invalidateQueries({ queryKey: ['settings'], exact: true })

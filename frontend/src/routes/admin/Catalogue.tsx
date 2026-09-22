@@ -39,6 +39,7 @@ import {
 import { api, query } from '../../lib/api'
 import { cn } from '../../lib/cn'
 import * as fmt from '../../lib/format'
+import { useSettled } from '../../lib/debounce'
 import { useI18n } from '../../lib/i18n'
 import type { ItemPage, MediaItem, MediaKind } from '../../lib/types'
 
@@ -55,11 +56,13 @@ export function Catalogue() {
   const [composing, setComposing] = useState(false)
   const [asking, setAsking] = useState<Asking | null>(null)
 
+  const settled = useSettled(term)
+
   const list = useQuery({
-    queryKey: ['items', term, kind, manualOnly],
+    queryKey: ['items', settled, kind, manualOnly],
     queryFn: () =>
       api.get<ItemPage>(
-        `/items${query({ term, kind, manualOnly, limit: 60, includeDisabled: true })}`,
+        `/items${query({ term: settled, kind, manualOnly, limit: 60, includeDisabled: true })}`,
       ),
   })
 
@@ -75,6 +78,10 @@ export function Catalogue() {
     mutationFn: (id: string) => api.post<MediaItem>(`/items/${id}/refresh`),
     onSuccess: invalidate,
   })
+
+  // The same operation reports itself on the editor screen and used to say
+  // nothing at all here, so a refused refresh looked like one that worked.
+  const rowError = refresh.isError ? refresh.error.message : null
 
   const setEnabled = useMutation({
     mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) =>
@@ -169,6 +176,12 @@ export function Catalogue() {
           ) : null}
         </span>
       </div>
+
+      {rowError ? (
+        <p role="alert" className="mb-3 text-sm text-vermillion">
+          {rowError}
+        </p>
+      ) : null}
 
       <Panel className="rise overflow-hidden" style={{ animationDelay: '60ms' }}>
         {list.isPending ? (

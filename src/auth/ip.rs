@@ -20,7 +20,7 @@ const FORWARDED_FOR: &str = "x-forwarded-for";
 /// is *not* itself a trusted proxy is returned.
 pub fn resolve(peer: Option<SocketAddr>, headers: &HeaderMap, trusted: &[IpNet]) -> Option<IpAddr> {
     // No peer address means no basis for a decision; the caller denies.
-    let peer_ip = peer?.ip();
+    let peer_ip = unmap(peer?.ip());
 
     if !is_trusted(peer_ip, trusted) {
         // The peer is the client. Anything it claims in a header is its own
@@ -36,8 +36,27 @@ pub fn resolve(peer: Option<SocketAddr>, headers: &HeaderMap, trusted: &[IpNet])
         .split(',')
         .rev()
         .filter_map(|entry| parse_entry(entry.trim()))
+        .map(unmap)
         .find(|ip| !is_trusted(*ip, trusted))
         .or(Some(peer_ip))
+}
+
+/// `::ffff:10.0.0.7` is `10.0.0.7`.
+///
+/// A socket bound to `[::]` — which is what a dual-stack listener and most
+/// Docker networks give you — reports an IPv4 client in that form, and
+/// `IpNet::contains` does not match across families. So `10.0.0.0/8` did not
+/// cover the very address it was written for, and every Sonarr and Radarr call
+/// was refused. It failed closed, which is the right direction; the wrong part
+/// is the fix an operator reaches for next, which is to allow `::/0`.
+fn unmap(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(v4) => IpAddr::V4(v4),
+            None => IpAddr::V6(v6),
+        },
+        other => other,
+    }
 }
 
 pub fn is_trusted(ip: IpAddr, trusted: &[IpNet]) -> bool {
@@ -85,6 +104,30 @@ fn parse_entry(entry: &str) -> Option<IpAddr> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_ipv4_client_on_a_dual_stack_socket_matches_its_own_rule() {
+        // What `[::]:8080` — a dual-stack listener, and most Docker networks —
+        // reports for an IPv4 client. `IpNet::contains` does not match across
+        // families, so without unmapping, `10.0.0.0/8` did not cover the very
+        // address it was written for and every arr call was refused.
+        let mapped: SocketAddr = "[::ffff:10.0.0.7]:51000".parse().unwrap();
+        let resolved = resolve(Some(mapped), &HeaderMap::new(), &[]).unwrap();
+
+        assert_eq!(resolved, "10.0.0.7".parse::<IpAddr>().unwrap());
+
+        let lan: Vec<(String, IpNet)> =
+            vec![("rule".into(), "10.0.0.0/8".parse::<IpNet>().unwrap())];
+        assert_eq!(matching_rule(Some(resolved), &lan), Some("rule"));
+    }
+
+    #[test]
+    fn a_real_ipv6_client_is_left_alone() {
+        let v6: SocketAddr = "[2001:db8::1]:51000".parse().unwrap();
+        let resolved = resolve(Some(v6), &HeaderMap::new(), &[]).unwrap();
+
+        assert_eq!(resolved, "2001:db8::1".parse::<IpAddr>().unwrap());
+    }
+
     use super::*;
 
     fn nets(values: &[&str]) -> Vec<IpNet> {

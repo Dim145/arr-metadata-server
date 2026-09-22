@@ -7,7 +7,7 @@ use crate::{
     db::repo,
     domain::{ExternalSource, MediaItem, MediaKind},
     providers::{names, tmdb::map as tmdb_map},
-    service::{cached_search, gather, ids, is_stale, load, persist},
+    service::{Found, cached_search, gather, ids, is_stale, load, persist},
     state::AppState,
     wire::sonarr,
 };
@@ -141,11 +141,15 @@ pub async fn search(state: &AppState, term: &str) -> Result<Vec<MediaItem>> {
 
     cached_search(state, key, || async {
         let mut results = local_search(state, term).await?;
+        let mut degraded = false;
 
         if state.tmdb.is_configured() {
             match tmdb_search(state, term).await {
                 Ok(remote) => merge_results(&mut results, remote),
-                Err(e) => tracing::warn!(term, error = %e, "TMDB search failed"),
+                Err(e) => {
+                    tracing::warn!(term, error = %e, "TMDB search failed");
+                    degraded = true;
+                }
             }
         }
 
@@ -158,7 +162,8 @@ pub async fn search(state: &AppState, term: &str) -> Result<Vec<MediaItem>> {
             match state.tvdb.search(term, state.search_limit()).await {
                 Ok(hits) => merge_results(&mut results, hits),
                 Err(e) => {
-                    tracing::warn!(term, error = format_args!("{e:#}"), "TheTVDB search failed")
+                    tracing::warn!(term, error = format_args!("{e:#}"), "TheTVDB search failed");
+                    degraded = true;
                 }
             }
         }
@@ -170,11 +175,17 @@ pub async fn search(state: &AppState, term: &str) -> Result<Vec<MediaItem>> {
                         results.push(sonarr::to_item(show));
                     }
                 }
-                Err(e) => tracing::warn!(term, error = %e, "Skyhook search failed"),
+                Err(e) => {
+                    tracing::warn!(term, error = %e, "Skyhook search failed");
+                    degraded = true;
+                }
             }
         }
 
-        Ok(results)
+        Ok(Found {
+            items: results,
+            degraded,
+        })
     })
     .await
 }

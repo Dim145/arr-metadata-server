@@ -133,7 +133,10 @@ export function WorkEditor() {
     },
   })
 
-  if (item.isError) {
+  // The registry too, and not only the work: it is asked for once and cached
+  // forever, so a failure there never retries. Without this the page waits on
+  // `registry.data` that is never coming and shimmers for as long as it is open.
+  if (item.isError || registry.isError) {
     return (
       <p role="alert" className="flex items-center gap-2 text-sm text-vermillion">
         <Glyph name="alert" className="size-4" />
@@ -360,6 +363,13 @@ export function WorkEditor() {
         }
       >
         {t.admin.editor.unlockAllBody}
+        {/* Without this the dialog stays open with a re-enabled button and no
+            reason, which reads as "press it again". */}
+        {unlockAll.isError ? (
+          <p role="alert" className="mt-3 text-sm text-vermillion">
+            {unlockAll.error.message || t.common.actionFailed}
+          </p>
+        ) : null}
       </Dialog>
 
       <Dialog
@@ -435,6 +445,8 @@ function FieldRow({
     onSuccess: onChanged,
   })
 
+
+
   const locked = lock !== undefined
   const display = readable(value, t)
   const multiline = def.fieldType === 'longText'
@@ -468,6 +480,16 @@ function FieldRow({
         </div>
 
         <div className="min-w-0 flex-1">
+          {/* A lock that did not lift, with nothing said, is this screen's own
+              failure mode running backwards: somebody believing a field is one
+              thing while the server holds another. The save path already
+              reports itself, inside the form below. */}
+          {unlock.isError ? (
+            <p role="alert" className="mb-2 text-xs text-vermillion">
+              {unlock.error.message || t.common.actionFailed}
+            </p>
+          ) : null}
+
           {editing ? (
             <form
               className="flex flex-col gap-3"

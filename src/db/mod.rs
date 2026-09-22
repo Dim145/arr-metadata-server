@@ -43,36 +43,98 @@ impl Dialect {
 
     /// Translate a `?`-placeholder query into this dialect's syntax.
     ///
-    /// SQLite takes `?` verbatim. PostgreSQL needs `$1`, `$2`, … Question marks
-    /// inside single-quoted string literals are left alone; doubled quotes
-    /// (`''`) are handled as SQL escapes rather than as a closing quote.
+    /// SQLite takes `?` verbatim. PostgreSQL needs `$1`, `$2`, … A `?` is a
+    /// placeholder only where one could go: not inside a single-quoted literal
+    /// (doubled quotes `''` are an escape, not a close), not inside a
+    /// double-quoted identifier, and not inside a comment.
+    ///
+    /// The comment case is the one worth the code. Renumbering starts at the
+    /// first `?` the scanner sees, so a `?` in a `-- why?` eats `$1` and every
+    /// real placeholder after it shifts by one — binding each value to the
+    /// wrong column, with no error at all when the types happen to line up.
+    /// Nothing in this crate writes a comment into a query string today; the
+    /// point is that the first one will not be a silent data corruption.
     pub fn rewrite<'a>(&self, sql: &'a str) -> Cow<'a, str> {
         if *self == Self::Sqlite || !sql.contains('?') {
             return Cow::Borrowed(sql);
         }
 
+        /// Where the scanner is, which decides whether a `?` means anything.
+        enum In {
+            Sql,
+            String,
+            Identifier,
+            LineComment,
+            BlockComment,
+        }
+
         let mut out = String::with_capacity(sql.len() + 8);
         let mut index = 0usize;
-        let mut in_string = false;
+        let mut state = In::Sql;
         let mut chars = sql.chars().peekable();
 
         while let Some(c) = chars.next() {
-            match c {
-                '\'' if in_string && chars.peek() == Some(&'\'') => {
-                    // Escaped quote inside a literal: consume both, stay inside.
-                    out.push('\'');
-                    out.push(chars.next().expect("peeked"));
+            match state {
+                In::String => {
+                    out.push(c);
+                    if c == '\'' {
+                        // Doubled: an escaped quote, still inside the literal.
+                        if chars.peek() == Some(&'\'') {
+                            out.push(chars.next().expect("peeked"));
+                        } else {
+                            state = In::Sql;
+                        }
+                    }
                 }
-                '\'' => {
-                    in_string = !in_string;
-                    out.push('\'');
+                In::Identifier => {
+                    out.push(c);
+                    if c == '"' {
+                        if chars.peek() == Some(&'"') {
+                            out.push(chars.next().expect("peeked"));
+                        } else {
+                            state = In::Sql;
+                        }
+                    }
                 }
-                '?' if !in_string => {
-                    index += 1;
-                    out.push('$');
-                    out.push_str(&index.to_string());
+                In::LineComment => {
+                    out.push(c);
+                    if c == '\n' {
+                        state = In::Sql;
+                    }
                 }
-                other => out.push(other),
+                In::BlockComment => {
+                    out.push(c);
+                    if c == '*' && chars.peek() == Some(&'/') {
+                        out.push(chars.next().expect("peeked"));
+                        state = In::Sql;
+                    }
+                }
+                In::Sql => match c {
+                    '\'' => {
+                        state = In::String;
+                        out.push(c);
+                    }
+                    '"' => {
+                        state = In::Identifier;
+                        out.push(c);
+                    }
+                    '-' if chars.peek() == Some(&'-') => {
+                        state = In::LineComment;
+                        out.push(c);
+                        out.push(chars.next().expect("peeked"));
+                    }
+                    '/' if chars.peek() == Some(&'*') => {
+                        state = In::BlockComment;
+                        out.push(c);
+                        out.push(chars.next().expect("peeked"));
+                    }
+                    '?' => {
+                        index += 1;
+                        out.push('$');
+                        out.push_str(&index.to_string());
+                    }
+                    other => out.push(other),
+                },
             }
         }
 
@@ -325,6 +387,96 @@ pub const DEFAULT_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_question_mark_that_is_not_a_placeholder_is_left_alone() {
+        let pg = Dialect::Postgres;
+
+        // A comment. This is the dangerous one: the `?` in it used to take
+        // `$1`, shifting every real placeholder by one and binding each value
+        // to the wrong column — silently, whenever the types happened to fit.
+        assert_eq!(
+            pg.rewrite("SELECT a -- why?\nFROM t WHERE b = ?"),
+            "SELECT a -- why?\nFROM t WHERE b = $1"
+        );
+        assert_eq!(
+            pg.rewrite("SELECT a /* is it? */ FROM t WHERE b = ?"),
+            "SELECT a /* is it? */ FROM t WHERE b = $1"
+        );
+
+        // A quoted identifier.
+        assert_eq!(
+            pg.rewrite("SELECT \"we?ird\" FROM t WHERE id = ?"),
+            "SELECT \"we?ird\" FROM t WHERE id = $1"
+        );
+
+        // The jsonb "does this key exist" operator, which this schema will
+        // reach for the day a payload column stops being TEXT.
+        assert_eq!(
+            pg.rewrite("SELECT * FROM t WHERE payload ? 'k' AND id = ?"),
+            "SELECT * FROM t WHERE payload $1 'k' AND id = $2",
+            "still wrong, but it is the one case a comment cannot rescue — \
+             left here so the next person sees it before writing it"
+        );
+
+        // And the cases that already worked, unchanged.
+        assert_eq!(
+            pg.rewrite("SELECT * FROM t WHERE s = 'it''s ?' AND id = ?"),
+            "SELECT * FROM t WHERE s = 'it''s ?' AND id = $1"
+        );
+        assert_eq!(
+            pg.rewrite("SELECT x::text FROM t WHERE id = ?"),
+            "SELECT x::text FROM t WHERE id = $1"
+        );
+    }
+
+    #[test]
+    fn no_query_in_this_crate_carries_a_comment_or_a_jsonb_operator() {
+        // The rewriter handles comments now. The jsonb containment operators it
+        // cannot tell from a bind, so this is the guard that says so before one
+        // is written rather than after it has bound the wrong column.
+        //
+        // The needles are built rather than written, or this test would be the
+        // first thing it found.
+        let q = '?';
+        let needles = [format!("{q}|"), format!("{q}&")];
+
+        let mut offenders: Vec<String> = Vec::new();
+
+        for file in walk("src") {
+            let text = std::fs::read_to_string(&file).expect("a readable source file");
+
+            for (number, line) in text.lines().enumerate() {
+                if needles.iter().any(|needle| line.contains(needle.as_str())) {
+                    offenders.push(format!("{}:{}", file.display(), number + 1));
+                }
+            }
+        }
+
+        assert!(
+            offenders.is_empty(),
+            "a jsonb key operator the placeholder rewriter cannot tell from a \
+             bind: {offenders:?}"
+        );
+    }
+
+    fn walk(dir: &str) -> Vec<std::path::PathBuf> {
+        let mut found = Vec::new();
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return found;
+        };
+
+        for entry in entries.filter_map(Result::ok) {
+            let path = entry.path();
+            if path.is_dir() {
+                found.extend(walk(&path.to_string_lossy()));
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                found.push(path);
+            }
+        }
+
+        found
+    }
+
     use super::*;
 
     #[test]

@@ -25,6 +25,13 @@ use crate::{
 /// short enough that a forgotten browser tab stops working.
 const SESSION_TTL_HOURS: i64 = 12;
 
+/// The longest a username or password may be, in bytes.
+///
+/// Generous for anything a person would type or a password manager would make,
+/// and short enough that the work of hashing it and recording the attempt is
+/// bounded. The body limit alone is a megabyte, which is not a bound at all.
+const MAX_CREDENTIAL: usize = 256;
+
 /// The tag every route here is filed under in the documentation.
 pub const TAG: &str = "Session";
 
@@ -72,17 +79,28 @@ async fn login(
     headers: HeaderMap,
     Json(request): Json<LoginRequest>,
 ) -> AppResult<impl IntoResponse> {
+    // Refused before anything is looked up or hashed. Nobody's credentials are
+    // this long, so the only thing that sends them is something trying to make
+    // this server do expensive work — a megabyte of username is a megabyte of
+    // log line and a megabyte of audit row, and neither needs a credential.
+    if request.username.len() > MAX_CREDENTIAL || request.password.len() > MAX_CREDENTIAL {
+        return Err(AppError::Unauthorized);
+    }
+
     let found = repo::user::find_by_username(&state.db, request.username.trim()).await?;
 
     // Verify even when the user does not exist, so a wrong username and a wrong
     // password take the same time and cannot be told apart.
     let (user, ok) = match found {
         Some(creds) => {
-            let ok = secrets::verify_password(&request.password, &creds.password_hash);
+            let ok =
+                secrets::verify_password_async(request.password.clone(), creds.password_hash).await;
             (Some(creds.user), ok)
         }
         None => {
-            let _ = secrets::verify_password(&request.password, DUMMY_HASH);
+            let _ =
+                secrets::verify_password_async(request.password.clone(), DUMMY_HASH.to_string())
+                    .await;
             (None, false)
         }
     };
@@ -137,7 +155,8 @@ async fn login(
     .await;
 
     let cookie = format!(
-        "{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={}",
+        "{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict{}; Max-Age={}",
+        secure_flag(&state),
         SESSION_TTL_HOURS * 3600
     );
 
@@ -149,6 +168,29 @@ async fn login(
             expires_at,
         }),
     ))
+}
+
+/// `; Secure` when this session can only have arrived over TLS.
+///
+/// Not unconditional: plenty of these run as plain HTTP on a home network, and
+/// a `Secure` cookie there is a cookie the browser never sends back — an admin
+/// who can sign in and is then immediately signed out again, with nothing to
+/// explain it. Set where it can be honoured: this server terminating TLS
+/// itself, or a public URL that says `https` because something in front of it
+/// does.
+fn secure_flag(state: &AppState) -> &'static str {
+    let terminates_tls = state.config.server.tls.is_some();
+    let published_over_tls = state
+        .config
+        .server
+        .public_url
+        .as_deref()
+        .is_some_and(|url| url.starts_with("https://"));
+
+    match terminates_tls || published_over_tls {
+        true => "; Secure",
+        false => "",
+    }
 }
 
 /// An argon2id hash of a value nobody knows, used to equalise timing on the
@@ -257,11 +299,19 @@ async fn change_password(
         return Err(AppError::NotFound);
     };
 
-    if !secrets::verify_password(&request.current_password, &creds.password_hash) {
+    if request.current_password.len() > MAX_CREDENTIAL
+        || request.new_password.len() > MAX_CREDENTIAL
+    {
+        return Err(AppError::BadRequest("that password is too long".into()));
+    }
+
+    if !secrets::verify_password_async(request.current_password.clone(), creds.password_hash).await
+    {
         return Err(AppError::Unauthorized);
     }
 
-    let hash = secrets::hash_password(&request.new_password)
+    let hash = secrets::hash_password_async(request.new_password.clone())
+        .await
         .map_err(|e| AppError::BadRequest(e.to_string()))?;
 
     repo::user::set_password(&state.db, &user.id, &hash).await?;

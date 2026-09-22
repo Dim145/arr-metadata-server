@@ -38,6 +38,16 @@ pub struct Store {
     db: Db,
     /// The whole table, which is a few dozen rows.
     values: Arc<RwLock<HashMap<Address, String>>>,
+    /// Held across write-then-reload, so two writers cannot install their
+    /// snapshots in the opposite order to the one they read them in.
+    ///
+    /// Without it: A writes `hidden` and reads it back, B writes `visible` and
+    /// reads it back, B installs, A installs. The table says `visible`, the map
+    /// says `hidden`, every decision is made from the map — and the next
+    /// restart reloads the table and flips the server's adult policy with
+    /// nobody having touched it. Settings are written when somebody clicks a
+    /// switch, so serialising them costs nothing.
+    writes: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl Store {
@@ -45,6 +55,7 @@ impl Store {
         Self {
             db,
             values: Arc::new(RwLock::new(HashMap::new())),
+            writes: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -162,6 +173,8 @@ impl Store {
 
         registry::validate(def, value).map_err(|why| anyhow::anyhow!("{key} {why}"))?;
 
+        let _writing = self.writes.lock().await;
+
         sqlx::query(self.db.sql(
             "INSERT INTO setting (scope, scope_id, key, value, updated_at, updated_by)
              VALUES (?, ?, ?, ?, ?, ?)
@@ -185,6 +198,8 @@ impl Store {
 
     /// Stop overriding a setting at a scope, so it inherits again.
     pub async fn clear(&self, scope: Scope, scope_id: &str, key: &str) -> Result<bool> {
+        let _writing = self.writes.lock().await;
+
         let done = sqlx::query(
             self.db
                 .sql("DELETE FROM setting WHERE scope = ? AND scope_id = ? AND key = ?"),
@@ -201,6 +216,8 @@ impl Store {
 
     /// Forget everything a scope set, for a key or a rule being deleted.
     pub async fn forget(&self, scope: Scope, scope_id: &str) -> Result<()> {
+        let _writing = self.writes.lock().await;
+
         sqlx::query(
             self.db
                 .sql("DELETE FROM setting WHERE scope = ? AND scope_id = ?"),

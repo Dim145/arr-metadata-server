@@ -60,12 +60,33 @@ pub fn combine(mut contributions: Vec<Contribution>, priority: &[String]) -> Opt
 
     // Decide whose episode numbering this is before anything is folded, because
     // every later provider fills fields *into* that list.
-    let answered = |c: &Contribution| !c.item.episodes.is_empty() || !c.item.seasons.is_empty();
+    //
+    // A numbering is an episode list. Seasons alone are not one, and treating
+    // them as one was how a TheTVDB answer that carried its six seasons but no
+    // episodes — its episode endpoint having failed while the rest succeeded —
+    // became the spine, and took every other provider's episodes with it: the
+    // merged list was empty, and `persist` writes what the merge produced.
+    let numbered = |c: &Contribution| !c.item.episodes.is_empty();
 
     let spine = contributions
         .iter()
-        .position(|c| TVDB_NUMBERED.contains(&c.provider.as_str()) && answered(c))
-        .or_else(|| contributions.iter().position(answered));
+        .position(|c| TVDB_NUMBERED.contains(&c.provider.as_str()) && numbered(c))
+        .or_else(|| contributions.iter().position(numbered))
+        // Nobody has episodes: a film, or a series nothing could answer for.
+        // Seasons can still come from somewhere, and the rule they exist to
+        // protect does not apply when there is nothing to number.
+        .or_else(|| {
+            contributions
+                .iter()
+                .position(|c| {
+                    TVDB_NUMBERED.contains(&c.provider.as_str()) && !c.item.seasons.is_empty()
+                })
+                .or_else(|| {
+                    contributions
+                        .iter()
+                        .position(|c| !c.item.seasons.is_empty())
+                })
+        });
 
     let (seasons, episodes) = match spine {
         Some(index) => {
@@ -379,6 +400,42 @@ mod tests {
         let mut i = crate::db::repo::child::blank_image(kind, url.into());
         i.is_manual = false;
         i
+    }
+
+    #[test]
+    fn a_numbered_provider_with_no_episodes_does_not_take_the_others_down_with_it() {
+        // TheTVDB's episode endpoint failed while the rest of its answer came
+        // back, so it carries seasons and nothing else. It is still the one that
+        // settles numbering — but it has not settled any, and letting it be the
+        // spine here emptied the merged list and deleted the stored episodes.
+        let mut tvdb = base("tvdb", "Breaking Bad");
+        tvdb.item.seasons = vec![
+            crate::db::repo::child::blank_season(1),
+            crate::db::repo::child::blank_season(2),
+        ];
+
+        let mut tmdb = base("tmdb", "Breaking Bad");
+        tmdb.item.episodes = vec![episode(1, 1), episode(1, 2), episode(2, 1)];
+
+        let merged = combine(vec![tvdb, tmdb], &priority()).unwrap();
+
+        assert_eq!(merged.episodes.len(), 3, "TMDB's episodes survived");
+        assert_eq!(merged.seasons.len(), 2, "TheTVDB's seasons still applied");
+    }
+
+    #[test]
+    fn a_numbered_provider_that_did_answer_still_wins_the_numbering() {
+        // The rule the constant exists for, unchanged: when TheTVDB has a list,
+        // it is the list, whatever the general priority says.
+        let mut tvdb = base("tvdb", "One Piece");
+        tvdb.item.episodes = vec![episode(1, 1), episode(1, 2)];
+
+        let mut tmdb = base("tmdb", "One Piece");
+        tmdb.item.episodes = vec![episode(1, 1), episode(2, 1), episode(3, 1)];
+
+        let merged = combine(vec![tvdb, tmdb], &priority()).unwrap();
+
+        assert_eq!(merged.episodes.len(), 2, "TheTVDB's numbering, not TMDB's");
     }
 
     #[test]

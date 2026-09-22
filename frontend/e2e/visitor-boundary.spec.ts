@@ -64,6 +64,35 @@ test.describe('a visitor with no credential', () => {
     }
   })
 
+  test('is answered with a policy that says where a page may be loaded from', async ({
+    request,
+  }) => {
+    const response = await request.get('/')
+    const csp = response.headers()['content-security-policy'] ?? ''
+
+    // `frame-ancestors` is the one that earns its place on a server sitting on
+    // a home network: it is what stops a page elsewhere framing this one and
+    // borrowing an administrator's clicks.
+    expect(csp).toContain("frame-ancestors 'none'")
+    expect(csp).toContain("default-src 'self'")
+    expect(csp).toContain("object-src 'none'")
+
+    expect(response.headers()['referrer-policy']).toBe('no-referrer')
+    expect(response.headers()['x-content-type-options']).toBe('nosniff')
+  })
+
+  test('cannot make the TMDB relay write with this server’s key', async ({ request }) => {
+    // The relay exists for Jellyseerr and Plex, which only read. Forwarding a
+    // write would let any key issued here rate a film as the operator.
+    for (const attempt of [
+      request.post('/3/movie/550/rating', { data: { value: 1 } }),
+      request.delete('/3/list/1/clear'),
+    ]) {
+      const response = await attempt
+      expect([401, 403, 405]).toContain(response.status())
+    }
+  })
+
   test('is offered a way in rather than an admin link', async ({ page }) => {
     await page.goto('/')
 

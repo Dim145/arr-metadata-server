@@ -7,7 +7,7 @@ use crate::{
     db::repo,
     domain::{ExternalSource, MediaItem, MediaKind},
     providers::tmdb::map as tmdb_map,
-    service::{cached_search, gather, ids, is_stale, load, persist},
+    service::{Found, cached_search, gather, ids, is_stale, load, persist},
     state::AppState,
 };
 
@@ -102,6 +102,7 @@ pub async fn search(state: &AppState, term: &str, year: Option<i32>) -> Result<V
 
     cached_search(state, key, || async {
         let mut results = local_search(state, term, year).await?;
+        let mut degraded = false;
 
         if state.tmdb.is_configured() {
             match state
@@ -114,7 +115,10 @@ pub async fn search(state: &AppState, term: &str, year: Option<i32>) -> Result<V
                         add_unseen(&mut results, tmdb_map::movie_summary_to_item(hit));
                     }
                 }
-                Err(e) => tracing::warn!(term, error = %e, "TMDB movie search failed"),
+                Err(e) => {
+                    tracing::warn!(term, error = %e, "TMDB movie search failed");
+                    degraded = true;
+                }
             }
         }
 
@@ -127,11 +131,17 @@ pub async fn search(state: &AppState, term: &str, year: Option<i32>) -> Result<V
                         add_unseen(&mut results, crate::wire::radarr::to_item(hit));
                     }
                 }
-                Err(e) => tracing::warn!(term, error = %e, "Radarr metadata search failed"),
+                Err(e) => {
+                    tracing::warn!(term, error = %e, "Radarr metadata search failed");
+                    degraded = true;
+                }
             }
         }
 
-        Ok(results)
+        Ok(Found {
+            items: results,
+            degraded,
+        })
     })
     .await
 }
@@ -168,7 +178,9 @@ pub async fn popular(state: &AppState) -> Result<Vec<MediaItem>> {
 
     cached_search(state, "list:popular".to_string(), || async {
         let hits = state.tmdb.popular_movies(1).await?;
-        Ok(hits.iter().map(tmdb_map::movie_summary_to_item).collect())
+        Ok(Found::complete(
+            hits.iter().map(tmdb_map::movie_summary_to_item).collect(),
+        ))
     })
     .await
 }
@@ -180,7 +192,9 @@ pub async fn trending(state: &AppState) -> Result<Vec<MediaItem>> {
 
     cached_search(state, "list:trending".to_string(), || async {
         let hits = state.tmdb.trending_movies().await?;
-        Ok(hits.iter().map(tmdb_map::movie_summary_to_item).collect())
+        Ok(Found::complete(
+            hits.iter().map(tmdb_map::movie_summary_to_item).collect(),
+        ))
     })
     .await
 }

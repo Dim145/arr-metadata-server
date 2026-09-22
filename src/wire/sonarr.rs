@@ -8,6 +8,17 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+/// Ceilings on what one upstream answer may turn into.
+///
+/// Every element here becomes a database row and a line in the cached document,
+/// and the upstream is a URL an operator can point elsewhere — the README's own
+/// deployment pattern is to redirect `skyhook.sonarr.tv` at a mirror. A mirror
+/// answering with two million episodes should cost a truncated series, not a
+/// transaction that inserts two million rows. Both are far above anything real:
+/// the longest thing television has produced is in the low thousands.
+const MAX_EPISODES: usize = 10_000;
+const MAX_IMAGES: usize = 200;
+
 use crate::{
     db::{new_id, now},
     domain::{
@@ -349,6 +360,7 @@ pub fn to_item(show: &ShowResource) -> MediaItem {
     item.images = show
         .images
         .iter()
+        .take(MAX_IMAGES)
         .enumerate()
         .map(|(i, img)| to_image(img, None, i as i32))
         .collect();
@@ -398,6 +410,7 @@ pub fn to_item(show: &ShowResource) -> MediaItem {
             images: s
                 .images
                 .iter()
+                .take(MAX_IMAGES)
                 .enumerate()
                 .map(|(i, img)| to_image(img, Some(s.season_number), i as i32))
                 .collect(),
@@ -407,6 +420,7 @@ pub fn to_item(show: &ShowResource) -> MediaItem {
     item.episodes = show
         .episodes
         .iter()
+        .take(MAX_EPISODES)
         .map(|e| Episode {
             id: new_id(),
             season_number: e.season_number,
