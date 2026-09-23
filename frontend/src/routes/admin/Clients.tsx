@@ -134,7 +134,11 @@ export function Clients() {
                   <Button
                     key={scope}
                     size="sm"
-                    variant={on ? 'primary' : 'ghost'}
+                    variant="ghost"
+                    // Pressed looks like the language toggle's pressed half:
+                    // bone. The primary gradient is for the one action a
+                    // screen asks for, and this is not that.
+                    className={on ? 'border-bone bg-bone text-ink hover:bg-bone' : undefined}
                     aria-pressed={on}
                     onClick={() =>
                       setScopes((current) =>
@@ -179,7 +183,7 @@ export function Clients() {
         ) : clients.data.length === 0 ? (
           <EmptyState title={t.admin.keys.empty} hint={t.admin.keys.emptyHint} />
         ) : (
-          <TableScroll>
+          <TableScroll label={t.admin.keys.issued}>
             <table className="w-full min-w-[20rem] border-collapse text-left">
               <thead>
                 <tr>

@@ -6,9 +6,11 @@
  * nearly square: the register is printed matter.
  */
 
-import { useEffect, useRef, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 
 import { cn } from '../lib/cn'
+import { useI18n } from '../lib/i18n'
+import { genreLabel } from '../lib/labels'
 
 /* ── Text ─────────────────────────────────────────────────────────────────── */
 
@@ -105,9 +107,44 @@ export function PanelHead({ title, action }: { title: ReactNode; action?: ReactN
  * is part of the set for a reason — a table wide enough to need it must scroll
  * inside its own frame, never by dragging the page sideways.
  */
-export function TableScroll({ children, className }: { children: ReactNode; className?: string }) {
+export function TableScroll({
+  children,
+  className,
+  label,
+}: {
+  children: ReactNode
+  className?: string
+  /** What the table is, for the region a keyboard user lands on. */
+  label: string
+}) {
+  const ref = useRef<HTMLDivElement>(null)
+  const [overflowing, setOverflowing] = useState(false)
+
+  // A tab stop only while there is something to scroll to. On a phone these
+  // tables are wider than the screen, and on the screens whose rows hold no
+  // link or button — the job history, the audit trail — a keyboard had no way
+  // to reach the columns off the edge. On a desktop, where nothing overflows,
+  // an extra stop per table would only be in the way.
+  useEffect(() => {
+    const element = ref.current
+    if (!element) return
+
+    const measure = () => setOverflowing(element.scrollWidth > element.clientWidth + 1)
+    measure()
+
+    const observer = new ResizeObserver(measure)
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [])
+
   return (
-    <div className={cn('w-full max-w-full overflow-x-auto overscroll-x-contain', className)}>
+    <div
+      ref={ref}
+      role={overflowing ? 'region' : undefined}
+      aria-label={overflowing ? label : undefined}
+      tabIndex={overflowing ? 0 : undefined}
+      className={cn('w-full max-w-full overflow-x-auto overscroll-x-contain', className)}
+    >
       {children}
     </div>
   )
@@ -186,13 +223,16 @@ export function Field({
   children: ReactNode
   hint?: ReactNode
 }) {
+  // A term and its description, for a `<dl>` — which is where every use of
+  // this sits. It used to be a span and a div, so a screen reader announced a
+  // definition list and then read it without a single term in it.
   return (
     <div className="flex items-baseline justify-between gap-6 px-5 py-2.5">
-      <Label className="shrink-0">{label}</Label>
-      <div className="min-w-0 text-right text-sm text-bone">
+      <dt className="label shrink-0">{label}</dt>
+      <dd className="min-w-0 text-right text-sm text-bone">
         {children}
         {hint ? <div className="mt-0.5 text-xs text-bone-faint">{hint}</div> : null}
-      </div>
+      </dd>
     </div>
   )
 }
@@ -319,7 +359,7 @@ export function Input({ className, ...props }: React.InputHTMLAttributes<HTMLInp
       className={cn(
         'min-h-11 w-full rounded-card border border-rule bg-ink px-3 text-sm text-bone',
         'transition-colors duration-200 placeholder:text-bone-faint',
-        'hover:border-rule-bright focus:border-vermillion focus:outline-none',
+        'hover:border-rule-bright focus:border-bone-dim focus:outline-none',
         className,
       )}
     />
@@ -341,7 +381,7 @@ export function Textarea({
       className={cn(
         'w-full rounded-card border border-rule bg-ink px-3 py-2.5 text-sm leading-relaxed text-bone',
         'transition-colors duration-200 placeholder:text-bone-faint',
-        'hover:border-rule-bright focus:border-vermillion focus:outline-none',
+        'hover:border-rule-bright focus:border-bone-dim focus:outline-none',
         className,
       )}
     />
@@ -355,7 +395,7 @@ export function Select({ className, ...props }: React.SelectHTMLAttributes<HTMLS
       className={cn(
         'min-h-11 w-full cursor-pointer appearance-none rounded-card border border-rule bg-ink',
         'px-3 pr-9 text-sm text-bone transition-colors duration-200',
-        'hover:border-rule-bright focus:border-vermillion focus:outline-none',
+        'hover:border-rule-bright focus:border-bone-dim focus:outline-none',
         // The chevron, drawn rather than imported, so it inherits the palette.
         "bg-[url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5 6 6.5 11 1.5' stroke='%23a5a099' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E\")]",
         'bg-[length:12px_8px] bg-[position:right_0.75rem_center] bg-no-repeat',
@@ -408,7 +448,7 @@ export function Toggle({
         aria-hidden
         className={cn(
           'relative block h-6 w-11 rounded-full border transition-colors duration-150',
-          checked ? 'border-vermillion bg-vermillion/25' : 'border-rule-bright bg-ink',
+          checked ? 'border-moss bg-moss/25' : 'border-rule-bright bg-ink',
         )}
       >
         {/* The knob travels by transform rather than by `left`: the second
@@ -417,7 +457,7 @@ export function Toggle({
           className={cn(
             'absolute top-1/2 left-0.5 size-4 -translate-y-1/2 rounded-full',
             'transition-[transform,background-color] duration-150',
-            checked ? 'translate-x-5 bg-vermillion' : 'bg-bone-faint',
+            checked ? 'translate-x-5 bg-moss' : 'bg-bone-faint',
           )}
         />
       </span>
@@ -480,7 +520,7 @@ export function Chip({
     <span
       className={cn(
         'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1',
-        'font-mono text-[0.625rem] font-medium tracking-[0.12em] uppercase',
+        'font-mono text-[0.6875rem] font-medium tracking-[0.12em] uppercase',
         CHIP_TONE[tone],
         className,
       )}
@@ -499,6 +539,9 @@ export function Chip({
  * the name is always written out rather than the colour standing for it.
  */
 export function Genre({ name, className }: { name: string; className?: string }) {
+  const { lang } = useI18n()
+  // The tint follows the stored name, so a genre keeps its colour whichever
+  // language it is read in.
   const stock = stockOf(name)
 
   return (
@@ -514,7 +557,7 @@ export function Genre({ name, className }: { name: string; className?: string })
         className,
       )}
     >
-      {name}
+      {genreLabel(name, lang)}
     </span>
   )
 }

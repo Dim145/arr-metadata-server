@@ -10,7 +10,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router'
 
-import { PosterCard, PosterGrid, Score } from '../components/media'
+import { Artwork, PosterCard, PosterGrid, Score } from '../components/media'
 import { EmptyState, Genre, Glyph, Label, SectionTitle, Skeleton } from '../components/ui'
 import { api, query } from '../lib/api'
 import * as fmt from '../lib/format'
@@ -91,8 +91,10 @@ function Featured({ item }: { item: MediaItem }) {
     <section className="relative mx-[calc(50%-50vw)] w-screen">
       <div className="relative h-[19rem] overflow-hidden sm:h-[24rem] lg:h-[28rem]">
         {art ? (
-          <img
-            src={art}
+          <Artwork
+            url={art}
+            role="backdrop"
+            eager
             alt=""
             aria-hidden
             fetchPriority="high"
@@ -114,8 +116,10 @@ function Featured({ item }: { item: MediaItem }) {
         <div className="mx-auto flex h-full max-w-7xl items-end px-4 pb-8 sm:px-6">
           <div className="flex items-end gap-5">
             {sheet ? (
-              <img
-                src={sheet}
+              <Artwork
+                url={sheet}
+                role="poster"
+                eager
                 alt={t.a11y.poster(item.title)}
                 className="strike hidden w-28 rounded-plate border border-rule-bright shadow-[var(--shadow-plate)] sm:block lg:w-36"
               />
@@ -151,7 +155,7 @@ function Featured({ item }: { item: MediaItem }) {
                 to={`/work/${item.id}`}
                 className="mt-5 inline-flex min-h-11 items-center gap-2 rounded-full bg-[linear-gradient(135deg,var(--color-vermillion),color-mix(in_srgb,var(--color-vermillion)_70%,var(--color-brass)))] px-5 text-sm font-medium text-ink shadow-[var(--shadow-lift)] transition-[filter] duration-200 hover:brightness-110"
               >
-                {t.work.details}
+                {t.home.open}
                 <Glyph name="chevronRight" className="size-4" />
               </Link>
             </div>

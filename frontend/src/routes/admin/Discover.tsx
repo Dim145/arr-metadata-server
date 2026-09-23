@@ -27,6 +27,7 @@ import {
   Select,
   Spinner,
 } from '../../components/ui'
+import { Artwork } from '../../components/media'
 import { api, query } from '../../lib/api'
 import { useI18n } from '../../lib/i18n'
 import type { Found, MediaItem, MediaKind } from '../../lib/types'
@@ -256,11 +257,10 @@ function Result({
     <li className="flex gap-4 border-b border-rule p-4 transition-colors duration-150 last:border-0 hover:bg-ink-high">
       <div className="aspect-2/3 w-14 shrink-0 overflow-hidden rounded-card border border-rule bg-ink-high sm:w-20">
         {found.poster ? (
-          <img
-            src={found.poster}
+          <Artwork
+            url={found.poster}
+            role="card"
             alt={t.a11y.poster(found.title)}
-            loading="lazy"
-            decoding="async"
             className="size-full object-cover"
           />
         ) : (

@@ -19,6 +19,7 @@ import { Link, useNavigate, useParams } from 'react-router'
 
 import { useAdminTitle } from '../../components/AdminShell'
 import { ManualChildren } from '../../components/ManualChildren'
+import { Artwork } from '../../components/media'
 import {
   Button,
   ButtonLink,
@@ -40,6 +41,7 @@ import {
 import { api, query } from '../../lib/api'
 import { cn } from '../../lib/cn'
 import * as fmt from '../../lib/format'
+import { statusLabel } from '../../lib/labels'
 import { useI18n, type Dict } from '../../lib/i18n'
 import { poster } from '../../lib/media'
 import type { FieldDef, FieldRegistry, MediaItem, Override, Snapshot } from '../../lib/types'
@@ -168,10 +170,10 @@ export function WorkEditor() {
 
       <header className="rise mb-8 flex gap-5">
         {sheet ? (
-          <img
-            src={sheet}
+          <Artwork
+            url={sheet}
+            role="card"
             alt={t.a11y.poster(work.title)}
-            loading="lazy"
             className="hidden h-42 w-28 shrink-0 rounded-card border border-rule object-cover sm:block"
           />
         ) : null}
@@ -183,7 +185,7 @@ export function WorkEditor() {
               {work.kind === 'series' ? t.nav.series : t.nav.films}
             </Chip>
             {work.isManual ? <Provenance manual label={t.work.manualEntry} /> : null}
-            {work.status ? <Chip tone="provider">{work.status}</Chip> : null}
+            {work.status ? <Chip tone="provider">{statusLabel(work.status, t)}</Chip> : null}
             {work.isEnabled ? null : <Chip tone="accent">{t.admin.works.disabled}</Chip>}
             {locks.size > 0 ? (
               <Chip tone="manual">
@@ -472,10 +474,13 @@ function FieldRow({
         <div className="shrink-0 sm:w-44 sm:pt-1">
           <span className="flex items-center gap-1.5">
             {locked ? <Glyph name="lock" className="size-3.5 text-brass" /> : null}
-            <Label className={locked ? 'text-brass' : undefined}>{def.label}</Label>
+            <Label className={locked ? 'text-brass' : undefined}>{fieldLabel(def, t)}</Label>
           </span>
-          <span className="mt-0.5 block font-mono text-[0.625rem] text-bone-faint">
-            {def.fieldType}
+          {/* What shape the value takes, in words — "Date · AAAA-MM-JJ" tells
+              somebody what to type, where "date" and "timeOfDay" were the
+              names of an enum. */}
+          <span className="mt-0.5 block font-mono text-[0.6875rem] text-bone-faint">
+            {(t.labels.fieldTypes as Record<string, string>)[def.fieldType] ?? def.fieldType}
           </span>
         </div>
 
@@ -669,4 +674,15 @@ function EditorSkeleton() {
       <Skeleton className="h-96 w-full" />
     </div>
   )
+}
+
+/**
+ * A field's name in the reader's language.
+ *
+ * The registry comes from the server, in English, so a French editor listed
+ * "SORT TITLE" and "RUNTIME (MINUTES)". Its own label is kept as the fallback
+ * for a field added to the server before it is added here.
+ */
+function fieldLabel(def: FieldDef, t: Dict): string {
+  return (t.labels.fields as Record<string, string>)[def.name] ?? def.label
 }

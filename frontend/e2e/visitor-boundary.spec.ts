@@ -96,6 +96,12 @@ test.describe('a visitor with no credential', () => {
   test('is offered a way in rather than an admin link', async ({ page }) => {
     await page.goto('/')
 
+    // On a phone the way in is inside the menu; see catalogue.spec.ts.
+    const menu = page.getByRole('button', { name: /^(menu)$/i })
+    if (await menu.isVisible()) {
+      await menu.click()
+    }
+
     await expect(page.getByRole('link', { name: /sign in|se connecter/i })).toBeVisible()
     await expect(page.getByRole('link', { name: /^(admin|administration)$/i })).toHaveCount(0)
   })

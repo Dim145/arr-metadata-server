@@ -88,10 +88,6 @@ export function Settings() {
         </p>
       ) : null}
 
-      <p className="rise mb-4 max-w-prose text-sm leading-relaxed text-bone-dim">
-        {t.settings.lead}
-      </p>
-
       <ServerSettings delay={40} />
 
       <div className="mt-6 grid gap-6 lg:grid-cols-2">
@@ -180,7 +176,9 @@ export function Settings() {
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <ButtonLink href="/api/docs" target="_blank" rel="noreferrer" variant="primary">
+            {/* A way somewhere else, not the action this page asks for: the
+                gradient is kept for one button a screen. */}
+            <ButtonLink href="/api/docs" target="_blank" rel="noreferrer" variant="ghost">
               <Glyph name="external" className="size-4" />
               {t.admin.config.open}
             </ButtonLink>

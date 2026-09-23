@@ -197,9 +197,6 @@ export function NetworkAccess() {
                       <p className="mt-0.5 truncate text-xs text-bone-faint">
                         {rule.note === 'from AMS_ALLOWLIST' ? t.admin.network.seeded : rule.note}
                       </p>
-                      {rule.name || editing ? null : (
-                        <p className="mt-0.5 text-xs text-bone-faint">{t.admin.network.nameWhy}</p>
-                      )}
                     </div>
 
                     {editing ? null : (
@@ -316,7 +313,7 @@ export function NetworkAccess() {
         ) : callers.data.length === 0 ? (
           <EmptyState title={t.admin.network.noCallers} hint={t.admin.network.noCallersHint} />
         ) : (
-          <TableScroll>
+          <TableScroll label={t.admin.network.callers}>
             <table className="w-full min-w-[34rem] border-collapse text-left">
               <thead>
                 <tr>
@@ -404,7 +401,7 @@ function CallerRow({
         {/* The user agent names the application where the hostname names the
             machine; between them an operator can tell two Sonarrs apart. */}
         <span className="text-sm text-bone-dim">{caller.userAgent ?? '—'}</span>
-        <span className="mt-0.5 block font-mono text-[0.625rem] tracking-wide text-bone-faint uppercase">
+        <span className="mt-0.5 block font-mono text-[0.6875rem] tracking-wide text-bone-faint uppercase">
           {caller.lastSurface}
         </span>
       </Td>

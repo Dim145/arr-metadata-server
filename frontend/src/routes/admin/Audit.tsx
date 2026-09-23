@@ -137,7 +137,7 @@ export function Audit() {
             hint={filtered ? t.admin.trail.emptyFilteredHint : t.admin.trail.emptyHint}
           />
         ) : (
-          <TableScroll>
+          <TableScroll label={t.admin.audit}>
             <table className="w-full min-w-[20rem] border-collapse text-left">
               <thead>
                 <tr>

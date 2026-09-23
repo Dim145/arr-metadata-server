@@ -658,24 +658,102 @@ fn alt_titles(titles: &[models::AltTitle]) -> Vec<AlternativeTitle> {
         .collect()
 }
 
+/// One translation per language, from the region that language is at home in.
+///
+/// TMDB publishes a translation per language *and region* — French for France
+/// and French for Québec are two entries — while a translation is stored, and
+/// asked for, by language alone. Every variant used to be kept, so which one a
+/// French reader saw depended on the order TMDB listed them in, and Québec
+/// sorts first: *Pulp Fiction* became *Fiction pulpeuse*, *Inception* became
+/// *Origine*, for readers in France. The home region wins now; a language with
+/// no entry from its home region keeps the first it has.
 fn translations(entries: &[models::Translation]) -> Vec<Translation> {
-    entries
-        .iter()
-        .filter_map(|t| {
-            let language = iso_639_1_to_3(t.iso_639_1.as_deref()?);
-            let data = t.data.as_ref()?;
-            let title = non_empty(data.title.as_deref().or(data.name.as_deref()));
-            let overview = non_empty(data.overview.as_deref());
+    let mut chosen: Vec<(Translation, bool)> = Vec::new();
 
-            // A translation with neither field is noise.
-            (title.is_some() || overview.is_some()).then_some(Translation {
-                language,
-                title,
-                overview,
-                is_manual: false,
-            })
-        })
+    for t in entries {
+        let Some(code) = t.iso_639_1.as_deref() else {
+            continue;
+        };
+        let Some(data) = t.data.as_ref() else {
+            continue;
+        };
+
+        let title = non_empty(data.title.as_deref().or(data.name.as_deref()));
+        let overview = non_empty(data.overview.as_deref());
+
+        // A translation with neither field is noise.
+        if title.is_none() && overview.is_none() {
+            continue;
+        }
+
+        let language = iso_639_1_to_3(code);
+        let at_home = t
+            .iso_3166_1
+            .as_deref()
+            .is_some_and(|region| region.eq_ignore_ascii_case(home_region(code)));
+        let candidate = Translation {
+            language,
+            title,
+            overview,
+            is_manual: false,
+        };
+
+        match chosen
+            .iter_mut()
+            .find(|(kept, _)| kept.language == candidate.language)
+        {
+            Some(slot) if at_home && !slot.1 => *slot = (candidate, true),
+            Some(_) => {}
+            None => chosen.push((candidate, at_home)),
+        }
+    }
+
+    chosen
+        .into_iter()
+        .map(|(translation, _)| translation)
         .collect()
+}
+
+/// Where a language is spoken by default, for choosing among TMDB's regional
+/// variants of it. Mostly the language's own code in capitals; the table holds
+/// the ones where that is wrong or ambiguous.
+fn home_region(language: &str) -> &'static str {
+    match language.to_ascii_lowercase().as_str() {
+        "en" => "US",
+        "pt" => "BR",
+        "ja" => "JP",
+        "ko" => "KR",
+        "zh" => "CN",
+        "sv" => "SE",
+        "da" => "DK",
+        "cs" => "CZ",
+        "el" => "GR",
+        "he" => "IL",
+        "uk" => "UA",
+        "ar" => "SA",
+        "hi" => "IN",
+        "vi" => "VN",
+        "sr" => "RS",
+        "et" => "EE",
+        "sl" => "SI",
+        "nb" | "no" => "NO",
+        "fa" => "IR",
+        "ms" => "MY",
+        "ca" => "ES",
+        "fr" => "FR",
+        "de" => "DE",
+        "es" => "ES",
+        "it" => "IT",
+        "nl" => "NL",
+        "pl" => "PL",
+        "ru" => "RU",
+        "tr" => "TR",
+        "fi" => "FI",
+        "hu" => "HU",
+        "ro" => "RO",
+        "bg" => "BG",
+        _ => "",
+    }
 }
 
 /// The best YouTube trailer key, preferring an official one.
@@ -696,6 +774,52 @@ fn youtube_trailer(videos: &[models::Video]) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    fn translation(language: &str, region: &str, title: &str) -> models::Translation {
+        serde_json::from_value(serde_json::json!({
+            "iso_639_1": language,
+            "iso_3166_1": region,
+            "data": { "title": title }
+        }))
+        .expect("a translation")
+    }
+
+    #[test]
+    fn a_language_is_read_in_its_home_region() {
+        // TMDB lists Québec before France. Stored by language alone, whichever
+        // came first won — and a reader in France got "Fiction pulpeuse".
+        let kept = translations(&[
+            translation("fr", "CA", "Fiction pulpeuse"),
+            translation("fr", "FR", "Pulp Fiction"),
+            translation("pt", "PT", "Pulp Fiction: Tempo de Violência"),
+            translation("pt", "BR", "Pulp Fiction: Tempo de Violência (BR)"),
+        ]);
+
+        let title = |language: &str| {
+            kept.iter()
+                .find(|t| t.language == language)
+                .and_then(|t| t.title.as_deref())
+                .map(str::to_string)
+        };
+
+        assert_eq!(kept.len(), 2, "one per language");
+        assert_eq!(title("fra").as_deref(), Some("Pulp Fiction"));
+        assert_eq!(
+            title("por").as_deref(),
+            Some("Pulp Fiction: Tempo de Violência (BR)")
+        );
+    }
+
+    #[test]
+    fn a_language_with_no_home_entry_keeps_the_first_it_has() {
+        let kept = translations(&[
+            translation("fr", "CA", "Fiction pulpeuse"),
+            translation("fr", "BE", "Pulp Fiction (BE)"),
+        ]);
+
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].title.as_deref(), Some("Fiction pulpeuse"));
+    }
+
     use super::*;
 
     #[test]

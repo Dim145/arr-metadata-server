@@ -15,6 +15,8 @@ import { cn } from '../lib/cn'
 import * as fmt from '../lib/format'
 import { useI18n } from '../lib/i18n'
 import type { MediaItem } from '../lib/types'
+import { seasonName } from '../lib/media'
+import { Artwork as Picture } from './media'
 import {
   Button,
   Dialog,
@@ -233,7 +235,13 @@ function Credits({ item, onDone, onRemove }: PanelProps) {
       {credits.length === 0 ? (
         <Empty>{t.admin.editor.children.none}</Empty>
       ) : (
-        <ul className="max-h-72 divide-y divide-rule overflow-y-auto">
+        <ul className="max-h-72 divide-y divide-rule overflow-y-auto"
+          // Focusable and named: its rows hold no control of their own when
+          // they came from a source, so without this a keyboard cannot
+          // scroll the part of the list that does not fit.
+          tabIndex={0}
+          aria-label={t.admin.editor.children.credits}
+        >
           {credits.map((credit) => (
             <ChildRow
               key={credit.id}
@@ -331,7 +339,13 @@ function AlternativeTitles({ item, onDone, onRemove }: PanelProps) {
       {titles.length === 0 ? (
         <Empty>{t.admin.editor.children.none}</Empty>
       ) : (
-        <ul className="mt-2 max-h-56 divide-y divide-rule overflow-y-auto">
+        <ul className="mt-2 max-h-56 divide-y divide-rule overflow-y-auto"
+          // Focusable and named: its rows hold no control of their own when
+          // they came from a source, so without this a keyboard cannot
+          // scroll the part of the list that does not fit.
+          tabIndex={0}
+          aria-label={t.admin.editor.children.titles}
+        >
           {titles.map((alt) => (
             <ChildRow
               key={alt.id}
@@ -387,6 +401,12 @@ function Artwork({ item, onDone, onRemove }: PanelProps) {
     ['clearlogo', t.admin.editor.children.clearlogo],
   ] as const
 
+  // The four offered for adding, plus the two providers also send.
+  const coverLabel = (kind: string) =>
+    kinds.find(([value]) => value === kind)?.[1] ??
+    ({ landscape: t.admin.editor.children.landscape, clearart: t.admin.editor.children.clearart } as Record<string, string>)[kind] ??
+    kind
+
   return (
     <Panel className="rise" style={{ animationDelay: '280ms' }}>
       <PanelHead title={t.admin.editor.children.artwork} action={<Count>{images.length}</Count>} />
@@ -397,18 +417,40 @@ function Artwork({ item, onDone, onRemove }: PanelProps) {
       {images.length === 0 ? (
         <Empty>{t.admin.editor.children.none}</Empty>
       ) : (
-        <ul className="mt-2 max-h-56 divide-y divide-rule overflow-y-auto">
+        <ul className="mt-2 max-h-56 divide-y divide-rule overflow-y-auto"
+          // Focusable and named: its rows hold no control of their own when
+          // they came from a source, so without this a keyboard cannot
+          // scroll the part of the list that does not fit.
+          tabIndex={0}
+          aria-label={t.admin.editor.children.artwork}
+        >
           {images.map((image) => (
             <ChildRow
               key={image.id}
               manual={image.isManual}
               onRemove={() => onRemove({ path: `images/${image.id}`, label: image.url })}
             >
-              <span className="flex min-w-0 items-center gap-2">
-                <span className="shrink-0 font-mono text-[0.6875rem] text-slate">
-                  {image.coverType}
+              {/* The picture itself, small. Eighty-two lines of URLs said which
+                  images existed and nothing about which one was which — the
+                  only thing anybody opening this list wants to know. */}
+              <span className="flex min-w-0 items-center gap-3">
+                <span
+                  className={cn(
+                    'shrink-0 overflow-hidden rounded-card border border-rule bg-ink-high',
+                    image.coverType === 'poster' ? 'aspect-2/3 w-8' : 'aspect-video w-16',
+                  )}
+                >
+                  <Picture url={image.url} role="headshot" alt="" className="size-full object-cover" />
                 </span>
-                <span className="truncate text-xs text-bone-faint">{image.url}</span>
+                <span className="min-w-0">
+                  <span className="block text-xs text-bone">
+                    {coverLabel(image.coverType)}
+                    {image.seasonNumber != null ? ` · ${t.work.season(image.seasonNumber)}` : ''}
+                  </span>
+                  <span className="block truncate font-mono text-[0.6875rem] text-bone-faint" title={image.url}>
+                    {hostOf(image.url)}
+                  </span>
+                </span>
               </span>
             </ChildRow>
           ))}
@@ -470,7 +512,13 @@ function Seasons({ item, onDone, onRemove }: PanelProps) {
       {seasons.length === 0 ? (
         <Empty>{t.admin.editor.children.none}</Empty>
       ) : (
-        <ul className="max-h-56 divide-y divide-rule overflow-y-auto">
+        <ul className="max-h-56 divide-y divide-rule overflow-y-auto"
+          // Focusable and named: its rows hold no control of their own when
+          // they came from a source, so without this a keyboard cannot
+          // scroll the part of the list that does not fit.
+          tabIndex={0}
+          aria-label={t.admin.editor.children.seasons}
+        >
           {seasons.map((season) => (
             <ChildRow
               key={season.id}
@@ -487,7 +535,7 @@ function Seasons({ item, onDone, onRemove }: PanelProps) {
                   S{String(season.seasonNumber).padStart(2, '0')}
                 </span>
                 <span className="truncate text-sm text-bone-dim">
-                  {season.title ?? t.work.season(season.seasonNumber)}
+                  {seasonName(season.title, season.seasonNumber, t.work.season)}
                 </span>
                 {season.airDate ? (
                   <span className="shrink-0 font-mono text-[0.6875rem] text-bone-faint tabular-nums">
@@ -582,7 +630,13 @@ function Episodes({ item, onDone, onRemove }: PanelProps) {
       {mine.length === 0 ? (
         <Empty>{t.admin.editor.children.none}</Empty>
       ) : (
-        <ul className="max-h-72 divide-y divide-rule overflow-y-auto">
+        <ul className="max-h-72 divide-y divide-rule overflow-y-auto"
+          // Focusable and named: its rows hold no control of their own when
+          // they came from a source, so without this a keyboard cannot
+          // scroll the part of the list that does not fit.
+          tabIndex={0}
+          aria-label={t.admin.editor.children.episodes}
+        >
           {mine.map((episode) => (
             <ChildRow
               key={episode.id}
@@ -678,4 +732,13 @@ function Episodes({ item, onDone, onRemove }: PanelProps) {
       </AddForm>
     </Panel>
   )
+}
+
+/** Where an image lives, which is as much of its URL as a person reads. */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host
+  } catch {
+    return url
+  }
 }

@@ -70,8 +70,15 @@ export function PublicShell({ me }: { me?: Me }) {
               <Glyph name={searching ? 'close' : 'search'} className="size-5" />
             </button>
 
-            <LanguageToggle />
-            <AdminLink me={me} />
+            {/* In the bar from `md` up; below it they move into the menu. On a
+                phone the logo, search, language, account and menu buttons are
+                wider than the screen together — at 320px the menu button sat
+                past the edge, clipped away, and the navigation behind it could
+                not be opened at all. */}
+            <div className="hidden items-center gap-2 md:flex">
+              <LanguageToggle />
+              <AdminLink me={me} />
+            </div>
 
             <button
               type="button"
@@ -107,6 +114,11 @@ export function PublicShell({ me }: { me?: Me }) {
                 {t.nav.films}
               </Tab>
             </nav>
+
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-rule pt-3">
+              <LanguageToggle />
+              <AdminLink me={me} labelled />
+            </div>
           </div>
         ) : null}
       </header>
@@ -259,7 +271,7 @@ function LanguageToggle() {
   )
 }
 
-function AdminLink({ me }: { me?: Me }) {
+function AdminLink({ me, labelled = false }: { me?: Me; labelled?: boolean }) {
   const { t } = useI18n()
   const signedIn = Boolean(me?.canWrite)
 
@@ -278,7 +290,7 @@ function AdminLink({ me }: { me?: Me }) {
       )}
     >
       <Glyph name={signedIn ? 'settings' : 'user'} className="size-4" />
-      <span className="hidden sm:inline">{label}</span>
+      <span className={labelled ? undefined : 'hidden sm:inline'}>{label}</span>
     </Link>
   )
 }

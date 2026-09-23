@@ -9,7 +9,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router'
 
-import { Score } from '../components/media'
+import { Artwork, Score } from '../components/media'
 import {
   Chip,
   Genre,
@@ -22,12 +22,23 @@ import {
   SectionTitle,
   Skeleton,
 } from '../components/ui'
-import { api, query } from '../lib/api'
+import { ApiError, api, query } from '../lib/api'
 import { cn } from '../lib/cn'
 import * as fmt from '../lib/format'
+import { languageName, statusLabel } from '../lib/labels'
 import { useI18n } from '../lib/i18n'
-import { backdrop, cast, crew, episodesOf, headlineRating, poster, seasonNumbers } from '../lib/media'
+import {
+  backdrop,
+  cast,
+  crew,
+  episodesOf,
+  headlineRating,
+  poster,
+  seasonName,
+  seasonNumbers,
+} from '../lib/media'
 import type { Credit, Episode, MediaItem } from '../lib/types'
+import { NotFound } from './NotFound'
 
 export function Work() {
   const { id = '' } = useParams()
@@ -42,19 +53,36 @@ export function Work() {
     return <WorkSkeleton />
   }
 
+  if (work.error instanceof ApiError && work.error.status === 404) {
+    return <NotFound work />
+  }
+
   if (work.isError || !work.data) {
     return (
       <div className="pt-16">
+        {/* A failure that is not "gone" is usually a moment — the server
+            restarting, the network — so the first way out is to ask again. */}
         <EmptyState
           title={t.common.error}
+          hint={t.work.loadFailedHint}
           action={
-            <Link
-              to="/"
-              className="mt-2 inline-flex min-h-11 items-center gap-2 rounded-card border border-rule-bright px-4 text-sm text-bone"
-            >
-              <Glyph name="arrowLeft" className="size-4" />
-              {t.work.back}
-            </Link>
+            <div className="mt-2 flex flex-wrap items-center justify-center gap-2">
+              <button
+                type="button"
+                onClick={() => void work.refetch()}
+                className="inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-card border border-rule-bright px-4 text-sm text-bone transition-colors duration-200 hover:bg-ink-high"
+              >
+                <Glyph name="refresh" className="size-4" />
+                {t.common.retry}
+              </button>
+              <Link
+                to="/"
+                className="inline-flex min-h-11 items-center gap-2 rounded-card px-4 text-sm text-bone-dim transition-colors duration-200 hover:bg-ink-high hover:text-bone"
+              >
+                <Glyph name="arrowLeft" className="size-4" />
+                {t.work.back}
+              </Link>
+            </div>
           }
         />
       </div>
@@ -95,7 +123,15 @@ function Plate({ item }: { item: MediaItem }) {
     <header className="relative mx-[calc(50%-50vw)] w-screen">
       <div className="relative h-56 overflow-hidden sm:h-72 lg:h-[22rem]">
         {art ? (
-          <img src={art} alt="" aria-hidden className="fade-in size-full object-cover object-top" />
+          <Artwork
+            url={art}
+            role="backdrop"
+            eager
+            alt=""
+            aria-hidden
+            fetchPriority="high"
+            className="fade-in size-full object-cover object-top"
+          />
         ) : (
           <div className="size-full bg-ink-raised" />
         )}
@@ -111,8 +147,10 @@ function Plate({ item }: { item: MediaItem }) {
         <div className="-mt-24 flex flex-col gap-6 sm:-mt-28 sm:flex-row sm:items-end">
           <div className="strike w-32 shrink-0 sm:w-40 lg:w-48">
             {sheet ? (
-              <img
-                src={sheet}
+              <Artwork
+                url={sheet}
+                role="poster"
+                eager
                 alt={t.a11y.poster(item.title)}
                 className="w-full rounded-plate border border-rule-bright shadow-[var(--shadow-plate)]"
               />
@@ -215,11 +253,10 @@ function CastList({ credits }: { credits: Credit[] }) {
         {credits.map((person) => (
           <li key={person.id} className="flex items-center gap-3.5">
             {person.image ? (
-              <img
-                src={person.image}
+              <Artwork
+                url={person.image}
+                role="headshot"
                 alt={t.a11y.headshot(person.personName)}
-                loading="lazy"
-                decoding="async"
                 className="size-14 shrink-0 rounded-full border border-rule object-cover"
               />
             ) : (
@@ -280,12 +317,9 @@ function SeasonRow({ item, season }: { item: MediaItem; season: number }) {
 
   const first = episodes.find((e) => e.airDate)?.airDate
 
-  // Providers name most seasons "Season 3", which is the label this interface
-  // already has in the reader's language. Only a real name — "Specials", or a
-  // part title an anime uses — is worth showing instead.
-  const generic = /^(season|saison|series|specials?|hors-s\u00e9rie)\s*\d*$/i
-  const given = meta?.title?.trim()
-  const name = given && !generic.test(given) ? given : t.work.season(season)
+  // "Season 3" and "Specials" are placeholders this interface already has in
+  // the reader's language; see `seasonName`.
+  const name = seasonName(meta?.title, season, t.work.season)
 
   return (
     <div>
@@ -299,7 +333,14 @@ function SeasonRow({ item, season }: { item: MediaItem; season: number }) {
 
       {/* Bleeds past the container on the right so a clipped card shows there is
           more; the padding puts it back for the last one. */}
-      <div className="-mr-4 flex snap-x snap-mandatory gap-3 overflow-x-auto pr-4 pb-2 sm:-mr-6 sm:pr-6">
+      {/* A region with a name and a tab stop: the cards in it are not links, so
+          without one a keyboard could not reach the episodes past the fourth. */}
+      <div
+        role="region"
+        tabIndex={0}
+        aria-label={`${name} — ${t.work.episodeCount(episodes.length)}`}
+        className="-mr-4 flex snap-x snap-mandatory gap-3 overflow-x-auto pr-4 pb-2 sm:-mr-6 sm:pr-6"
+      >
         {episodes.map((episode) => (
           <EpisodeCard key={episode.id} item={item} episode={episode} locale={locale} />
         ))}
@@ -328,11 +369,10 @@ function EpisodeCard({
     >
       <div className="relative aspect-video bg-ink-high">
         {episode.image ? (
-          <img
-            src={episode.image}
+          <Artwork
+            url={episode.image}
+            role="still"
             alt={t.a11y.still(episode.title)}
-            loading="lazy"
-            decoding="async"
             className="size-full object-cover"
           />
         ) : (
@@ -340,7 +380,7 @@ function EpisodeCard({
             <Glyph name="film" className="size-5 text-bone-faint" />
           </div>
         )}
-        <span className="absolute bottom-1.5 left-1.5 rounded-card bg-ink/85 px-1.5 py-0.5 font-mono text-[0.625rem] font-medium text-bone tabular-nums">
+        <span className="absolute bottom-1.5 left-1.5 rounded-card bg-ink/85 px-1.5 py-0.5 font-mono text-[0.6875rem] font-medium text-bone tabular-nums">
           S{String(episode.seasonNumber).padStart(2, '0')}E
           {String(episode.episodeNumber).padStart(2, '0')}
         </span>
@@ -374,7 +414,7 @@ function Record({ item }: { item: MediaItem }) {
   const { t, locale } = useI18n()
 
   const rows: [string, string | undefined][] = [
-    [t.work.status, item.status],
+    [t.work.status, statusLabel(item.status, t)],
     [
       item.kind === 'series' ? t.work.firstAired : t.work.released,
       fmt.longDate(item.firstAired ?? item.inCinemas, locale),
@@ -384,7 +424,7 @@ function Record({ item }: { item: MediaItem }) {
     [t.work.network, item.network],
     [t.work.studio, item.studio],
     [t.work.certification, item.contentRating],
-    [t.work.originalLanguage, item.originalLanguage?.toUpperCase()],
+    [t.work.originalLanguage, languageName(item.originalLanguage, locale)],
   ]
 
   const present = rows.filter((row): row is [string, string] => Boolean(row[1]))

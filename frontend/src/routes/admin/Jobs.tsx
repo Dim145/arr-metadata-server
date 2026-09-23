@@ -83,7 +83,7 @@ export function JobTable({ jobs }: { jobs: Job[] }) {
   const { t, locale } = useI18n()
 
   return (
-    <TableScroll>
+    <TableScroll label={t.admin.jobs}>
       <table className="w-full min-w-[40rem] border-collapse text-left">
         <thead>
           <tr>

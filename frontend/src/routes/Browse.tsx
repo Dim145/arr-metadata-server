@@ -152,7 +152,7 @@ export function Browse() {
       ) : items.length === 0 ? (
         <EmptyState
           title={t.browse.noResults}
-          hint={t.browse.noResultsHint}
+          hint={term ? t.browse.noResultsTermHint : t.browse.noResultsHint}
           action={
             filtered ? (
               <Button

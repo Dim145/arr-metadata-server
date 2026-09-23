@@ -2,12 +2,13 @@
  * The two things a catalogue is made of: a poster you can click, and a score.
  */
 
+import type { ImgHTMLAttributes } from 'react'
 import { Link } from 'react-router'
 
 import { cn } from '../lib/cn'
 import * as fmt from '../lib/format'
 import { useI18n } from '../lib/i18n'
-import { headlineRating, poster } from '../lib/media'
+import { fallBackToOriginal, headlineRating, poster, sized, type ImageRole } from '../lib/media'
 import type { MediaItem } from '../lib/types'
 import { Chip, Glyph } from './ui'
 
@@ -80,6 +81,39 @@ export function Score({
   )
 }
 
+/* ── Artwork ──────────────────────────────────────────────────────────────── */
+
+/**
+ * An image from a provider, fetched at the size it is drawn at.
+ *
+ * Lazy unless told otherwise, because most of these are below the fold. A hero
+ * backdrop is the exception and says so with `eager`.
+ */
+export function Artwork({
+  url,
+  role,
+  eager = false,
+  ...rest
+}: {
+  url: string
+  role: ImageRole
+  eager?: boolean
+} & Omit<ImgHTMLAttributes<HTMLImageElement>, 'src' | 'srcSet' | 'sizes'>) {
+  const image = sized(url, role)
+
+  return (
+    <img
+      {...rest}
+      src={image.src}
+      srcSet={image.srcSet}
+      sizes={image.sizes}
+      loading={eager ? undefined : 'lazy'}
+      decoding="async"
+      onError={image.src === image.original ? undefined : fallBackToOriginal(image.original)}
+    />
+  )
+}
+
 /* ── Poster ───────────────────────────────────────────────────────────────── */
 
 /**
@@ -111,11 +145,10 @@ export function PosterCard({ item, to }: { item: MediaItem; to: string }) {
         )}
       >
         {art ? (
-          <img
-            src={art}
+          <Artwork
+            url={art}
+            role="card"
             alt={t.a11y.poster(item.title)}
-            loading="lazy"
-            decoding="async"
             className="size-full object-cover"
           />
         ) : (

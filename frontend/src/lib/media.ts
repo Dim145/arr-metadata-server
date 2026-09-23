@@ -9,6 +9,102 @@
 
 import type { Credit, Image, MediaItem, Rating } from './types'
 
+/**
+ * What an image is on the page, which decides how big a file it needs.
+ *
+ * `card` is a poster in a grid, `poster` the one on a work's own page,
+ * `backdrop` the wide strip behind a header, `headshot` a cast member and
+ * `still` an episode.
+ */
+export type ImageRole = 'card' | 'poster' | 'backdrop' | 'headshot' | 'still'
+
+/**
+ * TMDB's own size ladder for each role, in the widths it actually serves.
+ *
+ * Every stored TMDB URL points at `original` — two to three thousand pixels and
+ * over half a megabyte for a poster shown a hundred and ninety wide. A front
+ * page of twenty-four posters was tens of megabytes. These are the published
+ * sizes (`w342` of the same poster is 48 KB); the browser picks among them by
+ * layout width and screen density through `srcSet`.
+ */
+const TMDB_LADDER: Record<ImageRole, readonly number[]> = {
+  card: [185, 342, 500],
+  poster: [342, 500, 780],
+  backdrop: [780, 1280],
+  headshot: [185],
+  still: [300],
+}
+
+/** The layout width each role is drawn at, for `sizes`. */
+const SIZES: Record<ImageRole, string> = {
+  card: '(min-width: 1280px) 200px, (min-width: 768px) 22vw, 45vw',
+  poster: '(min-width: 1024px) 192px, 160px',
+  backdrop: '100vw',
+  headshot: '56px',
+  still: '240px',
+}
+
+const TMDB = /^(https:\/\/image\.tmdb\.org\/t\/p\/)original(\/[^?#]+\.(?:jpe?g|png|webp))$/i
+const TVDB = /^(https:\/\/artworks\.thetvdb\.com\/banners\/.+?)(\.(?:jpe?g|png))$/i
+
+/** The attributes an `<img>` needs to fetch no more than it will show. */
+export interface Sourced {
+  src: string
+  srcSet?: string
+  sizes?: string
+  /** The full-size original, to fall back on if a thumbnail is missing. */
+  original: string
+}
+
+/**
+ * The right file for an image in a role.
+ *
+ * TMDB gets its ladder. TheTVDB publishes a thumbnail beside each artwork —
+ * the same path with `_t` before the extension — which is used for the small
+ * roles, with the original kept as a fallback because an old upload is not
+ * guaranteed to have one. Anything else, including a URL somebody typed by
+ * hand, is used as it is.
+ */
+export function sized(url: string, role: ImageRole): Sourced {
+  const tmdb = TMDB.exec(url)
+  const [, base, path] = tmdb ?? []
+  if (base && path) {
+    const ladder = TMDB_LADDER[role]
+    return {
+      src: `${base}w${ladder[Math.min(1, ladder.length - 1)]}${path}`,
+      srcSet: ladder.map((w) => `${base}w${w}${path} ${w}w`).join(', '),
+      sizes: SIZES[role],
+      original: url,
+    }
+  }
+
+  const [, stem, extension] = TVDB.exec(url) ?? []
+  const small = role === 'card' || role === 'headshot' || role === 'still'
+  if (stem && extension && small && !stem.endsWith('_t')) {
+    return { src: `${stem}_t${extension}`, original: url }
+  }
+
+  return { src: url, original: url }
+}
+
+/**
+ * Swap a thumbnail that failed for the original it was made from.
+ *
+ * Wired to `onError`, and only once: the original failing too is a broken
+ * image, not a reason to loop.
+ */
+export function fallBackToOriginal(original: string) {
+  return (event: { currentTarget: HTMLImageElement }) => {
+    const img = event.currentTarget
+    if (img.dataset.fellBack) {
+      return
+    }
+    img.dataset.fellBack = 'true'
+    img.removeAttribute('srcset')
+    img.src = original
+  }
+}
+
 /** Cover types as the server spells them. */
 const COVER = {
   poster: 'poster',
@@ -107,4 +203,22 @@ export function episodesOf(item: MediaItem, season: number) {
 /** Whether a person has claimed this field, so the interface can say so. */
 export function isLocked(item: Pick<MediaItem, 'lockedFields'>, path: string): boolean {
   return (item.lockedFields ?? []).includes(path)
+}
+
+/**
+ * What to call a season: its own title if it has a real one, otherwise its
+ * number in the reader's language.
+ *
+ * Providers name most seasons "Season 1" or "Specials" in English, which is a
+ * placeholder rather than a title; a real one — the part title an anime uses —
+ * is worth showing instead.
+ */
+export function seasonName(
+  title: string | undefined,
+  number: number,
+  byNumber: (n: number) => string,
+): string {
+  const given = title?.trim()
+  const generic = /^(season|saison|series|specials?|hors-s\u00e9rie)\s*\d*$/i
+  return given && !generic.test(given) ? given : byNumber(number)
 }

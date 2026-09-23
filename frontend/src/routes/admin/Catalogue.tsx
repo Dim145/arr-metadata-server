@@ -201,7 +201,7 @@ export function Catalogue() {
             hint={filtered ? t.admin.works.emptyFilteredHint : t.admin.works.emptyHint}
           />
         ) : (
-          <TableScroll>
+          <TableScroll label={t.admin.catalogue}>
             <table className="w-full min-w-[20rem] border-collapse text-left">
               <thead>
                 <tr>
@@ -362,6 +362,12 @@ function Row({
               <Glyph name="lock" className="size-3" />
               {t.admin.works.locks(locks)}
             </Chip>
+          ) : null}
+          {/* The ordinary case, said quietly. Showing only the exceptions left
+              most rows of this column blank, which reads as broken rather than
+              as "nothing unusual here". */}
+          {item.isEnabled && !item.isManual && locks === 0 ? (
+            <span className="text-xs text-bone-faint">{t.admin.works.served}</span>
           ) : null}
         </span>
       </Td>

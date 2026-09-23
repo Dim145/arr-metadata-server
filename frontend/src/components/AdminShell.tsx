@@ -18,6 +18,7 @@ import { Link, NavLink, Navigate, Outlet, useLocation, useNavigate } from 'react
 import { api } from '../lib/api'
 import { cn } from '../lib/cn'
 import { useI18n, type Dict, type Lang } from '../lib/i18n'
+import { describeIdentity } from '../lib/labels'
 import type { Me, Settings } from '../lib/types'
 import { Glyph, Spinner, type GlyphName } from './ui'
 
@@ -124,6 +125,7 @@ export function AdminShell() {
 
 function Sidebar({ identity }: { identity: string }) {
   const { t } = useI18n()
+  const who = describeIdentity(identity, t)
 
   const settings = useQuery({
     queryKey: ['settings'],
@@ -141,7 +143,7 @@ function Sidebar({ identity }: { identity: string }) {
           <span className="mt-1.5 flex items-center gap-2">
             <span className="label text-vermillion">{t.admin.title}</span>
             {settings.data ? (
-              <span className="font-mono text-[0.625rem] text-bone-faint tabular-nums">
+              <span className="font-mono text-[0.6875rem] text-bone-faint tabular-nums">
                 v{settings.data.version}
               </span>
             ) : null}
@@ -168,8 +170,11 @@ function Sidebar({ identity }: { identity: string }) {
 
         <div className="border-t border-rule pt-3">
           <span className="label block">{t.admin.operator}</span>
-          <span className="mt-1 block truncate font-mono text-xs text-bone-dim" title={identity}>
-            {identity}
+          <span className="mt-1 flex min-w-0 items-baseline gap-2">
+            <span className="truncate text-sm text-bone" title={identity}>
+              {who.name}
+            </span>
+            {who.role ? <span className="shrink-0 text-xs text-bone-faint">{who.role}</span> : null}
           </span>
           <SignOut className="mt-2 flex min-h-11 items-center gap-2 text-sm text-bone-faint transition-colors duration-150 hover:text-vermillion" />
         </div>
@@ -277,7 +282,7 @@ function TabBar() {
           }
         >
           <Glyph name={entry.glyph} className="size-5" />
-          <span className="line-clamp-2 w-full text-center text-[0.625rem] leading-tight font-medium">
+          <span className="line-clamp-2 w-full text-center text-[0.6875rem] leading-tight font-medium">
             {entry.label(t)}
           </span>
         </NavLink>

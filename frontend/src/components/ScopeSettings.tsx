@@ -441,12 +441,15 @@ function Control({
   }
 
   const kind = def.kind
+  const suggestions = SUGGESTIONS[def.key]
 
   return (
+    <>
     <Input
       id={id}
       className={kind.type === 'int' ? 'w-28 text-right' : 'w-52'}
       value={draft}
+      list={suggestions ? `${id}-suggestions` : undefined}
       disabled={disabled}
       inputMode={kind.type === 'int' ? 'numeric' : undefined}
       min={kind.type === 'int' ? kind.min : undefined}
@@ -461,5 +464,28 @@ function Control({
         if (event.key === 'Enter') event.currentTarget.blur()
       }}
     />
+    {suggestions ? (
+      <datalist id={`${id}-suggestions`}>
+        {suggestions.map((value) => (
+          <option key={value} value={value} />
+        ))}
+      </datalist>
+    ) : null}
+    </>
   )
+}
+
+/**
+ * Values worth offering for a free-text setting, as the browser's own list.
+ *
+ * The language is a TMDB tag, and a field that took anything took `fr_FR` and
+ * `french` just as happily — the server refuses neither, and TMDB answers both
+ * in English. Suggestions, not a menu: TMDB serves more tags than are listed.
+ */
+const SUGGESTIONS: Record<string, readonly string[]> = {
+  'tmdb.language': [
+    'en-US', 'en-GB', 'fr-FR', 'fr-CA', 'de-DE', 'es-ES', 'es-MX', 'it-IT', 'pt-BR', 'pt-PT',
+    'nl-NL', 'sv-SE', 'da-DK', 'nb-NO', 'fi-FI', 'pl-PL', 'cs-CZ', 'hu-HU', 'ru-RU', 'uk-UA',
+    'tr-TR', 'el-GR', 'he-IL', 'ar-SA', 'hi-IN', 'ja-JP', 'ko-KR', 'zh-CN', 'zh-TW', 'th-TH',
+  ],
 }

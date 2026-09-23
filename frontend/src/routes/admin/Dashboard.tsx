@@ -24,6 +24,7 @@ import { api, query } from '../../lib/api'
 import { cn } from '../../lib/cn'
 import * as fmt from '../../lib/format'
 import { useI18n } from '../../lib/i18n'
+import { policyLabel } from '../../lib/labels'
 import type { JobsResponse, Settings, Stats } from '../../lib/types'
 import { RunStatus } from './Jobs'
 
@@ -44,7 +45,6 @@ export function Dashboard() {
         <h1 className="mt-2 font-display text-3xl leading-tight font-medium text-bone sm:text-4xl">
           {t.admin.dashboard}
         </h1>
-        <p className="mt-2 text-sm text-bone-dim">{t.brand.tagline}</p>
         <p className="mt-3 max-w-prose text-sm leading-relaxed text-bone-dim">
           {t.admin.overview.lead}
         </p>
@@ -120,10 +120,13 @@ function Metric({
   return (
     <div
       className={cn(
-        'flex flex-col gap-4 bg-ink-raised px-5 py-5',
+        'flex flex-col gap-3 bg-ink-raised px-5 py-5',
         // The hero cell is two rows tall; centring keeps the figure at the eye
-        // rather than stranding it at the bottom of a void.
-        big ? 'justify-center' : 'justify-between',
+        // rather than stranding it at the bottom of a void. The others start at
+        // the top, so every figure in a row sits at the same height — pushed to
+        // the bottom, a figure with a caption under it rode higher than its
+        // neighbour without one.
+        big ? 'justify-center' : 'justify-start',
         className,
       )}
     >
@@ -136,13 +139,19 @@ function Metric({
           <Glyph name="chevronRight" className="size-3" />
         </Link>
       ) : (
-        <Label>{label}</Label>
+        // As tall as the linked caption beside it, which needs 44px to be a
+        // target; otherwise the two figures under them start at different
+        // heights.
+        <Label className="inline-flex min-h-11 items-center">{label}</Label>
       )}
       <div>
         <p
           className={cn(
             'font-display leading-none tabular-nums',
-            big ? 'text-6xl text-vermillion sm:text-7xl' : 'text-4xl text-bone',
+            // Brass, which is what a lock is everywhere else on this side.
+            // In vermillion the largest thing on the dashboard was a red zero:
+            // the colour of an error, on the one figure least likely to be one.
+            big ? 'text-6xl text-brass sm:text-7xl' : 'text-4xl text-bone',
           )}
         >
           {fmt.count(value, locale)}
@@ -235,17 +244,19 @@ function Surfaces({ settings }: { settings?: Settings }) {
           </Link>
         }
       />
-      <dl className="divide-y divide-rule">
+      {/* A list of entry points, each with who uses it and how it is guarded —
+          not a set of terms and definitions, which is what `<dl>` claimed. */}
+      <ul className="divide-y divide-rule">
         {rows.map(([path, who, policy]) => (
-          <div key={path} className="flex items-center justify-between gap-4 px-5 py-2.5">
+          <li key={path} className="flex items-center justify-between gap-4 px-5 py-2.5">
             <div className="min-w-0">
-              <dt className="truncate font-mono text-[0.8125rem] text-bone">{path}</dt>
-              <dd className="mt-0.5 text-xs text-bone-faint">{who}</dd>
+              <p className="truncate font-mono text-[0.8125rem] text-bone">{path}</p>
+              <p className="mt-0.5 text-xs text-bone-faint">{who}</p>
             </div>
             {policy ? <PolicyChip policy={policy} /> : null}
-          </div>
+          </li>
         ))}
-      </dl>
+      </ul>
     </Panel>
   )
 }
@@ -257,10 +268,12 @@ function Surfaces({ settings }: { settings?: Settings }) {
  * served, which on a machine with a port forward is the whole internet.
  */
 export function PolicyChip({ policy }: { policy: string }) {
+  const { t } = useI18n()
+
   return (
     <Chip tone={policy === 'open' ? 'accent' : policy === 'allowlist' ? 'provider' : 'neutral'}>
       <Glyph name={policy === 'open' ? 'alert' : policy === 'allowlist' ? 'globe' : 'key'} className="size-3" />
-      {policy}
+      {policyLabel(policy, t)}
     </Chip>
   )
 }

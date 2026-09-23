@@ -40,10 +40,17 @@
   /* Text. Bone rather than white: a printed page, held under a lamp. */
   --color-bone: #ece8e1;
   --color-bone-dim: #a5a099;
-  --color-bone-faint: #6c6862;
+  /* The quietest text still has to be read: 4.6:1 on the lightest surface it
+     sits on (`ink-top`), where the old #6c6862 managed 3.0 — below WCAG AA on
+     every surface, for every date, count and caption in the interface. Still
+     visibly a tier below `bone-dim`. */
+  --color-bone-faint: #8b867f;
 
   /* The one accent. */
-  --color-vermillion: #e04434;
+  /* Lifted from #e04434, which fell to 4.3:1 as text on a raised panel — the
+     current page in the admin navigation, most error lines. Now 4.7:1 on the
+     lightest surface, and dark text on a vermillion button reads at 5.6:1. */
+  --color-vermillion: #e45c4e;
   --color-vermillion-bright: #ff6a58;
   --color-vermillion-deep: #7d1f16;
 
@@ -173,7 +180,7 @@
      The caption under an index-card field. Mono, small, wide, quiet. */
   .label {
     font-family: var(--font-mono);
-    font-size: 0.625rem;
+    font-size: 0.6875rem;
     font-weight: 500;
     letter-spacing: 0.14em;
     text-transform: uppercase;

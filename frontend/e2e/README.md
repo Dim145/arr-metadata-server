@@ -29,3 +29,9 @@ than falling back to a guessed one: a suite that signed in as `admin/admin`
 would eventually run against somebody's real instance.
 
 `AMS_E2E_URL` points the suite somewhere other than `http://127.0.0.1:8479`.
+
+`accessibility.spec.ts` scans every screen against WCAG 2.1 AA with axe-core, at
+both widths. An automated scan catches perhaps a third of what a person with a
+screen reader would, but it catches it every time — contrast, names, roles,
+list structure, scroll regions a keyboard cannot reach — which is the part that
+regresses without anyone noticing.

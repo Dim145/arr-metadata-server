@@ -142,11 +142,27 @@ test.describe('a work', () => {
   })
 })
 
+/**
+ * Where the header's secondary controls are.
+ *
+ * On a phone the language toggle and the way in live in the menu — together
+ * with the logo, search and menu buttons they were wider than the screen, and
+ * at 320px the menu button itself was pushed off the edge. Opening the menu
+ * first, when there is one, is what a person on a phone does.
+ */
+async function openMenuIfNarrow(page: Page) {
+  const menu = page.getByRole('button', { name: /^(menu)$/i })
+  if (await menu.isVisible()) {
+    await menu.click()
+  }
+}
+
 test.describe('language', () => {
   test('switches the whole interface and survives a reload', async ({ page }) => {
     await page.goto('/')
     await catalogueLoaded(page)
 
+    await openMenuIfNarrow(page)
     await page.getByRole('button', { name: 'fr', exact: true }).click()
     await expect(page.locator('html')).toHaveAttribute('lang', 'fr')
     await expect(page.getByRole('link', { name: /se connecter/i })).toBeVisible()
@@ -154,6 +170,7 @@ test.describe('language', () => {
     await page.reload()
     await expect(page.locator('html')).toHaveAttribute('lang', 'fr')
 
+    await openMenuIfNarrow(page)
     await page.getByRole('button', { name: 'en', exact: true }).click()
     await expect(page.locator('html')).toHaveAttribute('lang', 'en')
   })
@@ -163,9 +180,51 @@ test.describe('language', () => {
     await catalogueLoaded(page)
 
     const asked = page.waitForRequest((request) => request.url().includes('language=fr'))
+    await openMenuIfNarrow(page)
     await page.getByRole('button', { name: 'fr', exact: true }).click()
 
     expect((await asked).url()).toContain('language=fr')
+  })
+})
+
+test.describe('an address with nothing behind it', () => {
+  test('says so, rather than quietly landing on the front page', async ({ page }) => {
+    await page.goto('/there-is-no-such-page')
+
+    await expect(page).toHaveURL(/there-is-no-such-page/)
+    await expect(
+      page.getByRole('heading', { name: /nothing lives at this address|rien à cette adresse/i }),
+    ).toBeVisible()
+    await expect(page.getByRole('link', { name: /back to the catalogue|retour au catalogue/i })).toBeVisible()
+  })
+
+  test('says a removed work is gone, not that something broke', async ({ page }) => {
+    await page.goto('/work/00000000-0000-0000-0000-000000000000')
+
+    await expect(
+      page.getByRole('heading', {
+        name: /no longer in the catalogue|n’est plus au catalogue/i,
+      }),
+    ).toBeVisible()
+  })
+})
+
+test.describe('the bar on the narrowest phone', () => {
+  test.use({ viewport: { width: 320, height: 640 } })
+
+  test('keeps the menu button on the screen, and the menu opens', async ({ page }) => {
+    await page.goto('/')
+
+    const menu = page.getByRole('button', { name: /^(menu)$/i })
+    const box = await menu.boundingBox()
+
+    // Clipped past the edge, it could not be pressed and the navigation behind
+    // it could not be reached at all.
+    expect(box).not.toBeNull()
+    expect(box!.x + box!.width).toBeLessThanOrEqual(320)
+
+    await menu.click()
+    await expect(page.getByRole('link', { name: /^(series|séries)$/i }).last()).toBeVisible()
   })
 })
 

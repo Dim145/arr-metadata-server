@@ -365,6 +365,9 @@ pub struct Translations {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Translation {
     pub iso_639_1: Option<String>,
+    /// The region the translation is for: `FR` and `CA` are both French.
+    #[serde(default)]
+    pub iso_3166_1: Option<String>,
     pub data: Option<TranslationData>,
 }
 
