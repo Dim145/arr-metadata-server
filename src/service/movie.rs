@@ -7,7 +7,7 @@ use crate::{
     db::repo,
     domain::{ExternalSource, MediaItem, MediaKind},
     providers::tmdb::map as tmdb_map,
-    service::{Found, cached_search, gather, ids, is_stale, load, persist},
+    service::{FETCHING, Found, cached_search, gather, ids, is_stale, load, persist},
     state::AppState,
 };
 
@@ -22,6 +22,14 @@ pub async fn by_tmdb_id(state: &AppState, tmdb_id: i64) -> Result<Option<MediaIt
         return Ok(Some(item));
     }
 
+    // One fetch per work at a time; see `FETCHING`. Radarr's bulk refresh asks
+    // for a hundred at once, and a request page opening asks for the same film
+    // it just listed.
+    let _fetching = FETCHING.lock(&format!("movie:tmdb:{tmdb_id}")).await;
+    if let Some(item) = local(state, ExternalSource::TmdbMovie, &tmdb_id.to_string()).await? {
+        return Ok(Some(item));
+    }
+
     fetch_from_tmdb(state, tmdb_id).await
 }
 
@@ -30,6 +38,13 @@ pub async fn by_imdb_id(state: &AppState, imdb_id: &str) -> Result<Option<MediaI
         return Ok(None);
     };
 
+    if let Some(item) = local(state, ExternalSource::Imdb, &normalized).await?
+        && item.kind == MediaKind::Movie
+    {
+        return Ok(Some(item));
+    }
+
+    let _fetching = FETCHING.lock(&format!("movie:imdb:{normalized}")).await;
     if let Some(item) = local(state, ExternalSource::Imdb, &normalized).await?
         && item.kind == MediaKind::Movie
     {

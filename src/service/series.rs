@@ -7,7 +7,7 @@ use crate::{
     db::repo,
     domain::{ExternalSource, MediaItem, MediaKind},
     providers::{names, tmdb::map as tmdb_map},
-    service::{Found, cached_search, gather, ids, is_stale, load, persist},
+    service::{FETCHING, Found, cached_search, gather, ids, is_stale, load, persist},
     state::AppState,
     wire::sonarr,
 };
@@ -29,6 +29,13 @@ pub async fn by_client_id(state: &AppState, requested_id: i64) -> Result<Option<
 }
 
 pub async fn by_tvdb_id(state: &AppState, tvdb_id: i64) -> Result<Option<MediaItem>> {
+    if let Some(item) = local(state, ExternalSource::TvdbSeries, &tvdb_id.to_string()).await? {
+        return Ok(Some(item));
+    }
+
+    // One fetch per work at a time; see `FETCHING`. Checked again after the
+    // wait, because whoever held it has usually just stored the answer.
+    let _fetching = FETCHING.lock(&format!("series:tvdb:{tvdb_id}")).await;
     if let Some(item) = local(state, ExternalSource::TvdbSeries, &tvdb_id.to_string()).await? {
         return Ok(Some(item));
     }
@@ -70,6 +77,11 @@ pub async fn by_tvdb_id(state: &AppState, tvdb_id: i64) -> Result<Option<MediaIt
 }
 
 pub async fn by_tmdb_id(state: &AppState, tmdb_id: i64) -> Result<Option<MediaItem>> {
+    if let Some(item) = local(state, ExternalSource::TmdbTv, &tmdb_id.to_string()).await? {
+        return Ok(Some(item));
+    }
+
+    let _fetching = FETCHING.lock(&format!("series:tmdb:{tmdb_id}")).await;
     if let Some(item) = local(state, ExternalSource::TmdbTv, &tmdb_id.to_string()).await? {
         return Ok(Some(item));
     }

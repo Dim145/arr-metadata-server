@@ -35,7 +35,19 @@ pub async fn serve(state: AppState) -> Result<()> {
     // ask it not to. `NormalizePathLayer` applied with `Router::layer` runs
     // *after* routing and so cannot help; it has to wrap the whole router as a
     // service, before a path is ever matched.
-    let router = NormalizePathLayer::trim_trailing_slash().layer(build_router(state.clone()));
+    let normalized = NormalizePathLayer::trim_trailing_slash().layer(build_router(state.clone()));
+
+    // The documentation's own entrance, answered *outside* the normalisation.
+    // Swagger UI redirects `/api/docs` to `/api/docs/`, and the layer above —
+    // which Sonarr needs — strips that slash again, so the page the README
+    // points at redirected to itself until the browser gave up. Its index is
+    // the one address neither step rewrites, and a real redirect to it (not a
+    // rewrite) is what makes the page's relative asset URLs resolve under
+    // `/api/docs/`. It reveals nothing: the index itself is still guarded.
+    let router = Router::new()
+        .route("/api/docs", get(docs_entry))
+        .route("/api/docs/", get(docs_entry))
+        .fallback_service(normalized);
 
     match state.config.server.tls.clone() {
         Some(tls) => {
@@ -268,6 +280,10 @@ fn cors(state: &AppState) -> CorsLayer {
             header::AUTHORIZATION,
             "x-api-key".parse().unwrap(),
         ])
+}
+
+async fn docs_entry() -> axum::response::Redirect {
+    axum::response::Redirect::to("/api/docs/index.html")
 }
 
 async fn health() -> StatusCode {

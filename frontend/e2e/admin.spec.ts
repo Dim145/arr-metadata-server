@@ -62,6 +62,27 @@ test.describe('the administration side', () => {
     await expect(page).toHaveURL(/\/login/)
   })
 
+  test('opens the API documentation, rather than redirecting to itself', async ({ page }) => {
+    // Swagger UI redirects its bare path to the same path with a slash, and the
+    // normalisation Sonarr needs strips that slash again — so the address the
+    // README gives looped until the browser gave up. And the page has to render
+    // under this server's content security policy, which a CSP violation would
+    // report as a console error.
+    const errors: string[] = []
+    page.on('console', (m) => {
+      if (m.type() === 'error') errors.push(m.text())
+    })
+
+    await signIn(page)
+    await page.goto('/api/docs')
+
+    await expect(page).toHaveURL(/\/api\/docs\/index\.html$/)
+    await expect(page.locator('.swagger-ui .information-container')).toBeVisible()
+    await expect(page.locator('.swagger-ui .opblock').first()).toBeVisible()
+
+    expect(errors.filter((t) => /Content Security Policy|Refused to/i.test(t))).toEqual([])
+  })
+
   test('opens every screen without scrolling sideways or logging an error', async ({ page }) => {
     const errors: string[] = []
     page.on('console', (m) => {

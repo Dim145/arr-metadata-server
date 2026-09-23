@@ -47,12 +47,22 @@ pub async fn apply(state: &AppState, item: &mut MediaItem, requested: &str) -> R
     }
 
     // Item-level translations arrive with the work itself, so they are already
-    // here. Episode text is fetched per language, on first request.
+    // here. Episode text is fetched per language, on first request — and only
+    // once, however many requests arrive for it together: a season's worth of
+    // calls per work per language is the price, and two French Sonarrs opening
+    // the same series should not pay it twice. Checked again once through, for
+    // the same reason as `FETCHING`.
     if item.kind == MediaKind::Series
         && !item.episodes.is_empty()
         && !repo::translation::was_fetched(&state.db, &item.id, &language).await?
     {
-        fetch_episodes(state, item, &language).await;
+        let _fetching = crate::service::FETCHING
+            .lock(&format!("episodes:{}:{language}", item.id))
+            .await;
+
+        if !repo::translation::was_fetched(&state.db, &item.id, &language).await? {
+            fetch_episodes(state, item, &language).await;
+        }
     }
 
     overlay_item(item, &language);

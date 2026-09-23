@@ -204,10 +204,16 @@ impl AppState {
         self.tmdb
             .tune(&self.language(None, None), self.adult_visible());
 
-        // A cached search was computed under the old settings. The key carries
-        // the language and the adult flag so a stale entry can never be served
-        // to the wrong caller, but leaving them to expire would mean an
-        // operator changing a setting and seeing nothing happen for an hour.
+        // After the tune, not before: a search that started in between reads
+        // the old generation, so whatever it caches is filed where nothing
+        // will look for it again.
+        self.caches
+            .generation
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
+        // A cached search was computed under the old settings. The generation
+        // already means none of it will be served; this gives the memory back
+        // now rather than at the end of the TTL.
         self.caches.searches.invalidate_all();
     }
 

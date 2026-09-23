@@ -203,6 +203,27 @@ impl Db {
         Ok(())
     }
 
+    /// Open a transaction that is going to write.
+    ///
+    /// On SQLite, `BEGIN IMMEDIATE` — the write lock is taken now, and anyone
+    /// else wanting it waits out the busy timeout for it. A plain `BEGIN` takes
+    /// nothing until the first write, so a transaction that reads first (every
+    /// work write checks its slug before inserting) holds a *snapshot*, and if
+    /// another writer commits before it gets to its own write, SQLite refuses
+    /// the upgrade on the spot: `database is locked`, without waiting at all,
+    /// because no amount of waiting makes a stale snapshot current. Sixteen
+    /// concurrent imports lost thirteen of their writes that way.
+    ///
+    /// PostgreSQL has row locks and no such upgrade, so it begins as usual.
+    pub async fn begin_write(&self) -> Result<sqlx::Transaction<'static, sqlx::Any>> {
+        let tx = match self.dialect {
+            Dialect::Sqlite => self.pool.begin_with("BEGIN IMMEDIATE").await,
+            Dialect::Postgres => self.pool.begin().await,
+        };
+
+        tx.context("failed to open a write transaction")
+    }
+
     pub fn pool(&self) -> &AnyPool {
         &self.pool
     }

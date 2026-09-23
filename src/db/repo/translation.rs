@@ -56,7 +56,7 @@ pub async fn put_episodes(
     language: &str,
     episodes: &[EpisodeText],
 ) -> Result<()> {
-    let mut tx = db.pool().begin().await?;
+    let mut tx = db.begin_write().await?;
 
     sqlx::query(
         db.sql("DELETE FROM media_episode_translation WHERE media_id = ? AND language = ?"),

@@ -100,8 +100,7 @@ pub async fn run(source: &Db, target: &Db, force: bool) -> Result<Report> {
     // `--force` would re-insert the tables that did land and duplicate every row
     // in the ones with no key to conflict on. All of it, or none of it.
     let mut tx = target
-        .pool()
-        .begin()
+        .begin_write()
         .await
         .context("failed to open the transfer transaction")?;
 

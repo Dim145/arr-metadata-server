@@ -422,11 +422,16 @@ pub const MAX_PAGE: i64 = 500;
 
 /// need. Anything more (ranking, typo tolerance) belongs in a later FTS index.
 pub async fn search(db: &Db, q: &Query) -> Result<Vec<MediaItem>> {
-    let mut sql = format!("SELECT {ITEM_COLUMNS} FROM media_item WHERE 1 = 1");
+    let mut sql = format!(
+        "SELECT {ITEM_COLUMNS} FROM {} WHERE 1 = 1",
+        from_clause(db, q)
+    );
     let mut args = AnyArguments::default();
     narrow(q, &mut sql, &mut args)?;
 
-    sql.push_str(" ORDER BY popularity DESC NULLS LAST, title ASC LIMIT ? OFFSET ?");
+    sql.push_str(" ORDER BY ");
+    sql.push_str(order_clause(q));
+    sql.push_str(" LIMIT ? OFFSET ?");
     args.add(q.limit.clamp(1, MAX_PAGE))
         .map_err(|e| anyhow::anyhow!("{e}"))?;
     args.add(q.offset.max(0))
@@ -496,6 +501,47 @@ async fn attach_external_ids(db: &Db, items: &mut [MediaItem]) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Whether a query searches text, which no index can help with.
+fn searches_text(q: &Query) -> bool {
+    q.term.as_deref().is_some_and(|t| !t.trim().is_empty())
+}
+
+/// The table to read, and — for a text search on SQLite — the instruction to
+/// read it straight through.
+///
+/// `LIKE '%term%'` has to look at every row, so a text search is a full read
+/// whatever happens. But `ix_media_item_browse` carries `is_enabled` and
+/// `is_adult`, and SQLite's planner prefers filtering through an index that
+/// holds the filter columns to reading the table: it walks the index, then
+/// fetches nearly every row from the table one at a time, because nearly every
+/// row passes. Measured at fifty thousand works, a search for a term that
+/// matched nothing went from 22 ms to 97 ms that way — and a search for
+/// something not yet stored is exactly what every Sonarr and Radarr search does
+/// first. `NOT INDEXED` is SQLite's own spelling of "don't"; PostgreSQL's cost
+/// model gets there by itself once [`order_clause`] stops it walking an index
+/// for the order.
+fn from_clause(db: &Db, q: &Query) -> &'static str {
+    match (db.dialect(), searches_text(q)) {
+        (crate::db::Dialect::Sqlite, true) => "media_item NOT INDEXED",
+        _ => "media_item",
+    }
+}
+
+/// The order every list is in.
+///
+/// For a text search, by an expression rather than the column: `popularity + 0`
+/// sorts the same way, and no index can produce it. Otherwise PostgreSQL walks
+/// `ix_media_item_popular` in order, betting that enough rows match early to
+/// stop after thirty-six — a bet that loses badly for a term matching nothing,
+/// 38 ms becoming 59 at fifty thousand works. With nothing to walk it reads
+/// the table and sorts what matched, which is what a text search costs anyway.
+fn order_clause(q: &Query) -> &'static str {
+    match searches_text(q) {
+        true => "(popularity + 0) DESC NULLS LAST, title ASC",
+        false => "popularity DESC NULLS LAST, title ASC",
+    }
 }
 
 /// Attach the artwork, scores and translations a list of works needs.
@@ -613,7 +659,10 @@ pub async fn load_artwork(db: &Db, items: &mut [MediaItem]) -> Result<()> {
 /// The same predicate as [`search`], because a result count that counted
 /// something else would be worse than no count at all.
 pub async fn count_matching(db: &Db, q: &Query) -> Result<i64> {
-    let mut sql = "SELECT COUNT(*) AS n FROM media_item WHERE 1 = 1".to_string();
+    let mut sql = format!(
+        "SELECT COUNT(*) AS n FROM {} WHERE 1 = 1",
+        from_clause(db, q)
+    );
     let mut args = AnyArguments::default();
     narrow(q, &mut sql, &mut args)?;
 
@@ -706,7 +755,7 @@ pub async fn count(db: &Db, kind: Option<MediaKind>) -> Result<i64> {
 
 /// Insert or update a work and, optionally, its provider-sourced children.
 pub async fn upsert(db: &Db, write: ItemWrite<'_>) -> Result<()> {
-    let mut tx = db.pool().begin().await?;
+    let mut tx = db.begin_write().await?;
 
     upsert_row(db, &mut tx, write.item).await?;
     upsert_external_ids(db, &mut tx, write.item).await?;
@@ -1308,6 +1357,143 @@ mod tests {
             rating_type: Some("user".into()),
         }];
         item
+    }
+
+    #[tokio::test]
+    async fn writers_to_different_works_wait_for_each_other_rather_than_fail() {
+        // What an import of several films at once did: every write opened a
+        // deferred transaction, *read* (the slug check) and then wrote. A
+        // second writer committing in between left the first holding a stale
+        // snapshot, and SQLite refuses that upgrade at once — `database is
+        // locked`, a 500 — without consulting the busy timeout at all, since
+        // waiting could not make the snapshot fresh again. A real file and a
+        // real pool here, because an in-memory database with one connection
+        // cannot have two writers.
+        let path = std::env::temp_dir().join(format!("ams-writers-{}.db", crate::db::new_id()));
+        let db = Db::connect(&config::Database {
+            url: format!("sqlite://{}?mode=rwc", path.display()),
+            max_connections: 8,
+            acquire_timeout: std::time::Duration::from_secs(10),
+        })
+        .await
+        .expect("a file database");
+        db.migrate().await.expect("migrations");
+
+        let writes: Vec<_> = (0..16)
+            .map(|n| {
+                let db = db.clone();
+                tokio::spawn(async move {
+                    let mut item = sample();
+                    item.id = crate::db::new_id();
+                    item.title = format!("Work {n}");
+                    item.slug = crate::domain::make_slug(&item.title, item.year);
+                    item.external_ids = ExternalIds {
+                        tmdb: Some(100_000 + n),
+                        ..Default::default()
+                    };
+
+                    upsert(
+                        &db,
+                        ItemWrite {
+                            item: &item,
+                            replace_children: true,
+                        },
+                    )
+                    .await
+                })
+            })
+            .collect();
+
+        let mut failed = Vec::new();
+        for write in writes {
+            if let Err(e) = write.await.expect("the task ran") {
+                failed.push(format!("{e:#}"));
+            }
+        }
+
+        db.close().await;
+        for suffix in ["", "-shm", "-wal"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+        }
+
+        assert!(
+            failed.is_empty(),
+            "{} of 16 writes failed: {failed:?}",
+            failed.len()
+        );
+    }
+
+    /// The plan SQLite chooses for a list query, as `search` would build it.
+    async fn plan(db: &Db, q: &Query) -> String {
+        let mut sql = format!(
+            "EXPLAIN QUERY PLAN SELECT id FROM {} WHERE 1 = 1",
+            from_clause(db, q)
+        );
+        let mut args = AnyArguments::default();
+        narrow(q, &mut sql, &mut args).expect("narrowed");
+        sql.push_str(" ORDER BY ");
+        sql.push_str(order_clause(q));
+        sql.push_str(" LIMIT 36");
+
+        let rows = sqlx::query_with(db.sql(&sql), args)
+            .fetch_all(db.pool())
+            .await
+            .expect("explained");
+
+        rows.iter()
+            .map(|r| r.text("detail").expect("a plan line"))
+            .collect::<Vec<_>>()
+            .join(" | ")
+    }
+
+    #[tokio::test]
+    async fn a_list_is_read_in_index_order_and_a_text_search_is_not() {
+        // The whole point of migration 0007, pinned: a page of one kind comes
+        // straight off `ix_media_item_browse` with no sort, a page of every kind
+        // off `ix_media_item_popular` — and a text search reads the table,
+        // because walking either index for it measured four times slower on a
+        // term that matched nothing.
+        let db = db().await;
+
+        let one_kind = plan(
+            &db,
+            &Query {
+                kind: Some(MediaKind::Movie),
+                limit: 36,
+                ..Default::default()
+            },
+        )
+        .await;
+        assert!(one_kind.contains("ix_media_item_browse"), "{one_kind}");
+        assert!(
+            !one_kind.contains("TEMP B-TREE"),
+            "sorted anyway: {one_kind}"
+        );
+
+        let every_kind = plan(
+            &db,
+            &Query {
+                include_disabled: true,
+                limit: 60,
+                ..Default::default()
+            },
+        )
+        .await;
+        assert!(every_kind.contains("ix_media_item_popular"), "{every_kind}");
+
+        let text = plan(
+            &db,
+            &Query {
+                term: Some("breaking".into()),
+                limit: 36,
+                ..Default::default()
+            },
+        )
+        .await;
+        assert!(
+            !text.contains("USING INDEX"),
+            "a text search walked an index: {text}"
+        );
     }
 
     #[tokio::test]

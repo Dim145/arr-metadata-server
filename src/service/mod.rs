@@ -112,6 +112,42 @@ async fn find_existing(state: &AppState, item: &MediaItem) -> Result<Option<Stri
     Ok(None)
 }
 
+/// Locks by name, made when first asked for and forgotten once nobody holds
+/// them.
+///
+/// For work that must not happen twice at once *for the same thing* while
+/// staying free to happen for different things at once — which is every case
+/// here: two series refreshing side by side is the normal state of affairs.
+pub struct Keyed {
+    held: parking_lot::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+}
+
+impl Keyed {
+    fn new() -> Self {
+        Self {
+            held: parking_lot::Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+
+    /// Wait for `key`, and hold it until the guard is dropped.
+    pub async fn lock(&self, key: &str) -> tokio::sync::OwnedMutexGuard<()> {
+        let lock = {
+            let mut held = self.held.lock();
+
+            // Bounded, because the keys are ids a client supplied. A lock
+            // nobody is holding or waiting on has served its purpose: the
+            // guard owns a clone, so anything in use has a count above one.
+            if held.len() > 256 {
+                held.retain(|_, lock| Arc::strong_count(lock) > 1);
+            }
+
+            Arc::clone(held.entry(key.to_string()).or_default())
+        };
+
+        lock.lock_owned().await
+    }
+}
+
 /// One write at a time per work.
 ///
 /// `replace_children` deletes a work's provider rows and re-inserts them, and
@@ -122,25 +158,17 @@ async fn find_existing(state: &AppState, item: &MediaItem) -> Result<Option<Stri
 /// transaction's freshly inserted credits survive it, the second adds its own,
 /// and the cast is doubled. `media_credit` is the one child table with no key
 /// to conflict on, so nothing catches it afterwards either.
+static WRITING: std::sync::LazyLock<Keyed> = std::sync::LazyLock::new(Keyed::new);
+
+/// One fetch at a time per work, as a client addressed it.
 ///
-/// A lock keyed on the work rather than one lock for all of them: two different
-/// series being refreshed at once is the normal case and has never been a
-/// problem.
-static WRITING: std::sync::LazyLock<
-    parking_lot::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
-> = std::sync::LazyLock::new(|| parking_lot::Mutex::new(std::collections::HashMap::new()));
-
-fn write_lock(id: &str) -> Arc<tokio::sync::Mutex<()>> {
-    let mut held = WRITING.lock();
-
-    // Bounded: the keys are work ids, and a busy sweep touches a batch at a
-    // time. Anything nobody else is holding has served its purpose.
-    if held.len() > 256 {
-        held.retain(|_, lock| Arc::strong_count(lock) > 1);
-    }
-
-    Arc::clone(held.entry(id.to_string()).or_default())
-}
+/// When a work goes stale, every request for it misses the store and runs the
+/// whole fan-out — a TMDB call per season, TheTVDB's pages, Skyhook, Fanart —
+/// and a library refresh or a request page opening is exactly when several
+/// arrive at once. The first does the work; the rest wait for it and then find
+/// what it stored, which is why every caller checks the store again after
+/// getting through.
+pub static FETCHING: std::sync::LazyLock<Keyed> = std::sync::LazyLock::new(Keyed::new);
 
 /// Carry over every child list this fetch came back empty-handed on.
 ///
@@ -197,8 +225,7 @@ pub async fn persist(
     item.refresh_after = Some(next_refresh(state, &item));
     item.refresh_error = None;
 
-    let serialised = write_lock(&item.id);
-    let _writing = serialised.lock().await;
+    let _writing = WRITING.lock(&item.id).await;
 
     repo::item::upsert(
         &state.db,
@@ -324,6 +351,14 @@ where
     F: FnOnce() -> Fut,
     Fut: std::future::Future<Output = Result<Found>>,
 {
+    // Read once, before anything is fetched, so the answer is filed under the
+    // settings it was actually computed with. See `Caches::generation`.
+    let generation = state
+        .caches
+        .generation
+        .load(std::sync::atomic::Ordering::SeqCst);
+    let key = format!("{generation}:{key}");
+
     if let Some(cached) = state.caches.searches.get(&key).await {
         if let Ok(items) = serde_json::from_str::<Vec<MediaItem>>(&cached) {
             return Ok(items);
@@ -344,6 +379,56 @@ where
     }
 
     Ok(found.items)
+}
+
+#[cfg(test)]
+mod keyed_tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn the_same_key_is_done_once_at_a_time() {
+        // Eight callers asking for one work: the fetch must never run for two
+        // of them at once, or the fan-out happens eight times over.
+        let keyed = Arc::new(Keyed::new());
+        let inside = Arc::new(AtomicUsize::new(0));
+        let most = Arc::new(AtomicUsize::new(0));
+
+        let tasks: Vec<_> = (0..8)
+            .map(|_| {
+                let (keyed, inside, most) = (keyed.clone(), inside.clone(), most.clone());
+                tokio::spawn(async move {
+                    let _held = keyed.lock("series:tvdb:81189").await;
+                    let now = inside.fetch_add(1, Ordering::SeqCst) + 1;
+                    most.fetch_max(now, Ordering::SeqCst);
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                    inside.fetch_sub(1, Ordering::SeqCst);
+                })
+            })
+            .collect();
+
+        for task in tasks {
+            task.await.unwrap();
+        }
+
+        assert_eq!(most.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn different_keys_do_not_wait_for_each_other() {
+        // Two different series refreshing side by side is the normal case.
+        let keyed = Keyed::new();
+
+        let _first = keyed.lock("series:tvdb:1").await;
+        let second = tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            keyed.lock("series:tvdb:2"),
+        )
+        .await;
+
+        assert!(second.is_ok(), "a different key was made to wait");
+    }
 }
 
 #[cfg(test)]
