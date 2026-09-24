@@ -159,6 +159,56 @@ still answers.
 > with the fix in the message — but point the upstreams elsewhere, or turn
 > enrichment off, when that is your setup.
 
+### Further sources
+
+Four more, each off until switched on under **Settings → Further sources**.
+None needs a key.
+
+| Source | Brings | Costs |
+| --- | --- | --- |
+| **TVmaze** | the moment each episode aired | two calls per series fetch |
+| **AniList** | its score, the romaji, native and English titles and synonyms, the main studio, an adult flag — for anime | one call per anime fetch |
+| **MyAnimeList** | its score and titles — for anime; through its own API when `AMS_MAL_CLIENT_ID` is set, through [Jikan](https://jikan.moe) otherwise | one call per anime fetch |
+| **IMDb** | IMDb's rating, for every work with an IMDb id | one download a day |
+
+None of them changes the shape of an answer: Sonarr and Radarr are served the
+same fields as before, some of them now more accurate.
+
+**TVmaze corrects `airDateUtc`**, the moment after which Sonarr counts an
+episode as aired. TheTVDB keeps one broadcast time per series and Skyhook stamps
+it on every episode, so a show that changed slot is wrong for everything before
+the change. TVmaze keeps a time per episode. Measured against Skyhook: all 62 of
+Breaking Bad's episodes are placed at 21:00 ET, where 54 aired at 22:00 — the
+last eight did air at 21:00, and on those it is TVmaze that is an hour late —
+and 35 of The Big Bang Theory's move, season 3 having aired on Mondays at 21:30
+rather than Thursdays at 20:00. Its time is taken only where its broadcast date
+matches TheTVDB's for the same season and episode. It never adds, removes or
+renumbers an episode.
+
+**AniList and MyAnimeList** are asked about one entry: the one that stands for
+the whole work, as the [Fribb anime-lists](https://github.com/Fribb/anime-lists)
+id map places it — the first season's, for a series both sites split by cour.
+The map is downloaded weekly while either source is on, and it also answers
+Sonarr's `mal:` and `anilist:` searches, which is how its AniList and
+MyAnimeList import lists find a series; those used to find only series already
+stored here. Neither site is ever used for numbering. Sonarr ignores
+alternative titles, so the romaji ones serve Radarr, which matches anime film
+releases against them, and this interface. For anime, their main studio
+replaces TMDB's, which is only the first production company TMDB lists.
+
+**IMDb's rating** is what Sonarr is given for a series — Skyhook's rating is
+IMDb's, republished — and otherwise the rating with the most votes behind it.
+The daily list keeps that figure current and supplies it when Skyhook and
+Radarr's service are off. Only the ratings of works stored here are kept, and
+the list is fetched again within the hour when works are added.
+
+The lists and their last download are shown under the switches, and every
+download is a job. Their terms: TVmaze's data is CC BY-SA; IMDb's datasets are
+for personal, non-commercial use; AniList's API is free for non-commercial use
+and asks not to be crawled or stored wholesale — this server asks only about
+works a client requested. Every public page credits the sources that are on,
+with the notices TMDB and IMDb require.
+
 ## Languages
 
 Entries are stored in whatever `AMS_TMDB_LANGUAGE` is set to. **If you want your

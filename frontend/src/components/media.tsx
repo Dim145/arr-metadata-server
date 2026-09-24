@@ -24,11 +24,14 @@ import { Chip, Glyph } from './ui'
 export function Score({
   value,
   votes,
+  source,
   size = 'md',
   className,
 }: {
   value: number
   votes?: number
+  /** Who gave it, by name, for the reader who cannot see the caption beside it. */
+  source?: string
   size?: 'sm' | 'md' | 'lg'
   className?: string
 }) {
@@ -45,7 +48,11 @@ export function Score({
     <div
       className={cn('relative shrink-0', box, className)}
       role="img"
-      aria-label={t.a11y.ratingOf(fmt.score(value, locale) ?? '')}
+      aria-label={
+        source
+          ? t.a11y.ratingOn(fmt.score(value, locale) ?? '', source)
+          : t.a11y.ratingOf(fmt.score(value, locale) ?? '')
+      }
     >
       <svg viewBox="0 0 36 36" className="size-full -rotate-90">
         <defs>

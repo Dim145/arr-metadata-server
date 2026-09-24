@@ -248,7 +248,7 @@ fn browsable(method: &axum::http::Method, path: &str) -> bool {
     }
 
     match path.trim_end_matches('/') {
-        "/api/v1/items" | "/api/v1/stats" | "/api/v1/auth/me" => true,
+        "/api/v1/items" | "/api/v1/stats" | "/api/v1/sources" | "/api/v1/auth/me" => true,
         // One work. Its seasons, episodes, artwork and cast come with it, but
         // its snapshots and overrides are their own paths and are not listed.
         rest => rest
@@ -411,6 +411,8 @@ mod browse_tests {
         ));
         assert!(allowed("/api/v1/stats"));
         assert!(allowed("/api/v1/auth/me"));
+        // The credits every page carries, which some sources' licences require.
+        assert!(allowed("/api/v1/sources"));
     }
 
     #[test]

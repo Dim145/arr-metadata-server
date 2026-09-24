@@ -10,8 +10,8 @@ use crate::{
     config::Config,
     db::{Db, repo},
     providers::{
-        fanart::FanartClient, radarr::RadarrMetadataClient, skyhook::SkyhookClient,
-        tmdb::TmdbClient, tvdb::TvdbClient,
+        anilist::AnilistClient, fanart::FanartClient, mal::MalClient, radarr::RadarrMetadataClient,
+        skyhook::SkyhookClient, tmdb::TmdbClient, tvdb::TvdbClient, tvmaze::TvmazeClient,
     },
     settings::{Scope, Store},
 };
@@ -29,6 +29,9 @@ pub struct Inner {
     pub radarr_metadata: RadarrMetadataClient,
     pub fanart: FanartClient,
     pub tvdb: TvdbClient,
+    pub tvmaze: TvmazeClient,
+    pub anilist: AnilistClient,
+    pub mal: MalClient,
     pub limiter: Limiter,
     /// Who may call the address-guarded surfaces, as the database holds it.
     ///
@@ -91,6 +94,9 @@ impl AppState {
             RadarrMetadataClient::new(http.clone(), &config.radarr_metadata, instance.clone());
         let fanart = FanartClient::new(http.clone(), &config.fanart, &config.tmdb.language);
         let tvdb = TvdbClient::new(http.clone(), &config.tvdb, &config.tmdb.language);
+        let tvmaze = TvmazeClient::new(http.clone(), &config.tvmaze);
+        let anilist = AnilistClient::new(http.clone(), &config.anilist);
+        let mal = MalClient::new(http.clone(), &config.mal);
 
         if config.fanart.enabled && !fanart.is_configured() {
             tracing::info!("no Fanart.tv key configured; artwork enrichment is off");
@@ -125,6 +131,9 @@ impl AppState {
             radarr_metadata,
             fanart,
             tvdb,
+            tvmaze,
+            anilist,
+            mal,
             limiter,
             instance,
         }));
@@ -160,6 +169,10 @@ impl AppState {
                 ("skyhook.enrich", cfg.skyhook.enrich.to_string()),
                 ("radarr.fallback", cfg.radarr_metadata.fallback.to_string()),
                 ("radarr.enrich", cfg.radarr_metadata.enrich.to_string()),
+                ("tvmaze.enabled", cfg.tvmaze.enabled.to_string()),
+                ("anilist.enabled", cfg.anilist.enabled.to_string()),
+                ("mal.enabled", cfg.mal.enabled.to_string()),
+                ("imdb.enabled", cfg.imdb.enabled.to_string()),
                 ("refresh.enabled", cfg.refresh.enabled.to_string()),
                 (
                     "refresh.intervalSeconds",
@@ -215,6 +228,10 @@ impl AppState {
         // already means none of it will be served; this gives the memory back
         // now rather than at the end of the TTL.
         self.caches.searches.invalidate_all();
+
+        // A cached work carries what the settings put on it when it was read —
+        // IMDb's rating, for one — so it is read again under the new ones.
+        self.caches.items.invalidate_all();
     }
 
     /// The language to answer a caller in.

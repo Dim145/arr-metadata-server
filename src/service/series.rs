@@ -108,6 +108,46 @@ pub async fn by_imdb_id(state: &AppState, imdb_id: &str) -> Result<Option<MediaI
     fetch_from_tmdb(state, summary.id).await
 }
 
+/// A series by one of its MyAnimeList or AniList entries.
+///
+/// This is how Sonarr's AniList and MyAnimeList import lists find a series:
+/// each entry on the list is searched for as `mal:{id}` or `anilist:{id}`. It
+/// used to be answered from the store alone, so a series nobody had added yet
+/// — the whole point of an import list — was never found, and neither was one
+/// held here but due a refresh. The TheTVDB id settles both: the stored
+/// series', or the one the anime identifier list files the entry under.
+async fn by_anime_id(
+    state: &AppState,
+    source: ExternalSource,
+    id: i64,
+) -> Result<Option<MediaItem>> {
+    let value = id.to_string();
+
+    if let Some(item) = local(state, source, &value).await?
+        && item.kind == MediaKind::Series
+    {
+        return Ok(Some(item));
+    }
+
+    let stored = match repo::item::find_id_by_external(&state.db, source, &value).await? {
+        Some(media_id) => load(state, &media_id)
+            .await?
+            .filter(|item| item.kind == MediaKind::Series)
+            .and_then(|item| item.external_ids.tvdb),
+        None => None,
+    };
+
+    let tvdb_id = match stored {
+        Some(tvdb_id) => Some(tvdb_id),
+        None => crate::service::anime::series_for(state, source, id).await?,
+    };
+
+    match tvdb_id {
+        Some(tvdb_id) => by_tvdb_id(state, tvdb_id).await,
+        None => Ok(None),
+    }
+}
+
 /// Search, in the order a client expects results to appear.
 pub async fn search(state: &AppState, term: &str) -> Result<Vec<MediaItem>> {
     // A prefixed term is a lookup, not a search: answer with the one match.
@@ -120,13 +160,13 @@ pub async fn search(state: &AppState, term: &str) -> Result<Vec<MediaItem>> {
             return Ok(by_imdb_id(state, &id).await?.into_iter().collect());
         }
         ids::TermLookup::Mal(id) => {
-            return Ok(local(state, ExternalSource::Mal, &id.to_string())
+            return Ok(by_anime_id(state, ExternalSource::Mal, id)
                 .await?
                 .into_iter()
                 .collect());
         }
         ids::TermLookup::AniList(id) => {
-            return Ok(local(state, ExternalSource::AniList, &id.to_string())
+            return Ok(by_anime_id(state, ExternalSource::AniList, id)
                 .await?
                 .into_iter()
                 .collect());

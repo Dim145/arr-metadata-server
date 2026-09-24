@@ -165,9 +165,14 @@ fn episodes(seasons: &[models::Season]) -> Vec<Episode> {
     for season in seasons {
         for ep in &season.episodes {
             let air_date = non_empty(ep.air_date.as_deref());
-            // TMDB gives a date with no time. Midnight UTC is what Skyhook has
-            // always emitted here, and Sonarr treats it as a date anyway.
-            let air_date_utc = air_date.as_deref().and_then(crate::domain::midnight_utc);
+            // TMDB gives a date with no time, so it says nothing about the
+            // moment an episode aired — and says so, rather than inventing
+            // midnight UTC. An invented time used to win the merge over the
+            // real one Skyhook and TVmaze know, and Sonarr, which reads this
+            // as a timestamp, saw every episode of a US evening show as aired
+            // a day before it was. The midnight fallback happens on the way
+            // out, only when no provider knew better: `wire::sonarr`.
+            let air_date_utc = None;
 
             out.push(Episode {
                 id: new_id(),
@@ -1101,7 +1106,9 @@ mod fixtures {
         assert_eq!(first.title, "Pilot");
         assert_eq!(first.season_number, 1);
         assert_eq!(first.air_date.as_deref(), Some("2008-01-20"));
-        assert_eq!(first.air_date_utc.as_deref(), Some("2008-01-20T00:00:00Z"));
+        // A date, and no pretence of knowing the time: see `episode` above.
+        assert_eq!(first.air_date.as_deref(), Some("2008-01-20"));
+        assert_eq!(first.air_date_utc, None);
         assert_eq!(first.runtime, Some(58));
         assert_eq!(first.rating.map(|r| r.votes), Some(260));
         assert!(

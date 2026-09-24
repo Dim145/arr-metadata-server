@@ -224,6 +224,24 @@ export interface Settings {
   nativePolicy: string
   tmdbPolicy: string
   arrPolicy: string
+  furtherSources: FurtherSources
+}
+
+/** A list the server downloads whole: when it last landed, and what it kept. */
+export interface ListImport {
+  importedAt: string
+  rows: number
+}
+
+export interface FurtherSources {
+  malVia: 'official' | 'jikan'
+  animeList?: ListImport
+  imdbRatings?: ListImport
+}
+
+/** Where the data comes from, for the credits: only what is switched on. */
+export interface Sources {
+  sources: string[]
 }
 
 export interface Me {

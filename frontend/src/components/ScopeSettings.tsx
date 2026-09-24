@@ -15,15 +15,24 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router'
 
 import { ApiError, api } from '../lib/api'
+import * as fmt from '../lib/format'
 import { useI18n, type Dict } from '../lib/i18n'
-import type { EffectiveSetting, SettingDef, SettingScope } from '../lib/types'
+import type {
+  EffectiveSetting,
+  ListImport,
+  SettingDef,
+  SettingScope,
+  Settings as Config,
+} from '../lib/types'
 import {
   Button,
   Chip,
   Dialog,
   EmptyState,
+  Field,
   Glyph,
   Input,
   Panel,
@@ -50,6 +59,7 @@ export const SERVER: Scope = { scope: 'server', id: '-' }
 const GROUPS = [
   { id: 'answering', prefixes: ['tmdb'] },
   { id: 'providers', prefixes: ['skyhook', 'radarr', 'sonarr', 'tvdb'] },
+  { id: 'sources', prefixes: ['tvmaze', 'anilist', 'mal', 'imdb'] },
   { id: 'refresh', prefixes: ['refresh'] },
   { id: 'adult', prefixes: ['adult'] },
 ] as const
@@ -115,7 +125,7 @@ export function ServerSettings({ delay = 0 }: { delay?: number }) {
   }
 
   const here = registry.data.filter((def) => def.scopes.includes('server'))
-  const groups: GroupId[] = ['answering', 'providers', 'refresh', 'adult', 'other']
+  const groups: GroupId[] = ['answering', 'providers', 'sources', 'refresh', 'adult', 'other']
 
   return (
     <div className="space-y-6">
@@ -144,10 +154,90 @@ export function ServerSettings({ delay = 0 }: { delay?: number }) {
                 </li>
               ))}
             </ul>
+            {group === 'sources' ? <SourcesAtWork values={values.data} /> : null}
           </Panel>
         )
       })}
     </div>
+  )
+}
+
+/**
+ * What the further sources are working from, under the switches that start it.
+ *
+ * Switching a source on is where an operator wonders whether it took: the
+ * lists it needs arrive within a minute, and this says when they did. Asked
+ * again every few seconds only while a source is on and its list has not
+ * landed yet.
+ */
+function SourcesAtWork({ values }: { values: EffectiveSetting[] }) {
+  const { t } = useI18n()
+
+  const on = (key: string) => values.find((value) => value.key === key)?.value === 'true'
+  const wantsAnime = on('anilist.enabled') || on('mal.enabled')
+  const wantsImdb = on('imdb.enabled')
+
+  const summary = useQuery({
+    queryKey: ['settings'],
+    queryFn: () => api.get<Config>('/settings'),
+    staleTime: 5 * 60_000,
+    refetchInterval: (query) => {
+      const further = query.state.data?.furtherSources
+      const waiting =
+        (wantsAnime && !further?.animeList) || (wantsImdb && !further?.imdbRatings)
+      return waiting ? 5_000 : false
+    },
+  })
+
+  const further = summary.data?.furtherSources
+  if (!further) return null
+
+  return (
+    <div className="border-t border-rule">
+      <dl className="divide-y divide-rule">
+        <Field label={t.admin.config.animeList}>
+          <Imported list={further.animeList} rows={t.admin.config.animeEntries} />
+        </Field>
+        <Field label={t.admin.config.imdbRatings}>
+          <Imported list={further.imdbRatings} rows={t.admin.config.imdbWorks} />
+        </Field>
+        <Field label={t.admin.config.malVia}>
+          {further.malVia === 'official' ? (
+            <Chip tone="provider">
+              <Glyph name="check" className="size-3" />
+              {t.admin.config.malOfficial}
+            </Chip>
+          ) : (
+            <Chip>{t.admin.config.malJikan}</Chip>
+          )}
+        </Field>
+      </dl>
+      <p className="border-t border-rule px-5 py-4 text-xs leading-relaxed text-bone-faint">
+        {t.admin.config.furtherHint} {t.admin.config.furtherJobs}{' '}
+        <Link
+          to="/admin/jobs"
+          className="text-bone-dim underline decoration-rule-bright underline-offset-2 transition-colors duration-150 hover:text-bone"
+        >
+          {t.admin.jobs}
+        </Link>
+        .
+      </p>
+    </div>
+  )
+}
+
+/** A downloaded list: how much of it is kept, and how long ago it landed. */
+function Imported({ list, rows }: { list?: ListImport; rows: (n: string) => string }) {
+  const { t, locale } = useI18n()
+
+  if (!list) {
+    return <span className="text-bone-faint">{t.admin.config.notImported}</span>
+  }
+
+  return (
+    <span className="font-mono text-[0.8125rem] tabular-nums" title={fmt.dateTime(list.importedAt, locale)}>
+      {rows(fmt.count(list.rows, locale))} · {fmt.relative(list.importedAt, locale)}
+    </span>
   )
 }
 
@@ -283,6 +373,8 @@ function SettingRow({
       // The read-only summary and the sidebar's version line read the same
       // configuration from a different route.
       void queryClient.invalidateQueries({ queryKey: ['settings'], exact: true })
+      // The footer credits whichever sources are on.
+      void queryClient.invalidateQueries({ queryKey: ['sources'] })
     },
   })
 

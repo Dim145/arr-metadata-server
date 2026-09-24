@@ -41,7 +41,7 @@ import {
 import { api, query } from '../../lib/api'
 import { cn } from '../../lib/cn'
 import * as fmt from '../../lib/format'
-import { statusLabel } from '../../lib/labels'
+import { providerName, statusLabel } from '../../lib/labels'
 import { useI18n, type Dict } from '../../lib/i18n'
 import { poster } from '../../lib/media'
 import type { FieldDef, FieldRegistry, MediaItem, Override, Snapshot } from '../../lib/types'
@@ -602,7 +602,7 @@ function Sources({ snapshots, isManual }: { snapshots?: Snapshot[]; isManual?: b
       ) : (
         <dl className="divide-y divide-rule">
           {sorted.map((snapshot) => (
-            <Field key={snapshot.provider} label={snapshot.provider}>
+            <Field key={snapshot.provider} label={providerName(snapshot.provider)}>
               <span title={fmt.dateTime(snapshot.fetchedAt, locale)}>
                 {fmt.relative(snapshot.fetchedAt, locale)}
               </span>

@@ -97,6 +97,34 @@ export function statusLabel(status: string | undefined, t: Dict): string | undef
   return known[status] ?? status
 }
 
+/**
+ * A provider or rating source by its own name.
+ *
+ * The server files everything under a short key — `mal`, `tvdb`,
+ * `rottenTomatoes` — and those are identifiers, not names. These are proper
+ * nouns, the same in every language, so they live here rather than in the
+ * dictionary.
+ */
+const PROVIDERS: Record<string, string> = {
+  anilist: 'AniList',
+  fanart: 'Fanart.tv',
+  imdb: 'IMDb',
+  mal: 'MyAnimeList',
+  metacritic: 'Metacritic',
+  radarr: 'Radarr',
+  rottenTomatoes: 'Rotten Tomatoes',
+  skyhook: 'Skyhook',
+  tmdb: 'TMDB',
+  trakt: 'Trakt',
+  tvdb: 'TheTVDB',
+  tvmaze: 'TVmaze',
+  tvrage: 'TVRage',
+}
+
+export function providerName(key: string): string {
+  return PROVIDERS[key] ?? key
+}
+
 /** How a surface authenticates — `apikey`, `allowlist` — as a word. */
 export function policyLabel(policy: string, t: Dict): string {
   const known = t.labels.policy as Record<string, string>

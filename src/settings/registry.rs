@@ -105,6 +105,27 @@ pub const REGISTRY: &[Definition] = &[
         kind: Kind::Bool,
         scopes: SERVER_ONLY,
     },
+    // ── Further sources, each off until turned on ────────────────────────────
+    Definition {
+        key: "tvmaze.enabled",
+        kind: Kind::Bool,
+        scopes: SERVER_ONLY,
+    },
+    Definition {
+        key: "anilist.enabled",
+        kind: Kind::Bool,
+        scopes: SERVER_ONLY,
+    },
+    Definition {
+        key: "mal.enabled",
+        kind: Kind::Bool,
+        scopes: SERVER_ONLY,
+    },
+    Definition {
+        key: "imdb.enabled",
+        kind: Kind::Bool,
+        scopes: SERVER_ONLY,
+    },
     // ── Refresh ──────────────────────────────────────────────────────────────
     Definition {
         key: "refresh.enabled",

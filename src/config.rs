@@ -47,6 +47,11 @@ pub struct Config {
     pub radarr_metadata: RadarrMetadata,
     pub fanart: Fanart,
     pub tvdb: Tvdb,
+    pub tvmaze: Tvmaze,
+    pub anilist: Anilist,
+    pub mal: Mal,
+    pub imdb: Imdb,
+    pub anime_mapping: AnimeMapping,
     /// Which provider wins when two disagree, most trusted first.
     pub provider_priority: Vec<String>,
     pub cache: Cache,
@@ -152,6 +157,47 @@ pub struct Tvdb {
     /// Only a subscriber key needs one; a project key must not send it.
     pub pin: Option<String>,
     pub enabled: bool,
+}
+
+/// TVmaze: exact broadcast times, for series. No key.
+#[derive(Clone, Debug)]
+pub struct Tvmaze {
+    pub upstream: String,
+    /// Seeds the `tvmaze.enabled` setting once; the interface decides after.
+    pub enabled: bool,
+}
+
+/// AniList: scores, titles and flags for anime. No key.
+#[derive(Clone, Debug)]
+pub struct Anilist {
+    pub upstream: String,
+    pub enabled: bool,
+}
+
+/// MyAnimeList: its official API when a client id is set, Jikan otherwise.
+#[derive(Clone, Debug)]
+pub struct Mal {
+    pub upstream: String,
+    pub jikan_upstream: String,
+    /// Free from myanimelist.net's API settings. Without one, Jikan is used —
+    /// an unofficial mirror that serves MAL from its own cache, which can be
+    /// weeks old and fails outright when MyAnimeList refuses it.
+    pub client_id: Option<String>,
+    pub enabled: bool,
+}
+
+/// IMDb's own non-commercial datasets, for ratings. No key, no API.
+#[derive(Clone, Debug)]
+pub struct Imdb {
+    pub datasets: String,
+    pub enabled: bool,
+}
+
+/// Which AniList and MyAnimeList entries a TheTVDB or TMDB id is, so anime is
+/// looked up by identifier rather than guessed at by title.
+#[derive(Clone, Debug)]
+pub struct AnimeMapping {
+    pub url: String,
 }
 
 #[derive(Clone, Debug)]
@@ -318,16 +364,54 @@ impl Config {
                 pin: opt(&["AMS_TVDB_PIN"]),
                 enabled: flag(&["AMS_TVDB_ENABLED"], true)?,
             },
+            // The four below are off until somebody turns them on: each is a
+            // new party this server talks to, and that is the operator's call.
+            tvmaze: Tvmaze {
+                upstream: var_or(&["AMS_TVMAZE_UPSTREAM"], "https://api.tvmaze.com")
+                    .trim_end_matches('/')
+                    .to_string(),
+                enabled: flag(&["AMS_TVMAZE_ENABLED"], false)?,
+            },
+            anilist: Anilist {
+                upstream: var_or(&["AMS_ANILIST_UPSTREAM"], "https://graphql.anilist.co")
+                    .trim_end_matches('/')
+                    .to_string(),
+                enabled: flag(&["AMS_ANILIST_ENABLED"], false)?,
+            },
+            mal: Mal {
+                upstream: var_or(&["AMS_MAL_UPSTREAM"], "https://api.myanimelist.net/v2")
+                    .trim_end_matches('/')
+                    .to_string(),
+                jikan_upstream: var_or(&["AMS_JIKAN_UPSTREAM"], "https://api.jikan.moe/v4")
+                    .trim_end_matches('/')
+                    .to_string(),
+                client_id: opt(&["AMS_MAL_CLIENT_ID", "MAL_CLIENT_ID"]),
+                enabled: flag(&["AMS_MAL_ENABLED"], false)?,
+            },
+            imdb: Imdb {
+                datasets: var_or(&["AMS_IMDB_DATASETS"], "https://datasets.imdbws.com")
+                    .trim_end_matches('/')
+                    .to_string(),
+                enabled: flag(&["AMS_IMDB_ENABLED"], false)?,
+            },
+            anime_mapping: AnimeMapping {
+                url: var_or(
+                    &["AMS_ANIME_MAPPING_URL"],
+                    "https://raw.githubusercontent.com/Fribb/anime-lists/master/anime-list-full.json",
+                ),
+            },
             provider_priority: {
                 let configured = list(&["AMS_PROVIDER_PRIORITY"]);
                 if configured.is_empty() {
                     // TMDB first because it is the broadest and the one holding a
                     // key; the arr services then fill what it leaves; artwork
                     // providers last, since they only ever add images.
-                    ["tmdb", "tvdb", "skyhook", "radarr", "fanart"]
-                        .iter()
-                        .map(|s| s.to_string())
-                        .collect()
+                    [
+                        "tmdb", "tvdb", "skyhook", "radarr", "fanart", "tvmaze", "anilist", "mal",
+                    ]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect()
                 } else {
                     configured
                 }
@@ -377,11 +461,16 @@ pub enum Surface {
 // ─── env helpers ─────────────────────────────────────────────────────────────
 
 /// First non-empty value among `keys`.
+/// The first of `keys` set to something. A variable set to nothing is passed
+/// over rather than taken: `.env.example` ships `AMS_MAL_CLIENT_ID=` empty, and
+/// a copy of it used to hide a `MAL_CLIENT_ID` given anywhere else.
 fn opt(keys: &[&str]) -> Option<String> {
-    keys.iter()
-        .find_map(|k| std::env::var(k).ok())
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
+    keys.iter().find_map(|k| {
+        std::env::var(k)
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+    })
 }
 
 fn var_or(keys: &[&str], default: &str) -> String {

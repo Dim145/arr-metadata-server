@@ -29,6 +29,7 @@ pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(field_registry))
         .routes(routes!(stats))
+        .routes(routes!(sources))
         .routes(routes!(settings))
         .routes(routes!(clear_cache))
         .routes(routes!(jobs))
@@ -91,6 +92,61 @@ async fn stats(State(state): State<AppState>) -> AppResult<Json<Stats>> {
 }
 
 #[derive(Serialize, ToSchema)]
+pub struct Sources {
+    /// `tmdb`, `tvdb`, `fanart`, `tvmaze`, `anilist`, `mal`, `imdb`: those
+    /// switched on and able to answer, in that order.
+    pub sources: Vec<&'static str>,
+}
+
+/// Where the data this server serves comes from.
+///
+/// For the credits every page carries. Several of these sources make their
+/// data free to use on the condition that it is credited where it is shown —
+/// TVmaze's licence asks for a link, IMDb's for a line — so a visitor has to be
+/// able to read this too.
+#[utoipa::path(get, path = "/sources", tag = TAG, responses((status = 200, body = Sources)))]
+async fn sources(State(state): State<AppState>) -> Json<Sources> {
+    use crate::providers::names;
+
+    let candidates = [
+        (names::TMDB, state.tmdb.is_configured()),
+        (names::TVDB, state.tvdb.is_enabled()),
+        (names::FANART, state.fanart.is_enabled()),
+        (names::TVMAZE, state.flag("tvmaze.enabled", false)),
+        (names::ANILIST, state.flag("anilist.enabled", false)),
+        (names::MAL, state.flag("mal.enabled", false)),
+        (names::IMDB, state.flag("imdb.enabled", false)),
+    ];
+
+    Json(Sources {
+        sources: candidates
+            .into_iter()
+            .filter_map(|(name, on)| on.then_some(name))
+            .collect(),
+    })
+}
+
+/// A list downloaded whole: when it last landed, and how much of it was kept.
+#[derive(Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ListImport {
+    pub imported_at: String,
+    pub rows: i64,
+}
+
+/// What the further sources are working from.
+#[derive(Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FurtherSources {
+    /// `official` when `AMS_MAL_CLIENT_ID` is set, `jikan` otherwise.
+    pub mal_via: &'static str,
+    /// The anime identifier list; absent until it has been downloaded once.
+    pub anime_list: Option<ListImport>,
+    /// IMDb's ratings; absent until they have been downloaded once.
+    pub imdb_ratings: Option<ListImport>,
+}
+
+#[derive(Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
     pub version: &'static str,
@@ -105,6 +161,7 @@ pub struct Settings {
     pub native_policy: &'static str,
     pub tmdb_policy: &'static str,
     pub arr_policy: &'static str,
+    pub further_sources: FurtherSources,
 }
 
 /// Effective configuration.
@@ -126,6 +183,23 @@ async fn settings(
 ) -> AppResult<Json<Settings>> {
     require_admin(&identity)?;
 
+    let imported = |import: Option<repo::import::Import>| {
+        import.map(|i| ListImport {
+            imported_at: i.imported_at,
+            rows: i.row_count,
+        })
+    };
+
+    let further_sources = FurtherSources {
+        mal_via: if state.mal.uses_official_api() {
+            "official"
+        } else {
+            "jikan"
+        },
+        anime_list: imported(repo::import::get(&state.db, crate::jobs::datasets::ANIME).await?),
+        imdb_ratings: imported(repo::import::get(&state.db, crate::jobs::datasets::IMDB).await?),
+    };
+
     Ok(Json(Settings {
         version: env!("CARGO_PKG_VERSION"),
         public_url: state.config.server.public_url.clone(),
@@ -142,6 +216,7 @@ async fn settings(
         native_policy: policy_name(state.config.policy_for(Surface::Native)),
         tmdb_policy: policy_name(state.config.policy_for(Surface::Tmdb)),
         arr_policy: policy_name(state.config.policy_for(Surface::Arr)),
+        further_sources,
     }))
 }
 

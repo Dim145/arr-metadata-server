@@ -228,9 +228,10 @@ async fn add_episode(
     episode.image = request.image;
     episode.absolute_episode_number = request.absolute_episode_number;
 
+    // A date is what was entered, so a date is what is stored. The UTC form a
+    // client expects is derived on the way out when nothing precise is known;
+    // storing an invented midnight here would outrank a real time later.
     if let Some(date) = request.air_date {
-        // Clients expect both forms; deriving the UTC one keeps them agreeing.
-        episode.air_date_utc = Some(format!("{date}T00:00:00Z"));
         episode.air_date = Some(date);
     }
 

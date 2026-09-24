@@ -193,7 +193,7 @@ pub fn from_item(item: &MediaItem, tvdb_id: i64, language: &str) -> ShowResource
         network: item.network.clone(),
         genres: item.genres.clone(),
         content_rating: item.content_rating.clone(),
-        rating: item.rating("tmdb").map(rating_resource),
+        rating: item.headline_rating().map(rating_resource),
         alternative_titles: item
             .alternative_titles
             .iter()
@@ -248,7 +248,15 @@ fn episode_resource(episode: &Episode, tvdb_show_id: i64) -> EpisodeResource {
         aired_before_episode_number: episode.aired_before_episode_number,
         title: episode.title.clone(),
         air_date: episode.air_date.clone(),
-        air_date_utc: episode.air_date_utc.clone(),
+        // The real moment when a provider knew it (Skyhook, TVmaze); midnight
+        // UTC of the broadcast date otherwise, which is what Sonarr needs to
+        // consider an episode aired at all — without it, nothing is searched.
+        air_date_utc: episode.air_date_utc.clone().or_else(|| {
+            episode
+                .air_date
+                .as_deref()
+                .and_then(crate::domain::midnight_utc)
+        }),
         runtime: episode.runtime,
         finale_type: episode.finale_type.clone(),
         rating: episode.rating.map(|r| RatingResource {
@@ -346,11 +354,14 @@ pub fn to_item(show: &ShowResource) -> MediaItem {
         trakt: None,
     };
 
+    // IMDb's rating, republished: Breaking Bad's is 9.5 from 2 679 821 votes
+    // here and 9.5 from 2 679 470 in IMDb's own dataset a day older. Filed
+    // under the source it comes from, so the IMDb list can keep it current.
     if let Some(rating) = &show.rating
         && rating.count > 0
     {
         item.ratings = vec![Rating {
-            source: "tvdb".to_string(),
+            source: "imdb".to_string(),
             value: rating.value.parse().ok(),
             votes: Some(rating.count),
             rating_type: Some("user".to_string()),
@@ -516,6 +527,31 @@ mod tests {
     }
 
     #[test]
+    fn an_episode_reaches_sonarr_with_the_real_moment_or_the_date_at_midnight() {
+        // Sonarr reads `airDateUtc` as the moment an episode aired and does not
+        // search before it. The real one when a provider knew it; midnight UTC
+        // of the broadcast date when none did — never nothing, or the episode
+        // would never be considered aired at all.
+        let mut item = item();
+        item.episodes = vec![crate::db::repo::child::blank_episode(1, 1)];
+        item.episodes[0].air_date = Some("2008-01-20".into());
+
+        item.episodes[0].air_date_utc = Some("2008-01-21T02:00:00Z".into());
+        let known = from_item(&item, 81189, "en");
+        assert_eq!(
+            known.episodes[0].air_date_utc.as_deref(),
+            Some("2008-01-21T02:00:00Z")
+        );
+
+        item.episodes[0].air_date_utc = None;
+        let dated = from_item(&item, 81189, "en");
+        assert_eq!(
+            dated.episodes[0].air_date_utc.as_deref(),
+            Some("2008-01-20T00:00:00Z")
+        );
+    }
+
+    #[test]
     fn air_time_becomes_a_time_of_day() {
         let resource = from_item(&item(), 81189, "en");
         let tod = resource.time_of_day.unwrap();
@@ -544,6 +580,85 @@ mod tests {
         let again = from_item(&canonical, 81189, "en");
         assert_eq!(again.status, original.status);
         assert_eq!(again.title, original.title);
+    }
+
+    fn rating(source: &str, value: f64, votes: i64) -> Rating {
+        Rating {
+            source: source.into(),
+            value: Some(value),
+            votes: Some(votes),
+            rating_type: Some("user".into()),
+        }
+    }
+
+    #[test]
+    fn sonarr_is_given_imdbs_rating_when_there_is_one() {
+        // What Skyhook gives it, so what it has always shown — even where
+        // another source has more votes behind it.
+        let mut it = item();
+        it.ratings = vec![
+            rating("tmdb", 8.7, 7_706),
+            rating("mal", 8.57, 3_089_461),
+            rating("imdb", 9.1, 748_283),
+        ];
+
+        let resource = from_item(&it, 267440, "en").rating.unwrap();
+        assert_eq!((resource.value.as_str(), resource.count), ("9.1", 748_283));
+    }
+
+    #[test]
+    fn otherwise_sonarr_is_given_the_rating_with_the_most_votes() {
+        let mut it = item();
+        it.ratings = vec![
+            rating("tmdb", 8.7, 7_706),
+            rating("anilist", 8.5, 609_257),
+            // A value of nothing is not a rating, however many voted.
+            Rating {
+                source: "trakt".into(),
+                value: None,
+                votes: Some(9_000_000),
+                rating_type: None,
+            },
+        ];
+
+        let resource = from_item(&it, 267440, "en").rating.unwrap();
+        assert_eq!((resource.value.as_str(), resource.count), ("8.5", 609_257));
+    }
+
+    #[test]
+    fn a_figure_that_is_not_a_mark_out_of_ten_is_never_the_rating() {
+        // TheTVDB's popularity figure, stored as a rating before this server
+        // stopped filing it as one.
+        let mut it = item();
+        it.ratings = vec![Rating {
+            source: "tvdb".into(),
+            value: Some(3_776_757.0),
+            votes: None,
+            rating_type: Some("user".into()),
+        }];
+
+        assert!(from_item(&it, 81189, "en").rating.is_none());
+    }
+
+    #[test]
+    fn of_ratings_tied_on_votes_the_first_listed_leads() {
+        let mut it = item();
+        it.ratings = vec![rating("tmdb", 7.4, 0), rating("mal", 8.1, 0)];
+
+        let resource = from_item(&it, 81189, "en").rating.unwrap();
+        assert_eq!(resource.value, "7.4");
+    }
+
+    #[test]
+    fn skyhooks_rating_is_filed_as_the_imdb_rating_it_is() {
+        let mut it = item();
+        it.ratings = vec![rating("imdb", 9.5, 2_679_821)];
+
+        let canonical = to_item(&from_item(&it, 81189, "en"));
+
+        assert_eq!(canonical.ratings.len(), 1);
+        assert_eq!(canonical.ratings[0].source, "imdb");
+        assert_eq!(canonical.ratings[0].votes, Some(2_679_821));
     }
 
     #[test]

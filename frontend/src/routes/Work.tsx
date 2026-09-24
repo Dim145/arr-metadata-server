@@ -25,7 +25,7 @@ import {
 import { ApiError, api, query } from '../lib/api'
 import { cn } from '../lib/cn'
 import * as fmt from '../lib/format'
-import { languageName, statusLabel } from '../lib/labels'
+import { languageName, providerName, statusLabel } from '../lib/labels'
 import { useI18n } from '../lib/i18n'
 import {
   backdrop,
@@ -34,6 +34,7 @@ import {
   episodesOf,
   headlineRating,
   poster,
+  ratingsOf,
   seasonName,
   seasonNumbers,
 } from '../lib/media'
@@ -104,6 +105,7 @@ export function Work() {
 
         <aside className="space-y-6">
           <Record item={item} />
+          <Ratings item={item} />
           <Identifiers item={item} />
         </aside>
       </div>
@@ -185,7 +187,29 @@ function Plate({ item }: { item: MediaItem }) {
             ) : null}
 
             <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-3">
-              {rating?.value ? <Score value={rating.value} votes={rating.votes} size="md" /> : null}
+              {rating?.value ? (
+                <div className="flex items-center gap-3">
+                  <Score
+                    value={rating.value}
+                    votes={rating.votes}
+                    source={providerName(rating.source)}
+                    size="md"
+                  />
+                  {/* Whose figure it is. One number with no name beside it read
+                      as the catalogue's own verdict, and it moves between
+                      sources as they are switched on. */}
+                  <div className="leading-tight">
+                    <p aria-hidden className="label">
+                      {providerName(rating.source)}
+                    </p>
+                    {rating.votes ? (
+                      <p className="mt-1 font-mono text-[0.6875rem] text-bone-faint tabular-nums">
+                        {t.work.votes(fmt.count(rating.votes, locale), rating.votes)}
+                      </p>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
 
               <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-bone-dim">
                 {fmt.runtime(item.runtime, locale) ? (
@@ -451,6 +475,54 @@ function Record({ item }: { item: MediaItem }) {
   )
 }
 
+/**
+ * Every mark out of ten a source gave, the one on the plate first.
+ *
+ * One figure hides how far apart the audiences are: an anime can sit a point
+ * higher on MyAnimeList than on TMDB, from a hundred times the votes. Left out
+ * when the plate already shows the only one there is.
+ */
+function Ratings({ item }: { item: MediaItem }) {
+  const { t, locale } = useI18n()
+  const ratings = ratingsOf(item.ratings)
+
+  if (ratings.length < 2) return null
+
+  return (
+    <Panel>
+      <PanelHead title={t.work.ratings} />
+      <ul className="divide-y divide-rule">
+        {ratings.map((rating) => {
+          const value = rating.value ?? 0
+
+          return (
+            <li key={rating.source} className="px-5 py-3">
+              <div className="flex items-baseline justify-between gap-3">
+                <span className="label">{providerName(rating.source)}</span>
+                <span className="font-display text-lg leading-none text-bone tabular-nums">
+                  {fmt.score(value, locale)}
+                  <span className="sr-only"> {t.work.outOfTen}</span>
+                </span>
+              </div>
+              <div aria-hidden className="mt-2 h-1 overflow-hidden rounded-full bg-rule">
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-vermillion to-brass"
+                  style={{ width: `${value * 10}%` }}
+                />
+              </div>
+              {rating.votes ? (
+                <p className="mt-1.5 font-mono text-[0.6875rem] text-bone-faint tabular-nums">
+                  {t.work.votes(fmt.count(rating.votes, locale), rating.votes)}
+                </p>
+              ) : null}
+            </li>
+          )
+        })}
+      </ul>
+    </Panel>
+  )
+}
+
 function Identifiers({ item }: { item: MediaItem }) {
   const { t } = useI18n()
 
@@ -465,7 +537,7 @@ function Identifiers({ item }: { item: MediaItem }) {
       <PanelHead title={t.work.identifiers} />
       <dl className="divide-y divide-rule">
         {entries.map(([source, value]) => (
-          <Field key={source} label={source}>
+          <Field key={source} label={providerName(source)}>
             <span className="font-mono text-[0.8125rem] tabular-nums">
               {Array.isArray(value) ? value.join(', ') : String(value)}
             </span>

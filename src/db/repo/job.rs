@@ -34,6 +34,10 @@ pub mod kinds {
     pub const REFRESH_SWEEP: &str = "refresh.sweep";
     /// One entry refreshed because someone asked.
     pub const REFRESH_ITEM: &str = "refresh.item";
+    /// The anime identifier list, downloaded whole.
+    pub const IMPORT_ANIME: &str = "import.anime";
+    /// IMDb's ratings, downloaded whole.
+    pub const IMPORT_IMDB: &str = "import.imdb";
 }
 
 #[derive(Clone, Debug, Serialize, ToSchema)]

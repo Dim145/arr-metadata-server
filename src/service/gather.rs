@@ -13,10 +13,11 @@ use anyhow::Result;
 use serde_json::Value;
 
 use crate::{
-    domain::MediaItem,
+    db::repo,
+    domain::{ExternalIds, ExternalSource, MediaItem, MediaKind},
     merge::{self, Contribution},
     providers::{names, tmdb::map as tmdb_map},
-    service::persist,
+    service::{anime, persist},
     state::AppState,
     wire,
 };
@@ -27,6 +28,14 @@ use crate::{
 /// television on record is under a hundred — and the number is read off an
 /// answer rather than known in advance.
 const MAX_SEASONS: usize = 200;
+
+/// Providers that add to a work and cannot describe one alone: artwork,
+/// broadcast times, the anime sites' scores and titles.
+///
+/// When nothing else answered, what these returned is not stored. There is no
+/// work to attach it to — only a name and some pictures filed under an id, or
+/// a series with no episodes that would reach Sonarr as one.
+const SUPPLEMENTS: &[&str] = &[names::FANART, names::TVMAZE, names::ANILIST, names::MAL];
 
 /// What one provider returned: its raw body, and the canonical form of it.
 struct Answer {
@@ -45,17 +54,34 @@ pub async fn series(
     tmdb_id: Option<i64>,
     tvdb_id: Option<i64>,
 ) -> Result<Option<MediaItem>> {
-    let (from_tmdb, from_tvdb, from_skyhook, from_fanart) = tokio::join!(
+    let (from_tmdb, from_tvdb, from_skyhook, from_fanart, from_tvmaze) = tokio::join!(
         series_from_tmdb(state, tmdb_id),
         series_from_tvdb(state, tvdb_id),
         series_from_skyhook(state, tvdb_id),
         series_from_fanart(state, tvdb_id),
+        series_from_tvmaze(state, tvdb_id),
     );
 
-    let answers: Vec<Answer> = [from_tmdb, from_tvdb, from_skyhook, from_fanart]
+    let mut answers: Vec<Answer> = [from_tmdb, from_tvdb, from_skyhook, from_fanart, from_tvmaze]
         .into_iter()
         .flatten()
         .collect();
+
+    // The anime sites second: which of their entries to ask about comes from
+    // the identifier list, or failing that from the ids Skyhook just returned.
+    if let Some(tvdb_id) = tvdb_id
+        && anime::enabled(state)
+        && describes_a_work(&answers)
+    {
+        let mut known = ExternalIds::default();
+        for answer in &answers {
+            known.mal.extend(&answer.item.external_ids.mal);
+            known.anilist.extend(&answer.item.external_ids.anilist);
+        }
+
+        let chosen = anime::for_series(state, tvdb_id, &known).await;
+        answers.extend(from_anime_sites(state, chosen, MediaKind::Series).await);
+    }
 
     store(state, answers).await
 }
@@ -72,12 +98,98 @@ pub async fn movie(
         movie_from_fanart(state, tmdb_id, imdb_id),
     );
 
-    let answers: Vec<Answer> = [from_tmdb, from_radarr, from_fanart]
+    let mut answers: Vec<Answer> = [from_tmdb, from_radarr, from_fanart]
         .into_iter()
         .flatten()
         .collect();
 
+    if let Some(tmdb_id) = tmdb_id
+        && anime::enabled(state)
+        && describes_a_work(&answers)
+    {
+        let chosen = anime::for_movie(state, tmdb_id).await;
+        let mut from_sites = from_anime_sites(state, chosen, MediaKind::Movie).await;
+
+        // A film keeps no AniList or MyAnimeList id. TheTVDB files films under
+        // the series they belong to, and Skyhook lists them with its entries,
+        // so a series already claims most of them — and a work is matched to
+        // the stored one by any id it shares, whatever its kind. The film would
+        // be written over the series.
+        for answer in &mut from_sites {
+            answer.item.external_ids = ExternalIds::default();
+        }
+
+        answers.extend(from_sites);
+    }
+
     store(state, answers).await
+}
+
+/// Whether anything that can stand for a work on its own answered.
+fn describes_a_work(answers: &[Answer]) -> bool {
+    answers.iter().any(|a| !SUPPLEMENTS.contains(&a.provider))
+}
+
+/// AniList and MyAnimeList, asked at the same time about the entry `chosen`.
+async fn from_anime_sites(state: &AppState, chosen: anime::Chosen, kind: MediaKind) -> Vec<Answer> {
+    if chosen.is_empty() {
+        return Vec::new();
+    }
+
+    let (from_anilist, from_mal) = tokio::join!(
+        from_anilist(state, chosen.anilist, kind),
+        from_mal(state, chosen.mal, kind),
+    );
+
+    [from_anilist, from_mal].into_iter().flatten().collect()
+}
+
+async fn from_anilist(state: &AppState, id: Option<i64>, kind: MediaKind) -> Option<Answer> {
+    let id = id?;
+    if !state.flag("anilist.enabled", false) {
+        return None;
+    }
+
+    match state.anilist.media(id, kind).await {
+        Ok(Some((raw, item))) => Some(Answer {
+            provider: names::ANILIST,
+            payload: raw,
+            item,
+        }),
+        Ok(None) => None,
+        Err(e) => {
+            tracing::warn!(
+                anilist_id = id,
+                error = format_args!("{e:#}"),
+                "AniList lookup failed"
+            );
+            None
+        }
+    }
+}
+
+async fn from_mal(state: &AppState, id: Option<i64>, kind: MediaKind) -> Option<Answer> {
+    let id = id?;
+    if !state.flag("mal.enabled", false) {
+        return None;
+    }
+
+    match state.mal.anime(id, kind).await {
+        Ok(Some((raw, item))) => Some(Answer {
+            provider: names::MAL,
+            payload: raw,
+            item,
+        }),
+        Ok(None) => None,
+        Err(e) => {
+            tracing::warn!(
+                mal_id = id,
+                error = format_args!("{e:#}"),
+                "MyAnimeList lookup failed"
+            );
+            None
+        }
+    }
 }
 
 /// Merge what came back and write it.
@@ -88,6 +200,14 @@ async fn store(state: &AppState, answers: Vec<Answer>) -> Result<Option<MediaIte
 
     let providers: Vec<&str> = answers.iter().map(|a| a.provider).collect();
     tracing::debug!(?providers, "merging provider answers");
+
+    if !describes_a_work(&answers) {
+        tracing::warn!(
+            ?providers,
+            "only supplementary sources answered; not storing"
+        );
+        return Ok(None);
+    }
 
     let snapshots: Vec<(String, Value)> = answers
         .iter()
@@ -106,10 +226,10 @@ async fn store(state: &AppState, answers: Vec<Answer>) -> Result<Option<MediaIte
         return Ok(None);
     };
 
-    // Fanart.tv answers with artwork and nothing else, so when it is the only
-    // provider that replied there is no work here to speak of — just pictures
-    // filed under an id. Storing that would put a nameless row in the catalogue
-    // and hand the client an entry it cannot display.
+    // Answers from supplements alone were refused above; this is the provider
+    // of record that answered with a blank title. Storing it would put a
+    // nameless row in the catalogue and hand the client an entry it cannot
+    // display.
     if merged.title.trim().is_empty() {
         tracing::warn!(?providers, "no provider named this work; not storing it");
         return Ok(None);
@@ -214,6 +334,50 @@ async fn series_from_tvdb(state: &AppState, tvdb_id: Option<i64>) -> Option<Answ
                 tvdb_id,
                 error = format_args!("{e:#}"),
                 "TheTVDB lookup failed"
+            );
+            None
+        }
+    }
+}
+
+/// TVmaze, for the instant each episode aired.
+///
+/// What it says about an episode is only used where its broadcast date agrees
+/// with the spine's — see `merge::apply_broadcast_times`.
+async fn series_from_tvmaze(state: &AppState, tvdb_id: Option<i64>) -> Option<Answer> {
+    let tvdb_id = tvdb_id?;
+    if !state.flag("tvmaze.enabled", false) {
+        return None;
+    }
+
+    // A series fetched before has its TVmaze id on file — Skyhook and TheTVDB
+    // both carry it — which turns three requests into one.
+    let known = match repo::item::find_id_by_external(
+        &state.db,
+        ExternalSource::TvdbSeries,
+        &tvdb_id.to_string(),
+    )
+    .await
+    {
+        Ok(Some(id)) => repo::item::load_external_ids(&state.db, &id)
+            .await
+            .ok()
+            .and_then(|ids| ids.tvmaze),
+        _ => None,
+    };
+
+    match state.tvmaze.series(tvdb_id, known).await {
+        Ok(Some((raw, item))) => Some(Answer {
+            provider: names::TVMAZE,
+            payload: raw,
+            item,
+        }),
+        Ok(None) => None,
+        Err(e) => {
+            tracing::warn!(
+                tvdb_id,
+                error = format_args!("{e:#}"),
+                "TVmaze lookup failed"
             );
             None
         }

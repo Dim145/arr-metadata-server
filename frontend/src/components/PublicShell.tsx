@@ -7,12 +7,15 @@
  * transcoding.
  */
 
-import { useEffect, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import { Fragment, useEffect, useState } from 'react'
 import { Link, Outlet, useLocation, useNavigate, useSearchParams } from 'react-router'
 
+import { api } from '../lib/api'
 import { cn } from '../lib/cn'
 import { useI18n, type Lang } from '../lib/i18n'
-import type { Me } from '../lib/types'
+import { providerName } from '../lib/labels'
+import type { Me, Sources } from '../lib/types'
 import { Glyph, Input } from './ui'
 
 export function PublicShell({ me }: { me?: Me }) {
@@ -298,12 +301,81 @@ function AdminLink({ me, labelled = false }: { me?: Me; labelled?: boolean }) {
 function Footer() {
   const { t } = useI18n()
 
+  const sources = useQuery({
+    queryKey: ['sources'],
+    queryFn: () => api.get<Sources>('/sources'),
+    staleTime: 10 * 60_000,
+    // The page is whole without it; a failed request is not worth a second.
+    retry: false,
+  })
+
   return (
     <footer className="relative z-10 border-t border-rule">
-      <div className="mx-auto flex max-w-7xl flex-col gap-1 px-4 py-8 sm:px-6">
-        <span className="font-display text-base text-bone-dim">{t.brand.name}</span>
-        <span className="text-xs text-bone-faint">{t.brand.tagline}</span>
+      <div className="mx-auto flex max-w-7xl flex-col gap-6 px-4 py-8 sm:flex-row sm:items-start sm:justify-between sm:px-6">
+        <div className="flex flex-col gap-1">
+          <span className="font-display text-base text-bone-dim">{t.brand.name}</span>
+          <span className="text-xs text-bone-faint">{t.brand.tagline}</span>
+        </div>
+        {sources.data?.sources.length ? <Credits active={sources.data.sources} /> : null}
       </div>
     </footer>
+  )
+}
+
+/** Where each source lives, for the link its credit carries. */
+const HOMES: Record<string, string> = {
+  tmdb: 'https://www.themoviedb.org',
+  tvdb: 'https://thetvdb.com',
+  fanart: 'https://fanart.tv',
+  tvmaze: 'https://www.tvmaze.com',
+  anilist: 'https://anilist.co',
+  mal: 'https://myanimelist.net',
+  imdb: 'https://www.imdb.com',
+}
+
+/**
+ * Who the data on these pages comes from.
+ *
+ * Owed, not decorative: TMDB's terms ask for their notice, TVmaze's licence
+ * for a link, IMDb's for a line. Only what is switched on is named, so the
+ * footer never credits a source that contributed nothing.
+ */
+function Credits({ active }: { active: string[] }) {
+  const { t } = useI18n()
+  const linked = active.filter((key) => HOMES[key])
+
+  return (
+    <div className="max-w-xl text-xs leading-relaxed text-bone-faint sm:text-right">
+      <p>
+        {t.credits.lead}{' '}
+        {linked.map((key, index) => (
+          <Fragment key={key}>
+            {/* The dot rides with the name before it, so a line never starts
+                with one. */}
+            <span className="whitespace-nowrap">
+              <a
+                href={HOMES[key]}
+                target="_blank"
+                rel="noreferrer"
+                className="text-bone-dim underline decoration-rule-bright underline-offset-2 transition-colors duration-150 hover:text-bone"
+              >
+                {providerName(key)}
+              </a>
+              {index < linked.length - 1 ? <span aria-hidden> ·</span> : null}
+            </span>{' '}
+          </Fragment>
+        ))}
+      </p>
+      {active.includes('tmdb') ? (
+        <p lang="en" className="mt-1">
+          {t.credits.tmdb}
+        </p>
+      ) : null}
+      {active.includes('imdb') ? (
+        <p lang="en" className="mt-1">
+          {t.credits.imdb}
+        </p>
+      ) : null}
+    </div>
   )
 }

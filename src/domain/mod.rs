@@ -207,6 +207,28 @@ impl MediaItem {
     pub fn rating(&self, source: &str) -> Option<&Rating> {
         self.ratings.iter().find(|r| r.source == source)
     }
+
+    /// The one rating to give where a client takes only one.
+    ///
+    /// IMDb's when there is one: it is what Skyhook serves, so it is what
+    /// Sonarr has always shown for a series. Otherwise the one with the most
+    /// votes behind it — TMDB's for most works, MyAnimeList's for most anime —
+    /// and the first listed of those tied.
+    ///
+    /// Only marks out of ten. TheTVDB's popularity figure used to be stored as
+    /// a rating; a figure in the millions is not one, whatever it is filed as.
+    /// The interface picks by the same rule: see `ratingsOf` in `lib/media.ts`.
+    pub fn headline_rating(&self) -> Option<&Rating> {
+        let real = || {
+            self.ratings
+                .iter()
+                .filter(|r| r.value.is_some_and(|v| v > 0.0 && v <= 10.0))
+        };
+
+        real()
+            .find(|r| r.source == "imdb")
+            .or_else(|| real().min_by_key(|r| std::cmp::Reverse(r.votes.unwrap_or(0))))
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
@@ -428,7 +450,7 @@ pub struct RatingValue {
     pub votes: i64,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Rating {
     /// `tmdb`, `imdb`, `metacritic`, `rottenTomatoes`, `trakt`, …

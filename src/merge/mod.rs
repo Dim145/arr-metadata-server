@@ -39,6 +39,18 @@ pub struct Contribution {
 /// these has a list, it is the list, whatever the general priority says.
 const TVDB_NUMBERED: &[&str] = &["tvdb", "skyhook"];
 
+/// Providers whose episodes are matched to the spine by broadcast date as well
+/// as by number, and whose broadcast instant replaces anyone else's.
+const DATE_CHECKED: &[&str] = &["tvmaze"];
+
+/// Providers whose studio replaces anyone else's.
+///
+/// They only ever describe anime, and for anime their main studio is the one
+/// that animated it. What TMDB supplies as a studio is the first production
+/// company it happens to list: Production I.G for *Attack on Titan*, whose
+/// first three seasons Wit Studio animated.
+const STUDIO_AUTHORITIES: &[&str] = &["anilist", "mal"];
+
 /// Fold contributions into one entity, most trusted first.
 ///
 /// `priority` names providers in order; anything not named sorts last, keeping
@@ -57,6 +69,24 @@ pub fn combine(mut contributions: Vec<Contribution>, priority: &[String]) -> Opt
     };
 
     contributions.sort_by_key(|c| rank(&c.provider));
+
+    // TVmaze's episodes are held out of the merge below: it numbers some series
+    // its own way, so it may neither supply the list nor fill it by number
+    // alone. What it knows is applied at the end, where its broadcast date
+    // agrees with the spine's; see `apply_broadcast_times`.
+    let broadcasts: Vec<Episode> = contributions
+        .iter_mut()
+        .filter(|c| DATE_CHECKED.contains(&c.provider.as_str()))
+        .flat_map(|c| {
+            c.item.seasons.clear();
+            std::mem::take(&mut c.item.episodes)
+        })
+        .collect();
+
+    let studio = contributions
+        .iter()
+        .filter(|c| STUDIO_AUTHORITIES.contains(&c.provider.as_str()))
+        .find_map(|c| c.item.studio.clone().filter(|s| !s.trim().is_empty()));
 
     // Decide whose episode numbering this is before anything is folded, because
     // every later provider fills fields *into* that list.
@@ -113,6 +143,12 @@ pub fn combine(mut contributions: Vec<Contribution>, priority: &[String]) -> Opt
         fold(&mut merged, contribution.item);
     }
 
+    apply_broadcast_times(&mut merged.episodes, broadcasts);
+
+    if studio.is_some() {
+        merged.studio = studio;
+    }
+
     // Whichever provider ended up supplying the spine, a client reads it in order.
     merged.seasons.sort_by_key(|s| s.season_number);
     merged
@@ -123,6 +159,19 @@ pub fn combine(mut contributions: Vec<Contribution>, priority: &[String]) -> Opt
         .sort_by_key(|i| (i.cover_type.priority(), i.sort_order));
 
     Some(merged)
+}
+
+/// Drop the alternative titles that are only the work's own title again.
+///
+/// Several providers list it anyway, under whichever country they filed it
+/// for. Applied to what is about to be stored rather than inside the merge: a
+/// merge that removed every title a work had would come back empty, and an
+/// empty list is how a refresh says nobody answered — so the stored list, its
+/// copies of the title included, would be put back.
+pub fn drop_own_title(item: &mut MediaItem) {
+    let title = item.title.trim().to_string();
+    item.alternative_titles
+        .retain(|t| t.is_manual || !t.title.trim().eq_ignore_ascii_case(&title));
 }
 
 /// Take from `other` whatever `into` is missing.
@@ -171,6 +220,11 @@ fn fold(into: &mut MediaItem, other: MediaItem) {
         into.keywords = other.keywords;
     }
 
+    // Believed from whichever provider says so. A work only one source knows
+    // is adult — AniList, for most of what it flags — must not be served as
+    // anything else because a broader source forgot to say.
+    into.is_adult = into.is_adult || other.is_adult;
+
     merge_ids(&mut into.external_ids, other.external_ids);
 
     union_images(&mut into.images, other.images);
@@ -196,6 +250,73 @@ fn fold(into: &mut MediaItem, other: MediaItem) {
         into.episodes = other.episodes;
     } else {
         merge_episodes(&mut into.episodes, other.episodes);
+    }
+}
+
+/// What TVmaze knows about each episode, applied where it provably means the
+/// same episode.
+///
+/// Same season, same number *and* the same broadcast date: TVmaze numbers some
+/// series differently from TheTVDB, and a date is the one thing both sides can
+/// check each other against. Where they agree, its instant replaces whatever
+/// else was there — it keeps a time per episode, in the network's timezone,
+/// where TheTVDB keeps one per series and Skyhook stamps it on every episode.
+/// Measured on *The Big Bang Theory*: Skyhook puts all of season three at
+/// 20:00 when it aired at 21:30. Where they do not agree, nothing is taken.
+///
+/// A date only tells episodes apart when it is theirs alone. On a day with
+/// several — a double bill, a season released at once — the two sides line up
+/// only if they count the same number of episodes that day; then the instants
+/// are taken, in order, but not the text or the still, which would belong to a
+/// neighbour if the order within the day differed. A day the sides count
+/// differently is one where TVmaze numbers the release its own way, and
+/// nothing from it is taken.
+fn apply_broadcast_times(into: &mut [Episode], from: Vec<Episode>) {
+    use std::collections::HashMap;
+
+    fn per_day(episodes: &[Episode]) -> HashMap<(i32, String), usize> {
+        let mut days = HashMap::new();
+        for e in episodes {
+            if let Some(date) = &e.air_date {
+                *days.entry((e.season_number, date.clone())).or_default() += 1;
+            }
+        }
+        days
+    }
+
+    let ours_per_day = per_day(into);
+    let theirs_per_day = per_day(&from);
+
+    for theirs in from {
+        let Some(ours) = into.iter_mut().find(|e| {
+            e.season_number == theirs.season_number && e.episode_number == theirs.episode_number
+        }) else {
+            continue;
+        };
+
+        let Some(date) = ours
+            .air_date
+            .clone()
+            .filter(|d| Some(d) == theirs.air_date.as_ref())
+        else {
+            continue;
+        };
+
+        let day = (ours.season_number, date);
+        let on_the_day = ours_per_day.get(&day).copied().unwrap_or(0);
+        if theirs_per_day.get(&day).copied().unwrap_or(0) != on_the_day {
+            continue;
+        }
+
+        if theirs.air_date_utc.is_some() {
+            ours.air_date_utc = theirs.air_date_utc;
+        }
+
+        if on_the_day == 1 {
+            fill(&mut ours.overview, theirs.overview);
+            fill(&mut ours.image, theirs.image);
+            ours.runtime = ours.runtime.or(theirs.runtime);
+        }
     }
 }
 
@@ -255,11 +376,20 @@ fn union_images(into: &mut Vec<Image>, other: Vec<Image>) {
     }
 }
 
+/// Union alternative titles, one copy of each.
+///
+/// The same title filed for two countries is two entries, because a client may
+/// ask for the one used in its own. A title filed for none says nothing a copy
+/// filed for a country does not, so it is a duplicate of any — the anime sites
+/// list every synonym that way, and *AOT* reached the catalogue three times.
 fn union_alternative_titles(into: &mut Vec<AlternativeTitle>, other: Vec<AlternativeTitle>) {
     for title in other {
-        let duplicate = into
-            .iter()
-            .any(|e| e.title.eq_ignore_ascii_case(&title.title) && e.language == title.language);
+        let duplicate = into.iter().any(|e| {
+            e.title.eq_ignore_ascii_case(&title.title)
+                && (e.language == title.language
+                    || e.language.is_none()
+                    || title.language.is_none())
+        });
 
         if !duplicate {
             into.push(title);
@@ -400,6 +530,32 @@ mod tests {
         let mut i = crate::db::repo::child::blank_image(kind, url.into());
         i.is_manual = false;
         i
+    }
+
+    #[test]
+    fn an_air_time_from_a_provider_that_knows_it_reaches_the_spine() {
+        // TheTVDB has the date and not the time; Skyhook has both. The spine is
+        // TheTVDB's, and its episodes used to carry an invented midnight UTC
+        // that the fill-only merge then kept — so all eighty episodes of
+        // Breaking Bad reached Sonarr twenty-six hours early.
+        let mut tvdb = base("tvdb", "Breaking Bad");
+        let mut pilot = episode(1, 1);
+        pilot.air_date = Some("2008-01-20".into());
+        pilot.air_date_utc = None;
+        tvdb.item.episodes = vec![pilot];
+
+        let mut skyhook = base("skyhook", "Breaking Bad");
+        let mut known = episode(1, 1);
+        known.air_date = Some("2008-01-20".into());
+        known.air_date_utc = Some("2008-01-21T02:00:00Z".into());
+        skyhook.item.episodes = vec![known];
+
+        let merged = combine(vec![tvdb, skyhook], &priority()).unwrap();
+
+        assert_eq!(
+            merged.episodes[0].air_date_utc.as_deref(),
+            Some("2008-01-21T02:00:00Z")
+        );
     }
 
     #[test]
@@ -813,5 +969,289 @@ mod tests {
         // TVDB owns the list here, so its rating is the one already in place.
         let merged = combine(vec![a, b], &priority()).unwrap();
         assert_eq!(merged.episodes[0].rating.map(|r| r.value), Some(9.0));
+    }
+
+    /// An episode as TVmaze gives it: a date, and the moment on that date.
+    fn broadcast(season: i32, number: i32, date: &str, instant: &str) -> Episode {
+        let mut e = episode(season, number);
+        e.air_date = Some(date.into());
+        e.air_date_utc = Some(instant.into());
+        e
+    }
+
+    #[test]
+    fn a_broadcast_time_replaces_the_series_slot_when_the_dates_agree() {
+        // Skyhook stamps the series' time slot on every episode; TVmaze knows
+        // the slot moved. Measured on The Big Bang Theory, season three.
+        let mut skyhook = base("skyhook", "The Big Bang Theory");
+        skyhook.item.episodes = vec![broadcast(3, 1, "2009-09-21", "2009-09-22T00:00:00Z")];
+
+        let mut tvmaze = base("tvmaze", "The Big Bang Theory");
+        tvmaze.item.episodes = vec![broadcast(3, 1, "2009-09-21", "2009-09-22T01:30:00Z")];
+
+        let merged = combine(vec![skyhook, tvmaze], &priority()).unwrap();
+
+        assert_eq!(
+            merged.episodes[0].air_date_utc.as_deref(),
+            Some("2009-09-22T01:30:00Z")
+        );
+    }
+
+    #[test]
+    fn a_broadcast_time_for_a_different_date_is_not_taken() {
+        // Same numbers, different days: TVmaze means another episode. Nothing
+        // it says about this one can be trusted, time or text.
+        let mut tvdb = base("tvdb", "One Piece");
+        let mut ours = broadcast(1, 1, "1999-10-20", "1999-10-20T10:30:00Z");
+        ours.overview = None;
+        tvdb.item.episodes = vec![ours];
+
+        let mut tvmaze = base("tvmaze", "One Piece");
+        let mut theirs = broadcast(1, 1, "2004-09-18", "2004-09-18T14:00:00Z");
+        theirs.overview = Some("Another episode entirely.".into());
+        tvmaze.item.episodes = vec![theirs];
+
+        let merged = combine(vec![tvdb, tvmaze], &priority()).unwrap();
+
+        assert_eq!(
+            merged.episodes[0].air_date_utc.as_deref(),
+            Some("1999-10-20T10:30:00Z")
+        );
+        assert_eq!(merged.episodes[0].overview, None);
+    }
+
+    #[test]
+    fn a_broadcast_fills_what_the_spine_is_missing_about_the_same_episode() {
+        let mut tvdb = base("tvdb", "Breaking Bad");
+        let mut pilot = episode(1, 1);
+        pilot.air_date = Some("2008-01-20".into());
+        pilot.overview = None;
+        tvdb.item.episodes = vec![pilot];
+
+        let mut tvmaze = base("tvmaze", "Breaking Bad");
+        let mut theirs = broadcast(1, 1, "2008-01-20", "2008-01-21T03:00:00Z");
+        theirs.overview = Some("A teacher learns he is ill.".into());
+        theirs.runtime = Some(58);
+        tvmaze.item.episodes = vec![theirs];
+
+        let merged = combine(vec![tvdb, tvmaze], &priority()).unwrap();
+        let pilot = &merged.episodes[0];
+
+        assert_eq!(pilot.air_date_utc.as_deref(), Some("2008-01-21T03:00:00Z"));
+        assert_eq!(
+            pilot.overview.as_deref(),
+            Some("A teacher learns he is ill.")
+        );
+        assert_eq!(pilot.runtime, Some(58));
+    }
+
+    #[test]
+    fn on_a_double_bill_the_instants_are_taken_but_not_the_text() {
+        let mut tvdb = base("tvdb", "Finale");
+        tvdb.item.episodes = (23..=24)
+            .map(|n| {
+                let mut e = episode(12, n);
+                e.air_date = Some("2019-05-16".into());
+                e.overview = None;
+                e
+            })
+            .collect();
+
+        let mut tvmaze = base("tvmaze", "Finale");
+        tvmaze.item.episodes = vec![
+            broadcast(12, 23, "2019-05-16", "2019-05-17T00:00:00Z"),
+            broadcast(12, 24, "2019-05-16", "2019-05-17T00:30:00Z"),
+        ];
+        for e in &mut tvmaze.item.episodes {
+            e.overview = Some("Which of the two is this?".into());
+        }
+
+        let merged = combine(vec![tvdb, tvmaze], &priority()).unwrap();
+
+        let instants: Vec<_> = merged
+            .episodes
+            .iter()
+            .map(|e| e.air_date_utc.as_deref())
+            .collect();
+        assert_eq!(
+            instants,
+            [Some("2019-05-17T00:00:00Z"), Some("2019-05-17T00:30:00Z")]
+        );
+        assert!(merged.episodes.iter().all(|e| e.overview.is_none()));
+    }
+
+    #[test]
+    fn a_release_day_the_sides_count_differently_is_left_alone() {
+        // A season released at once, where TVmaze counts a two-part premiere
+        // as one episode: its numbers are one behind from the second on.
+        let mut tvdb = base("tvdb", "Binge");
+        tvdb.item.episodes = (1..=3)
+            .map(|n| {
+                let mut e = episode(1, n);
+                e.air_date = Some("2021-09-17".into());
+                e.air_date_utc = Some("2021-09-17T07:00:00Z".into());
+                e.overview = None;
+                e
+            })
+            .collect();
+
+        let mut tvmaze = base("tvmaze", "Binge");
+        tvmaze.item.episodes = (1..=2)
+            .map(|n| {
+                let mut e = broadcast(1, n, "2021-09-17", "2021-09-17T08:00:00Z");
+                e.overview = Some(format!("TVmaze's episode {n}"));
+                e
+            })
+            .collect();
+
+        let merged = combine(vec![tvdb, tvmaze], &priority()).unwrap();
+
+        assert!(merged.episodes.iter().all(|e| e.air_date_utc.as_deref()
+            == Some("2021-09-17T07:00:00Z")
+            && e.overview.is_none()));
+    }
+
+    #[test]
+    fn tvmaze_never_supplies_the_episode_list() {
+        // Its numbering is its own, so even when it is the only provider with
+        // episodes it does not become the list Sonarr maps files against.
+        let tmdb = base("tmdb", "Somewhere");
+
+        let mut tvmaze = base("tvmaze", "Somewhere");
+        tvmaze.item.episodes = vec![
+            broadcast(1, 1, "2020-01-01", "2020-01-01T20:00:00Z"),
+            broadcast(1, 2, "2020-01-08", "2020-01-08T20:00:00Z"),
+        ];
+
+        let merged = combine(vec![tmdb, tvmaze], &priority()).unwrap();
+
+        assert!(merged.episodes.is_empty());
+        assert!(merged.seasons.is_empty());
+    }
+
+    #[test]
+    fn tvmaze_does_not_add_episodes_the_spine_does_not_have() {
+        let mut tvdb = base("tvdb", "Short");
+        let mut first = episode(1, 1);
+        first.air_date = Some("2020-01-01".into());
+        tvdb.item.episodes = vec![first];
+
+        let mut tvmaze = base("tvmaze", "Short");
+        tvmaze.item.episodes = vec![
+            broadcast(1, 1, "2020-01-01", "2020-01-01T20:00:00Z"),
+            broadcast(1, 2, "2020-01-08", "2020-01-08T20:00:00Z"),
+        ];
+
+        let merged = combine(vec![tvdb, tvmaze], &priority()).unwrap();
+
+        assert_eq!(merged.episodes.len(), 1);
+    }
+
+    fn alternative(title: &str, language: Option<&str>) -> AlternativeTitle {
+        AlternativeTitle {
+            id: crate::db::new_id(),
+            title: title.into(),
+            title_type: None,
+            language: language.map(String::from),
+            is_manual: false,
+        }
+    }
+
+    #[test]
+    fn an_alternative_title_filed_for_no_country_is_not_a_second_copy() {
+        let mut tmdb = base("tmdb", "Attack on Titan");
+        tmdb.item.alternative_titles = vec![
+            alternative("AOT", Some("usa")),
+            alternative("Shingeki no Kyojin", Some("jpn")),
+        ];
+
+        let mut anilist = base("anilist", "Attack on Titan");
+        anilist.item.alternative_titles = vec![
+            alternative("aot", None),
+            alternative("SnK", None),
+            alternative("Shingeki no Kyojin", Some("jpn")),
+        ];
+
+        let merged = combine(vec![tmdb, anilist], &priority()).unwrap();
+        let titles: Vec<&str> = merged
+            .alternative_titles
+            .iter()
+            .map(|t| t.title.as_str())
+            .collect();
+
+        assert_eq!(titles, ["AOT", "Shingeki no Kyojin", "SnK"]);
+    }
+
+    #[test]
+    fn the_same_title_for_two_countries_is_still_two_entries() {
+        let mut tmdb = base("tmdb", "Amélie");
+        tmdb.item.alternative_titles = vec![
+            alternative("Die fabelhafte Welt der Amélie", Some("deu")),
+            alternative("Die fabelhafte Welt der Amélie", Some("aut")),
+        ];
+
+        let merged = combine(vec![tmdb], &priority()).unwrap();
+        assert_eq!(merged.alternative_titles.len(), 2);
+    }
+
+    #[test]
+    fn a_works_own_title_is_not_listed_among_its_alternatives() {
+        let mut item = MediaItem::empty(MediaKind::Series);
+        item.title = "Attack on Titan".into();
+        let mut manual = alternative("Attack on Titan", None);
+        manual.is_manual = true;
+        item.alternative_titles = vec![
+            alternative("Attack On Titan", Some("usa")),
+            alternative(" attack on titan ", Some("deu")),
+            alternative("Shingeki no Kyojin", Some("jpn")),
+            manual,
+        ];
+
+        drop_own_title(&mut item);
+        let titles: Vec<(&str, bool)> = item
+            .alternative_titles
+            .iter()
+            .map(|t| (t.title.as_str(), t.is_manual))
+            .collect();
+
+        // What a person entered stays, whatever it says.
+        assert_eq!(
+            titles,
+            [("Shingeki no Kyojin", false), ("Attack on Titan", true)]
+        );
+    }
+
+    #[test]
+    fn an_anime_sites_studio_replaces_the_first_production_company() {
+        let tmdb = || {
+            let mut tmdb = base("tmdb", "Attack on Titan");
+            tmdb.item.studio = Some("Production I.G".into());
+            tmdb
+        };
+
+        let mut anilist = base("anilist", "Attack on Titan");
+        anilist.item.studio = Some("WIT STUDIO".into());
+
+        let mut mal = base("mal", "Attack on Titan");
+        mal.item.studio = Some("Wit Studio".into());
+
+        // In the order the default priority gives them: AniList before MAL.
+        let order: Vec<String> = ["tmdb", "anilist", "mal"].map(String::from).to_vec();
+        let merged = combine(vec![tmdb(), mal, anilist], &order).unwrap();
+        assert_eq!(merged.studio.as_deref(), Some("WIT STUDIO"));
+
+        // Nothing from them, nothing replaced.
+        let merged = combine(vec![tmdb()], &order).unwrap();
+        assert_eq!(merged.studio.as_deref(), Some("Production I.G"));
+    }
+
+    #[test]
+    fn a_work_any_provider_calls_adult_is_adult() {
+        let tmdb = base("tmdb", "Somewhere");
+        let mut anilist = base("anilist", "Somewhere");
+        anilist.item.is_adult = true;
+
+        let merged = combine(vec![tmdb, anilist], &priority()).unwrap();
+        assert!(merged.is_adult);
     }
 }

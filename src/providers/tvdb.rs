@@ -23,7 +23,7 @@ use crate::{
     config,
     db::{new_id, now},
     domain::{
-        CoverType, Episode, ExternalIds, Image, MediaItem, MediaKind, Rating, Season, Translation,
+        CoverType, Episode, ExternalIds, Image, MediaItem, MediaKind, Season, Translation,
         make_slug,
     },
 };
@@ -471,7 +471,6 @@ struct SeriesExtended {
     airs_time: Option<String>,
     original_network: Option<Named>,
     latest_network: Option<Named>,
-    score: Option<f64>,
     #[serde(default)]
     genres: Vec<Named>,
     #[serde(default)]
@@ -701,16 +700,10 @@ fn to_item(series: &SeriesExtended, language: &str) -> MediaItem {
         item.content_rating_country = alpha3_to_alpha2(&rating.country);
     }
 
-    if let Some(score) = series.score.filter(|s| *s > 0.0) {
-        item.ratings = vec![Rating {
-            source: "tvdb".to_string(),
-            // TVDB's score is a popularity figure on its own scale, not a mark
-            // out of ten, so it carries no vote count.
-            value: Some(score),
-            votes: None,
-            rating_type: Some("user".to_string()),
-        }];
-    }
+    // TheTVDB's `score` is not taken as a rating. It is a popularity figure —
+    // 3 776 757 for Breaking Bad — on no scale a rating is read on, and filed as
+    // one it did worse than mean nothing: it held the `tvdb` slot, so Skyhook's
+    // rating, which Skyhook also called that, was dropped as a duplicate.
 
     item.alternative_titles = series
         .aliases
@@ -860,7 +853,8 @@ fn episodes(series: &SeriesExtended) -> Vec<Episode> {
                 aired_before_episode_number: record.airs_before_episode,
                 title: record.name.clone().unwrap_or_default(),
                 overview: non_empty(record.overview.as_deref()),
-                air_date_utc: aired.as_deref().and_then(crate::domain::midnight_utc),
+                // A date and no time: see the note in `tmdb::map`.
+                air_date_utc: None,
                 air_date: aired,
                 runtime: record.runtime.filter(|r| *r > 0),
                 finale_type: non_empty(record.finale_type.as_deref()),

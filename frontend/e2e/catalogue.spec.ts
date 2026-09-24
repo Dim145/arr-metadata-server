@@ -187,6 +187,48 @@ test.describe('language', () => {
   })
 })
 
+/**
+ * Who the data comes from, in the footer of every page.
+ *
+ * Owed to the sources rather than decorative — TMDB's terms ask for a notice,
+ * TVmaze's licence for a link, IMDb's for a line — so a visitor must see it,
+ * and it must name exactly what is switched on: never a source that
+ * contributed nothing, never one left out.
+ */
+test.describe('credits', () => {
+  const NAMES: Record<string, string> = {
+    tmdb: 'TMDB',
+    tvdb: 'TheTVDB',
+    fanart: 'Fanart.tv',
+    tvmaze: 'TVmaze',
+    anilist: 'AniList',
+    mal: 'MyAnimeList',
+    imdb: 'IMDb',
+  }
+
+  test('name every source that is switched on, and only those', async ({ page, request }) => {
+    const answer = await request.get('/api/v1/sources')
+    expect(answer.ok()).toBe(true)
+    const { sources } = (await answer.json()) as { sources: string[] }
+
+    await page.goto('/')
+    const footer = page.getByRole('contentinfo')
+
+    for (const [key, name] of Object.entries(NAMES)) {
+      await expect(footer.getByRole('link', { name, exact: true })).toHaveCount(
+        sources.includes(key) ? 1 : 0,
+      )
+    }
+
+    await expect(footer.getByText(/not endorsed or certified by TMDB/)).toHaveCount(
+      sources.includes('tmdb') ? 1 : 0,
+    )
+    await expect(footer.getByText(/Information courtesy of IMDb/)).toHaveCount(
+      sources.includes('imdb') ? 1 : 0,
+    )
+  })
+})
+
 test.describe('an address with nothing behind it', () => {
   test('says so, rather than quietly landing on the front page', async ({ page }) => {
     await page.goto('/there-is-no-such-page')

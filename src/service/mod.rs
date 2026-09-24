@@ -12,6 +12,7 @@
 //! becomes a local entry, so the next request is served from step 1 and a human
 //! can edit it.
 
+pub mod anime;
 pub mod gather;
 pub mod ids;
 pub mod language;
@@ -25,7 +26,7 @@ use serde_json::Value;
 
 use crate::{
     db::{repo, to_rfc3339},
-    domain::{ExternalSource, MediaItem, fields},
+    domain::{ExternalSource, MediaItem, Rating, fields},
     state::AppState,
 };
 
@@ -51,6 +52,17 @@ pub async fn load(state: &AppState, id: &str) -> Result<Option<MediaItem>> {
 
     repo::item::load_children(&state.db, &mut item).await?;
 
+    if state.flag("imdb.enabled", false)
+        && let Err(e) = overlay_imdb(state, &mut item).await
+    {
+        // A rating is not worth failing a read over.
+        tracing::warn!(
+            id,
+            error = format_args!("{e:#}"),
+            "could not read IMDb's rating"
+        );
+    }
+
     let overrides = repo::override_field::list(&state.db, id).await?;
     fields::apply(&mut item, &overrides)?;
 
@@ -59,6 +71,41 @@ pub async fn load(state: &AppState, id: &str) -> Result<Option<MediaItem>> {
     }
 
     Ok(Some(item))
+}
+
+/// IMDb's figure for a work, from the daily list, where it is the newer one.
+///
+/// Skyhook and Radarr's metadata server both republish IMDb's rating, so a
+/// stored one is often there already; the list is what has it when neither was
+/// asked, and what keeps it current between refreshes. Newer means more votes —
+/// a count that only grows is a better clock than either source's fetch date.
+async fn overlay_imdb(state: &AppState, item: &mut MediaItem) -> Result<()> {
+    let Some(tconst) = item.external_ids.imdb.as_deref() else {
+        return Ok(());
+    };
+    let Some(listed) = repo::imdb::get(&state.db, tconst).await? else {
+        return Ok(());
+    };
+
+    take_newer_imdb(&mut item.ratings, &listed);
+    Ok(())
+}
+
+/// Put IMDb's listed figure in place of the stored one, unless the stored one
+/// has more votes and so is the newer of the two.
+fn take_newer_imdb(ratings: &mut Vec<Rating>, listed: &repo::imdb::Rating) {
+    let rating = Rating {
+        source: "imdb".to_string(),
+        value: Some(listed.rating),
+        votes: Some(listed.votes),
+        rating_type: Some("user".to_string()),
+    };
+
+    match ratings.iter_mut().find(|r| r.source == "imdb") {
+        Some(stored) if stored.votes.unwrap_or(0) > listed.votes => {}
+        Some(stored) => *stored = rating,
+        None => ratings.push(rating),
+    }
 }
 
 /// Apply stored overrides to a batch of works.
@@ -88,28 +135,67 @@ pub async fn apply_overrides(state: &AppState, items: &mut [MediaItem]) -> Resul
 /// Checked in order of how strongly each id identifies a single work: an IMDb
 /// id is shared between a film and its remake far more often than a TMDB id is.
 async fn find_existing(state: &AppState, item: &MediaItem) -> Result<Option<String>> {
-    for (source, value) in item.external_ids.rows(item.kind) {
-        if source == ExternalSource::Imdb {
-            continue;
-        }
+    let rows = item.external_ids.rows(item.kind);
+    let (decisive, weak): (Vec<_>, Vec<_>) = rows
+        .into_iter()
+        .partition(|(source, _)| names_one_work(*source));
+
+    for (source, value) in decisive {
         if let Some(id) = repo::item::find_id_by_external(&state.db, source, &value).await? {
             return Ok(Some(id));
         }
     }
 
-    if let Some(imdb) = &item.external_ids.imdb
-        && let Some(id) =
-            repo::item::find_id_by_external(&state.db, ExternalSource::Imdb, imdb).await?
-    {
-        // An IMDb id is only decisive when the kinds agree.
-        if let Some(existing) = repo::item::get(&state.db, &id).await?
-            && existing.kind == item.kind
+    // IMDb last: it is the one most often shared, between a film and its remake
+    // or two TMDB entries for the same thing.
+    let (imdb, others): (Vec<_>, Vec<_>) = weak
+        .into_iter()
+        .partition(|(source, _)| *source == ExternalSource::Imdb);
+
+    for (source, value) in others.into_iter().chain(imdb) {
+        if let Some(id) = repo::item::find_id_by_external(&state.db, source, &value).await?
+            && let Some(existing) = repo::item::get(&state.db, &id).await?
+            && same_work(&existing, item)
         {
             return Ok(Some(id));
         }
     }
 
     Ok(None)
+}
+
+/// Whether an id of this source names one work, and only one kind of work.
+///
+/// TMDB, TheTVDB and Trakt number films and series separately and give each
+/// work its own id. The rest do not settle it alone: IMDb ids are shared
+/// between TMDB entries; MyAnimeList and AniList number films and series in
+/// one sequence, and one of their entries is filed under a series by Skyhook
+/// and under another by the anime identifier list; TVmaze and TVRage ids are
+/// only as right as the provider that relayed them.
+fn names_one_work(source: ExternalSource) -> bool {
+    matches!(
+        source,
+        ExternalSource::TmdbMovie
+            | ExternalSource::TmdbTv
+            | ExternalSource::TvdbSeries
+            | ExternalSource::TvdbMovie
+            | ExternalSource::TraktShow
+            | ExternalSource::TraktMovie
+    )
+}
+
+/// Whether a stored work, found by an id that does not settle it, can be the
+/// one `incoming` describes: the same kind, and no TMDB or TheTVDB id of its
+/// own that says it is something else.
+///
+/// Without this, a new series sharing a MyAnimeList id with a stored one was
+/// written over it — its overrides, its identifiers, its episodes.
+fn same_work(existing: &MediaItem, incoming: &MediaItem) -> bool {
+    let clash = |a: Option<i64>, b: Option<i64>| matches!((a, b), (Some(a), Some(b)) if a != b);
+
+    existing.kind == incoming.kind
+        && !clash(existing.external_ids.tmdb, incoming.external_ids.tmdb)
+        && !clash(existing.external_ids.tvdb, incoming.external_ids.tvdb)
 }
 
 /// Locks by name, made when first asked for and forgotten once nobody holds
@@ -220,6 +306,8 @@ pub async fn persist(
         repo::item::load_children(&state.db, &mut existing).await?;
         keep_what_nobody_answered(&mut item, existing);
     }
+
+    crate::merge::drop_own_title(&mut item);
 
     item.refreshed_at = Some(crate::db::now());
     item.refresh_after = Some(next_refresh(state, &item));
@@ -459,5 +547,112 @@ mod cache_key_tests {
             search_key("movie", "en-US", false, "1999", " The Matrix "),
             search_key("movie", "en-US", false, "1999", "the matrix"),
         );
+    }
+}
+
+#[cfg(test)]
+mod imdb_overlay_tests {
+    use super::*;
+
+    fn listed(rating: f64, votes: i64) -> repo::imdb::Rating {
+        repo::imdb::Rating {
+            tconst: "tt0903747".into(),
+            rating,
+            votes,
+        }
+    }
+
+    fn stored(value: f64, votes: i64) -> Rating {
+        Rating {
+            source: "imdb".into(),
+            value: Some(value),
+            votes: Some(votes),
+            rating_type: Some("user".into()),
+        }
+    }
+
+    #[test]
+    fn the_list_supplies_a_rating_nobody_stored() {
+        let mut ratings = Vec::new();
+        take_newer_imdb(&mut ratings, &listed(9.5, 2_679_470));
+
+        assert_eq!(ratings.len(), 1);
+        assert_eq!(ratings[0].votes, Some(2_679_470));
+        assert_eq!(ratings[0].rating_type.as_deref(), Some("user"));
+    }
+
+    #[test]
+    fn the_list_replaces_an_older_figure() {
+        // Stored at the last refresh, weeks ago; the list is this morning's.
+        let mut ratings = vec![stored(9.4, 2_500_000)];
+        take_newer_imdb(&mut ratings, &listed(9.5, 2_679_470));
+
+        assert_eq!(ratings, vec![stored(9.5, 2_679_470)]);
+    }
+
+    #[test]
+    fn a_newer_stored_figure_is_kept() {
+        // Skyhook's is a day fresher than IMDb's own dataset.
+        let mut ratings = vec![stored(9.5, 2_679_821)];
+        take_newer_imdb(&mut ratings, &listed(9.5, 2_679_470));
+
+        assert_eq!(ratings, vec![stored(9.5, 2_679_821)]);
+    }
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::*;
+    use crate::domain::{ExternalIds, MediaKind};
+
+    fn work(kind: MediaKind, tmdb: Option<i64>, tvdb: Option<i64>, mal: &[i64]) -> MediaItem {
+        let mut item = MediaItem::empty(kind);
+        item.external_ids = ExternalIds {
+            tmdb,
+            tvdb,
+            mal: mal.to_vec(),
+            ..Default::default()
+        };
+        item
+    }
+
+    #[test]
+    fn a_shared_anime_id_does_not_make_two_series_one() {
+        let stored = work(MediaKind::Series, Some(1429), Some(267440), &[16498]);
+        let incoming = work(MediaKind::Series, None, Some(999999), &[16498]);
+
+        assert!(!same_work(&stored, &incoming));
+    }
+
+    #[test]
+    fn nor_a_film_and_a_series() {
+        let series = work(MediaKind::Series, None, Some(81797), &[460]);
+        let film = work(MediaKind::Movie, Some(23446), None, &[460]);
+
+        assert!(!same_work(&series, &film));
+    }
+
+    #[test]
+    fn a_work_the_ids_do_not_contradict_is_the_same_one() {
+        // Stored before its TMDB id was known; nothing it holds says otherwise.
+        let stored = work(MediaKind::Series, None, Some(267440), &[16498]);
+        let incoming = work(MediaKind::Series, Some(1429), Some(267440), &[16498]);
+
+        assert!(same_work(&stored, &incoming));
+    }
+
+    #[test]
+    fn only_the_ids_that_settle_a_work_decide_alone() {
+        assert!(names_one_work(ExternalSource::TvdbSeries));
+        assert!(names_one_work(ExternalSource::TmdbMovie));
+        for weak in [
+            ExternalSource::Imdb,
+            ExternalSource::Mal,
+            ExternalSource::AniList,
+            ExternalSource::TvMaze,
+            ExternalSource::TvRage,
+        ] {
+            assert!(!names_one_work(weak), "{weak:?}");
+        }
     }
 }

@@ -146,20 +146,32 @@ export function logo(item: Pick<MediaItem, 'images'>) {
 }
 
 /**
- * The score to lead with.
+ * The ratings worth showing, the one to lead with first.
  *
- * Providers disagree and count votes on different scales. TMDB is preferred
- * because it is the one with a vote count most works actually have; anything
- * with no value at all is not a rating, whatever the provider called it.
+ * Only marks out of ten: anything with no value is not a rating, whatever the
+ * provider called it, and anything above ten is TheTVDB's popularity figure,
+ * which older entries still carry until their next refresh.
  */
-export function headlineRating(ratings: Rating[] | undefined): Rating | undefined {
-  const real = (ratings ?? []).filter((r) => typeof r.value === 'number' && r.value > 0)
-
-  if (!real.length) return undefined
+export function ratingsOf(ratings: Rating[] | undefined): Rating[] {
+  const real = (ratings ?? []).filter(
+    (r) => typeof r.value === 'number' && r.value > 0 && r.value <= 10,
+  )
 
   const byVotes = [...real].sort((a, b) => (b.votes ?? 0) - (a.votes ?? 0))
+  const imdb = byVotes.find((r) => r.source === 'imdb')
 
-  return real.find((r) => r.source === 'tmdb') ?? byVotes[0]
+  return imdb ? [imdb, ...byVotes.filter((r) => r !== imdb)] : byVotes
+}
+
+/**
+ * The score to lead with: the same one Sonarr is given.
+ *
+ * IMDb's when there is one — it is what Skyhook serves, so it is the figure
+ * Sonarr has always shown — and otherwise the one with the most votes behind
+ * it. The server picks by the same rule; see `MediaItem::headline_rating`.
+ */
+export function headlineRating(ratings: Rating[] | undefined): Rating | undefined {
+  return ratingsOf(ratings)[0]
 }
 
 /** Cast, in billing order, capped so a page is not a phone book. */

@@ -50,6 +50,9 @@ const TABLES: &[&str] = &[
     "network_caller",
     "setting",
     "search_cache",
+    "anime_mapping",
+    "imdb_rating",
+    "data_import",
 ];
 
 /// Rows carried per statement. Large enough to be quick, small enough to stay

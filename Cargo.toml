@@ -70,6 +70,8 @@ governor = "0.10.4"
 chrono = { version = "0.4.45", default-features = false, features = ["std", "clock", "serde"] }
 uuid = { version = "1.26.1", features = ["v4", "v7", "serde"] }
 futures = "0.3.34"
+# IMDb publishes its datasets gzipped; already built for reqwest's own gzip.
+flate2 = "1.1.10"
 moka = { version = "0.12.16", features = ["future"] }
 slug = "0.1.6"
 urlencoding = "2.1.3"
