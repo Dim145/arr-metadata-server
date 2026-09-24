@@ -52,9 +52,12 @@ It replaces and merges two earlier projects: `the earlier TMDB relay` and
   work's page shows, IMDb's latest score included when that list is on. A
   series' combined genres count as the film genres they stand for: "Action &
   Adventure" is found under Action and under Adventure, beside the films.
-  Each identifier opens the work's page on the site it came from; the artwork
-  opens in a viewer; a trailer plays from YouTube's no-cookie domain, and only
-  once somebody presses play.
+  The search lists what it finds as it is typed — `/` puts the cursor in it —
+  and the front page opens on one of the most followed works, its own logo
+  over its backdrop, a different one each day. Each identifier opens the
+  work's page on the site it came from; the artwork opens in a viewer; a
+  trailer plays from YouTube's no-cookie domain, and only once somebody
+  presses play.
 - **A season chart, past and to come.** One page for each quarter of the
   calendar — winter from January, spring from April, summer from July, autumn
   from October — as anime season charts have it, for series and films alike:

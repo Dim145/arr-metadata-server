@@ -20,7 +20,7 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 use crate::{
     auth::Identity,
     db::repo,
-    domain::{CoverType, ExternalSource, MediaItem, MediaKind},
+    domain::{ExternalSource, MediaItem, MediaKind},
     error::{AppError, AppResult},
     service,
     state::AppState,
@@ -251,7 +251,7 @@ async fn chart(
         if let Some(language) = language.as_deref() {
             service::language::apply_shallow(&state, work, language);
         }
-        slim(work);
+        service::as_card(work);
     }
     service::redact_for_reader(&identity, &mut works);
 
@@ -315,28 +315,6 @@ async fn chart(
     }
 
     Ok(Json(chart))
-}
-
-/// What a card of the chart draws, and nothing else: the chart is read whole,
-/// a season's worth of works at once, and the front page reads it for a row of
-/// posters. The poster a page would show, the scores, the text in the reader's
-/// language — not every picture, keyword and translation held.
-fn slim(work: &mut MediaItem) {
-    work.translations.clear();
-    work.keywords.clear();
-    let shown = work
-        .images
-        .iter()
-        .position(|i| i.cover_type == CoverType::Poster && i.is_manual)
-        .or_else(|| {
-            work.images
-                .iter()
-                .position(|i| i.cover_type == CoverType::Poster)
-        });
-    work.images = match shown {
-        Some(index) => vec![work.images.swap_remove(index)],
-        None => Vec::new(),
-    };
 }
 
 // ─── what else premieres ─────────────────────────────────────────────────────

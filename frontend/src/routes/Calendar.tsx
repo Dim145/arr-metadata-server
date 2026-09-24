@@ -96,6 +96,25 @@ export function Calendar() {
     days[6] ?? monday,
   )
   const total = days.reduce((sum, day) => sum + (byDay.get(localDate(day))?.length ?? 0), 0)
+
+  // The week as it is listed: each day with something on, and the quiet days
+  // between them run together — except today, which is always its own.
+  type Slot = { day: Date; key: string; entries: Airing[] }
+  type Group = { kind: 'day'; slot: Slot } | { kind: 'gap'; from: Slot; to: Slot }
+  const grouped: Group[] = []
+  for (const day of days) {
+    const key = localDate(day)
+    const slot: Slot = { day, key, entries: byDay.get(key) ?? [] }
+    const last = grouped.at(-1)
+    if (!slot.entries.length) {
+      // Today never runs together with the days around it: marked, on its
+      // own line, so a reader sees where the week stands.
+      if (key !== today && last?.kind === 'gap' && last.to.key !== today) last.to = slot
+      else grouped.push({ kind: 'gap', from: slot, to: slot })
+    } else {
+      grouped.push({ kind: 'day', slot })
+    }
+  }
   // The season most of the week is in: a week across the turn of a quarter
   // belongs where its Thursday does.
   const season = seasonOf(days[3] ?? monday)
@@ -122,20 +141,63 @@ export function Calendar() {
           </Link>
         </div>
 
-        <nav aria-label={t.calendar.weeks} className="flex flex-wrap items-center gap-2">
-          <Button size="sm" onClick={() => move(-1)}>
+        {/* One row, whatever the width: the arrows either side of the week
+            they step from. Three labelled buttons wrapped onto two lines on a
+            phone, the last one alone. */}
+        <nav aria-label={t.calendar.weeks} className="flex items-center gap-1 rounded-full border border-rule p-1">
+          <Button size="sm" onClick={() => move(-1)} aria-label={t.calendar.previous} className="size-11 px-0">
             <Glyph name="chevronLeft" className="size-4" />
-            {t.calendar.previous}
           </Button>
           <Button size="sm" variant={thisWeek ? 'quiet' : 'ghost'} disabled={thisWeek} onClick={() => setParams({})}>
             {t.calendar.thisWeek}
           </Button>
-          <Button size="sm" onClick={() => move(1)}>
-            {t.calendar.next}
+          <Button size="sm" onClick={() => move(1)} aria-label={t.calendar.next} className="size-11 px-0">
             <Glyph name="chevronRight" className="size-4" />
           </Button>
         </nav>
       </header>
+
+      {/* The week at a glance: a cell a day, a mark on the days that have
+          something on, and each of those a step down to its listing. */}
+      {listing.isSuccess && total > 0 ? (
+        <ol aria-label={t.calendar.days} className="rise mb-8 grid grid-cols-7 gap-1 rounded-panel border border-rule bg-ink-raised p-1">
+          {days.map((day) => {
+            const key = localDate(day)
+            const n = byDay.get(key)?.length ?? 0
+            const isToday = key === today
+            const label = `${fmt.dayHeading(day, locale)} · ${n ? t.calendar.count(n) : t.calendar.nothing}`
+            const cell = cn(
+              'flex min-h-14 flex-col items-center justify-center gap-0.5 rounded-card font-mono text-xs tabular-nums transition-colors duration-150',
+              isToday ? 'bg-vermillion/12 text-bone' : n ? 'text-bone' : 'text-bone-faint',
+              n && 'hover:bg-ink-high',
+            )
+            const inner = (
+              <>
+                <span aria-hidden className="text-[0.625rem] tracking-wider uppercase">
+                  {new Intl.DateTimeFormat(locale, { weekday: 'short' }).format(day).replace('.', '')}
+                </span>
+                <span aria-hidden className="font-display text-base leading-none">
+                  {day.getDate()}
+                </span>
+                <span aria-hidden className={cn('mt-0.5 size-1.5 rounded-full', n ? 'bg-vermillion' : 'bg-transparent')} />
+              </>
+            )
+            return (
+              <li key={key} className="flex">
+                {n ? (
+                  <a href={`#day-${key}`} aria-label={label} aria-current={isToday ? 'date' : undefined} className={cn(cell, 'flex-1')}>
+                    {inner}
+                  </a>
+                ) : (
+                  <span role="img" aria-label={label} aria-current={isToday ? 'date' : undefined} className={cn(cell, 'flex-1')}>
+                    {inner}
+                  </span>
+                )}
+              </li>
+            )
+          })}
+        </ol>
+      ) : null}
 
       {listing.isPending ? (
         <div className="space-y-8">
@@ -162,39 +224,47 @@ export function Calendar() {
         <EmptyState title={thisWeek ? t.calendar.empty : t.calendar.emptyOther} hint={t.calendar.emptyHint} />
       ) : (
         <div className="stagger">
-          {days.map((day, index) => {
-            const key = localDate(day)
-            const entries = byDay.get(key) ?? []
-            const isToday = key === today
-            const previous = days[index - 1]
-            const afterEmpty = previous !== undefined && !byDay.get(localDate(previous))?.length
-
-            // A day with nothing on is one line of the week, not a section of
-            // its own: in a quiet week, seven headings over seven "nothing"s
-            // pushed the one programme there was to the bottom of the page.
-            if (!entries.length) {
+          {grouped.map((group) => {
+            // Days with nothing on run together as one line, however many:
+            // in a quiet week, six lines of "nothing" pushed the one programme
+            // there was to the bottom of the page. Today keeps its own line,
+            // marked, so a reader can see where the week stands.
+            if (group.kind === 'gap') {
+              const { from, to } = group
+              const heading =
+                from.key === to.key
+                  ? fmt.dayHeading(from.day, locale)
+                  : new Intl.DateTimeFormat(locale, { weekday: 'long', day: 'numeric', month: 'long' }).formatRange(from.day, to.day)
+              const isToday = from.key === today
               return (
                 <section
-                  key={key}
-                  aria-labelledby={`day-${key}`}
-                  className={cn(
-                    'flex flex-wrap items-baseline gap-x-3 gap-y-1 border-b border-rule py-2.5',
-                    index > 0 && !afterEmpty && 'mt-10',
-                  )}
+                  key={from.key}
+                  id={`day-${from.key}`}
+                  aria-labelledby={`day-heading-${from.key}`}
+                  className="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-b border-rule py-2.5"
                 >
-                  <h2 id={`day-${key}`} className="font-display text-base text-bone-faint first-letter:uppercase">
-                    {fmt.dayHeading(day, locale)}
+                  <h2 id={`day-heading-${from.key}`} className="font-display text-base text-bone-faint first-letter:uppercase">
+                    {heading}
                   </h2>
                   {isToday ? <Chip tone="accent">{t.calendar.today}</Chip> : null}
-                  <p className="text-sm text-bone-faint italic">{t.calendar.nothing}</p>
+                  <p className="text-sm text-bone-faint italic">
+                    {from.key === to.key ? t.calendar.nothing : t.calendar.nothingBetween}
+                  </p>
                 </section>
               )
             }
 
+            const { day, key, entries } = group.slot
+            const isToday = key === today
             return (
-              <section key={key} aria-labelledby={`day-${key}`} className={cn(index > 0 && 'mt-10')}>
+              <section
+                key={key}
+                id={`day-${key}`}
+                aria-labelledby={`day-heading-${key}`}
+                className="scroll-mt-24 pt-10 first:pt-0"
+              >
                 <div className="mb-3 flex items-baseline gap-3 border-b border-rule pb-2">
-                  <h2 id={`day-${key}`} className="font-display text-xl font-medium text-bone first-letter:uppercase">
+                  <h2 id={`day-heading-${key}`} className="font-display text-xl font-medium text-bone first-letter:uppercase">
                     {fmt.dayHeading(day, locale)}
                   </h2>
                   {isToday ? <Chip tone="accent">{t.calendar.today}</Chip> : null}
@@ -236,9 +306,10 @@ function Listing({ airing, work }: { airing: Airing; work?: MediaItem }) {
 
   return (
     <li className="grid grid-cols-[3.75rem_2.75rem_minmax(0,1fr)] items-center gap-4 py-3">
-      <span className={cn('font-mono text-sm tabular-nums', time ? 'text-bone' : 'text-bone-faint')}>
-        {time ?? '—'}
-        {time ? null : <span className="sr-only">{t.calendar.noTime}</span>}
+      {/* A time nobody knows is said only to a screen reader: under the day's
+          heading, a dash where the hour would be read as one. */}
+      <span className="font-mono text-sm text-bone tabular-nums">
+        {time ?? <span className="sr-only">{t.calendar.noTime}</span>}
       </span>
 
       <div className="aspect-2/3 w-full overflow-hidden rounded-card border border-rule bg-ink-high">

@@ -227,6 +227,13 @@ test.describe('the schedule', () => {
       `a[href="/work/${work!.id}/season/${dated!.seasonNumber}/episode/${dated!.episodeNumber}"]`,
     )
     await expect(entry).toBeVisible()
+
+    // The week at a glance leads to the day.
+    const strip = page.getByRole('list', { name: /days of the week|jours de la semaine/i })
+    await expect(strip.locator(`a[href="#day-${day}"]`)).toBeVisible()
+    await strip.locator(`a[href="#day-${day}"]`).click()
+    await expect(page).toHaveURL(new RegExp(`#day-${day}$`))
+
     await entry.click()
     await expect(page).toHaveURL(/\/episode\/\d+$/)
   })

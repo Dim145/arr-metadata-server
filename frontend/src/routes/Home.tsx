@@ -15,7 +15,7 @@ import { EmptyState, Genre, Glyph, Label, SectionTitle, Skeleton } from '../comp
 import { api, query } from '../lib/api'
 import * as fmt from '../lib/format'
 import { useI18n } from '../lib/i18n'
-import { airTime, backdrop, episodeCode, headlineRating, poster } from '../lib/media'
+import { airTime, backdrop, episodeCode, headlineRating, logo, poster } from '../lib/media'
 import { chartQuery, formatDay, seasonOf, seasonPath } from '../lib/seasons'
 import type { Airing, Calendar, ItemPage, MediaItem } from '../lib/types'
 
@@ -39,7 +39,15 @@ export function Home() {
 
   const loading = series.isPending || films.isPending
   const everything = [...(series.data?.items ?? []), ...(films.data?.items ?? [])]
-  const featured = everything.find((item) => backdrop(item)) ?? everything[0]
+  // The work at the top: one of the most followed series and films, a
+  // different one each day rather than the same one for ever — the same one
+  // all day, so a page left open and reloaded does not shuffle.
+  const heroes = [...(series.data?.items ?? []).slice(0, 4), ...(films.data?.items ?? []).slice(0, 4)].filter(
+    (item) => backdrop(item),
+  )
+  const now = new Date()
+  const dayOfYear = Math.floor((now.getTime() - new Date(now.getFullYear(), 0, 0).getTime()) / 86_400_000)
+  const featured = heroes.length ? heroes[dayOfYear % heroes.length] : everything[0]
 
   if (loading) {
     return <HomeSkeleton />
@@ -86,6 +94,7 @@ export function Home() {
             to="/browse?order=added"
             items={added.data.items}
             total={added.data.total}
+            mixed
           />
         ) : null}
       </div>
@@ -104,6 +113,7 @@ function Featured({ item }: { item: MediaItem }) {
   const { t, locale } = useI18n()
   const art = backdrop(item)
   const sheet = poster(item)
+  const mark = logo(item)
   const rating = headlineRating(item.ratings)
 
   return (
@@ -147,11 +157,28 @@ function Featured({ item }: { item: MediaItem }) {
             <div className="strike max-w-2xl" style={{ animationDelay: '80ms' }}>
               <Label>{item.kind === 'series' ? t.nav.series : t.nav.films}</Label>
 
-              <h1 className="mt-2 font-display text-3xl leading-[1.05] font-medium text-bone sm:text-4xl lg:text-5xl">
-                {item.title}
-              </h1>
+              {/* The work's own mark where it has one, as a cinema's front
+                  does: the title stays the heading, for whoever reads rather
+                  than looks. A light hairline round it keeps a dark logo from
+                  sinking into the ink. */}
+              {mark ? (
+                <>
+                  <h1 className="sr-only">{item.title}</h1>
+                  <Artwork
+                    url={mark}
+                    role="logo"
+                    eager
+                    alt=""
+                    className="mt-3 max-h-20 w-auto max-w-[min(100%,26rem)] object-contain object-left [filter:drop-shadow(0_0_1px_rgb(255_255_255/0.55))_drop-shadow(0_8px_18px_rgb(0_0_0/0.65))] sm:max-h-28 lg:max-h-36"
+                  />
+                </>
+              ) : (
+                <h1 className="mt-2 font-display text-3xl leading-[1.05] font-medium text-bone sm:text-4xl lg:text-5xl">
+                  {item.title}
+                </h1>
+              )}
 
-              <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2">
+              <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2">
                 {item.year ? (
                   <span className="font-mono text-sm text-bone-dim tabular-nums">{item.year}</span>
                 ) : null}
@@ -161,7 +188,13 @@ function Featured({ item }: { item: MediaItem }) {
                 {item.genres.slice(0, 3).map((genre) => (
                   <Genre key={genre} name={genre} />
                 ))}
-                {rating?.value ? <Score value={rating.value} size="sm" /> : null}
+                {/* On a phone the score ring made the line wrap; the page it
+                    opens says it. */}
+                {rating?.value ? (
+                  <span className="hidden sm:block">
+                    <Score value={rating.value} size="sm" />
+                  </span>
+                ) : null}
               </div>
 
               {item.overview ? (
@@ -190,11 +223,14 @@ function Row({
   to,
   items,
   total,
+  mixed = false,
 }: {
   title: string
   to: string
   items: MediaItem[]
   total: number
+  /** Series and films together, so each card says which it is. */
+  mixed?: boolean
 }) {
   const { t, locale } = useI18n()
 
@@ -219,7 +255,7 @@ function Row({
 
       <PosterShelf label={title}>
         {items.map((item) => (
-          <PosterCard key={item.id} item={item} to={`/work/${item.id}`} />
+          <PosterCard key={item.id} item={item} to={`/work/${item.id}`} kind={mixed} />
         ))}
       </PosterShelf>
     </section>

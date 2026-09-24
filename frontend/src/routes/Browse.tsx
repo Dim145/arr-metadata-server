@@ -317,7 +317,7 @@ export function Browse() {
             <div className={cn('transition-opacity duration-150', results.isPlaceholderData && 'opacity-60')}>
               <PosterGrid className="lg:grid-cols-4 xl:grid-cols-5">
                 {items.map((item) => (
-                  <PosterCard key={item.id} item={item} to={`/work/${item.id}`} />
+                  <PosterCard key={item.id} item={item} to={`/work/${item.id}`} kind={!f.kind} />
                 ))}
               </PosterGrid>
 

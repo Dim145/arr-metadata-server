@@ -195,6 +195,9 @@ async fn calendar(
         }
     }
     service::overlay_imdb_many(&state, &mut works).await;
+    for work in &mut works {
+        service::as_card(work);
+    }
     service::redact_for_reader(&identity, &mut works);
 
     let titles: HashMap<String, String> = works
@@ -323,6 +326,9 @@ async fn person(
         }
     }
 
+    for work in &mut works {
+        service::as_card(work);
+    }
     service::redact_for_reader(&identity, &mut works);
 
     // In the order the credits came, newest work first.

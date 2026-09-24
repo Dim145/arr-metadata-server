@@ -96,6 +96,42 @@ async fn overlay_imdb(state: &AppState, item: &mut MediaItem) -> Result<()> {
 /// how the last refresh went — the error can name a provider's address, or the
 /// host this server reaches it on — when the next one is due, and which fields
 /// are locked. Applied last, since the language overlay reads the locks.
+/// What a card draws of a work, and nothing more.
+///
+/// A list, a schedule, a filmography, a season chart: each is drawn as cards,
+/// one poster, a title and a score apiece — and each was sent every work
+/// whole, ninety-four translations and forty-seven pictures for one film,
+/// fifty kilobytes a card, a megabyte and a half for a page of the catalogue.
+/// Kept: the poster a card shows, a hand-picked one first; one backdrop and
+/// one landscape for a page that lays the work out wide; one logo for the
+/// front page. The text is in the reader's language by the time this runs, so
+/// the translations it was taken from can go, and the keywords with them.
+pub fn as_card(work: &mut MediaItem) {
+    use crate::domain::{CoverType, Image};
+
+    work.translations.clear();
+    work.keywords.clear();
+
+    let mut kept = Vec::with_capacity(4);
+    for kind in [
+        CoverType::Poster,
+        CoverType::Fanart,
+        CoverType::Landscape,
+        CoverType::Clearlogo,
+    ] {
+        let own = |i: &Image| i.cover_type == kind && i.season_number.is_none();
+        let shown = work
+            .images
+            .iter()
+            .position(|i| own(i) && i.is_manual)
+            .or_else(|| work.images.iter().position(own));
+        if let Some(index) = shown {
+            kept.push(work.images[index].clone());
+        }
+    }
+    work.images = kept;
+}
+
 pub fn redact_for_reader(identity: &crate::auth::Identity, items: &mut [MediaItem]) {
     if identity.can_write() {
         return;
@@ -708,5 +744,50 @@ mod identity_tests {
         ] {
             assert!(!names_one_work(weak), "{weak:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod card_tests {
+    use super::*;
+    use crate::domain::{CoverType, Image, MediaKind, Translation};
+
+    fn picture(kind: CoverType, url: &str, manual: bool) -> Image {
+        Image {
+            id: url.into(),
+            season_number: None,
+            cover_type: kind,
+            url: url.into(),
+            language: None,
+            sort_order: 0,
+            source: None,
+            is_manual: manual,
+        }
+    }
+
+    #[test]
+    fn a_card_keeps_one_picture_of_each_kind_it_draws_and_the_hand_picked_first() {
+        let mut work = MediaItem::empty(MediaKind::Movie);
+        work.images = vec![
+            picture(CoverType::Poster, "poster-1", false),
+            picture(CoverType::Poster, "poster-2", true),
+            picture(CoverType::Fanart, "fanart-1", false),
+            picture(CoverType::Fanart, "fanart-2", false),
+            picture(CoverType::Banner, "banner", false),
+            picture(CoverType::Clearlogo, "logo", false),
+        ];
+        work.keywords = vec!["cartel".into()];
+        work.translations = vec![Translation {
+            language: "fra".into(),
+            title: Some("Le Parrain".into()),
+            overview: None,
+            is_manual: false,
+        }];
+
+        as_card(&mut work);
+
+        let urls: Vec<&str> = work.images.iter().map(|i| i.url.as_str()).collect();
+        assert_eq!(urls, ["poster-2", "fanart-1", "logo"]);
+        assert!(work.keywords.is_empty() && work.translations.is_empty());
     }
 }

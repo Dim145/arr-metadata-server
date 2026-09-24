@@ -56,7 +56,10 @@ test.describe('the catalogue', () => {
     await page.goto('/')
     await catalogueLoaded(page)
 
-    await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
+    // The work's own logo where it has one, its title read out either way.
+    const title = page.getByRole('heading', { level: 1 })
+    await expect(title).toBeAttached()
+    expect((await title.textContent())?.trim()).not.toBe('')
     await expect(page.getByRole('link', { name: /details|fiche/i }).first()).toBeVisible()
 
     // Both kinds are offered, and each row says how many it is a window onto.
@@ -89,6 +92,43 @@ test.describe('the catalogue', () => {
     }
   })
 
+  test('offers what it finds as the search is typed, and opens one with the keys', async ({
+    page,
+    request,
+  }) => {
+    const { items } = await (await request.get('/api/v1/items?kind=series&limit=1')).json()
+    const work = items[0] as { id: string; title: string } | undefined
+    test.skip(!work, 'the catalogue holds no series')
+
+    await page.goto('/')
+    const reveal = page.getByRole('button', { name: /^(search|rechercher)/i })
+    if (await reveal.isVisible()) await reveal.click()
+
+    const box = page.getByRole('combobox').first()
+    await box.fill(work!.title.slice(0, 4))
+    const option = page.getByRole('option', { name: new RegExp(work!.title.slice(0, 4), 'i') }).first()
+    await expect(option).toBeVisible()
+    await expect(page.getByRole('option', { name: /see all|see the|voir le/i })).toBeVisible()
+
+    // The first option, by the keys alone.
+    await box.press('ArrowDown')
+    await expect(box).toHaveAttribute('aria-activedescendant', /option-0$/)
+    await box.press('Enter')
+    await expect(page).toHaveURL(/\/work\/[0-9a-f-]{36}$/)
+  })
+
+  test('puts the cursor in the search when / is pressed', async ({ page }) => {
+    await page.goto('/')
+    await catalogueLoaded(page)
+    await page.keyboard.press('/')
+    const box = page.getByRole('combobox').first()
+    await expect(box).toBeFocused()
+    // The key itself is not typed in; typed into a field, it is left alone.
+    await expect(box).toHaveValue('')
+    await box.pressSequentially('a/b')
+    await expect(box).toHaveValue('a/b')
+  })
+
   test('a search from the bar lands on a filtered list', async ({ page }) => {
     await page.goto('/')
     await catalogueLoaded(page)
@@ -98,7 +138,7 @@ test.describe('the catalogue', () => {
       await reveal.click()
     }
 
-    const box = page.getByRole('searchbox').first()
+    const box = page.getByRole('combobox').first()
     await box.fill('breaking')
     await box.press('Enter')
 

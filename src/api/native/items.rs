@@ -225,6 +225,9 @@ async fn list(
     }
 
     let total = repo::item::count_matching(&state.db, &query_for_count).await?;
+    for item in &mut items {
+        service::as_card(item);
+    }
     service::redact_for_reader(&identity, &mut items);
 
     Ok(Json(ListResponse { items, total }))

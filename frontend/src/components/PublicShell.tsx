@@ -7,16 +7,19 @@
  * transcoding.
  */
 
-import { useQuery } from '@tanstack/react-query'
+import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { Fragment, useEffect, useState } from 'react'
 import { Link, Outlet, useLocation, useNavigate, useSearchParams } from 'react-router'
 
-import { api } from '../lib/api'
+import { api, query } from '../lib/api'
+import { useSettled } from '../lib/debounce'
 import { useNavigationReset } from '../lib/hooks'
 import { cn } from '../lib/cn'
 import { useI18n, type Lang } from '../lib/i18n'
 import { providerName } from '../lib/labels'
-import type { Me, Sources } from '../lib/types'
+import { poster } from '../lib/media'
+import type { ItemPage, Me, Sources } from '../lib/types'
+import { Artwork } from './media'
 import { Glyph, Input } from './ui'
 
 export function PublicShell({ me }: { me?: Me }) {
@@ -31,6 +34,27 @@ export function PublicShell({ me }: { me?: Me }) {
     setOpen(false)
     setSearching(false)
   }, [location.pathname, location.search])
+
+  // `/` puts the cursor in the search, as it does on every site with one,
+  // unless it is being typed into a field.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== '/' || event.metaKey || event.ctrlKey || event.altKey) return
+      const target = event.target as HTMLElement | null
+      if (target?.closest('input, textarea, select, [contenteditable="true"]')) return
+      event.preventDefault()
+      const box = document.getElementById('catalogue-search') as HTMLInputElement | null
+      if (box && box.offsetParent !== null) {
+        box.focus()
+        box.select()
+      } else {
+        setSearching(true)
+        setOpen(false)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   return (
     // `clip` rather than `hidden`: the season scrollers deliberately bleed past
@@ -61,7 +85,7 @@ export function PublicShell({ me }: { me?: Me }) {
           </nav>
 
           <div className="ml-auto flex items-center gap-2">
-            <SearchBox className="hidden w-56 lg:block" />
+            <SearchBox className="hidden w-64 lg:block" />
 
             {/* Below the width where the field fits, search is still one tap
                 away rather than buried in the menu: it is the thing people
@@ -106,7 +130,7 @@ export function PublicShell({ me }: { me?: Me }) {
 
         {searching ? (
           <div className="border-t border-rule bg-ink-raised px-4 py-3 lg:hidden">
-            <SearchBox autoFocus />
+            <SearchBox id="catalogue-search-bar" autoFocus />
           </div>
         ) : null}
 
@@ -218,16 +242,66 @@ function Tab({
   )
 }
 
-function SearchBox({ className, autoFocus }: { className?: string; autoFocus?: boolean }) {
-  const { t } = useI18n()
+/**
+ * The search, with what it finds as it is typed.
+ *
+ * A catalogue is opened to find one work, and the first letters of its title
+ * are enough: what they match is listed under the box as they are typed — a
+ * poster, a title, a year — the arrow keys walk it, Enter opens the one under
+ * the cursor, and the whole list is the last line. Pressing Enter to see a
+ * page of results, then choosing from it, was a detour on every visit.
+ *
+ * ARIA's combobox, so a screen reader hears the count and the option under
+ * the cursor; the options are links, so the page is the same one a click and
+ * a keyboard open.
+ */
+function SearchBox({
+  id = 'catalogue-search',
+  className,
+  autoFocus,
+}: {
+  id?: string
+  className?: string
+  autoFocus?: boolean
+}) {
+  const { t, lang } = useI18n()
   const navigate = useNavigate()
   const [params] = useSearchParams()
   const [term, setTerm] = useState(params.get('q') ?? '')
+  const [open, setOpen] = useState(false)
+  const [active, setActive] = useState(-1)
+  const settled = useSettled(term.trim(), 200)
+  const asked = settled.length >= 2
 
   // Landing on /browse?q=… from elsewhere should fill the box.
   useEffect(() => {
     setTerm(params.get('q') ?? '')
   }, [params])
+
+  const found = useQuery({
+    queryKey: ['search', settled, lang],
+    queryFn: () => api.get<ItemPage>(`/items${query({ term: settled, limit: 6, language: lang })}`),
+    enabled: asked,
+    // The last list stays up while the next letter's is fetched: a list that
+    // emptied between keystrokes flickered.
+    placeholderData: keepPreviousData,
+    staleTime: 60_000,
+  })
+  const items = asked ? (found.data?.items ?? []) : []
+  const total = asked ? (found.data?.total ?? 0) : 0
+  const listed = open && asked
+  // The options, and the way to the whole list after them.
+  const count = items.length ? items.length + 1 : 0
+  const listing = `${id}-results`
+  const optionId = (index: number) => `${id}-option-${index}`
+
+  const browse = (trimmed: string) => (trimmed ? `/browse?q=${encodeURIComponent(trimmed)}` : '/browse')
+  const go = (index: number) => {
+    const trimmed = term.trim()
+    navigate(index >= 0 && index < items.length ? `/work/${items[index]!.id}` : browse(trimmed))
+    setOpen(false)
+    setActive(-1)
+  }
 
   return (
     <form
@@ -235,11 +309,10 @@ function SearchBox({ className, autoFocus }: { className?: string; autoFocus?: b
       className={cn('relative', className)}
       onSubmit={(event) => {
         event.preventDefault()
-        const trimmed = term.trim()
-        navigate(trimmed ? `/browse?q=${encodeURIComponent(trimmed)}` : '/browse')
+        go(active)
       }}
     >
-      <label htmlFor="catalogue-search" className="sr-only">
+      <label htmlFor={id} className="sr-only">
         {t.nav.search}
       </label>
       <Glyph
@@ -247,14 +320,127 @@ function SearchBox({ className, autoFocus }: { className?: string; autoFocus?: b
         className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-bone-faint"
       />
       <Input
-        id="catalogue-search"
+        id={id}
         autoFocus={autoFocus}
-        type="search"
+        type="text"
+        role="combobox"
+        aria-expanded={listed}
+        aria-controls={listing}
+        aria-autocomplete="list"
+        aria-activedescendant={listed && active >= 0 ? optionId(active) : undefined}
+        autoComplete="off"
+        enterKeyHint="search"
         value={term}
-        onChange={(event) => setTerm(event.target.value)}
+        onChange={(event) => {
+          setTerm(event.target.value)
+          setActive(-1)
+          setOpen(true)
+        }}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setOpen(false)}
+        onKeyDown={(event) => {
+          if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+            if (!count) return
+            event.preventDefault()
+            setOpen(true)
+            const step = event.key === 'ArrowDown' ? 1 : -1
+            // Through none, then each option, and round: the states are one
+            // more than the options.
+            setActive((was) => (was + 1 + step + count + 1) % (count + 1) - 1)
+          } else if (event.key === 'Escape' && listed) {
+            event.preventDefault()
+            setOpen(false)
+            setActive(-1)
+          }
+        }}
         placeholder={t.nav.searchPlaceholder}
-        className="pl-9"
+        className="pr-9 pl-9"
       />
+      {term ? (
+        <button
+          type="button"
+          onClick={() => {
+            setTerm('')
+            setActive(-1)
+            document.getElementById(id)?.focus()
+          }}
+          aria-label={t.nav.close}
+          className="absolute top-1/2 right-1 grid size-9 -translate-y-1/2 place-items-center rounded-card text-bone-faint transition-colors duration-150 hover:text-bone"
+        >
+          <Glyph name="close" className="size-3.5" />
+        </button>
+      ) : (
+        <kbd
+          aria-hidden
+          title={t.nav.searchShortcut}
+          className="pointer-events-none absolute top-1/2 right-3 hidden -translate-y-1/2 rounded-[4px] border border-rule px-1.5 font-mono text-[0.625rem] text-bone-faint lg:block"
+        >
+          /
+        </kbd>
+      )}
+
+      {listed ? (
+        <div
+          id={listing}
+          role="listbox"
+          aria-label={t.nav.results}
+          className="fade-in absolute inset-x-0 top-full z-40 mt-2 overflow-hidden rounded-panel border border-rule-bright bg-ink-raised shadow-[var(--shadow-plate)]"
+        >
+          {items.map((item, index) => (
+            <Link
+              key={item.id}
+              id={optionId(index)}
+              role="option"
+              aria-selected={index === active}
+              to={`/work/${item.id}`}
+              // Pressing the mouse would take the focus, and the list with it,
+              // before the click could land.
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => setOpen(false)}
+              className={cn(
+                'flex items-center gap-3 px-3 py-2 transition-colors duration-100',
+                index === active ? 'bg-ink-high' : 'hover:bg-ink-high',
+              )}
+            >
+              <span className="aspect-2/3 w-8 shrink-0 overflow-hidden rounded-[4px] bg-ink-high">
+                {poster(item) ? (
+                  <Artwork url={poster(item)!} role="thumb" sizes="32px" alt="" className="size-full object-cover" />
+                ) : null}
+              </span>
+              <span className="min-w-0">
+                <span className="block truncate text-sm font-medium text-bone">{item.title}</span>
+                <span className="block font-mono text-[0.6875rem] text-bone-faint tabular-nums">
+                  {[item.year, item.kind === 'series' ? t.home.kindSeries : t.home.kindFilm].filter(Boolean).join(' · ')}
+                </span>
+              </span>
+            </Link>
+          ))}
+          {items.length ? (
+            <Link
+              id={optionId(items.length)}
+              role="option"
+              aria-selected={active === items.length}
+              to={browse(term.trim())}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => setOpen(false)}
+              className={cn(
+                'flex min-h-11 items-center justify-between gap-2 border-t border-rule px-3 text-sm transition-colors duration-100',
+                active === items.length ? 'bg-ink-high text-bone' : 'text-bone-dim hover:bg-ink-high hover:text-bone',
+              )}
+            >
+              {t.nav.allResults(total)}
+              <Glyph name="chevronRight" className="size-3.5" />
+            </Link>
+          ) : (
+            <p className="px-3 py-3 text-sm text-bone-faint">
+              {found.isPending ? t.nav.searching : t.nav.noResults(settled)}
+            </p>
+          )}
+        </div>
+      ) : null}
+      <p className="sr-only" aria-live="polite">
+        {listed && found.isSuccess ? t.nav.resultsFound(items.length) : ''}
+      </p>
     </form>
   )
 }

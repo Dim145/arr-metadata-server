@@ -137,13 +137,21 @@ export function PosterCard({
   item,
   to,
   note,
+  kind = false,
 }: {
   item: MediaItem
   to: string
   /** What to say under the title in place of the year. */
   note?: string
+  /** Say whether it is a series or a film: for a list that mixes them. */
+  kind?: boolean
 }) {
   const { t, locale } = useI18n()
+  const caption =
+    note ??
+    [item.year, kind ? (item.kind === 'series' ? t.home.kindSeries : t.home.kindFilm) : undefined]
+      .filter(Boolean)
+      .join(' · ')
   const art = poster(item)
   const rating = headlineRating(item.ratings)
 
@@ -206,7 +214,7 @@ export function PosterCard({
           {item.title}
         </h3>
         <p className="font-mono text-[0.6875rem] tracking-wide text-bone-faint tabular-nums">
-          {note ?? item.year ?? '—'}
+          {caption || '—'}
         </p>
       </div>
     </Link>

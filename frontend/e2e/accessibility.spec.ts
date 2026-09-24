@@ -171,6 +171,22 @@ test.describe('the catalogue, to a visitor', () => {
     await scan(page, 'the artwork viewer')
   })
 
+  test('the search, with what it found, meets WCAG 2.1 AA', async ({ page }) => {
+    const { items } = await (await page.request.get('/api/v1/items?limit=1')).json()
+    test.skip(!items[0], 'the catalogue is empty')
+
+    await page.goto('/')
+    await page.waitForLoadState('networkidle')
+    const reveal = page.getByRole('button', { name: /^(search|rechercher)/i })
+    if (await reveal.isVisible()) await reveal.click()
+    const box = page.getByRole('combobox').first()
+    await box.fill((items[0].title as string).slice(0, 3))
+    await expect(page.getByRole('option').first()).toBeVisible()
+    await box.press('ArrowDown')
+
+    await scan(page, 'the search')
+  })
+
   test('the filters, opened, meet WCAG 2.1 AA', async ({ page }) => {
     await page.goto('/browse')
     await page.waitForLoadState('networkidle')

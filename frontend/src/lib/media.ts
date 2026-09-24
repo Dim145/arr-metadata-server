@@ -22,6 +22,7 @@ import type { Credit, Episode, Image, MediaItem, Rating } from './types'
 export type ImageRole =
   | 'card'
   | 'thumb'
+  | 'logo'
   | 'poster'
   | 'backdrop'
   | 'headshot'
@@ -43,6 +44,8 @@ const TMDB_LADDER: Record<ImageRole, readonly number[]> = {
   card: [185, 342, 500],
   // A poster beside a card's text, a hundred pixels or so.
   thumb: [92, 154, 185, 342],
+  // A clear logo laid over the front page's backdrop.
+  logo: [300, 500],
   poster: [342, 500, 780],
   backdrop: [780, 1280],
   headshot: [185],
@@ -67,6 +70,7 @@ const TMDB_BEYOND: Partial<Record<ImageRole, { size: string; width: number }>> =
 const SIZES: Record<ImageRole, string> = {
   card: '(min-width: 1280px) 200px, (min-width: 768px) 22vw, 45vw',
   thumb: '(min-width: 640px) 112px, 88px',
+  logo: '(min-width: 1024px) 416px, (min-width: 640px) 336px, 240px',
   poster: '(min-width: 1024px) 192px, 160px',
   backdrop: '100vw',
   headshot: '56px',
