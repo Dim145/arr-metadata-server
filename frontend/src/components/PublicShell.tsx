@@ -12,6 +12,7 @@ import { Fragment, useEffect, useState } from 'react'
 import { Link, Outlet, useLocation, useNavigate, useSearchParams } from 'react-router'
 
 import { api } from '../lib/api'
+import { useNavigationReset } from '../lib/hooks'
 import { cn } from '../lib/cn'
 import { useI18n, type Lang } from '../lib/i18n'
 import { providerName } from '../lib/labels'
@@ -23,6 +24,7 @@ export function PublicShell({ me }: { me?: Me }) {
   const [open, setOpen] = useState(false)
   const [searching, setSearching] = useState(false)
   const location = useLocation()
+  useNavigationReset('main')
 
   // A menu that survives navigation would cover the page it just opened.
   useEffect(() => {
@@ -52,6 +54,7 @@ export function PublicShell({ me }: { me?: Me }) {
             <Tab to="/browse">{t.nav.browse}</Tab>
             <Tab to="/browse?kind=series">{t.nav.series}</Tab>
             <Tab to="/browse?kind=movie">{t.nav.films}</Tab>
+            <Tab to="/calendar">{t.nav.calendar}</Tab>
           </nav>
 
           <div className="ml-auto flex items-center gap-2">
@@ -116,6 +119,9 @@ export function PublicShell({ me }: { me?: Me }) {
               <Tab to="/browse?kind=movie" block>
                 {t.nav.films}
               </Tab>
+              <Tab to="/calendar" block>
+                {t.nav.calendar}
+              </Tab>
             </nav>
 
             <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-rule pt-3">
@@ -126,7 +132,7 @@ export function PublicShell({ me }: { me?: Me }) {
         ) : null}
       </header>
 
-      <main id="main" className="relative z-10 mx-auto max-w-7xl px-4 pb-24 sm:px-6">
+      <main id="main" tabIndex={-1} className="relative z-10 mx-auto max-w-7xl px-4 pb-24 outline-none sm:px-6">
         <Outlet />
       </main>
 

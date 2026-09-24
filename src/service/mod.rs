@@ -91,6 +91,56 @@ async fn overlay_imdb(state: &AppState, item: &mut MediaItem) -> Result<()> {
     Ok(())
 }
 
+/// Leave out of works what only somebody maintaining the catalogue is told:
+/// how the last refresh went — the error can name a provider's address, or the
+/// host this server reaches it on — when the next one is due, and which fields
+/// are locked. Applied last, since the language overlay reads the locks.
+pub fn redact_for_reader(identity: &crate::auth::Identity, items: &mut [MediaItem]) {
+    if identity.can_write() {
+        return;
+    }
+
+    for item in items {
+        item.refresh_error = None;
+        item.refresh_after = None;
+        item.locked_fields.clear();
+    }
+}
+
+/// IMDb's figure for every work of a list, in one query.
+///
+/// A failure costs the list IMDb's figure and nothing else: the stored ratings
+/// are already on every card.
+pub async fn overlay_imdb_many(state: &AppState, items: &mut [MediaItem]) {
+    if !state.flag("imdb.enabled", false) {
+        return;
+    }
+
+    let tconsts: Vec<String> = items
+        .iter()
+        .filter_map(|i| i.external_ids.imdb.clone())
+        .collect();
+
+    match repo::imdb::get_many(&state.db, &tconsts).await {
+        Ok(listed) => {
+            for item in items.iter_mut() {
+                if let Some(rating) = item
+                    .external_ids
+                    .imdb
+                    .as_deref()
+                    .and_then(|t| listed.get(t))
+                {
+                    take_newer_imdb(&mut item.ratings, rating);
+                }
+            }
+        }
+        Err(e) => tracing::warn!(
+            error = format_args!("{e:#}"),
+            "could not read IMDb's ratings for a list"
+        ),
+    }
+}
+
 /// Put IMDb's listed figure in place of the stored one, unless the stored one
 /// has more votes and so is the newer of the two.
 fn take_newer_imdb(ratings: &mut Vec<Rating>, listed: &repo::imdb::Rating) {

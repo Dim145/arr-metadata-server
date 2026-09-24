@@ -37,6 +37,7 @@ pub enum Action {
     PasswordChanged,
     CacheCleared,
     NfoExported,
+    DatasetImported,
 }
 
 impl Action {
@@ -62,6 +63,7 @@ impl Action {
             Self::PasswordChanged => "auth.password_changed",
             Self::CacheCleared => "cache.cleared",
             Self::NfoExported => "export.nfo",
+            Self::DatasetImported => "dataset.imported",
         }
     }
 }

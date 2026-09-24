@@ -25,7 +25,7 @@ import { cn } from '../../lib/cn'
 import * as fmt from '../../lib/format'
 import { useI18n } from '../../lib/i18n'
 import { policyLabel } from '../../lib/labels'
-import type { JobsResponse, Settings, Stats } from '../../lib/types'
+import type { ItemPage, JobsResponse, Settings, Stats } from '../../lib/types'
 import { RunStatus } from './Jobs'
 
 export function Dashboard() {
@@ -83,6 +83,8 @@ export function Dashboard() {
           />
         </div>
       )}
+
+      <Failing />
 
       <div className="mt-6 grid items-start gap-6 lg:grid-cols-2">
         <RecentRuns />
@@ -159,6 +161,41 @@ function Metric({
         {hint ? <p className="mt-2 text-xs leading-relaxed text-bone-faint">{hint}</p> : null}
       </div>
     </div>
+  )
+}
+
+/**
+ * The works whose last refresh failed, when there are any.
+ *
+ * Said only when it is true: a banner that is always there, reading zero, is
+ * one nobody reads on the day it says something.
+ */
+function Failing() {
+  const { t, locale } = useI18n()
+
+  // Enabled works only: a disabled one is never refreshed again, so its last
+  // error would hold the banner up for good.
+  const failing = useQuery({
+    queryKey: ['items', 'refresh-failed', 'count'],
+    queryFn: () => api.get<ItemPage>(`/items${query({ refreshFailed: true, limit: 1 })}`),
+    refetchInterval: 60_000,
+  })
+
+  const total = failing.data?.total ?? 0
+  if (!total) return null
+
+  return (
+    <Link
+      to="/admin/catalogue?refreshFailed=1"
+      className="rise mt-6 flex items-center gap-3 rounded-panel border border-vermillion-deep bg-vermillion/[0.06] px-5 py-4 text-sm text-bone transition-colors duration-150 hover:bg-vermillion/10"
+    >
+      <Glyph name="alert" className="size-4 shrink-0 text-vermillion" />
+      <span className="flex-1">{t.admin.overview.failing(fmt.count(total, locale), total)}</span>
+      <span className="label inline-flex items-center gap-1">
+        {t.admin.overview.seeThem}
+        <Glyph name="chevronRight" className="size-3" />
+      </span>
+    </Link>
   )
 }
 

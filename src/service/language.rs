@@ -74,6 +74,27 @@ pub async fn apply(state: &AppState, item: &mut MediaItem, requested: &str) -> R
     Ok(())
 }
 
+/// Overlay what is already held in the requested language, and ask no
+/// provider for more.
+///
+/// For episodes drawn from many works at once — a calendar — where [`apply`]
+/// would fetch each work's missing text in turn.
+pub async fn apply_stored(state: &AppState, item: &mut MediaItem, requested: &str) -> Result<()> {
+    let language = normalize(requested);
+
+    if language.is_empty() || is_default(state, &language) {
+        return Ok(());
+    }
+
+    overlay_item(item, &language);
+
+    if item.kind == MediaKind::Series && !item.episodes.is_empty() {
+        overlay_episodes(state, item, &language).await?;
+    }
+
+    Ok(())
+}
+
 /// Overlay only the work's own title and overview.
 ///
 /// For lists: [`apply`] may fetch a season's worth of episode text per work,

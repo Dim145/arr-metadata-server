@@ -14,7 +14,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
-import { Link } from 'react-router'
+import { Link, useSearchParams } from 'react-router'
 
 import {
   Button,
@@ -50,19 +50,41 @@ export function Catalogue() {
   const { t, locale } = useI18n()
   const queryClient = useQueryClient()
 
+  const [params, setParams] = useSearchParams()
   const [term, setTerm] = useState('')
   const [kind, setKind] = useState<'' | MediaKind>('')
   const [manualOnly, setManualOnly] = useState(false)
+  // In the address, where the dashboard's count of failed refreshes links:
+  // read from it only, a toggle switched off came back on at the next reload.
+  const failedOnly = params.get('refreshFailed') === '1'
+  const setFailedOnly = (on: boolean) => {
+    const next = new URLSearchParams(window.location.search)
+    if (on) {
+      next.set('refreshFailed', '1')
+    } else {
+      next.delete('refreshFailed')
+    }
+    setParams(next, { replace: true })
+  }
+  const [sort, setSort] = useState<'popularity' | 'title' | 'added' | 'refreshed'>('popularity')
   const [composing, setComposing] = useState(false)
   const [asking, setAsking] = useState<Asking | null>(null)
 
   const settled = useSettled(term)
 
   const list = useQuery({
-    queryKey: ['items', settled, kind, manualOnly],
+    queryKey: ['items', settled, kind, manualOnly, failedOnly, sort],
     queryFn: () =>
       api.get<ItemPage>(
-        `/items${query({ term: settled, kind, manualOnly, limit: 60, includeDisabled: true })}`,
+        `/items${query({
+          term: settled,
+          kind,
+          manualOnly,
+          refreshFailed: failedOnly,
+          sort,
+          limit: 60,
+          includeDisabled: true,
+        })}`,
       ),
   })
 
@@ -100,7 +122,7 @@ export function Catalogue() {
     },
   })
 
-  const filtered = Boolean(term || kind || manualOnly)
+  const filtered = Boolean(term || kind || manualOnly || failedOnly)
 
   return (
     <div className="mx-auto max-w-6xl">
@@ -166,6 +188,31 @@ export function Catalogue() {
           <Glyph name="lock" className="size-4" />
           {t.admin.works.manualOnly}
         </Button>
+
+        <Button
+          variant={failedOnly ? 'danger' : 'ghost'}
+          aria-pressed={failedOnly}
+          onClick={() => setFailedOnly(!failedOnly)}
+        >
+          <Glyph name="alert" className="size-4" />
+          {t.admin.works.failedOnly}
+        </Button>
+
+        <div className="min-w-40">
+          <label htmlFor="works-sort" className="label mb-1.5 block">
+            {t.browse.sort}
+          </label>
+          <Select
+            id="works-sort"
+            value={sort}
+            onChange={(event) => setSort(event.target.value as typeof sort)}
+          >
+            <option value="popularity">{t.browse.orders.popular}</option>
+            <option value="title">{t.browse.orders.title}</option>
+            <option value="added">{t.browse.orders.added}</option>
+            <option value="refreshed">{t.admin.works.sortRefreshed}</option>
+          </Select>
+        </div>
 
         <span className="ml-auto flex items-center gap-3 self-center">
           {list.isFetching ? <Spinner className="size-3.5 text-bone-faint" /> : null}

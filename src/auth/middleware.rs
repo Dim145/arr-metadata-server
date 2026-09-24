@@ -248,7 +248,15 @@ fn browsable(method: &axum::http::Method, path: &str) -> bool {
     }
 
     match path.trim_end_matches('/') {
-        "/api/v1/items" | "/api/v1/stats" | "/api/v1/sources" | "/api/v1/auth/me" => true,
+        "/api/v1/items" | "/api/v1/stats" | "/api/v1/sources" | "/api/v1/facets"
+        | "/api/v1/calendar" | "/api/v1/auth/me" => true,
+        // Somebody's work, as the catalogue holds it.
+        rest if rest
+            .strip_prefix("/api/v1/people/")
+            .is_some_and(|id| !id.is_empty() && !id.contains('/')) =>
+        {
+            true
+        }
         // One work. Its seasons, episodes, artwork and cast come with it, but
         // its snapshots and overrides are their own paths and are not listed.
         rest => rest
@@ -413,6 +421,12 @@ mod browse_tests {
         assert!(allowed("/api/v1/auth/me"));
         // The credits every page carries, which some sources' licences require.
         assert!(allowed("/api/v1/sources"));
+        // The catalogue from other sides: what it can be narrowed by, what
+        // airs when, and who is in it.
+        assert!(allowed("/api/v1/facets"));
+        assert!(allowed("/api/v1/calendar"));
+        assert!(allowed("/api/v1/people/17419"));
+        assert!(!allowed("/api/v1/people/17419/secret"));
     }
 
     #[test]

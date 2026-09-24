@@ -18,6 +18,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router'
 
 import { ApiError, api } from '../lib/api'
+import { cn } from '../lib/cn'
 import * as fmt from '../lib/format'
 import { useI18n, type Dict } from '../lib/i18n'
 import type {
@@ -196,10 +197,16 @@ function SourcesAtWork({ values }: { values: EffectiveSetting[] }) {
     <div className="border-t border-rule">
       <dl className="divide-y divide-rule">
         <Field label={t.admin.config.animeList}>
-          <Imported list={further.animeList} rows={t.admin.config.animeEntries} />
+          <span className="inline-flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
+            <Imported list={further.animeList} rows={t.admin.config.animeEntries} />
+            {wantsAnime ? <ImportNow name="anime-lists" /> : null}
+          </span>
         </Field>
         <Field label={t.admin.config.imdbRatings}>
-          <Imported list={further.imdbRatings} rows={t.admin.config.imdbWorks} />
+          <span className="inline-flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
+            <Imported list={further.imdbRatings} rows={t.admin.config.imdbWorks} />
+            {wantsImdb ? <ImportNow name="imdb-ratings" /> : null}
+          </span>
         </Field>
         <Field label={t.admin.config.malVia}>
           {further.malVia === 'official' ? (
@@ -223,6 +230,50 @@ function SourcesAtWork({ values }: { values: EffectiveSetting[] }) {
         .
       </p>
     </div>
+  )
+}
+
+/**
+ * Download a list now rather than when the schedule next says — after
+ * switching a source on, or to check a list is not stale.
+ */
+function ImportNow({ name }: { name: 'anime-lists' | 'imdb-ratings' }) {
+  const { t } = useI18n()
+  const queryClient = useQueryClient()
+
+  const run = useMutation({
+    // No summary when the server answered before the download finished: it
+    // carries on, and records itself as a job.
+    mutationFn: () => api.post<{ summary?: string }>(`/datasets/${name}/import`),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ['settings'], exact: true })
+      void queryClient.invalidateQueries({ queryKey: ['jobs'] })
+    },
+  })
+
+  // A refusal says why in words worth showing — another import running, the
+  // source switched off. A failed download does not: its reason can name
+  // hosts, so it is in the job run, and this says where to read it.
+  const refusal =
+    run.error instanceof ApiError && run.error.status === 409 ? run.error.message : undefined
+
+  return (
+    <span className="inline-flex flex-col items-end gap-1">
+      <Button size="sm" variant="quiet" disabled={run.isPending} onClick={() => run.mutate()}>
+        {run.isPending ? <Spinner className="size-3.5" /> : <Glyph name="download" className="size-3.5" />}
+        {run.isPending ? t.admin.config.importing : t.admin.config.importNow}
+      </Button>
+      {/* Always there, so what appears in it is read out: a live region
+          inserted together with its text often is not. */}
+      <span role="status" className={cn('text-xs', run.data?.summary ? 'text-moss' : 'text-bone-dim')}>
+        {run.isSuccess ? (run.data.summary ?? t.admin.config.importRunning) : ''}
+      </span>
+      {run.isError ? (
+        <span role="alert" className="text-xs text-vermillion">
+          {refusal ?? t.admin.config.importFailed}
+        </span>
+      ) : null}
+    </span>
   )
 }
 

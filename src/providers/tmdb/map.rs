@@ -359,11 +359,23 @@ fn release_dates(movie: &models::Movie) -> Releases {
     for entry in &block.release_dates {
         let date = entry.release_date.as_deref().map(trim_to_date);
 
-        match entry.release_type {
-            Some(2) | Some(3) if out.in_cinemas.is_none() => out.in_cinemas = date,
-            Some(4) if out.digital.is_none() => out.digital = date,
-            Some(5) if out.physical.is_none() => out.physical = date,
-            _ => {}
+        // The earliest of each kind. TMDB lists a country's dates in no order
+        // it promises, and files a re-release under the same type as the
+        // original: taken as they came, the fiftieth-anniversary run made The
+        // Godfather a 2022 film and a 2026 one had Fight Club not yet reach
+        // cinemas — which Radarr reads as not yet available.
+        let slot = match entry.release_type {
+            Some(2 | 3) => Some(&mut out.in_cinemas),
+            Some(4) => Some(&mut out.digital),
+            Some(5) => Some(&mut out.physical),
+            _ => None,
+        };
+        if let (Some(slot), Some(date)) = (slot, date)
+            && slot
+                .as_deref()
+                .is_none_or(|current| date.as_str() < current)
+        {
+            *slot = Some(date);
         }
 
         if out.certification.is_none() {
@@ -1199,6 +1211,33 @@ mod fixtures {
         assert_eq!(item.physical_release.as_deref(), Some("2017-02-14"));
         assert_eq!(item.content_rating.as_deref(), Some("PG-13"));
         assert_eq!(item.status.as_deref(), Some("released"));
+    }
+
+    #[test]
+    fn a_re_release_does_not_move_a_film_forward() {
+        // Fight Club, as TMDB lists its US dates: the 2026 re-release first.
+        let mut m = movie();
+        m.release_dates = serde_json::from_value(serde_json::json!({
+            "results": [{
+                "iso_3166_1": "US",
+                "release_dates": [
+                    { "type": 3, "release_date": "2026-04-22T00:00:00.000Z", "certification": "R" },
+                    { "type": 4, "release_date": "2026-05-12T00:00:00.000Z", "certification": "R" },
+                    { "type": 3, "release_date": "1999-10-15T00:00:00.000Z", "certification": "R" },
+                    { "type": 5, "release_date": "2000-04-25T00:00:00.000Z", "certification": "R" },
+                    { "type": 4, "release_date": "2009-11-17T00:00:00.000Z", "certification": "R" },
+                    { "type": 2, "release_date": "1999-10-14T00:00:00.000Z", "certification": "R" }
+                ]
+            }]
+        }))
+        .unwrap();
+
+        let item = movie_to_item(&m);
+
+        // A limited run before the wide one is still the first time in cinemas.
+        assert_eq!(item.in_cinemas.as_deref(), Some("1999-10-14"));
+        assert_eq!(item.digital_release.as_deref(), Some("2009-11-17"));
+        assert_eq!(item.physical_release.as_deref(), Some("2000-04-25"));
     }
 
     #[test]

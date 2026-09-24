@@ -14,6 +14,28 @@ async function catalogueLoaded(page: Page) {
 }
 
 /**
+ * The filters, wherever this width keeps them: in a rail beside the results on
+ * a wide screen, in a sheet behind a button on a phone.
+ */
+async function filters(page: Page) {
+  const open = page.getByRole('button', { name: /^(filters|filtres)/i })
+  if (await open.isVisible()) {
+    await open.click()
+    return page.getByRole('dialog')
+  }
+  return page.getByRole('complementary', { name: /^(filters|filtres)$/i })
+}
+
+/** Back to the results from the phone's sheet; nothing to do beside a rail. */
+async function backToResults(page: Page) {
+  const sheet = page.getByRole('dialog')
+  if (await sheet.isVisible()) {
+    await sheet.getByRole('button', { name: /^(show|voir) /i }).click()
+    await expect(sheet).toBeHidden()
+  }
+}
+
+/**
  * Whether the page can be dragged sideways.
  *
  * Asserted on every page because it is the failure that hides: a child that
@@ -48,8 +70,10 @@ test.describe('the catalogue', () => {
     await page.goto('/')
     await catalogueLoaded(page)
 
+    // A work's poster, that is: an episode's card names its episode in text,
+    // and the picture beside it is rightly left undescribed.
     const described = await page.evaluate(() =>
-      [...document.querySelectorAll('a[href^="/work/"] img')].every(
+      [...document.querySelectorAll('a[href^="/work/"]:not([href*="/episode/"]) img')].every(
         (img) => (img as HTMLImageElement).alt.trim().length > 0,
       ),
     )
@@ -87,20 +111,67 @@ test.describe('the catalogue', () => {
     await page.goto('/browse?kind=movie')
     await catalogueLoaded(page)
 
-    const kinds = await page.evaluate(() =>
-      [...document.querySelectorAll('a[href^="/work/"]')].length,
-    )
-    expect(kinds).toBeGreaterThan(0)
-
     // The control reflects the URL rather than its own default.
-    await expect(page.getByLabel(/kind|type/i)).toHaveValue('movie')
+    const panel = await filters(page)
+    await expect(panel.getByRole('radio', { name: /^(films)$/i })).toBeChecked()
   })
 
-  test('says so plainly when a filter matches nothing', async ({ page }) => {
+  test('a genre narrows the list, and its chip takes it off again', async ({ page }) => {
+    await page.goto('/browse')
+    await catalogueLoaded(page)
+
+    const panel = await filters(page)
+    const genre = panel.getByRole('group', { name: /^(genres)$/i }).getByRole('button').first()
+    await genre.click()
+
+    await expect(page).toHaveURL(/[?&]genre=/)
+    await expect(genre).toHaveAttribute('aria-pressed', 'true')
+
+    await backToResults(page)
+    await catalogueLoaded(page)
+    await page.getByRole('button', { name: /remove the filter|retirer le filtre/i }).first().click()
+    await expect(page).not.toHaveURL(/genre=/)
+  })
+
+  test('an order is asked of the server, and kept in the URL', async ({ page }) => {
+    await page.goto('/browse')
+    await catalogueLoaded(page)
+
+    const asked = page.waitForRequest((r) => r.url().includes('/api/v1/items') && r.url().includes('sort=title'))
+    await page.getByLabel(/^(sort|tri)$/i).selectOption('title')
+
+    await asked
+    await expect(page).toHaveURL(/[?&]order=title/)
+  })
+
+  test('a link made for a single year still lands on that year', async ({ page }) => {
+    const asked = page.waitForRequest(
+      (r) => r.url().includes('/api/v1/items') && r.url().includes('yearFrom=2008') && r.url().includes('yearTo=2008'),
+    )
+    await page.goto('/browse?year=2008')
+
+    await asked
+    await expect(page.getByRole('button', { name: /(remove the filter|retirer le filtre).*2008/i })).toBeVisible()
+  })
+
+  test('says so plainly when a search matches nothing, and offers to clear it', async ({ page }) => {
     await page.goto('/browse?q=zzzzznothinghere')
 
     await expect(page.getByText(/no work matches|aucune œuvre/i)).toBeVisible()
-    await expect(page.getByRole('button', { name: /clear|effacer/i }).first()).toBeVisible()
+    await page.getByRole('button', { name: /^(clear filters|effacer les filtres)$/i }).first().click()
+    await expect(page).not.toHaveURL(/q=/)
+    await catalogueLoaded(page)
+  })
+
+  test('offers to take off the filter that emptied the list', async ({ page }) => {
+    await page.goto('/browse?kind=movie&genre=zzz-no-such-genre')
+
+    await expect(page.getByText(/these filters leave nothing|ces filtres ne laissent rien/i)).toBeVisible()
+    await page.getByRole('button', { name: /^(without|sans).*zzz-no-such-genre/i }).click()
+
+    await expect(page).not.toHaveURL(/genre=/)
+    await expect(page).toHaveURL(/kind=movie/)
+    await catalogueLoaded(page)
   })
 })
 

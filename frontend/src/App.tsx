@@ -19,6 +19,12 @@ import { Work } from './routes/Work'
 const named = <K extends string>(load: () => Promise<Record<K, React.ComponentType>>, name: K) =>
   lazy(() => load().then((module) => ({ default: module[name] })))
 
+// The catalogue's deeper pages: reached from a work, not the way in.
+const Season = named(() => import('./routes/Season'), 'Season')
+const Episode = named(() => import('./routes/Episode'), 'Episode')
+const Person = named(() => import('./routes/Person'), 'Person')
+const Calendar = named(() => import('./routes/Calendar'), 'Calendar')
+
 const Login = named(() => import('./routes/Login'), 'Login')
 const AdminShell = named(() => import('./components/AdminShell'), 'AdminShell')
 const Dashboard = named(() => import('./routes/admin/Dashboard'), 'Dashboard')
@@ -75,6 +81,10 @@ function Router() {
           <Route path="/" element={<Home />} />
           <Route path="/browse" element={<Browse />} />
           <Route path="/work/:id" element={<Work />} />
+          <Route path="/work/:id/season/:season" element={<Season />} />
+          <Route path="/work/:id/season/:season/episode/:episode" element={<Episode />} />
+          <Route path="/person/:tmdbId" element={<Person />} />
+          <Route path="/calendar" element={<Calendar />} />
           {/* Said, not redirected: see `NotFound`. */}
           <Route path="*" element={<NotFound />} />
         </Route>

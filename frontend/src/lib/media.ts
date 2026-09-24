@@ -7,16 +7,19 @@
  * three different ways in three components.
  */
 
-import type { Credit, Image, MediaItem, Rating } from './types'
+import * as fmt from './format'
+import type { Credit, Episode, Image, MediaItem, Rating } from './types'
 
 /**
  * What an image is on the page, which decides how big a file it needs.
  *
  * `card` is a poster in a grid, `poster` the one on a work's own page,
  * `backdrop` the wide strip behind a header, `headshot` a cast member and
- * `still` an episode.
+ * `still` an episode; `frame` an episode's still drawn wide on its own page,
+ * `portrait` a person's photograph on theirs, and `full` whatever the provider
+ * has, for the lightbox.
  */
-export type ImageRole = 'card' | 'poster' | 'backdrop' | 'headshot' | 'still'
+export type ImageRole = 'card' | 'poster' | 'backdrop' | 'headshot' | 'still' | 'frame' | 'portrait' | 'full'
 
 /**
  * TMDB's own size ladder for each role, in the widths it actually serves.
@@ -33,6 +36,20 @@ const TMDB_LADDER: Record<ImageRole, readonly number[]> = {
   backdrop: [780, 1280],
   headshot: [185],
   still: [300],
+  // TMDB cuts stills at 92, 185 and 300 and nothing between that and the
+  // original, so a wide still is the original past the first step.
+  frame: [300],
+  portrait: [185],
+  full: [],
+}
+
+/**
+ * The step past the ladder, where TMDB has one: the original for a still,
+ * `h632` for a photograph. Widths are what the step is at least.
+ */
+const TMDB_BEYOND: Partial<Record<ImageRole, { size: string; width: number }>> = {
+  frame: { size: 'original', width: 1920 },
+  portrait: { size: 'h632', width: 421 },
 }
 
 /** The layout width each role is drawn at, for `sizes`. */
@@ -42,6 +59,9 @@ const SIZES: Record<ImageRole, string> = {
   backdrop: '100vw',
   headshot: '56px',
   still: '240px',
+  frame: '(min-width: 1024px) 880px, 100vw',
+  portrait: '(min-width: 640px) 224px, 160px',
+  full: '100vw',
 }
 
 const TMDB = /^(https:\/\/image\.tmdb\.org\/t\/p\/)original(\/[^?#]+\.(?:jpe?g|png|webp))$/i
@@ -70,9 +90,19 @@ export function sized(url: string, role: ImageRole): Sourced {
   const [, base, path] = tmdb ?? []
   if (base && path) {
     const ladder = TMDB_LADDER[role]
+    if (!ladder.length) {
+      return { src: url, original: url }
+    }
+
+    const beyond = TMDB_BEYOND[role]
+    const steps = ladder.map((w) => `${base}w${w}${path} ${w}w`)
+    if (beyond) {
+      steps.push(`${base}${beyond.size}${path} ${beyond.width}w`)
+    }
+
     return {
       src: `${base}w${ladder[Math.min(1, ladder.length - 1)]}${path}`,
-      srcSet: ladder.map((w) => `${base}w${w}${path} ${w}w`).join(', '),
+      srcSet: steps.join(', '),
       sizes: SIZES[role],
       original: url,
     }
@@ -210,6 +240,126 @@ export function episodesOf(item: MediaItem, season: number) {
   return (item.episodes ?? [])
     .filter((e) => e.seasonNumber === season)
     .sort((a, b) => a.episodeNumber - b.episodeNumber)
+}
+
+/** `S01E02`, the way every release name and every client writes it. */
+export function episodeCode(episode: Pick<Episode, 'seasonNumber' | 'episodeNumber'>): string {
+  const two = (n: number) => String(n).padStart(2, '0')
+  return `S${two(episode.seasonNumber)}E${two(episode.episodeNumber)}`
+}
+
+/**
+ * When an episode airs, for sorting: the moment a provider knew, otherwise
+ * midnight UTC on its date — the same instant Sonarr is given. Not for saying
+ * whether it has aired, or when: see `airTime`.
+ */
+export function airsAt(episode: Pick<Episode, 'airDate' | 'airDateUtc'>): number | undefined {
+  const raw = episode.airDateUtc ?? (episode.airDate ? `${episode.airDate}T00:00:00Z` : undefined)
+  const time = raw ? Date.parse(raw) : Number.NaN
+  return Number.isNaN(time) ? undefined : time
+}
+
+/** When an episode airs, as precisely as anybody knows it. */
+export interface AirTime {
+  /** The reader's own calendar date of it: `2026-09-22`. */
+  day: string
+  /** The moment, where a provider knew one. */
+  moment?: Date
+}
+
+/**
+ * A moment where a provider gave a full timestamp, and otherwise a day — the
+ * date the network gave, which is the same day for every reader. Read as the
+ * midnight UTC it is stored at, it moved to the evening before for anybody
+ * west of Greenwich, and aired "in 8 hours" there. A value an override made
+ * something else — a bare date, a typing slip — says a day at most, and
+ * never breaks the page it is on.
+ */
+export function airTime(episode: Pick<Episode, 'airDate' | 'airDateUtc'>): AirTime | undefined {
+  const utc = episode.airDateUtc?.trim()
+  if (utc && /^\d{4}-\d{2}-\d{2}T/.test(utc)) {
+    const moment = new Date(utc)
+    if (!Number.isNaN(moment.getTime())) return { day: fmt.localDay(moment), moment }
+  }
+
+  const day = [utc, episode.airDate?.trim()].find((v): v is string => !!v && /^\d{4}-\d{2}-\d{2}$/.test(v))
+  return day ? { day } : undefined
+}
+
+/**
+ * The value to hand a date formatter for it: the moment, so the day comes out
+ * the reader's own, or the day as it was given.
+ */
+export function airValue(time: AirTime | undefined): string | undefined {
+  return time?.moment?.toISOString() ?? time?.day
+}
+
+/** Whether it has aired by `now`: a moment once it is past, a day once it is over. */
+export function hasAired(time: AirTime, now = new Date()): boolean {
+  return time.moment ? time.moment.getTime() <= now.getTime() : time.day < fmt.localDay(now)
+}
+
+/**
+ * How far off it is: in hours or minutes for a moment later the same day, and
+ * otherwise in the reader's calendar days — never an hour made up for an
+ * episode nobody gave a time.
+ */
+export function airsWhen(time: AirTime, locale: string, now = new Date()): string {
+  if (time.moment && time.day === fmt.localDay(now)) {
+    return fmt.relative(time.moment.toISOString(), locale) ?? fmt.dayDistance(time.day, locale, now)
+  }
+  return fmt.dayDistance(time.day, locale, now)
+}
+
+/** The regular episodes in airing order, specials left out. */
+function regular(item: MediaItem): Episode[] {
+  return (item.episodes ?? [])
+    .filter((e) => e.seasonNumber > 0 && airTime(e) !== undefined)
+    .sort((a, b) => (airsAt(a) ?? 0) - (airsAt(b) ?? 0))
+}
+
+/** The next regular episode to air, if one is known: tonight's until tonight is over. */
+export function nextEpisode(item: MediaItem, now = new Date()): Episode | undefined {
+  return regular(item).find((e) => !hasAired(airTime(e)!, now))
+}
+
+/** The last regular episode to have aired by `now`. */
+export function latestEpisode(item: MediaItem, now = new Date()): Episode | undefined {
+  return regular(item)
+    .filter((e) => hasAired(airTime(e)!, now))
+    .at(-1)
+}
+
+/** The seasons either side of `season` in reading order, specials last. */
+export function adjacentSeasons(item: MediaItem, season: number): { before?: number; after?: number } {
+  const numbers = seasonNumbers(item)
+  const at = numbers.indexOf(season)
+  return {
+    before: at > 0 ? numbers[at - 1] : undefined,
+    after: at >= 0 ? numbers[at + 1] : undefined,
+  }
+}
+
+/** The episodes either side of one, in reading order across seasons. */
+export function adjacentEpisodes(
+  item: MediaItem,
+  episode: Pick<Episode, 'seasonNumber' | 'episodeNumber'>,
+): { before?: Episode; after?: Episode } {
+  const order = seasonNumbers(item).flatMap((n) => episodesOf(item, n))
+  const at = order.findIndex(
+    (e) => e.seasonNumber === episode.seasonNumber && e.episodeNumber === episode.episodeNumber,
+  )
+  return at < 0 ? {} : { before: order[at - 1], after: order[at + 1] }
+}
+
+/** Every image of one kind, a person's choice first, then in the order given. */
+export function imagesOf(item: Pick<MediaItem, 'images'>, kind: string): Image[] {
+  return (item.images ?? [])
+    .filter(
+      (image) =>
+        image.coverType === kind && (image.seasonNumber === undefined || image.seasonNumber === null),
+    )
+    .sort((a, b) => Number(b.isManual) - Number(a.isManual) || a.sortOrder - b.sortOrder)
 }
 
 /** Whether a person has claimed this field, so the interface can say so. */

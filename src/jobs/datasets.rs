@@ -79,20 +79,27 @@ pub async fn run(state: AppState) {
     loop {
         ticker.tick().await;
 
-        if anime_wanted(&state)
-            && retry_allowed(anime_failed)
-            && last_import(&state, ANIME)
-                .await
-                .is_some_and(|last| due(last.as_ref(), ANIME_EVERY))
-        {
-            let ok = record(&state, job::kinds::IMPORT_ANIME, import_anime(&state)).await;
-            anime_failed = (!ok).then(tokio::time::Instant::now);
+        // Asked again once the lock is held: an import somebody asked for by
+        // hand may have been what it waited on, and has just done the work.
+        if anime_wanted(&state) && retry_allowed(anime_failed) && anime_due(&state).await {
+            let _importing = IMPORTING.lock().await;
+            if anime_due(&state).await {
+                let ok = record(&state, job::kinds::IMPORT_ANIME, import_anime(&state))
+                    .await
+                    .is_ok();
+                anime_failed = (!ok).then(tokio::time::Instant::now);
+            }
         }
 
         if state.flag("imdb.enabled", false) && retry_allowed(imdb_failed) && imdb_due(&state).await
         {
-            let ok = record(&state, job::kinds::IMPORT_IMDB, import_imdb(&state)).await;
-            imdb_failed = (!ok).then(tokio::time::Instant::now);
+            let _importing = IMPORTING.lock().await;
+            if imdb_due(&state).await {
+                let ok = record(&state, job::kinds::IMPORT_IMDB, import_imdb(&state))
+                    .await
+                    .is_ok();
+                imdb_failed = (!ok).then(tokio::time::Instant::now);
+            }
         }
     }
 }
@@ -115,6 +122,13 @@ async fn last_import(state: &AppState, name: &str) -> Option<Option<Import>> {
             None
         }
     }
+}
+
+/// Whether the anime list has never been imported, or not for a week.
+async fn anime_due(state: &AppState) -> bool {
+    last_import(state, ANIME)
+        .await
+        .is_some_and(|last| due(last.as_ref(), ANIME_EVERY))
 }
 
 /// Whether a list has never been imported, or not for `every`.
@@ -149,9 +163,57 @@ async fn imdb_due(state: &AppState) -> bool {
             })
 }
 
-/// Run one import as a job, so it shows in the interface. Returns whether it
-/// succeeded.
-async fn record(state: &AppState, kind: &str, work: impl Future<Output = Result<String>>) -> bool {
+/// One import at a time, whether the scheduler or an operator asked for it:
+/// two writers replacing the same table at once would each wait out the other.
+static IMPORTING: std::sync::LazyLock<tokio::sync::Mutex<()>> =
+    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
+
+/// What asking for an import now came to.
+pub enum Asked {
+    Imported(String),
+    /// Another import is running; this one was not started.
+    Busy,
+    /// No source that needs this list is switched on.
+    NotWanted,
+    Unknown,
+    Failed(anyhow::Error),
+}
+
+/// Import one list now, rather than when the schedule next says.
+///
+/// For an operator who has just switched a source on, or who suspects a list
+/// is stale. Recorded as a job like any other import.
+pub async fn import_now(state: &AppState, name: &str) -> Asked {
+    let wanted = match name {
+        ANIME => anime_wanted(state),
+        IMDB => state.flag("imdb.enabled", false),
+        _ => return Asked::Unknown,
+    };
+    if !wanted {
+        return Asked::NotWanted;
+    }
+
+    let Ok(_importing) = IMPORTING.try_lock() else {
+        return Asked::Busy;
+    };
+
+    let outcome = match name {
+        ANIME => record(state, job::kinds::IMPORT_ANIME, import_anime(state)).await,
+        _ => record(state, job::kinds::IMPORT_IMDB, import_imdb(state)).await,
+    };
+
+    match outcome {
+        Ok(summary) => Asked::Imported(summary),
+        Err(e) => Asked::Failed(e),
+    }
+}
+
+/// Run one import as a job, so it shows in the interface.
+async fn record(
+    state: &AppState,
+    kind: &str,
+    work: impl Future<Output = Result<String>>,
+) -> Result<String> {
     let run = match job::start(&state.db, kind, None).await {
         Ok(id) => Some(id),
         Err(e) => {
@@ -173,20 +235,16 @@ async fn record(state: &AppState, kind: &str, work: impl Future<Output = Result<
         }
     }
 
-    match outcome {
-        Ok(summary) => {
-            tracing::info!(kind, summary, "list imported");
-            true
-        }
-        Err(e) => {
-            tracing::warn!(
-                kind,
-                error = format_args!("{e:#}"),
-                "list import failed; the previous one stays"
-            );
-            false
-        }
+    match &outcome {
+        Ok(summary) => tracing::info!(kind, summary, "list imported"),
+        Err(e) => tracing::warn!(
+            kind,
+            error = format_args!("{e:#}"),
+            "list import failed; the previous one stays"
+        ),
     }
+
+    outcome
 }
 
 async fn download(state: &AppState, url: &str, limit: u64) -> Result<Vec<u8>> {
@@ -514,10 +572,16 @@ mod tests {
     #[test]
     fn a_ratings_file_that_unpacks_into_a_monster_is_refused() {
         // Compresses to almost nothing; would unpack into one line of any size.
-        let file = gzip(&format!("tconst\taverageRating\tnumVotes\n{}", "a".repeat(100_000)));
+        let file = gzip(&format!(
+            "tconst\taverageRating\tnumVotes\n{}",
+            "a".repeat(100_000)
+        ));
         let error = parse_ratings(&file, &HashSet::new()).unwrap_err();
 
-        assert!(error.to_string().contains("longer than any it should"), "{error:#}");
+        assert!(
+            error.to_string().contains("longer than any it should"),
+            "{error:#}"
+        );
     }
 
     #[test]

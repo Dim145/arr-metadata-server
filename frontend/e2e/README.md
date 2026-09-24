@@ -13,8 +13,14 @@ AMS_PUBLIC_BROWSE=true \
 AMS_BIND_ADDRESS=127.0.0.1:8479 \
 AMS_DATABASE_URL='sqlite://data/e2e.db?mode=rwc' \
 AMS_ADMIN_USERNAME=admin AMS_ADMIN_PASSWORD='choose-one' \
+AMS_RATE_LIMIT_PER_MINUTE=6000 \
   ./target/debug/arr-metadata-server
 ```
+
+The rate limit is raised because every request of the suite comes from one
+address, two browsers at a time: at the default of 600 a minute, a second run
+started straight after the first is refused partway, and its tests fail or skip
+for a reason that has nothing to do with the interface.
 
 Then, with a catalogue that has a few works in it:
 

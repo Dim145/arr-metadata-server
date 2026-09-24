@@ -9,7 +9,7 @@
 const cache = new Map<string, Intl.DateTimeFormat | Intl.NumberFormat>()
 
 function dateFormat(locale: string, options: Intl.DateTimeFormatOptions, key: string) {
-  const id = `${locale}:${key}`
+  const id = `${locale}:${key}:${options.timeZone ?? ''}`
   let found = cache.get(id)
 
   if (!found) {
@@ -20,20 +20,69 @@ function dateFormat(locale: string, options: Intl.DateTimeFormatOptions, key: st
   return found as Intl.DateTimeFormat
 }
 
+/**
+ * A calendar date with no time of day — `2008-01-20` — is a day, not a moment.
+ *
+ * `new Date` reads it as midnight UTC, so formatting it in the reader's own
+ * timezone moved it: west of Greenwich, every air date and release date was
+ * shown as the day before. It is formatted in UTC, where it is still that day.
+ */
+function zoneFor(value: string): Intl.DateTimeFormatOptions {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value.trim()) ? { timeZone: 'UTC' } : {}
+}
+
 /** `12 January 2008`. For a release or an air date. */
 export function longDate(value: string | undefined, locale: string): string | undefined {
   const date = parse(value)
-  if (!date) return undefined
+  if (!date || !value) return undefined
 
-  return dateFormat(locale, { day: 'numeric', month: 'long', year: 'numeric' }, 'long').format(date)
+  return dateFormat(
+    locale,
+    { day: 'numeric', month: 'long', year: 'numeric', ...zoneFor(value) },
+    'long',
+  ).format(date)
+}
+
+/** `Monday 21 September 2009`. For the day an episode aired, in full. */
+export function weekdayDate(value: string | undefined, locale: string): string | undefined {
+  const date = parse(value)
+  if (!date || !value) return undefined
+
+  return dateFormat(
+    locale,
+    { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', ...zoneFor(value) },
+    'weekday-long',
+  ).format(date)
+}
+
+/** `Mon 21 Sept`. A day heading in a listing that is already inside one year. */
+export function dayHeading(value: Date, locale: string): string {
+  return dateFormat(locale, { weekday: 'long', day: 'numeric', month: 'long' }, 'day-heading').format(value)
+}
+
+/**
+ * `21:30`, in the reader's own timezone.
+ *
+ * Only for a moment a provider actually knew. A time made up from a date —
+ * midnight UTC, the fallback Sonarr is given — is not shown as one.
+ */
+export function clock(value: string | undefined, locale: string): string | undefined {
+  const date = parse(value)
+  if (!date || !value || zoneFor(value).timeZone) return undefined
+
+  return dateFormat(locale, { hour: '2-digit', minute: '2-digit' }, 'clock').format(date)
 }
 
 /** `12/01/2008`. For a table, where the column must stay narrow. */
 export function shortDate(value: string | undefined, locale: string): string | undefined {
   const date = parse(value)
-  if (!date) return undefined
+  if (!date || !value) return undefined
 
-  return dateFormat(locale, { day: '2-digit', month: '2-digit', year: 'numeric' }, 'short').format(date)
+  return dateFormat(
+    locale,
+    { day: '2-digit', month: '2-digit', year: 'numeric', ...zoneFor(value) },
+    'short',
+  ).format(date)
 }
 
 /** `12/01/2008, 21:00`. For anything a machine timestamped. */
@@ -107,6 +156,24 @@ export function score(value: number | undefined, locale: string): string | undef
   }
 
   return (found as Intl.NumberFormat).format(value)
+}
+
+/** `2026-09-21`: the reader's own calendar date of a moment. */
+export function localDay(date: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+}
+
+/**
+ * `today`, `tomorrow`, `in 3 days`, `2 days ago`: how far a `YYYY-MM-DD` day
+ * is from the reader's today, in their own calendar days. Elapsed time rounded
+ * is wrong for this: thirty-eight hours from breakfast on a Thursday is
+ * Friday night, which is tomorrow, not "in 2 days".
+ */
+export function dayDistance(day: string, locale: string, now = new Date()): string {
+  const utc = (d: string) => Date.UTC(Number(d.slice(0, 4)), Number(d.slice(5, 7)) - 1, Number(d.slice(8, 10)))
+  const days = Math.round((utc(day) - utc(localDay(now))) / 86_400_000)
+  return new Intl.RelativeTimeFormat(locale, { numeric: 'auto' }).format(days, 'day')
 }
 
 /**

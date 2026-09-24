@@ -9,8 +9,47 @@
 
 import { Link } from 'react-router'
 
-import { Glyph } from '../components/ui'
+import { EmptyState, Glyph } from '../components/ui'
 import { useI18n } from '../lib/i18n'
+
+/**
+ * A work that could not be read just now, as opposed to one that is gone.
+ *
+ * Usually a moment — the server restarting, the network — so the first way
+ * out is to ask again. Shared by a work's page and its season and episode
+ * pages, which read the same record.
+ */
+export function Unavailable({ onRetry }: { onRetry: () => void }) {
+  const { t } = useI18n()
+
+  return (
+    <div className="pt-16">
+      <EmptyState
+        title={t.common.error}
+        hint={t.work.loadFailedHint}
+        action={
+          <div className="mt-2 flex flex-wrap items-center justify-center gap-2">
+            <button
+              type="button"
+              onClick={onRetry}
+              className="inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-card border border-rule-bright px-4 text-sm text-bone transition-colors duration-200 hover:bg-ink-high"
+            >
+              <Glyph name="refresh" className="size-4" />
+              {t.common.retry}
+            </button>
+            <Link
+              to="/"
+              className="inline-flex min-h-11 items-center gap-2 rounded-card px-4 text-sm text-bone-dim transition-colors duration-200 hover:bg-ink-high hover:text-bone"
+            >
+              <Glyph name="arrowLeft" className="size-4" />
+              {t.work.back}
+            </Link>
+          </div>
+        }
+      />
+    </div>
+  )
+}
 
 export function NotFound({ work = false, admin = false }: { work?: boolean; admin?: boolean }) {
   const { t } = useI18n()

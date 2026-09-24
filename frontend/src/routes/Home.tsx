@@ -15,8 +15,8 @@ import { EmptyState, Genre, Glyph, Label, SectionTitle, Skeleton } from '../comp
 import { api, query } from '../lib/api'
 import * as fmt from '../lib/format'
 import { useI18n } from '../lib/i18n'
-import { backdrop, headlineRating, poster } from '../lib/media'
-import type { ItemPage, MediaItem } from '../lib/types'
+import { airTime, backdrop, episodeCode, headlineRating, poster } from '../lib/media'
+import type { Airing, Calendar, ItemPage, MediaItem } from '../lib/types'
 
 export function Home() {
   const { t, lang } = useI18n()
@@ -29,6 +29,11 @@ export function Home() {
   const films = useQuery({
     queryKey: ['home', 'movie', lang],
     queryFn: () => api.get<ItemPage>(`/items${query({ kind: 'movie', limit: 12, language: lang })}`),
+  })
+
+  const added = useQuery({
+    queryKey: ['home', 'added', lang],
+    queryFn: () => api.get<ItemPage>(`/items${query({ sort: 'added', limit: 12, language: lang })}`),
   })
 
   const loading = series.isPending || films.isPending
@@ -52,6 +57,8 @@ export function Home() {
       {featured ? <Featured item={featured} /> : null}
 
       <div className="mt-16 space-y-16">
+        <ThisWeek />
+
         {series.data?.items.length ? (
           <Row
             title={t.home.allSeries}
@@ -67,6 +74,15 @@ export function Home() {
             to="/browse?kind=movie"
             items={films.data.items}
             total={films.data.total}
+          />
+        ) : null}
+
+        {added.data?.items.length ? (
+          <Row
+            title={t.home.recentlyAdded}
+            to="/browse?order=added"
+            items={added.data.items}
+            total={added.data.total}
           />
         ) : null}
       </div>
@@ -204,6 +220,114 @@ function Row({
         ))}
       </PosterGrid>
     </section>
+  )
+}
+
+/**
+ * The next seven days, as a strip of frames: what is on, when, in the
+ * reader's own time. Left out when nothing is.
+ */
+function ThisWeek() {
+  const { t, lang, locale } = useI18n()
+
+  // Today and the six days after it, as the reader's calendar has them — and
+  // the same dates at midnight UTC, where an episode with only a date is
+  // stored: from this hour on, tonight's episode was already "past".
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const end = new Date(today)
+  end.setDate(today.getDate() + 7)
+  const utcMidnight = (d: Date) => Date.UTC(d.getFullYear(), d.getMonth(), d.getDate())
+  const from = new Date(Math.min(today.getTime(), utcMidnight(today))).toISOString()
+  const to = new Date(Math.max(end.getTime(), utcMidnight(end))).toISOString()
+  const first = fmt.localDay(today)
+  const last = fmt.localDay(new Date(end.getTime() - 1))
+
+  const week = useQuery({
+    queryKey: ['home', 'week', first, lang],
+    queryFn: () => api.get<Calendar>(`/calendar${query({ from, to, language: lang })}`),
+  })
+
+  const works = new Map((week.data?.works ?? []).map((w) => [w.id, w]))
+  const episodes = (week.data?.episodes ?? [])
+    .filter((a) => {
+      const day = airTime(a.episode)?.day
+      return day !== undefined && day >= first && day <= last
+    })
+    .slice(0, 16)
+
+  if (!episodes.length) return null
+
+  return (
+    <section>
+      <SectionTitle
+        action={
+          <Link
+            to="/calendar"
+            className="flex min-h-11 items-center gap-1.5 text-sm text-bone-dim transition-colors duration-200 hover:text-vermillion"
+          >
+            {t.home.fullSchedule}
+            <Glyph name="chevronRight" className="size-3.5" />
+          </Link>
+        }
+      >
+        {t.home.thisWeek}
+      </SectionTitle>
+
+      <div
+        role="region"
+        aria-label={t.home.thisWeek}
+        className="-mr-4 flex snap-x snap-mandatory gap-3 overflow-x-auto pr-4 pb-2 sm:-mr-6 sm:pr-6"
+      >
+        {episodes.map((airing) => (
+          <Upcoming key={`${airing.workId}-${airing.episode.id}`} airing={airing} work={works.get(airing.workId)} locale={locale} />
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function Upcoming({ airing, work, locale }: { airing: Airing; work?: MediaItem; locale: string }) {
+  const { t } = useI18n()
+  const { episode } = airing
+  const image = episode.image ?? (work ? backdrop(work) : undefined)
+  const when = airTime(episode)
+  // Today and tomorrow in words; after that the weekday, which within a week
+  // says which day without a date.
+  const soon = when && when.day <= fmt.localDay(new Date(Date.now() + 86_400_000))
+  const day = !when
+    ? undefined
+    : soon
+      ? fmt.dayDistance(when.day, locale)
+      : new Intl.DateTimeFormat(locale, { weekday: 'short', timeZone: 'UTC' }).format(new Date(`${when.day}T00:00:00Z`))
+  const time = when?.moment ? fmt.clock(when.moment.toISOString(), locale) : undefined
+
+  return (
+    <Link
+      to={`/work/${airing.workId}/season/${episode.seasonNumber}/episode/${episode.episodeNumber}`}
+      className="group w-64 shrink-0 snap-start overflow-hidden rounded-panel border border-rule bg-ink-raised transition-colors duration-150 hover:border-rule-bright"
+    >
+      <div className="relative aspect-video bg-ink-high">
+        {image ? (
+          <Artwork url={image} role="still" alt="" className="size-full object-cover" />
+        ) : (
+          <div className="grid size-full place-items-center">
+            <Glyph name="tv" className="size-5 text-bone-faint" />
+          </div>
+        )}
+        <span className="absolute top-1.5 left-1.5 rounded-card bg-ink/85 px-1.5 py-0.5 font-mono text-[0.6875rem] font-medium text-bone tabular-nums first-letter:uppercase">
+          {[day, time].filter(Boolean).join(' · ')}
+        </span>
+      </div>
+      <div className="space-y-0.5 p-3">
+        <p className="truncate text-sm font-medium text-bone transition-colors duration-150 group-hover:text-vermillion">
+          {work?.title ?? '—'}
+        </p>
+        <p className="truncate text-xs text-bone-faint">
+          <span className="font-mono">{episodeCode(episode)}</span> · {episode.title || t.episode.untitled(episode.episodeNumber)}
+        </p>
+      </div>
+    </Link>
   )
 }
 

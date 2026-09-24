@@ -206,6 +206,10 @@ fn strip_port(host: &str) -> &str {
 /// * **inline styles** are how React writes a `style` attribute, and the
 ///   interface uses them for per-card animation delays and accent colours.
 ///
+/// * **one frame**: a work's trailer, played from YouTube's no-cookie domain —
+///   and only once somebody presses play, so the page itself sends nobody to
+///   YouTube.
+///
 /// `frame-ancestors 'none'` is the one that earns its place on a server on a
 /// home network: it is what stops a page elsewhere framing this one and
 /// borrowing an administrator's clicks. `base-uri` and `form-action` close the
@@ -215,6 +219,7 @@ const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; \
      style-src 'self' 'unsafe-inline'; \
      script-src 'self'; \
      connect-src 'self'; \
+     frame-src https://www.youtube-nocookie.com; \
      font-src 'self' data:; \
      object-src 'none'; \
      base-uri 'self'; \

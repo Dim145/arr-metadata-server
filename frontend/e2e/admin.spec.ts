@@ -427,3 +427,105 @@ test.describe('importing a work', () => {
     expect((await page.request.delete(`/api/v1/items/${id}`)).ok()).toBe(true)
   })
 })
+
+/**
+ * Two episodes of a series nothing else in the suite reads: the last regular
+ * season's last two. The first season's are what the public pages' tests
+ * open, at the same moment, and a title changed under one of them made it fail.
+ */
+async function aQuietSeason(page: Page) {
+  const { items } = await (await page.request.get('/api/v1/items?kind=series&limit=10')).json()
+  for (const { id } of items as { id: string }[]) {
+    const work = await (await page.request.get(`/api/v1/items/${id}`)).json()
+    const regular = (work.episodes ?? []).filter((e: { seasonNumber: number }) => e.seasonNumber > 0)
+    if (!regular.length) continue
+    const season = Math.max(...regular.map((e: { seasonNumber: number }) => e.seasonNumber))
+    const episodes = regular
+      .filter((e: { seasonNumber: number }) => e.seasonNumber === season)
+      .sort((a: { episodeNumber: number }, b: { episodeNumber: number }) => a.episodeNumber - b.episodeNumber)
+      .slice(-2)
+    if (episodes.length === 2) return { id: work.id as string, season, episodes }
+  }
+  return undefined
+}
+
+test.describe('an episode’s field', () => {
+  test.skip(!USERNAME || !PASSWORD, 'needs a credential; see above')
+
+  test('is locked in the episode’s own scope, and its page shows it', async ({ page }, info) => {
+    test.slow()
+    await signIn(page)
+
+    const found = await aQuietSeason(page)
+    test.skip(!found, 'the catalogue holds no season of two episodes')
+
+    // One episode per project: the two run at the same time against one server.
+    const episode = found!.episodes[info.project.name === 'mobile' ? 0 : 1]
+    const number = episode.episodeNumber as number
+    const scope = `episode:${found!.season}x${number}`
+    const editor = `/admin/catalogue/${found!.id}?season=${found!.season}&episode=${number}`
+    const publicPage = `/work/${found!.id}/season/${found!.season}/episode/${number}`
+    const probe = `Zzz e2e episode probe ${info.project.name}`
+
+    // However the test ends, the lock goes: left behind on a real instance,
+    // the probe would be the title Sonarr is given for that episode.
+    const unlock = () =>
+      page.request.delete(`/api/v1/items/${found!.id}/overrides/${encodeURIComponent(scope)}/title`)
+
+    try {
+      await unlock()
+
+      await page.goto(editor)
+      const row = page.locator(`#episode-fields-${found!.season}x${number} li[data-field="title"]`)
+      await expect(row).toBeVisible()
+
+      await row.getByRole('button', { name: /^(edit|modifier)$/i }).click()
+      await row.getByRole('textbox').fill(probe)
+      await row.getByRole('button', { name: /save and lock|enregistrer et verrouiller/i }).click()
+      await expect(row.getByText(/^(locked|verrouillé)\b/i)).toBeVisible()
+
+      await page.goto(publicPage)
+      await expect(page.getByRole('heading', { level: 1 })).toHaveText(probe)
+
+      await page.goto(editor)
+      await row.getByRole('button', { name: /^(unlock|déverrouiller)$/i }).click()
+      await expect(row.getByText(/^(locked|verrouillé)\b/i)).toHaveCount(0)
+
+      await page.goto(publicPage)
+      await expect(page.getByRole('heading', { level: 1 })).not.toHaveText(probe)
+    } finally {
+      await unlock()
+    }
+  })
+})
+
+test.describe('a provider’s answer', () => {
+  test.skip(!USERNAME || !PASSWORD, 'needs a credential; see above')
+
+  test('can be read as it was received', async ({ page }) => {
+    await signIn(page)
+
+    // Chosen from the record: the sources are read separately from the page,
+    // and a check made as the page first answered skipped every time.
+    const { items } = await (await page.request.get('/api/v1/items?limit=10')).json()
+    let id: string | undefined
+    for (const item of items as { id: string }[]) {
+      const snapshots = await (await page.request.get(`/api/v1/items/${item.id}/snapshots`)).json()
+      if (Array.isArray(snapshots) && snapshots.length) {
+        id = item.id
+        break
+      }
+    }
+    test.skip(!id, 'no work has a stored answer')
+
+    await page.goto(`/admin/catalogue/${id}`)
+    const raw = page.getByRole('button', { name: /^(what .+ answered|réponse brute de .+)$/i }).first()
+    await expect(raw).toBeVisible()
+    await raw.click()
+
+    const dialog = page.getByRole('dialog')
+    await expect(dialog).toBeVisible()
+    await expect(dialog.getByRole('region')).toContainText('{')
+    await expect(dialog.getByRole('button', { name: /^(copy|copier)$/i })).toBeVisible()
+  })
+})

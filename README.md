@@ -41,6 +41,19 @@ It replaces and merges two earlier projects: `the earlier TMDB relay` and
   posters, seasons, cast, the record — and an administration side for the
   people who maintain it. Both switch language from the bar and remember the
   choice.
+- **A catalogue to read, not only to feed clients.** Every season and every
+  episode has its page, every credited person a filmography of what is held
+  here, and a schedule lists what airs each week in the reader's own timezone.
+  The list is filtered by genre, years, score, status, language and network,
+  and sorted by popularity, score, date, title or when a work arrived — all of
+  it kept in the address, so a view can be sent as a link.
+  Each identifier opens the work's page on the site it came from; the artwork
+  opens in a viewer; a trailer plays from YouTube's no-cookie domain, and only
+  once somebody presses play.
+- **Maintenance where the problem is.** Season and episode fields are locked
+  one by one from the editor, which opens on the episode a public page came
+  from; each provider's last answer can be read as it arrived; the works whose
+  last refresh failed are one filter away, and flagged on the dashboard.
 
 ## Requirements
 
@@ -202,8 +215,8 @@ The daily list keeps that figure current and supplies it when Skyhook and
 Radarr's service are off. Only the ratings of works stored here are kept, and
 the list is fetched again within the hour when works are added.
 
-The lists and their last download are shown under the switches, and every
-download is a job. Their terms: TVmaze's data is CC BY-SA; IMDb's datasets are
+The lists and their last download are shown under the switches, with a button
+to download one now rather than wait for its turn, and every download is a job. Their terms: TVmaze's data is CC BY-SA; IMDb's datasets are
 for personal, non-commercial use; AniList's API is free for non-commercial use
 and asks not to be crawled or stored wholesale — this server asks only about
 works a client requested. Every public page credits the sources that are on,
@@ -263,7 +276,11 @@ what they can send:
 ### Letting anyone browse
 
 `AMS_PUBLIC_BROWSE=true` opens the catalogue to a reader with no credential:
-the list of works, one work, and the totals. Nothing else. It is an allowlist
+the list of works, one work, the totals, what the filters offer
+(`/api/v1/facets`), the schedule (`/api/v1/calendar`) and a person's credits
+(`/api/v1/people/{tmdbId}`). Nothing else. Which works failed their last
+refresh is not among them: that filter is ignored for anyone but an
+administrator. It is an allowlist
 rather than a denylist, so the settings, the job history, the audit trail, the
 raw provider payloads and the record of who edited what all stay behind a
 credential — and an endpoint added later is closed until somebody decides

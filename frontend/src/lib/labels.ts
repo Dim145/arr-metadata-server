@@ -88,6 +88,77 @@ export function languageName(code: string | undefined, locale: string): string |
   }
 }
 
+/**
+ * The countries the server files alternative titles under, by the code it
+ * stores for each — the inverse of `iso_3166_2_to_3` in src/providers/lang.rs.
+ * A country outside that table is stored in the two letters TMDB sent.
+ */
+const COUNTRIES = new Map(
+  (
+    'are:AE arg:AR aut:AT aus:AU bel:BE bgr:BG bra:BR can:CA che:CH chl:CL chn:CN col:CO ' +
+    'cze:CZ deu:DE dnk:DK est:EE egy:EG esp:ES fin:FI fra:FR gbr:GB grc:GR hkg:HK hrv:HR ' +
+    'hun:HU idn:ID irl:IE isr:IL ind:IN irn:IR isl:IS ita:IT jpn:JP kor:KR ltu:LT lux:LU ' +
+    'lva:LV mex:MX mys:MY nld:NL nor:NO nzl:NZ per:PE phl:PH pol:PL prt:PT rou:RO srb:RS ' +
+    'rus:RU sau:SA swe:SE sgp:SG svn:SI svk:SK tha:TH tur:TR twn:TW ukr:UA usa:US vnm:VN ' +
+    'zaf:ZA'
+  )
+    .split(' ')
+    .map((pair) => pair.split(':') as [string, string]),
+)
+
+/**
+ * Where an alternative title is from, in words.
+ *
+ * TMDB, AniList and MyAnimeList file a title under a country and TheTVDB under
+ * a language, in the same field — so a code is read as a country where it is
+ * one this server stores, and as a language otherwise. Read the other way
+ * round, Brazil's title was Braj's and China's was Chinook Jargon's. A code
+ * nothing recognises is left out, rather than shown to a reader as a code.
+ *
+ * Radarr's own titles are the exception, filed under a language outright; the
+ * caller says so with `reading`.
+ */
+export function titleOrigin(
+  code: string | undefined,
+  locale: string,
+  reading: 'place' | 'language' = 'place',
+): string | undefined {
+  if (!code) {
+    return undefined
+  }
+
+  const lower = code.trim().toLowerCase()
+  const named = (type: 'region' | 'language', value: string) => {
+    try {
+      const name = new Intl.DisplayNames([locale], { type, fallback: 'none' }).of(value)
+      return name ? name.charAt(0).toLocaleUpperCase(locale) + name.slice(1) : undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  if (reading === 'language') {
+    return named('language', lower)
+  }
+
+  // The same three letters for a country TMDB names and a language TheTVDB
+  // does, meaning different things: Belgium or Belarusian, India or
+  // Indonesian. Which was meant is not stored, so neither is said.
+  if (AMBIGUOUS.has(lower)) {
+    return undefined
+  }
+
+  const region = COUNTRIES.get(lower) ?? (/^[a-z]{2}$/.test(lower) ? lower.toUpperCase() : undefined)
+  return (region && named('region', region)) || (/^[a-z]{3}$/.test(lower) ? named('language', lower) : undefined)
+}
+
+/**
+ * Countries in `COUNTRIES` whose code is also a language's that TheTVDB
+ * could send: Argentina / Aragonese, Belgium / Belarusian, Switzerland /
+ * Chechen, Egypt / Egyptian, India / Indonesian, Peru / Persian.
+ */
+const AMBIGUOUS = new Set(['arg', 'bel', 'che', 'egy', 'ind', 'per'])
+
 /** A work's status — `ended`, `inCinemas` — as a word. */
 export function statusLabel(status: string | undefined, t: Dict): string | undefined {
   if (!status) {

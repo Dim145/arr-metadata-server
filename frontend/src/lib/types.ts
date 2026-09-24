@@ -36,6 +36,8 @@ export interface Credit {
   personName: string
   characterName?: string
   image?: string
+  /** TMDB's id for the person, which is what a person's page is found by. */
+  tmdbPersonId?: number
   sortOrder: number
   isManual: boolean
 }
@@ -54,6 +56,8 @@ export interface Season {
   title?: string
   overview?: string
   airDate?: string
+  tmdbId?: number
+  tvdbId?: number
   isManual: boolean
   images?: Image[]
 }
@@ -62,6 +66,11 @@ export interface Episode {
   id: string
   seasonNumber: number
   episodeNumber: number
+  absoluteEpisodeNumber?: number
+  /** Where a special belongs among the regular episodes, as TheTVDB files it. */
+  airedAfterSeasonNumber?: number
+  airedBeforeSeasonNumber?: number
+  airedBeforeEpisodeNumber?: number
   title: string
   overview?: string
   airDate?: string
@@ -69,6 +78,16 @@ export interface Episode {
   runtime?: number
   finaleType?: string
   image?: string
+  tvdbId?: number
+  tmdbId?: number
+  rating?: { value: number; votes: number }
+  isManual: boolean
+}
+
+export interface Translation {
+  language: string
+  title?: string
+  overview?: string
   isManual: boolean
 }
 
@@ -97,6 +116,8 @@ export interface MediaItem {
   homepage?: string
   trailerYoutubeId?: string
   popularity?: number
+  collectionTmdbId?: number
+  isAdult?: boolean
   genres: string[]
   keywords: string[]
   externalIds: ExternalIds
@@ -113,6 +134,7 @@ export interface MediaItem {
   credits?: Credit[]
   alternativeTitles?: AlternativeTitle[]
   ratings?: Rating[]
+  translations?: Translation[]
   lockedFields?: string[]
 }
 
@@ -262,6 +284,49 @@ export interface ItemPage {
   items: MediaItem[]
   total: number
 }
+
+/** One value a list can be narrowed to, and how many works it would leave. */
+export interface Facet {
+  value: string
+  count: number
+}
+
+export interface Facets {
+  total: number
+  genres: Facet[]
+  networks: Facet[]
+  languages: Facet[]
+  statuses: Facet[]
+  yearMin?: number
+  yearMax?: number
+}
+
+export interface Airing {
+  workId: string
+  episode: Episode
+}
+
+export interface Calendar {
+  episodes: Airing[]
+  works: MediaItem[]
+  /** More aired in the window than one answer carries; the latest are missing. */
+  truncated: boolean
+}
+
+export interface Role {
+  workId: string
+  creditType: string
+  character?: string
+}
+
+export interface Person {
+  tmdbId: number
+  name: string
+  image?: string
+  roles: Role[]
+  works: MediaItem[]
+}
+
 
 export interface NetworkRule {
   id: string

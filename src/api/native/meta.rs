@@ -32,6 +32,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(sources))
         .routes(routes!(settings))
         .routes(routes!(clear_cache))
+        .routes(routes!(import_dataset))
         .routes(routes!(jobs))
 }
 
@@ -321,6 +322,101 @@ async fn clear_cache(
     .await;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct Imported {
+    /// What the import kept: `8442 entries`, `3 of 3 works rated`. Absent
+    /// while it is still going.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+}
+
+/// Download one of the lists the further sources work from, now.
+///
+/// `anime-lists` or `imdb-ratings`. Refused while the source that needs the
+/// list is off, and while another import is running. An import that takes
+/// longer than a request is given carries on after the answer, 202, and is
+/// followed under Jobs like any other.
+#[utoipa::path(
+    post, path = "/datasets/{name}/import", tag = TAG,
+    params(("name" = String, Path, description = "`anime-lists` or `imdb-ratings`")),
+    responses(
+        (status = 200, body = Imported),
+        (status = 202, description = "Still downloading; it carries on, and its result is under Jobs", body = Imported),
+        (status = 403, description = "The caller is not an administrator"),
+        (status = 404, description = "No list by that name"),
+        (status = 409, description = "The source is off, or an import is already running"),
+        (status = 502, description = "The list could not be downloaded or read"),
+    ),
+)]
+async fn import_dataset(
+    State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
+    ip: ClientIp,
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> AppResult<(StatusCode, Json<Imported>)> {
+    require_admin(&identity)?;
+
+    use crate::jobs::datasets::{Asked, import_now};
+
+    // On its own task, recording itself, whatever becomes of this request:
+    // run inside it, an import that outlasted the request's time limit was
+    // dropped halfway, its job left "running" until a restart and nothing
+    // written down. The IMDb list alone is allowed five minutes to arrive.
+    let (done, answer) = tokio::sync::oneshot::channel();
+    let task = state.clone();
+    let actor = identity.clone();
+    let list = name.clone();
+    tokio::spawn(async move {
+        let asked = import_now(&task, &list).await;
+        if let Asked::Imported(summary) = &asked {
+            audit::record(
+                &task,
+                Event {
+                    identity: Some(&actor),
+                    ip: &ip,
+                    action: Action::DatasetImported,
+                    target: Some(&list),
+                    detail: Some(summary),
+                },
+            )
+            .await;
+        }
+        // Whoever asked may have been answered already; that is fine.
+        let _ = done.send(asked);
+    });
+
+    // Answered before the request's own limit would cut it off.
+    let wait = state.config.server.request_timeout.mul_f64(0.75);
+    let asked = match tokio::time::timeout(wait, answer).await {
+        Ok(Ok(asked)) => asked,
+        Ok(Err(_)) => {
+            return Err(crate::error::AppError::Internal(anyhow::anyhow!(
+                "the import stopped without saying how it went"
+            )));
+        }
+        Err(_) => return Ok((StatusCode::ACCEPTED, Json(Imported { summary: None }))),
+    };
+
+    match asked {
+        Asked::Imported(summary) => Ok((
+            StatusCode::OK,
+            Json(Imported {
+                summary: Some(summary),
+            }),
+        )),
+        Asked::Unknown => Err(crate::error::AppError::NotFound),
+        Asked::NotWanted => Err(crate::error::AppError::Conflict(
+            "no source that uses this list is switched on".into(),
+        )),
+        Asked::Busy => Err(crate::error::AppError::Conflict(
+            "an import is already running; it will be done in a moment".into(),
+        )),
+        // Why is in the job run, where an operator reads it; the answer does
+        // not repeat it, since it can name hosts.
+        Asked::Failed(e) => Err(crate::error::AppError::UpstreamUnavailable(e)),
+    }
 }
 
 fn policy_name(policy: SurfacePolicy) -> &'static str {

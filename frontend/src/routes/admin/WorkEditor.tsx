@@ -14,8 +14,8 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 
 import { useAdminTitle } from '../../components/AdminShell'
 import { ManualChildren } from '../../components/ManualChildren'
@@ -43,8 +43,8 @@ import { cn } from '../../lib/cn'
 import * as fmt from '../../lib/format'
 import { providerName, statusLabel } from '../../lib/labels'
 import { useI18n, type Dict } from '../../lib/i18n'
-import { poster } from '../../lib/media'
-import type { FieldDef, FieldRegistry, MediaItem, Override, Snapshot } from '../../lib/types'
+import { episodeCode, episodesOf, poster, seasonName, seasonNumbers } from '../../lib/media'
+import type { Episode, FieldDef, FieldRegistry, MediaItem, Override, Snapshot } from '../../lib/types'
 
 /** Worth offering without asking the server which translations it holds. */
 const LANGUAGES = [
@@ -96,6 +96,8 @@ export function WorkEditor() {
 
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ['item', id] })
+    // The catalogue's own pages read the same work under another key.
+    void queryClient.invalidateQueries({ queryKey: ['work', id] })
     void queryClient.invalidateQueries({ queryKey: ['overrides', id] })
     void queryClient.invalidateQueries({ queryKey: ['items'] })
     void queryClient.invalidateQueries({ queryKey: ['stats'] })
@@ -156,6 +158,11 @@ export function WorkEditor() {
   const locks = new Map(
     (overrides.data ?? []).filter((o) => o.scope === 'item').map((o) => [o.field, o]),
   )
+  // Every lock, the seasons' and episodes' too: unlocking everything lifts
+  // them all, and counting only the work's own let one confirmation undo
+  // thirty episode edits it never mentioned.
+  const allLocks = overrides.data?.length ?? 0
+  const deeperLocks = allLocks - locks.size
   const sheet = poster(work)
 
   return (
@@ -187,10 +194,10 @@ export function WorkEditor() {
             {work.isManual ? <Provenance manual label={t.work.manualEntry} /> : null}
             {work.status ? <Chip tone="provider">{statusLabel(work.status, t)}</Chip> : null}
             {work.isEnabled ? null : <Chip tone="accent">{t.admin.works.disabled}</Chip>}
-            {locks.size > 0 ? (
+            {allLocks > 0 ? (
               <Chip tone="manual">
                 <Glyph name="lock" className="size-3" />
-                {t.admin.editor.lockCount(locks.size)}
+                {t.admin.editor.lockCount(allLocks)}
               </Chip>
             ) : null}
           </div>
@@ -217,12 +224,20 @@ export function WorkEditor() {
           {refresh.isPending ? t.admin.editor.refreshing : t.admin.editor.refresh}
         </Button>
 
-        {locks.size > 0 ? (
+        {allLocks > 0 ? (
           <Button variant="danger" onClick={() => setAsking('unlockAll')}>
             <Glyph name="unlock" className="size-4" />
             {t.admin.editor.unlockAll}
           </Button>
         ) : null}
+
+        <Link
+          to={`/work/${id}`}
+          className="inline-flex min-h-11 items-center gap-2 rounded-full border border-rule-bright px-5 text-sm font-medium text-bone transition-colors duration-200 hover:border-bone-faint hover:bg-ink-high"
+        >
+          <Glyph name="reel" className="size-4" />
+          {t.admin.editor.publicPage}
+        </Link>
 
         <ButtonLink
           href={`/api/v1/items/${id}/nfo`}
@@ -308,6 +323,17 @@ export function WorkEditor() {
         <ManualChildren item={work} onChanged={invalidate} />
       </div>
 
+      {work.kind === 'series' && seasonNumbers(work).length ? (
+        <div className="mt-6">
+          <SeasonsEditor
+            work={work}
+            registry={registry.data}
+            overrides={overrides.data ?? []}
+            onChanged={invalidate}
+          />
+        </div>
+      ) : null}
+
       <div
  className="mt-6 grid gap-6 lg:grid-cols-3">
         <Panel className="rise" style={{ animationDelay: '400ms' }}>
@@ -347,7 +373,7 @@ export function WorkEditor() {
           </dl>
         </Panel>
 
-        <Sources snapshots={snapshots.data} isManual={work.isManual} />
+        <Sources itemId={id} snapshots={snapshots.data} isManual={work.isManual} />
       </div>
 
       <Dialog
@@ -365,6 +391,9 @@ export function WorkEditor() {
         }
       >
         {t.admin.editor.unlockAllBody}
+        {deeperLocks > 0 ? (
+          <p className="mt-3 text-sm text-brass">{t.admin.editor.unlockAllDeeper(deeperLocks)}</p>
+        ) : null}
         {/* Without this the dialog stays open with a re-enabled button and no
             reason, which reads as "press it again". */}
         {unlockAll.isError ? (
@@ -418,12 +447,15 @@ export function WorkEditor() {
 
 function FieldRow({
   itemId,
+  scope = 'item',
   def,
   value,
   lock,
   onChanged,
 }: {
   itemId: string
+  /** `item`, `season:3` or `episode:3x7` — what the override addresses. */
+  scope?: string
   def: FieldDef
   value: unknown
   lock?: Override
@@ -435,7 +467,7 @@ function FieldRow({
 
   const save = useMutation({
     mutationFn: (parsed: unknown) =>
-      api.put(`/items/${itemId}/overrides`, { scope: 'item', field: def.name, value: parsed }),
+      api.put(`/items/${itemId}/overrides`, { scope, field: def.name, value: parsed }),
     onSuccess: () => {
       setEditing(false)
       onChanged()
@@ -443,16 +475,15 @@ function FieldRow({
   })
 
   const unlock = useMutation({
-    mutationFn: () => api.delete(`/items/${itemId}/overrides/item/${def.name}`),
+    mutationFn: () =>
+      api.delete(`/items/${itemId}/overrides/${encodeURIComponent(scope)}/${def.name}`),
     onSuccess: onChanged,
   })
-
-
 
   const locked = lock !== undefined
   const display = readable(value, t)
   const multiline = def.fieldType === 'longText'
-  const inputId = `field-${def.name}`
+  const inputId = `field-${scope.replace(/\W/g, '-')}-${def.name}`
 
   const begin = () => {
     setDraft(readable(value, t))
@@ -504,7 +535,7 @@ function FieldRow({
               }}
             >
               <FormField
-                label={def.label}
+                label={fieldLabel(def, t)}
                 htmlFor={inputId}
                 hint={def.fieldType === 'textList' ? t.admin.editor.listHint : undefined}
                 error={save.isError ? save.error.message : undefined}
@@ -584,10 +615,197 @@ function FieldRow({
   )
 }
 
+/* ── Seasons and episodes ─────────────────────────────────────────────────── */
+
+/**
+ * The fields of one season and of each of its episodes, locked the same way
+ * the work's own are.
+ *
+ * One season at a time, and one episode open at a time: a series of a
+ * thousand episodes drawn as a thousand forms is not a page anybody can use.
+ * Arriving from a season or an episode's public page opens straight onto it.
+ */
+function SeasonsEditor({
+  work,
+  registry,
+  overrides,
+  onChanged,
+}: {
+  work: MediaItem
+  registry: FieldRegistry
+  overrides: Override[]
+  onChanged: () => void
+}) {
+  const { t, locale } = useI18n()
+  const [params] = useSearchParams()
+  const numbers = seasonNumbers(work)
+
+  // Absent is not zero: `Number(null)` opened every series with specials on
+  // its specials.
+  const asked = params.has('season') ? Number(params.get('season')) : Number.NaN
+  const [season, setSeason] = useState<number>(
+    numbers.includes(asked) ? asked : (numbers.find((n) => n > 0) ?? numbers[0] ?? 1),
+  )
+  const [open, setOpen] = useState<number | null>(
+    numbers.includes(asked) && params.get('episode') ? Number(params.get('episode')) : null,
+  )
+
+  const episodes = episodesOf(work, season)
+  const meta = work.seasons?.find((s) => s.seasonNumber === season)
+  const lockOf = (scope: string, field: string) =>
+    overrides.find((o) => o.scope === scope && o.field === field)
+  const lockCount = (scope: string) => overrides.filter((o) => o.scope === scope).length
+
+  return (
+    <Panel className="rise" style={{ animationDelay: '120ms' }}>
+      <PanelHead
+        title={t.admin.editor.seasons}
+        action={
+          <div className="flex items-center gap-2">
+            {/* Out of sight on a phone, where the select says which season it
+                is on its own — but still its name for a screen reader. */}
+            <label htmlFor="editor-season" className="label sr-only sm:not-sr-only">
+              {t.admin.editor.season}
+            </label>
+            <Select
+              id="editor-season"
+              value={String(season)}
+              onChange={(event) => {
+                setSeason(Number(event.target.value))
+                setOpen(null)
+              }}
+              className="w-auto min-w-36"
+            >
+              {numbers.map((n) => (
+                <option key={n} value={n}>
+                  {seasonName(work.seasons?.find((s) => s.seasonNumber === n)?.title, n, t.work.season)}
+                </option>
+              ))}
+            </Select>
+          </div>
+        }
+      />
+
+      {meta ? (
+        <ul className="divide-y divide-rule border-b border-rule">
+          {registry.season.map((def) => (
+            <FieldRow
+              key={`season:${season}:${def.name}`}
+              itemId={work.id}
+              scope={`season:${season}`}
+              def={def}
+              value={(meta as unknown as Record<string, unknown>)[def.name]}
+              lock={lockOf(`season:${season}`, def.name)}
+              onChanged={onChanged}
+            />
+          ))}
+        </ul>
+      ) : null}
+
+      <ol className="divide-y divide-rule">
+        {episodes.map((episode) => {
+          const scope = `episode:${episode.seasonNumber}x${episode.episodeNumber}`
+          const locks = lockCount(scope)
+          const expanded = open === episode.episodeNumber
+
+          return (
+            <EpisodeFields
+              key={episode.id}
+              episode={episode}
+              expanded={expanded}
+              locks={locks}
+              onToggle={() => setOpen(expanded ? null : episode.episodeNumber)}
+              locale={locale}
+            >
+              <ul className="divide-y divide-rule border-t border-rule bg-ink/40">
+                {registry.episode.map((def) => (
+                  <FieldRow
+                    key={`${scope}:${def.name}`}
+                    itemId={work.id}
+                    scope={scope}
+                    def={def}
+                    value={(episode as unknown as Record<string, unknown>)[def.name]}
+                    lock={lockOf(scope, def.name)}
+                    onChanged={onChanged}
+                  />
+                ))}
+              </ul>
+            </EpisodeFields>
+          )
+        })}
+      </ol>
+    </Panel>
+  )
+}
+
+function EpisodeFields({
+  episode,
+  expanded,
+  locks,
+  onToggle,
+  locale,
+  children,
+}: {
+  episode: Episode
+  expanded: boolean
+  locks: number
+  onToggle: () => void
+  locale: string
+  children: React.ReactNode
+}) {
+  const { t } = useI18n()
+  const ref = useRef<HTMLLIElement>(null)
+
+  // Opened from an episode's public page: bring it into view once.
+  useEffect(() => {
+    if (expanded) ref.current?.scrollIntoView({ block: 'nearest' })
+    // Only on first open; later toggles are the reader's own doing.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const panel = `episode-fields-${episode.seasonNumber}x${episode.episodeNumber}`
+
+  return (
+    <li ref={ref}>
+      <button
+        type="button"
+        aria-expanded={expanded}
+        aria-controls={panel}
+        onClick={onToggle}
+        className="flex w-full cursor-pointer items-center gap-3 px-5 py-3 text-left transition-colors duration-150 hover:bg-ink-high"
+      >
+        <Glyph name={expanded ? 'chevronDown' : 'chevronRight'} className="size-3.5 text-bone-faint" />
+        <span className="font-mono text-xs text-bone-faint tabular-nums">{episodeCode(episode)}</span>
+        <span className="min-w-0 flex-1 truncate text-sm text-bone">{episode.title || '—'}</span>
+        <span className="hidden font-mono text-[0.6875rem] text-bone-faint tabular-nums sm:inline">
+          {fmt.shortDate(episode.airDate, locale) ?? ''}
+        </span>
+        {locks ? (
+          <Chip tone="manual">
+            <Glyph name="lock" className="size-3" />
+            {locks}
+            <span className="sr-only"> {t.admin.editor.lockCount(locks)}</span>
+          </Chip>
+        ) : null}
+      </button>
+      {expanded ? <div id={panel}>{children}</div> : null}
+    </li>
+  )
+}
+
 /* ── Sources ──────────────────────────────────────────────────────────────── */
 
-function Sources({ snapshots, isManual }: { snapshots?: Snapshot[]; isManual?: boolean }) {
+function Sources({
+  itemId,
+  snapshots,
+  isManual,
+}: {
+  itemId: string
+  snapshots?: Snapshot[]
+  isManual?: boolean
+}) {
   const { t, locale } = useI18n()
+  const [viewing, setViewing] = useState<string | null>(null)
 
   const sorted = [...(snapshots ?? [])].sort((a, b) => b.fetchedAt.localeCompare(a.fetchedAt))
 
@@ -603,8 +821,18 @@ function Sources({ snapshots, isManual }: { snapshots?: Snapshot[]; isManual?: b
         <dl className="divide-y divide-rule">
           {sorted.map((snapshot) => (
             <Field key={snapshot.provider} label={providerName(snapshot.provider)}>
-              <span title={fmt.dateTime(snapshot.fetchedAt, locale)}>
-                {fmt.relative(snapshot.fetchedAt, locale)}
+              <span className="inline-flex items-center gap-2">
+                <span title={fmt.dateTime(snapshot.fetchedAt, locale)}>
+                  {fmt.relative(snapshot.fetchedAt, locale)}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setViewing(snapshot.provider)}
+                  className="min-h-8 cursor-pointer rounded-card px-2 font-mono text-[0.6875rem] text-slate transition-colors duration-150 hover:bg-ink-high hover:text-bone"
+                  aria-label={t.admin.editor.rawOf(providerName(snapshot.provider))}
+                >
+                  {'{ }'}
+                </button>
               </span>
             </Field>
           ))}
@@ -617,7 +845,94 @@ function Sources({ snapshots, isManual }: { snapshots?: Snapshot[]; isManual?: b
           {t.work.numbering}
         </p>
       ) : null}
+
+      <RawSnapshot itemId={itemId} provider={viewing} onClose={() => setViewing(null)} />
     </Panel>
+  )
+}
+
+/**
+ * What one provider actually answered, verbatim.
+ *
+ * For the question the merged record cannot answer: did the provider say
+ * this, or did this server get it wrong? Fetched only when asked for — a long
+ * series' documents run to megabytes.
+ */
+function RawSnapshot({
+  itemId,
+  provider,
+  onClose,
+}: {
+  itemId: string
+  provider: string | null
+  onClose: () => void
+}) {
+  const { t } = useI18n()
+  const [copied, setCopied] = useState<'no' | 'yes' | 'failed'>('no')
+
+  const raw = useQuery({
+    queryKey: ['item', itemId, 'snapshot', provider],
+    queryFn: () => api.get<Snapshot[]>(`/items/${itemId}/snapshots${query({ provider: provider ?? '' })}`),
+    enabled: provider !== null,
+    staleTime: 60_000,
+  })
+
+  // A provider's answer can run to megabytes: laid out once, not on every
+  // render the copy button's state causes.
+  const payload = raw.data?.[0]?.payload
+  const text = useMemo(() => (payload === undefined ? '' : JSON.stringify(payload, null, 2)), [payload])
+
+  const copy = async () => {
+    try {
+      // Absent altogether over plain HTTP, which is how a server on a home
+      // network is usually reached: that is a refusal like any other.
+      await navigator.clipboard.writeText(text)
+      setCopied('yes')
+    } catch {
+      setCopied('failed')
+    }
+  }
+
+  return (
+    <Dialog
+      open={provider !== null}
+      title={provider ? t.admin.editor.rawOf(providerName(provider)) : ''}
+      onClose={() => {
+        setCopied('no')
+        onClose()
+      }}
+      footer={
+        <>
+          <span role="status" className="mr-auto text-xs text-bone-faint">
+            {copied === 'failed' ? t.admin.editor.copyFailed : ''}
+          </span>
+          <Button disabled={!text} onClick={() => void copy()}>
+            <Glyph name={copied === 'yes' ? 'check' : 'copy'} className="size-4" />
+            {copied === 'yes' ? t.admin.editor.copied : t.admin.editor.copy}
+          </Button>
+          <Button onClick={onClose}>{t.nav.close}</Button>
+        </>
+      }
+    >
+      {raw.isPending ? (
+        <Skeleton className="h-64 w-full" />
+      ) : raw.isError ? (
+        <p role="alert" className="text-sm text-vermillion">
+          {t.admin.editor.rawFailed}
+        </p>
+      ) : (
+        // A tab stop and a name: it always scrolls, and a keyboard had no way
+        // into it otherwise.
+        <pre
+          tabIndex={0}
+          role="region"
+          aria-label={provider ? t.admin.editor.rawOf(providerName(provider)) : undefined}
+          className="max-h-[60dvh] overflow-auto rounded-card border border-rule bg-ink p-3 font-mono text-[0.6875rem] leading-relaxed text-bone-dim"
+        >
+          {text}
+        </pre>
+      )}
+    </Dialog>
   )
 }
 

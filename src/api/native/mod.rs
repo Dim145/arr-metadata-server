@@ -5,6 +5,7 @@
 //! directly.
 
 pub mod auth;
+pub mod browse;
 pub mod children;
 pub mod clients;
 pub mod discover;
@@ -23,6 +24,7 @@ use crate::state::AppState;
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .merge(items::router())
+        .merge(browse::router())
         .merge(children::router())
         .merge(export::router())
         .merge(overrides::router())

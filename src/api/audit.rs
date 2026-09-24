@@ -167,6 +167,7 @@ const ACTIONS: &[Action] = &[
     Action::PasswordChanged,
     Action::CacheCleared,
     Action::NfoExported,
+    Action::DatasetImported,
 ];
 
 #[cfg(test)]

@@ -7,6 +7,7 @@
  */
 
 import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { Link } from 'react-router'
 
 import { cn } from '../lib/cn'
 import { useI18n } from '../lib/i18n'
@@ -538,25 +539,39 @@ export function Chip({
  * not look like a comedy. It carries no meaning beyond identity, which is why
  * the name is always written out rather than the colour standing for it.
  */
-export function Genre({ name, className }: { name: string; className?: string }) {
+export function Genre({
+  name,
+  to,
+  className,
+}: {
+  name: string
+  /** Where the genre leads — the catalogue narrowed to it — when it is a link. */
+  to?: string
+  className?: string
+}) {
   const { lang } = useI18n()
   // The tint follows the stored name, so a genre keeps its colour whichever
   // language it is read in.
   const stock = stockOf(name)
 
-  return (
-    <span
-      style={{
-        color: `var(--color-stock-${stock})`,
-        borderColor: `color-mix(in srgb, var(--color-stock-${stock}) 35%, transparent)`,
-        backgroundColor: `color-mix(in srgb, var(--color-stock-${stock}) 10%, transparent)`,
-      }}
-      className={cn(
-        'inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium',
-        'transition-colors duration-150',
-        className,
-      )}
-    >
+  const style = {
+    color: `var(--color-stock-${stock})`,
+    borderColor: `color-mix(in srgb, var(--color-stock-${stock}) 35%, transparent)`,
+    backgroundColor: `color-mix(in srgb, var(--color-stock-${stock}) 10%, transparent)`,
+  }
+  const classes = cn(
+    'inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium',
+    'transition-colors duration-150',
+    to && 'hover:border-current focus-visible:outline-offset-2',
+    className,
+  )
+
+  return to ? (
+    <Link to={to} style={style} className={classes}>
+      {genreLabel(name, lang)}
+    </Link>
+  ) : (
+    <span style={style} className={classes}>
       {genreLabel(name, lang)}
     </span>
   )
@@ -840,6 +855,22 @@ const PATHS = {
       <path d="M7 4.6v4.8M4.6 7h4.8" />
     </>
   ),
+  play: <path d="M5 3.3v9.4l7.6-4.7Z" />,
+  calendar: (
+    <>
+      <path d="M2.5 4.5h11v8.8h-11Z" />
+      <path d="M2.5 7.2h11M5.5 2.7v3M10.5 2.7v3" />
+    </>
+  ),
+  image: (
+    <>
+      <path d="M2.5 3.5h11v9h-11Z" />
+      <path d="m2.5 10.8 3.1-3.1 2.6 2.6 1.9-1.9 3.4 3.4" />
+      <path d="M10.6 6.3h.01" />
+    </>
+  ),
+  sliders: <path d="M2.5 4.5h6.5M12 4.5h1.5M2.5 11.5h1.5M7 11.5h6.5M10.5 3v3M5.5 10v3" />,
+  sort: <path d="M5 2.8v10.4M2.9 11.1 5 13.2l2.1-2.1M11 13.2V2.8M8.9 4.9 11 2.8l2.1 2.1" />,
   pencil: (
     <>
       <path d="M2.5 13.5 3 10.8l7.4-7.4a1.7 1.7 0 0 1 2.4 2.4l-7.4 7.4Z" />

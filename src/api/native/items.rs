@@ -52,6 +52,36 @@ pub struct ListQuery {
     pub manual_only: bool,
     #[serde(default)]
     pub include_disabled: bool,
+    /// Genres the works must all carry, comma-separated: `Drama,Crime`.
+    pub genre: Option<String>,
+    /// A keyword the works must carry.
+    pub keyword: Option<String>,
+    #[serde(default, deserialize_with = "crate::api::extract::empty_as_none")]
+    pub year_from: Option<i32>,
+    #[serde(default, deserialize_with = "crate::api::extract::empty_as_none")]
+    pub year_to: Option<i32>,
+    /// `continuing`, `ended`, `upcoming`, `released`… as stored.
+    pub status: Option<String>,
+    /// The language a work was made in, as stored: `ja`, `en`, `fra`…
+    pub original_language: Option<String>,
+    /// A network or a studio, by name, whatever its case.
+    pub network: Option<String>,
+    /// The TMDB collection a film belongs to.
+    #[serde(default, deserialize_with = "crate::api::extract::empty_as_none")]
+    pub collection: Option<i64>,
+    /// The lowest score, out of ten, a work may have to be listed.
+    #[serde(default, deserialize_with = "crate::api::extract::empty_as_none")]
+    pub min_rating: Option<f64>,
+    /// Only works whose last refresh failed. For those who may edit the
+    /// catalogue: it says how the server is doing, not anything about a film,
+    /// and anybody else is answered as if it had not been asked.
+    #[serde(default)]
+    pub refresh_failed: bool,
+    /// `popularity` (the default), `rating`, `release`, `title`, `added` or
+    /// `refreshed`.
+    pub sort: Option<String>,
+    /// `asc` or `desc`; each sort has its own default.
+    pub order: Option<String>,
     #[serde(default, deserialize_with = "crate::api::extract::empty_as_none")]
     pub limit: Option<i64>,
     #[serde(default, deserialize_with = "crate::api::extract::empty_as_none")]
@@ -67,6 +97,88 @@ pub struct ListQuery {
 pub struct ListResponse {
     pub items: Vec<MediaItem>,
     pub total: i64,
+}
+
+/// The list's filters as the store takes them, checked.
+///
+/// Shared with the facets, so that what a filter means cannot differ between a
+/// list and the counts beside it.
+pub(super) fn to_query(
+    state: &AppState,
+    identity: &Identity,
+    query: ListQuery,
+) -> AppResult<repo::item::Query> {
+    let kind = query
+        .kind
+        .as_deref()
+        .map(str::trim)
+        .filter(|k| !k.is_empty())
+        .map(str::parse::<MediaKind>)
+        .transpose()
+        .map_err(|e| AppError::BadRequest(e.to_string()))?;
+
+    let sort = query
+        .sort
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::parse::<repo::item::Sort>)
+        .transpose()
+        .map_err(AppError::BadRequest)?
+        .unwrap_or_default();
+
+    let descending = match query.order.as_deref().map(str::trim) {
+        None | Some("") => None,
+        Some("asc") => Some(false),
+        Some("desc") => Some(true),
+        Some(other) => {
+            return Err(AppError::BadRequest(format!(
+                "unknown order {other:?}: expected asc or desc"
+            )));
+        }
+    };
+
+    if query.min_rating.is_some_and(|m| !(0.0..=10.0).contains(&m)) {
+        return Err(AppError::BadRequest(
+            "minRating is a score out of ten".into(),
+        ));
+    }
+
+    // Which works are switched off, and which failed their last refresh, is for
+    // whoever maintains the catalogue — the editors' screens ask for both — and
+    // not for a visitor, who is answered as if the flags had not been sent.
+    let maintains = identity.can_write();
+
+    Ok(repo::item::Query {
+        term: query.term,
+        kind,
+        year: query.year,
+        manual_only: query.manual_only,
+        include_disabled: query.include_disabled && maintains,
+        include_adult: state.adult_for(
+            identity.client_id(),
+            identity.peer_id(),
+            query.include_adult,
+        ),
+        genres: query
+            .genre
+            .as_deref()
+            .map(|g| g.split(',').map(|s| s.trim().to_string()).collect())
+            .unwrap_or_default(),
+        keyword: query.keyword,
+        year_from: query.year_from,
+        year_to: query.year_to,
+        status: query.status,
+        original_language: query.original_language,
+        network: query.network,
+        collection: query.collection,
+        min_rating: query.min_rating,
+        refresh_failed: query.refresh_failed && maintains,
+        sort,
+        descending,
+        limit: query.limit.unwrap_or(50),
+        offset: query.offset.unwrap_or(0),
+    })
 }
 
 /// List and search stored works.
@@ -86,29 +198,8 @@ async fn list(
     Extension(identity): Extension<Identity>,
     Query(query): Query<ListQuery>,
 ) -> AppResult<Json<ListResponse>> {
-    let kind = query
-        .kind
-        .as_deref()
-        .map(str::parse::<MediaKind>)
-        .transpose()
-        .map_err(|e| AppError::BadRequest(e.to_string()))?;
-
     let language = query.language.clone();
-
-    let query_for_count = repo::item::Query {
-        term: query.term,
-        kind,
-        year: query.year,
-        manual_only: query.manual_only,
-        include_disabled: query.include_disabled,
-        include_adult: state.adult_for(
-            identity.client_id(),
-            identity.peer_id(),
-            query.include_adult,
-        ),
-        limit: query.limit.unwrap_or(50),
-        offset: query.offset.unwrap_or(0),
-    };
+    let query_for_count = to_query(&state, &identity, query)?;
 
     let mut items = repo::item::search(&state.db, &query_for_count).await?;
 
@@ -121,6 +212,10 @@ async fn list(
     // episode list to draw one thumbnail.
     repo::item::load_artwork(&state.db, &mut items).await?;
 
+    // The same IMDb figure a work's own page leads with, or a card and the
+    // page it opens could disagree about the score.
+    service::overlay_imdb_many(&state, &mut items).await;
+
     // Shallow, not the full overlay: a grid shows titles, and fetching every
     // work's episode text to draw fifty posters would be absurd.
     if let Some(language) = language.as_deref().filter(|l| !l.is_empty()) {
@@ -130,6 +225,7 @@ async fn list(
     }
 
     let total = repo::item::count_matching(&state.db, &query_for_count).await?;
+    service::redact_for_reader(&identity, &mut items);
 
     Ok(Json(ListResponse { items, total }))
 }
@@ -157,6 +253,7 @@ pub struct DetailQuery {
 )]
 async fn detail(
     State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
     Path(id): Path<String>,
     Query(query): Query<DetailQuery>,
 ) -> AppResult<Json<MediaItem>> {
@@ -164,9 +261,21 @@ async fn detail(
         .await?
         .ok_or(AppError::NotFound)?;
 
+    // Switched off, or kept from this caller by the adult policy even were it
+    // to ask: the list would never have shown it to them, and knowing the id
+    // is no reason to. Whoever maintains the catalogue still opens it.
+    let hidden = !item.is_enabled
+        || (item.is_adult
+            && !state.adult_for(identity.client_id(), identity.peer_id(), Some(true)));
+    if hidden && !identity.can_write() {
+        return Err(AppError::NotFound);
+    }
+
     if let Some(language) = query.language.as_deref().filter(|l| !l.is_empty()) {
         crate::service::language::apply(&state, &mut item, language).await?;
     }
+
+    service::redact_for_reader(&identity, std::slice::from_mut(&mut item));
 
     Ok(Json(item))
 }
@@ -483,6 +592,8 @@ pub struct SnapshotQuery {
     /// wants to know *who* answered does not need.
     #[serde(default = "yes")]
     pub payload: bool,
+    /// Only this provider's snapshot: `tmdb`, `tvdb`, `skyhook`…
+    pub provider: Option<String>,
 }
 
 fn yes() -> bool {
@@ -504,9 +615,16 @@ async fn snapshots(
 ) -> AppResult<Json<Vec<SnapshotSummary>>> {
     let snapshots = repo::snapshot::list(&state.db, &id).await?;
 
+    let wanted = query
+        .provider
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty());
+
     Ok(Json(
         snapshots
             .into_iter()
+            .filter(|s| wanted.is_none_or(|p| s.provider == p))
             .map(|s| SnapshotSummary {
                 provider: s.provider,
                 fetched_at: s.fetched_at,

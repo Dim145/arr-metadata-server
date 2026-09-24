@@ -16,6 +16,7 @@ import { createContext, use, useEffect, useState } from 'react'
 import { Link, NavLink, Navigate, Outlet, useLocation, useNavigate } from 'react-router'
 
 import { api } from '../lib/api'
+import { useNavigationReset } from '../lib/hooks'
 import { cn } from '../lib/cn'
 import { useI18n, type Dict, type Lang } from '../lib/i18n'
 import { describeIdentity } from '../lib/labels'
@@ -65,6 +66,7 @@ export function useAdminTitle(title: string | null) {
 export function AdminShell() {
   const { t } = useI18n()
   const location = useLocation()
+  useNavigationReset('admin-main')
   const [override, setOverride] = useState<string | null>(null)
 
   const me = useQuery({
@@ -109,7 +111,11 @@ export function AdminShell() {
       <div className="flex min-w-0 flex-col">
         <TopBar title={override ?? (current ? current.label(t) : t.admin.title)} />
 
-        <main id="admin-main" className="relative z-10 min-w-0 flex-1 px-4 pt-6 pb-28 sm:px-6 lg:px-10 lg:pt-10 lg:pb-16">
+        <main
+          id="admin-main"
+          tabIndex={-1}
+          className="relative z-10 min-w-0 flex-1 px-4 pt-6 pb-28 outline-none sm:px-6 lg:px-10 lg:pt-10 lg:pb-16"
+        >
           <TitleContext value={setOverride}>
             <Outlet />
           </TitleContext>

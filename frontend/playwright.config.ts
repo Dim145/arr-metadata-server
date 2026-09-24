@@ -10,8 +10,11 @@ import { defineConfig, devices } from '@playwright/test'
  *
  * Start one first, with a database that has some works in it:
  *
- *   AMS_PUBLIC_BROWSE=true AMS_BIND_ADDRESS=127.0.0.1:8479 \
+ *   AMS_PUBLIC_BROWSE=true AMS_BIND_ADDRESS=127.0.0.1:8479 AMS_RATE_LIMIT_PER_MINUTE=6000 \
  *   AMS_DATABASE_URL='sqlite://data/e2e.db?mode=rwc' ./target/debug/arr-metadata-server
+ *
+ * The limit is raised because the whole suite comes from one address; see
+ * e2e/README.md.
  */
 const baseURL = process.env.AMS_E2E_URL ?? 'http://127.0.0.1:8479'
 

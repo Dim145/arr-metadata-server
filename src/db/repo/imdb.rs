@@ -70,6 +70,42 @@ pub async fn get(db: &Db, tconst: &str) -> Result<Option<Rating>> {
     .transpose()
 }
 
+/// The ratings IMDb gives several titles, by title, in one query.
+pub async fn get_many(
+    db: &Db,
+    tconsts: &[String],
+) -> Result<std::collections::HashMap<String, Rating>> {
+    if tconsts.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+
+    let sql = format!(
+        "SELECT tconst, rating, votes FROM imdb_rating WHERE tconst IN ({})",
+        vec!["?"; tconsts.len()].join(", ")
+    );
+
+    let mut args = AnyArguments::default();
+    for tconst in tconsts {
+        args.add(tconst.clone())
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+    }
+
+    let rows = sqlx::query_with(db.sql(&sql), args)
+        .fetch_all(db.pool())
+        .await?;
+
+    rows.iter()
+        .map(|r| {
+            let rating = Rating {
+                tconst: r.text("tconst")?,
+                rating: r.opt_real("rating")?.unwrap_or_default(),
+                votes: r.big("votes")?,
+            };
+            Ok((rating.tconst.clone(), rating))
+        })
+        .collect()
+}
+
 /// Whether a work with an IMDb id was first stored after `since`.
 ///
 /// By the work's creation, which a refresh preserves, and not by its ids' —

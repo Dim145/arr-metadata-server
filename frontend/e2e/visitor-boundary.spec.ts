@@ -9,7 +9,14 @@ import { expect, test } from '@playwright/test'
  * the cost of getting it wrong is someone's configuration on the open internet.
  */
 
-const OPEN = ['/api/v1/items', '/api/v1/stats', '/api/v1/auth/me']
+/** A week from now, as the schedule asks for one. */
+function week() {
+  const from = new Date()
+  const to = new Date(from.getTime() + 7 * 86_400_000)
+  return `from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`
+}
+
+const OPEN = ['/api/v1/items', '/api/v1/stats', '/api/v1/auth/me', '/api/v1/facets', `/api/v1/calendar?${week()}`]
 
 const CLOSED = [
   '/api/v1/settings',
@@ -56,11 +63,41 @@ test.describe('a visitor with no credential', () => {
       request.post('/api/v1/items', { data: { kind: 'movie', title: 'Trespass' } }),
       request.post('/api/v1/cache/clear'),
       request.post('/api/v1/export/nfo'),
+      request.post('/api/v1/datasets/imdb/import'),
     ]
 
     for (const attempt of attempts) {
       const response = await attempt
       expect([401, 403]).toContain(response.status())
+    }
+  })
+
+  test('is not told which works failed to refresh', async ({ request }) => {
+    // How the server is doing is its administrators' business: to a visitor
+    // the filter is ignored, and the list is the whole catalogue.
+    const all = await (await request.get('/api/v1/items?limit=1')).json()
+    const failed = await (await request.get('/api/v1/items?limit=1&refreshFailed=true')).json()
+
+    expect(failed.total).toBe(all.total)
+  })
+
+  test('is not told how a work’s refresh went, when the next is due, or what is locked', async ({
+    request,
+  }) => {
+    // An error can name a provider's address or the host this server reaches
+    // it on; the rest is how the catalogue is maintained, not what it holds.
+    const { items } = await (await request.get('/api/v1/items?limit=50')).json()
+    const told = (items as Record<string, unknown>[]).filter(
+      (item) => 'refreshError' in item || 'refreshAfter' in item || 'lockedFields' in item,
+    )
+    expect(told.map((item) => item.title)).toEqual([])
+  })
+
+  test('reads a person by their id, and nothing beneath it', async ({ request }) => {
+    // The allowlist opens `/people/{id}` and not one segment more.
+    for (const path of ['/api/v1/people/1/credits', '/api/v1/people/1%2F..%2Fsettings']) {
+      const response = await request.get(path)
+      expect([400, 401, 403, 404], `${path} answered ${response.status()}`).toContain(response.status())
     }
   })
 
@@ -76,6 +113,8 @@ test.describe('a visitor with no credential', () => {
     expect(csp).toContain("frame-ancestors 'none'")
     expect(csp).toContain("default-src 'self'")
     expect(csp).toContain("object-src 'none'")
+    // One exception, for a trailer someone asked to play.
+    expect(csp).toContain('frame-src https://www.youtube-nocookie.com')
 
     expect(response.headers()['referrer-policy']).toBe('no-referrer')
     expect(response.headers()['x-content-type-options']).toBe('nosniff')

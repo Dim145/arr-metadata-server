@@ -8,7 +8,9 @@
 use std::collections::HashMap;
 
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 use sqlx::{Any, Arguments, Transaction, any::AnyArguments};
+use utoipa::ToSchema;
 
 use crate::{
     db::{Db, RowExt, from_bool, new_id, now, text_list},
@@ -219,51 +221,52 @@ async fn load_seasons(db: &Db, media_id: &str) -> Result<Vec<Season>> {
 }
 
 async fn load_episodes(db: &Db, media_id: &str) -> Result<Vec<Episode>> {
-    let rows = sqlx::query(db.sql(
-        "SELECT id, season_number, episode_number, absolute_episode_number,
-                aired_after_season_number, aired_before_season_number,
-                aired_before_episode_number, title, overview, air_date, air_date_utc,
-                runtime, finale_type, image, tvdb_id, tmdb_id, rating_value,
-                rating_count, is_manual
-         FROM media_episode WHERE media_id = ?
-         ORDER BY season_number, episode_number",
-    ))
+    let rows = sqlx::query(db.sql(&format!(
+        "SELECT {EPISODE_COLUMNS} FROM media_episode WHERE media_id = ?
+         ORDER BY season_number, episode_number"
+    )))
     .bind(media_id)
     .fetch_all(db.pool())
     .await?;
 
-    rows.iter()
-        .map(|row| {
-            let rating = match (row.opt_real("rating_value")?, row.opt_big("rating_count")?) {
-                (Some(value), votes) => Some(RatingValue {
-                    value,
-                    votes: votes.unwrap_or(0),
-                }),
-                _ => None,
-            };
+    rows.iter().map(map_episode).collect()
+}
 
-            Ok(Episode {
-                id: row.text("id")?,
-                season_number: row.int("season_number")?,
-                episode_number: row.int("episode_number")?,
-                absolute_episode_number: row.opt_int("absolute_episode_number")?,
-                aired_after_season_number: row.opt_int("aired_after_season_number")?,
-                aired_before_season_number: row.opt_int("aired_before_season_number")?,
-                aired_before_episode_number: row.opt_int("aired_before_episode_number")?,
-                title: row.text("title")?,
-                overview: row.opt_text("overview")?,
-                air_date: row.opt_text("air_date")?,
-                air_date_utc: row.opt_text("air_date_utc")?,
-                runtime: row.opt_int("runtime")?,
-                finale_type: row.opt_text("finale_type")?,
-                image: row.opt_text("image")?,
-                tvdb_id: row.opt_big("tvdb_id")?,
-                tmdb_id: row.opt_big("tmdb_id")?,
-                rating,
-                is_manual: row.flag("is_manual")?,
-            })
-        })
-        .collect()
+/// The columns [`map_episode`] reads, for a query that selects episodes.
+const EPISODE_COLUMNS: &str = "id, season_number, episode_number, absolute_episode_number,
+    aired_after_season_number, aired_before_season_number, aired_before_episode_number,
+    title, overview, air_date, air_date_utc, runtime, finale_type, image, tvdb_id, tmdb_id,
+    rating_value, rating_count, is_manual";
+
+fn map_episode(row: &sqlx::any::AnyRow) -> Result<Episode> {
+    let rating = match (row.opt_real("rating_value")?, row.opt_big("rating_count")?) {
+        (Some(value), votes) => Some(RatingValue {
+            value,
+            votes: votes.unwrap_or(0),
+        }),
+        _ => None,
+    };
+
+    Ok(Episode {
+        id: row.text("id")?,
+        season_number: row.int("season_number")?,
+        episode_number: row.int("episode_number")?,
+        absolute_episode_number: row.opt_int("absolute_episode_number")?,
+        aired_after_season_number: row.opt_int("aired_after_season_number")?,
+        aired_before_season_number: row.opt_int("aired_before_season_number")?,
+        aired_before_episode_number: row.opt_int("aired_before_episode_number")?,
+        title: row.text("title")?,
+        overview: row.opt_text("overview")?,
+        air_date: row.opt_text("air_date")?,
+        air_date_utc: row.opt_text("air_date_utc")?,
+        runtime: row.opt_int("runtime")?,
+        finale_type: row.opt_text("finale_type")?,
+        image: row.opt_text("image")?,
+        tvdb_id: row.opt_big("tvdb_id")?,
+        tmdb_id: row.opt_big("tmdb_id")?,
+        rating,
+        is_manual: row.flag("is_manual")?,
+    })
 }
 
 async fn load_images(db: &Db, media_id: &str) -> Result<Vec<Image>> {
@@ -294,24 +297,24 @@ async fn load_credits(db: &Db, media_id: &str) -> Result<Vec<Credit>> {
     .fetch_all(db.pool())
     .await?;
 
-    rows.iter()
-        .map(|row| {
-            Ok(Credit {
-                id: row.text("id")?,
-                credit_type: row
-                    .text("credit_type")?
-                    .parse::<CreditType>()
-                    .unwrap_or(CreditType::Actor),
-                person_name: row.text("person_name")?,
-                character_name: row.opt_text("character_name")?,
-                image: row.opt_text("image")?,
-                tmdb_person_id: row.opt_big("tmdb_person_id")?,
-                credit_tmdb_id: row.opt_text("credit_tmdb_id")?,
-                sort_order: row.int("sort_order")?,
-                is_manual: row.flag("is_manual")?,
-            })
-        })
-        .collect()
+    rows.iter().map(map_credit).collect()
+}
+
+fn map_credit(row: &sqlx::any::AnyRow) -> Result<Credit> {
+    Ok(Credit {
+        id: row.text("id")?,
+        credit_type: row
+            .text("credit_type")?
+            .parse::<CreditType>()
+            .unwrap_or(CreditType::Actor),
+        person_name: row.text("person_name")?,
+        character_name: row.opt_text("character_name")?,
+        image: row.opt_text("image")?,
+        tmdb_person_id: row.opt_big("tmdb_person_id")?,
+        credit_tmdb_id: row.opt_text("credit_tmdb_id")?,
+        sort_order: row.int("sort_order")?,
+        is_manual: row.flag("is_manual")?,
+    })
 }
 
 async fn load_alternative_titles(db: &Db, media_id: &str) -> Result<Vec<AlternativeTitle>> {
@@ -394,7 +397,7 @@ async fn load_translations(db: &Db, media_id: &str) -> Result<Vec<Translation>> 
 
 // ─── search & listing ────────────────────────────────────────────────────────
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Query {
     pub term: Option<String>,
     pub kind: Option<MediaKind>,
@@ -404,9 +407,73 @@ pub struct Query {
     /// Whether adult titles may appear. Defaulting to `false` means a caller
     /// that forgets to decide gets the safe answer rather than the open one.
     pub include_adult: bool,
+    /// Works carrying every one of these genres.
+    pub genres: Vec<String>,
+    pub keyword: Option<String>,
+    pub year_from: Option<i32>,
+    pub year_to: Option<i32>,
+    pub status: Option<String>,
+    pub original_language: Option<String>,
+    /// A network or a studio, by name.
+    pub network: Option<String>,
+    pub collection: Option<i64>,
+    /// Works whose score — see [`SCORE`] — is at least this, out of ten.
+    pub min_rating: Option<f64>,
+    /// Works whose last refresh failed.
+    pub refresh_failed: bool,
+    pub sort: Sort,
+    /// `None` is the sort's own direction: A to Z for titles, highest,
+    /// newest or most popular first for the rest.
+    pub descending: Option<bool>,
     pub limit: i64,
     pub offset: i64,
 }
+
+/// What a list is ordered by.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Sort {
+    #[default]
+    Popularity,
+    Rating,
+    Release,
+    Title,
+    Added,
+    Refreshed,
+}
+
+impl std::str::FromStr for Sort {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "popularity" => Ok(Self::Popularity),
+            "rating" => Ok(Self::Rating),
+            "release" => Ok(Self::Release),
+            "title" => Ok(Self::Title),
+            "added" => Ok(Self::Added),
+            "refreshed" => Ok(Self::Refreshed),
+            other => Err(format!(
+                "unknown sort {other:?}: expected popularity, rating, release, title, added or refreshed"
+            )),
+        }
+    }
+}
+
+/// A work's score, out of ten, the way the interface and Sonarr read one:
+/// IMDb's when there is one, otherwise the rating with the most votes behind
+/// it — see `MediaItem::headline_rating`. Figures outside ten are not scores.
+const SCORE: &str = "COALESCE(
+        (SELECT r.value FROM media_rating r
+          WHERE r.media_id = media_item.id AND r.source = 'imdb'
+            AND r.value > 0 AND r.value <= 10),
+        (SELECT r.value FROM media_rating r
+          WHERE r.media_id = media_item.id AND r.value > 0 AND r.value <= 10
+          ORDER BY COALESCE(r.votes, 0) DESC LIMIT 1))";
+
+/// When a work first reached the public, as far as it is known: a date, or
+/// the year alone.
+const RELEASE: &str =
+    "COALESCE(first_aired, in_cinemas, digital_release, physical_release, CAST(year AS TEXT))";
 
 /// Shallow search over the canonical store.
 ///
@@ -430,7 +497,7 @@ pub async fn search(db: &Db, q: &Query) -> Result<Vec<MediaItem>> {
     narrow(q, &mut sql, &mut args)?;
 
     sql.push_str(" ORDER BY ");
-    sql.push_str(order_clause(q));
+    sql.push_str(&order_clause(q));
     sql.push_str(" LIMIT ? OFFSET ?");
     args.add(q.limit.clamp(1, MAX_PAGE))
         .map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -537,11 +604,40 @@ fn from_clause(db: &Db, q: &Query) -> &'static str {
 /// stop after thirty-six — a bet that loses badly for a term matching nothing,
 /// 38 ms becoming 59 at fifty thousand works. With nothing to walk it reads
 /// the table and sorts what matched, which is what a text search costs anyway.
-fn order_clause(q: &Query) -> &'static str {
-    match searches_text(q) {
-        true => "(popularity + 0) DESC NULLS LAST, title ASC",
-        false => "popularity DESC NULLS LAST, title ASC",
-    }
+///
+/// Anything but popularity is sorted rather than walked: nothing is indexed
+/// by score or date, and for a catalogue's worth of rows that costs little.
+/// Missing values go last whichever way the list runs, so a work with no date
+/// is not presented as the oldest.
+fn order_clause(q: &Query) -> String {
+    let (expression, descending) = match q.sort {
+        Sort::Popularity if searches_text(q) => ("(popularity + 0)", true),
+        Sort::Popularity => ("popularity", true),
+        Sort::Rating => (SCORE, true),
+        Sort::Release => (RELEASE, true),
+        Sort::Title => ("LOWER(COALESCE(sort_title, title))", false),
+        Sort::Added => ("created_at", true),
+        Sort::Refreshed => ("refreshed_at", true),
+    };
+
+    let direction = if q.descending.unwrap_or(descending) {
+        "DESC"
+    } else {
+        "ASC"
+    };
+
+    format!("{expression} {direction} NULLS LAST, title ASC")
+}
+
+/// `value` as one element of a JSON array of strings reads in the column that
+/// stores genres and keywords: encoded the way the column was, so its quotes
+/// delimit it and `"Drama"` is not found inside `"Docudrama"`.
+///
+/// Looked for with `REPLACE(column, ?, '') <> column`, a substring test both
+/// engines make the same way. `LIKE` did not: SQLite folds ASCII case in it and
+/// PostgreSQL does not, so `drama` found two works on one and none on the other.
+fn json_element(value: &str) -> String {
+    serde_json::to_string(value).unwrap_or_default()
 }
 
 /// Attach the artwork, scores and translations a list of works needs.
@@ -695,6 +791,78 @@ fn narrow(q: &Query, sql: &mut String, args: &mut AnyArguments) -> Result<()> {
         sql.push_str(" AND is_manual = 1");
     }
 
+    for genre in q.genres.iter().map(|g| g.trim()).filter(|g| !g.is_empty()) {
+        sql.push_str(" AND REPLACE(genres, ?, '') <> genres");
+        args.add(json_element(genre))
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+    }
+
+    if let Some(keyword) = q
+        .keyword
+        .as_deref()
+        .map(str::trim)
+        .filter(|k| !k.is_empty())
+    {
+        sql.push_str(" AND REPLACE(keywords, ?, '') <> keywords");
+        args.add(json_element(keyword))
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+    }
+
+    if let Some(from) = q.year_from {
+        sql.push_str(" AND year >= ?");
+        args.add(i64::from(from))
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+    }
+
+    if let Some(to) = q.year_to {
+        sql.push_str(" AND year <= ?");
+        args.add(i64::from(to))
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+    }
+
+    if let Some(status) = q.status.as_deref().filter(|s| !s.is_empty()) {
+        sql.push_str(" AND status = ?");
+        args.add(status.to_string())
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+    }
+
+    if let Some(language) = q.original_language.as_deref().filter(|l| !l.is_empty()) {
+        sql.push_str(" AND original_language = ?");
+        args.add(language.to_string())
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+    }
+
+    // Both engines fold with their own `LOWER`, on both sides. They agree for
+    // ASCII, which is what a link from a work's page or the filter list sends
+    // back exactly anyway; for an accented capital typed by hand only
+    // PostgreSQL folds, and SQLite asks for the letters as given.
+    if let Some(network) = q
+        .network
+        .as_deref()
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+    {
+        sql.push_str(" AND (LOWER(network) = LOWER(?) OR LOWER(studio) = LOWER(?))");
+        for _ in 0..2 {
+            args.add(network.to_string())
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+        }
+    }
+
+    if let Some(collection) = q.collection {
+        sql.push_str(" AND collection_tmdb_id = ?");
+        args.add(collection).map_err(|e| anyhow::anyhow!("{e}"))?;
+    }
+
+    if let Some(min) = q.min_rating.filter(|m| *m > 0.0) {
+        sql.push_str(&format!(" AND {SCORE} >= ?"));
+        args.add(min).map_err(|e| anyhow::anyhow!("{e}"))?;
+    }
+
+    if q.refresh_failed {
+        sql.push_str(" AND refresh_error IS NOT NULL");
+    }
+
     if !q.include_adult {
         sql.push_str(" AND is_adult = 0");
     }
@@ -749,6 +917,374 @@ pub async fn count(db: &Db, kind: Option<MediaKind>) -> Result<i64> {
     };
 
     Ok(row.big("n")?)
+}
+
+// ─── across works ────────────────────────────────────────────────────────────
+
+/// Works by id, with their identifiers and nothing hanging off them — the
+/// same shape [`search`] returns, in no particular order.
+pub async fn by_ids(db: &Db, ids: &[String]) -> Result<Vec<MediaItem>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let sql = format!(
+        "SELECT {ITEM_COLUMNS} FROM media_item WHERE id IN ({})",
+        vec!["?"; ids.len()].join(", ")
+    );
+
+    let mut args = AnyArguments::default();
+    for id in ids {
+        args.add(id.clone()).map_err(|e| anyhow::anyhow!("{e}"))?;
+    }
+
+    let rows = sqlx::query_with(db.sql(&sql), args)
+        .fetch_all(db.pool())
+        .await?;
+
+    let mut items = rows.iter().map(map_item).collect::<Result<Vec<_>>>()?;
+    attach_external_ids(db, &mut items).await?;
+    Ok(items)
+}
+
+/// One value a list can be narrowed to, and how many works it would leave.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct Facet {
+    pub value: String,
+    pub count: i64,
+}
+
+/// What the works on view can be narrowed by.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Facets {
+    pub total: i64,
+    /// Most common first.
+    pub genres: Vec<Facet>,
+    /// Networks and studios together, most common first; the long tail left out.
+    pub networks: Vec<Facet>,
+    /// The languages works were made in, as stored.
+    pub languages: Vec<Facet>,
+    pub statuses: Vec<Facet>,
+    pub year_min: Option<i32>,
+    pub year_max: Option<i32>,
+}
+
+/// How many networks a facet list offers: enough to find any the catalogue
+/// holds more than a handful of, not so many the list stops being a choice.
+const TOP_NETWORKS: usize = 40;
+
+/// What the list can be narrowed by next, and how many works each choice
+/// would leave.
+///
+/// Counted under the filters already applied, so that a count is what
+/// choosing its value would show. Genres are all required at once, so each is
+/// counted among the works listed now; a status, a language or a network
+/// replaces the one chosen, so each of those is counted as if its own filter
+/// were off, and the years span what the list would hold without its range.
+/// One read over the matching rows, and one more for each of those filters
+/// that is on, counted here: genres live in a JSON column neither engine can
+/// count inside the same way, and a catalogue is a few thousand short rows.
+pub async fn facets(db: &Db, q: &Query) -> Result<Facets> {
+    use std::collections::HashMap;
+
+    let all = facet_rows(db, q).await?;
+    let statuses_over = rows_without(
+        db,
+        q.status.is_some(),
+        Query {
+            status: None,
+            ..q.clone()
+        },
+    )
+    .await?;
+    let languages_over = rows_without(
+        db,
+        q.original_language.is_some(),
+        Query {
+            original_language: None,
+            ..q.clone()
+        },
+    )
+    .await?;
+    let networks_over = rows_without(
+        db,
+        q.network.is_some(),
+        Query {
+            network: None,
+            ..q.clone()
+        },
+    )
+    .await?;
+    let years_over = rows_without(
+        db,
+        q.year.is_some() || q.year_from.is_some() || q.year_to.is_some(),
+        Query {
+            year: None,
+            year_from: None,
+            year_to: None,
+            ..q.clone()
+        },
+    )
+    .await?;
+
+    let mut facets = Facets {
+        total: all.len() as i64,
+        ..Default::default()
+    };
+
+    let mut genres: HashMap<String, i64> = HashMap::new();
+    for row in &all {
+        for genre in row.text_list("genres")? {
+            *genres.entry(genre).or_default() += 1;
+        }
+    }
+
+    let mut networks: HashMap<String, i64> = HashMap::new();
+    for row in networks_over.as_deref().unwrap_or(&all) {
+        let network = row.opt_text("network")?.filter(|n| !n.trim().is_empty());
+        let studio = row.opt_text("studio")?.filter(|s| !s.trim().is_empty());
+        if let Some(network) = &network {
+            *networks.entry(network.clone()).or_default() += 1;
+        }
+        if let Some(studio) = studio.filter(|s| Some(s) != network.as_ref()) {
+            *networks.entry(studio).or_default() += 1;
+        }
+    }
+
+    let mut languages: HashMap<String, i64> = HashMap::new();
+    for row in languages_over.as_deref().unwrap_or(&all) {
+        if let Some(language) = row.opt_text("original_language")?.filter(|l| !l.is_empty()) {
+            *languages.entry(language).or_default() += 1;
+        }
+    }
+
+    let mut statuses: HashMap<String, i64> = HashMap::new();
+    for row in statuses_over.as_deref().unwrap_or(&all) {
+        if let Some(status) = row.opt_text("status")?.filter(|s| !s.is_empty()) {
+            *statuses.entry(status).or_default() += 1;
+        }
+    }
+
+    for row in years_over.as_deref().unwrap_or(&all) {
+        if let Some(year) = row.opt_int("year")?.filter(|y| *y > 0) {
+            facets.year_min = Some(facets.year_min.map_or(year, |m| m.min(year)));
+            facets.year_max = Some(facets.year_max.map_or(year, |m| m.max(year)));
+        }
+    }
+
+    let ranked = |counts: HashMap<String, i64>| {
+        let mut list: Vec<Facet> = counts
+            .into_iter()
+            .map(|(value, count)| Facet { value, count })
+            .collect();
+        list.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.value.cmp(&b.value)));
+        list
+    };
+
+    facets.genres = ranked(genres);
+    facets.networks = ranked(networks);
+    facets.networks.truncate(TOP_NETWORKS);
+    facets.languages = ranked(languages);
+    facets.statuses = ranked(statuses);
+
+    Ok(facets)
+}
+
+/// The columns [`facets`] counts, for the works a query lists.
+async fn facet_rows(db: &Db, q: &Query) -> Result<Vec<sqlx::any::AnyRow>> {
+    let mut sql = format!(
+        "SELECT genres, network, studio, original_language, status, year FROM {} WHERE 1 = 1",
+        from_clause(db, q)
+    );
+    let mut args = AnyArguments::default();
+    narrow(q, &mut sql, &mut args)?;
+
+    Ok(sqlx::query_with(db.sql(&sql), args)
+        .fetch_all(db.pool())
+        .await?)
+}
+
+/// The rows one filter's own values are counted over: read again without that
+/// filter when it is on, and otherwise the list's own, which are the same.
+async fn rows_without(db: &Db, on: bool, without: Query) -> Result<Option<Vec<sqlx::any::AnyRow>>> {
+    if on {
+        Ok(Some(facet_rows(db, &without).await?))
+    } else {
+        Ok(None)
+    }
+}
+
+/// A mark that moves whenever the catalogue does: how many works it holds and
+/// when one last changed. For answers read across works and kept a while.
+pub async fn catalogue_stamp(db: &Db) -> Result<String> {
+    let row = sqlx::query(db.sql("SELECT COUNT(*) AS n, MAX(updated_at) AS at FROM media_item"))
+        .fetch_one(db.pool())
+        .await?;
+
+    Ok(format!(
+        "{}@{}",
+        row.big("n")?,
+        row.opt_text("at")?.unwrap_or_default()
+    ))
+}
+
+/// An episode of an enabled series, for a list across works.
+#[derive(Clone, Debug)]
+pub struct Airing {
+    pub media_id: String,
+    pub episode: Episode,
+}
+
+/// The most episodes one window answers with.
+pub const MAX_AIRING: i64 = 500;
+
+/// Episodes of enabled series that air in `[from, to)`, earliest first, and
+/// whether the window held more than [`MAX_AIRING`] of them.
+///
+/// `from` and `to` are instants written as `YYYY-MM-DDTHH:MM:SSZ`, the form
+/// every provider's `air_date_utc` is stored in, so the comparison is a string
+/// comparison on both engines. An episode with a date and no time is counted
+/// at midnight UTC on that date — the moment Sonarr is given for it.
+///
+/// The episodes whose date somebody corrected come too, wherever their stored
+/// date is: the correction is applied after this, and can move an episode
+/// into the window as easily as out of it. The caller keeps those it lands in.
+pub async fn airing(
+    db: &Db,
+    from: &str,
+    to: &str,
+    include_adult: bool,
+) -> Result<(Vec<Airing>, bool)> {
+    let adult = if include_adult {
+        ""
+    } else {
+        " AND m.is_adult = 0"
+    };
+    let columns = EPISODE_COLUMNS
+        .split(',')
+        .map(|c| format!("e.{}", c.trim()))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    // The two kinds of episode as two statements, each walked from its own
+    // index on the episodes. As one with an OR between them, SQLite walked
+    // every episode of every series instead: some seventy milliseconds at
+    // half a million episodes, against three. Ties are broken all the way
+    // down, so a season dropped at once comes back in its own order.
+    let sql = format!(
+        "SELECT e.media_id, {columns}, e.air_date_utc AS aired_at, m.title AS work_title
+         FROM media_episode e JOIN media_item m ON m.id = e.media_id
+         WHERE e.air_date_utc >= ? AND e.air_date_utc < ?
+           AND m.is_enabled = 1 AND m.kind = 'series'{adult}
+         UNION ALL
+         SELECT e.media_id, {columns}, e.air_date || 'T00:00:00Z' AS aired_at, m.title AS work_title
+         FROM media_episode e JOIN media_item m ON m.id = e.media_id
+         WHERE e.air_date_utc IS NULL AND e.air_date >= ? AND e.air_date <= ?
+           AND e.air_date || 'T00:00:00Z' >= ? AND e.air_date || 'T00:00:00Z' < ?
+           AND m.is_enabled = 1 AND m.kind = 'series'{adult}
+         ORDER BY aired_at, work_title, media_id, season_number, episode_number
+         LIMIT ?"
+    );
+
+    let day = |instant: &str| instant.get(..10).unwrap_or(instant).to_string();
+
+    let rows = sqlx::query(db.sql(&sql))
+        .bind(from)
+        .bind(to)
+        .bind(day(from))
+        .bind(day(to))
+        .bind(from)
+        .bind(to)
+        // One more than is answered, to know whether there was more.
+        .bind(MAX_AIRING + 1)
+        .fetch_all(db.pool())
+        .await?;
+
+    let mut found = rows
+        .iter()
+        .map(|row| {
+            Ok(Airing {
+                media_id: row.text("media_id")?,
+                episode: map_episode(row)?,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let truncated = found.len() as i64 > MAX_AIRING;
+    found.truncate(MAX_AIRING as usize);
+
+    // A handful of rows, read from the corrections rather than the episodes.
+    let moved_sql = format!(
+        "SELECT e.media_id, {columns} FROM media_override o
+         JOIN media_episode e ON e.media_id = o.media_id
+          AND o.scope = 'episode:' || CAST(e.season_number AS TEXT) || 'x' || CAST(e.episode_number AS TEXT)
+         JOIN media_item m ON m.id = e.media_id
+         WHERE o.field IN ('airDate', 'airDateUtc')
+           AND m.is_enabled = 1 AND m.kind = 'series'{adult}
+         LIMIT ?"
+    );
+
+    let moved = sqlx::query(db.sql(&moved_sql))
+        .bind(MAX_AIRING)
+        .fetch_all(db.pool())
+        .await?;
+
+    let mut seen: std::collections::HashSet<String> =
+        found.iter().map(|a| a.episode.id.clone()).collect();
+    for row in &moved {
+        let airing = Airing {
+            media_id: row.text("media_id")?,
+            episode: map_episode(row)?,
+        };
+        if seen.insert(airing.episode.id.clone()) {
+            found.push(airing);
+        }
+    }
+
+    Ok((found, truncated))
+}
+
+/// One of a person's credits, on an enabled work.
+#[derive(Clone, Debug)]
+pub struct PersonCredit {
+    pub media_id: String,
+    pub credit: Credit,
+}
+
+/// Every credit TMDB files under one person, on works this catalogue shows.
+pub async fn person_credits(
+    db: &Db,
+    tmdb_person_id: i64,
+    include_adult: bool,
+) -> Result<Vec<PersonCredit>> {
+    let adult = if include_adult {
+        ""
+    } else {
+        " AND m.is_adult = 0"
+    };
+    let sql = format!(
+        "SELECT c.media_id, c.id, c.credit_type, c.person_name, c.character_name, c.image,
+                c.tmdb_person_id, c.credit_tmdb_id, c.sort_order, c.is_manual
+         FROM media_credit c JOIN media_item m ON m.id = c.media_id
+         WHERE c.tmdb_person_id = ? AND m.is_enabled = 1{adult}
+         ORDER BY m.year DESC NULLS LAST, m.title
+         LIMIT 500"
+    );
+
+    let rows = sqlx::query(db.sql(&sql))
+        .bind(tmdb_person_id)
+        .fetch_all(db.pool())
+        .await?;
+
+    rows.iter()
+        .map(|row| {
+            Ok(PersonCredit {
+                media_id: row.text("media_id")?,
+                credit: map_credit(row)?,
+            })
+        })
+        .collect()
 }
 
 // ─── writes ──────────────────────────────────────────────────────────────────
@@ -1432,7 +1968,7 @@ mod tests {
         let mut args = AnyArguments::default();
         narrow(q, &mut sql, &mut args).expect("narrowed");
         sql.push_str(" ORDER BY ");
-        sql.push_str(order_clause(q));
+        sql.push_str(&order_clause(q));
         sql.push_str(" LIMIT 36");
 
         let rows = sqlx::query_with(db.sql(&sql), args)
@@ -1841,5 +2377,550 @@ mod tests {
             "manual row survives a refresh"
         );
         assert_eq!(read.credits.len(), 2, "no duplicates");
+    }
+
+    // ─── filtering, ordering and reading across works ───────────────────────
+
+    /// A work built from [`sample`], changed by `adjust`, stored.
+    async fn stored(db: &Db, adjust: impl FnOnce(&mut MediaItem)) -> MediaItem {
+        let mut item = sample();
+        item.id = crate::db::new_id();
+        // Each its own identity: the sample's ids would make every work the same.
+        item.external_ids = ExternalIds::default();
+        item.credits.clear();
+        item.episodes.clear();
+        item.ratings.clear();
+        adjust(&mut item);
+        item.slug = crate::domain::make_slug(&item.title, item.year);
+
+        upsert(
+            db,
+            ItemWrite {
+                item: &item,
+                replace_children: true,
+            },
+        )
+        .await
+        .expect("stored");
+        item
+    }
+
+    async fn titles(db: &Db, q: Query) -> Vec<String> {
+        search(db, &Query { limit: 50, ..q })
+            .await
+            .expect("searched")
+            .into_iter()
+            .map(|i| i.title)
+            .collect()
+    }
+
+    fn rated(source: &str, value: f64, votes: i64) -> Rating {
+        Rating {
+            source: source.into(),
+            value: Some(value),
+            votes: Some(votes),
+            rating_type: Some("user".into()),
+        }
+    }
+
+    #[tokio::test]
+    async fn every_genre_asked_for_must_be_there_and_whole() {
+        let db = db().await;
+        stored(&db, |i| {
+            i.title = "Both".into();
+            i.genres = vec!["Drama".into(), "Crime".into()];
+        })
+        .await;
+        stored(&db, |i| {
+            i.title = "Docudrama".into();
+            i.genres = vec!["Docudrama".into()];
+        })
+        .await;
+        stored(&db, |i| {
+            i.title = "Drama only".into();
+            i.genres = vec!["Drama".into()];
+        })
+        .await;
+
+        let mut drama = titles(
+            &db,
+            Query {
+                genres: vec!["Drama".into()],
+                sort: Sort::Title,
+                ..Default::default()
+            },
+        )
+        .await;
+        drama.sort();
+        assert_eq!(
+            drama,
+            ["Both", "Drama only"],
+            "a genre is matched whole, not as part of another"
+        );
+
+        // As PostgreSQL has always answered: SQLite's LIKE folded the case and
+        // found both, so the two engines disagreed about the same link.
+        assert!(
+            titles(
+                &db,
+                Query {
+                    genres: vec!["drama".into()],
+                    ..Default::default()
+                },
+            )
+            .await
+            .is_empty(),
+            "a genre is matched as the list offers it, case and all"
+        );
+
+        let both = titles(
+            &db,
+            Query {
+                genres: vec!["Drama".into(), "Crime".into()],
+                ..Default::default()
+            },
+        )
+        .await;
+        assert_eq!(both, ["Both"]);
+    }
+
+    #[tokio::test]
+    async fn a_network_is_found_whatever_its_case_and_a_studio_with_it() {
+        let db = db().await;
+        stored(&db, |i| {
+            i.title = "On AMC".into();
+            i.network = Some("AMC".into());
+        })
+        .await;
+        stored(&db, |i| {
+            i.title = "By Wit".into();
+            i.studio = Some("Wit Studio".into());
+        })
+        .await;
+
+        assert_eq!(
+            titles(
+                &db,
+                Query {
+                    network: Some("amc".into()),
+                    ..Default::default()
+                }
+            )
+            .await,
+            ["On AMC"]
+        );
+        assert_eq!(
+            titles(
+                &db,
+                Query {
+                    network: Some("WIT STUDIO".into()),
+                    ..Default::default()
+                }
+            )
+            .await,
+            ["By Wit"]
+        );
+    }
+
+    #[tokio::test]
+    async fn years_status_and_language_narrow_the_list() {
+        let db = db().await;
+        for (title, year, status, language) in [
+            ("Old", 1999, "ended", "en"),
+            ("Mid", 2008, "continuing", "ja"),
+            ("New", 2020, "ended", "en"),
+        ] {
+            stored(&db, |i| {
+                i.title = title.into();
+                i.year = Some(year);
+                i.status = Some(status.into());
+                i.original_language = Some(language.into());
+            })
+            .await;
+        }
+
+        assert_eq!(
+            titles(
+                &db,
+                Query {
+                    year_from: Some(2000),
+                    year_to: Some(2010),
+                    ..Default::default()
+                }
+            )
+            .await,
+            ["Mid"]
+        );
+        assert_eq!(
+            titles(
+                &db,
+                Query {
+                    status: Some("ended".into()),
+                    sort: Sort::Title,
+                    ..Default::default()
+                }
+            )
+            .await,
+            ["New", "Old"]
+        );
+        assert_eq!(
+            titles(
+                &db,
+                Query {
+                    original_language: Some("ja".into()),
+                    ..Default::default()
+                }
+            )
+            .await,
+            ["Mid"]
+        );
+    }
+
+    #[tokio::test]
+    async fn the_score_is_imdbs_or_else_the_most_voted_one() {
+        let db = db().await;
+        stored(&db, |i| {
+            i.title = "With IMDb".into();
+            i.ratings = vec![rated("tmdb", 7.0, 50_000), rated("imdb", 9.1, 700_000)];
+        })
+        .await;
+        stored(&db, |i| {
+            i.title = "Without".into();
+            // MyAnimeList has more votes, so its 6.0 is the score, not TMDB's 8.0.
+            i.ratings = vec![rated("tmdb", 8.0, 100), rated("mal", 6.0, 1_000)];
+        })
+        .await;
+        stored(&db, |i| {
+            i.title = "Unrated".into();
+            // Not a mark out of ten: TheTVDB's old popularity figure.
+            i.ratings = vec![rated("tvdb", 3_776_757.0, 0)];
+        })
+        .await;
+
+        assert_eq!(
+            titles(
+                &db,
+                Query {
+                    min_rating: Some(7.0),
+                    ..Default::default()
+                }
+            )
+            .await,
+            ["With IMDb"]
+        );
+
+        let best_first = titles(
+            &db,
+            Query {
+                sort: Sort::Rating,
+                ..Default::default()
+            },
+        )
+        .await;
+        assert_eq!(
+            best_first,
+            ["With IMDb", "Without", "Unrated"],
+            "no score goes last"
+        );
+
+        let worst_first = titles(
+            &db,
+            Query {
+                sort: Sort::Rating,
+                descending: Some(false),
+                ..Default::default()
+            },
+        )
+        .await;
+        assert_eq!(
+            worst_first,
+            ["Without", "With IMDb", "Unrated"],
+            "and last either way"
+        );
+    }
+
+    #[tokio::test]
+    async fn titles_sort_without_regard_to_case_and_dates_newest_first() {
+        let db = db().await;
+        for (title, date) in [
+            ("beta", "2001-05-01"),
+            ("Alpha", "2019-01-01"),
+            ("Gamma", "1994-09-22"),
+        ] {
+            stored(&db, |i| {
+                i.title = title.into();
+                i.in_cinemas = Some(date.into());
+                i.year = date.get(..4).and_then(|y| y.parse().ok());
+            })
+            .await;
+        }
+
+        assert_eq!(
+            titles(
+                &db,
+                Query {
+                    sort: Sort::Title,
+                    ..Default::default()
+                }
+            )
+            .await,
+            ["Alpha", "beta", "Gamma"]
+        );
+        assert_eq!(
+            titles(
+                &db,
+                Query {
+                    sort: Sort::Release,
+                    ..Default::default()
+                }
+            )
+            .await,
+            ["Alpha", "beta", "Gamma"]
+        );
+        assert_eq!(
+            titles(
+                &db,
+                Query {
+                    sort: Sort::Release,
+                    descending: Some(false),
+                    ..Default::default()
+                }
+            )
+            .await,
+            ["Gamma", "beta", "Alpha"]
+        );
+    }
+
+    #[tokio::test]
+    async fn facets_count_what_is_on_view() {
+        let db = db().await;
+        stored(&db, |i| {
+            i.title = "One".into();
+            i.genres = vec!["Drama".into(), "Crime".into()];
+            i.network = Some("AMC".into());
+            i.original_language = Some("en".into());
+            i.year = Some(2008);
+        })
+        .await;
+        stored(&db, |i| {
+            i.title = "Two".into();
+            i.genres = vec!["Drama".into()];
+            i.studio = Some("Wit Studio".into());
+            i.original_language = Some("ja".into());
+            i.year = Some(2013);
+        })
+        .await;
+        stored(&db, |i| {
+            i.title = "Hidden".into();
+            i.genres = vec!["Hentai".into()];
+            i.is_adult = true;
+        })
+        .await;
+
+        let facets = facets(&db, &Query::default()).await.expect("counted");
+
+        assert_eq!(
+            facets.total, 2,
+            "an adult work is not counted for someone who would not see it"
+        );
+        assert_eq!(
+            facets.genres[0],
+            Facet {
+                value: "Drama".into(),
+                count: 2
+            }
+        );
+        assert!(facets.genres.iter().all(|g| g.value != "Hentai"));
+        assert_eq!(facets.networks.len(), 2);
+        assert_eq!((facets.year_min, facets.year_max), (Some(2008), Some(2013)));
+    }
+
+    #[tokio::test]
+    async fn facets_count_what_each_choice_would_leave() {
+        let db = db().await;
+        for (title, genres, status) in [
+            ("Running drama", vec!["Drama", "Crime"], "continuing"),
+            ("Ended drama", vec!["Drama"], "ended"),
+            ("Ended comedy", vec!["Comedy"], "ended"),
+        ] {
+            stored(&db, |i| {
+                i.title = title.into();
+                i.genres = genres.into_iter().map(String::from).collect();
+                i.status = Some(status.into());
+            })
+            .await;
+        }
+
+        let facets = facets(
+            &db,
+            &Query {
+                genres: vec!["Drama".into()],
+                status: Some("ended".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("counted");
+
+        let count =
+            |list: &[Facet], value: &str| list.iter().find(|f| f.value == value).map(|f| f.count);
+
+        assert_eq!(facets.total, 1, "one ended drama");
+        // Genres are all required: each is counted among what is listed now.
+        assert_eq!(count(&facets.genres, "Drama"), Some(1));
+        assert_eq!(
+            count(&facets.genres, "Comedy"),
+            None,
+            "no ended drama is also a comedy"
+        );
+        // A status replaces the one chosen: counted as if it were not.
+        assert_eq!(count(&facets.statuses, "continuing"), Some(1));
+        assert_eq!(count(&facets.statuses, "ended"), Some(1));
+    }
+
+    #[tokio::test]
+    async fn the_calendar_reads_the_window_and_places_dateless_times_at_midnight() {
+        let db = db().await;
+
+        let episode = |number: i32, date: &str, utc: Option<&str>| {
+            let mut e = crate::db::repo::child::blank_episode(1, number);
+            // As a provider gave it: a refresh writes only those.
+            e.is_manual = false;
+            e.air_date = Some(date.into());
+            e.air_date_utc = utc.map(String::from);
+            e
+        };
+
+        stored(&db, |i| {
+            i.kind = MediaKind::Series;
+            i.title = "Airing".into();
+            i.episodes = vec![
+                episode(1, "2026-09-20", Some("2026-09-21T01:30:00Z")),
+                // No time known: counted at midnight UTC on its date.
+                episode(2, "2026-09-24", None),
+                episode(3, "2026-10-30", Some("2026-10-31T01:30:00Z")),
+            ];
+        })
+        .await;
+        stored(&db, |i| {
+            i.kind = MediaKind::Series;
+            i.title = "Switched off".into();
+            i.is_enabled = false;
+            i.episodes = vec![episode(1, "2026-09-22", Some("2026-09-22T20:00:00Z"))];
+        })
+        .await;
+
+        let read = async |from: &str, to: &str| {
+            let (found, truncated) = airing(&db, from, to, false).await.expect("read");
+            assert!(!truncated);
+            found
+                .iter()
+                .map(|a| a.episode.episode_number)
+                .collect::<Vec<i32>>()
+        };
+
+        assert_eq!(
+            read("2026-09-21T00:00:00Z", "2026-09-28T00:00:00Z").await,
+            [1, 2],
+            "the disabled series and the episode outside are left out"
+        );
+
+        // Episode 2 has a date and no time, so it is midnight UTC on that date:
+        // a window from one second after misses it, one ending on it misses
+        // it, and one ending a second after holds it.
+        assert_eq!(
+            read("2026-09-24T00:00:01Z", "2026-09-28T00:00:00Z").await,
+            [] as [i32; 0]
+        );
+        assert_eq!(
+            read("2026-09-22T00:00:00Z", "2026-09-24T00:00:00Z").await,
+            [] as [i32; 0]
+        );
+        assert_eq!(
+            read("2026-09-22T00:00:00Z", "2026-09-24T00:00:01Z").await,
+            [2]
+        );
+    }
+
+    #[tokio::test]
+    async fn an_episode_a_correction_moved_is_read_wherever_it_is_stored() {
+        let db = db().await;
+
+        let mut postponed = crate::db::repo::child::blank_episode(2, 5);
+        postponed.is_manual = false;
+        postponed.air_date = Some("2027-01-01".into());
+        let work = stored(&db, |i| {
+            i.kind = MediaKind::Series;
+            i.title = "Postponed".into();
+            i.episodes = vec![postponed];
+        })
+        .await;
+
+        // Its network brought it forward; the provider has not caught up.
+        crate::db::repo::override_field::set(
+            &db,
+            &work.id,
+            crate::domain::fields::Scope::Episode {
+                season: 2,
+                episode: 5,
+            },
+            "airDate",
+            Some(&serde_json::json!("2026-09-25")),
+            None,
+        )
+        .await
+        .expect("corrected");
+
+        let (found, _) = airing(&db, "2026-09-21T00:00:00Z", "2026-09-28T00:00:00Z", false)
+            .await
+            .expect("read");
+
+        // Read with its stored date: the caller applies the correction, and
+        // then keeps it in this window.
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].episode.air_date.as_deref(), Some("2027-01-01"));
+    }
+
+    #[tokio::test]
+    async fn a_persons_credits_are_found_on_every_work_newest_first() {
+        let db = db().await;
+        let credit = |character: &str| Credit {
+            id: String::new(),
+            credit_type: CreditType::Actor,
+            person_name: "Bryan Cranston".into(),
+            character_name: Some(character.into()),
+            image: None,
+            tmdb_person_id: Some(17419),
+            credit_tmdb_id: None,
+            sort_order: 0,
+            is_manual: false,
+        };
+
+        stored(&db, |i| {
+            i.title = "Older".into();
+            i.year = Some(1998);
+            i.credits = vec![credit("Hal")];
+        })
+        .await;
+        stored(&db, |i| {
+            i.title = "Newer".into();
+            i.year = Some(2008);
+            i.credits = vec![credit("Walter White")];
+        })
+        .await;
+
+        let found = person_credits(&db, 17419, false).await.expect("read");
+        let characters: Vec<_> = found
+            .iter()
+            .map(|c| c.credit.character_name.as_deref())
+            .collect();
+
+        assert_eq!(characters, [Some("Walter White"), Some("Hal")]);
+        assert!(
+            person_credits(&db, 1, false)
+                .await
+                .expect("read")
+                .is_empty()
+        );
     }
 }
