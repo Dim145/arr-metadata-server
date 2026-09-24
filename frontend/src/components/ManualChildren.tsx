@@ -226,7 +226,7 @@ function Credits({ item, onDone, onRemove }: PanelProps) {
   ] as const
 
   return (
-    <Panel className="rise" style={{ animationDelay: '200ms' }}>
+    <Panel id="credits" className="rise" style={{ animationDelay: '200ms' }}>
       <PanelHead
         title={t.admin.editor.children.credits}
         action={<Count>{credits.length}</Count>}
@@ -330,7 +330,7 @@ function AlternativeTitles({ item, onDone, onRemove }: PanelProps) {
   const titles = item.alternativeTitles ?? []
 
   return (
-    <Panel className="rise" style={{ animationDelay: '240ms' }}>
+    <Panel id="titles" className="rise" style={{ animationDelay: '240ms' }}>
       <PanelHead title={t.admin.editor.children.titles} action={<Count>{titles.length}</Count>} />
       <p className="px-5 pt-3 text-xs leading-relaxed text-bone-faint">
         {t.admin.editor.children.titlesHint}
@@ -408,7 +408,7 @@ function Artwork({ item, onDone, onRemove }: PanelProps) {
     kind
 
   return (
-    <Panel className="rise" style={{ animationDelay: '280ms' }}>
+    <Panel id="artwork" className="rise" style={{ animationDelay: '280ms' }}>
       <PanelHead title={t.admin.editor.children.artwork} action={<Count>{images.length}</Count>} />
       <p className="px-5 pt-3 text-xs leading-relaxed text-bone-faint">
         {t.admin.editor.children.artworkHint}
@@ -506,7 +506,7 @@ function Seasons({ item, onDone, onRemove }: PanelProps) {
   const seasons = [...(item.seasons ?? [])].sort((a, b) => a.seasonNumber - b.seasonNumber)
 
   return (
-    <Panel className="rise" style={{ animationDelay: '320ms' }}>
+    <Panel id="seasons" className="rise" style={{ animationDelay: '320ms' }}>
       <PanelHead title={t.admin.editor.children.seasons} action={<Count>{seasons.length}</Count>} />
 
       {seasons.length === 0 ? (
@@ -616,7 +616,7 @@ function Episodes({ item, onDone, onRemove }: PanelProps) {
   const mine = episodes.filter((episode) => episode.isManual)
 
   return (
-    <Panel className="rise lg:col-span-2" style={{ animationDelay: '360ms' }}>
+    <Panel id="episodes" className="rise lg:col-span-2" style={{ animationDelay: '360ms' }}>
       <PanelHead
         title={t.admin.editor.children.episodes}
         action={

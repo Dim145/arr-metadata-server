@@ -30,6 +30,7 @@ import {
   Glyph,
   Input,
   Label,
+  OnThisPage,
   Panel,
   PanelHead,
   Provenance,
@@ -218,7 +219,9 @@ export function WorkEditor() {
         </div>
       </header>
 
-      <div className="rise mb-8 flex flex-wrap items-end gap-2" style={{ animationDelay: '40ms' }}>
+      {/* Two to a row on a phone: five buttons one under another, then the
+          language, were a whole screen before the first field. */}
+      <div className="rise mb-8 grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-end" style={{ animationDelay: '40ms' }}>
         <Button onClick={() => refresh.mutate()} disabled={refresh.isPending}>
           {refresh.isPending ? <Spinner className="size-4" /> : <Glyph name="refresh" className="size-4" />}
           {refresh.isPending ? t.admin.editor.refreshing : t.admin.editor.refresh}
@@ -262,7 +265,7 @@ export function WorkEditor() {
           {t.common.delete}
         </Button>
 
-        <div className="w-full min-w-40 sm:ml-auto sm:w-auto">
+        <div className="col-span-2 w-full min-w-40 sm:ml-auto sm:w-auto">
           <label htmlFor="editor-language" className="label mb-1.5 block">
             {t.admin.editor.showIn}
           </label>
@@ -300,7 +303,27 @@ export function WorkEditor() {
         </p>
       ) : null}
 
-      <Panel className="rise" style={{ animationDelay: '80ms' }}>
+      <OnThisPage
+        label={t.admin.inPage}
+        entries={[
+          { id: 'fields', label: t.admin.editor.fields },
+          { id: 'credits', label: t.admin.editor.children.credits },
+          { id: 'titles', label: t.admin.editor.children.titles },
+          { id: 'artwork', label: t.admin.editor.children.artwork },
+          ...(work.kind === 'series'
+            ? [
+                { id: 'seasons', label: t.admin.editor.children.seasons },
+                { id: 'episodes', label: t.admin.editor.children.episodes },
+                ...(seasonNumbers(work).length ? [{ id: 'season-fields', label: t.admin.editor.seasons }] : []),
+              ]
+            : []),
+          { id: 'identifiers', label: t.work.identifiers },
+          { id: 'record', label: t.admin.editor.record },
+          { id: 'sources', label: t.work.sources },
+        ]}
+      />
+
+      <Panel id="fields" className="rise" style={{ animationDelay: '80ms' }}>
         <PanelHead
           title={t.admin.editor.fields}
           action={<span className="label hidden sm:inline">{t.admin.editor.fieldsHint}</span>}
@@ -336,7 +359,7 @@ export function WorkEditor() {
 
       <div
  className="mt-6 grid gap-6 lg:grid-cols-3">
-        <Panel className="rise" style={{ animationDelay: '400ms' }}>
+        <Panel id="identifiers" className="rise" style={{ animationDelay: '400ms' }}>
           <PanelHead title={t.work.identifiers} />
           <dl className="divide-y divide-rule">
             {Object.entries(work.externalIds).map(([source, value]) => (
@@ -354,7 +377,7 @@ export function WorkEditor() {
           </dl>
         </Panel>
 
-        <Panel className="rise" style={{ animationDelay: '440ms' }}>
+        <Panel id="record" className="rise" style={{ animationDelay: '440ms' }}>
           <PanelHead title={t.admin.editor.record} />
           <dl className="divide-y divide-rule">
             <Field label={t.admin.editor.created}>{fmt.dateTime(work.createdAt, locale) ?? '—'}</Field>
@@ -501,8 +524,11 @@ function FieldRow({
         editing ? '' : 'hover:bg-ink-high',
       )}
     >
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:gap-4">
-        <div className="shrink-0 sm:w-44 sm:pt-1">
+      {/* On a phone the buttons sit on the label's line, and the value runs
+          the width under both: a row was four lines tall, and twenty-eight of
+          them made a page nobody could scan. */}
+      <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-2 sm:flex sm:items-start sm:gap-4">
+        <div className="min-w-0 sm:w-44 sm:shrink-0 sm:pt-1">
           <span className="flex items-center gap-1.5">
             {locked ? <Glyph name="lock" className="size-3.5 text-brass" /> : null}
             <Label className={locked ? 'text-brass' : undefined}>{fieldLabel(def, t)}</Label>
@@ -515,7 +541,7 @@ function FieldRow({
           </span>
         </div>
 
-        <div className="min-w-0 flex-1">
+        <div className="col-span-2 min-w-0 sm:col-span-1 sm:flex-1">
           {/* A lock that did not lift, with nothing said, is this screen's own
               failure mode running backwards: somebody believing a field is one
               thing while the server holds another. The save path already
@@ -581,7 +607,7 @@ function FieldRow({
         </div>
 
         {editing ? null : (
-          <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <div className="col-start-2 row-start-1 flex shrink-0 flex-wrap items-center justify-end gap-2 sm:col-start-auto sm:row-start-auto">
             {locked ? (
               <>
                 <Provenance
@@ -657,7 +683,7 @@ function SeasonsEditor({
   const lockCount = (scope: string) => overrides.filter((o) => o.scope === scope).length
 
   return (
-    <Panel className="rise" style={{ animationDelay: '120ms' }}>
+    <Panel id="season-fields" className="rise" style={{ animationDelay: '120ms' }}>
       <PanelHead
         title={t.admin.editor.seasons}
         action={
@@ -810,7 +836,7 @@ function Sources({
   const sorted = [...(snapshots ?? [])].sort((a, b) => b.fetchedAt.localeCompare(a.fetchedAt))
 
   return (
-    <Panel className="rise" style={{ animationDelay: '480ms' }}>
+    <Panel id="sources" className="rise" style={{ animationDelay: '480ms' }}>
       <PanelHead title={t.work.sources} />
 
       {sorted.length === 0 ? (

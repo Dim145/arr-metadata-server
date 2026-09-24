@@ -67,26 +67,96 @@ export function Panel({
   className,
   style,
   label,
+  id,
 }: {
   children: ReactNode
   className?: string
   style?: React.CSSProperties
   label?: string
+  /** An anchor, for a page's own index (`OnThisPage`) to lead to. */
+  id?: string
 }) {
-  const shell = cn('plate rounded-panel border border-rule bg-ink-raised', className)
+  const shell = cn(
+    'plate rounded-panel border border-rule bg-ink-raised',
+    // Room for the bars that stay at the top when the page scrolls to it.
+    id && 'scroll-mt-28 lg:scroll-mt-16',
+    className,
+  )
 
   if (!label) {
     return (
-      <div style={style} className={shell}>
+      <div id={id} style={style} className={shell}>
         {children}
       </div>
     )
   }
 
   return (
-    <section aria-label={label} style={style} className={shell}>
+    <section id={id} aria-label={label} style={style} className={shell}>
       {children}
     </section>
+  )
+}
+
+/**
+ * A long page's own index: its sections in a row that stays at the top, the
+ * one in view marked. The work editor is ten panels and a screen or four
+ * tall; getting from the fields to the sources meant scrolling past every
+ * episode. Anchors, so the address and the back button know where the reader
+ * went.
+ */
+export function OnThisPage({
+  entries,
+  label,
+}: {
+  entries: { id: string; label: string }[]
+  label: string
+}) {
+  const [current, setCurrent] = useState<string | null>(null)
+  const ids = entries.map((entry) => entry.id).join(' ')
+
+  useEffect(() => {
+    if (typeof IntersectionObserver === 'undefined') return
+    const targets = ids
+      .split(' ')
+      .map((id) => document.getElementById(id))
+      .filter((element): element is HTMLElement => element !== null)
+    if (!targets.length) return
+
+    // The section whose top is nearest the top of the screen, of those
+    // crossing a band below the bars.
+    const observer = new IntersectionObserver(
+      (seen) => {
+        const first = seen
+          .filter((entry) => entry.isIntersecting)
+          .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)[0]
+        if (first) setCurrent(first.target.id)
+      },
+      { rootMargin: '-25% 0px -60% 0px' },
+    )
+    targets.forEach((target) => observer.observe(target))
+    return () => observer.disconnect()
+  }, [ids])
+
+  return (
+    <nav aria-label={label} className="sticky top-14 z-20 -mx-1 mb-6 border-b border-rule bg-ink/95 px-1 backdrop-blur lg:top-0">
+      <ol className="flex gap-1 overflow-x-auto py-2 [scrollbar-width:none]">
+        {entries.map((entry) => (
+          <li key={entry.id} className="shrink-0">
+            <a
+              href={`#${entry.id}`}
+              aria-current={current === entry.id ? 'location' : undefined}
+              className={cn(
+                'hit inline-flex min-h-9 items-center rounded-full px-3 text-[0.8125rem] transition-colors duration-150',
+                current === entry.id ? 'bg-ink-top text-bone' : 'text-bone-dim hover:text-bone',
+              )}
+            >
+              {entry.label}
+            </a>
+          </li>
+        ))}
+      </ol>
+    </nav>
   )
 }
 

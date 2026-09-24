@@ -22,12 +22,13 @@ import {
   Glyph,
   Input,
   Label,
+  OnThisPage,
   Panel,
   PanelHead,
   Skeleton,
   Spinner,
 } from '../../components/ui'
-import { ServerSettings } from '../../components/ScopeSettings'
+import { type GroupId, ServerSettings, groupOf, useRegistry } from '../../components/ScopeSettings'
 import { ApiError, api } from '../../lib/api'
 import { cn } from '../../lib/cn'
 import { useI18n } from '../../lib/i18n'
@@ -42,6 +43,7 @@ export function Settings() {
     queryFn: () => api.get<Config>('/settings'),
     staleTime: 5 * 60_000,
   })
+  const registry = useRegistry()
 
   if (settings.isPending) {
     return (
@@ -62,6 +64,11 @@ export function Settings() {
   }
 
   const config = settings.data
+  // The groups the server's settings fall in, for the index: the same
+  // grouping the panels below are drawn by.
+  const groups: GroupId[] = (['answering', 'providers', 'sources', 'refresh', 'adult', 'other'] as GroupId[]).filter(
+    (group) => (registry.data ?? []).some((def) => def.scopes.includes('server') && groupOf(def.key) === group),
+  )
 
   return (
     <div className="mx-auto max-w-4xl">
@@ -88,10 +95,23 @@ export function Settings() {
         </p>
       ) : null}
 
+      <OnThisPage
+        label={t.admin.inPage}
+        entries={[
+          ...groups.map((group) => ({ id: `settings-${group}`, label: t.settings.groups[group] })),
+          { id: 'settings-runtime', label: t.admin.config.runtime },
+          { id: 'settings-policy', label: t.admin.config.policy },
+          { id: 'settings-nfo', label: t.admin.config.export },
+          { id: 'settings-docs', label: t.admin.config.docs },
+          { id: 'settings-maintenance', label: t.admin.config.maintenance },
+          { id: 'settings-password', label: t.admin.config.password },
+        ]}
+      />
+
       <ServerSettings delay={40} />
 
       <div className="mt-6 grid gap-6 lg:grid-cols-2">
-        <Panel className="rise" style={{ animationDelay: '260ms' }}>
+        <Panel id="settings-runtime" className="rise" style={{ animationDelay: '260ms' }}>
           <PanelHead title={t.admin.config.runtime} />
           <dl className="divide-y divide-rule">
             <Field label={t.admin.config.version}>
@@ -127,7 +147,7 @@ export function Settings() {
           </p>
         </Panel>
 
-        <Panel className="rise" style={{ animationDelay: '300ms' }}>
+        <Panel id="settings-policy" className="rise" style={{ animationDelay: '300ms' }}>
           <PanelHead title={t.admin.config.policy} />
           <dl className="divide-y divide-rule">
             {(
@@ -151,7 +171,7 @@ export function Settings() {
         </Panel>
       </div>
 
-      <Panel className="rise mt-6" style={{ animationDelay: '340ms' }}>
+      <Panel id="settings-nfo" className="rise mt-6" style={{ animationDelay: '340ms' }}>
         <PanelHead
           title={t.admin.config.export}
           action={
@@ -166,7 +186,7 @@ export function Settings() {
         <NfoExport />
       </Panel>
 
-      <Panel className="rise mt-6" style={{ animationDelay: '380ms' }}>
+      <Panel id="settings-docs" className="rise mt-6" style={{ animationDelay: '380ms' }}>
         <PanelHead title={t.admin.config.docs} />
         <div className="flex flex-wrap items-center justify-between gap-4 p-5">
           <div className="min-w-0">
@@ -189,12 +209,12 @@ export function Settings() {
         </div>
       </Panel>
 
-      <Panel className="rise mt-6" style={{ animationDelay: '420ms' }}>
+      <Panel id="settings-maintenance" className="rise mt-6" style={{ animationDelay: '420ms' }}>
         <PanelHead title={t.admin.config.maintenance} />
         <ClearCache />
       </Panel>
 
-      <Panel className="rise mt-6 mb-4" style={{ animationDelay: '460ms' }}>
+      <Panel id="settings-password" className="rise mt-6 mb-4" style={{ animationDelay: '460ms' }}>
         <PanelHead title={t.admin.config.password} />
         <ChangePassword />
       </Panel>

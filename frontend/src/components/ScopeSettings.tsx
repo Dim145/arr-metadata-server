@@ -57,7 +57,7 @@ export const SERVER: Scope = { scope: 'server', id: '-' }
  * and only a genuinely new area of the server falls through to "everything
  * else" — which is a prompt to name it, not a failure.
  */
-const GROUPS = [
+export const GROUPS = [
   { id: 'answering', prefixes: ['tmdb'] },
   { id: 'providers', prefixes: ['skyhook', 'radarr', 'sonarr', 'tvdb'] },
   { id: 'sources', prefixes: ['tvmaze', 'anilist', 'mal', 'imdb'] },
@@ -65,9 +65,9 @@ const GROUPS = [
   { id: 'adult', prefixes: ['adult'] },
 ] as const
 
-type GroupId = (typeof GROUPS)[number]['id'] | 'other'
+export type GroupId = (typeof GROUPS)[number]['id'] | 'other'
 
-function groupOf(key: string): GroupId {
+export function groupOf(key: string): GroupId {
   const prefix = key.split('.')[0] ?? ''
   return GROUPS.find((group) => group.prefixes.some((p) => p === prefix))?.id ?? 'other'
 }
@@ -87,7 +87,7 @@ function named(t: Dict) {
   return { names, hints, choices }
 }
 
-function useRegistry() {
+export function useRegistry() {
   return useQuery({
     queryKey: ['settings', 'registry'],
     queryFn: () => api.get<SettingDef[]>('/settings/registry'),
@@ -139,6 +139,7 @@ export function ServerSettings({ delay = 0 }: { delay?: number }) {
         return (
           <Panel
             key={group}
+            id={`settings-${group}`}
             label={title}
             className="rise"
             style={{ animationDelay: `${delay + index * 40}ms` }}
