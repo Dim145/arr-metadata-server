@@ -16,6 +16,7 @@ pub mod anime;
 pub mod gather;
 pub mod ids;
 pub mod language;
+pub mod listing;
 pub mod movie;
 pub mod series;
 
@@ -379,6 +380,9 @@ pub async fn persist(
     for (provider, payload) in snapshots {
         repo::snapshot::put(&state.db, &item.id, provider, payload, None).await?;
     }
+
+    // Listed by what it now holds, with its locks, before anyone lists it.
+    listing::after_write(state, &item.id).await;
 
     // A refresh can add episodes, so whatever was fetched for another language
     // no longer covers the whole run. The stored text stays — it is keyed by

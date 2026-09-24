@@ -132,6 +132,7 @@ async fn set(
     .await?;
 
     state.caches.items.invalidate(&format!("item:{id}")).await;
+    service::listing::after_write(&state, &id).await;
 
     tracing::info!(
         %id, %scope, field = %request.field, actor = %identity.label(),
@@ -197,6 +198,7 @@ async fn unset(
     }
 
     state.caches.items.invalidate(&format!("item:{id}")).await;
+    service::listing::after_write(&state, &id).await;
     tracing::info!(%id, %scope, %field, actor = %identity.label(), "unlocked a field");
 
     audit::record(
@@ -240,6 +242,7 @@ async fn clear(
     let removed = repo::override_field::clear(&state.db, &id).await?;
 
     state.caches.items.invalidate(&format!("item:{id}")).await;
+    service::listing::after_write(&state, &id).await;
     tracing::info!(%id, removed, actor = %identity.label(), "unlocked every field");
 
     audit::record(

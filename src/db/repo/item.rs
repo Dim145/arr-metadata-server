@@ -395,6 +395,297 @@ async fn load_translations(db: &Db, media_id: &str) -> Result<Vec<Translation>> 
         .collect()
 }
 
+// ─── what a work is listed by ────────────────────────────────────────────────
+
+/// What a work is listed by: its values as the catalogue shows it, kept beside
+/// the providers' own so a list can be narrowed and ordered by them. Written
+/// by `service::listing` from the work as it is read — its locks applied, IMDb's
+/// list laid over its scores — and here, on a work's first write, from the
+/// work as given.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Listed {
+    /// The key a list is put in title order by: the sort title if there is
+    /// one, folded to plain lower-case letters, so an accent does not send
+    /// *Étoile* past *Zodiac* the way the stored letters did.
+    pub title: String,
+    pub year: Option<i32>,
+    pub genres: Vec<String>,
+    pub keywords: Vec<String>,
+    pub network: Option<String>,
+    pub studio: Option<String>,
+    pub status: Option<String>,
+    pub language: Option<String>,
+    /// When it first reached the public, as far as it is known: a date, or the
+    /// year alone.
+    pub release: Option<String>,
+    /// The score its card leads with; see [`MediaItem::headline_rating`].
+    pub score: Option<f64>,
+}
+
+impl Listed {
+    pub fn of(item: &MediaItem) -> Self {
+        // PostgreSQL will not store a NUL in text, and a lock can hold one: a
+        // value that passes as JSON. Written as it came, one such work failed
+        // every batch it was in.
+        let clean = |value: &str| value.replace('\0', "");
+        let given = |value: &Option<String>| {
+            value
+                .as_deref()
+                .map(clean)
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+        };
+        let each = |values: &[String]| values.iter().map(|v| clean(v)).collect::<Vec<_>>();
+
+        let named = clean(
+            item.sort_title
+                .as_deref()
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+                .unwrap_or(&item.title),
+        );
+        let folded = slug::slugify(&named);
+        let title = if folded.is_empty() {
+            named.to_lowercase()
+        } else {
+            folded
+        };
+
+        let release = [
+            &item.first_aired,
+            &item.in_cinemas,
+            &item.digital_release,
+            &item.physical_release,
+        ]
+        .into_iter()
+        .find_map(given)
+        .map(|date| date.get(..10).map_or(date.clone(), String::from))
+        .or_else(|| item.year.map(|year| format!("{year:04}")));
+
+        Self {
+            title,
+            year: item.year,
+            genres: each(&item.genres),
+            keywords: each(&item.keywords),
+            network: given(&item.network),
+            studio: given(&item.studio),
+            status: given(&item.status),
+            language: given(&item.original_language),
+            release,
+            score: item.headline_rating().and_then(|r| r.value),
+        }
+    }
+}
+
+/// Writes that touch many works' listed values at once take turns.
+///
+/// On PostgreSQL two of them locking the same rows in different orders
+/// deadlock: a batch of the listing job and the mark IMDb's import leaves on
+/// every work it rescored did, each time they met. Single-row writes need no
+/// turn; they cannot close a cycle.
+static LISTING: std::sync::LazyLock<tokio::sync::Mutex<()>> =
+    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
+
+/// Which change to each work is the latest, read before the work itself: a
+/// change that lands between the two is then not mistaken for one listed.
+pub async fn listed_changes(db: &Db, ids: &[String]) -> Result<HashMap<String, i64>> {
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let sql = format!(
+        "SELECT id, listed_change FROM media_item WHERE id IN ({})",
+        vec!["?"; ids.len()].join(", ")
+    );
+    let mut args = AnyArguments::default();
+    for id in ids {
+        args.add(id.clone()).map_err(|e| anyhow::anyhow!("{e}"))?;
+    }
+
+    let rows = sqlx::query_with(db.sql(&sql), args)
+        .fetch_all(db.pool())
+        .await?;
+
+    rows.iter()
+        .map(|row| Ok((row.text("id")?, row.big("listed_change")?)))
+        .collect()
+}
+
+/// Store what works are listed by, each as of the change it was read at.
+///
+/// A work that has changed again since is left alone — still to be listed,
+/// from what it holds now — rather than written with what it held then.
+/// Returns how many were written.
+pub async fn write_listed(
+    db: &Db,
+    listed: &[(String, i64, Listed)],
+    imdb: bool,
+    version: i64,
+) -> Result<u64> {
+    let _turn = LISTING.lock().await;
+    let mut tx = db.begin_write().await?;
+    let at = now();
+    let mut written = 0;
+
+    for (id, change, values) in listed {
+        let result = sqlx::query(db.sql(
+            "UPDATE media_item SET
+                 listed_title = ?, listed_year = ?, listed_genres = ?, listed_keywords = ?,
+                 listed_network = ?, listed_studio = ?, listed_status = ?, listed_language = ?,
+                 listed_release = ?, listed_score = ?, listed_imdb = ?, listed_version = ?,
+                 listed_seen = ?, listed_at = ?
+             WHERE id = ? AND listed_change = ?",
+        ))
+        .bind(&values.title)
+        .bind(values.year)
+        .bind(text_list(&values.genres))
+        .bind(text_list(&values.keywords))
+        .bind(&values.network)
+        .bind(&values.studio)
+        .bind(&values.status)
+        .bind(&values.language)
+        .bind(&values.release)
+        .bind(values.score)
+        .bind(from_bool(imdb))
+        .bind(version)
+        .bind(*change)
+        .bind(&at)
+        .bind(id)
+        .bind(*change)
+        .execute(&mut *tx)
+        .await?;
+
+        written += result.rows_affected();
+    }
+
+    tx.commit()
+        .await
+        .context("failed to commit listed values")?;
+    Ok(written)
+}
+
+/// Works whose listed values are behind: changed since they were listed,
+/// listed another way than `version`, or with IMDb's list taken into account
+/// where the switch now says `imdb` otherwise.
+///
+/// In id order, after `after`: a pass walks them from one end to the other, so
+/// a work that cannot be written is passed over rather than met at the head of
+/// every pass, holding back every work behind it.
+pub async fn stale_ids(
+    db: &Db,
+    version: i64,
+    imdb: bool,
+    after: Option<&str>,
+    limit: i64,
+) -> Result<Vec<String>> {
+    let rows = sqlx::query(db.sql(
+        "SELECT id FROM media_item
+         WHERE (listed_seen IS NULL OR listed_seen <> listed_change
+                OR listed_version IS NULL OR listed_version <> ?
+                OR listed_imdb <> ?)
+           AND id > ?
+         ORDER BY id
+         LIMIT ?",
+    ))
+    .bind(version)
+    .bind(from_bool(imdb))
+    .bind(after.unwrap_or(""))
+    .bind(limit)
+    .fetch_all(db.pool())
+    .await?;
+
+    Ok(rows
+        .iter()
+        .map(|row| row.text("id"))
+        .collect::<Result<_, _>>()?)
+}
+
+/// Count a change to what a work is listed by, so that it is listed again.
+pub async fn mark_changed(db: &Db, id: &str) -> Result<()> {
+    sqlx::query(db.sql("UPDATE media_item SET listed_change = listed_change + 1 WHERE id = ?"))
+        .bind(id)
+        .execute(db.pool())
+        .await?;
+
+    Ok(())
+}
+
+/// [`mark_changed`], inside the transaction that made the change: a change
+/// written without its mark would never be listed.
+pub async fn mark_changed_in(db: &Db, tx: &mut Transaction<'_, Any>, id: &str) -> Result<()> {
+    sqlx::query(db.sql("UPDATE media_item SET listed_change = listed_change + 1 WHERE id = ?"))
+        .bind(id)
+        .execute(&mut **tx)
+        .await?;
+
+    Ok(())
+}
+
+/// Count a change to the works IMDb's list rescored: those whose IMDb id is
+/// one of `tconsts`.
+pub async fn mark_changed_by_imdb(db: &Db, tconsts: &[String]) -> Result<u64> {
+    let mut marked = 0;
+
+    for chunk in tconsts.chunks(500) {
+        let _turn = LISTING.lock().await;
+        let sql = format!(
+            "UPDATE media_item SET listed_change = listed_change + 1
+             WHERE id IN (SELECT media_id FROM media_external_id
+                          WHERE source = 'imdb' AND value IN ({}))",
+            vec!["?"; chunk.len()].join(", ")
+        );
+        let mut args = AnyArguments::default();
+        for tconst in chunk {
+            args.add(tconst.clone())
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+        }
+
+        marked += sqlx::query_with(db.sql(&sql), args)
+            .execute(db.pool())
+            .await?
+            .rows_affected();
+    }
+
+    Ok(marked)
+}
+
+/// The ratings of a batch of works, which is all a score needs of what hangs
+/// off them.
+pub async fn attach_ratings(db: &Db, items: &mut [MediaItem]) -> Result<()> {
+    if items.is_empty() {
+        return Ok(());
+    }
+
+    let sql = format!(
+        "SELECT media_id, source, value, votes, rating_type
+         FROM media_rating WHERE media_id IN ({})",
+        vec!["?"; items.len()].join(", ")
+    );
+    let mut args = AnyArguments::default();
+    for item in items.iter() {
+        args.add(item.id.clone())
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+    }
+
+    let rows = sqlx::query_with(db.sql(&sql), args)
+        .fetch_all(db.pool())
+        .await?;
+
+    let mut ratings: HashMap<String, Vec<Rating>> = HashMap::new();
+    for row in &rows {
+        ratings
+            .entry(row.text("media_id")?)
+            .or_default()
+            .push(map_rating(row)?);
+    }
+
+    for item in items {
+        item.ratings = ratings.remove(&item.id).unwrap_or_default();
+    }
+
+    Ok(())
+}
+
 // ─── search & listing ────────────────────────────────────────────────────────
 
 #[derive(Clone, Debug, Default)]
@@ -417,7 +708,7 @@ pub struct Query {
     /// A network or a studio, by name.
     pub network: Option<String>,
     pub collection: Option<i64>,
-    /// Works whose score — see [`SCORE`] — is at least this, out of ten.
+    /// Works whose score — the one their card leads with — is at least this.
     pub min_rating: Option<f64>,
     /// Works whose last refresh failed.
     pub refresh_failed: bool,
@@ -458,22 +749,6 @@ impl std::str::FromStr for Sort {
         }
     }
 }
-
-/// A work's score, out of ten, the way the interface and Sonarr read one:
-/// IMDb's when there is one, otherwise the rating with the most votes behind
-/// it — see `MediaItem::headline_rating`. Figures outside ten are not scores.
-const SCORE: &str = "COALESCE(
-        (SELECT r.value FROM media_rating r
-          WHERE r.media_id = media_item.id AND r.source = 'imdb'
-            AND r.value > 0 AND r.value <= 10),
-        (SELECT r.value FROM media_rating r
-          WHERE r.media_id = media_item.id AND r.value > 0 AND r.value <= 10
-          ORDER BY COALESCE(r.votes, 0) DESC LIMIT 1))";
-
-/// When a work first reached the public, as far as it is known: a date, or
-/// the year alone.
-const RELEASE: &str =
-    "COALESCE(first_aired, in_cinemas, digital_release, physical_release, CAST(year AS TEXT))";
 
 /// Shallow search over the canonical store.
 ///
@@ -613,9 +888,9 @@ fn order_clause(q: &Query) -> String {
     let (expression, descending) = match q.sort {
         Sort::Popularity if searches_text(q) => ("(popularity + 0)", true),
         Sort::Popularity => ("popularity", true),
-        Sort::Rating => (SCORE, true),
-        Sort::Release => (RELEASE, true),
-        Sort::Title => ("LOWER(COALESCE(sort_title, title))", false),
+        Sort::Rating => ("listed_score", true),
+        Sort::Release => ("listed_release", true),
+        Sort::Title => ("listed_title", false),
         Sort::Added => ("created_at", true),
         Sort::Refreshed => ("refreshed_at", true),
     };
@@ -782,6 +1057,8 @@ fn narrow(q: &Query, sql: &mut String, args: &mut AnyArguments) -> Result<()> {
     }
 
     if let Some(year) = q.year {
+        // The providers' year, not the one shown: Radarr's search passes the
+        // year it was given, and a lock must not change what it is answered.
         sql.push_str(" AND year = ?");
         args.add(i64::from(year))
             .map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -792,7 +1069,7 @@ fn narrow(q: &Query, sql: &mut String, args: &mut AnyArguments) -> Result<()> {
     }
 
     for genre in q.genres.iter().map(|g| g.trim()).filter(|g| !g.is_empty()) {
-        sql.push_str(" AND REPLACE(genres, ?, '') <> genres");
+        sql.push_str(" AND REPLACE(listed_genres, ?, '') <> listed_genres");
         args.add(json_element(genre))
             .map_err(|e| anyhow::anyhow!("{e}"))?;
     }
@@ -803,31 +1080,31 @@ fn narrow(q: &Query, sql: &mut String, args: &mut AnyArguments) -> Result<()> {
         .map(str::trim)
         .filter(|k| !k.is_empty())
     {
-        sql.push_str(" AND REPLACE(keywords, ?, '') <> keywords");
+        sql.push_str(" AND REPLACE(listed_keywords, ?, '') <> listed_keywords");
         args.add(json_element(keyword))
             .map_err(|e| anyhow::anyhow!("{e}"))?;
     }
 
     if let Some(from) = q.year_from {
-        sql.push_str(" AND year >= ?");
+        sql.push_str(" AND listed_year >= ?");
         args.add(i64::from(from))
             .map_err(|e| anyhow::anyhow!("{e}"))?;
     }
 
     if let Some(to) = q.year_to {
-        sql.push_str(" AND year <= ?");
+        sql.push_str(" AND listed_year <= ?");
         args.add(i64::from(to))
             .map_err(|e| anyhow::anyhow!("{e}"))?;
     }
 
     if let Some(status) = q.status.as_deref().filter(|s| !s.is_empty()) {
-        sql.push_str(" AND status = ?");
+        sql.push_str(" AND listed_status = ?");
         args.add(status.to_string())
             .map_err(|e| anyhow::anyhow!("{e}"))?;
     }
 
     if let Some(language) = q.original_language.as_deref().filter(|l| !l.is_empty()) {
-        sql.push_str(" AND original_language = ?");
+        sql.push_str(" AND listed_language = ?");
         args.add(language.to_string())
             .map_err(|e| anyhow::anyhow!("{e}"))?;
     }
@@ -842,7 +1119,7 @@ fn narrow(q: &Query, sql: &mut String, args: &mut AnyArguments) -> Result<()> {
         .map(str::trim)
         .filter(|n| !n.is_empty())
     {
-        sql.push_str(" AND (LOWER(network) = LOWER(?) OR LOWER(studio) = LOWER(?))");
+        sql.push_str(" AND (LOWER(listed_network) = LOWER(?) OR LOWER(listed_studio) = LOWER(?))");
         for _ in 0..2 {
             args.add(network.to_string())
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -855,7 +1132,7 @@ fn narrow(q: &Query, sql: &mut String, args: &mut AnyArguments) -> Result<()> {
     }
 
     if let Some(min) = q.min_rating.filter(|m| *m > 0.0) {
-        sql.push_str(&format!(" AND {SCORE} >= ?"));
+        sql.push_str(" AND listed_score >= ?");
         args.add(min).map_err(|e| anyhow::anyhow!("{e}"))?;
     }
 
@@ -1094,7 +1371,9 @@ pub async fn facets(db: &Db, q: &Query) -> Result<Facets> {
 /// The columns [`facets`] counts, for the works a query lists.
 async fn facet_rows(db: &Db, q: &Query) -> Result<Vec<sqlx::any::AnyRow>> {
     let mut sql = format!(
-        "SELECT genres, network, studio, original_language, status, year FROM {} WHERE 1 = 1",
+        "SELECT listed_genres AS genres, listed_network AS network, listed_studio AS studio,
+                listed_language AS original_language, listed_status AS status, listed_year AS year
+         FROM {} WHERE 1 = 1",
         from_clause(db, q)
     );
     let mut args = AnyArguments::default();
@@ -1118,14 +1397,19 @@ async fn rows_without(db: &Db, on: bool, without: Query) -> Result<Option<Vec<sq
 /// A mark that moves whenever the catalogue does: how many works it holds and
 /// when one last changed. For answers read across works and kept a while.
 pub async fn catalogue_stamp(db: &Db) -> Result<String> {
-    let row = sqlx::query(db.sql("SELECT COUNT(*) AS n, MAX(updated_at) AS at FROM media_item"))
-        .fetch_one(db.pool())
-        .await?;
+    let row = sqlx::query(db.sql(
+        "SELECT COUNT(*) AS n, MAX(updated_at) AS at, MAX(listed_at) AS listed FROM media_item",
+    ))
+    .fetch_one(db.pool())
+    .await?;
 
+    // Listed again counts: a lock changes what a work is counted under
+    // without changing the work.
     Ok(format!(
-        "{}@{}",
+        "{}@{}@{}",
         row.big("n")?,
-        row.opt_text("at")?.unwrap_or_default()
+        row.opt_text("at")?.unwrap_or_default(),
+        row.opt_text("listed")?.unwrap_or_default()
     ))
 }
 
@@ -1294,13 +1578,20 @@ pub async fn upsert(db: &Db, write: ItemWrite<'_>) -> Result<()> {
     let mut tx = db.begin_write().await?;
 
     upsert_row(db, &mut tx, write.item).await?;
-    upsert_external_ids(db, &mut tx, write.item).await?;
+    let displaced = upsert_external_ids(db, &mut tx, write.item).await?;
 
     if write.replace_children {
         replace_children(db, &mut tx, write.item).await?;
     }
 
     tx.commit().await.context("failed to commit item write")?;
+
+    // After the commit, one row at a time, so no two works' locks are held
+    // together here; a work that lost an IMDb id loses IMDb's figure with it.
+    for other in displaced {
+        mark_changed(db, &other).await?;
+    }
+
     Ok(())
 }
 
@@ -1348,9 +1639,12 @@ async fn upsert_row(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaItem) ->
             in_cinemas, physical_release, digital_release, air_time, network, studio,
             content_rating, content_rating_country, homepage, trailer_youtube_id,
             popularity, genres, keywords, collection_tmdb_id, is_manual, is_enabled, is_adult,
-            created_at, updated_at, refreshed_at, refresh_after, refresh_error
+            created_at, updated_at, refreshed_at, refresh_after, refresh_error,
+            listed_title, listed_year, listed_genres, listed_keywords, listed_network,
+            listed_studio, listed_status, listed_language, listed_release, listed_score
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (id) DO UPDATE SET
             kind = excluded.kind,
             slug = excluded.slug,
@@ -1385,8 +1679,17 @@ async fn upsert_row(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaItem) ->
             updated_at = excluded.updated_at,
             refreshed_at = excluded.refreshed_at,
             refresh_after = excluded.refresh_after,
-            refresh_error = excluded.refresh_error
+            refresh_error = excluded.refresh_error,
+            -- What it is listed by stays until it is listed again, with its
+            -- locks: written from the providers' values here, a locked genre
+            -- would drop out of its filter until then.
+            listed_change = media_item.listed_change + 1
     ";
+
+    // A new work is listed by its own values straight away, so it is in every
+    // filter from its first moment; its locks and IMDb's figure follow when it
+    // is listed properly, which its first write has already asked for.
+    let listed = Listed::of(item);
 
     sqlx::query(db.sql(sql))
         .bind(&item.id)
@@ -1425,6 +1728,16 @@ async fn upsert_row(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaItem) ->
         .bind(&item.refreshed_at)
         .bind(&item.refresh_after)
         .bind(&item.refresh_error)
+        .bind(&listed.title)
+        .bind(listed.year)
+        .bind(text_list(&listed.genres))
+        .bind(text_list(&listed.keywords))
+        .bind(&listed.network)
+        .bind(&listed.studio)
+        .bind(&listed.status)
+        .bind(&listed.language)
+        .bind(&listed.release)
+        .bind(listed.score)
         .execute(&mut **tx)
         .await
         .context("failed to write media_item")?;
@@ -1432,11 +1745,12 @@ async fn upsert_row(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaItem) ->
     Ok(())
 }
 
+/// Returns the other works that held one of these ids until now.
 async fn upsert_external_ids(
     db: &Db,
     tx: &mut Transaction<'_, Any>,
     item: &MediaItem,
-) -> Result<()> {
+) -> Result<Vec<String>> {
     // Ids this work no longer claims must go, or a stale row keeps resolving to it.
     sqlx::query(db.sql("DELETE FROM media_external_id WHERE media_id = ?"))
         .bind(&item.id)
@@ -1444,8 +1758,20 @@ async fn upsert_external_ids(
         .await?;
 
     let created = now();
+    let mut displaced: Vec<String> = Vec::new();
 
     for (source, value) in item.external_ids.rows(item.kind) {
+        let owner: Option<String> = sqlx::query_scalar(
+            db.sql("SELECT media_id FROM media_external_id WHERE source = ? AND value = ?"),
+        )
+        .bind(source.as_str())
+        .bind(&value)
+        .fetch_optional(&mut **tx)
+        .await?;
+        if let Some(owner) = owner.filter(|o| o != &item.id && !displaced.contains(o)) {
+            displaced.push(owner);
+        }
+
         // Another work may already claim this id — for instance two TMDB entries
         // sharing an IMDb id. Last writer wins rather than aborting the refresh.
         sqlx::query(db.sql(
@@ -1462,7 +1788,7 @@ async fn upsert_external_ids(
         .with_context(|| format!("failed to write external id {source}={value}"))?;
     }
 
-    Ok(())
+    Ok(displaced)
 }
 
 /// Replace provider-sourced children; manual rows (`is_manual = 1`) are kept.

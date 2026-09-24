@@ -70,6 +70,18 @@ pub async fn get(db: &Db, tconst: &str) -> Result<Option<Rating>> {
     .transpose()
 }
 
+/// Every figure the list holds now, by title: what an import compares its new
+/// figures with, to tell which works it rescored.
+pub async fn values(db: &Db) -> Result<std::collections::HashMap<String, f64>> {
+    let rows = sqlx::query(db.sql("SELECT tconst, rating FROM imdb_rating"))
+        .fetch_all(db.pool())
+        .await?;
+
+    rows.iter()
+        .map(|r| Ok((r.text("tconst")?, r.opt_real("rating")?.unwrap_or_default())))
+        .collect()
+}
+
 /// The ratings IMDb gives several titles, by title, in one query.
 pub async fn get_many(
     db: &Db,

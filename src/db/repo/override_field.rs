@@ -46,6 +46,10 @@ pub async fn set(
 ) -> Result<()> {
     let encoded = value.map(serde_json::to_string).transpose()?;
     let at = now();
+    // The lock and the change it makes to how the work is listed, together:
+    // written apart, a failure between the two left the lock unlisted, and
+    // nothing afterwards would ever list it.
+    let mut tx = db.begin_write().await?;
 
     sqlx::query(db.sql(
         "INSERT INTO media_override (media_id, scope, field, value, created_at, updated_at, updated_by)
@@ -62,33 +66,55 @@ pub async fn set(
     .bind(&at)
     .bind(&at)
     .bind(by)
-    .execute(db.pool())
+    .execute(&mut *tx)
     .await?;
 
+    // A lock on the work itself changes what it is listed by: its genre, its
+    // year, its title's place in the order.
+    if scope == Scope::Item {
+        super::item::mark_changed_in(db, &mut tx, media_id).await?;
+    }
+
+    tx.commit().await?;
     Ok(())
 }
 
 /// Remove an override, handing the field back to provider data.
 pub async fn unset(db: &Db, media_id: &str, scope: Scope, field: &str) -> Result<bool> {
+    let mut tx = db.begin_write().await?;
+
     let result = sqlx::query(
         db.sql("DELETE FROM media_override WHERE media_id = ? AND scope = ? AND field = ?"),
     )
     .bind(media_id)
     .bind(scope.to_string())
     .bind(field)
-    .execute(db.pool())
+    .execute(&mut *tx)
     .await?;
 
-    Ok(result.rows_affected() > 0)
+    let removed = result.rows_affected() > 0;
+    if removed && scope == Scope::Item {
+        super::item::mark_changed_in(db, &mut tx, media_id).await?;
+    }
+
+    tx.commit().await?;
+    Ok(removed)
 }
 
 /// Unlock every field of a work at once.
 pub async fn clear(db: &Db, media_id: &str) -> Result<u64> {
+    let mut tx = db.begin_write().await?;
+
     let result = sqlx::query(db.sql("DELETE FROM media_override WHERE media_id = ?"))
         .bind(media_id)
-        .execute(db.pool())
+        .execute(&mut *tx)
         .await?;
 
+    if result.rows_affected() > 0 {
+        super::item::mark_changed_in(db, &mut tx, media_id).await?;
+    }
+
+    tx.commit().await?;
     Ok(result.rows_affected())
 }
 

@@ -26,7 +26,9 @@ It replaces and merges two earlier projects: `the earlier TMDB relay` and
   provider being reachable.
 - **Manual entries.** Create a work that exists on no provider at all.
 - **Edits that stick.** Change a title, an air date, an episode order — the
-  field is locked and every later refresh leaves it alone.
+  field is locked and every later refresh leaves it alone. The catalogue's
+  filters, orders and counts follow the edit too: a work locked to Animation
+  is found under Animation.
 - **Automatic refresh.** Any entry carrying at least one external id is
   refreshed on a schedule that adapts to its status.
 - **Client management.** Named API keys, scopes, expiry, per-surface policy, and
@@ -46,7 +48,8 @@ It replaces and merges two earlier projects: `the earlier TMDB relay` and
   here, and a schedule lists what airs each week in the reader's own timezone.
   The list is filtered by genre, years, score, status, language and network,
   and sorted by popularity, score, date, title or when a work arrived — all of
-  it kept in the address, so a view can be sent as a link.
+  it kept in the address, so a view can be sent as a link — by the values each
+  work's page shows, IMDb's latest score included when that list is on.
   Each identifier opens the work's page on the site it came from; the artwork
   opens in a viewer; a trailer plays from YouTube's no-cookie domain, and only
   once somebody presses play.

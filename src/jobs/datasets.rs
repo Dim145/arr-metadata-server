@@ -397,7 +397,27 @@ async fn import_imdb(state: &AppState) -> Result<String> {
         );
     }
 
+    // Which works this rescores, for `jobs::listing` to list again: a figure
+    // that moved, arrived or went. A vote count moving alone changes no score
+    // — the list's figure wins over a stored one on its votes, and the stored
+    // one is always the older — and marking every rated work instead listed the
+    // whole catalogue again after each list, hourly while works were added.
+    let before = repo::imdb::values(&state.db).await?;
     repo::imdb::replace_all(&state.db, &ratings).await?;
+
+    let kept: HashSet<&str> = ratings.iter().map(|r| r.tconst.as_str()).collect();
+    let rescored: Vec<String> = ratings
+        .iter()
+        .filter(|r| before.get(&r.tconst) != Some(&r.rating))
+        .map(|r| r.tconst.clone())
+        .chain(
+            before
+                .keys()
+                .filter(|t| !kept.contains(t.as_str()))
+                .cloned(),
+        )
+        .collect();
+    repo::item::mark_changed_by_imdb(&state.db, &rescored).await?;
     repo::import::record(&state.db, IMDB, ratings.len() as i64, &started).await?;
 
     // A cached work carries the rating it was loaded with.

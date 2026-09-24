@@ -371,6 +371,7 @@ async fn create(
         },
     )
     .await?;
+    service::listing::after_write(&state, &item.id).await;
 
     tracing::info!(id = %item.id, actor = %identity.label(), "created a manual entry");
 

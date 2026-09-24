@@ -155,6 +155,10 @@ test.describe('the administration side', () => {
   test.skip(!USERNAME || !PASSWORD, 'needs a credential; see admin.spec.ts')
 
   test('every screen meets WCAG 2.1 AA', async ({ page }) => {
+    // Ten screens, each loaded to rest and scanned whole: some twenty-five
+    // seconds on its own, more beside the rest of the suite.
+    test.slow()
+
     await page.goto('/login')
     await page.getByLabel(/username|identifiant/i).fill(USERNAME!)
     await page.getByLabel(/password|mot de passe/i).fill(PASSWORD!)

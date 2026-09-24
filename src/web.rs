@@ -30,6 +30,7 @@ pub async fn serve(state: AppState) -> Result<()> {
     // refresh on no longer needs a restart.
     tokio::spawn(crate::jobs::refresh::run(state.clone()));
     tokio::spawn(crate::jobs::datasets::run(state.clone()));
+    tokio::spawn(crate::jobs::listing::run(state.clone()));
 
     // Sonarr builds its URLs from `.../v1/tvdb/{route}/{language}/` — with a
     // trailing slash — and its hostname is compiled in, so there is no way to

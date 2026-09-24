@@ -529,3 +529,49 @@ test.describe('a provider’s answer', () => {
     await expect(dialog.getByRole('button', { name: /^(copy|copier)$/i })).toBeVisible()
   })
 })
+
+test.describe('a locked genre', () => {
+  test.skip(!USERNAME || !PASSWORD, 'needs a credential; see above')
+
+  test('is what the catalogue is filtered by, as soon as it is saved', async ({ page }, info) => {
+    test.slow()
+    await signIn(page)
+
+    // The least popular films, one per project — the two run at the same time
+    // against one server, and sharing a work they shared its lock. Nothing
+    // else in the suite reads their genres, and a film's editor has a single
+    // genres field, with no seasons below it.
+    const { items } = await (await page.request.get('/api/v1/items?kind=movie&limit=50')).json()
+    const work = (items as { id: string }[]).at(info.project.name === 'mobile' ? -2 : -1)
+    test.skip(!work, 'the catalogue holds too few films')
+
+    const genre = `Zzz e2e genre ${info.project.name}`
+    const listed = `/browse?genre=${encodeURIComponent(genre)}`
+    const unlock = () => page.request.delete(`/api/v1/items/${work!.id}/overrides/item/genres`)
+
+    try {
+      await unlock()
+
+      await page.goto(`/admin/catalogue/${work!.id}`)
+      const row = page.locator('li[data-field="genres"]').first()
+      await row.getByRole('button', { name: /^(edit|modifier)$/i }).click()
+      await row.getByRole('textbox').fill(genre)
+      await row.getByRole('button', { name: /save and lock|enregistrer et verrouiller/i }).click()
+      await expect(row.getByText(/^(locked|verrouillé)\b/i)).toBeVisible()
+
+      // Filtered by the genre it is shown with now, not the one its
+      // providers gave it — and counted under it beside the list.
+      await page.goto(listed)
+      await expect(page.locator(`a[href="/work/${work!.id}"]`)).toBeVisible()
+      await expect(page.locator('a[href^="/work/"]')).toHaveCount(1)
+
+      const facets = await (await page.request.get(`/api/v1/facets?genre=${encodeURIComponent(genre)}`)).json()
+      expect(facets.genres).toContainEqual({ value: genre, count: 1 })
+    } finally {
+      await unlock()
+    }
+
+    await page.goto(listed)
+    await expect(page.getByText(/no work matches|aucune œuvre/i)).toBeVisible()
+  })
+})
