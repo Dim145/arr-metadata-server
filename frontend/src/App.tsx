@@ -24,6 +24,7 @@ const Season = named(() => import('./routes/Season'), 'Season')
 const Episode = named(() => import('./routes/Episode'), 'Episode')
 const Person = named(() => import('./routes/Person'), 'Person')
 const Calendar = named(() => import('./routes/Calendar'), 'Calendar')
+const Seasons = named(() => import('./routes/Seasons'), 'Seasons')
 
 const Login = named(() => import('./routes/Login'), 'Login')
 const AdminShell = named(() => import('./components/AdminShell'), 'AdminShell')
@@ -85,6 +86,8 @@ function Router() {
           <Route path="/work/:id/season/:season/episode/:episode" element={<Episode />} />
           <Route path="/person/:tmdbId" element={<Person />} />
           <Route path="/calendar" element={<Calendar />} />
+          <Route path="/seasons" element={<Seasons />} />
+          <Route path="/seasons/:year/:season" element={<Seasons />} />
           {/* Said, not redirected: see `NotFound`. */}
           <Route path="*" element={<NotFound />} />
         </Route>

@@ -322,7 +322,7 @@ fn is_placeholder(title: &str) -> bool {
 ///
 /// Only the languages TMDB actually serves need to round-trip; anything else
 /// passes through and TMDB falls back on its own.
-fn two_letter(language: &str) -> String {
+pub(crate) fn two_letter(language: &str) -> String {
     for code in TWO_LETTER_CODES {
         if iso_639_1_to_3(code) == language {
             return (*code).to_string();

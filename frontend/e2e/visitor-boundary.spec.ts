@@ -16,7 +16,14 @@ function week() {
   return `from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`
 }
 
-const OPEN = ['/api/v1/items', '/api/v1/stats', '/api/v1/auth/me', '/api/v1/facets', `/api/v1/calendar?${week()}`]
+const OPEN = [
+  '/api/v1/items',
+  '/api/v1/stats',
+  '/api/v1/auth/me',
+  '/api/v1/facets',
+  `/api/v1/calendar?${week()}`,
+  '/api/v1/seasons/2019/spring',
+]
 
 const CLOSED = [
   '/api/v1/settings',
@@ -24,6 +31,9 @@ const CLOSED = [
   '/api/v1/audit',
   '/api/v1/clients',
   '/api/v1/fields',
+  // What TMDB lists for a season is asked of TMDB, on this server's key: for
+  // whoever maintains the catalogue, not for anyone passing.
+  '/api/v1/seasons/2019/spring/candidates',
 ]
 
 test.describe('a visitor with no credential', () => {
@@ -91,6 +101,15 @@ test.describe('a visitor with no credential', () => {
       (item) => 'refreshError' in item || 'refreshAfter' in item || 'lockedFields' in item,
     )
     expect(told.map((item) => item.title)).toEqual([])
+  })
+
+  test('reads a season chart, and not what TMDB lists for the season', async ({ request }) => {
+    expect((await request.get('/api/v1/seasons/2019/spring')).status()).toBe(200)
+
+    // Refused at the door, before any handler: the allowlist opens the chart
+    // and not one segment more. A 403 would be the handler turning away a
+    // caller the door had let in.
+    expect((await request.get('/api/v1/seasons/2019/spring/candidates')).status()).toBe(401)
   })
 
   test('reads a person by their id, and nothing beneath it', async ({ request }) => {

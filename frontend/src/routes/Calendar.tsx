@@ -20,6 +20,7 @@ import { cn } from '../lib/cn'
 import * as fmt from '../lib/format'
 import { useI18n } from '../lib/i18n'
 import { airTime, episodeCode, poster } from '../lib/media'
+import { seasonOf, seasonPath } from '../lib/seasons'
 import type { Airing, Calendar as CalendarData, MediaItem } from '../lib/types'
 
 /** Midnight at the start of the Monday of `date`'s week, local time. */
@@ -95,6 +96,9 @@ export function Calendar() {
     days[6] ?? monday,
   )
   const total = days.reduce((sum, day) => sum + (byDay.get(localDate(day))?.length ?? 0), 0)
+  // The season most of the week is in: a week across the turn of a quarter
+  // belongs where its Thursday does.
+  const season = seasonOf(days[3] ?? monday)
 
   return (
     <div className="pt-10 pb-12">
@@ -108,6 +112,14 @@ export function Calendar() {
             {range}
             {listing.isSuccess ? ` · ${t.calendar.count(total)}` : ''}
           </p>
+          <Link
+            to={seasonPath(season)}
+            className="-ml-3 mt-2 inline-flex min-h-11 items-center gap-1.5 rounded-full px-3 text-sm text-vermillion transition-colors duration-150 hover:bg-vermillion/10"
+          >
+            <Glyph name="calendar" className="size-4" />
+            {t.calendar.seasonChart(t.seasons.title(t.seasons.names[season.season], season.year))}
+            <Glyph name="chevronRight" className="size-3.5" />
+          </Link>
         </div>
 
         <nav aria-label={t.calendar.weeks} className="flex flex-wrap items-center gap-2">

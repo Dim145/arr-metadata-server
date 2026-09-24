@@ -100,11 +100,14 @@ export function Artwork({
   url,
   role,
   eager = false,
+  sizes,
   ...rest
 }: {
   url: string
   role: ImageRole
   eager?: boolean
+  /** The width it is drawn at, where the role's own does not say. */
+  sizes?: string
 } & Omit<ImgHTMLAttributes<HTMLImageElement>, 'src' | 'srcSet' | 'sizes'>) {
   const image = sized(url, role)
 
@@ -113,7 +116,7 @@ export function Artwork({
       {...rest}
       src={image.src}
       srcSet={image.srcSet}
-      sizes={image.sizes}
+      sizes={image.srcSet ? (sizes ?? image.sizes) : undefined}
       loading={eager ? undefined : 'lazy'}
       decoding="async"
       onError={image.src === image.original ? undefined : fallBackToOriginal(image.original)}
@@ -130,7 +133,16 @@ export function Artwork({
  * under it. The year sits under the title rather than over the artwork: text
  * laid on a poster is a pattern every mature catalogue has tried and dropped.
  */
-export function PosterCard({ item, to }: { item: MediaItem; to: string }) {
+export function PosterCard({
+  item,
+  to,
+  note,
+}: {
+  item: MediaItem
+  to: string
+  /** What to say under the title in place of the year. */
+  note?: string
+}) {
   const { t, locale } = useI18n()
   const art = poster(item)
   const rating = headlineRating(item.ratings)
@@ -138,7 +150,9 @@ export function PosterCard({ item, to }: { item: MediaItem; to: string }) {
   return (
     <Link
       to={to}
-      aria-label={t.a11y.openWork(item.title)}
+      // The note says what the card is for — the season it leads to — so it
+      // is read too.
+      aria-label={note ? `${t.a11y.openWork(item.title)} · ${note}` : t.a11y.openWork(item.title)}
       className="group block focus-visible:outline-offset-4"
     >
       {/* Colour only. Every mature catalogue tried scaling posters on hover and
@@ -192,7 +206,7 @@ export function PosterCard({ item, to }: { item: MediaItem; to: string }) {
           {item.title}
         </h3>
         <p className="font-mono text-[0.6875rem] tracking-wide text-bone-faint tabular-nums">
-          {item.year ?? '—'}
+          {note ?? item.year ?? '—'}
         </p>
       </div>
     </Link>

@@ -53,6 +53,16 @@ It replaces and merges two earlier projects: `the earlier TMDB relay` and
   Each identifier opens the work's page on the site it came from; the artwork
   opens in a viewer; a trailer plays from YouTube's no-cookie domain, and only
   once somebody presses play.
+- **A season chart, past and to come.** One page for each quarter of the
+  calendar — winter from January, spring from April, summer from July, autumn
+  from October — as anime season charts have it, for series and films alike:
+  the new series, the series back for another season, the films released and
+  what carries on from before, each placed by its episodes' dates (corrected
+  ones included) or its release. A strip of the season's weeks leads to each;
+  kind, trailer, genre and original language narrow it, all kept in the
+  address. For whoever maintains the catalogue, the most popular of what TMDB
+  lists for the same quarter that the catalogue lacks follows, each a button
+  away from being imported.
 - **Maintenance where the problem is.** Season and episode fields are locked
   one by one from the editor, which opens on the episode a public page came
   from; each provider's last answer can be read as it arrived; the works whose
@@ -280,8 +290,10 @@ what they can send:
 
 `AMS_PUBLIC_BROWSE=true` opens the catalogue to a reader with no credential:
 the list of works, one work, the totals, what the filters offer
-(`/api/v1/facets`), the schedule (`/api/v1/calendar`) and a person's credits
-(`/api/v1/people/{tmdbId}`). Nothing else. Which works failed their last
+(`/api/v1/facets`), the schedule (`/api/v1/calendar`), a season chart
+(`/api/v1/seasons/{year}/{season}`) and a person's credits
+(`/api/v1/people/{tmdbId}`). Nothing else — not what TMDB lists for a season
+(`…/candidates`), which is asked of TMDB on this server's key. Which works failed their last
 refresh is not among them: that filter is ignored for anyone but an
 administrator. It is an allowlist
 rather than a denylist, so the settings, the job history, the audit trail, the

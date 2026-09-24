@@ -257,6 +257,18 @@ fn browsable(method: &axum::http::Method, path: &str) -> bool {
         {
             true
         }
+        // A season's chart. What else premieres in it, one segment further,
+        // is TMDB's list for whoever maintains the catalogue, and is not.
+        rest if rest.strip_prefix("/api/v1/seasons/").is_some_and(|tail| {
+            let mut parts = tail.split('/');
+            matches!(
+                (parts.next(), parts.next(), parts.next()),
+                (Some(year), Some(season), None) if !year.is_empty() && !season.is_empty()
+            )
+        }) =>
+        {
+            true
+        }
         // One work. Its seasons, episodes, artwork and cast come with it, but
         // its snapshots and overrides are their own paths and are not listed.
         rest => rest
@@ -427,6 +439,10 @@ mod browse_tests {
         assert!(allowed("/api/v1/calendar"));
         assert!(allowed("/api/v1/people/17419"));
         assert!(!allowed("/api/v1/people/17419/secret"));
+        assert!(allowed("/api/v1/seasons/2026/autumn"));
+        assert!(!allowed("/api/v1/seasons/2026/autumn/candidates"));
+        assert!(!allowed("/api/v1/seasons/2026"));
+        assert!(!allowed("/api/v1/seasons//autumn"));
     }
 
     #[test]

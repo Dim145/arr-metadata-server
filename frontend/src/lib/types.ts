@@ -399,3 +399,42 @@ export interface Found {
   stored: boolean
   isAdult: boolean
 }
+
+/** What an entry of a season chart is. */
+export type SeasonEntryKind = 'newSeries' | 'newSeason' | 'continuing' | 'film'
+
+export interface SeasonEntry {
+  workId: string
+  kind: SeasonEntryKind
+  /** The season, for a series whose episodes are known. */
+  seasonNumber?: number
+  /** The day it premiered, or will; for a season carrying on, the day it began. */
+  starts: string
+  ends?: string
+  episodes?: number
+  aired?: number
+  nextEpisode?: { episodeNumber: number; airDate: string }
+}
+
+export interface SeasonChart {
+  year: number
+  season: 'winter' | 'spring' | 'summer' | 'autumn'
+  from: string
+  to: string
+  entries: SeasonEntry[]
+  works: MediaItem[]
+}
+
+/** A work premiering in a season that the catalogue does not hold, by TMDB. */
+export interface SeasonCandidate {
+  kind: MediaKind
+  tmdbId: number
+  title: string
+  originalTitle?: string
+  premiere?: string
+  overview?: string
+  poster?: string
+  originalLanguage?: string
+  score?: number
+  votes?: number
+}

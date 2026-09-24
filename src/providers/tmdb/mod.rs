@@ -409,6 +409,77 @@ impl TmdbClient {
         Ok(parsed.results)
     }
 
+    /// Series that first aired between two dates, most popular first: what a
+    /// season brings that nobody has asked this server for yet.
+    ///
+    /// `language` is the language titles and synopses come back in, TMDB's
+    /// own setting when absent; `original` narrows to works made in one.
+    pub async fn discover_tv(
+        &self,
+        from: &str,
+        to: &str,
+        original: Option<&str>,
+        language: Option<&str>,
+        page: u32,
+    ) -> Result<(Vec<models::TvSummary>, bool)> {
+        let url = format!("{}/discover/tv", self.base);
+        let mut params = vec![
+            ("first_air_date.gte", from.to_string()),
+            ("first_air_date.lte", to.to_string()),
+            ("sort_by", "popularity.desc".to_string()),
+            ("include_adult", self.include_adult().to_string()),
+            ("include_null_first_air_dates", "false".to_string()),
+            (
+                "language",
+                language.map_or_else(|| self.language(), String::from),
+            ),
+            ("page", page.to_string()),
+        ];
+        if let Some(original) = original {
+            params.push(("with_original_language", original.to_string()));
+        }
+
+        let Some(value) = self.fetch(&url, &params).await? else {
+            return Ok((Vec::new(), false));
+        };
+
+        let parsed: models::SearchResponse<models::TvSummary> = Self::typed(&value, "discover")?;
+        Ok((parsed.results, i64::from(page) < parsed.total_pages))
+    }
+
+    /// Films first released between two dates, most popular first.
+    pub async fn discover_movies(
+        &self,
+        from: &str,
+        to: &str,
+        original: Option<&str>,
+        language: Option<&str>,
+        page: u32,
+    ) -> Result<(Vec<models::MovieSummary>, bool)> {
+        let url = format!("{}/discover/movie", self.base);
+        let mut params = vec![
+            ("primary_release_date.gte", from.to_string()),
+            ("primary_release_date.lte", to.to_string()),
+            ("sort_by", "popularity.desc".to_string()),
+            ("include_adult", self.include_adult().to_string()),
+            (
+                "language",
+                language.map_or_else(|| self.language(), String::from),
+            ),
+            ("page", page.to_string()),
+        ];
+        if let Some(original) = original {
+            params.push(("with_original_language", original.to_string()));
+        }
+
+        let Some(value) = self.fetch(&url, &params).await? else {
+            return Ok((Vec::new(), false));
+        };
+
+        let parsed: models::SearchResponse<models::MovieSummary> = Self::typed(&value, "discover")?;
+        Ok((parsed.results, i64::from(page) < parsed.total_pages))
+    }
+
     /// Ids changed since `start_date` (`YYYY-MM-DD`), used to drive refreshes.
     pub async fn changed_ids(&self, kind: MediaKind, start_date: &str) -> Result<Vec<i64>> {
         let segment = match kind {

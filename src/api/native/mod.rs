@@ -14,6 +14,7 @@ pub mod items;
 pub mod meta;
 pub mod network;
 pub mod overrides;
+pub mod seasons;
 pub mod settings;
 
 use utoipa_axum::router::OpenApiRouter;
@@ -25,6 +26,7 @@ pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .merge(items::router())
         .merge(browse::router())
+        .merge(seasons::router())
         .merge(children::router())
         .merge(export::router())
         .merge(overrides::router())

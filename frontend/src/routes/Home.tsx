@@ -16,6 +16,7 @@ import { api, query } from '../lib/api'
 import * as fmt from '../lib/format'
 import { useI18n } from '../lib/i18n'
 import { airTime, backdrop, episodeCode, headlineRating, poster } from '../lib/media'
+import { chartQuery, formatDay, seasonOf, seasonPath } from '../lib/seasons'
 import type { Airing, Calendar, ItemPage, MediaItem } from '../lib/types'
 
 export function Home() {
@@ -58,6 +59,8 @@ export function Home() {
 
       <div className="mt-16 space-y-16">
         <ThisWeek />
+
+        <ThisSeason />
 
         {series.data?.items.length ? (
           <Row
@@ -283,6 +286,75 @@ function ThisWeek() {
           <Upcoming key={`${airing.workId}-${airing.episode.id}`} airing={airing} work={works.get(airing.workId)} locale={locale} />
         ))}
       </div>
+    </section>
+  )
+}
+
+/**
+ * What the season brings: its new series, the series back for another
+ * season, its films, the most followed first. Left out when it brings nothing
+ * the catalogue holds.
+ */
+function ThisSeason() {
+  const { t, lang, locale } = useI18n()
+  const at = seasonOf(new Date())
+
+  // The season page's own query, so going there from here costs nothing.
+  const chart = useQuery(chartQuery(at, lang))
+
+  const works = new Map((chart.data?.works ?? []).map((w) => [w.id, w]))
+  const held = (chart.data?.entries ?? []).filter((e) => works.has(e.workId))
+  const fresh = held
+    .filter((e) => e.kind !== 'continuing')
+    .sort((a, b) => (works.get(b.workId)!.popularity ?? -1) - (works.get(a.workId)!.popularity ?? -1))
+
+  if (!fresh.length) return null
+
+  const day = (value: string) => formatDay(value, locale, { day: 'numeric', month: 'short' })
+
+  return (
+    <section>
+      <SectionTitle
+        action={
+          <Link
+            to={seasonPath(at)}
+            className="flex min-h-11 items-center gap-1.5 text-sm text-bone-dim transition-colors duration-200 hover:text-vermillion"
+          >
+            {t.home.wholeSeason}
+            {/* The season's works, as its page counts them. */}
+            <span className="font-mono text-xs text-bone-faint tabular-nums">
+              {fmt.count(new Set(held.map((e) => e.workId)).size, locale)}
+            </span>
+            <Glyph name="chevronRight" className="size-3.5" />
+          </Link>
+        }
+      >
+        {t.home.thisSeason(at.season, at.year)}
+      </SectionTitle>
+
+      <PosterGrid>
+        {fresh.slice(0, 12).map((entry) => {
+          const work = works.get(entry.workId)!
+          const kind =
+            entry.kind === 'film'
+              ? t.seasons.badges.film
+              : entry.kind === 'newSeries'
+                ? t.seasons.badges.newSeries
+                : t.seasons.badges.season(entry.seasonNumber ?? 0)
+          return (
+            <PosterCard
+              key={`${entry.workId}-${entry.seasonNumber ?? ''}`}
+              item={work}
+              to={
+                entry.kind === 'newSeason' && entry.seasonNumber !== undefined
+                  ? `/work/${work.id}/season/${entry.seasonNumber}`
+                  : `/work/${work.id}`
+              }
+              note={`${kind} · ${day(entry.starts)}`}
+            />
+          )
+        })}
+      </PosterGrid>
     </section>
   )
 }

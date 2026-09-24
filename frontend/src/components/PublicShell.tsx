@@ -55,6 +55,9 @@ export function PublicShell({ me }: { me?: Me }) {
             <Tab to="/browse?kind=series">{t.nav.series}</Tab>
             <Tab to="/browse?kind=movie">{t.nav.films}</Tab>
             <Tab to="/calendar">{t.nav.calendar}</Tab>
+            <Tab to="/seasons" section>
+              {t.nav.seasons}
+            </Tab>
           </nav>
 
           <div className="ml-auto flex items-center gap-2">
@@ -122,6 +125,9 @@ export function PublicShell({ me }: { me?: Me }) {
               <Tab to="/calendar" block>
                 {t.nav.calendar}
               </Tab>
+              <Tab to="/seasons" block section>
+                {t.nav.seasons}
+              </Tab>
             </nav>
 
             <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-rule pt-3">
@@ -171,10 +177,13 @@ function Tab({
   to,
   children,
   block,
+  section,
 }: {
   to: string
   children: React.ReactNode
   block?: boolean
+  /** Current anywhere beneath it too: every season is the seasons' tab. */
+  section?: boolean
 }) {
   const location = useLocation()
 
@@ -182,8 +191,9 @@ function Tab({
   const wanted = new URLSearchParams(search).get('kind')
   const current = new URLSearchParams(location.search).get('kind')
 
-  const isActive =
-    location.pathname === path && (wanted ?? null) === (current ?? null)
+  const isActive = section
+    ? location.pathname === path || location.pathname.startsWith(`${path}/`)
+    : location.pathname === path && (wanted ?? null) === (current ?? null)
 
   return (
     <Link

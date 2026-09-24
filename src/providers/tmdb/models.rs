@@ -22,6 +22,8 @@ pub struct SearchResponse<T> {
     pub results: Vec<T>,
     #[serde(default)]
     pub total_results: i64,
+    #[serde(default)]
+    pub total_pages: i64,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]

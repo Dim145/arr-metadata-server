@@ -148,6 +148,35 @@ pub async fn find_id_by_external(
         .map_err(Into::into)
 }
 
+/// Which of some identifiers of one source the store holds a work for.
+pub async fn held_externals(
+    db: &Db,
+    source: ExternalSource,
+    values: &[String],
+) -> Result<std::collections::HashSet<String>> {
+    let mut held = std::collections::HashSet::new();
+    for chunk in values.chunks(400) {
+        let mut args = AnyArguments::default();
+        args.add(source.as_str().to_string())
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        for value in chunk {
+            args.add(value.clone())
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+        }
+        let sql = format!(
+            "SELECT value FROM media_external_id WHERE source = ? AND value IN ({})",
+            vec!["?"; chunk.len()].join(", ")
+        );
+        for row in sqlx::query_with(db.sql(&sql), args)
+            .fetch_all(db.pool())
+            .await?
+        {
+            held.insert(row.text("value")?);
+        }
+    }
+    Ok(held)
+}
+
 pub async fn find_id_by_slug(db: &Db, kind: MediaKind, slug: &str) -> Result<Option<String>> {
     let row = sqlx::query(db.sql("SELECT id FROM media_item WHERE kind = ? AND slug = ?"))
         .bind(kind.as_str())

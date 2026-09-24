@@ -19,7 +19,16 @@ import type { Credit, Episode, Image, MediaItem, Rating } from './types'
  * `portrait` a person's photograph on theirs, and `full` whatever the provider
  * has, for the lightbox.
  */
-export type ImageRole = 'card' | 'poster' | 'backdrop' | 'headshot' | 'still' | 'frame' | 'portrait' | 'full'
+export type ImageRole =
+  | 'card'
+  | 'thumb'
+  | 'poster'
+  | 'backdrop'
+  | 'headshot'
+  | 'still'
+  | 'frame'
+  | 'portrait'
+  | 'full'
 
 /**
  * TMDB's own size ladder for each role, in the widths it actually serves.
@@ -32,6 +41,8 @@ export type ImageRole = 'card' | 'poster' | 'backdrop' | 'headshot' | 'still' | 
  */
 const TMDB_LADDER: Record<ImageRole, readonly number[]> = {
   card: [185, 342, 500],
+  // A poster beside a card's text, a hundred pixels or so.
+  thumb: [92, 154, 185, 342],
   poster: [342, 500, 780],
   backdrop: [780, 1280],
   headshot: [185],
@@ -55,6 +66,7 @@ const TMDB_BEYOND: Partial<Record<ImageRole, { size: string; width: number }>> =
 /** The layout width each role is drawn at, for `sizes`. */
 const SIZES: Record<ImageRole, string> = {
   card: '(min-width: 1280px) 200px, (min-width: 768px) 22vw, 45vw',
+  thumb: '(min-width: 640px) 112px, 88px',
   poster: '(min-width: 1024px) 192px, 160px',
   backdrop: '100vw',
   headshot: '56px',
@@ -109,7 +121,7 @@ export function sized(url: string, role: ImageRole): Sourced {
   }
 
   const [, stem, extension] = TVDB.exec(url) ?? []
-  const small = role === 'card' || role === 'headshot' || role === 'still'
+  const small = role === 'card' || role === 'thumb' || role === 'headshot' || role === 'still'
   if (stem && extension && small && !stem.endsWith('_t')) {
     return { src: `${stem}_t${extension}`, original: url }
   }

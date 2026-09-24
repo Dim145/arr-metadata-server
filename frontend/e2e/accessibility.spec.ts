@@ -61,6 +61,24 @@ async function aSeriesWithEpisodes(page: Page) {
   return undefined
 }
 
+/** The season chart a series began in, when it holds anything. */
+async function aSeasonWithEntries(page: Page) {
+  const { items } = await (await page.request.get('/api/v1/items?kind=series&limit=10')).json()
+  for (const { id } of items as { id: string }[]) {
+    const work = await (await page.request.get(`/api/v1/items/${id}`)).json()
+    const first = ((work.episodes ?? []) as { seasonNumber: number; airDate?: string }[])
+      .filter((e) => e.seasonNumber > 0 && e.airDate)
+      .map((e) => e.airDate!.slice(0, 10))
+      .sort()[0]
+    if (!first) continue
+    const season = ['winter', 'spring', 'summer', 'autumn'][Math.floor((Number(first.slice(5, 7)) - 1) / 3)]
+    const path = `/seasons/${first.slice(0, 4)}/${season}`
+    const chart = await (await page.request.get(`/api/v1${path}`)).json()
+    if (chart.entries?.length) return path
+  }
+  return undefined
+}
+
 test.describe('the catalogue, to a visitor', () => {
   for (const [label, path] of [
     ['the front page', '/'],
@@ -68,6 +86,7 @@ test.describe('the catalogue, to a visitor', () => {
     ['an empty result', '/browse?q=zzzqqq'],
     ['a narrowed and ordered list', '/browse?kind=series&genre=Drama&yearFrom=2000&order=rated'],
     ['the schedule', '/calendar'],
+    ['a season the catalogue holds nothing of', '/seasons/1890/winter'],
     ['sign-in', '/login'],
   ] as const) {
     test(`${label} meets WCAG 2.1 AA`, async ({ page }) => {
@@ -107,6 +126,17 @@ test.describe('the catalogue, to a visitor', () => {
     ]
 
     for (const path of pages) {
+      await page.goto(path)
+      await page.waitForLoadState('networkidle')
+      await scan(page, path)
+    }
+  })
+
+  test('a season chart, whole and filtered, meets WCAG 2.1 AA', async ({ page }) => {
+    const found = await aSeasonWithEntries(page)
+    test.skip(!found, 'no series has a dated episode')
+
+    for (const path of [found!, `${found!}?sort=date`, `${found!}?trailer=without&sort=title`]) {
       await page.goto(path)
       await page.waitForLoadState('networkidle')
       await scan(page, path)
@@ -155,7 +185,7 @@ test.describe('the administration side', () => {
   test.skip(!USERNAME || !PASSWORD, 'needs a credential; see admin.spec.ts')
 
   test('every screen meets WCAG 2.1 AA', async ({ page }) => {
-    // Ten screens, each loaded to rest and scanned whole: some twenty-five
+    // Eleven screens, each loaded to rest and scanned whole: some thirty
     // seconds on its own, more beside the rest of the suite.
     test.slow()
 
@@ -176,6 +206,12 @@ test.describe('the administration side', () => {
       '/admin/jobs',
       '/admin/audit',
       '/admin/settings',
+      // A season to come, with what TMDB lists for it to import.
+      await page.evaluate(() => {
+        const now = new Date()
+        const index = now.getFullYear() * 4 + Math.floor(now.getMonth() / 3) + 1
+        return `/seasons/${Math.floor(index / 4)}/${['winter', 'spring', 'summer', 'autumn'][index % 4]}`
+      }),
       ...(id ? [`/admin/catalogue/${id}`] : []),
       // An episode's fields, opened from its public page.
       ...(found

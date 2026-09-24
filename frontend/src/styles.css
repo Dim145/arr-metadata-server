@@ -150,6 +150,34 @@
 }
 
 @layer components {
+  /* A target a finger can find, drawn smaller than one: the part that takes
+     a tap reaches 44px tall, past the pill or chip it is drawn as. Rows of
+     them want a gap to match, or one row's reach covers the next. */
+  .hit {
+    position: relative;
+  }
+  .hit::before {
+    content: "";
+    position: absolute;
+    inset-inline: 0;
+    top: 50%;
+    height: max(100%, 44px);
+    translate: 0 -50%;
+  }
+
+  /* A strip of film: a row of perforations along each edge, light through the
+     sprocket holes, and the frames between them. The season chart's weeks. */
+  .film-strip {
+    --perforation: color-mix(in srgb, var(--color-bone) 8%, transparent);
+    background:
+      repeating-linear-gradient(90deg, transparent 0 5px, var(--perforation) 5px 11px, transparent 11px 16px)
+        left 0 top 5px / 100% 5px no-repeat,
+      repeating-linear-gradient(90deg, transparent 0 5px, var(--perforation) 5px 11px, transparent 11px 16px)
+        left 0 bottom 5px / 100% 5px no-repeat,
+      var(--color-ink-raised);
+    padding-block: 15px;
+  }
+
   /* ── The grain ────────────────────────────────────────────────────────────
      A still frame has grain; a web page does not, and the difference is most of
      why screens look sterile next to film. One fixed layer, painted once, so it
