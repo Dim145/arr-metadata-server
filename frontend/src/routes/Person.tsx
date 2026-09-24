@@ -16,6 +16,7 @@ import { EmptyState, Glyph, Label, Skeleton } from '../components/ui'
 import { ApiError, api, query } from '../lib/api'
 import { useTitle } from '../lib/hooks'
 import { useI18n } from '../lib/i18n'
+import { jobLabel } from '../lib/labels'
 import { personLink } from '../lib/links'
 import { poster } from '../lib/media'
 import type { MediaItem, Person as PersonData, Role } from '../lib/types'
@@ -108,7 +109,7 @@ function Filmography({ person }: { person: PersonData }) {
 
 /** One line of the filmography. */
 function Entry({ work, roles }: { work: MediaItem; roles: Role[] }) {
-  const { t } = useI18n()
+  const { t, lang } = useI18n()
   const art = poster(work)
 
   // A job in words: TMDB files a director with no job title of its own, and
@@ -122,7 +123,9 @@ function Entry({ work, roles }: { work: MediaItem; roles: Role[] }) {
         ? role.character
           ? t.person.as(role.character)
           : t.person.cast
-        : (role.character ?? job(role.creditType)),
+        : role.character
+          ? jobLabel(role.character, lang)
+          : job(role.creditType),
     )
     .filter((text, index, all) => all.indexOf(text) === index)
 

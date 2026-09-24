@@ -828,7 +828,7 @@ function Sources({
                 <button
                   type="button"
                   onClick={() => setViewing(snapshot.provider)}
-                  className="min-h-8 cursor-pointer rounded-card px-2 font-mono text-[0.6875rem] text-slate transition-colors duration-150 hover:bg-ink-high hover:text-bone"
+                  className="hit min-h-8 min-w-11 cursor-pointer rounded-card px-2 font-mono text-[0.6875rem] text-slate transition-colors duration-150 hover:bg-ink-high hover:text-bone"
                   aria-label={t.admin.editor.rawOf(providerName(snapshot.provider))}
                 >
                   {'{ }'}

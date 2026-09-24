@@ -7,7 +7,7 @@
  */
 
 import { useQuery } from '@tanstack/react-query'
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router'
 
 import { ExternalLink } from '../components/elsewhere'
@@ -30,7 +30,7 @@ import { useMe, useTitle, useWork } from '../lib/hooks'
 import { identifierLink } from '../lib/links'
 import { cn } from '../lib/cn'
 import * as fmt from '../lib/format'
-import { languageName, providerName, statusLabel, titleOrigin } from '../lib/labels'
+import { jobLabel, languageName, providerName, statusLabel, titleOrigin } from '../lib/labels'
 import { useI18n } from '../lib/i18n'
 import {
   airTime,
@@ -41,6 +41,7 @@ import {
   crew,
   episodesOf,
   episodeCode,
+  hasAired,
   headlineRating,
   imagesOf,
   latestEpisode,
@@ -49,6 +50,7 @@ import {
   ratingsOf,
   seasonName,
   seasonNumbers,
+  seasonPoster,
 } from '../lib/media'
 import type { Credit, Episode, ItemPage, MediaItem } from '../lib/types'
 import { NotFound, Unavailable } from './NotFound'
@@ -74,22 +76,29 @@ export function Work() {
     <article key={item.id} className="pb-8">
       <Plate item={item} />
 
-      <div className="mt-12 grid gap-12 lg:grid-cols-[minmax(0,1fr)_20rem]">
-        <div className="min-w-0 space-y-14">
+      {/* The facts sit beside the page on a wide screen, and straight after the
+          synopsis on a phone: status, dates, network and identifiers are what
+          the page is opened for, and at the foot of a long page they were
+          past the cast, the seasons and every picture. */}
+      <div className="mt-12 grid gap-x-12 gap-y-14 lg:grid-cols-[minmax(0,1fr)_20rem] lg:grid-rows-[auto_1fr]">
+        <div className="min-w-0 space-y-14 lg:col-start-1 lg:row-start-1">
           <Synopsis item={item} />
           {item.kind === 'series' ? <OnAir item={item} /> : null}
+        </div>
+
+        <aside className="space-y-6 lg:col-start-2 lg:row-span-2 lg:row-start-1">
+          <Record item={item} />
+          <Ratings item={item} />
+          <Identifiers item={item} />
+        </aside>
+
+        <div className="min-w-0 space-y-14 lg:col-start-1 lg:row-start-2">
           <CastList credits={cast(item.credits)} />
           {item.kind === 'series' ? <Seasons item={item} /> : null}
           <Gallery item={item} />
           {item.kind === 'movie' && item.collectionTmdbId ? <Collection item={item} /> : null}
           <AlsoKnownAs item={item} />
         </div>
-
-        <aside className="space-y-6">
-          <Record item={item} />
-          <Ratings item={item} />
-          <Identifiers item={item} />
-        </aside>
       </div>
     </article>
   )
@@ -263,7 +272,7 @@ function Plate({ item }: { item: MediaItem }) {
 /* ── Sections ─────────────────────────────────────────────────────────────── */
 
 function Synopsis({ item }: { item: MediaItem }) {
-  const { t } = useI18n()
+  const { t, lang } = useI18n()
 
   return (
     <section>
@@ -280,7 +289,7 @@ function Synopsis({ item }: { item: MediaItem }) {
         <dl className="mt-8 grid gap-x-8 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
           {crew(item.credits, 6).map((person) => (
             <div key={person.id}>
-              <dt className="label">{person.characterName ?? person.creditType}</dt>
+              <dt className="label">{jobLabel(person.characterName ?? person.creditType, lang)}</dt>
               <dd className="mt-0.5 text-sm text-bone">{person.personName}</dd>
             </div>
           ))}
@@ -299,14 +308,29 @@ function Synopsis({ item }: { item: MediaItem }) {
  */
 function CastList({ credits }: { credits: Credit[] }) {
   const { t } = useI18n()
+  const [whole, setWhole] = useState(false)
+  const list = useRef<HTMLUListElement>(null)
+  // The button goes once pressed, and the focus with it: to the first name it
+  // brought out, rather than to the page, which carried on tabbing past them.
+  const revealed = useRef<number | null>(null)
+  useEffect(() => {
+    if (revealed.current === null) return
+    list.current?.querySelectorAll<HTMLElement>(':scope > li')[revealed.current]?.focus()
+    revealed.current = null
+  }, [whole])
 
   if (!credits.length) return null
+
+  // The top of the bill, then the rest a press away: three rows at the widest,
+  // six names on a phone, where each takes a row of its own.
+  const hidden = (index: number) => !whole && (index >= WIDE_CAST ? 'hidden' : index >= NARROW_CAST ? 'max-sm:hidden' : '')
+  const more = !whole && credits.length > NARROW_CAST
 
   return (
     <section>
       <SectionTitle>{t.work.cast}</SectionTitle>
-      <ul className="stagger grid gap-x-8 gap-y-5 sm:grid-cols-2 xl:grid-cols-3">
-        {credits.map((person) => {
+      <ul ref={list} className="stagger grid gap-x-8 gap-y-5 sm:grid-cols-2 xl:grid-cols-3">
+        {credits.map((person, index) => {
           const face = person.image ? (
             <Artwork
               url={person.image}
@@ -331,7 +355,7 @@ function CastList({ credits }: { credits: Credit[] }) {
           )
 
           return (
-            <li key={person.id}>
+            <li key={person.id} tabIndex={-1} className={cn('rounded-card', hidden(index))}>
               {/* A person TMDB has an id for has a page: everything else they
                   are in, as far as this catalogue holds it. */}
               {person.tmdbPersonId ? (
@@ -349,20 +373,53 @@ function CastList({ credits }: { credits: Credit[] }) {
           )
         })}
       </ul>
+      {more ? (
+        <Button
+          size="sm"
+          variant="ghost"
+          className={cn('mt-6', credits.length <= WIDE_CAST && 'sm:hidden')}
+          onClick={() => {
+            revealed.current = window.matchMedia('(min-width: 640px)').matches ? WIDE_CAST : NARROW_CAST
+            setWhole(true)
+          }}
+        >
+          {t.work.wholeCast(credits.length)}
+        </Button>
+      ) : null}
     </section>
   )
 }
 
+/** How much of the cast shows before the rest is asked for. */
+const WIDE_CAST = 9
+const NARROW_CAST = 6
+
 /**
- * Every season, each as its own scroller.
+ * Every season, as a shelf of its posters, each the way to its page.
  *
- * Tabs would hide five sixths of a series behind a click and put its state
- * nowhere. Stacked scrollers keep the whole thing on one page, and the card
- * clipped by the right edge is the only affordance a reader needs.
+ * A season's episodes are its own page's. Laid out here, season after season,
+ * a series of twenty-four seasons was twelve hundred cards — ten thousand
+ * nodes and a page ten thousand pixels tall — most of it never looked at.
+ * What the page is opened to choose is a season; the episode that aired last
+ * and the one airing next are already above.
  */
 function Seasons({ item }: { item: MediaItem }) {
   const { t } = useI18n()
-  const numbers = seasonNumbers(item)
+  const shelf = useRef<HTMLUListElement>(null)
+  const numbers = seasonNumbers(item).filter((n) => episodesOf(item, n).length)
+  const now = latestEpisode(item) ?? nextEpisode(item)
+
+  // A running series opens on the season it is at, not on its first, where
+  // the shelf is wider than the screen; one that has ended, on its first.
+  useEffect(() => {
+    if (item.status === 'ended') return
+    const list = shelf.current
+    const at = list?.querySelector<HTMLElement>('[data-current]')
+    if (!list || !at || list.scrollWidth <= list.clientWidth) return
+    // Where the card sits along the shelf, whatever it is measured from.
+    const left = at.getBoundingClientRect().left - list.getBoundingClientRect().left + list.scrollLeft
+    list.scrollLeft = left - list.clientWidth + at.offsetWidth * 2
+  }, [])
 
   if (!numbers.length) return null
 
@@ -375,127 +432,90 @@ function Seasons({ item }: { item: MediaItem }) {
         {t.work.numbering}
       </p>
 
-      <div className="space-y-10">
+      {/* Bleeds past the container on the right so a clipped card shows there
+          is more; each card is a link, so a keyboard walks the shelf by
+          tabbing and the browser brings each one into view. */}
+      <ul
+        ref={shelf}
+        aria-label={t.work.seasons}
+        // Room above and to the left for a card's focus ring, which a scroller
+        // would otherwise cut off.
+        className="-mt-2 -mr-4 -ml-2 flex snap-x snap-mandatory scroll-pl-2 gap-4 overflow-x-auto pt-2 pr-4 pb-3 pl-2 sm:-mr-6 sm:pr-6"
+      >
         {numbers.map((number) => (
-          <SeasonRow key={number} item={item} season={number} />
+          <li
+            key={number}
+            data-current={now?.seasonNumber === number || undefined}
+            className="w-36 shrink-0 snap-start sm:w-40"
+          >
+            <SeasonCard item={item} season={number} />
+          </li>
         ))}
-      </div>
+      </ul>
     </section>
   )
 }
 
-function SeasonRow({ item, season }: { item: MediaItem; season: number }) {
+function SeasonCard({ item, season }: { item: MediaItem; season: number }) {
   const { t, locale } = useI18n()
   const episodes = episodesOf(item, season)
   const meta = item.seasons?.find((s) => s.seasonNumber === season)
-
-  if (!episodes.length) return null
-
-  const first = episodes.find((e) => e.airDate)?.airDate
+  const art = seasonPoster(item, season)
 
   // "Season 3" and "Specials" are placeholders this interface already has in
   // the reader's language; see `seasonName`.
   const name = seasonName(meta?.title, season, t.work.season)
+  // Days as the reader's calendar has them, as the latest and next episodes
+  // above are dated.
+  const days = episodes
+    .map((e) => airTime(e)?.day)
+    .filter((d): d is string => !!d)
+    .sort()
+  const first = days[0] ?? meta?.airDate?.slice(0, 10)
+  const aired = episodes.filter((e) => {
+    const when = airTime(e)
+    return when !== undefined && hasAired(when)
+  }).length
+  // A season under way says how far along it is; one still to come, when —
+  // and only one whose first day is ahead: a past season with its episodes
+  // undated is not coming.
+  const airing = season > 0 && aired > 0 && aired < episodes.length && days.length === episodes.length
+  const coming = season > 0 && aired === 0 && first !== undefined && first > fmt.localDay(new Date())
 
   return (
-    <div>
-      <div className="mb-3 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <h3 className="font-display text-lg font-medium text-bone">
-          <Link
-            to={`/work/${item.id}/season/${season}`}
-            className="transition-colors duration-150 hover:text-vermillion"
-          >
-            {name}
-          </Link>
-        </h3>
-        <span className="font-mono text-xs text-bone-faint tabular-nums">
-          {t.work.episodeCount(episodes.length)}
-          {first ? ` · ${fmt.year(first)}` : ''}
-        </span>
-        <Link
-          to={`/work/${item.id}/season/${season}`}
-          className="label ml-auto inline-flex min-h-11 items-center gap-1 transition-colors duration-150 hover:text-vermillion"
-        >
-          {/* Named by what it says, then which season: someone who speaks
-              "All episodes" to their computer has to find it. */}
-          {t.work.allEpisodes}
-          <span className="sr-only"> — {name}</span>
-          <Glyph name="chevronRight" className="size-3" />
-        </Link>
-      </div>
-
-      {/* Bleeds past the container on the right so a clipped card shows there is
-          more; the padding puts it back for the last one. Each card is a link
-          now, so a keyboard walks the strip by tabbing and the browser brings
-          each one into view; the region is named, and no longer a tab stop of
-          its own. */}
-      <div
-        role="region"
-        aria-label={`${name} — ${t.work.episodeCount(episodes.length)}`}
-        className="-mr-4 flex snap-x snap-mandatory gap-3 overflow-x-auto pr-4 pb-2 sm:-mr-6 sm:pr-6"
-      >
-        {episodes.map((episode) => (
-          <EpisodeCard key={episode.id} item={item} episode={episode} locale={locale} />
-        ))}
-      </div>
-    </div>
-  )
-}
-
-function EpisodeCard({
-  item,
-  episode,
-  locale,
-}: {
-  item: MediaItem
-  episode: Episode
-  locale: string
-}) {
-  const { t } = useI18n()
-
-  return (
-    <Link
-      to={`/work/${item.id}/season/${episode.seasonNumber}/episode/${episode.episodeNumber}`}
-      className={cn(
-        'group w-60 shrink-0 snap-start overflow-hidden rounded-panel border border-rule bg-ink-raised',
-        'transition-colors duration-150 hover:border-rule-bright',
-      )}
-    >
-      <div className="relative aspect-video bg-ink-high">
-        {episode.image ? (
-          <Artwork
-            url={episode.image}
-            role="still"
-            alt={t.a11y.still(episode.title)}
-            className="size-full object-cover"
-          />
+    <Link to={`/work/${item.id}/season/${season}`} className="group block focus-visible:outline-offset-4">
+      <div className="relative aspect-2/3 overflow-hidden rounded-panel border border-rule bg-ink-high transition-colors duration-150 group-hover:border-vermillion/45">
+        {art ? (
+          <Artwork url={art} role="card" sizes="160px" alt="" className="size-full object-cover" />
         ) : (
           <div className="grid size-full place-items-center">
-            <Glyph name="film" className="size-5 text-bone-faint" />
+            <Glyph name="tv" className="size-6 text-bone-faint" />
           </div>
         )}
-        <span className="absolute bottom-1.5 left-1.5 rounded-card bg-ink/85 px-1.5 py-0.5 font-mono text-[0.6875rem] font-medium text-bone tabular-nums">
-          {episodeCode(episode)}
-        </span>
-        {episode.isManual ? (
-          <span className="absolute top-1.5 right-1.5">
-            <Chip tone="manual">
-              <Glyph name="lock" className="size-3" />
+        {airing || coming ? (
+          <span className="absolute top-2 left-2">
+            <Chip tone={airing ? 'accent' : 'neutral'} className="bg-ink/85">
+              {airing ? t.work.seasonAiring : t.work.seasonComing}
             </Chip>
           </span>
         ) : null}
+        {airing ? (
+          <span aria-hidden className="absolute inset-x-0 bottom-0 h-1 bg-ink/70">
+            <span className="block h-full bg-vermillion" style={{ width: `${(aired / episodes.length) * 100}%` }} />
+          </span>
+        ) : null}
       </div>
-
-      <div className="space-y-1 p-3">
-        <h4 className="line-clamp-2 text-sm leading-snug font-medium text-bone transition-colors duration-150 group-hover:text-vermillion">
-          {episode.title || '—'}
-        </h4>
-        <p className="font-mono text-[0.6875rem] text-bone-faint tabular-nums">
-          {[fmt.shortDate(airValue(airTime(episode)), locale), fmt.runtime(episode.runtime, locale)]
-            .filter(Boolean)
-            .join(' · ') || '—'}
-        </p>
-      </div>
+      <h3 className="mt-2.5 line-clamp-2 text-sm leading-snug font-medium text-bone transition-colors duration-150 group-hover:text-vermillion">
+        {name}
+      </h3>
+      <p className="mt-0.5 font-mono text-[0.6875rem] text-bone-faint tabular-nums">
+        {[
+          airing ? t.work.airedOf(aired, episodes.length) : t.work.episodeCount(episodes.length),
+          coming ? fmt.shortDate(first, locale) : first ? fmt.year(first) : undefined,
+        ]
+          .filter(Boolean)
+          .join(' · ')}
+      </p>
       <span className="sr-only">{item.title}</span>
     </Link>
   )
@@ -820,12 +840,12 @@ function AlsoKnownAs({ item }: { item: MediaItem }) {
       {keywords.length ? (
         <div className={titles.length ? 'mt-6' : undefined}>
           {titles.length ? <h3 className="label mb-2">{t.work.keywords}</h3> : null}
-          <ul className="flex flex-wrap gap-1.5">
+          <ul className="flex flex-wrap gap-x-1.5 gap-y-3">
             {keywords.map((keyword) => (
               <li key={keyword}>
                 <Link
                   to={`/browse?keyword=${encodeURIComponent(keyword)}`}
-                  className="inline-flex min-h-8 items-center rounded-full border border-rule-bright px-2.5 text-xs text-bone-dim transition-colors duration-150 hover:border-bone-faint hover:text-bone"
+                  className="hit inline-flex min-h-8 items-center rounded-full border border-rule-bright px-2.5 text-xs text-bone-dim transition-colors duration-150 hover:border-bone-faint hover:text-bone"
                 >
                   # {keyword}
                 </Link>

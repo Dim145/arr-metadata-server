@@ -502,6 +502,30 @@ pub fn midnight_utc(date: &str) -> Option<String> {
         .map(|d| format!("{d}T00:00:00Z"))
 }
 
+/// The genres one of a work's stands for, as a list files them.
+///
+/// TMDB gives series and films different genres for the same thing: a series
+/// is "Action & Adventure", a film "Action" and "Adventure"; a series "Sci-Fi
+/// & Fantasy", a film "Science Fiction" and "Fantasy". In a catalogue of both,
+/// "Action" found no series at all, and the genres on offer named everything
+/// twice. TMDB's three combined genres are listed as their parts, in the two
+/// languages this interface speaks; anything else is left as it is, a genre
+/// somebody typed — "Sword & Sorcery" — included.
+pub fn genre_parts(genre: &str) -> Vec<String> {
+    let genre = genre.trim();
+    let parts: &[&str] = match genre {
+        "" => &[],
+        "Action & Adventure" => &["Action", "Adventure"],
+        "Sci-Fi & Fantasy" => &["Science Fiction", "Fantasy"],
+        "War & Politics" => &["War", "Politics"],
+        "Action & Aventure" => &["Action", "Aventure"],
+        "Science-Fiction & Fantastique" => &["Science-Fiction", "Fantastique"],
+        "Guerre & Politique" => &["Guerre", "Politique"],
+        other => return vec![other.to_string()],
+    };
+    parts.iter().map(|p| p.to_string()).collect()
+}
+
 pub fn make_slug(title: &str, year: Option<i32>) -> String {
     let base = slug::slugify(title);
     let base = if base.is_empty() {
@@ -518,6 +542,25 @@ pub fn make_slug(title: &str, year: Option<i32>) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_series_genre_is_listed_as_the_film_genres_it_stands_for() {
+        assert_eq!(genre_parts("Action & Adventure"), ["Action", "Adventure"]);
+        assert_eq!(
+            genre_parts("Sci-Fi & Fantasy"),
+            ["Science Fiction", "Fantasy"]
+        );
+        assert_eq!(genre_parts("Action & Aventure"), ["Action", "Aventure"]);
+        assert_eq!(
+            genre_parts("Science-Fiction & Fantastique"),
+            ["Science-Fiction", "Fantastique"]
+        );
+        assert_eq!(genre_parts(" Drama "), ["Drama"]);
+        assert!(genre_parts("  ").is_empty());
+        // Only TMDB's own combinations: one typed by hand stays whole.
+        assert_eq!(genre_parts("Sword & Sorcery"), ["Sword & Sorcery"]);
+    }
+
     #[test]
     fn a_broadcast_date_that_is_not_a_date_produces_nothing() {
         // Sonarr parses this field as a timestamp. It used to be built by

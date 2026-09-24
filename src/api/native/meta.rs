@@ -269,20 +269,30 @@ async fn jobs(
 ) -> AppResult<Json<JobsResponse>> {
     require_admin(&identity)?;
 
-    let jobs = repo::job::list(
-        &state.db,
-        &repo::job::Query {
-            kind: query.kind,
-            status: query.status,
-            limit: query.limit.unwrap_or(50),
-            offset: query.offset.unwrap_or(0),
-        },
-    )
-    .await?;
+    let filter = repo::job::Query {
+        kind: query.kind,
+        status: query.status,
+        limit: query.limit.unwrap_or(50),
+        offset: query.offset.unwrap_or(0),
+    };
+    let mut jobs = repo::job::list(&state.db, &filter).await?;
+
+    // A refresh names its work by id; the page names it by its title.
+    let ids: Vec<String> = jobs
+        .iter()
+        .filter_map(|j| j.target.clone())
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+    let works = repo::item::titles(&state.db, &ids).await?;
+    for job in &mut jobs {
+        job.work = job.target.as_deref().and_then(|id| works.get(id)).cloned();
+    }
 
     Ok(Json(JobsResponse {
         jobs,
-        total: repo::job::count(&state.db).await?,
+        // As many as the filters match, so the pages end where the runs do.
+        total: repo::job::count_matching(&state.db, &filter).await?,
     }))
 }
 

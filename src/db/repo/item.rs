@@ -148,6 +148,45 @@ pub async fn find_id_by_external(
         .map_err(Into::into)
 }
 
+/// A work named in passing — by an audit entry, a job — as a reader knows it.
+#[derive(Clone, Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkRef {
+    pub id: String,
+    pub title: String,
+    pub kind: MediaKind,
+}
+
+/// The title and kind of each of some works still held, by id.
+pub async fn titles(db: &Db, ids: &[String]) -> Result<std::collections::HashMap<String, WorkRef>> {
+    let mut found = std::collections::HashMap::new();
+    for chunk in ids.chunks(400) {
+        let mut args = AnyArguments::default();
+        for id in chunk {
+            args.add(id.clone()).map_err(|e| anyhow::anyhow!("{e}"))?;
+        }
+        let sql = format!(
+            "SELECT id, title, kind FROM media_item WHERE id IN ({})",
+            vec!["?"; chunk.len()].join(", ")
+        );
+        for row in sqlx::query_with(db.sql(&sql), args)
+            .fetch_all(db.pool())
+            .await?
+        {
+            let id = row.text("id")?;
+            found.insert(
+                id.clone(),
+                WorkRef {
+                    id,
+                    title: row.text("title")?,
+                    kind: row.text("kind")?.parse()?,
+                },
+            );
+        }
+    }
+    Ok(found)
+}
+
 /// Which of some identifiers of one source the store holds a work for.
 pub async fn held_externals(
     db: &Db,
@@ -494,7 +533,15 @@ impl Listed {
         Self {
             title,
             year: item.year,
-            genres: each(&item.genres),
+            // Each once, in the order the work gives them; see `genre_parts`.
+            genres: {
+                let mut seen = std::collections::HashSet::new();
+                item.genres
+                    .iter()
+                    .flat_map(|g| crate::domain::genre_parts(&clean(g)))
+                    .filter(|g| seen.insert(g.clone()))
+                    .collect()
+            },
             keywords: each(&item.keywords),
             network: given(&item.network),
             studio: given(&item.studio),
@@ -1097,10 +1144,34 @@ fn narrow(q: &Query, sql: &mut String, args: &mut AnyArguments) -> Result<()> {
         sql.push_str(" AND is_manual = 1");
     }
 
+    // A combined genre asked for — from a series' own page — is its parts,
+    // as the works are listed by them: "Action & Adventure" is a work that is
+    // both. Or the combined name itself, as a work not yet listed again since
+    // the change still holds it. Each part once, however often it is asked.
+    let mut asked = std::collections::HashSet::new();
     for genre in q.genres.iter().map(|g| g.trim()).filter(|g| !g.is_empty()) {
-        sql.push_str(" AND REPLACE(listed_genres, ?, '') <> listed_genres");
-        args.add(json_element(genre))
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let parts: Vec<String> = crate::domain::genre_parts(genre)
+            .into_iter()
+            .filter(|p| asked.insert(p.clone()))
+            .collect();
+        if parts.is_empty() {
+            continue;
+        }
+        let each =
+            vec!["REPLACE(listed_genres, ?, '') <> listed_genres"; parts.len()].join(" AND ");
+        if parts.len() > 1 {
+            sql.push_str(&format!(
+                " AND (REPLACE(listed_genres, ?, '') <> listed_genres OR ({each}))"
+            ));
+            args.add(json_element(genre))
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+        } else {
+            sql.push_str(&format!(" AND {each}"));
+        }
+        for part in &parts {
+            args.add(json_element(part))
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+        }
     }
 
     if let Some(keyword) = q
@@ -3044,6 +3115,103 @@ mod tests {
             .await,
             ["Gamma", "beta", "Alpha"]
         );
+    }
+
+    #[tokio::test]
+    async fn a_series_genre_and_the_film_genres_it_stands_for_are_one_list() {
+        let db = db().await;
+        stored(&db, |i| {
+            i.kind = MediaKind::Series;
+            i.title = "Series".into();
+            i.genres = vec!["Action & Adventure".into(), "Drama".into()];
+        })
+        .await;
+        stored(&db, |i| {
+            i.kind = MediaKind::Movie;
+            i.title = "Action film".into();
+            i.genres = vec!["Action".into()];
+        })
+        .await;
+        stored(&db, |i| {
+            i.kind = MediaKind::Movie;
+            i.title = "Adventure film".into();
+            i.genres = vec!["Action".into(), "Adventure".into()];
+        })
+        .await;
+
+        let by = |genres: &[&str]| Query {
+            genres: genres.iter().map(|g| g.to_string()).collect(),
+            sort: Sort::Title,
+            ..Default::default()
+        };
+        assert_eq!(
+            titles(&db, by(&["Action"])).await,
+            ["Action film", "Adventure film", "Series"]
+        );
+        // Asked for by its own name, from the series' page: works that are both.
+        assert_eq!(
+            titles(&db, by(&["Action & Adventure"])).await,
+            ["Adventure film", "Series"]
+        );
+
+        let facets = facets(&db, &Query::default()).await.expect("counted");
+        let named: Vec<&str> = facets.genres.iter().map(|f| f.value.as_str()).collect();
+        assert!(named.contains(&"Adventure") && !named.contains(&"Action & Adventure"));
+    }
+
+    #[tokio::test]
+    async fn a_combined_genre_is_found_on_a_work_not_yet_listed_again() {
+        let db = db().await;
+        let old = stored(&db, |i| {
+            i.kind = MediaKind::Series;
+            i.title = "Listed before the change".into();
+            i.genres = vec!["Action & Adventure".into()];
+        })
+        .await;
+        // As the previous version listed it: the combined name, whole.
+        sqlx::query(db.sql("UPDATE media_item SET listed_genres = ? WHERE id = ?"))
+            .bind(r#"["Action & Adventure"]"#)
+            .bind(&old.id)
+            .execute(db.pool())
+            .await
+            .unwrap();
+
+        let query = Query {
+            genres: vec!["Action & Adventure".into(), "Action".into()],
+            ..Default::default()
+        };
+        // Asked for by its own name — and for a part it names as well, which
+        // is one condition, not two.
+        assert_eq!(titles(&db, query).await, ["Listed before the change"]);
+    }
+
+    #[test]
+    fn genres_are_listed_each_once_whichever_way_they_came() {
+        let mut item = MediaItem::empty(MediaKind::Series);
+        item.genres = vec![
+            "Sci-Fi & Fantasy".into(),
+            "Fantasy".into(),
+            "Science Fiction".into(),
+            "Drama".into(),
+        ];
+        assert_eq!(
+            Listed::of(&item).genres,
+            ["Science Fiction", "Fantasy", "Drama"]
+        );
+    }
+
+    #[tokio::test]
+    async fn works_are_named_by_id_in_batches_and_the_gone_are_not() {
+        let db = db().await;
+        assert!(super::titles(&db, &[]).await.unwrap().is_empty());
+
+        let held = stored(&db, |i| i.title = "Held".into()).await;
+        let mut ids: Vec<String> = (0..450).map(|_| crate::db::new_id()).collect();
+        ids.push(held.id.clone());
+
+        let named = super::titles(&db, &ids).await.unwrap();
+        assert_eq!(named.len(), 1, "an id nothing holds is not named");
+        assert_eq!(named[&held.id].title, "Held");
     }
 
     #[tokio::test]

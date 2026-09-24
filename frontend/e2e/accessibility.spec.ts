@@ -19,6 +19,11 @@ const PASSWORD = process.env.AMS_E2E_PASSWORD
 const WCAG = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']
 
 async function scan(page: Page, label: string) {
+  // A scan is a second or two on its own and many times that beside the rest
+  // of the suite: the phone-sized browse page and the season charts ran out
+  // of the default thirty seconds inside axe, with nothing wrong on the page.
+  test.slow()
+
   // Mid-fade, text is measured at part of its opacity: a dialog scanned the
   // moment it opened failed on colours that pass once it has finished arriving.
   await page.waitForFunction(() => document.getAnimations().every((a) => a.playState !== 'running'))

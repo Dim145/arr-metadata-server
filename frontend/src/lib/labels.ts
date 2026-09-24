@@ -58,12 +58,84 @@ const GENRES_FR: Record<string, string> = {
   Travel: 'Voyage',
   'TV Movie': 'Téléfilm',
   War: 'Guerre',
+  Politics: 'Politique',
   'War & Politics': 'Guerre & politique',
   Western: 'Western',
 }
 
 export function genreLabel(name: string, lang: Lang): string {
   return lang === 'fr' ? (GENRES_FR[name] ?? name) : name
+}
+
+/**
+ * TMDB's three combined series genres, in the two languages this interface
+ * speaks, and the film genres each stands for. The server lists works the same
+ * way (`genre_parts`); a genre typed by hand stays whole.
+ */
+const COMBINED: Record<string, string[]> = {
+  'Action & Adventure': ['Action', 'Adventure'],
+  'Sci-Fi & Fantasy': ['Science Fiction', 'Fantasy'],
+  'War & Politics': ['War', 'Politics'],
+  'Action & Aventure': ['Action', 'Aventure'],
+  'Science-Fiction & Fantastique': ['Science-Fiction', 'Fantastique'],
+  'Guerre & Politique': ['Guerre', 'Politique'],
+}
+
+/**
+ * The genres one of a work's stands for, as the server lists them: a series'
+ * "Action & Adventure" is the "Action" and "Adventure" films are filed under,
+ * so that one filter finds both.
+ */
+export function genreParts(genre: string): string[] {
+  const name = genre.trim()
+  return name ? (COMBINED[name] ?? [name]) : []
+}
+
+/** A work's genres, each once, as a list files them. */
+export function listedGenres(genres: string[]): string[] {
+  return [...new Set(genres.flatMap(genreParts))]
+}
+
+/**
+ * The jobs TMDB credits most, in French: what a film's credits open with.
+ *
+ * TMDB names a job in English whatever language it is asked in, so a French
+ * page said "Director" above Coppola. Named as French credits name them — the
+ * work done, "Réalisation", rather than the person, "Réalisateur", which
+ * would need a gender TMDB does not give.
+ */
+const JOBS_FR: Record<string, string> = {
+  Director: 'Réalisation',
+  'Co-Director': 'Coréalisation',
+  Creator: 'Création',
+  Writer: 'Scénario',
+  Screenplay: 'Scénario',
+  Teleplay: 'Scénario',
+  Story: 'Histoire',
+  Novel: 'Roman',
+  Characters: 'Personnages',
+  Author: 'Œuvre originale',
+  Producer: 'Production',
+  'Executive Producer': 'Production exécutive',
+  'Co-Producer': 'Coproduction',
+  'Original Music Composer': 'Musique',
+  Music: 'Musique',
+  'Director of Photography': 'Photographie',
+  Editor: 'Montage',
+  Casting: 'Distribution des rôles',
+  'Production Design': 'Décors',
+  'Costume Design': 'Costumes',
+  'Art Direction': 'Direction artistique',
+  'Visual Effects Supervisor': 'Effets visuels',
+  Showrunner: 'Showrunner',
+  // The kind of credit, where a hand-added one has no job of its own.
+  director: 'Réalisation',
+  writer: 'Scénario',
+  producer: 'Production',
+}
+
+export function jobLabel(job: string, lang: Lang): string {
+  return lang === 'fr' ? (JOBS_FR[job] ?? job) : job
 }
 
 /**

@@ -189,6 +189,8 @@ export interface AuditEntry {
   target?: string
   detail?: string
   ip?: string
+  /** The work the target names, while it is held. */
+  work?: { id: string; title: string; kind: MediaKind }
 }
 
 export interface AuditResponse {
@@ -207,6 +209,8 @@ export interface Job {
   error?: string
   detail?: string
   createdAt: string
+  /** The work it acted on, while it is held. */
+  work?: { id: string; title: string; kind: MediaKind }
 }
 
 export interface JobsResponse {

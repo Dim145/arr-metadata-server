@@ -49,7 +49,9 @@ It replaces and merges two earlier projects: `the earlier TMDB relay` and
   The list is filtered by genre, years, score, status, language and network,
   and sorted by popularity, score, date, title or when a work arrived — all of
   it kept in the address, so a view can be sent as a link — by the values each
-  work's page shows, IMDb's latest score included when that list is on.
+  work's page shows, IMDb's latest score included when that list is on. A
+  series' combined genres count as the film genres they stand for: "Action &
+  Adventure" is found under Action and under Adventure, beside the films.
   Each identifier opens the work's page on the site it came from; the artwork
   opens in a viewer; a trailer plays from YouTube's no-cookie domain, and only
   once somebody presses play.

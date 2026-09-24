@@ -179,6 +179,15 @@ export function poster(item: Pick<MediaItem, 'images'>, season?: number) {
   return pick(item.images, COVER.poster, season)?.url
 }
 
+/**
+ * A season's own poster, where it has one: providers file it with the season
+ * rather than with the work, and the work's own stands in otherwise.
+ */
+export function seasonPoster(item: Pick<MediaItem, 'images' | 'seasons'>, season: number) {
+  const own = item.seasons?.find((s) => s.seasonNumber === season)?.images
+  return pick(own, COVER.poster, season)?.url ?? poster(item, season) ?? poster(item)
+}
+
 export function backdrop(item: Pick<MediaItem, 'images'>) {
   return pick(item.images, COVER.fanart)?.url ?? pick(item.images, COVER.landscape)?.url
 }

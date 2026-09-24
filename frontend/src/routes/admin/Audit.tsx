@@ -3,12 +3,14 @@
  *
  * Action names stay in the server's own spelling, set in mono: `override.set`
  * is an identifier a person will grep the logs for, and translating it would
- * break the one thing this table is for. Everything around it — the time, the
- * actor, the empty state — is in the reader's language.
+ * break the one thing this table is for. What it means is said beside it, in
+ * the reader's language, and a work is named by its title with its id kept —
+ * `01a0…#item/genres` was the whole of a lock's line.
  */
 
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
+import { Link } from 'react-router'
 
 import {
   Button,
@@ -84,7 +86,7 @@ export function Audit() {
             <option value="">{t.admin.trail.allActions}</option>
             {(log.data?.actions ?? []).map((name) => (
               <option key={name} value={name}>
-                {name}
+                {t.admin.trail.says[name] ? `${t.admin.trail.says[name]} · ${name}` : name}
               </option>
             ))}
           </Select>
@@ -199,16 +201,26 @@ function Row({ entry, locale }: { entry: AuditEntry; locale: string }) {
       </Td>
 
       <Td>
-        <Chip tone={tone(entry.action)}>{entry.action}</Chip>
-        <span className="mt-1 block truncate font-mono text-[0.6875rem] text-bone-faint sm:hidden">
-          {entry.target ?? entry.detail ?? ''}
-        </span>
+        <span className="block text-sm text-bone">{t.admin.trail.says[entry.action] ?? entry.action}</span>
+        <Chip tone={tone(entry.action)} className="mt-1">
+          {entry.action}
+        </Chip>
+        {/* The target column is not drawn on a phone: what it says, here. */}
+        {entry.target || entry.detail ? (
+          <span className="mt-1 block truncate text-xs text-bone-dim sm:hidden">
+            {entry.target ? <Target entry={entry} /> : (t.admin.runs.notes[entry.detail!] ?? entry.detail)}
+          </span>
+        ) : null}
       </Td>
 
       <Td className="hidden w-full max-w-0 sm:table-cell">
-        <span className="block truncate font-mono text-xs text-bone">{entry.target ?? '—'}</span>
+        <span className="block truncate text-sm text-bone">
+          <Target entry={entry} />
+        </span>
         {entry.detail ? (
-          <span className="block truncate text-xs text-bone-faint">{entry.detail}</span>
+          <span className="block truncate text-xs text-bone-faint">
+            {t.admin.runs.notes[entry.detail] ?? entry.detail}
+          </span>
         ) : null}
       </Td>
 
@@ -223,6 +235,47 @@ function Row({ entry, locale }: { entry: AuditEntry; locale: string }) {
         ) : null}
       </Td>
     </Tr>
+  )
+}
+
+/**
+ * What an entry acted on, as a reader names it: a work by its title and the
+ * field of it, a season or an episode by its number — and the raw target, in
+ * mono, where there is nothing better to say.
+ */
+function Target({ entry }: { entry: AuditEntry }) {
+  const { t } = useI18n()
+  if (!entry.target) return <>—</>
+  if (!entry.work) return <span className="font-mono text-xs">{entry.target}</span>
+
+  // `{id}#{scope}/{field}`: `item/genres`, `season:2/title`, `episode:5x25/airDate`.
+  const [, path = ''] = entry.target.split('#')
+  const [scope = '', field] = path.split('/')
+  const [, numbers = ''] = scope.split(':')
+  const [season, episode] = numbers.split('x').map(Number)
+  const where =
+    scope.startsWith('episode:') && season !== undefined && episode !== undefined
+      ? `S${String(season).padStart(2, '0')}E${String(episode).padStart(2, '0')}`
+      : scope.startsWith('season:') && season !== undefined
+        ? t.admin.trail.season(season)
+        : undefined
+  const named = field ? ((t.labels.fields as Record<string, string>)[field] ?? field) : undefined
+
+  return (
+    <>
+      <Link
+        to={`/admin/catalogue/${entry.work.id}`}
+        className="underline decoration-rule-bright underline-offset-2 transition-colors duration-150 hover:text-vermillion hover:decoration-vermillion"
+      >
+        {entry.work.title}
+      </Link>
+      {[where, named].filter(Boolean).map((part) => (
+        <span key={part} className="text-bone-dim">
+          {' · '}
+          {part}
+        </span>
+      ))}
+    </>
   )
 }
 

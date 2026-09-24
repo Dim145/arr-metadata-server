@@ -53,6 +53,9 @@ pub struct Job {
     pub error: Option<String>,
     pub detail: Option<String>,
     pub created_at: String,
+    /// The work it acted on, while it is held.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub work: Option<crate::db::repo::item::WorkRef>,
 }
 
 /// Open a job row and return its id. Mark it done with [`finish`].
@@ -108,13 +111,11 @@ pub struct Query {
     pub offset: i64,
 }
 
-pub async fn list(db: &Db, q: &Query) -> Result<Vec<Job>> {
+/// The conditions a query puts on the runs, and what they are bound to.
+fn filtered(q: &Query) -> Result<(String, sqlx::any::AnyArguments)> {
     use sqlx::{Arguments, any::AnyArguments};
 
-    let mut sql = String::from(
-        "SELECT id, kind, target, status, started_at, finished_at, error, detail, created_at
-         FROM job_run WHERE 1 = 1",
-    );
+    let mut sql = String::from(" WHERE 1 = 1");
     let mut args = AnyArguments::default();
 
     let bind = |args: &mut AnyArguments, value: String| -> Result<()> {
@@ -129,6 +130,18 @@ pub async fn list(db: &Db, q: &Query) -> Result<Vec<Job>> {
         sql.push_str(" AND status = ?");
         bind(&mut args, status.clone())?;
     }
+
+    Ok((sql, args))
+}
+
+pub async fn list(db: &Db, q: &Query) -> Result<Vec<Job>> {
+    use sqlx::Arguments;
+
+    let (conditions, mut args) = filtered(q)?;
+    let mut sql = format!(
+        "SELECT id, kind, target, status, started_at, finished_at, error, detail, created_at
+         FROM job_run{conditions}"
+    );
 
     // Ids are UUIDv7, so they break a timestamp tie in creation order.
     sql.push_str(" ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?");
@@ -153,9 +166,23 @@ pub async fn list(db: &Db, q: &Query) -> Result<Vec<Job>> {
                 error: row.opt_text("error")?,
                 detail: row.opt_text("detail")?,
                 created_at: row.text("created_at")?,
+                work: None,
             })
         })
         .collect()
+}
+
+/// How many runs a query's conditions match, however many pages of them.
+pub async fn count_matching(db: &Db, q: &Query) -> Result<i64> {
+    let (conditions, args) = filtered(q)?;
+    let row = sqlx::query_with(
+        db.sql(&format!("SELECT COUNT(*) AS n FROM job_run{conditions}")),
+        args,
+    )
+    .fetch_one(db.pool())
+    .await?;
+
+    Ok(row.big("n")?)
 }
 
 pub async fn count(db: &Db) -> Result<i64> {

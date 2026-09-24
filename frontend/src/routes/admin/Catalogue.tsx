@@ -413,8 +413,10 @@ function Row({
           {/* The ordinary case, said quietly. Showing only the exceptions left
               most rows of this column blank, which reads as broken rather than
               as "nothing unusual here". */}
+          {/* On one line: wrapped in a narrow column, it made every row of
+              the catalogue three lines tall. */}
           {item.isEnabled && !item.isManual && locks === 0 ? (
-            <span className="text-xs text-bone-faint">{t.admin.works.served}</span>
+            <span className="text-xs whitespace-nowrap text-bone-faint">{t.admin.works.served}</span>
           ) : null}
         </span>
       </Td>

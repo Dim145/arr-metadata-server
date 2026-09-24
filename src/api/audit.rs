@@ -130,45 +130,67 @@ async fn list(
         return Err(AppError::Forbidden);
     }
 
-    let entries = repo::audit::list(
-        &state.db,
-        &repo::audit::Query {
-            action: query.action,
-            actor: query.actor,
-            target: query.target,
-            since: query.since,
-            limit: query.limit.unwrap_or(100),
-            offset: query.offset.unwrap_or(0),
-        },
-    )
-    .await?;
+    let filter = repo::audit::Query {
+        action: query.action,
+        actor: query.actor,
+        target: query.target,
+        since: query.since,
+        limit: query.limit.unwrap_or(100),
+        offset: query.offset.unwrap_or(0),
+    };
+    let mut entries = repo::audit::list(&state.db, &filter).await?;
+
+    // A work is named by its id, and read by its title.
+    let ids: Vec<String> = entries
+        .iter()
+        .filter_map(named_work)
+        .map(str::to_string)
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+    let works = repo::item::titles(&state.db, &ids).await?;
+    for entry in &mut entries {
+        entry.work = named_work(entry).and_then(|id| works.get(id)).cloned();
+    }
 
     Ok(Json(ListResponse {
         entries,
-        total: repo::audit::count(&state.db).await?,
-        actions: ACTIONS.iter().map(|a| a.as_str()).collect(),
+        // As many as the filters match, so the pages end where the entries do.
+        total: repo::audit::count_matching(&state.db, &filter).await?,
+        actions: Action::ALL.iter().map(|a| a.as_str()).collect(),
     }))
 }
 
-const ACTIONS: &[Action] = &[
-    Action::ItemCreated,
-    Action::ItemUpdated,
-    Action::ItemDeleted,
-    Action::ItemRefreshed,
-    Action::OverrideSet,
-    Action::OverrideRemoved,
-    Action::OverridesCleared,
-    Action::ClientCreated,
-    Action::ClientUpdated,
-    Action::ClientRevoked,
-    Action::SignedIn,
-    Action::SignInFailed,
-    Action::SignedOut,
-    Action::PasswordChanged,
-    Action::CacheCleared,
-    Action::NfoExported,
-    Action::DatasetImported,
-];
+/// The work an entry acted on, where its action acts on one: a work's own
+/// actions and its locks name it by the id their target opens with — `{id}`,
+/// or `{id}#{scope}/{field}` — and an import by the id its note ends with. A
+/// refused sign-in's target is whatever name was typed, and names no work
+/// however it is shaped.
+fn named_work(entry: &Entry) -> Option<&str> {
+    let action = entry.action.as_str();
+    if action == Action::ItemImported.as_str() {
+        return entry
+            .detail
+            .as_deref()
+            .and_then(|d| d.rsplit(' ').next())
+            .and_then(work_id);
+    }
+    if action.starts_with("item.") || action.starts_with("override.") {
+        return entry.target.as_deref().and_then(work_id);
+    }
+    None
+}
+
+/// The work id a target opens with, if it opens with one.
+fn work_id(target: &str) -> Option<&str> {
+    let id = target.get(..36)?;
+    let shaped = id.bytes().enumerate().all(|(i, b)| match i {
+        8 | 13 | 18 | 23 => b == b'-',
+        _ => b.is_ascii_hexdigit(),
+    });
+    let whole = matches!(target.as_bytes().get(36), None | Some(b'#'));
+    (shaped && whole).then_some(id)
+}
 
 #[cfg(test)]
 mod tests {
@@ -176,7 +198,7 @@ mod tests {
 
     #[test]
     fn every_action_has_a_distinct_name() {
-        let mut names: Vec<&str> = ACTIONS.iter().map(|a| a.as_str()).collect();
+        let mut names: Vec<&str> = Action::ALL.iter().map(|a| a.as_str()).collect();
         let count = names.len();
         names.sort_unstable();
         names.dedup();
@@ -185,9 +207,60 @@ mod tests {
     }
 
     #[test]
+    fn a_target_names_a_work_by_the_id_it_opens_with() {
+        let id = "01a0cff7-d8dc-70bc-a6b1-38379ee39bd0";
+        assert_eq!(work_id(id), Some(id));
+        assert_eq!(work_id(&format!("{id}#item/genres")), Some(id));
+        assert_eq!(work_id(&format!("{id}#episode:5x25/title")), Some(id));
+        for other in [
+            "203.0.113.31",
+            "peer:tmdb.language",
+            "admin",
+            &format!("{id}x"),
+        ] {
+            assert_eq!(work_id(other), None, "{other}");
+        }
+    }
+
+    #[test]
+    fn only_an_action_on_a_work_names_one() {
+        let id = "01a0cff7-d8dc-70bc-a6b1-38379ee39bd0";
+        let entry = |action: Action, target: &str, detail: Option<&str>| Entry {
+            id: String::new(),
+            at: String::new(),
+            actor: None,
+            action: action.as_str().into(),
+            target: Some(target.into()),
+            detail: detail.map(String::from),
+            ip: None,
+            work: None,
+        };
+
+        assert_eq!(
+            named_work(&entry(
+                Action::OverrideSet,
+                &format!("{id}#item/genres"),
+                None
+            )),
+            Some(id)
+        );
+        assert_eq!(named_work(&entry(Action::ItemDeleted, id, None)), Some(id));
+        assert_eq!(
+            named_work(&entry(
+                Action::ItemImported,
+                "Blade Runner 2099",
+                Some(&format!("series {id}"))
+            )),
+            Some(id)
+        );
+        // Typed into the sign-in form, shaped like an id or not.
+        assert_eq!(named_work(&entry(Action::SignInFailed, id, None)), None);
+    }
+
+    #[test]
     fn action_names_are_namespaced() {
         // A log shipper filters on the prefix, so every name must carry one.
-        for action in ACTIONS {
+        for action in Action::ALL {
             assert!(
                 action.as_str().contains('.'),
                 "{} is not namespaced",

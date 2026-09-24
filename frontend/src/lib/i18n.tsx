@@ -150,10 +150,13 @@ const en = {
     editedHint: 'A person set this value. No refresh will overwrite it.',
     fromProvider: 'From a provider',
     manualEntry: 'Entered by hand',
-    absoluteNumber: 'Abs.',
     sameYear: (year: number) => `Everything from ${year}`,
     edit: 'Edit',
     allEpisodes: 'All episodes',
+    wholeCast: (n: number) => `The whole cast · ${n}`,
+    seasonAiring: 'Airing',
+    seasonComing: 'Upcoming',
+    airedOf: (aired: number, of: number) => `${aired} of ${of} aired`,
     onAir: 'On the air',
     latestEpisode: 'Latest episode',
     nextEpisode: 'Next episode',
@@ -643,6 +646,12 @@ const en = {
       emptyHint:
         'A sweep is recorded each time the scheduler wakes, and a refresh you trigger gets its own row.',
       loadFailed: 'The job history could not be loaded.',
+      /** The fixed notes the server leaves on a run or an entry, in words. */
+      notes: {
+        'refreshed from a provider': 'Refreshed from a provider',
+        'no provider could resolve it': 'No provider could find it',
+        'no provider could resolve this entry': 'No provider could find it',
+      } as Record<string, string>,
     },
 
     trail: {
@@ -663,6 +672,31 @@ const en = {
       emptyHint: 'Entries appear as soon as anything is created, edited or revoked.',
       emptyFilteredHint: 'No entry matches that filter.',
       loadFailed: 'The audit trail could not be loaded.',
+      /** What each action is, in words, beside the name the logs keep. */
+      says: {
+        'item.created': 'Work added by hand',
+        'item.imported': 'Work imported',
+        'item.updated': 'Work edited',
+        'item.refreshed': 'Refreshed from its sources',
+        'item.deleted': 'Work deleted',
+        'override.set': 'Field locked',
+        'override.removed': 'Field unlocked',
+        'override.cleared': 'Every lock removed',
+        'client.created': 'Key issued',
+        'client.updated': 'Key changed',
+        'client.revoked': 'Key revoked',
+        'network.rule_added': 'Address allowed',
+        'network.rule_removed': 'Address no longer allowed',
+        'setting.changed': 'Setting changed',
+        'auth.signed_in': 'Signed in',
+        'auth.sign_in_failed': 'Sign-in refused',
+        'auth.signed_out': 'Signed out',
+        'auth.password_changed': 'Password changed',
+        'cache.cleared': 'Cache cleared',
+        'export.nfo': '.nfo files written',
+        'dataset.imported': 'Dataset downloaded',
+      } as Record<string, string>,
+      season: (n: number) => (n === 0 ? 'Specials' : `Season ${n}`),
     },
 
     config: {
@@ -1059,10 +1093,13 @@ const fr: Dict = {
     editedHint: 'Une personne a fixé cette valeur. Aucun rafraîchissement ne l’écrasera.',
     fromProvider: 'Depuis une source',
     manualEntry: 'Saisi à la main',
-    absoluteNumber: 'Abs.',
     sameYear: (year: number) => `Tout ce qui date de ${year}`,
     edit: 'Modifier',
     allEpisodes: 'Tous les épisodes',
+    wholeCast: (n: number) => `Toute la distribution · ${n}`,
+    seasonAiring: 'En cours',
+    seasonComing: 'À venir',
+    airedOf: (aired: number, of: number) => `${aired} sur ${of} ${aired <= 1 ? 'diffusé' : 'diffusés'}`,
     onAir: 'À l’antenne',
     latestEpisode: 'Dernier épisode',
     nextEpisode: 'Prochain épisode',
@@ -1557,6 +1594,12 @@ const fr: Dict = {
       emptyHint:
         'Un balayage est enregistré à chaque réveil de l’ordonnanceur, et un rafraîchissement que vous déclenchez a sa propre ligne.',
       loadFailed: 'L’historique des tâches n’a pas pu être chargé.',
+      /** The fixed notes the server leaves on a run or an entry, in words. */
+      notes: {
+        'refreshed from a provider': 'Rafraîchie depuis une source',
+        'no provider could resolve it': 'Aucune source ne l’a trouvée',
+        'no provider could resolve this entry': 'Aucune source ne l’a trouvée',
+      } as Record<string, string>,
     },
 
     trail: {
@@ -1577,6 +1620,31 @@ const fr: Dict = {
       emptyHint: 'Les entrées apparaissent dès que quelque chose est créé, modifié ou révoqué.',
       emptyFilteredHint: 'Aucune entrée ne correspond à ce filtre.',
       loadFailed: 'Le journal n’a pas pu être chargé.',
+      /** What each action is, in words, beside the name the logs keep. */
+      says: {
+        'item.created': 'Œuvre ajoutée à la main',
+        'item.imported': 'Œuvre importée',
+        'item.updated': 'Œuvre modifiée',
+        'item.refreshed': 'Rafraîchie depuis ses sources',
+        'item.deleted': 'Œuvre supprimée',
+        'override.set': 'Champ verrouillé',
+        'override.removed': 'Champ déverrouillé',
+        'override.cleared': 'Tous les verrous retirés',
+        'client.created': 'Clé émise',
+        'client.updated': 'Clé modifiée',
+        'client.revoked': 'Clé révoquée',
+        'network.rule_added': 'Adresse autorisée',
+        'network.rule_removed': 'Adresse retirée de la liste',
+        'setting.changed': 'Réglage modifié',
+        'auth.signed_in': 'Connexion',
+        'auth.sign_in_failed': 'Connexion refusée',
+        'auth.signed_out': 'Déconnexion',
+        'auth.password_changed': 'Mot de passe changé',
+        'cache.cleared': 'Cache vidé',
+        'export.nfo': 'Fichiers .nfo écrits',
+        'dataset.imported': 'Jeu de données téléchargé',
+      } as Record<string, string>,
+      season: (n: number) => (n === 0 ? 'Hors-série' : `Saison ${n}`),
     },
 
     config: {

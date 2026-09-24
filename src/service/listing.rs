@@ -22,7 +22,9 @@ use crate::{
 
 /// The way works are listed. Raise it when [`repo::item::Listed::of`] changes
 /// what it derives, and every work is listed again.
-pub const VERSION: i64 = 1;
+///
+/// 2: a series' combined genres are listed as the film genres they stand for.
+pub const VERSION: i64 = 2;
 
 /// How many works are read and written at a time.
 const BATCH: usize = 200;

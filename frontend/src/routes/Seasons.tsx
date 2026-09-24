@@ -25,7 +25,7 @@ import { ApiError, api, query } from '../lib/api'
 import { cn } from '../lib/cn'
 import * as fmt from '../lib/format'
 import { useMe, useTitle } from '../lib/hooks'
-import { genreLabel, languageName } from '../lib/labels'
+import { genreLabel, languageName, listedGenres } from '../lib/labels'
 import { useI18n } from '../lib/i18n'
 import { identifierLink } from '../lib/links'
 import { headlineRating, poster } from '../lib/media'
@@ -78,10 +78,14 @@ function read(params: URLSearchParams) {
     type: (KINDS as string[]).includes(type ?? '') ? (type as SeasonEntryKind) : undefined,
     trailer: (TRAILERS as readonly string[]).includes(trailer ?? '') ? (trailer as (typeof TRAILERS)[number]) : 'all',
     language: params.get('language') ?? '',
-    genres: (params.get('genre') ?? '')
-      .split(',')
-      .map((g) => g.trim())
-      .filter(Boolean),
+    // As the catalogue lists them: an older address asking for a series'
+    // "Action & Adventure" asks for its "Action" and "Adventure".
+    genres: listedGenres(
+      (params.get('genre') ?? '')
+        .split(',')
+        .map((g) => g.trim())
+        .filter(Boolean),
+    ),
     sort: (SORTS as readonly string[]).includes(sort ?? '') ? (sort as Sort) : 'popularity',
   }
 }
@@ -132,6 +136,10 @@ function Programme({ at }: { at: SeasonRef }) {
   const derived = useMemo(() => {
     const works = new Map((chart.data?.works ?? []).map((w) => [w.id, w]))
     const all = (chart.data?.entries ?? []).filter((e) => works.has(e.workId))
+    // Genres as the catalogue lists them: a series' "Action & Adventure" is
+    // the "Action" and "Adventure" of the films beside it.
+    const genresOf = new Map([...works.values()].map((w) => [w.id, listedGenres(w.genres)]))
+    const wanted = f.genres
 
     // Each filter's own values are counted under the others, so a count is
     // what choosing it would leave.
@@ -143,7 +151,7 @@ function Programme({ at }: { at: SeasonRef }) {
         (except === 'trailer' ||
           f.trailer === 'all' ||
           (f.trailer === 'with') === Boolean(work.trailerYoutubeId)) &&
-        f.genres.every((g) => work.genres.includes(g))
+        wanted.every((g) => genresOf.get(work.id)!.includes(g))
       )
     }
 
@@ -158,10 +166,10 @@ function Programme({ at }: { at: SeasonRef }) {
       byLanguage: count(
         all.filter((e) => passes(e, 'language')).flatMap((e) => works.get(e.workId)?.originalLanguage ?? []),
       ),
-      byGenre: count(visible.flatMap((e) => works.get(e.workId)?.genres ?? [])),
+      byGenre: count(visible.flatMap((e) => genresOf.get(e.workId) ?? [])),
       // The order genres are offered in is the season's, not the filtered
       // list's: a chip that moved when it was pressed took the focus with it.
-      genreOrder: [...count(all.flatMap((e) => works.get(e.workId)?.genres ?? []))]
+      genreOrder: [...count(all.flatMap((e) => genresOf.get(e.workId) ?? []))]
         .sort(([a, x], [b, y]) => y - x || a.localeCompare(b))
         .map(([genre]) => genre),
     }
@@ -439,7 +447,9 @@ function Strip({
     const strip = reel.current
     const now = strip?.querySelector<HTMLElement>('[data-today]')
     if (!strip || !now || strip.scrollWidth <= strip.clientWidth) return
-    strip.scrollLeft = now.offsetLeft - (strip.clientWidth - now.offsetWidth) / 2
+    // Where the frame sits along the strip, whatever it is measured from.
+    const left = now.getBoundingClientRect().left - strip.getBoundingClientRect().left + strip.scrollLeft
+    strip.scrollLeft = left - (strip.clientWidth - now.offsetWidth) / 2
   }, [shown])
 
   const day = (value: string, options: Intl.DateTimeFormatOptions) => formatDay(value, locale, options)
@@ -890,7 +900,8 @@ function ProgrammeCard({
         {/* The trailer keeps its corner however many rows the genres take. */}
         <div className="mt-auto flex items-end gap-3 pt-3">
           <div className="flex min-w-0 flex-1 flex-wrap gap-1.5">
-            {work.genres.slice(0, 3).map((genre) => (
+            {/* Named as the filters above name them. */}
+            {listedGenres(work.genres).slice(0, 3).map((genre) => (
               <Genre key={genre} name={genre} to={`/browse?genre=${encodeURIComponent(genre)}`} className="relative z-10" />
             ))}
           </div>

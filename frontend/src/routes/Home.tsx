@@ -10,7 +10,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router'
 
-import { Artwork, PosterCard, PosterGrid, Score } from '../components/media'
+import { Artwork, PosterCard, PosterShelf, Score } from '../components/media'
 import { EmptyState, Genre, Glyph, Label, SectionTitle, Skeleton } from '../components/ui'
 import { api, query } from '../lib/api'
 import * as fmt from '../lib/format'
@@ -217,11 +217,11 @@ function Row({
         {title}
       </SectionTitle>
 
-      <PosterGrid>
+      <PosterShelf label={title}>
         {items.map((item) => (
           <PosterCard key={item.id} item={item} to={`/work/${item.id}`} />
         ))}
-      </PosterGrid>
+      </PosterShelf>
     </section>
   )
 }
@@ -280,7 +280,7 @@ function ThisWeek() {
       <div
         role="region"
         aria-label={t.home.thisWeek}
-        className="-mr-4 flex snap-x snap-mandatory gap-3 overflow-x-auto pr-4 pb-2 sm:-mr-6 sm:pr-6"
+        className="-mt-2 -mr-4 -ml-2 flex snap-x snap-mandatory scroll-pl-2 gap-3 overflow-x-auto pt-2 pr-4 pb-2 pl-2 sm:-mr-6 sm:pr-6"
       >
         {episodes.map((airing) => (
           <Upcoming key={`${airing.workId}-${airing.episode.id}`} airing={airing} work={works.get(airing.workId)} locale={locale} />
@@ -332,7 +332,7 @@ function ThisSeason() {
         {t.home.thisSeason(at.season, at.year)}
       </SectionTitle>
 
-      <PosterGrid>
+      <PosterShelf label={t.home.thisSeason(at.season, at.year)}>
         {fresh.slice(0, 12).map((entry) => {
           const work = works.get(entry.workId)!
           const kind =
@@ -354,7 +354,7 @@ function ThisSeason() {
             />
           )
         })}
-      </PosterGrid>
+      </PosterShelf>
     </section>
   )
 }
@@ -411,14 +411,14 @@ function HomeSkeleton() {
       </div>
       <div className="mt-16 space-y-4">
         <Skeleton className="h-7 w-40" />
-        <PosterGrid>
+        <PosterShelf>
           {Array.from({ length: 6 }, (_, index) => (
-            <div key={index} className="space-y-2.5">
+            <div key={index} aria-hidden className="space-y-2.5">
               <Skeleton className="aspect-2/3 w-full" />
               <Skeleton className="h-4 w-3/4" />
             </div>
           ))}
-        </PosterGrid>
+        </PosterShelf>
       </div>
     </div>
   )

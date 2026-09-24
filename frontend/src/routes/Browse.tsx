@@ -24,7 +24,7 @@ import { cn } from '../lib/cn'
 import * as fmt from '../lib/format'
 import { useTitle } from '../lib/hooks'
 import { useI18n } from '../lib/i18n'
-import { genreLabel, languageName, statusLabel } from '../lib/labels'
+import { genreLabel, languageName, listedGenres, statusLabel } from '../lib/labels'
 import type { Facet, Facets, ItemPage } from '../lib/types'
 
 const PAGE = 36
@@ -72,7 +72,9 @@ function read(params: URLSearchParams) {
   return {
     kind: params.get('kind') ?? '',
     term: params.get('q') ?? '',
-    genres: list('genre'),
+    // As the catalogue lists them: a series' page links "Action & Adventure",
+    // which is its "Action" and "Adventure", the chips on offer.
+    genres: listedGenres(list('genre')),
     keyword: params.get('keyword') ?? '',
     yearFrom: params.get('yearFrom') ?? year,
     yearTo: params.get('yearTo') ?? year,
@@ -238,7 +240,7 @@ export function Browse() {
                   type="button"
                   onClick={() => change(filter.clear)}
                   className={cn(
-                    'inline-flex min-h-9 cursor-pointer items-center gap-1.5 rounded-full border border-rule-bright px-3',
+                    'hit inline-flex min-h-9 cursor-pointer items-center gap-1.5 rounded-full border border-rule-bright px-3',
                     'text-[0.8125rem] text-bone transition-colors duration-150 hover:border-vermillion-deep hover:text-vermillion',
                   )}
                   aria-label={t.browse.remove(filter.label)}
@@ -452,7 +454,7 @@ function FilterPanel({
             <label
               key={value || 'all'}
               className={cn(
-                'relative grid min-h-9 cursor-pointer place-items-center rounded-full px-2 text-[0.8125rem]',
+                'hit relative grid min-h-9 cursor-pointer place-items-center rounded-full px-2 text-[0.8125rem]',
                 'transition-colors duration-150 has-focus-visible:outline-2 has-focus-visible:outline-vermillion',
                 f.kind === value ? 'bg-ink-top text-bone' : 'text-bone-dim hover:text-bone',
               )}
@@ -477,7 +479,7 @@ function FilterPanel({
       {facets?.genres.length ? (
         <fieldset>
           <legend className="label mb-2">{t.work.genres}</legend>
-          <div className="flex flex-wrap gap-1.5">
+          <div className="flex flex-wrap gap-x-1.5 gap-y-3">
             {facets.genres.map((genre) => {
               const on = f.genres.includes(genre.value)
               return (
@@ -487,7 +489,7 @@ function FilterPanel({
                   aria-pressed={on}
                   onClick={() => toggleGenre(genre.value)}
                   className={cn(
-                    'inline-flex min-h-8 cursor-pointer items-center gap-1.5 rounded-full border px-2.5 text-xs',
+                    'hit inline-flex min-h-8 cursor-pointer items-center gap-1.5 rounded-full border px-2.5 text-xs',
                     'transition-colors duration-150',
                     on
                       ? 'border-vermillion bg-vermillion/15 text-bone'

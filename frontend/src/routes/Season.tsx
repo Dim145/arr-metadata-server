@@ -31,7 +31,7 @@ import {
   episodeCode,
   episodesOf,
   hasAired,
-  poster,
+  seasonPoster,
   seasonName,
   seasonNumbers,
 } from '../lib/media'
@@ -67,7 +67,7 @@ function SeasonSheet({ item, number }: { item: MediaItem; number: number }) {
   const meta = item.seasons?.find((s) => s.seasonNumber === number)
   const episodes = episodesOf(item, number)
   const name = seasonName(meta?.title, number, t.work.season)
-  const sheet = poster(item, number) ?? poster(item)
+  const sheet = seasonPoster(item, number)
   const { before, after } = adjacentSeasons(item, number)
   const numbers = seasonNumbers(item)
   useTitle(name, item.title)
@@ -285,13 +285,6 @@ function EpisodeEntry({ item, episode }: { item: MediaItem; episode: Episode }) 
 
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            {/* Only where it says something the code does not: in a first
-                season the two are the same number. */}
-            {episode.absoluteEpisodeNumber && episode.absoluteEpisodeNumber !== episode.episodeNumber ? (
-              <span className="font-mono text-[0.6875rem] text-bone-faint tabular-nums">
-                {t.work.absoluteNumber} {episode.absoluteEpisodeNumber}
-              </span>
-            ) : null}
             {episode.finaleType ? <Chip tone="accent">{finaleLabel(episode.finaleType, t)}</Chip> : null}
             {upcoming && when ? (
               <Chip tone="provider">
@@ -317,6 +310,12 @@ function EpisodeEntry({ item, episode }: { item: MediaItem; episode: Episode }) 
               time,
               fmt.runtime(episode.runtime, locale),
               episode.rating?.value ? `★ ${fmt.score(episode.rating.value, locale)}` : undefined,
+              // Last, and only where it says something the code does not: in
+              // a first season the two are the same number. Above the title,
+              // on every episode after the first season, it read as a heading.
+              episode.absoluteEpisodeNumber && episode.absoluteEpisodeNumber !== episode.episodeNumber
+                ? t.episode.absolute(episode.absoluteEpisodeNumber)
+                : undefined,
             ]
               .filter(Boolean)
               .join(' · ') || t.episode.noDate}

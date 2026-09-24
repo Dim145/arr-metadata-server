@@ -6,6 +6,7 @@
  */
 
 import { useQuery } from '@tanstack/react-query'
+import { Link } from 'react-router'
 
 import {
   Chip,
@@ -111,8 +112,18 @@ export function JobTable({ jobs }: { jobs: Job[] }) {
                 <span className="font-mono text-xs whitespace-nowrap text-slate">{job.kind}</span>
               </Td>
               <Td className="w-full max-w-0">
-                <span className={job.error ? 'block truncate text-vermillion' : 'block truncate'}>
-                  {job.error ?? job.detail ?? '—'}
+                {/* Which work, for a run that had one: "refreshed from a
+                    provider" three times over said nothing of what. */}
+                {job.work ? (
+                  <Link
+                    to={`/admin/catalogue/${job.work.id}`}
+                    className="block truncate text-sm text-bone underline decoration-rule-bright underline-offset-2 transition-colors duration-150 hover:text-vermillion hover:decoration-vermillion"
+                  >
+                    {job.work.title}
+                  </Link>
+                ) : null}
+                <span className={job.error ? 'block truncate text-vermillion' : 'block truncate text-bone-dim'}>
+                  {job.error ?? (job.detail ? (t.admin.runs.notes[job.detail] ?? job.detail) : job.work ? '' : '—')}
                 </span>
               </Td>
             </Tr>

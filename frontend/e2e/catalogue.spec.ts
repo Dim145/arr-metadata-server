@@ -192,24 +192,54 @@ test.describe('a work', () => {
     expect(await scrollsSideways(page)).toBe(false)
   })
 
-  test('scrolls a season inside its own strip, not the page', async ({ page }) => {
-    await page.goto('/browse?kind=series')
-    await catalogueLoaded(page)
-    await page.locator('a[href^="/work/"]').first().click()
+  test('scrolls its seasons inside their own shelf, not the page', async ({ page, request }) => {
+    // The series with the most seasons, the one whose shelf is likeliest to
+    // be wider than the screen.
+    const { items } = await (await request.get('/api/v1/items?kind=series&limit=20')).json()
+    let most: { id: string; seasons: number } | undefined
+    for (const { id } of items as { id: string }[]) {
+      const work = await (await request.get(`/api/v1/items/${id}`)).json()
+      const seasons = new Set((work.episodes ?? []).map((e: { seasonNumber: number }) => e.seasonNumber)).size
+      if (seasons > (most?.seasons ?? 0)) most = { id, seasons }
+    }
+    test.skip(!most, 'the catalogue holds no series with episodes')
+
+    await page.goto(`/work/${most!.id}`)
     await expect(page.getByRole('heading', { name: /^(Seasons|Saisons)$/ })).toBeVisible()
 
-    const moved = await page.evaluate(async () => {
-      const strip = document.querySelector<HTMLElement>('.snap-x')
-      if (!strip || strip.scrollWidth <= strip.clientWidth) return null
+    const shelf = page.getByRole('list', { name: /^(Seasons|Saisons)$/ })
+    const fits = await shelf.evaluate((list) => list.scrollWidth <= list.clientWidth)
+    test.skip(fits, 'every season fits on the screen')
 
-      strip.scrollTo(400, 0)
+    const moved = await shelf.evaluate(async (list) => {
+      const before = list.scrollLeft
+      list.scrollBy(list.scrollLeft > 0 ? -400 : 400, 0)
       await new Promise((r) => setTimeout(r, 150))
-      return { inside: strip.scrollLeft > 0, page: window.scrollX > 0 }
+      return list.scrollLeft !== before
     })
+    expect(moved).toBe(true)
+    expect(await scrollsSideways(page)).toBe(false)
+  })
 
-    expect(moved, 'no season strip had anything to scroll').not.toBeNull()
-    expect(moved!.inside).toBe(true)
-    expect(moved!.page).toBe(false)
+  test('leads to each season, and leaves its episodes to the season', async ({ page, request }) => {
+    // The longest series held: a page listing its every episode was the one
+    // that grew to ten thousand nodes.
+    const { items } = await (await request.get('/api/v1/items?kind=series&limit=20')).json()
+    let longest: { id: string; episodes: { seasonNumber: number }[] } | undefined
+    for (const { id } of items as { id: string }[]) {
+      const work = await (await request.get(`/api/v1/items/${id}`)).json()
+      if ((work.episodes?.length ?? 0) > (longest?.episodes.length ?? 0)) longest = work
+    }
+    test.skip(!longest?.episodes.length, 'the catalogue holds no series with episodes')
+    const seasons = new Set(longest!.episodes.map((e) => e.seasonNumber))
+
+    await page.goto(`/work/${longest!.id}`)
+    await expect(page.getByRole('heading', { name: /^(Seasons|Saisons)$/ })).toBeVisible()
+    await expect(page.locator(`main a[href^="/work/${longest!.id}/season/"]:not([href*="/episode/"])`)).toHaveCount(
+      seasons.size,
+    )
+    // The episode that aired last and the one airing next, and no more.
+    expect(await page.locator(`main a[href*="/episode/"]`).count()).toBeLessThanOrEqual(2)
   })
 })
 

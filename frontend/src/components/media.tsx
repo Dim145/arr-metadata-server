@@ -2,7 +2,7 @@
  * The two things a catalogue is made of: a poster you can click, and a score.
  */
 
-import type { ImgHTMLAttributes } from 'react'
+import { Children, type ImgHTMLAttributes } from 'react'
 import { Link } from 'react-router'
 
 import { cn } from '../lib/cn'
@@ -210,6 +210,31 @@ export function PosterCard({
         </p>
       </div>
     </Link>
+  )
+}
+
+/**
+ * A row of posters: a shelf that scrolls sideways on a phone, the grid
+ * anywhere wider. On the front page two columns of twelve were six screens of
+ * one row's worth, three rows deep; a shelf is a row, and the card clipped at
+ * the edge says there is more.
+ */
+export function PosterShelf({ children, label }: { children: React.ReactNode; label?: string }) {
+  return (
+    <ul
+      aria-label={label || undefined}
+      className={cn(
+        // Room above and to the left for a card's focus ring, which the
+        // scroller would otherwise cut off.
+        'stagger -mt-2 -mr-4 -ml-2 flex snap-x snap-mandatory scroll-pl-2 gap-4 overflow-x-auto pt-2 pr-4 pb-2 pl-2',
+        'sm:m-0 sm:grid sm:grid-cols-3 sm:gap-x-4 sm:gap-y-7 sm:overflow-visible sm:p-0',
+        'md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6',
+      )}
+    >
+      {Children.map(children, (child) => (
+        <li className="w-[42%] shrink-0 snap-start sm:w-auto">{child}</li>
+      ))}
+    </ul>
   )
 }
 
