@@ -68,6 +68,24 @@ export interface Relation {
   sortOrder: number
 }
 
+/** Where one episode stands in one of the other orders TheTVDB keeps. */
+export interface PlacedEpisode {
+  tvdbId: number
+  seasonNumber: number
+  episodeNumber: number
+  absoluteNumber?: number
+}
+
+/** One of the other orders a series' episodes come in: dvd, absolute, alternate, regional, altdvd. */
+export interface EpisodeOrder {
+  kind: string
+  episodes: PlacedEpisode[]
+}
+
+export interface Orders {
+  orders: EpisodeOrder[]
+}
+
 export interface AlternativeTitle {
   id: string
   title: string

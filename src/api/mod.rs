@@ -234,6 +234,7 @@ mod tests {
             "/api/v1/lists",
             "/api/v1/items/{id}/watch",
             "/api/v1/items/{id}/similar",
+            "/api/v1/items/{id}/orders",
             "/api/v1/collections/{tmdbId}",
             "/api/v1/figures",
             "/api/v1/admin/health",

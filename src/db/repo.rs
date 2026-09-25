@@ -11,6 +11,7 @@ pub mod item;
 pub mod job;
 pub mod list;
 pub mod network;
+pub mod order;
 pub mod override_field;
 pub mod season;
 pub mod snapshot;

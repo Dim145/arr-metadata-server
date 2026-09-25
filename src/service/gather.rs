@@ -83,7 +83,12 @@ pub async fn series(
         answers.extend(from_anime_sites(state, chosen, MediaKind::Series).await);
     }
 
-    store(state, answers).await
+    let stored = store(state, answers).await?;
+    // The other orders TheTVDB numbers it in, kept beside the aired one.
+    if let Some(item) = &stored {
+        super::orders::gather(state, item).await;
+    }
+    Ok(stored)
 }
 
 /// Fetch a movie from everything that can address it, and store the result.

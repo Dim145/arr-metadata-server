@@ -103,10 +103,59 @@
   --color-stock-8: #c46a9a; /* plum       */
 }
 
+/* ── The light theme ────────────────────────────────────────────────────────
+   The same tokens, redefined for daylight: paper for ink, ink for bone, the
+   accent a shade deeper so it still reads as text on white, the deep variants
+   turned into pale tints, the film-stock casts darkened to the same end. Worn
+   when the reader asks for it, or the system does and the reader has not said
+   — `public/theme.js` settles which before the first paint. Every pair here
+   was measured to WCAG AA, as the dark set was. */
+:root[data-theme="light"] {
+  --color-ink: #f6f3ee;
+  --color-ink-raised: #fdfcfa;
+  --color-ink-high: #efece6;
+  --color-ink-top: #e6e2da;
+  --color-rule: #dcd7ce;
+  --color-rule-bright: #c9c3b8;
+
+  --color-bone: #1c1b19;
+  --color-bone-dim: #4f4b45;
+  --color-bone-faint: #625e57;
+
+  --color-vermillion: #b8392a;
+  --color-vermillion-bright: #d94a38;
+  --color-vermillion-deep: #f0c9c3;
+
+  --color-brass: #7a600c;
+  --color-brass-deep: #e8dcb0;
+
+  --color-slate: #4d6579;
+  --color-slate-deep: #cdd6df;
+
+  --color-moss: #3f7a33;
+
+  --shadow-plate: 0 18px 40px -20px rgb(20 16 12 / 0.35), 0 2px 8px -4px rgb(184 57 42 / 0.12);
+  --shadow-lift: 0 10px 28px -16px rgb(20 16 12 / 0.3);
+
+  /* Dark enough to be read as text on their own pale tint: 5:1 and better. */
+  --color-stock-1: #a03a2a;
+  --color-stock-2: #7d5410;
+  --color-stock-3: #5c6128;
+  --color-stock-4: #2f6636;
+  --color-stock-5: #1f6664;
+  --color-stock-6: #2b5a92;
+  --color-stock-7: #55458f;
+  --color-stock-8: #7f3d5e;
+}
+
 @layer base {
   html {
     color-scheme: dark;
     -webkit-text-size-adjust: 100%;
+  }
+
+  html[data-theme="light"] {
+    color-scheme: light;
   }
 
   body {

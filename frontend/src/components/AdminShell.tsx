@@ -19,6 +19,7 @@ import { api } from '../lib/api'
 import { useNavigationReset } from '../lib/hooks'
 import { cn } from '../lib/cn'
 import { useI18n, type Dict, type Lang } from '../lib/i18n'
+import { ThemeToggle } from './ThemeToggle'
 import { describeIdentity } from '../lib/labels'
 import type { Me, Settings } from '../lib/types'
 import { CommandPalette } from './CommandPalette'
@@ -175,7 +176,7 @@ function Sidebar({ identity }: { identity: string }) {
           {t.admin.backToSite}
         </Link>
 
-        <LanguageToggle />
+        <ThemeToggle /><LanguageToggle />
 
         <div className="border-t border-rule pt-3">
           <span className="label block">{t.admin.operator}</span>
@@ -260,7 +261,7 @@ function TopBar({ title }: { title: string }) {
         {title}
       </p>
 
-      <LanguageToggle compact />
+      <ThemeToggle /><LanguageToggle compact />
       <SignOut
         iconOnly
         className="grid size-11 shrink-0 place-items-center rounded-card text-bone-dim transition-colors duration-150 hover:bg-ink-high hover:text-vermillion"

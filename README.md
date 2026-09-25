@@ -56,6 +56,11 @@ It replaces and merges two earlier projects: `the earlier TMDB relay` and
   what a series is the sequel of. A person's page adds who they are as
   TMDB has it: born when and where, known for what, a biography in the
   reader's language and a few portraits.
+- **The other orders, and a lamp.** Where TheTVDB numbers a series another
+  way — its DVDs, straight through, an alternate or a regional order — the
+  season page offers that numbering too (`GET /api/v1/items/{id}/orders`),
+  without touching what Sonarr is served. And the interface has a light
+  theme: the reader's choice, kept in the browser, or the system's.
 - **A command palette, and actions on many works at once.** ⌘K or Ctrl K
   anywhere finds a place to go or a work by its title; in the catalogue,
   whoever maintains it selects rows and refreshes, switches off or on,

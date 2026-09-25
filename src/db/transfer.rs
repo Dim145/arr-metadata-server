@@ -37,6 +37,7 @@ const TABLES: &[&str] = &[
     "media_image",
     "media_credit",
     "media_relation",
+    "media_episode_order",
     "media_alternative_title",
     "media_rating",
     "media_translation",

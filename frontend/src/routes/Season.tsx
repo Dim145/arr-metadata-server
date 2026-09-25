@@ -11,7 +11,7 @@
  * and the one somebody matching a release to an episode is looking for.
  */
 
-import { Link, useParams } from 'react-router'
+import { Link, useParams, useSearchParams } from 'react-router'
 
 import { Elsewhere, Trail } from '../components/elsewhere'
 import { Placement, finaleLabel } from '../components/episodes'
@@ -20,7 +20,7 @@ import { Chip, EmptyState, Glyph, Skeleton } from '../components/ui'
 import { ApiError } from '../lib/api'
 import { cn } from '../lib/cn'
 import * as fmt from '../lib/format'
-import { useMe, useTitle, useWork } from '../lib/hooks'
+import { useMe, useOrders, useTitle, useWork } from '../lib/hooks'
 import { useI18n } from '../lib/i18n'
 import { seasonLinks } from '../lib/links'
 import {
@@ -35,13 +35,15 @@ import {
   seasonName,
   seasonNumbers,
 } from '../lib/media'
-import type { Episode, MediaItem } from '../lib/types'
+import type { Episode, EpisodeOrder, MediaItem, PlacedEpisode } from '../lib/types'
 import { NotFound, Unavailable } from './NotFound'
 
 export function Season() {
   const { id = '', season = '' } = useParams()
+  const [params] = useSearchParams()
   const number = Number(season)
   const work = useWork(id)
+  const orders = useOrders(id)
 
   // Kept on screen through a refetch that failed; see the work's page.
   if (!work.data) {
@@ -51,26 +53,92 @@ export function Season() {
   }
 
   const item = work.data
-  if (!Number.isInteger(number) || !seasonNumbers(item).includes(number)) {
+  // The order asked for, where the series is numbered that way. Not known
+  // yet, the page waits rather than judge the season by the wrong numbers.
+  const asked = params.get('order')
+  if (asked && orders.isPending) return <SeasonSkeleton />
+  const order = asked ? orders.data?.orders.find((o) => o.kind === asked) : undefined
+  const numbers = order ? orderSeasons(order) : seasonNumbers(item)
+  if (!Number.isInteger(number) || !numbers.includes(number)) {
     return <NotFound />
   }
 
-  // Keyed by the season, so the next one starts its images afresh rather than
-  // inheriting whatever the last one's had to fall back to.
-  return <SeasonSheet key={number} item={item} number={number} />
+  // Keyed by the season and the order, so the next one starts its images
+  // afresh rather than inheriting whatever the last one's had to fall back to.
+  return (
+    <SeasonSheet
+      key={`${number}:${order?.kind ?? ''}`}
+      item={item}
+      number={number}
+      order={order}
+      orders={orders.data?.orders ?? []}
+    />
+  )
 }
 
-function SeasonSheet({ item, number }: { item: MediaItem; number: number }) {
+/** The seasons an order has, specials last. */
+function orderSeasons(order: EpisodeOrder): number[] {
+  const numbers = [...new Set(order.episodes.map((e) => e.seasonNumber))]
+  return numbers.sort((a, b) => (a === 0 ? 1 : b === 0 ? -1 : a - b))
+}
+
+/**
+ * The work's episodes as an order places them in one of its seasons, each
+ * with its place. An episode the work does not hold — a DVD extra TheTVDB
+ * numbers and no provider aired — is left out.
+ */
+function placedIn(
+  item: MediaItem,
+  order: EpisodeOrder,
+  season: number,
+): { episode: Episode; placed: PlacedEpisode }[] {
+  const byTvdb = new Map((item.episodes ?? []).filter((e) => e.tvdbId).map((e) => [e.tvdbId!, e]))
+  return order.episodes
+    .filter((p) => p.seasonNumber === season)
+    .sort((a, b) => a.episodeNumber - b.episodeNumber)
+    .flatMap((placed) => {
+      const episode = byTvdb.get(placed.tvdbId)
+      return episode ? [{ episode, placed }] : []
+    })
+}
+
+function adjacent(numbers: number[], season: number): { before?: number; after?: number } {
+  const at = numbers.indexOf(season)
+  return {
+    before: at > 0 ? numbers[at - 1] : undefined,
+    after: at >= 0 ? numbers[at + 1] : undefined,
+  }
+}
+
+function SeasonSheet({
+  item,
+  number,
+  order,
+  orders,
+}: {
+  item: MediaItem
+  number: number
+  /** The order the sheet is numbered in, where it is not the aired one. */
+  order?: EpisodeOrder
+  orders: EpisodeOrder[]
+}) {
   const { t, locale } = useI18n()
   const me = useMe()
 
-  const meta = item.seasons?.find((s) => s.seasonNumber === number)
-  const episodes = episodesOf(item, number)
+  // A season's own name and note belong to the aired order; another order's
+  // seasons are only numbers.
+  const meta = order ? undefined : item.seasons?.find((s) => s.seasonNumber === number)
+  const rows = order
+    ? placedIn(item, order, number)
+    : episodesOf(item, number).map((episode) => ({ episode, placed: undefined }))
+  const episodes = rows.map((r) => r.episode)
   const name = seasonName(meta?.title, number, t.work.season)
   const sheet = seasonPoster(item, number)
-  const { before, after } = adjacentSeasons(item, number)
-  const numbers = seasonNumbers(item)
-  useTitle(name, item.title)
+  const numbers = order ? orderSeasons(order) : seasonNumbers(item)
+  const { before, after } = order ? adjacent(numbers, number) : adjacentSeasons(item, number)
+  const suffix = order ? `?order=${encodeURIComponent(order.kind)}` : ''
+  const orderLabel = (kind?: string) => (kind ? (t.season.order[kind] ?? kind) : t.season.order.official)
+  useTitle(order ? `${name} · ${orderLabel(order.kind)}` : name, item.title)
 
   // The earliest date and the latest, whatever order the numbers put them in:
   // specials are numbered as they were found, not as they aired.
@@ -116,6 +184,7 @@ function SeasonSheet({ item, number }: { item: MediaItem; number: number }) {
           <h1 className="font-display text-3xl leading-tight font-medium text-bone sm:text-4xl">{name}</h1>
           <p className="mt-2 font-mono text-xs text-bone-faint tabular-nums">
             {[
+              order ? orderLabel(order.kind) : undefined,
               t.work.episodeCount(episodes.length),
               first ? (last && fmt.year(last) !== fmt.year(first) ? `${fmt.year(first)}–${fmt.year(last)}` : fmt.year(first)) : undefined,
               minutes ? t.season.watchTime(fmt.runtime(minutes, locale) ?? '') : undefined,
@@ -151,9 +220,41 @@ function SeasonSheet({ item, number }: { item: MediaItem; number: number }) {
         className="rise mt-8 border-y border-rule py-3"
         style={{ animationDelay: '60ms' }}
       >
+        {/* Where TheTVDB numbers the series more than one way, the way a
+            reader knows it: the DVDs, straight through. The aired order stays
+            the page's own, and the one every client is served. */}
+        {orders.length ? (
+          <div className="mb-3">
+            <div role="group" aria-label={t.season.orders} className="flex flex-wrap items-center gap-1.5">
+              <span className="label mr-1">{t.season.orders}</span>
+              {[undefined, ...orders].map((o) => {
+                const kind = o?.kind
+                const current = order?.kind === kind
+                const seasons = o ? orderSeasons(o) : seasonNumbers(item)
+                const target = seasons.includes(number) ? number : seasons[0]
+                return (
+                  <Link
+                    key={kind ?? 'official'}
+                    to={`/work/${item.id}/season/${target}${kind ? `?order=${encodeURIComponent(kind)}` : ''}`}
+                    aria-current={current ? 'page' : undefined}
+                    className={cn(
+                      'inline-flex min-h-11 items-center rounded-full border px-3 text-sm transition-colors duration-150',
+                      current
+                        ? 'border-vermillion bg-vermillion/15 text-bone'
+                        : 'border-rule text-bone-dim hover:border-rule-bright hover:text-bone',
+                    )}
+                  >
+                    {orderLabel(kind)}
+                  </Link>
+                )
+              })}
+            </div>
+            {order ? <p className="mt-2 text-xs text-bone-faint">{t.season.orderNote}</p> : null}
+          </div>
+        ) : null}
         <div className="flex items-center justify-between gap-3">
-          <SeasonStep item={item} number={before} direction="before" />
-          <SeasonStep item={item} number={after} direction="after" />
+          <SeasonStep item={item} number={before} direction="before" suffix={suffix} />
+          <SeasonStep item={item} number={after} direction="after" suffix={suffix} />
         </div>
         {/* One row, scrolled where it is wider than the screen: wrapped, a
             phone put the specials alone on a second line. */}
@@ -166,7 +267,7 @@ function SeasonSheet({ item, number }: { item: MediaItem; number: number }) {
               return (
                 <li key={n} className="shrink-0">
                   <Link
-                    to={`/work/${item.id}/season/${n}`}
+                    to={`/work/${item.id}/season/${n}${suffix}`}
                     aria-current={current ? 'page' : undefined}
                     title={title}
                     className={cn(
@@ -196,10 +297,10 @@ function SeasonSheet({ item, number }: { item: MediaItem; number: number }) {
         ) : null}
       </nav>
 
-      {episodes.length ? (
+      {rows.length ? (
         <ol className="stagger mt-8 space-y-4">
-          {episodes.map((episode) => (
-            <EpisodeEntry key={episode.id} item={item} episode={episode} />
+          {rows.map(({ episode, placed }) => (
+            <EpisodeEntry key={episode.id} item={item} episode={episode} placed={placed} />
           ))}
         </ol>
       ) : (
@@ -218,20 +319,27 @@ function SeasonStep({
   item,
   number,
   direction,
+  suffix = '',
 }: {
   item: MediaItem
   number?: number
   direction: 'before' | 'after'
+  /** The order the page is numbered in, carried along. */
+  suffix?: string
 }) {
   const { t } = useI18n()
 
   if (number === undefined) return <span className="hidden sm:block sm:w-40" />
 
-  const name = seasonName(item.seasons?.find((s) => s.seasonNumber === number)?.title, number, t.work.season)
+  const name = seasonName(
+    suffix ? undefined : item.seasons?.find((s) => s.seasonNumber === number)?.title,
+    number,
+    t.work.season,
+  )
 
   return (
     <Link
-      to={`/work/${item.id}/season/${number}`}
+      to={`/work/${item.id}/season/${number}${suffix}`}
       rel={direction === 'before' ? 'prev' : 'next'}
       className={cn(
         'group inline-flex min-h-11 items-center gap-2 rounded-full px-3 text-sm text-bone-dim',
@@ -249,16 +357,33 @@ function SeasonStep({
 }
 
 /** One frame of the sheet. The whole row is the way to the episode's page. */
-function EpisodeEntry({ item, episode }: { item: MediaItem; episode: Episode }) {
+function EpisodeEntry({
+  item,
+  episode,
+  placed,
+}: {
+  item: MediaItem
+  episode: Episode
+  /** Where the episode stands in the order the sheet is numbered in. */
+  placed?: PlacedEpisode
+}) {
   const { t, locale } = useI18n()
 
+  // The way to the episode's page is its aired place; what is printed on the
+  // still is its place in the order shown.
   const to = `/work/${item.id}/season/${episode.seasonNumber}/episode/${episode.episodeNumber}`
+  const shown = placed
+    ? { ...episode, seasonNumber: placed.seasonNumber, episodeNumber: placed.episodeNumber }
+    : episode
+  const absolute = placed?.absoluteNumber ?? episode.absoluteEpisodeNumber
   const when = airTime(episode)
   const upcoming = when !== undefined && !hasAired(when)
   const time = when?.moment ? fmt.clock(when.moment.toISOString(), locale) : undefined
 
   return (
-    <li id={`episode-${episode.episodeNumber}`}>
+    // An anchor only in the aired order: another order can number two
+    // episodes the same, and an id has to be one thing.
+    <li id={placed ? undefined : `episode-${episode.episodeNumber}`}>
       <Link
         to={to}
         className={cn(
@@ -281,7 +406,7 @@ function EpisodeEntry({ item, episode }: { item: MediaItem; episode: Episode }) 
           )}
           {/* Edge print: the code as a film strip carries its frame numbers. */}
           <span className="absolute bottom-1.5 left-1.5 rounded-card bg-ink/85 px-1.5 py-0.5 font-mono text-[0.6875rem] font-medium tracking-wider text-bone tabular-nums">
-            {episodeCode(episode)}
+            {episodeCode(shown)}
           </span>
         </div>
 
@@ -303,7 +428,7 @@ function EpisodeEntry({ item, episode }: { item: MediaItem; episode: Episode }) 
           </div>
 
           <h2 className="mt-1 text-base leading-snug font-medium text-bone transition-colors duration-150 group-hover:text-vermillion">
-            {episode.title || t.episode.untitled(episode.episodeNumber)}
+            {episode.title || t.episode.untitled(shown.episodeNumber)}
           </h2>
 
           <p className="mt-1 font-mono text-[0.6875rem] text-bone-faint tabular-nums">
@@ -315,9 +440,7 @@ function EpisodeEntry({ item, episode }: { item: MediaItem; episode: Episode }) 
               // Last, and only where it says something the code does not: in
               // a first season the two are the same number. Above the title,
               // on every episode after the first season, it read as a heading.
-              episode.absoluteEpisodeNumber && episode.absoluteEpisodeNumber !== episode.episodeNumber
-                ? t.episode.absolute(episode.absoluteEpisodeNumber)
-                : undefined,
+              absolute && absolute !== shown.episodeNumber ? t.episode.absolute(absolute) : undefined,
             ]
               .filter(Boolean)
               .join(' · ') || t.episode.noDate}

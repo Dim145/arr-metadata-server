@@ -12,7 +12,7 @@ import { useLocation, useNavigationType } from 'react-router'
 
 import { api, query } from './api'
 import { useI18n } from './i18n'
-import type { MediaItem, Me } from './types'
+import type { MediaItem, Me, Orders } from './types'
 
 export function useWork(id: string) {
   const { lang } = useI18n()
@@ -21,6 +21,17 @@ export function useWork(id: string) {
     queryKey: ['work', id, lang],
     queryFn: () => api.get<MediaItem>(`/items/${id}${query({ language: lang })}`),
     enabled: Boolean(id),
+  })
+}
+
+/** How else a series' episodes are numbered, where a provider keeps other orders. */
+export function useOrders(id: string) {
+  return useQuery({
+    queryKey: ['orders', id],
+    queryFn: () => api.get<Orders>(`/items/${id}/orders`),
+    enabled: Boolean(id),
+    staleTime: 10 * 60_000,
+    retry: false,
   })
 }
 

@@ -11,6 +11,13 @@ import { cn } from '../../lib/cn'
  */
 const PATHS = {
   search: <path d="M11 11 15 15M7 12.5a5.5 5.5 0 1 0 0-11 5.5 5.5 0 0 0 0 11Z" />,
+  sun: (
+    <>
+      <circle cx="8" cy="8" r="3" />
+      <path d="M8 1.5V3M8 13v1.5M1.5 8H3M13 8h1.5M3.4 3.4l1.1 1.1M11.5 11.5l1.1 1.1M3.4 12.6l1.1-1.1M11.5 4.5l1.1-1.1" />
+    </>
+  ),
+  moon: <path d="M13.5 9.6A5.6 5.6 0 0 1 6.4 2.5a5.6 5.6 0 1 0 7.1 7.1Z" />,
   close: <path d="M4 4 12 12M12 4 4 12" />,
   menu: <path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11" />,
   chevronRight: <path d="M6 3.5 10.5 8 6 12.5" />,

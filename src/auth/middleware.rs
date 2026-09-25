@@ -302,6 +302,7 @@ fn browsable(method: &axum::http::Method, path: &str) -> bool {
         rest => rest.strip_prefix("/api/v1/items/").is_some_and(|tail| {
             let id = tail
                 .strip_suffix("/calendar.ics")
+                .or_else(|| tail.strip_suffix("/orders"))
                 .or_else(|| tail.strip_suffix("/lists"))
                 .or_else(|| tail.strip_suffix("/watch"))
                 .or_else(|| tail.strip_suffix("/similar"))
@@ -520,6 +521,9 @@ mod browse_tests {
         assert!(allowed("/api/v1/collections"));
         assert!(allowed("/api/v1/figures"));
         assert!(!allowed("/api/v1/admin/health"));
+        assert!(allowed(
+            "/api/v1/items/01a0cff7-d8dc-70bc-a6b1-38379ee39bd0/orders"
+        ));
         assert!(allowed("/api/v1/collections/10"));
         assert!(!allowed("/api/v1/collections/ten"));
         assert!(!allowed("/api/v1/collections/10/x"));

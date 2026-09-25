@@ -18,6 +18,7 @@ pub mod ids;
 pub mod language;
 pub mod listing;
 pub mod movie;
+pub mod orders;
 pub mod series;
 pub mod webhook;
 

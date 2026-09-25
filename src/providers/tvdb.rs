@@ -23,8 +23,8 @@ use crate::{
     config,
     db::{new_id, now},
     domain::{
-        CoverType, Episode, ExternalIds, Image, MediaItem, MediaKind, Season, Translation,
-        make_slug,
+        CoverType, Episode, EpisodeOrder, ExternalIds, Image, MediaItem, MediaKind, PlacedEpisode,
+        Season, Translation, make_slug,
     },
 };
 
@@ -252,15 +252,67 @@ impl TvdbClient {
             .collect())
     }
 
-    /// Every episode in one language, following TVDB's paging.
+    /// Every episode in one language, as they aired, following TVDB's paging.
     async fn episodes_in(&self, tvdb_id: i64, language: &str) -> Result<Vec<Value>> {
+        self.episodes_of(tvdb_id, "official", language).await
+    }
+
+    /// The other orders TVDB keeps this series' episodes in — the DVDs',
+    /// straight through, an alternate or a regional one — each the same
+    /// episodes, by id, placed in seasons and numbers of its own. The aired
+    /// order is not among them: it is the work's own.
+    pub async fn orders(&self, tvdb_id: i64) -> Result<Vec<EpisodeOrder>> {
+        if !self.is_enabled() {
+            return Ok(Vec::new());
+        }
+
+        let Some(body) = self
+            .get(&format!("series/{tvdb_id}/extended?short=true"))
+            .await?
+        else {
+            return Ok(Vec::new());
+        };
+
+        let mut kinds: Vec<String> = body
+            .pointer("/data/seasons")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|s| s.pointer("/type/type").and_then(Value::as_str))
+            .filter(|kind| OTHER_ORDERS.contains(kind))
+            .map(str::to_string)
+            .collect();
+        kinds.sort_unstable();
+        kinds.dedup();
+
+        // No falling back to the untranslated episodes here, as the aired
+        // fetch does: a language TVDB does not hold blanks the names, and a
+        // place is made of ids and numbers alone.
+        let mut orders = Vec::with_capacity(kinds.len());
+        for kind in kinds {
+            let episodes: Vec<PlacedEpisode> = self
+                .episodes_of(tvdb_id, &kind, &self.language)
+                .await?
+                .into_iter()
+                .filter_map(|raw| placed(&raw))
+                .collect();
+            if !episodes.is_empty() {
+                orders.push(EpisodeOrder { kind, episodes });
+            }
+        }
+
+        Ok(orders)
+    }
+
+    /// Every episode in one language and one order, following TVDB's paging.
+    async fn episodes_of(&self, tvdb_id: i64, order: &str, language: &str) -> Result<Vec<Value>> {
         let mut episodes = Vec::new();
 
         // TVDB pages at 500. The cap is a guard against a paging bug upstream
         // turning into an unbounded loop, not a real limit: it allows 10000
         // episodes, and the longest series ever made is far short of that.
         for page in 0..20 {
-            let path = format!("series/{tvdb_id}/episodes/official/{language}?page={page}");
+            let path = format!("series/{tvdb_id}/episodes/{order}/{language}?page={page}");
 
             let Some(body) = self.get(&path).await? else {
                 break;
@@ -564,6 +616,21 @@ struct ArtworkRecord {
 }
 
 // ─── mapping ─────────────────────────────────────────────────────────────────
+
+/// The season types TVDB numbers a series by besides the aired order, as
+/// they are named in a season's `type` and in the episodes path.
+const OTHER_ORDERS: &[&str] = &["dvd", "absolute", "alternate", "regional", "altdvd"];
+
+/// Where one episode record stands in the order it was read from.
+fn placed(raw: &Value) -> Option<PlacedEpisode> {
+    let record: EpisodeRecord = serde_json::from_value(raw.clone()).ok()?;
+    Some(PlacedEpisode {
+        tvdb_id: record.id?,
+        season_number: record.season_number?,
+        episode_number: record.number?,
+        absolute_number: record.absolute_number,
+    })
+}
 
 /// TVDB's numeric artwork types, from `/artwork/types`.
 fn cover_type(kind: i64) -> Option<(CoverType, bool)> {
@@ -939,6 +1006,28 @@ fn non_empty(value: Option<&str>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_episode_is_placed_by_what_the_order_says_of_it() {
+        let raw = serde_json::json!({ "id": 297989, "seasonNumber": 1, "number": 2, "absoluteNumber": 2, "name": "The Train Job" });
+        let placed = placed(&raw).expect("placed");
+        assert_eq!(
+            (placed.tvdb_id, placed.season_number, placed.episode_number),
+            (297989, 1, 2)
+        );
+        assert_eq!(placed.absolute_number, Some(2));
+        // Without an id, or a place, there is nothing to keep.
+        assert!(placed_is_none(
+            &serde_json::json!({ "seasonNumber": 1, "number": 2 })
+        ));
+        assert!(placed_is_none(
+            &serde_json::json!({ "id": 1, "seasonNumber": 1 })
+        ));
+    }
+
+    fn placed_is_none(raw: &Value) -> bool {
+        placed(raw).is_none()
+    }
 
     fn fixture() -> SeriesExtended {
         serde_json::from_value(raw_fixture()).expect("fixture")

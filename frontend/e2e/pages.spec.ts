@@ -270,6 +270,39 @@ test.describe('related works', () => {
   })
 })
 
+test.describe('the other orders', () => {
+  test('are offered where TheTVDB keeps them, and the aired order stays the way in', async ({
+    page,
+    request,
+  }) => {
+    const { items } = await (await request.get('/api/v1/items?kind=series&limit=30')).json()
+    let found: { id: string; orders: { kind: string; episodes: { seasonNumber: number }[] }[] } | undefined
+    for (const { id } of items as { id: string }[]) {
+      const response = await request.get(`/api/v1/items/${id}/orders`)
+      expect(response.status()).toBe(200)
+      const { orders } = await response.json()
+      if (orders.length) {
+        found = { id, orders }
+        break
+      }
+    }
+    test.skip(!found, 'no series here is numbered another way; refresh one with TheTVDB on')
+
+    const order = found!.orders[0]
+    const season = order.episodes[0].seasonNumber
+    await page.goto(`/work/${found!.id}/season/${season}?order=${order.kind}`)
+    const tabs = page.getByRole('group', { name: /numbering|numérotation/i })
+    await expect(tabs).toBeVisible()
+    await expect(tabs.locator('a[aria-current="page"]')).toHaveCount(1)
+    await expect(page.getByText(/as thetvdb numbers them|telle que thetvdb/i)).toBeVisible()
+
+    // Back to the aired order, which is the page's own.
+    await tabs.getByRole('link', { name: /^(as aired|diffusion)$/i }).click()
+    await expect(page).toHaveURL(/\/season\/\d+$/)
+    await expect(page.getByText(/as thetvdb numbers them|telle que thetvdb/i)).toHaveCount(0)
+  })
+})
+
 test.describe('the schedule', () => {
   test('lists an episode in the week it aired, and leads to it', async ({ page, request }) => {
     const work = await aSeries(request)

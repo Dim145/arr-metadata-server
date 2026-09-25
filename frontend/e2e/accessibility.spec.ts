@@ -249,3 +249,32 @@ test.describe('the administration side', () => {
     }
   })
 })
+
+test.describe('the catalogue, in the light', () => {
+  // The system asks for daylight and the reader has not said otherwise: the
+  // light theme, with every pair of colours measured again.
+  test.use({ colorScheme: 'light' })
+
+  for (const [label, path] of [
+    ['the front page', '/'],
+    ['a browse page', '/browse?kind=series'],
+    ['the schedule', '/calendar'],
+    ['sign-in', '/login'],
+  ] as const) {
+    test(`${label} meets WCAG 2.1 AA in the light`, async ({ page }) => {
+      await page.goto(path)
+      await page.waitForLoadState('networkidle')
+      await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
+      await scan(page, `${label}, in the light`)
+    })
+  }
+
+  test('a work meets WCAG 2.1 AA in the light', async ({ page }) => {
+    const id = await firstWork(page, 'series')
+    test.skip(!id, 'the catalogue holds no series')
+
+    await page.goto(`/work/${id}`)
+    await page.waitForLoadState('networkidle')
+    await scan(page, 'a work, in the light')
+  })
+})

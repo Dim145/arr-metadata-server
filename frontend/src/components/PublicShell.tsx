@@ -17,6 +17,7 @@ import { feeds, webcal } from '../lib/feeds'
 import { useMe, useNavigationReset } from '../lib/hooks'
 import { cn } from '../lib/cn'
 import { useI18n, type Lang } from '../lib/i18n'
+import { ThemeToggle } from './ThemeToggle'
 import { providerName } from '../lib/labels'
 import { poster } from '../lib/media'
 import type { ItemPage, Me, Sources } from '../lib/types'
@@ -127,6 +128,8 @@ export function PublicShell({ me }: { me?: Me }) {
                 past the edge, clipped away, and the navigation behind it could
                 not be opened at all. */}
             <div className="hidden items-center gap-2 md:flex">
+              {/* On a tablet the bar is full; the lamp is in the menu there. */}
+              <ThemeToggle className="hidden lg:flex" />
               <LanguageToggle />
               <AdminLink me={me} />
             </div>
@@ -176,6 +179,7 @@ export function PublicShell({ me }: { me?: Me }) {
             </nav>
 
             <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-rule pt-3">
+              <ThemeToggle />
               <LanguageToggle />
               <AdminLink me={me} labelled />
             </div>

@@ -26,6 +26,8 @@ export default defineConfig({
   reporter: process.env.CI ? 'line' : [['list']],
 
   use: {
+    // Dark unless a test asks for daylight: the page's own baseline.
+    colorScheme: 'dark',
     baseURL,
     // Screenshots and traces only for what failed: a green run should leave
     // nothing behind to clean up.

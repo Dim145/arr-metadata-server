@@ -487,6 +487,27 @@ pub struct Relation {
     pub sort_order: i32,
 }
 
+/// One of the other orders a series' episodes come in — `dvd`, `absolute`,
+/// `alternate`, `regional` — as TheTVDB keeps it: the work's episodes, by
+/// their TVDB id, in seasons and numbers of that order's own.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct EpisodeOrder {
+    pub kind: String,
+    pub episodes: Vec<PlacedEpisode>,
+}
+
+/// Where one episode stands in an order.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PlacedEpisode {
+    pub tvdb_id: i64,
+    pub season_number: i32,
+    pub episode_number: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub absolute_number: Option<i32>,
+}
+
 /// An earlier work named beside one, as a line on a chart says it: its title,
 /// and the work here that it is when the catalogue holds it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
