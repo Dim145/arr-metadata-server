@@ -163,6 +163,18 @@ impl AppState {
             .settings
             .seed_missing(&[
                 ("tmdb.language", cfg.tmdb.language.clone()),
+                // The country of the language's own tag, or TMDB's default: a value
+                // from the start, so a key or an address can take it over.
+                (
+                    "tmdb.watchRegion",
+                    cfg.tmdb
+                        .language
+                        .split(['-', '_'])
+                        .nth(1)
+                        .map(str::to_ascii_uppercase)
+                        .filter(|r| r.len() == 2 && r.bytes().all(|b| b.is_ascii_uppercase()))
+                        .unwrap_or_else(|| "US".to_string()),
+                ),
                 ("tmdb.searchLimit", cfg.tmdb.search_limit.to_string()),
                 ("tvdb.searchFallback", cfg.tvdb.enabled.to_string()),
                 ("skyhook.fallback", cfg.skyhook.fallback.to_string()),
@@ -239,6 +251,24 @@ impl AppState {
         self.settings
             .resolve("tmdb.language", client, peer)
             .unwrap_or_else(|| self.config.tmdb.language.clone())
+    }
+
+    /// The country a caller watches in: set as such, or the one named by the
+    /// language they are answered in (`fr-FR` → `FR`), or none.
+    pub fn watch_region(&self, client: Option<&str>, peer: Option<&str>) -> Option<String> {
+        let two_letters = |code: &str| {
+            let code = code.trim().to_ascii_uppercase();
+            (code.len() == 2 && code.bytes().all(|b| b.is_ascii_uppercase())).then_some(code)
+        };
+        self.settings
+            .resolve("tmdb.watchRegion", client, peer)
+            .and_then(|r| two_letters(&r))
+            .or_else(|| {
+                self.language(client, peer)
+                    .split(['-', '_'])
+                    .nth(1)
+                    .and_then(two_letters)
+            })
     }
 
     pub fn search_limit(&self) -> usize {

@@ -292,6 +292,27 @@ export interface ItemPage {
   total: number
 }
 
+/** A service that carries a work in a country, as TMDB lists it from JustWatch. */
+export interface WatchProvider {
+  id: number
+  name: string
+  logo?: string
+}
+
+export interface WhereToWatch {
+  region: string
+  link?: string
+  flatrate: WatchProvider[]
+  rent: WatchProvider[]
+  buy: WatchProvider[]
+  free: WatchProvider[]
+  ads: WatchProvider[]
+  /** Every country TMDB lists anything for. */
+  regions: string[]
+  /** Who the data comes from; shown beside it. */
+  attribution: string
+}
+
 export type ListKind = 'series' | 'movie' | 'mixed'
 export type ListMode = 'manual' | 'filter'
 

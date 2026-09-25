@@ -16,13 +16,14 @@ import { Lightbox, Trailer, useLightbox } from '../components/Theatre'
 import {
   Button,
   Chip,
-  Genre,
   Field,
+  Genre,
   Glyph,
   Panel,
   PanelHead,
   Provenance,
   SectionTitle,
+  Select,
   Skeleton,
 } from '../components/ui'
 import { ApiError, api, query } from '../lib/api'
@@ -53,7 +54,7 @@ import {
   seasonNumbers,
   seasonPoster,
 } from '../lib/media'
-import type { Credit, Episode, ItemPage, MediaItem, CuratedLists } from '../lib/types'
+import type { Credit, Episode, ItemPage, MediaItem, CuratedLists, WhereToWatch } from '../lib/types'
 import { NotFound, Unavailable } from './NotFound'
 
 export function Work() {
@@ -89,6 +90,7 @@ export function Work() {
 
         <aside className="space-y-6 lg:col-start-2 lg:row-span-2 lg:row-start-1">
           <Record item={item} />
+          <WhereToWatch item={item} />
           <Ratings item={item} />
           <Identifiers item={item} />
         </aside>
@@ -1083,5 +1085,144 @@ function WorkSkeleton() {
         <Skeleton className="h-24 w-full" />
       </div>
     </div>
+  )
+}
+
+/* ── Where to watch ───────────────────────────────────────────────────────── */
+
+const REGION_KEY = 'ams.watchRegion'
+
+/**
+ * The services carrying the work in a country, as TMDB lists them from
+ * JustWatch — named beside the data, as TMDB's terms ask. The country is
+ * the reader's own setting, then the language's; any other TMDB knows of
+ * can be picked. Absent altogether where there is no TMDB key, or nothing.
+ */
+function WhereToWatch({ item }: { item: MediaItem }) {
+  const { t, locale } = useI18n()
+  // The country picked last time, kept in this browser alone: a reader abroad
+  // picks it once, not on every page.
+  const [region, setRegion] = useState<string | undefined>(() => {
+    try {
+      const stored = localStorage.getItem(REGION_KEY)
+      return stored && /^[A-Z]{2}$/.test(stored) ? stored : undefined
+    } catch {
+      return undefined
+    }
+  })
+  const pick = (code: string) => {
+    setRegion(code)
+    try {
+      localStorage.setItem(REGION_KEY, code)
+    } catch {
+      // A browser that keeps nothing still shows the country picked.
+    }
+  }
+
+  const watch = useQuery({
+    queryKey: ['watch', item.id, region ?? ''],
+    queryFn: () => api.get<WhereToWatch>(`/items/${item.id}/watch${query({ region })}`),
+    retry: false,
+    staleTime: 60 * 60_000,
+  })
+  // A remembered country the server no longer takes is forgotten, and the
+  // panel asked for again without it, rather than staying away for good.
+  useEffect(() => {
+    if (region && watch.error instanceof ApiError && watch.error.status === 400) {
+      try {
+        localStorage.removeItem(REGION_KEY)
+      } catch {
+        // Nothing kept, nothing to forget.
+      }
+      setRegion(undefined)
+    }
+  }, [region, watch.error])
+  if (!watch.data) return null
+  const data = watch.data
+  const groups = (['flatrate', 'free', 'ads', 'rent', 'buy'] as const).filter((group) => data[group].length)
+  if (!groups.length && data.regions.length === 0) return null
+
+  // A country's name where the engine knows them; its code where it does not.
+  const names = (() => {
+    try {
+      return new Intl.DisplayNames(locale, { type: 'region' })
+    } catch {
+      return undefined
+    }
+  })()
+  const place = (code: string) => {
+    try {
+      return names?.of(code) ?? code
+    } catch {
+      return code
+    }
+  }
+
+  return (
+    <Panel>
+      <PanelHead
+        title={t.work.watch}
+        action={
+          data.regions.length > 1 ? (
+            <Select
+              aria-label={t.work.watchRegion}
+              value={data.region}
+              onChange={(event) => pick(event.target.value)}
+              className="min-h-9 w-auto py-0 text-xs"
+            >
+              {data.regions.map((code) => (
+                <option key={code} value={code}>
+                  {place(code)}
+                </option>
+              ))}
+            </Select>
+          ) : null
+        }
+      />
+      <div className="space-y-4 p-5">
+        {groups.length ? (
+          groups.map((group) => (
+            <div key={group}>
+              <span className="label">{t.work.watchGroups[group]}</span>
+              <ul className="mt-2 flex flex-wrap gap-2">
+                {data[group].map((provider) => (
+                  <li
+                    key={provider.id}
+                    className="flex items-center gap-2 rounded-full border border-rule py-1 pr-3 pl-1 text-sm text-bone"
+                  >
+                    {provider.logo ? (
+                      <img
+                        src={provider.logo}
+                        alt=""
+                        width={24}
+                        height={24}
+                        loading="lazy"
+                        className="size-6 rounded-full"
+                      />
+                    ) : (
+                      <span className="ml-2" />
+                    )}
+                    {provider.name}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))
+        ) : (
+          <p className="text-sm text-bone-dim">{t.work.watchNone(place(data.region))}</p>
+        )}
+        <p className="text-xs text-bone-faint">
+          {place(data.region)} · {t.work.watchCredit}
+          {data.link ? (
+            <>
+              {' · '}
+              <ExternalLink href={data.link} className="text-bone-dim">
+                {t.work.watchLink}
+              </ExternalLink>
+            </>
+          ) : null}
+        </p>
+      </div>
+    </Panel>
   )
 }

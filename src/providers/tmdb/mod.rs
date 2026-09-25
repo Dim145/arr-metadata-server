@@ -332,6 +332,18 @@ impl TmdbClient {
         Ok(Some((raw, movie)))
     }
 
+    /// Where a work can be watched, by country, as TMDB lists it from
+    /// JustWatch: `results.{REGION}.{flatrate,rent,buy,free,ads}`, each a
+    /// list of services. `None` where TMDB knows nothing of the work.
+    pub async fn watch_providers(&self, kind: MediaKind, id: i64) -> Result<Option<Value>> {
+        let path = match kind {
+            MediaKind::Series => "tv",
+            MediaKind::Movie => "movie",
+        };
+        let url = format!("{}/{path}/{id}/watch/providers", self.base);
+        self.fetch(&url, &[]).await
+    }
+
     async fn fetch_movie(&self, id: i64, language: &str) -> Result<Option<Value>> {
         let url = format!("{}/movie/{id}", self.base);
         let params = [

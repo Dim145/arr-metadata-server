@@ -40,6 +40,10 @@ It replaces and merges two earlier projects: `the earlier TMDB relay` and
 - **Curated lists.** Selections composed by hand or by a filter, shown on
   the site and served to Sonarr and Radarr as the custom lists their import
   lists read.
+- **Where to watch.** A work's page lists the services carrying it in a
+  country — streaming, rent, buy — from the JustWatch data TMDB serves, named
+  beside it as TMDB's terms ask; the country is a setting (`tmdb.watchRegion`,
+  per key or address too), or the one the language of the answers names.
 - **A page that installs, links that unfurl, answers that revalidate.** The
   site is a web app a phone installs; a link to a work or a list carries its
   title, line and poster for whoever unfurls it, while the catalogue is open;

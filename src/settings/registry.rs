@@ -75,6 +75,13 @@ pub const REGISTRY: &[Definition] = &[
         scopes: ALL,
     },
     Definition {
+        key: "tmdb.watchRegion",
+        // The country whose services a work's page lists — per client and
+        // per address too, since a household's key may be used abroad.
+        kind: Kind::Text,
+        scopes: ALL,
+    },
+    Definition {
         key: "tmdb.searchLimit",
         kind: Kind::Int { min: 1, max: 50 },
         scopes: SERVER_ONLY,

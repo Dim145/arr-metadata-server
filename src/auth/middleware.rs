@@ -295,6 +295,7 @@ fn browsable(method: &axum::http::Method, path: &str) -> bool {
             let id = tail
                 .strip_suffix("/calendar.ics")
                 .or_else(|| tail.strip_suffix("/lists"))
+                .or_else(|| tail.strip_suffix("/watch"))
                 .unwrap_or(tail);
             !id.is_empty() && !id.contains('/')
         }),
@@ -504,6 +505,8 @@ mod browse_tests {
         assert!(!allowed("/api/v1/lists/autumn-2026/items"));
         assert!(!allowed("/api/v1/lists//sonarr.json"));
         assert!(allowed(&format!("/api/v1/items/{id}/lists")));
+        assert!(allowed(&format!("/api/v1/items/{id}/watch")));
+        assert!(!allowed(&format!("/api/v1/items/{id}/watch/x")));
     }
 
     #[test]

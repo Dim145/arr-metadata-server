@@ -327,11 +327,13 @@ test.describe('settings', () => {
     const rules = page.getByRole('region').filter({ hasText: /allowed addresses|adresses autorisées/i })
     const row = () => rules.locator('li').filter({ hasText: address }).first()
 
-    // A run that failed partway would otherwise leave the rule behind.
-    if (await rules.locator('li').filter({ hasText: address }).count()) {
-      await row().getByRole('button', { name: /stop allowing|retirer/i }).click()
+    // A run that failed partway would otherwise leave the rule behind — named,
+    // once it got that far, so it is looked for by its name too.
+    const leftover = rules.locator('li').filter({ hasText: new RegExp(`${address.replace(/\./g, '\\.')}|${name}`) })
+    if (await leftover.count()) {
+      await leftover.first().getByRole('button', { name: /stop allowing|retirer/i }).click()
       await page.getByRole('button', { name: /stop allowing|retirer/i }).last().click()
-      await expect(rules.locator('li').filter({ hasText: address })).toHaveCount(0)
+      await expect(leftover).toHaveCount(0)
     }
 
     await page.getByLabel(/address or block|adresse ou plage/i).fill(address)
