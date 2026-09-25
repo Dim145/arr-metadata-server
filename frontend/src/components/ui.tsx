@@ -113,7 +113,18 @@ export function OnThisPage({
   label: string
 }) {
   const [current, setCurrent] = useState<string | null>(null)
+  const row = useRef<HTMLOListElement>(null)
   const ids = entries.map((entry) => entry.id).join(' ')
+
+  // On a phone the row is wider than the screen: it follows the reader, so
+  // the section in view is the one whose name shows.
+  useEffect(() => {
+    const list = row.current
+    const active = list?.querySelector<HTMLElement>('[aria-current]')
+    if (!list || !active || list.scrollWidth <= list.clientWidth) return
+    const left = active.getBoundingClientRect().left - list.getBoundingClientRect().left + list.scrollLeft
+    list.scrollTo({ left: left - (list.clientWidth - active.offsetWidth) / 2, behavior: 'smooth' })
+  }, [current])
 
   useEffect(() => {
     if (typeof IntersectionObserver === 'undefined') return
@@ -140,7 +151,7 @@ export function OnThisPage({
 
   return (
     <nav aria-label={label} className="sticky top-14 z-20 -mx-1 mb-6 border-b border-rule bg-ink/95 px-1 backdrop-blur lg:top-0">
-      <ol className="flex gap-1 overflow-x-auto py-2 [scrollbar-width:none]">
+      <ol ref={row} className="flex gap-1 overflow-x-auto py-2 [scrollbar-width:none]">
         {entries.map((entry) => (
           <li key={entry.id} className="shrink-0">
             <a

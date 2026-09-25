@@ -601,7 +601,19 @@ function FieldRow({
                 display ? (locked ? 'text-bone' : 'text-bone-dim') : 'text-bone-faint italic',
               )}
             >
-              {display || t.common.notSet}
+              {/* A picture's address is the picture, with the address kept
+                  for whoever needs it: a hundred-character URL said nothing
+                  a thumbnail does not. */}
+              {display && def.name === 'image' && /^https?:\/\//.test(display) ? (
+                <span className="flex items-center gap-3">
+                  <Artwork url={display} role="still" alt="" className="h-14 w-24 shrink-0 rounded-card border border-rule object-cover" />
+                  <span className="min-w-0 truncate font-mono text-xs" title={display}>
+                    {display}
+                  </span>
+                </span>
+              ) : (
+                display || t.common.notSet
+              )}
             </p>
           )}
         </div>

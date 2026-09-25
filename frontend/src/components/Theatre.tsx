@@ -107,7 +107,9 @@ export function Lightbox({
     <Theatre open={open} onClose={onClose} label={t.gallery.viewer(title)} onKey={onKey}>
       {image ? (
         <div className="grid h-full grid-rows-[auto_minmax(0,1fr)_auto]">
-          <header className="flex items-center gap-3 px-4 py-2 sm:px-6">
+          {/* The bar is the dialog's own, drawn on its ink: over the page's
+              header, its words and the wordmark's were one tangle. */}
+          <header className="flex items-center gap-3 bg-ink px-4 py-2 sm:px-6">
             <p className="font-mono text-xs text-bone-dim tabular-nums" aria-live="polite">
               {t.gallery.position(position.format(at + 1), position.format(images.length))}
             </p>

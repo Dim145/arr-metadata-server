@@ -46,6 +46,23 @@ test.describe('the administration side', () => {
     'set AMS_E2E_USER and AMS_E2E_PASSWORD to exercise the administration side',
   )
 
+  test('a row’s buttons take the press, not the row behind them', async ({ page, isMobile }) => {
+    test.skip(isMobile, 'the buttons are in the editor at this width')
+    await signIn(page)
+    await page.goto('/admin/catalogue')
+
+    // By the pointer, as the row's title link stretches over the whole row:
+    // the press must reach the button, and the dialog it opens is the proof.
+    const remove = page.getByRole('button', { name: /^(delete|supprimer)$/i }).first()
+    await expect(remove).toBeVisible()
+    await remove.click()
+    const dialog = page.getByRole('dialog')
+    await expect(dialog).toBeVisible()
+    await expect(page).toHaveURL(/\/admin\/catalogue$/)
+    await dialog.getByRole('button', { name: /^(cancel|annuler)$/i }).click()
+    await expect(dialog).toHaveCount(0)
+  })
+
   test('turns an anonymous visitor away at the door', async ({ page }) => {
     await page.goto('/admin/settings')
     await expect(page).toHaveURL(/\/login/)

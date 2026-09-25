@@ -137,7 +137,9 @@ export function Catalogue() {
           </p>
         </div>
 
-        <Button variant="primary" onClick={() => setComposing((open) => !open)}>
+        {/* The way in is the page's one primary action; the way back out of
+            the form is not. */}
+        <Button variant={composing ? 'ghost' : 'primary'} onClick={() => setComposing((open) => !open)}>
           <Glyph name={composing ? 'close' : 'plus'} className="size-4" />
           {composing ? t.common.cancel : t.admin.works.newEntry}
         </Button>
@@ -431,7 +433,9 @@ function Row({
       </Td>
 
       <Td align="right" className="hidden md:table-cell">
-        <span className="flex items-center justify-end gap-0.5">
+        {/* Above the title's stretched link, or the row would open under
+            every press meant for a button. */}
+        <span className="relative z-10 flex items-center justify-end gap-0.5">
           <IconButton
             glyph="refresh"
             label={t.common.refresh}

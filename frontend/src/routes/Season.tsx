@@ -155,14 +155,16 @@ function SeasonSheet({ item, number }: { item: MediaItem; number: number }) {
           <SeasonStep item={item} number={before} direction="before" />
           <SeasonStep item={item} number={after} direction="after" />
         </div>
+        {/* One row, scrolled where it is wider than the screen: wrapped, a
+            phone put the specials alone on a second line. */}
         {numbers.length > 2 ? (
-          <ol className="mt-2 flex flex-wrap items-center justify-center gap-1.5">
+          <ol className="-mx-4 mt-2 flex items-center gap-1.5 overflow-x-auto px-4 py-1 [scrollbar-width:none] sm:mx-0 sm:justify-center sm:px-0">
             {numbers.map((n) => {
               const title = seasonName(item.seasons?.find((s) => s.seasonNumber === n)?.title, n, t.work.season)
               const current = n === number
 
               return (
-                <li key={n}>
+                <li key={n} className="shrink-0">
                   <Link
                     to={`/work/${item.id}/season/${n}`}
                     aria-current={current ? 'page' : undefined}
