@@ -160,6 +160,20 @@ async fn calendar(
         )));
     }
 
+    let language = query.language.as_deref().filter(|l| !l.is_empty());
+    Ok(Json(window(&state, &identity, from, to, language).await?))
+}
+
+/// The schedule of a window, as the calendar answers it and the feeds repeat
+/// it: every episode airing from `from` to `to`, and the works they belong
+/// to, with the overrides and the reader's language applied.
+pub(super) async fn window(
+    state: &AppState,
+    identity: &Identity,
+    from: chrono::DateTime<chrono::Utc>,
+    to: chrono::DateTime<chrono::Utc>,
+    language: Option<&str>,
+) -> AppResult<Calendar> {
     let stamp = |t: chrono::DateTime<chrono::Utc>| t.format("%Y-%m-%dT%H:%M:%SZ").to_string();
     let adult = state.adult_for(identity.client_id(), identity.peer_id(), None);
     let (airing, truncated) =
@@ -185,20 +199,20 @@ async fn calendar(
         work.episodes = by_work.remove(&work.id).unwrap_or_default();
     }
 
-    service::apply_overrides(&state, &mut works).await?;
+    service::apply_overrides(state, &mut works).await?;
     // Before the language: the stored translations the overlay reads come
     // with the artwork, and without them every series kept its own title.
     repo::item::load_artwork(&state.db, &mut works).await?;
-    if let Some(language) = query.language.as_deref().filter(|l| !l.is_empty()) {
+    if let Some(language) = language {
         for work in &mut works {
-            service::language::apply_stored(&state, work, language).await?;
+            service::language::apply_stored(state, work, language).await?;
         }
     }
-    service::overlay_imdb_many(&state, &mut works).await;
+    service::overlay_imdb_many(state, &mut works).await;
     for work in &mut works {
         service::as_card(work);
     }
-    service::redact_for_reader(&identity, &mut works);
+    service::redact_for_reader(identity, &mut works);
 
     let titles: HashMap<String, String> = works
         .iter()
@@ -234,15 +248,15 @@ async fn calendar(
         )
     });
 
-    Ok(Json(Calendar {
+    Ok(Calendar {
         episodes,
         works,
         truncated,
-    }))
+    })
 }
 
 /// When an episode airs, as the calendar compares it.
-fn aired_at(episode: &Episode) -> Option<String> {
+pub(super) fn aired_at(episode: &Episode) -> Option<String> {
     episode
         .air_date_utc
         .clone()

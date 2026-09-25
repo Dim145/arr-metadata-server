@@ -37,6 +37,8 @@ It replaces and merges two earlier projects: `the earlier TMDB relay` and
   `?language=`. Translations are fetched the first time a language is asked for
   and kept — from TMDB, then TheTVDB for the many languages TMDB does not carry.
   A locked field stays locked in every language.
+- **Calendars and feeds.** The schedule, and any one work, as an iCalendar a
+  phone subscribes to; what arrives and what airs as Atom feeds.
 - **`.nfo` export with the artwork beside it**, in the layout Kodi defined and
   Plex's Personal Media agent reads. It is the only route to Plex.
 - **Two interfaces, in English or French.** A catalogue anyone can browse —
@@ -296,8 +298,8 @@ what they can send:
 `AMS_PUBLIC_BROWSE=true` opens the catalogue to a reader with no credential:
 the list of works, one work, the totals, what the filters offer
 (`/api/v1/facets`), the schedule (`/api/v1/calendar`), a season chart
-(`/api/v1/seasons/{year}/{season}`) and a person's credits
-(`/api/v1/people/{tmdbId}`). Nothing else — not what TMDB lists for a season
+(`/api/v1/seasons/{year}/{season}`), a person's credits
+(`/api/v1/people/{tmdbId}`) and the feeds (below). Nothing else — not what TMDB lists for a season
 (`…/candidates`), which is asked of TMDB on this server's key. Which works failed their last
 refresh is not among them: that filter is ignored for anyone but an
 administrator. It is an allowlist
@@ -308,6 +310,33 @@ otherwise. Administration is never reachable this way.
 
 It is off by default, because turning it on publishes what this server knows to
 whoever can reach the port.
+
+### Feeds
+
+The schedule, and one work's dates, as calendars a phone or a desktop
+subscribes to; what arrives and what airs as Atom feeds a reader follows.
+Read under the same rule as the pages they mirror: open under public
+browsing, otherwise with a key, which a calendar app carries in the address
+(`?api_key=…`).
+
+| Feed | Path |
+|---|---|
+| The schedule: seven days back and twenty-eight ahead unless asked otherwise, at most sixty-two together | `/api/v1/calendar.ics?pastDays=7&futureDays=28&language=fr` |
+| One work: a series' dated episodes, or a film's release day | `/api/v1/items/{id}/calendar.ics` |
+| The fifty works most recently added | `/api/v1/feed/added.atom` |
+| The episodes airing from yesterday to a week ahead | `/api/v1/feed/airing.atom` |
+
+An episode whose time a provider knew is a timed event, as long as its runtime;
+one with only a date is an all-day event on it. Under public browsing the
+interface offers them — *Subscribe* on the schedule, *Add to my calendar* on a
+work, the feeds in the footer — as `webcal://` addresses where a calendar app
+expects one; otherwise it does not, since the app would arrive without a
+credential, and the addresses take a key as above. Links in a feed point at
+`AMS_PUBLIC_URL` when it is set — set it behind a reverse proxy — otherwise at
+the host and scheme the request came to, as the proxy forwarded them if it is
+among `AMS_TRUSTED_PROXIES`, or as the socket saw them. A window holding more
+episodes than one answer carries is cut short and says so in an
+`X-AMS-Truncated` header.
 
 ### What is a setting, and what is not
 

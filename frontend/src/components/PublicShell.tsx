@@ -13,7 +13,8 @@ import { Link, Outlet, useLocation, useNavigate, useSearchParams } from 'react-r
 
 import { api, query } from '../lib/api'
 import { useSettled } from '../lib/debounce'
-import { useNavigationReset } from '../lib/hooks'
+import { feeds, webcal } from '../lib/feeds'
+import { useMe, useNavigationReset } from '../lib/hooks'
 import { cn } from '../lib/cn'
 import { useI18n, type Lang } from '../lib/i18n'
 import { providerName } from '../lib/labels'
@@ -506,7 +507,8 @@ function AdminLink({ me, labelled = false }: { me?: Me; labelled?: boolean }) {
 }
 
 function Footer() {
-  const { t } = useI18n()
+  const { t, lang } = useI18n()
+  const me = useMe()
 
   const sources = useQuery({
     queryKey: ['sources'],
@@ -523,6 +525,37 @@ function Footer() {
           <span className="font-display text-base text-bone-dim">{t.brand.name}</span>
           <span className="text-xs text-bone-faint">{t.brand.tagline}</span>
         </div>
+        {/* What a reader can follow from elsewhere: the schedule in a
+            calendar app, the arrivals and the week in a feed reader. Only
+            where the catalogue is open, since neither carries a credential. */}
+        {me.data?.publicBrowse ? (
+        <nav aria-label={t.feeds.label} className="flex flex-wrap items-center gap-x-4 text-xs text-bone-faint">
+          <a
+            href={webcal(feeds.calendar(lang))}
+            title={t.feeds.calendarHint}
+            className="inline-flex min-h-11 items-center gap-1.5 transition-colors duration-150 hover:text-bone"
+          >
+            <Glyph name="calendar" className="size-3.5" />
+            {t.feeds.calendar}
+          </a>
+          <a
+            href={feeds.added}
+            type="application/atom+xml"
+            className="inline-flex min-h-11 items-center gap-1.5 transition-colors duration-150 hover:text-bone"
+          >
+            <Glyph name="rss" className="size-3.5" />
+            {t.feeds.added}
+          </a>
+          <a
+            href={feeds.airing}
+            type="application/atom+xml"
+            className="inline-flex min-h-11 items-center gap-1.5 transition-colors duration-150 hover:text-bone"
+          >
+            <Glyph name="rss" className="size-3.5" />
+            {t.feeds.airing}
+          </a>
+        </nav>
+        ) : null}
         {sources.data?.sources.length ? <Credits active={sources.data.sources} /> : null}
       </div>
     </footer>

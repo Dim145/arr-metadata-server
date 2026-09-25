@@ -28,6 +28,17 @@ const en = {
     tmdb: 'This product uses the TMDB API but is not endorsed or certified by TMDB.',
     imdb: 'Information courtesy of IMDb (https://www.imdb.com). Used with permission.',
   },
+  feeds: {
+    label: 'Feeds',
+    subscribe: 'Subscribe',
+    calendar: 'The schedule as a calendar',
+    calendarHint: 'Opens in your calendar app and keeps itself current: the past week and the four ahead.',
+    work: 'Add to my calendar',
+    workHint:
+      'Its dates in your calendar app, kept current: every episode as it airs, or the day of release.',
+    added: 'Recently added',
+    airing: 'On the air',
+  },
   nav: {
     browse: 'Browse',
     series: 'Series',
@@ -983,6 +994,18 @@ const fr: Dict = {
     lead: 'Métadonnées :',
     tmdb: 'This product uses the TMDB API but is not endorsed or certified by TMDB.',
     imdb: 'Information courtesy of IMDb (https://www.imdb.com). Used with permission.',
+  },
+  feeds: {
+    label: 'Flux',
+    subscribe: 'S’abonner',
+    calendar: 'Le programme en calendrier',
+    calendarHint:
+      'S’ouvre dans votre application de calendrier et s’y tient à jour : la semaine passée et les quatre à venir.',
+    work: 'Ajouter à mon calendrier',
+    workHint:
+      'Ses dates dans votre application de calendrier, tenues à jour : chaque épisode à sa diffusion, ou le jour de sortie.',
+    added: 'Ajouts récents',
+    airing: 'À l’antenne',
   },
   nav: {
     browse: 'Parcourir',

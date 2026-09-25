@@ -250,6 +250,9 @@ fn browsable(method: &axum::http::Method, path: &str) -> bool {
     match path.trim_end_matches('/') {
         "/api/v1/items" | "/api/v1/stats" | "/api/v1/sources" | "/api/v1/facets"
         | "/api/v1/calendar" | "/api/v1/auth/me" => true,
+        // The feeds: the schedule again, and the arrivals, in shapes a
+        // calendar app or a feed reader takes.
+        "/api/v1/calendar.ics" | "/api/v1/feed/added.atom" | "/api/v1/feed/airing.atom" => true,
         // Somebody's work, as the catalogue holds it.
         rest if rest
             .strip_prefix("/api/v1/people/")
@@ -269,11 +272,13 @@ fn browsable(method: &axum::http::Method, path: &str) -> bool {
         {
             true
         }
-        // One work. Its seasons, episodes, artwork and cast come with it, but
-        // its snapshots and overrides are their own paths and are not listed.
-        rest => rest
-            .strip_prefix("/api/v1/items/")
-            .is_some_and(|id| !id.is_empty() && !id.contains('/')),
+        // One work. Its seasons, episodes, artwork and cast come with it, and
+        // its calendar is the same dates again; its snapshots and overrides
+        // are their own paths and are not listed.
+        rest => rest.strip_prefix("/api/v1/items/").is_some_and(|tail| {
+            let id = tail.strip_suffix("/calendar.ics").unwrap_or(tail);
+            !id.is_empty() && !id.contains('/')
+        }),
     }
 }
 
@@ -466,6 +471,13 @@ mod browse_tests {
         assert!(!allowed(&format!("/api/v1/items/{id}/snapshots")));
         assert!(!allowed(&format!("/api/v1/items/{id}/overrides")));
         assert!(!allowed(&format!("/api/v1/items/{id}/nfo")));
+        assert!(allowed(&format!("/api/v1/items/{id}/calendar.ics")));
+        assert!(!allowed(&format!("/api/v1/items/{id}/calendar.ics/x")));
+        assert!(!allowed("/api/v1/items//calendar.ics"));
+        assert!(allowed("/api/v1/calendar.ics"));
+        assert!(allowed("/api/v1/feed/added.atom"));
+        assert!(allowed("/api/v1/feed/airing.atom"));
+        assert!(!allowed("/api/v1/feed/other.atom"));
     }
 
     #[test]

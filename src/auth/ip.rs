@@ -41,6 +41,13 @@ pub fn resolve(peer: Option<SocketAddr>, headers: &HeaderMap, trusted: &[IpNet])
         .or(Some(peer_ip))
 }
 
+/// Whether the socket a request came from is one of the trusted proxies —
+/// and so whether what it forwards beyond the address, the host and the
+/// scheme it was reached by, may be believed.
+pub fn is_trusted_peer(peer: Option<SocketAddr>, trusted: &[IpNet]) -> bool {
+    peer.is_some_and(|p| is_trusted(unmap(p.ip()), trusted))
+}
+
 /// `::ffff:10.0.0.7` is `10.0.0.7`.
 ///
 /// A socket bound to `[::]` — which is what a dual-stack listener and most

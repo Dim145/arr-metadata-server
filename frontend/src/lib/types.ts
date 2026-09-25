@@ -275,6 +275,8 @@ export interface Me {
   identity: string
   canWrite: boolean
   isAdmin: boolean
+  /** Whether a reader with no credential may browse: the feeds answer a calendar app only then. */
+  publicBrowse: boolean
 }
 
 export interface Snapshot {

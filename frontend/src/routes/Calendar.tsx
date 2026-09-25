@@ -15,7 +15,8 @@ import { Link, useSearchParams } from 'react-router'
 import { Artwork } from '../components/media'
 import { Button, Chip, EmptyState, Glyph, Label, Skeleton } from '../components/ui'
 import { api, query } from '../lib/api'
-import { useTitle } from '../lib/hooks'
+import { feeds, webcal } from '../lib/feeds'
+import { useMe, useTitle } from '../lib/hooks'
 import { cn } from '../lib/cn'
 import * as fmt from '../lib/format'
 import { useI18n } from '../lib/i18n'
@@ -51,6 +52,7 @@ function dayOf(airing: Airing): string | undefined {
 
 export function Calendar() {
   const { t, lang, locale } = useI18n()
+  const me = useMe()
   const [params, setParams] = useSearchParams()
   useTitle(t.calendar.label)
 
@@ -131,14 +133,29 @@ export function Calendar() {
             {range}
             {listing.isSuccess ? ` · ${t.calendar.count(total)}` : ''}
           </p>
-          <Link
-            to={seasonPath(season)}
-            className="-ml-3 mt-2 inline-flex min-h-11 items-center gap-1.5 rounded-full px-3 text-sm text-vermillion transition-colors duration-150 hover:bg-vermillion/10"
-          >
-            <Glyph name="calendar" className="size-4" />
-            {t.calendar.seasonChart(t.seasons.title(t.seasons.names[season.season], season.year))}
-            <Glyph name="chevronRight" className="size-3.5" />
-          </Link>
+          <div className="-ml-3 mt-2 flex flex-wrap items-center gap-x-1">
+            <Link
+              to={seasonPath(season)}
+              className="inline-flex min-h-11 items-center gap-1.5 rounded-full px-3 text-sm text-vermillion transition-colors duration-150 hover:bg-vermillion/10"
+            >
+              <Glyph name="calendar" className="size-4" />
+              {t.calendar.seasonChart(t.seasons.title(t.seasons.names[season.season], season.year))}
+              <Glyph name="chevronRight" className="size-3.5" />
+            </Link>
+            {/* The same schedule in a calendar app, kept current there: a
+                `webcal:` address is opened as a subscription, not saved. Only
+                where the catalogue is open: the app carries no credential. */}
+            {me.data?.publicBrowse ? (
+              <a
+                href={webcal(feeds.calendar(lang))}
+                title={t.feeds.calendarHint}
+                className="inline-flex min-h-11 items-center gap-1.5 rounded-full px-3 text-sm text-bone-dim transition-colors duration-150 hover:bg-ink-high hover:text-bone"
+              >
+                <Glyph name="rss" className="size-4" />
+                {t.feeds.subscribe}
+              </a>
+            ) : null}
+          </div>
         </div>
 
         {/* One row, whatever the width: the arrows either side of the week

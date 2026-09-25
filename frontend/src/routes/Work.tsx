@@ -26,6 +26,7 @@ import {
   Skeleton,
 } from '../components/ui'
 import { ApiError, api, query } from '../lib/api'
+import { feeds, webcal } from '../lib/feeds'
 import { useMe, useTitle, useWork } from '../lib/hooks'
 import { identifierLink } from '../lib/links'
 import { cn } from '../lib/cn'
@@ -107,8 +108,13 @@ export function Work() {
 /* ── The plate ────────────────────────────────────────────────────────────── */
 
 function Plate({ item }: { item: MediaItem }) {
-  const { t, locale } = useI18n()
+  const { t, lang, locale } = useI18n()
   const me = useMe()
+  // A calendar app carries no credential, so the subscription is offered only
+  // where the catalogue is open — and only for a work with a date to give.
+  const subscribable =
+    me.data?.publicBrowse === true &&
+    (item?.kind === 'series' || Boolean(item?.inCinemas || item?.digitalRelease || item?.physicalRelease))
   const [trailer, setTrailer] = useState(false)
   const art = backdrop(item)
   const sheet = poster(item)
@@ -229,7 +235,7 @@ function Plate({ item }: { item: MediaItem }) {
               </div>
             </div>
 
-            {item.trailerYoutubeId || item.homepage || me.data?.canWrite ? (
+            {item.trailerYoutubeId || item.homepage || subscribable || me.data?.canWrite ? (
               <div className="mt-5 flex flex-wrap items-center gap-2">
                 {item.trailerYoutubeId ? (
                   <Button onClick={() => setTrailer(true)}>
@@ -241,6 +247,18 @@ function Plate({ item }: { item: MediaItem }) {
                   <ExternalLink href={item.homepage} className="min-h-11 px-3 text-sm text-bone-dim">
                     {t.work.homepage}
                   </ExternalLink>
+                ) : null}
+                {/* The work's dates as a subscription a calendar app keeps
+                    current: its episodes as they air, or a film's release day. */}
+                {subscribable ? (
+                  <a
+                    href={webcal(feeds.work(item.id, lang))}
+                    title={t.feeds.workHint}
+                    className="inline-flex min-h-11 items-center gap-1.5 rounded-full px-3 text-sm text-bone-dim transition-colors duration-150 hover:bg-ink-high hover:text-bone"
+                  >
+                    <Glyph name="rss" className="size-4" />
+                    {t.feeds.work}
+                  </a>
                 ) : null}
                 {me.data?.canWrite ? (
                   <Link

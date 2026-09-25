@@ -244,6 +244,10 @@ pub struct MeResponse {
     pub identity: String,
     pub can_write: bool,
     pub is_admin: bool,
+    /// Whether a reader with no credential may browse the catalogue — and so
+    /// whether an address handed to a calendar app or a feed reader, which
+    /// carries none, will answer.
+    pub public_browse: bool,
 }
 
 /// Who this request is authenticated as, and what it may do.
@@ -254,11 +258,15 @@ pub struct MeResponse {
         (status = 401, description = "No valid credential was presented"),
     ),
 )]
-async fn me(Extension(identity): Extension<Identity>) -> Json<MeResponse> {
+async fn me(
+    State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
+) -> Json<MeResponse> {
     Json(MeResponse {
         identity: identity.label(),
         can_write: identity.can_write(),
         is_admin: identity.is_admin(),
+        public_browse: state.config.security.public_browse,
     })
 }
 
