@@ -144,6 +144,11 @@ pub struct MediaItem {
     pub ratings: Vec<Rating>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub translations: Vec<Translation>,
+    /// The other works a provider files beside this one — its sequels,
+    /// prequels, side stories — with the work here that each is, when the
+    /// catalogue holds it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub relations: Vec<Relation>,
 
     /// Fields carrying a manual override, as `scope/field` paths. The web UI
     /// renders a lock next to each of these.
@@ -200,6 +205,7 @@ impl MediaItem {
             alternative_titles: Vec::new(),
             ratings: Vec::new(),
             translations: Vec::new(),
+            relations: Vec::new(),
             locked_fields: Vec::new(),
         }
     }
@@ -441,6 +447,54 @@ pub struct AlternativeTitle {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
     pub is_manual: bool,
+}
+
+/// Another work, as a provider files it beside this one.
+///
+/// AniList's relations for the moment: what an entry is the sequel, prequel,
+/// side story or spin-off of, with the entry named, dated and pictured as
+/// AniList has it, so it can be shown whether or not the catalogue holds it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Relation {
+    pub id: String,
+    /// How the other work stands to this one, as AniList names it: `SEQUEL`,
+    /// `PREQUEL`, `PARENT`, `SIDE_STORY`, `SPIN_OFF`, `ALTERNATIVE`, `SUMMARY`,
+    /// `COMPILATION`, `CONTAINS`, `SOURCE`, `ADAPTATION`, `CHARACTER` or
+    /// `OTHER`.
+    pub relation_type: String,
+    /// Where the other work is filed — `anilist` — and its id there.
+    pub source: String,
+    pub external_id: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mal_id: Option<i64>,
+    pub title: String,
+    /// `anime` or `manga`.
+    pub medium: String,
+    /// AniList's format: `TV`, `MOVIE`, `OVA`, `ONA`, `SPECIAL`, `MANGA`, …
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub format: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub year: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
+    /// Whether the other work is for adults: as AniList flags it, or as the
+    /// catalogue holds it. A reader kept from adult works is not shown it.
+    pub is_adult: bool,
+    /// The work here that the other one is, when the catalogue holds it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub work_id: Option<String>,
+    pub sort_order: i32,
+}
+
+/// An earlier work named beside one, as a line on a chart says it: its title,
+/// and the work here that it is when the catalogue holds it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Kin {
+    pub title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub work_id: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, ToSchema)]

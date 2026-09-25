@@ -20,7 +20,7 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 use crate::{
     auth::Identity,
     db::repo,
-    domain::{ExternalSource, MediaItem, MediaKind},
+    domain::{ExternalSource, Kin, MediaItem, MediaKind},
     error::{AppError, AppResult},
     service,
     state::AppState,
@@ -128,6 +128,10 @@ pub struct Entry {
     pub aired: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_episode: Option<NextEpisode>,
+    /// What it is the sequel of, where a provider filed one: the nearest
+    /// earlier work, and the work here that it is when the catalogue holds it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sequel_of: Option<Kin>,
 }
 
 #[derive(Serialize, Deserialize, ToSchema)]
@@ -239,6 +243,7 @@ async fn chart(
     // In batches, a season of a large catalogue being more works than one
     // statement can name.
     let ids = repo::season::works(&runs, &premieres);
+    let kin = repo::item::prequels_of(&state.db, &ids, adult).await?;
     let mut works = Vec::with_capacity(ids.len());
     for chunk in ids.chunks(500) {
         let mut batch = repo::item::by_ids(&state.db, chunk).await?;
@@ -258,6 +263,7 @@ async fn chart(
     let mut entries: Vec<Entry> = runs
         .into_iter()
         .map(|run| Entry {
+            sequel_of: kin.get(&run.media_id).cloned(),
             work_id: run.media_id,
             kind: if run.starts < from {
                 EntryKind::Continuing
@@ -277,6 +283,7 @@ async fn chart(
             }),
         })
         .chain(premieres.into_iter().map(|(id, kind, day)| Entry {
+            sequel_of: kin.get(&id).cloned(),
             work_id: id,
             kind: if kind == MediaKind::Movie {
                 EntryKind::Film

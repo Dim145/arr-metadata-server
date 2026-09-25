@@ -54,7 +54,7 @@ import {
   seasonNumbers,
   seasonPoster,
 } from '../lib/media'
-import type { Credit, Episode, ItemPage, MediaItem, CuratedLists, WhereToWatch, Similar } from '../lib/types'
+import type { Credit, Episode, ItemPage, MediaItem, CuratedLists, Relation, WhereToWatch, Similar } from '../lib/types'
 import { NotFound, Unavailable } from './NotFound'
 
 export function Work() {
@@ -100,6 +100,7 @@ export function Work() {
           {item.kind === 'series' ? <Seasons item={item} /> : null}
           <Gallery item={item} />
           {item.kind === 'movie' && item.collectionTmdbId ? <Collection item={item} /> : null}
+          <Related item={item} />
           <Similar item={item} />
           <AlsoKnownAs item={item} />
         </div>
@@ -822,6 +823,84 @@ function Collection({ item }: { item: MediaItem }) {
  * keywords, network or decade — for a reader who liked this one. Nothing
  * where nothing is close enough.
  */
+/**
+ * The works AniList files beside this one, nearest first: what it follows and
+ * what follows it, then the stories beside it, then what it was drawn from.
+ * A work the catalogue holds leads to its page; the rest lead to AniList.
+ */
+function Related({ item }: { item: MediaItem }) {
+  const { t } = useI18n()
+  const related = item.relations ?? []
+  if (!related.length) return null
+
+  return (
+    <section>
+      <SectionTitle>{t.work.related}</SectionTitle>
+      <p className="-mt-3 mb-4 text-xs text-bone-faint">{t.work.relatedHint}</p>
+      <PosterShelf label={t.work.related}>
+        {related.map((relation) => (
+          <RelationCard key={relation.id} relation={relation} />
+        ))}
+      </PosterShelf>
+    </section>
+  )
+}
+
+function RelationCard({ relation }: { relation: Relation }) {
+  const { t } = useI18n()
+  const kind = t.work.relation[relation.relationType] ?? t.work.relation.OTHER
+  const format = relation.format ? (t.work.format[relation.format] ?? relation.format) : undefined
+  const caption = [relation.year, format].filter(Boolean).join(' · ')
+  const label = `${relation.title} · ${kind}${relation.workId ? '' : ` · ${t.work.notHeld}`}`
+  const className = 'group block focus-visible:outline-offset-4'
+  const face = (
+    <>
+      <div
+        className={cn(
+          'relative aspect-2/3 overflow-hidden rounded-panel border border-rule bg-ink-high',
+          'shadow-[var(--shadow-lift)] transition-colors duration-150 group-hover:border-vermillion/45',
+          !relation.workId && 'opacity-80 group-hover:opacity-100',
+        )}
+      >
+        {relation.image ? (
+          <Artwork url={relation.image} role="card" alt="" className="size-full object-cover" />
+        ) : (
+          <div className="flex size-full items-center justify-center font-display text-3xl text-bone-faint">
+            {relation.title.slice(0, 1)}
+          </div>
+        )}
+        <div className="absolute right-0 bottom-0 left-0 bg-gradient-to-t from-ink/85 to-transparent px-2 pt-6 pb-2">
+          <span className="label text-bone">{kind}</span>
+        </div>
+      </div>
+      <div className="mt-2.5 space-y-0.5">
+        <h3 className="line-clamp-2 text-sm leading-snug font-medium text-bone transition-colors duration-200 group-hover:text-vermillion">
+          {relation.title}
+        </h3>
+        <p className="font-mono text-[0.6875rem] text-bone-faint tabular-nums">
+          {relation.workId ? caption : [caption, t.work.onAnilist].filter(Boolean).join(' · ')}
+        </p>
+      </div>
+    </>
+  )
+
+  return relation.workId ? (
+    <Link to={`/work/${relation.workId}`} aria-label={label} className={className}>
+      {face}
+    </Link>
+  ) : (
+    <a
+      href={`https://anilist.co/${relation.medium === 'manga' ? 'manga' : 'anime'}/${relation.externalId}`}
+      target="_blank"
+      rel="noreferrer noopener"
+      aria-label={label}
+      className={className}
+    >
+      {face}
+    </a>
+  )
+}
+
 function Similar({ item }: { item: MediaItem }) {
   const { t, lang } = useI18n()
 

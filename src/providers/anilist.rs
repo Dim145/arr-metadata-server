@@ -21,7 +21,7 @@ use serde_json::{Value, json};
 use crate::{
     config,
     db::{new_id, now},
-    domain::{CoverType, ExternalIds, Image, MediaItem, MediaKind, Rating},
+    domain::{CoverType, ExternalIds, Image, MediaItem, MediaKind, Rating, Relation},
     providers::{PATIENCE, Pacer, alternative_title, plain_text},
 };
 
@@ -39,6 +39,17 @@ const QUERY: &str = "query ($id: Int) {
     isAdult
     coverImage { extraLarge }
     startDate { year }
+    relations {
+      edges {
+        relationType(version: 2)
+        node {
+          id idMal type format isAdult
+          title { romaji english native }
+          startDate { year }
+          coverImage { extraLarge large }
+        }
+      }
+    }
   }
 }";
 
@@ -132,6 +143,38 @@ struct Media {
     is_adult: bool,
     cover_image: Option<Cover>,
     start_date: Option<Date>,
+    relations: Option<Relations>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Relations {
+    #[serde(default)]
+    edges: Vec<Edge>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Edge {
+    relation_type: Option<String>,
+    node: Option<Node>,
+}
+
+/// The entry at the other end of a relation, as much of it as is shown.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Node {
+    id: i64,
+    id_mal: Option<i64>,
+    /// `ANIME` or `MANGA`.
+    #[serde(rename = "type")]
+    medium: Option<String>,
+    format: Option<String>,
+    #[serde(default)]
+    is_adult: bool,
+    #[serde(default)]
+    title: Titles,
+    start_date: Option<Date>,
+    cover_image: Option<Cover>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -179,6 +222,7 @@ struct Named {
 #[serde(rename_all = "camelCase")]
 struct Cover {
     extra_large: Option<String>,
+    large: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -283,8 +327,82 @@ fn to_item(media: &Media, kind: MediaKind) -> MediaItem {
         });
     }
 
+    item.relations = relations(media);
+
     item.updated_at = now();
     item
+}
+
+/// The entries AniList files beside this one: prequels and sequels first, then
+/// the stories beside the main one, then what it was drawn from and the rest —
+/// each kind in order of year. An edge with no entry behind it is nothing.
+fn relations(media: &Media) -> Vec<Relation> {
+    let mut related: Vec<Relation> = media
+        .relations
+        .iter()
+        .flat_map(|r| &r.edges)
+        .filter_map(|edge| {
+            let node = edge.node.as_ref()?;
+            let relation_type = edge.relation_type.clone()?;
+            let title = [&node.title.english, &node.title.romaji, &node.title.native]
+                .into_iter()
+                .find_map(|t| t.as_deref().map(str::trim).filter(|t| !t.is_empty()))?
+                .to_string();
+            Some(Relation {
+                id: String::new(),
+                relation_type,
+                source: "anilist".to_string(),
+                external_id: node.id,
+                mal_id: node.id_mal,
+                title,
+                medium: node
+                    .medium
+                    .as_deref()
+                    .unwrap_or("ANIME")
+                    .to_ascii_lowercase(),
+                format: node.format.clone(),
+                year: node.start_date.as_ref().and_then(|d| d.year),
+                image: node
+                    .cover_image
+                    .as_ref()
+                    .and_then(|c| c.extra_large.clone().or_else(|| c.large.clone()))
+                    .filter(|u| u.starts_with("https://")),
+                is_adult: node.is_adult,
+                work_id: None,
+                sort_order: 0,
+            })
+        })
+        .collect();
+    related.sort_by_key(|r| {
+        (
+            relation_rank(&r.relation_type),
+            r.year.unwrap_or(i32::MAX),
+            r.external_id,
+        )
+    });
+    for (index, relation) in related.iter_mut().enumerate() {
+        relation.sort_order = i32::try_from(index).unwrap_or(i32::MAX);
+    }
+    related
+}
+
+/// Where a kind of relation stands: the story's own line first.
+fn relation_rank(relation_type: &str) -> u8 {
+    match relation_type {
+        "PREQUEL" => 0,
+        "SEQUEL" => 1,
+        "PARENT" => 2,
+        "SIDE_STORY" => 3,
+        "SPIN_OFF" => 4,
+        "ALTERNATIVE" => 5,
+        "SUMMARY" => 6,
+        "COMPILATION" => 7,
+        "CONTAINS" => 8,
+        "SOURCE" => 9,
+        "ADAPTATION" => 10,
+        "CHARACTER" => 11,
+        _ => 12,
+    }
 }
 
 #[cfg(test)]
@@ -311,7 +429,22 @@ mod tests {
             "studios": { "nodes": [{ "name": "WIT STUDIO" }] },
             "isAdult": false,
             "coverImage": { "extraLarge": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx16498.jpg" },
-            "startDate": { "year": 2013 }
+            "startDate": { "year": 2013 },
+            "relations": { "edges": [
+                { "relationType": "SEQUEL", "node": { "id": 20958, "idMal": 25777, "type": "ANIME", "format": "TV",
+                  "title": { "romaji": "Shingeki no Kyojin 2", "english": "Attack on Titan Season 2", "native": "進撃の巨人 Season 2" },
+                  "startDate": { "year": 2017 },
+                  "coverImage": { "extraLarge": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx20958.jpg" } } },
+                { "relationType": "SOURCE", "node": { "id": 53390, "idMal": 23390, "type": "MANGA", "format": "MANGA", "isAdult": true,
+                  "title": { "romaji": "Shingeki no Kyojin", "english": "Attack on Titan", "native": "進撃の巨人" },
+                  "startDate": { "year": 2009 },
+                  "coverImage": { "large": "https://s4.anilist.co/file/anilistcdn/media/manga/cover/medium/bx53390.jpg" } } },
+                { "relationType": "PREQUEL", "node": { "id": 20811, "idMal": 25781, "type": "ANIME", "format": "OVA",
+                  "title": { "romaji": "Shingeki no Kyojin: Kuinaki Sentaku", "english": "Attack on Titan: No Regrets", "native": null },
+                  "startDate": { "year": 2014 },
+                  "coverImage": { "extraLarge": "http://insecure.example/x.jpg" } } },
+                { "relationType": "OTHER", "node": null }
+            ] }
         }))
         .unwrap()
     }
@@ -368,6 +501,55 @@ mod tests {
         assert_eq!(item.images[0].cover_type, CoverType::Poster);
         assert_eq!(item.studio.as_deref(), Some("WIT STUDIO"));
         assert_eq!(item.external_ids.mal, [16498]);
+    }
+
+    #[test]
+    fn the_works_filed_beside_it_are_kept_nearest_first() {
+        let item = to_item(&attack_on_titan(), MediaKind::Series);
+        let related: Vec<(&str, i64, &str)> = item
+            .relations
+            .iter()
+            .map(|r| (r.relation_type.as_str(), r.external_id, r.medium.as_str()))
+            .collect();
+        assert_eq!(
+            related,
+            [
+                ("PREQUEL", 20811, "anime"),
+                ("SEQUEL", 20958, "anime"),
+                ("SOURCE", 53390, "manga")
+            ],
+            "an edge with no entry behind it is nothing to keep"
+        );
+        let sequel = &item.relations[1];
+        assert_eq!(sequel.title, "Attack on Titan Season 2");
+        assert_eq!(sequel.year, Some(2017));
+        assert_eq!(sequel.mal_id, Some(25777));
+        assert_eq!(sequel.format.as_deref(), Some("TV"));
+        assert!(
+            sequel
+                .image
+                .as_deref()
+                .is_some_and(|u| u.contains("bx20958"))
+        );
+        // The manga's cover comes in the one size AniList gives for it.
+        assert!(
+            item.relations[2]
+                .image
+                .as_deref()
+                .is_some_and(|u| u.contains("bx53390"))
+        );
+        // Not over plain http.
+        assert_eq!(item.relations[0].image, None);
+        // As AniList flags each entry.
+        assert!(item.relations[2].is_adult);
+        assert!(!item.relations[1].is_adult);
+        assert_eq!(
+            item.relations
+                .iter()
+                .map(|r| r.sort_order)
+                .collect::<Vec<_>>(),
+            [0, 1, 2]
+        );
     }
 
     #[test]

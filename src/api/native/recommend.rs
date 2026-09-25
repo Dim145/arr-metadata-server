@@ -496,7 +496,7 @@ async fn cards(
 }
 
 /// A JSON value from the day-long cache, or fetched and kept.
-async fn cached_value<F, Fut>(state: &AppState, key: &str, fetch: F) -> AppResult<Value>
+pub(crate) async fn cached_value<F, Fut>(state: &AppState, key: &str, fetch: F) -> AppResult<Value>
 where
     F: FnOnce() -> Fut,
     Fut: std::future::Future<Output = anyhow::Result<Value>>,

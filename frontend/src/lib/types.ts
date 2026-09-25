@@ -42,6 +42,32 @@ export interface Credit {
   isManual: boolean
 }
 
+/**
+ * Another work a provider files beside one — its sequel, prequel, side story —
+ * as AniList names, dates and pictures it, with the work here that it is when
+ * the catalogue holds it.
+ */
+export interface Relation {
+  id: string
+  /** SEQUEL, PREQUEL, PARENT, SIDE_STORY, SPIN_OFF, ALTERNATIVE, SUMMARY, COMPILATION, CONTAINS, SOURCE, ADAPTATION, CHARACTER or OTHER. */
+  relationType: string
+  /** Where the other work is filed — `anilist` — and its id there. */
+  source: string
+  externalId: number
+  malId?: number
+  title: string
+  /** `anime` or `manga`. */
+  medium: string
+  /** TV, MOVIE, OVA, ONA, SPECIAL, MANGA, … */
+  format?: string
+  year?: number
+  image?: string
+  /** For adults, as AniList flags it or as the catalogue holds it; a reader kept from such works is not sent it. */
+  isAdult: boolean
+  workId?: string
+  sortOrder: number
+}
+
 export interface AlternativeTitle {
   id: string
   title: string
@@ -135,6 +161,7 @@ export interface MediaItem {
   alternativeTitles?: AlternativeTitle[]
   ratings?: Rating[]
   translations?: Translation[]
+  relations?: Relation[]
   lockedFields?: string[]
 }
 
@@ -495,12 +522,30 @@ export interface Role {
   character?: string
 }
 
+/** Somebody as TMDB knows them, beside what this catalogue holds of theirs. */
+export interface PersonDetails {
+  biography?: string
+  /** YYYY-MM-DD. */
+  birthday?: string
+  deathday?: string
+  placeOfBirth?: string
+  /** What TMDB files them under: Acting, Directing, Writing, … */
+  knownFor?: string
+  alsoKnownAs?: string[]
+  homepage?: string
+  imdbId?: string
+  /** A few portraits, in TMDB's order. */
+  photos?: string[]
+}
+
 export interface Person {
   tmdbId: number
   name: string
   image?: string
   roles: Role[]
   works: MediaItem[]
+  /** What TMDB says of them, when it is configured and answered. */
+  details?: PersonDetails
 }
 
 
@@ -590,6 +635,8 @@ export interface SeasonEntry {
   episodes?: number
   aired?: number
   nextEpisode?: { episodeNumber: number; airDate: string }
+  /** What it is the sequel of, where a provider filed one; the work here that it is, when held. */
+  sequelOf?: { title: string; workId?: string }
 }
 
 export interface SeasonChart {

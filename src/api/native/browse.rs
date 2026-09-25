@@ -11,6 +11,7 @@ use axum::{
     extract::{Path, Query, State},
 };
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use utoipa::{IntoParams, ToSchema};
 use utoipa_axum::{router::OpenApiRouter, routes};
 
@@ -19,6 +20,7 @@ use crate::{
     db::repo::{self, item::Facets},
     domain::{CreditType, Episode, MediaItem},
     error::{AppError, AppResult},
+    providers::tmdb,
     service,
     state::AppState,
 };
@@ -283,6 +285,36 @@ pub struct Role {
     pub character: Option<String>,
 }
 
+/// Somebody as TMDB knows them, beside what this catalogue holds of theirs.
+#[derive(Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PersonDetails {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub biography: Option<String>,
+    /// `YYYY-MM-DD`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub birthday: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deathday: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub place_of_birth: Option<String>,
+    /// What TMDB files them under: `Acting`, `Directing`, `Writing`, …
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub known_for: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub also_known_as: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub homepage: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub imdb_id: Option<String>,
+    /// A few portraits, in TMDB's order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub photos: Vec<String>,
+}
+
+/// The most portraits a page is given.
+const MOST_PHOTOS: usize = 6;
+
 #[derive(Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Person {
@@ -293,6 +325,9 @@ pub struct Person {
     /// Newest work first.
     pub roles: Vec<Role>,
     pub works: Vec<MediaItem>,
+    /// What TMDB says of them, when it is configured and answered.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<PersonDetails>,
 }
 
 /// Somebody's work, as far as this catalogue holds it.
@@ -321,7 +356,11 @@ async fn person(
     };
 
     let name = first.credit.person_name.clone();
-    let image = credits.iter().find_map(|c| c.credit.image.clone());
+    let details = details_for(&state, tmdb_id, query.language.as_deref()).await;
+    let image = credits
+        .iter()
+        .find_map(|c| c.credit.image.clone())
+        .or_else(|| details.as_ref().and_then(|d| d.photos.first().cloned()));
 
     let mut ids: Vec<String> = Vec::new();
     for c in &credits {
@@ -363,12 +402,179 @@ async fn person(
         image,
         roles,
         works,
+        details,
     }))
+}
+
+/// What TMDB says of somebody, from the day-long cache or fetched — in the
+/// reader's language, with the English biography where that language has
+/// none. Nothing when TMDB is not configured or did not answer, which costs
+/// the page its biography and nothing else.
+async fn details_for(
+    state: &AppState,
+    tmdb_id: i64,
+    language: Option<&str>,
+) -> Option<PersonDetails> {
+    if !state.tmdb.is_configured() {
+        return None;
+    }
+    let language = language.and_then(tmdb_language).unwrap_or("en-US");
+    let mut details = person_details(&fetch_person(state, tmdb_id, language).await?);
+    if details.biography.is_none()
+        && !language.to_ascii_lowercase().starts_with("en")
+        && let Some(english) = fetch_person(state, tmdb_id, "en-US").await
+    {
+        details.biography = person_details(&english).biography;
+    }
+    Some(details)
+}
+
+/// A language as TMDB takes one — `fr`, `pt-BR` — and nothing else: the
+/// value is a cache key and a request parameter, and whoever reads the
+/// page chose it.
+fn tmdb_language(asked: &str) -> Option<&str> {
+    let asked = asked.trim();
+    let (base, region) = asked.split_once('-').unwrap_or((asked, ""));
+    let base_ok = matches!(base.len(), 2 | 3) && base.bytes().all(|b| b.is_ascii_lowercase());
+    let region_ok =
+        region.is_empty() || (region.len() == 2 && region.bytes().all(|b| b.is_ascii_uppercase()));
+    (base_ok && region_ok).then_some(asked)
+}
+
+async fn fetch_person(state: &AppState, tmdb_id: i64, language: &str) -> Option<Value> {
+    let key = format!("person:{tmdb_id}:{language}");
+    let fetched = super::recommend::cached_value(state, &key, || async {
+        Ok(state
+            .tmdb
+            .person(tmdb_id, language)
+            .await?
+            .unwrap_or(Value::Null))
+    })
+    .await;
+    match fetched {
+        Ok(Value::Null) => None,
+        Ok(value) => Some(value),
+        Err(e) => {
+            tracing::debug!(tmdb_id, error = ?e, "TMDB could not say who this is");
+            None
+        }
+    }
+}
+
+/// TMDB's record of somebody, read down to what the page shows. A blank
+/// where TMDB holds nothing — an untranslated biography, no homepage — is
+/// nothing, not an empty line.
+fn person_details(raw: &Value) -> PersonDetails {
+    let text = |key: &str| {
+        raw.get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+    };
+    let names = |value: Option<&Value>| -> Vec<String> {
+        value
+            .and_then(Value::as_array)
+            .map(|names| {
+                names
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::trim)
+                    .filter(|n| !n.is_empty())
+                    .map(String::from)
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let photos = raw
+        .pointer("/images/profiles")
+        .and_then(Value::as_array)
+        .map(|profiles| {
+            profiles
+                .iter()
+                .filter_map(|p| p.get("file_path").and_then(Value::as_str))
+                .filter(|path| path.starts_with('/'))
+                .take(MOST_PHOTOS)
+                .map(tmdb::image_url)
+                .collect()
+        })
+        .unwrap_or_default();
+    PersonDetails {
+        biography: text("biography"),
+        birthday: text("birthday"),
+        deathday: text("deathday"),
+        place_of_birth: text("place_of_birth"),
+        known_for: text("known_for_department"),
+        also_known_as: names(raw.get("also_known_as")),
+        homepage: text("homepage").filter(|h| h.starts_with("http")),
+        imdb_id: text("imdb_id").or_else(|| {
+            raw.pointer("/external_ids/imdb_id")
+                .and_then(Value::as_str)
+                .map(String::from)
+        }),
+        photos,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn somebody_is_read_off_tmdb_s_record_down_to_what_is_shown() {
+        let profiles: Vec<Value> = (0..9)
+            .map(|n| serde_json::json!({ "file_path": format!("/p{n}.jpg") }))
+            .collect();
+        let raw = serde_json::json!({
+            "id": 17419,
+            "name": "Bryan Cranston",
+            "biography": "  ",
+            "birthday": "1956-03-07",
+            "deathday": null,
+            "place_of_birth": "Hollywood, Los Angeles, California, USA",
+            "known_for_department": "Acting",
+            "also_known_as": ["Bryan Lee Cranston", " ", "Lee Stone"],
+            "homepage": "",
+            "imdb_id": null,
+            "external_ids": { "imdb_id": "nm0186505", "wikidata_id": "Q23547" },
+            "images": { "profiles": profiles }
+        });
+        let details = person_details(&raw);
+        assert_eq!(details.biography, None, "blank is nothing");
+        assert_eq!(details.birthday.as_deref(), Some("1956-03-07"));
+        assert_eq!(details.deathday, None);
+        assert_eq!(
+            details.place_of_birth.as_deref(),
+            Some("Hollywood, Los Angeles, California, USA")
+        );
+        assert_eq!(details.known_for.as_deref(), Some("Acting"));
+        assert_eq!(details.also_known_as, ["Bryan Lee Cranston", "Lee Stone"]);
+        assert_eq!(details.homepage, None);
+        assert_eq!(details.imdb_id.as_deref(), Some("nm0186505"));
+        assert_eq!(details.photos.len(), MOST_PHOTOS);
+        assert!(details.photos[0].starts_with("https://"));
+        assert!(details.photos[0].ends_with("/p0.jpg"));
+    }
+
+    #[test]
+    fn only_a_language_shaped_like_one_reaches_tmdb() {
+        for fine in ["fr", "en-US", "pt-BR", "ast", " de "] {
+            assert!(tmdb_language(fine).is_some(), "{fine:?}");
+        }
+        for odd in [
+            "",
+            "f",
+            "FR",
+            "fr-fr",
+            "fr-FRA",
+            "en_US",
+            "../x",
+            "fr-FR&x=1",
+            "français",
+        ] {
+            assert_eq!(tmdb_language(odd), None, "{odd:?}");
+        }
+    }
 
     #[test]
     fn an_episode_without_a_time_is_placed_at_midnight_utc() {

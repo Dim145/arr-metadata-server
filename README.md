@@ -49,6 +49,13 @@ It replaces and merges two earlier projects: `the earlier TMDB relay` and
   the catalogue: `item.imported`, `item.created`, `item.deleted` and
   `dataset.imported`; `*` is every one. A failed sign-in is posted without
   the name that was typed, and the webhook address itself is never posted.
+- **Related works, and who people are.** What AniList files beside an anime
+  — its sequels, prequels, side stories, what it was drawn from — is kept
+  with the work and shown on its page, leading to the work here when the
+  catalogue holds it and to AniList when it does not; the seasonal chart says
+  what a series is the sequel of. A person's page adds who they are as
+  TMDB has it: born when and where, known for what, a biography in the
+  reader's language and a few portraits.
 - **A command palette, and actions on many works at once.** ⌘K or Ctrl K
   anywhere finds a place to go or a work by its title; in the catalogue,
   whoever maintains it selects rows and refreshes, switches off or on,

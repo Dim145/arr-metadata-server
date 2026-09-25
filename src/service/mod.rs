@@ -112,6 +112,7 @@ pub fn as_card(work: &mut MediaItem) {
 
     work.translations.clear();
     work.keywords.clear();
+    work.relations.clear();
 
     let mut kept = Vec::with_capacity(4);
     for kind in [
@@ -131,6 +132,15 @@ pub fn as_card(work: &mut MediaItem) {
         }
     }
     work.images = kept;
+}
+
+/// Keep from a reader who may not see adult works the entries filed beside
+/// a work that are for adults — by AniList's flag, or by what the catalogue
+/// holds of them — as the list would have kept the works themselves.
+pub fn hide_adult_relations(items: &mut [MediaItem]) {
+    for item in items {
+        item.relations.retain(|r| !r.is_adult);
+    }
 }
 
 pub fn redact_for_reader(identity: &crate::auth::Identity, items: &mut [MediaItem]) {

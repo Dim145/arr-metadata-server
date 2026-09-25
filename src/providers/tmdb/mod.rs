@@ -368,6 +368,18 @@ impl TmdbClient {
         self.fetch(&url, &params).await
     }
 
+    /// Somebody as TMDB has them — biography, dates, the names they go by,
+    /// pictures and the ids other sites file them under — in a language, and
+    /// untyped, for a reader that wants the record rather than the model.
+    pub async fn person(&self, id: i64, language: &str) -> Result<Option<Value>> {
+        let url = format!("{}/person/{id}", self.base);
+        let params = [
+            ("language", language.to_string()),
+            ("append_to_response", "images,external_ids".to_string()),
+        ];
+        self.fetch(&url, &params).await
+    }
+
     async fn fetch_movie(&self, id: i64, language: &str) -> Result<Option<Value>> {
         let url = format!("{}/movie/{id}", self.base);
         let params = [

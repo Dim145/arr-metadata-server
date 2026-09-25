@@ -16,7 +16,7 @@ use crate::{
     db::{Db, RowExt, from_bool, new_id, now, text_list},
     domain::{
         AlternativeTitle, CoverType, Credit, CreditType, Episode, ExternalIds, ExternalSource,
-        Image, MediaItem, MediaKind, Rating, RatingValue, Season, Translation,
+        Image, Kin, MediaItem, MediaKind, Rating, RatingValue, Relation, Season, Translation,
     },
 };
 
@@ -86,6 +86,7 @@ fn map_item(row: &sqlx::any::AnyRow) -> Result<MediaItem> {
         alternative_titles: Vec::new(),
         ratings: Vec::new(),
         translations: Vec::new(),
+        relations: Vec::new(),
         locked_fields: Vec::new(),
     })
 }
@@ -258,7 +259,7 @@ pub async fn find_id_by_slug(db: &Db, kind: MediaKind, slug: &str) -> Result<Opt
 
 /// Load every child collection onto `item`.
 pub async fn load_children(db: &Db, item: &mut MediaItem) -> Result<()> {
-    let (seasons, episodes, images, credits, alt_titles, ratings, translations) = tokio::try_join!(
+    let (seasons, episodes, images, credits, alt_titles, ratings, translations, relations) = tokio::try_join!(
         load_seasons(db, &item.id),
         load_episodes(db, &item.id),
         load_images(db, &item.id),
@@ -266,6 +267,7 @@ pub async fn load_children(db: &Db, item: &mut MediaItem) -> Result<()> {
         load_alternative_titles(db, &item.id),
         load_ratings(db, &item.id),
         load_translations(db, &item.id),
+        load_relations(db, &item.id),
     )?;
 
     // Season-scoped images belong on their season, not on the work.
@@ -288,6 +290,7 @@ pub async fn load_children(db: &Db, item: &mut MediaItem) -> Result<()> {
     item.alternative_titles = alt_titles;
     item.ratings = ratings;
     item.translations = translations;
+    item.relations = relations;
 
     Ok(())
 }
@@ -383,6 +386,75 @@ async fn load_images(db: &Db, media_id: &str) -> Result<Vec<Image>> {
     images.sort_by_key(|i| (i.cover_type.priority(), i.sort_order));
 
     Ok(images)
+}
+
+/// The work held here that a relation's entry is, as a subquery on a row `r`
+/// of `media_relation`: the one switched on that carries that id from that
+/// source — and, unless adult works are asked for, not one for adults.
+fn held(include_adult: bool) -> String {
+    format!(
+        "(SELECT x.media_id FROM media_external_id x
+           JOIN media_item w ON w.id = x.media_id
+          WHERE x.source = r.source AND x.value = CAST(r.external_id AS TEXT)
+            AND w.is_enabled = 1{}
+          LIMIT 1)",
+        if include_adult {
+            ""
+        } else {
+            " AND w.is_adult = 0"
+        }
+    )
+}
+
+/// Whether the work held here that a relation's entry is, is for adults:
+/// the same subquery, answering with the flag rather than the id.
+const HELD_ADULT: &str = "(SELECT w.is_adult FROM media_external_id x
+                            JOIN media_item w ON w.id = x.media_id
+                           WHERE x.source = r.source AND x.value = CAST(r.external_id AS TEXT)
+                             AND w.is_enabled = 1
+                           LIMIT 1)";
+
+/// Every relation of a work, with the work here that each is when the
+/// catalogue holds it, whatever it is; an entry for adults — by AniList's
+/// flag or by the work held — is marked so, for the reader's policy to keep
+/// or drop.
+async fn load_relations(db: &Db, media_id: &str) -> Result<Vec<Relation>> {
+    let held = held(true);
+    let rows = sqlx::query(db.sql(&format!(
+        "SELECT r.id, r.relation_type, r.source, r.external_id, r.mal_id, r.title, r.medium,
+                r.format, r.year, r.image, r.is_adult, r.sort_order, {held} AS work_id,
+                COALESCE({HELD_ADULT}, 0) AS work_is_adult
+           FROM media_relation r WHERE r.media_id = ? ORDER BY r.sort_order"
+    )))
+    .bind(media_id)
+    .fetch_all(db.pool())
+    .await?;
+
+    rows.iter()
+        .map(map_relation)
+        // An entry that is this very work — a film filed under its series,
+        // where the series is several entries — is not another work to lead
+        // to.
+        .filter(|r| !matches!(r, Ok(r) if r.work_id.as_deref() == Some(media_id)))
+        .collect()
+}
+
+fn map_relation(row: &sqlx::any::AnyRow) -> Result<Relation> {
+    Ok(Relation {
+        id: row.text("id")?,
+        relation_type: row.text("relation_type")?,
+        source: row.text("source")?,
+        external_id: row.big("external_id")?,
+        mal_id: row.opt_big("mal_id")?,
+        title: row.text("title")?,
+        medium: row.text("medium")?,
+        format: row.opt_text("format")?,
+        year: row.opt_int("year")?,
+        image: row.opt_text("image")?,
+        is_adult: row.flag("is_adult")? || row.flag("work_is_adult")?,
+        work_id: row.opt_text("work_id")?,
+        sort_order: row.int("sort_order")?,
+    })
 }
 
 async fn load_credits(db: &Db, media_id: &str) -> Result<Vec<Credit>> {
@@ -1246,6 +1318,55 @@ pub async fn added_since(db: &Db, since: &str, include_adult: bool) -> Result<i6
     Ok(row.big("n")?)
 }
 
+/// What each of these works is the sequel of, where a provider filed a
+/// prequel: the nearest one — the latest, where years are known — with the
+/// work here that it is, when the catalogue holds it. A work with none filed
+/// is absent; so is one whose prequels are all for adults, unless adult works
+/// are asked for, and a held work for adults is then not led to either.
+pub async fn prequels_of(
+    db: &Db,
+    ids: &[String],
+    include_adult: bool,
+) -> Result<std::collections::HashMap<String, Kin>> {
+    let mut kin = std::collections::HashMap::new();
+    let held = held(include_adult);
+    // For adults by AniList's flag, or by the work held: neither is named.
+    let adult = if include_adult {
+        String::new()
+    } else {
+        format!(" AND r.is_adult = 0 AND COALESCE({HELD_ADULT}, 0) = 0")
+    };
+    for chunk in ids.chunks(400) {
+        let marks = vec!["?"; chunk.len()].join(", ");
+        let sql = format!(
+            "SELECT r.media_id, r.title, {held} AS work_id
+               FROM media_relation r
+              WHERE r.relation_type = 'PREQUEL'{adult} AND r.media_id IN ({marks})
+              ORDER BY r.media_id, r.year DESC NULLS LAST, r.sort_order"
+        );
+        let mut query = sqlx::query(db.sql(&sql));
+        for id in chunk {
+            query = query.bind(id);
+        }
+        for row in query.fetch_all(db.pool()).await? {
+            let media_id = row.text("media_id")?;
+            let work_id = row.opt_text("work_id")?;
+            // Its own entry, or one already chosen: see `load_relations`.
+            if work_id.as_deref() == Some(media_id.as_str()) || kin.contains_key(&media_id) {
+                continue;
+            }
+            kin.insert(
+                media_id,
+                Kin {
+                    title: row.text("title")?,
+                    work_id,
+                },
+            );
+        }
+    }
+    Ok(kin)
+}
+
 pub async fn count_matching(db: &Db, q: &Query) -> Result<i64> {
     let mut sql = format!(
         "SELECT COUNT(*) AS n FROM {} WHERE 1 = 1",
@@ -2047,6 +2168,7 @@ async fn replace_children(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaIt
         "media_episode",
         "media_image",
         "media_credit",
+        "media_relation",
         "media_alternative_title",
         "media_translation",
     ] {
@@ -2224,6 +2346,36 @@ async fn replace_children(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaIt
         .execute(&mut **tx)
         .await
         .context("failed to write credit")?;
+    }
+
+    for relation in &item.relations {
+        sqlx::query(db.sql(
+            "INSERT INTO media_relation
+                 (id, media_id, relation_type, source, external_id, mal_id, title, medium,
+                  format, year, image, is_adult, sort_order, is_manual, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)",
+        ))
+        .bind(if relation.id.is_empty() {
+            new_id()
+        } else {
+            relation.id.clone()
+        })
+        .bind(&item.id)
+        .bind(&relation.relation_type)
+        .bind(&relation.source)
+        .bind(relation.external_id)
+        .bind(relation.mal_id)
+        .bind(&relation.title)
+        .bind(&relation.medium)
+        .bind(&relation.format)
+        .bind(relation.year)
+        .bind(&relation.image)
+        .bind(from_bool(relation.is_adult))
+        .bind(relation.sort_order)
+        .bind(&created)
+        .execute(&mut **tx)
+        .await
+        .context("failed to write relation")?;
     }
 
     for alt in &item.alternative_titles {
@@ -3646,5 +3798,210 @@ mod tests {
             .expect("switched off");
         assert_eq!(episode_count(&db, true, false).await.unwrap(), 0);
         assert_eq!(episode_count(&db, true, true).await.unwrap(), episodes);
+    }
+
+    fn related(
+        relation_type: &str,
+        external_id: i64,
+        title: &str,
+        year: Option<i32>,
+        sort_order: i32,
+    ) -> Relation {
+        Relation {
+            id: String::new(),
+            relation_type: relation_type.into(),
+            source: "anilist".into(),
+            external_id,
+            mal_id: None,
+            title: title.into(),
+            medium: "anime".into(),
+            format: Some("TV".into()),
+            year,
+            image: None,
+            is_adult: false,
+            work_id: None,
+            sort_order,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_related_work_is_kept_and_found_here_once_the_catalogue_holds_it() {
+        let db = db().await;
+        let mut first = sample();
+        first.relations = vec![
+            related("PREQUEL", 20811, "No Regrets", Some(2014), 0),
+            related("SEQUEL", 20958, "Season 2", Some(2017), 1),
+        ];
+        upsert(
+            &db,
+            ItemWrite {
+                item: &first,
+                replace_children: true,
+            },
+        )
+        .await
+        .expect("stored");
+
+        let mut read = first.clone();
+        load_children(&db, &mut read).await.expect("loaded");
+        assert_eq!(
+            read.relations
+                .iter()
+                .map(|r| r.external_id)
+                .collect::<Vec<_>>(),
+            [20811, 20958]
+        );
+        assert!(
+            read.relations.iter().all(|r| r.work_id.is_none()),
+            "nothing held yet"
+        );
+
+        // The sequel arrives, filed under its AniList id.
+        let mut second = sample();
+        second.id = crate::db::new_id();
+        second.slug = "season-2".into();
+        second.title = "Season 2".into();
+        second.external_ids = ExternalIds {
+            anilist: vec![20958],
+            ..Default::default()
+        };
+        upsert(
+            &db,
+            ItemWrite {
+                item: &second,
+                replace_children: false,
+            },
+        )
+        .await
+        .expect("stored");
+
+        load_children(&db, &mut read).await.expect("loaded");
+        assert_eq!(
+            read.relations[1].work_id.as_deref(),
+            Some(second.id.as_str())
+        );
+        assert_eq!(read.relations[0].work_id, None);
+
+        let kin = prequels_of(&db, &[first.id.clone(), second.id.clone()], true)
+            .await
+            .expect("read");
+        assert_eq!(
+            kin.get(&first.id).map(|k| k.title.as_str()),
+            Some("No Regrets")
+        );
+        assert!(!kin.contains_key(&second.id), "nothing filed before it");
+    }
+
+    #[tokio::test]
+    async fn an_entry_that_is_this_very_work_is_not_a_related_one() {
+        // One work here can be several AniList entries — a series and the
+        // film filed under it — and one entry relates to the other.
+        let db = db().await;
+        let mut item = sample();
+        item.external_ids = ExternalIds {
+            anilist: vec![21, 12001],
+            ..Default::default()
+        };
+        item.relations = vec![
+            related("SIDE_STORY", 12001, "The Film", Some(2012), 0),
+            related("PREQUEL", 12001, "The Film", Some(2012), 1),
+            related("SEQUEL", 30, "Something else", None, 2),
+            related("PREQUEL", 40, "The one before", Some(2000), 3),
+        ];
+        upsert(
+            &db,
+            ItemWrite {
+                item: &item,
+                replace_children: true,
+            },
+        )
+        .await
+        .expect("stored");
+
+        let mut read = item.clone();
+        load_children(&db, &mut read).await.expect("loaded");
+        assert_eq!(
+            read.relations
+                .iter()
+                .map(|r| r.external_id)
+                .collect::<Vec<_>>(),
+            [30, 40]
+        );
+        // The later prequel is the work itself, so the earlier one is named.
+        let kin = prequels_of(&db, &[item.id.clone()], true).await.unwrap();
+        assert_eq!(
+            kin.get(&item.id).map(|k| k.title.as_str()),
+            Some("The one before")
+        );
+    }
+
+    #[tokio::test]
+    async fn what_is_for_adults_is_marked_and_kept_from_whoever_may_not_see_it() {
+        let db = db().await;
+        let mut first = sample();
+        let mut flagged = related("PREQUEL", 777, "Grown-up prequel", Some(2019), 0);
+        flagged.is_adult = true;
+        first.relations = vec![
+            flagged,
+            related("PREQUEL", 20811, "No Regrets", Some(2014), 1),
+            related("PREQUEL", 555, "The old one", Some(2001), 2),
+        ];
+        upsert(
+            &db,
+            ItemWrite {
+                item: &first,
+                replace_children: true,
+            },
+        )
+        .await
+        .expect("stored");
+
+        // The catalogue holds "No Regrets", and holds it as a work for adults.
+        let mut held = sample();
+        held.id = crate::db::new_id();
+        held.slug = "no-regrets".into();
+        held.title = "No Regrets".into();
+        held.is_adult = true;
+        held.external_ids = ExternalIds {
+            anilist: vec![20811],
+            ..Default::default()
+        };
+        upsert(
+            &db,
+            ItemWrite {
+                item: &held,
+                replace_children: false,
+            },
+        )
+        .await
+        .expect("stored");
+
+        let mut read = first.clone();
+        load_children(&db, &mut read).await.expect("loaded");
+        let marked: Vec<(i64, bool, bool)> = read
+            .relations
+            .iter()
+            .map(|r| (r.external_id, r.is_adult, r.work_id.is_some()))
+            .collect();
+        assert_eq!(
+            marked,
+            [(777, true, false), (20811, true, true), (555, false, false)],
+            "flagged by AniList, flagged by what is held, and plain"
+        );
+
+        // A chart that may show adult works names the latest prequel; one that
+        // may not names the latest that is not for adults, and never leads to
+        // the held work for adults.
+        let kin = prequels_of(&db, &[first.id.clone()], true).await.unwrap();
+        assert_eq!(
+            kin.get(&first.id).map(|k| k.title.as_str()),
+            Some("Grown-up prequel")
+        );
+        let kin = prequels_of(&db, &[first.id.clone()], false).await.unwrap();
+        assert_eq!(
+            kin.get(&first.id)
+                .map(|k| (k.title.as_str(), k.work_id.is_some())),
+            Some(("The old one", false))
+        );
     }
 }

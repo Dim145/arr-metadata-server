@@ -267,11 +267,14 @@ async fn detail(
     // Switched off, or kept from this caller by the adult policy even were it
     // to ask: the list would never have shown it to them, and knowing the id
     // is no reason to. Whoever maintains the catalogue still opens it.
-    let hidden = !item.is_enabled
-        || (item.is_adult
-            && !state.adult_for(identity.client_id(), identity.peer_id(), Some(true)));
+    let adult = state.adult_for(identity.client_id(), identity.peer_id(), Some(true));
+    let hidden = !item.is_enabled || (item.is_adult && !adult);
     if hidden && !identity.can_write() {
         return Err(AppError::NotFound);
+    }
+    // Nor what is filed beside it that the same policy would keep from them.
+    if !adult && !identity.can_write() {
+        service::hide_adult_relations(std::slice::from_mut(&mut item));
     }
 
     if let Some(language) = query.language.as_deref().filter(|l| !l.is_empty()) {

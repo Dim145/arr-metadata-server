@@ -1,25 +1,31 @@
 /**
- * Somebody's work, as this catalogue holds it.
+ * Somebody's work, as this catalogue holds it — and who they are, as TMDB
+ * has it.
  *
  * Laid out like the filmography at the back of a monograph: the year in the
  * margin, the title set in the display face, the part or the job in italics.
  * It is only ever the part of a career this server happens to hold — the
- * page says so, and links to TMDB for the rest.
+ * page says so, and links to TMDB for the rest. Above it, when TMDB answers,
+ * the life in a few lines: when and where they were born, what they are known
+ * for, a biography folded to its first lines, and a few portraits.
  */
 
 import { useQuery } from '@tanstack/react-query'
+import { useState } from 'react'
 import { Link, useParams } from 'react-router'
 
 import { ExternalLink } from '../components/elsewhere'
 import { Artwork } from '../components/media'
 import { EmptyState, Glyph, Label, Skeleton } from '../components/ui'
 import { ApiError, api, query } from '../lib/api'
+import { cn } from '../lib/cn'
+import * as fmt from '../lib/format'
 import { useTitle } from '../lib/hooks'
 import { useI18n } from '../lib/i18n'
 import { jobLabel } from '../lib/labels'
 import { personLink } from '../lib/links'
 import { poster } from '../lib/media'
-import type { MediaItem, Person as PersonData, Role } from '../lib/types'
+import type { MediaItem, Person as PersonData, PersonDetails, Role } from '../lib/types'
 import { NotFound } from './NotFound'
 
 export function Person() {
@@ -59,6 +65,7 @@ function Filmography({ person }: { person: PersonData }) {
   const onScreen = (type: string) => type === 'actor' || type === 'guest'
   const acting = person.roles.filter((r) => onScreen(r.creditType)).length
   const crew = person.roles.length - acting
+  const details = person.details
 
   return (
     <article className="pt-10 pb-12">
@@ -91,12 +98,36 @@ function Filmography({ person }: { person: PersonData }) {
               .filter(Boolean)
               .join(' · ')}
           </p>
+          {details ? <Vitals details={details} /> : null}
           <p className="mt-4 max-w-prose text-sm leading-relaxed text-bone-dim">
             {t.person.partial}{' '}
             <ExternalLink href={personLink(person.tmdbId)}>{t.person.onTmdb}</ExternalLink>
+            {details?.imdbId ? (
+              <>
+                {' · '}
+                <ExternalLink href={`https://www.imdb.com/name/${encodeURIComponent(details.imdbId)}/`}>
+                  {t.person.onImdb}
+                </ExternalLink>
+              </>
+            ) : null}
+            {details?.homepage ? (
+              <>
+                {' · '}
+                <ExternalLink href={details.homepage}>{t.person.website}</ExternalLink>
+              </>
+            ) : null}
           </p>
         </div>
       </header>
+
+      {details?.biography ? <Biography text={details.biography} /> : null}
+      {details?.alsoKnownAs?.length ? (
+        <p className="mt-6 text-sm text-bone-dim">
+          <span className="label mr-2">{t.person.alsoKnownAs}</span>
+          <span className="font-mono text-xs text-bone-faint">{details.alsoKnownAs.join(' · ')}</span>
+        </p>
+      ) : null}
+      {details?.photos && details.photos.length > 1 ? <Portraits name={person.name} photos={details.photos} /> : null}
 
       <ol className="stagger mt-10 divide-y divide-rule border-y border-rule">
         {person.works.map((work) => (
@@ -104,6 +135,99 @@ function Filmography({ person }: { person: PersonData }) {
         ))}
       </ol>
     </article>
+  )
+}
+
+/** When and where they were born, when they died, what they are known for. */
+function Vitals({ details }: { details: PersonDetails }) {
+  const { t, locale } = useI18n()
+  const born = details.birthday ? fmt.longDate(details.birthday, locale) : undefined
+  const died = details.deathday ? fmt.longDate(details.deathday, locale) : undefined
+  const age = details.birthday ? ageBetween(details.birthday, details.deathday) : undefined
+
+  const lines = [
+    born
+      ? [
+          t.person.born(born),
+          details.placeOfBirth ? t.person.in(details.placeOfBirth) : undefined,
+          age !== undefined && !details.deathday ? `(${t.person.aged(age)})` : undefined,
+        ]
+          .filter(Boolean)
+          .join(' ')
+      : undefined,
+    died ? [t.person.died(died), age !== undefined ? t.person.at(age) : undefined].filter(Boolean).join(' ') : undefined,
+    details.knownFor ? t.person.knownFor(t.person.department[details.knownFor] ?? details.knownFor) : undefined,
+  ].filter(Boolean) as string[]
+  if (!lines.length) return null
+
+  return (
+    <ul className="mt-3 space-y-0.5 text-sm text-bone-dim">
+      {lines.map((line) => (
+        <li key={line}>{line}</li>
+      ))}
+    </ul>
+  )
+}
+
+/** Whole years from one day to another — today, when the second is not given. */
+export function ageBetween(from: string, until?: string): number | undefined {
+  const start = new Date(`${from}T00:00:00Z`)
+  const end = until ? new Date(`${until}T00:00:00Z`) : new Date()
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end < start) return undefined
+  let years = end.getUTCFullYear() - start.getUTCFullYear()
+  const beforeBirthday =
+    end.getUTCMonth() < start.getUTCMonth() ||
+    (end.getUTCMonth() === start.getUTCMonth() && end.getUTCDate() < start.getUTCDate())
+  if (beforeBirthday) years -= 1
+  return years
+}
+
+/** The biography, folded to its first lines until asked for whole. */
+function Biography({ text }: { text: string }) {
+  const { t } = useI18n()
+  const [whole, setWhole] = useState(false)
+  // Short enough to show whole: a fold that hides one line is a tease.
+  const long = text.length > 700
+
+  return (
+    <section className="rise mt-8 max-w-prose" style={{ animationDelay: '80ms' }}>
+      <Label>{t.person.biography}</Label>
+      <p className={cn('mt-2 text-sm leading-relaxed whitespace-pre-line text-bone-dim', long && !whole && 'line-clamp-6')}>
+        {text}
+      </p>
+      {long ? (
+        <button
+          type="button"
+          onClick={() => setWhole((v) => !v)}
+          aria-expanded={whole}
+          className="mt-2 text-xs text-vermillion underline-offset-2 hover:underline"
+        >
+          {whole ? t.person.readLess : t.person.readMore}
+        </button>
+      ) : null}
+    </section>
+  )
+}
+
+/** A few portraits, in a row that scrolls sideways. */
+function Portraits({ name, photos }: { name: string; photos: string[] }) {
+  const { t } = useI18n()
+  return (
+    <section className="mt-8">
+      <Label>{t.person.portraits}</Label>
+      <ul className="mt-3 flex gap-3 overflow-x-auto pb-2" aria-label={t.person.portraits}>
+        {photos.map((url, index) => (
+          <li key={url} className="w-20 shrink-0 sm:w-24">
+            <Artwork
+              url={url}
+              role="thumb"
+              alt={t.person.portrait(name, index + 1)}
+              className="aspect-2/3 w-full rounded-card border border-rule object-cover"
+            />
+          </li>
+        ))}
+      </ul>
+    </section>
   )
 }
 

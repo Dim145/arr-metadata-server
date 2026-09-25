@@ -238,6 +238,11 @@ fn fold(into: &mut MediaItem, other: MediaItem) {
         into.credits = other.credits;
     }
 
+    // Likewise what a work is filed beside: one provider's relations, whole.
+    if into.relations.is_empty() {
+        into.relations = other.relations;
+    }
+
     // The spine: whichever provider came first and had a list keeps it. Only
     // when it had none does a later provider supply one.
     if into.seasons.is_empty() {
@@ -724,6 +729,40 @@ mod tests {
         let merged = combine(vec![a, b], &priority()).unwrap();
         assert_eq!(merged.credits.len(), 1);
         assert_eq!(merged.credits[0].person_name, "Bryan Cranston");
+    }
+
+    #[test]
+    fn related_works_come_from_the_first_provider_that_has_them() {
+        let related = |external_id: i64| crate::domain::Relation {
+            id: String::new(),
+            relation_type: "SEQUEL".into(),
+            source: "anilist".into(),
+            external_id,
+            mal_id: None,
+            title: "Next".into(),
+            medium: "anime".into(),
+            format: None,
+            year: None,
+            image: None,
+            is_adult: false,
+            work_id: None,
+            sort_order: 0,
+        };
+        let a = base("tmdb", "T");
+        let mut b = base("anilist", "T");
+        b.item.relations = vec![related(1)];
+        let mut c = base("mal", "T");
+        c.item.relations = vec![related(2), related(3)];
+
+        let merged = combine(vec![a, b, c], &priority()).unwrap();
+        assert_eq!(
+            merged
+                .relations
+                .iter()
+                .map(|r| r.external_id)
+                .collect::<Vec<_>>(),
+            [1]
+        );
     }
 
     #[test]

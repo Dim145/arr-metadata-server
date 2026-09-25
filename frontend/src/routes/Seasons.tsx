@@ -881,6 +881,20 @@ function ProgrammeCard({
         </h3>
 
         <p className="mt-1 text-sm text-bone-dim">{opens}</p>
+        {entry.sequelOf ? (
+          <p className="mt-0.5 text-xs text-bone-faint">
+            {entry.sequelOf.workId ? (
+              <Link
+                to={`/work/${entry.sequelOf.workId}`}
+                className="relative z-10 underline-offset-2 transition-colors duration-150 hover:text-vermillion hover:underline"
+              >
+                {t.seasons.sequelOf(entry.sequelOf.title)}
+              </Link>
+            ) : (
+              t.seasons.sequelOf(entry.sequelOf.title)
+            )}
+          </p>
+        ) : null}
         {facts.length ? (
           <p className="mt-0.5 font-mono text-xs text-bone-faint tabular-nums">{facts.join(' · ')}</p>
         ) : null}

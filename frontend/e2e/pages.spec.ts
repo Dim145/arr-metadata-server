@@ -195,11 +195,78 @@ test.describe('a person', () => {
     ).toHaveAttribute('target', '_blank')
   })
 
+  test('says who they are, as TMDB has it, when TMDB answers', async ({ page, request }) => {
+    const work = await aSeries(request)
+    const credit = work?.credits?.find((c) => c.tmdbPersonId)
+    test.skip(!credit, 'no credit carries a TMDB person id')
+
+    const response = await request.get(`/api/v1/people/${credit!.tmdbPersonId}?language=en`)
+    expect(response.status()).toBe(200)
+    const person = await response.json()
+    test.skip(!person.details, 'TMDB is not configured, so nobody has a biography here')
+
+    // What TMDB says, read down to the page: a date, a department, portraits.
+    if (person.details.birthday) expect(person.details.birthday).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+    expect(Array.isArray(person.details.photos ?? [])).toBe(true)
+
+    await page.goto(`/person/${credit!.tmdbPersonId}`)
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText(credit!.personName)
+    if (person.details.biography) {
+      await expect(page.getByText(/^(biography|biographie)$/i)).toBeVisible()
+    }
+    if (person.details.birthday) {
+      await expect(page.getByText(/^(born |né·e le )/i)).toBeVisible()
+    }
+    if (person.details.imdbId) {
+      await expect(
+        page.locator(`a[href="https://www.imdb.com/name/${person.details.imdbId}/"]`),
+      ).toHaveAttribute('target', '_blank')
+    }
+  })
+
   test('nobody by that id says so', async ({ page }) => {
     await page.goto('/person/999999999')
     await expect(
       page.getByRole('heading', { name: /nothing lives at this address|rien à cette adresse/i }),
     ).toBeVisible()
+  })
+})
+
+test.describe('related works', () => {
+  test('lead to the work here when it is held, and to AniList when it is not', async ({
+    page,
+    request,
+  }) => {
+    // A work AniList filed others beside: only an anime refreshed with
+    // AniList switched on carries any, so this may have nothing to look at.
+    const { items } = await (await request.get('/api/v1/items?limit=60')).json()
+    let related:
+      | { id: string; relations: { title: string; workId?: string; externalId: number; medium: string }[] }
+      | undefined
+    for (const { id } of items as { id: string }[]) {
+      const work = await (await request.get(`/api/v1/items/${id}`)).json()
+      if (work.relations?.length) {
+        related = work
+        break
+      }
+    }
+    test.skip(!related, 'no work carries relations; switch AniList on and refresh an anime')
+
+    await page.goto(`/work/${related!.id}`)
+    await expect(page.getByText(/^(related works|œuvres liées)$/i)).toBeVisible()
+
+    const first = related!.relations[0]
+    const card = page.getByRole('link', { name: first.title.slice(0, 24) }).first()
+    await expect(card).toBeVisible()
+    if (first.workId) {
+      await expect(card).toHaveAttribute('href', `/work/${first.workId}`)
+    } else {
+      await expect(card).toHaveAttribute(
+        'href',
+        `https://anilist.co/${first.medium === 'manga' ? 'manga' : 'anime'}/${first.externalId}`,
+      )
+      await expect(card).toHaveAttribute('rel', /noreferrer/)
+    }
   })
 })
 
