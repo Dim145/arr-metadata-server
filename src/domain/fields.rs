@@ -28,8 +28,12 @@ pub enum FieldType {
     Integer,
     Float,
     Boolean,
-    /// ISO-8601 date or date-time, kept as a string.
+    /// A day, `YYYY-MM-DD` — or a date-time, as a provider sometimes gives
+    /// a release. Kept as a string.
     Date,
+    /// An instant, RFC 3339 with its zone: `2009-03-22T21:00:00Z`. What
+    /// Sonarr reads as the moment an episode aired.
+    DateTime,
     /// `HH:MM`.
     TimeOfDay,
     /// Array of strings.
@@ -44,7 +48,15 @@ impl FieldType {
     fn accepts(self, value: &Value) -> bool {
         match (self, value) {
             (_, Value::Null) => true,
-            (Self::Text | Self::LongText | Self::Date | Self::TimeOfDay, Value::String(_)) => true,
+            (Self::Text | Self::LongText, Value::String(_)) => true,
+            // Shaped as the readers of these fields expect: Sonarr parses a
+            // date and an instant, and a day typed in as "TBA" was stored,
+            // served, and failed there.
+            (Self::Date, Value::String(s)) => is_day(s) || is_instant(s),
+            (Self::DateTime, Value::String(s)) => is_instant(s),
+            (Self::TimeOfDay, Value::String(s)) => {
+                chrono::NaiveTime::parse_from_str(s, "%H:%M").is_ok()
+            }
             // In `i32` range, because that is what every integer field is. A
             // number that is merely a valid JSON integer passes serde on the
             // way in and fails it on the way out, in `patch_in_place` — which
@@ -67,11 +79,22 @@ impl FieldType {
             Self::Integer => "a whole number between -2147483648 and 2147483647",
             Self::Float => "a number",
             Self::Boolean => "true or false",
-            Self::Date => "an ISO-8601 date string",
-            Self::TimeOfDay => "an HH:MM string",
+            Self::Date => "a date, YYYY-MM-DD, or a date-time",
+            Self::DateTime => "a date-time with its zone, like 2009-03-22T21:00:00Z",
+            Self::TimeOfDay => "a time, HH:MM",
             Self::TextList => "an array of strings",
         }
     }
+}
+
+/// `YYYY-MM-DD`, and a real day of the calendar.
+fn is_day(value: &str) -> bool {
+    chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").is_ok()
+}
+
+/// An RFC 3339 date-time, its zone included.
+fn is_instant(value: &str) -> bool {
+    chrono::DateTime::parse_from_rfc3339(value).is_ok()
 }
 
 #[derive(Clone, Copy, Debug, Serialize, ToSchema)]
@@ -132,7 +155,7 @@ pub const EPISODE_FIELDS: &[FieldDef] = &[
     f("title", Text, "Title"),
     f("overview", LongText, "Overview"),
     f("airDate", Date, "Air date"),
-    f("airDateUtc", Date, "Air date (UTC)"),
+    f("airDateUtc", DateTime, "Air date and time (UTC)"),
     f("runtime", Integer, "Runtime (minutes)"),
     f("finaleType", Text, "Finale type"),
     f("image", Text, "Still image URL"),
@@ -449,6 +472,43 @@ mod tests {
         )
         .unwrap();
         assert_eq!(it.runtime, Some(42));
+    }
+
+    #[test]
+    fn dates_times_and_instants_are_checked_for_their_shape() {
+        let episode = Scope::Episode {
+            season: 1,
+            episode: 1,
+        };
+        // A day, or a date-time a provider gave, for a date.
+        assert!(validate(Scope::Item, "firstAired", Some(&"2008-01-20".into())).is_ok());
+        assert!(
+            validate(
+                Scope::Item,
+                "digitalRelease",
+                Some(&"2016-06-30T00:00:00Z".into())
+            )
+            .is_ok()
+        );
+        assert!(validate(Scope::Item, "firstAired", Some(&"TBA".into())).is_err());
+        assert!(validate(Scope::Item, "firstAired", Some(&"2008-13-40".into())).is_err());
+        // An instant, with its zone, for the moment an episode aired.
+        assert!(validate(episode, "airDateUtc", Some(&"2009-03-22T21:00:00Z".into())).is_ok());
+        assert!(
+            validate(
+                episode,
+                "airDateUtc",
+                Some(&"2009-03-22T23:00:00+02:00".into())
+            )
+            .is_ok()
+        );
+        assert!(validate(episode, "airDateUtc", Some(&"2009-03-22".into())).is_err());
+        assert!(validate(episode, "airDateUtc", Some(&"2009-03-22T21:00".into())).is_err());
+        // A time of day.
+        assert!(validate(Scope::Item, "airTime", Some(&"21:00".into())).is_ok());
+        assert!(validate(Scope::Item, "airTime", Some(&"9pm".into())).is_err());
+        // Clearing any of them is always allowed.
+        assert!(validate(episode, "airDateUtc", Some(&Value::Null)).is_ok());
     }
 
     #[test]

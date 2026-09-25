@@ -145,6 +145,7 @@ export type FieldType =
   | 'float'
   | 'boolean'
   | 'date'
+  | 'dateTime'
   | 'timeOfDay'
   | 'textList'
 

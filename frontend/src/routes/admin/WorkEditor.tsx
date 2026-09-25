@@ -563,7 +563,13 @@ function FieldRow({
               <FormField
                 label={fieldLabel(def, t)}
                 htmlFor={inputId}
-                hint={def.fieldType === 'textList' ? t.admin.editor.listHint : undefined}
+                hint={
+                  def.fieldType === 'textList'
+                    ? t.admin.editor.listHint
+                    : def.fieldType === 'dateTime'
+                      ? t.admin.editor.dateTimeHint
+                      : undefined
+                }
                 error={save.isError ? save.error.message : undefined}
               >
                 {multiline ? (
@@ -1008,6 +1014,12 @@ function parse(draft: string, def: FieldDef): unknown {
         .split(',')
         .map((part) => part.trim())
         .filter(Boolean)
+    case 'dateTime': {
+      // Typed by hand, in UTC: the seconds and the zone filled in, so that
+      // "2009-03-22T21:00" is the instant the server expects.
+      const partial = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2})(:\d{2})?$/.exec(trimmed)
+      return partial ? `${partial[1]}${partial[2] ?? ':00'}Z` : trimmed
+    }
     default:
       return trimmed
   }

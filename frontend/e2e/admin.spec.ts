@@ -516,6 +516,58 @@ test.describe('an episode’s field', () => {
   })
 })
 
+test.describe('an episode’s air time', () => {
+  test.skip(!USERNAME || !PASSWORD, 'needs a credential; see above')
+
+  test('typed without its seconds or zone, is stored as the instant Sonarr reads', async ({ page }, info) => {
+    test.slow()
+    await signIn(page)
+
+    const found = await aQuietSeason(page)
+    test.skip(!found, 'the catalogue holds no season of two episodes')
+
+    const episode = found!.episodes[info.project.name === 'mobile' ? 0 : 1]
+    const number = episode.episodeNumber as number
+    const scope = `episode:${found!.season}x${number}`
+    const editor = `/admin/catalogue/${found!.id}?season=${found!.season}&episode=${number}`
+    const unlock = () =>
+      page.request.delete(`/api/v1/items/${found!.id}/overrides/${encodeURIComponent(scope)}/airDateUtc`)
+
+    try {
+      await unlock()
+      await page.goto(editor)
+      const row = page.locator(`#episode-fields-${found!.season}x${number} li[data-field="airDateUtc"]`)
+      await expect(row).toBeVisible()
+
+      // The field says what it holds, and the hint how to type it.
+      await expect(row.getByText(/date and time|date et heure/i).first()).toBeVisible()
+      await row.getByRole('button', { name: /^(edit|modifier)$/i }).click()
+      await row.getByRole('textbox').fill('2009-03-22T21:00')
+      await row.getByRole('button', { name: /save and lock|enregistrer et verrouiller/i }).click()
+      await expect(row.getByText(/^(locked|verrouillé)\b/i)).toBeVisible()
+      // The value's own line, not the type's example, which reads the same.
+      await expect(row.locator('p', { hasText: /^2009-03-22T21:00:00Z$/ })).toBeVisible()
+
+      // What the server holds is the whole instant, which its clients parse.
+      const overrides = await (await page.request.get(`/api/v1/items/${found!.id}/overrides`)).json()
+      const stored = (overrides as { scope: string; field: string; value: unknown }[]).find(
+        (o) => o.scope === scope && o.field === 'airDateUtc',
+      )
+      expect(stored?.value).toBe('2009-03-22T21:00:00Z')
+
+      // A day alone is not an instant, and the server says so where it was typed.
+      await row.getByRole('button', { name: /^(unlock|déverrouiller)$/i }).click()
+      await expect(row.getByText(/^(locked|verrouillé)\b/i)).toHaveCount(0)
+      await row.getByRole('button', { name: /^(edit|modifier)$/i }).click()
+      await row.getByRole('textbox').fill('2009-03-22')
+      await row.getByRole('button', { name: /save and lock|enregistrer et verrouiller/i }).click()
+      await expect(row.getByText(/expects a date-time/i)).toBeVisible()
+    } finally {
+      await unlock()
+    }
+  })
+})
+
 test.describe('a provider’s answer', () => {
   test.skip(!USERNAME || !PASSWORD, 'needs a credential; see above')
 
