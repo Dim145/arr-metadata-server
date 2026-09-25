@@ -65,6 +65,10 @@ const ALL: &[Scope] = &[Scope::Server, Scope::Client, Scope::Peer];
 const SERVER_ONLY: &[Scope] = &[Scope::Server];
 const PER_CLIENT: &[Scope] = &[Scope::Client, Scope::Peer];
 
+/// The text settings that may be set to nothing, which switches them off:
+/// an address to post to is one, a language is not.
+const OPTIONAL: &[&str] = &["webhooks.url"];
+
 pub const REGISTRY: &[Definition] = &[
     // ── Answering ────────────────────────────────────────────────────────────
     Definition {
@@ -154,6 +158,21 @@ pub const REGISTRY: &[Definition] = &[
         kind: Kind::Int { min: 1, max: 500 },
         scopes: SERVER_ONLY,
     },
+    // ── Webhooks ─────────────────────────────────────────────────────────────
+    Definition {
+        // Where what happens is posted, as JSON; nothing is posted while it is
+        // unset.
+        key: "webhooks.url",
+        kind: Kind::Text,
+        scopes: SERVER_ONLY,
+    },
+    Definition {
+        // Which actions of the audit trail are posted: their names, separated
+        // by commas, or `*` for every one.
+        key: "webhooks.events",
+        kind: Kind::Text,
+        scopes: SERVER_ONLY,
+    },
     // ── Adult titles ─────────────────────────────────────────────────────────
     Definition {
         key: "adult.mode",
@@ -198,7 +217,7 @@ pub fn validate(def: &Definition, value: &str) -> Result<(), String> {
             Err(_) => Err(format!("{value:?} is not a whole number")),
         },
         Kind::Text => {
-            if value.trim().is_empty() {
+            if value.trim().is_empty() && !OPTIONAL.contains(&def.key) {
                 Err("must not be empty".to_string())
             } else if value.len() > 200 {
                 Err("is too long".to_string())
@@ -258,6 +277,9 @@ mod tests {
         assert!(validate(def("adult.mode"), "hidden").is_ok());
         assert!(validate(def("adult.mode"), "visible").is_ok());
         assert!(validate(def("adult.mode"), "sometimes").is_err());
+        assert!(validate(def("webhooks.url"), "").is_ok());
+        assert!(validate(def("webhooks.url"), "https://example.com/hook").is_ok());
+        assert!(validate(def("tmdb.language"), "").is_err());
     }
 
     #[test]

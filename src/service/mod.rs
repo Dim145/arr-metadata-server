@@ -19,6 +19,7 @@ pub mod language;
 pub mod listing;
 pub mod movie;
 pub mod series;
+pub mod webhook;
 
 use std::sync::Arc;
 

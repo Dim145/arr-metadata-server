@@ -365,6 +365,46 @@ export interface CollectionPage {
   parts: CollectionPart[]
 }
 
+export interface Count {
+  name: string
+  count: number
+}
+
+/** The catalogue in numbers, as a reader is shown it. */
+export interface Figures {
+  total: number
+  series: number
+  movies: number
+  episodes: number
+  addedRecently: number
+  decades: Count[]
+  genres: Count[]
+  networks: Count[]
+  languages: Count[]
+  scores: Count[]
+  statuses: Count[]
+}
+
+export interface CacheFigures {
+  entries: number
+  bytes: number
+}
+
+export interface Health {
+  version: string
+  uptimeSeconds: number
+  database: string
+  works: number
+  episodes: number
+  refreshFailed: number
+  rules: number
+  itemsCache: CacheFigures
+  searchesCache: CacheFigures
+  listsCache: CacheFigures
+  sources: { name: string; on: boolean }[]
+  jobs: Job[]
+}
+
 export type ListKind = 'series' | 'movie' | 'mixed'
 export type ListMode = 'manual' | 'filter'
 

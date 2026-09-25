@@ -185,6 +185,10 @@ impl AppState {
                 ("anilist.enabled", cfg.anilist.enabled.to_string()),
                 ("mal.enabled", cfg.mal.enabled.to_string()),
                 ("imdb.enabled", cfg.imdb.enabled.to_string()),
+                (
+                    "webhooks.events",
+                    crate::service::webhook::DEFAULT_EVENTS.to_string(),
+                ),
                 ("refresh.enabled", cfg.refresh.enabled.to_string()),
                 (
                     "refresh.intervalSeconds",

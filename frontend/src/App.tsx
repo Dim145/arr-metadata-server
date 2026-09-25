@@ -26,6 +26,7 @@ const Person = named(() => import('./routes/Person'), 'Person')
 const Calendar = named(() => import('./routes/Calendar'), 'Calendar')
 const Seasons = named(() => import('./routes/Seasons'), 'Seasons')
 const Lists = named(() => import('./routes/Lists'), 'Lists')
+const Figures = named(() => import('./routes/Figures'), 'Figures')
 const ListDetail = named(() => import('./routes/Lists'), 'ListDetail')
 const CollectionDetail = named(() => import('./routes/Lists'), 'CollectionDetail')
 
@@ -91,6 +92,7 @@ function Router() {
           <Route path="/person/:tmdbId" element={<Person />} />
           <Route path="/calendar" element={<Calendar />} />
           <Route path="/lists" element={<Lists />} />
+          <Route path="/stats" element={<Figures />} />
           <Route path="/lists/:slug" element={<ListDetail />} />
           <Route path="/collections/:id" element={<CollectionDetail />} />
           <Route path="/seasons" element={<Seasons />} />

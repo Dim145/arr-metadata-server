@@ -40,6 +40,15 @@ It replaces and merges two earlier projects: `the earlier TMDB relay` and
 - **Curated lists.** Selections composed by hand or by a filter, shown on
   the site and served to Sonarr and Radarr as the custom lists their import
   lists read.
+- **The catalogue in numbers, the server's health, and webhooks.** A public
+  page counts what the catalogue holds by decade, genre, network, language
+  and score; the administrator's dashboard says what the server is, keeps and
+  did last; and what happens can be posted to a webhook — Discord, Slack or
+  anything that takes JSON — for the actions chosen (`webhooks.url`,
+  `webhooks.events`). To begin with, the actions are what enters and leaves
+  the catalogue: `item.imported`, `item.created`, `item.deleted` and
+  `dataset.imported`; `*` is every one. A failed sign-in is posted without
+  the name that was typed, and the webhook address itself is never posted.
 - **A command palette, and actions on many works at once.** ⌘K or Ctrl K
   anywhere finds a place to go or a work by its title; in the catalogue,
   whoever maintains it selects rows and refreshes, switches off or on,

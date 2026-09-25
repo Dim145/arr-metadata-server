@@ -255,7 +255,7 @@ fn browsable(method: &axum::http::Method, path: &str) -> bool {
         "/api/v1/calendar.ics" | "/api/v1/feed/added.atom" | "/api/v1/feed/airing.atom" => true,
         // The curated lists, and the shapes the clients import them in. A
         // private list is refused inside, as a hidden work is.
-        "/api/v1/lists" | "/api/v1/collections" => true,
+        "/api/v1/lists" | "/api/v1/collections" | "/api/v1/figures" => true,
         rest if rest
             .strip_prefix("/api/v1/collections/")
             .is_some_and(|tail| {
@@ -518,6 +518,8 @@ mod browse_tests {
         assert!(allowed(&format!("/api/v1/items/{id}/similar")));
         assert!(!allowed(&format!("/api/v1/items/{id}/suggestions")));
         assert!(allowed("/api/v1/collections"));
+        assert!(allowed("/api/v1/figures"));
+        assert!(!allowed("/api/v1/admin/health"));
         assert!(allowed("/api/v1/collections/10"));
         assert!(!allowed("/api/v1/collections/ten"));
         assert!(!allowed("/api/v1/collections/10/x"));

@@ -1160,6 +1160,92 @@ pub async fn collections(db: &Db, include_adult: bool) -> Result<Vec<(i64, i64)>
         .collect()
 }
 
+/// Works by decade of release, earliest first: switched on, adult only
+/// where asked.
+pub async fn decades(db: &Db, include_adult: bool) -> Result<Vec<(i32, i64)>> {
+    let sql = format!(
+        "SELECT (listed_year / 10) * 10 AS decade, COUNT(*) AS n FROM media_item
+          WHERE is_enabled = 1 AND listed_year IS NOT NULL{}
+          GROUP BY decade ORDER BY decade",
+        if include_adult {
+            ""
+        } else {
+            " AND is_adult = 0"
+        }
+    );
+    let rows = sqlx::query(db.sql(&sql)).fetch_all(db.pool()).await?;
+    rows.iter()
+        .map(|row| Ok((row.int("decade")?, row.big("n")?)))
+        .collect()
+}
+
+/// Works by the whole part of the score their card leads with, lowest first.
+///
+/// `CAST` to an integer truncates on SQLite and rounds on PostgreSQL, so a
+/// seven point nine would be counted as seven on one and eight on the other.
+/// The `CASE` brings a rounded-up value back down: both count it as seven.
+/// (`FLOOR` would say it in a word, but the SQLite this is built with does
+/// not carry the math functions.)
+pub async fn score_buckets(db: &Db, include_adult: bool) -> Result<Vec<(i64, i64)>> {
+    let sql = format!(
+        "SELECT CASE WHEN CAST(listed_score AS INTEGER) > listed_score
+                     THEN CAST(listed_score AS INTEGER) - 1
+                     ELSE CAST(listed_score AS INTEGER) END AS bucket,
+                COUNT(*) AS n
+           FROM media_item
+          WHERE is_enabled = 1 AND listed_score IS NOT NULL{}
+          GROUP BY bucket ORDER BY bucket",
+        if include_adult {
+            ""
+        } else {
+            " AND is_adult = 0"
+        }
+    );
+    let rows = sqlx::query(db.sql(&sql)).fetch_all(db.pool()).await?;
+    rows.iter()
+        .map(|row| Ok((row.big("bucket")?, row.big("n")?)))
+        .collect()
+}
+
+/// The episodes of the works: of those switched on, unless the ones switched
+/// off are asked for too.
+pub async fn episode_count(db: &Db, include_adult: bool, include_disabled: bool) -> Result<i64> {
+    let sql = format!(
+        "SELECT COUNT(*) AS n FROM media_episode e
+           JOIN media_item m ON m.id = e.media_id
+          WHERE 1 = 1{}{}",
+        if include_disabled {
+            ""
+        } else {
+            " AND m.is_enabled = 1"
+        },
+        if include_adult {
+            ""
+        } else {
+            " AND m.is_adult = 0"
+        }
+    );
+    let row = sqlx::query(db.sql(&sql)).fetch_one(db.pool()).await?;
+    Ok(row.big("n")?)
+}
+
+/// Works added since an instant, RFC 3339.
+pub async fn added_since(db: &Db, since: &str, include_adult: bool) -> Result<i64> {
+    let sql = format!(
+        "SELECT COUNT(*) AS n FROM media_item WHERE is_enabled = 1 AND created_at >= ?{}",
+        if include_adult {
+            ""
+        } else {
+            " AND is_adult = 0"
+        }
+    );
+    let row = sqlx::query(db.sql(&sql))
+        .bind(since)
+        .fetch_one(db.pool())
+        .await?;
+    Ok(row.big("n")?)
+}
+
 pub async fn count_matching(db: &Db, q: &Query) -> Result<i64> {
     let mut sql = format!(
         "SELECT COUNT(*) AS n FROM {} WHERE 1 = 1",
@@ -3500,5 +3586,65 @@ mod tests {
                 .expect("read")
                 .is_empty()
         );
+    }
+
+    #[tokio::test]
+    async fn scores_are_bucketed_by_their_whole_part() {
+        // A seven point nine is a seven, whichever engine counts it: the
+        // CAST alone would round it to eight on PostgreSQL.
+        let db = db().await;
+        for (n, score) in [(1, 7.9), (2, 7.2), (3, 8.0), (4, 6.5)] {
+            let mut item = sample();
+            item.id = crate::db::new_id();
+            item.slug = format!("scored-{n}");
+            item.external_ids = ExternalIds {
+                tmdb: Some(n),
+                ..Default::default()
+            };
+            upsert(
+                &db,
+                ItemWrite {
+                    item: &item,
+                    replace_children: false,
+                },
+            )
+            .await
+            .expect("stored");
+            sqlx::query(db.sql("UPDATE media_item SET listed_score = ? WHERE id = ?"))
+                .bind(score)
+                .bind(&item.id)
+                .execute(db.pool())
+                .await
+                .expect("scored");
+        }
+
+        let buckets = score_buckets(&db, true).await.expect("counted");
+        assert_eq!(buckets, vec![(6, 1), (7, 2), (8, 1)]);
+    }
+
+    #[tokio::test]
+    async fn the_episodes_of_a_work_switched_off_are_counted_only_when_asked() {
+        let db = db().await;
+        let item = sample();
+        let episodes = item.episodes.len() as i64;
+        assert!(episodes > 0, "the sample carries episodes");
+        upsert(
+            &db,
+            ItemWrite {
+                item: &item,
+                replace_children: true,
+            },
+        )
+        .await
+        .expect("stored");
+        assert_eq!(episode_count(&db, true, false).await.unwrap(), episodes);
+
+        sqlx::query(db.sql("UPDATE media_item SET is_enabled = 0 WHERE id = ?"))
+            .bind(&item.id)
+            .execute(db.pool())
+            .await
+            .expect("switched off");
+        assert_eq!(episode_count(&db, true, false).await.unwrap(), 0);
+        assert_eq!(episode_count(&db, true, true).await.unwrap(), episodes);
     }
 }

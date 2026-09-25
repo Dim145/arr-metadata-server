@@ -55,6 +55,16 @@ pub async fn record(state: &AppState, event: Event<'_>) {
     if let Err(e) = result {
         tracing::warn!(action = %event.action, error = %e, "could not write the audit entry");
     }
+
+    crate::service::webhook::notify(
+        state,
+        crate::service::webhook::Happening {
+            action: event.action,
+            actor,
+            target,
+            detail,
+        },
+    );
 }
 
 /// The most of any one field this trail will hold.

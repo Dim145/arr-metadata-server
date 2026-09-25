@@ -551,6 +551,12 @@ function Footer() {
           >
             {t.nav.lists}
           </Link>
+          <Link
+            to="/stats"
+            className="inline-flex min-h-11 items-center text-xs text-bone-dim transition-colors duration-150 hover:text-bone"
+          >
+            {t.nav.figures}
+          </Link>
         </div>
         {/* What a reader can follow from elsewhere: the schedule in a
             calendar app, the arrivals and the week in a feed reader. Only

@@ -24,8 +24,8 @@ import { api, query } from '../../lib/api'
 import { cn } from '../../lib/cn'
 import * as fmt from '../../lib/format'
 import { useI18n } from '../../lib/i18n'
-import { policyLabel } from '../../lib/labels'
-import type { ItemPage, JobsResponse, Settings, Stats } from '../../lib/types'
+import { policyLabel, providerName } from '../../lib/labels'
+import type { ItemPage, JobsResponse, Settings, Stats, Health } from '../../lib/types'
 import { RunStatus } from './Jobs'
 
 export function Dashboard() {
@@ -90,6 +90,7 @@ export function Dashboard() {
         <RecentRuns />
         <Surfaces settings={settings.data} />
         <Locking />
+        <HealthPanel />
       </div>
     </div>
   )
@@ -336,6 +337,80 @@ function Locking() {
             <span>{text}</span>
           </p>
         ))}
+      </div>
+    </Panel>
+  )
+}
+
+/* ── Health ───────────────────────────────────────────────────────────────── */
+
+/** What the server is, holds, keeps and did last — for the administrator. */
+function HealthPanel() {
+  const { t, locale } = useI18n()
+  const health = useQuery({
+    queryKey: ['health'],
+    queryFn: () => api.get<Health>('/admin/health'),
+    refetchInterval: 60_000,
+    retry: false,
+  })
+  const bytes = (n: number) => (n >= 1_048_576 ? `${(n / 1_048_576).toFixed(1)} MB` : `${Math.round(n / 1024)} kB`)
+  const uptime = (seconds: number) => {
+    const days = Math.floor(seconds / 86_400)
+    const hours = Math.floor((seconds % 86_400) / 3600)
+    const minutes = Math.floor((seconds % 3600) / 60)
+    return days ? `${days} d ${hours} h` : hours ? `${hours} h ${minutes} min` : `${minutes} min`
+  }
+
+  return (
+    <Panel className="rise lg:col-span-2" style={{ animationDelay: '140ms' }} id="health">
+      <PanelHead title={t.admin.overview.health} />
+      <div className="p-5">
+        <p className="text-sm text-bone-dim">{t.admin.overview.healthHint}</p>
+        {health.isPending ? (
+          <Skeleton className="mt-4 h-20 w-full" />
+        ) : health.isError ? (
+          <p role="alert" className="mt-4 text-sm text-vermillion">
+            {t.admin.overview.healthFailed}
+          </p>
+        ) : (
+          <>
+            <dl className="mt-4 grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
+              {(
+                [
+                  [t.admin.overview.version, health.data.version],
+                  [t.admin.overview.uptime, uptime(health.data.uptimeSeconds)],
+                  [t.admin.overview.database, health.data.database],
+                  [t.admin.overview.refreshFailed, fmt.count(health.data.refreshFailed, locale)],
+                  [t.admin.overview.cacheOf('items'), t.admin.overview.cacheLine(health.data.itemsCache.entries, bytes(health.data.itemsCache.bytes))],
+                  [t.admin.overview.cacheOf('searches'), t.admin.overview.cacheLine(health.data.searchesCache.entries, bytes(health.data.searchesCache.bytes))],
+                  [t.admin.overview.cacheOf('lists'), t.admin.overview.cacheLine(health.data.listsCache.entries, bytes(health.data.listsCache.bytes))],
+                  [t.admin.overview.sources, health.data.sources.filter((s) => s.on).map((s) => providerName(s.name)).join(' · ') || '—'],
+                ] as [string, string][]
+              ).map(([label, value]) => (
+                <div key={label}>
+                  <dt className="label">{label}</dt>
+                  <dd className="mt-0.5 font-mono text-[0.8125rem] text-bone tabular-nums">{value}</dd>
+                </div>
+              ))}
+            </dl>
+            {health.data.jobs.length ? (
+              <div className="mt-5">
+                <span className="label">{t.admin.overview.lastJobs}</span>
+                <ul className="mt-2 divide-y divide-rule text-sm">
+                  {health.data.jobs.slice(0, 5).map((job) => (
+                    <li key={job.id} className="flex items-center gap-3 py-1.5">
+                      <RunStatus status={job.status} />
+                      <span className="min-w-0 flex-1 truncate text-bone">{job.kind}</span>
+                      <span className="font-mono text-xs text-bone-faint tabular-nums">
+                        {fmt.relative(job.finishedAt ?? job.startedAt ?? job.createdAt, locale)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+          </>
+        )}
       </div>
     </Panel>
   )

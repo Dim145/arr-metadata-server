@@ -11,6 +11,7 @@ pub mod clients;
 pub mod discover;
 pub mod export;
 pub mod feeds;
+pub mod figures;
 pub mod items;
 pub mod lists;
 pub mod meta;
@@ -34,6 +35,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(lists::router())
         .merge(watch::router())
         .merge(recommend::router())
+        .merge(figures::router())
         .merge(seasons::router())
         .merge(children::router())
         .merge(export::router())
