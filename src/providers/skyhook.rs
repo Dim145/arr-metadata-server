@@ -67,6 +67,7 @@ impl SkyhookClient {
     }
 
     async fn fetch(&self, url: &str, query: &[(&str, &str)]) -> Result<Option<Value>> {
+        let started = std::time::Instant::now();
         let response = self
             .http
             .get(url)
@@ -76,8 +77,13 @@ impl SkyhookClient {
             .header(crate::providers::radarr::LOOP_HEADER, &self.instance)
             .timeout(std::time::Duration::from_secs(20))
             .send()
-            .await
-            .with_context(|| format!("Skyhook request failed: {url}"))?;
+            .await;
+        crate::metrics::upstream(
+            "skyhook",
+            started,
+            response.as_ref().ok().map(|r| r.status()),
+        );
+        let response = response.with_context(|| format!("Skyhook request failed: {url}"))?;
 
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);

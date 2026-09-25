@@ -391,14 +391,16 @@ impl TvdbClient {
     async fn try_get(&self, path: &str, token: &str) -> Result<Attempt> {
         let url = format!("{}/{path}", self.base);
 
+        let started = std::time::Instant::now();
         let response = self
             .http
             .get(&url)
             .bearer_auth(token)
             .timeout(std::time::Duration::from_secs(20))
             .send()
-            .await
-            .with_context(|| format!("TheTVDB request failed: {url}"))?;
+            .await;
+        crate::metrics::upstream("tvdb", started, response.as_ref().ok().map(|r| r.status()));
+        let response = response.with_context(|| format!("TheTVDB request failed: {url}"))?;
 
         match response.status() {
             reqwest::StatusCode::NOT_FOUND => Ok(Attempt::Missing),
@@ -437,14 +439,16 @@ impl TvdbClient {
             body["pin"] = Value::String(pin.clone());
         }
 
+        let started = std::time::Instant::now();
         let response = self
             .http
             .post(format!("{}/login", self.base))
             .json(&body)
             .timeout(std::time::Duration::from_secs(20))
             .send()
-            .await
-            .context("TheTVDB login failed")?;
+            .await;
+        crate::metrics::upstream("tvdb", started, response.as_ref().ok().map(|r| r.status()));
+        let response = response.context("TheTVDB login failed")?;
 
         if !response.status().is_success() {
             anyhow::bail!("TheTVDB login returned {}", response.status());

@@ -16,7 +16,7 @@ import { useSettled } from '../lib/debounce'
 import { feeds, webcal } from '../lib/feeds'
 import { useMe, useNavigationReset } from '../lib/hooks'
 import { cn } from '../lib/cn'
-import { useI18n, type Lang } from '../lib/i18n'
+import { LANGS, LANGUAGES, useI18n } from '../lib/i18n'
 import { ThemeToggle } from './ThemeToggle'
 import { providerName } from '../lib/labels'
 import { poster } from '../lib/media'
@@ -482,12 +482,14 @@ function LanguageToggle() {
       aria-label={t.nav.language}
       className="flex items-center rounded-card border border-rule"
     >
-      {(['en', 'fr'] as Lang[]).map((code) => (
+      {LANGS.map((code) => (
         <button
           key={code}
           type="button"
           onClick={() => setLang(code)}
           aria-pressed={lang === code}
+          title={LANGUAGES[code].name}
+          lang={code}
           className={cn(
             // Each half is a target in its own right, so each half gets the
             // full 44px rather than the pair sharing one.

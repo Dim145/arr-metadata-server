@@ -61,6 +61,20 @@ It replaces and merges two earlier projects: `the earlier TMDB relay` and
   season page offers that numbering too (`GET /api/v1/items/{id}/orders`),
   without touching what Sonarr is served. And the interface has a light
   theme: the reader's choice, kept in the browser, or the system's.
+- **A scrape, and the locks as a file.** `GET /api/v1/admin/metrics` is the
+  server counting itself in the text Prometheus reads — requests by surface
+  and status, calls upstream by provider and outcome with their latency,
+  what the caches keep, what the catalogue holds, what the jobs did — for an
+  administrator or a key with the `admin` scope, which a scraper sends as
+  `Authorization: Bearer`. Every edit made by hand can be downloaded as one
+  JSON document and imported into another catalogue (`GET`/`POST
+  /api/v1/admin/locks`), each lock finding its work of the same kind by the
+  TMDB, TheTVDB or IMDb id it shares; a request takes two thousand locks at
+  most, and the dashboard sends a longer file in parts.
+- **Languages of the interface.** English and French ship complete; a
+  third language is one file and a registry entry, may start partial — what
+  it lacks is shown in English — and the build refuses a key English does
+  not have. See `frontend/src/lib/lang/README.md`.
 - **A command palette, and actions on many works at once.** ⌘K or Ctrl K
   anywhere finds a place to go or a work by its title; in the catalogue,
   whoever maintains it selects rows and refreshes, switches off or on,

@@ -34,6 +34,33 @@ pub async fn list(db: &Db, media_id: &str) -> Result<Vec<Override>> {
         .collect()
 }
 
+/// Every override in the catalogue, with the work each is on, in a fixed
+/// order: what an export is made of.
+pub async fn all(db: &Db) -> Result<Vec<(String, Override)>> {
+    let rows = sqlx::query(db.sql(
+        "SELECT media_id, scope, field, value, updated_at, updated_by
+         FROM media_override ORDER BY media_id, scope, field",
+    ))
+    .fetch_all(db.pool())
+    .await?;
+
+    rows.iter()
+        .map(|row| {
+            let raw: Option<String> = row.opt_text("value")?;
+            Ok((
+                row.text("media_id")?,
+                Override {
+                    scope: row.text("scope")?,
+                    field: row.text("field")?,
+                    value: raw.and_then(|s| serde_json::from_str(&s).ok()),
+                    updated_at: row.text("updated_at")?,
+                    updated_by: row.opt_text("updated_by")?,
+                },
+            ))
+        })
+        .collect()
+}
+
 /// Record an edit. `value = None` stores an explicit "cleared" marker, which is
 /// different from deleting the override.
 pub async fn set(

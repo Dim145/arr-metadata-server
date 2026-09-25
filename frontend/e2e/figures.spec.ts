@@ -58,4 +58,83 @@ test.describe('the health, read by the administrator', () => {
     await expect(panel.getByText(health.version, { exact: true })).toBeVisible()
     await expect(panel.getByText(health.database, { exact: true })).toBeVisible()
   })
+
+  test('the server counts itself for a scrape, and the locks travel as a file', async ({ page }) => {
+    await signIn(page)
+
+    const metrics = await page.request.get('/api/v1/admin/metrics')
+    expect(metrics.status()).toBe(200)
+    expect(metrics.headers()['content-type']).toMatch(/^text\/plain/)
+    const text = await metrics.text()
+    expect(text).toContain('# TYPE ams_http_requests_total counter')
+    expect(text).toMatch(/ams_http_requests_total\{surface="native",status="2xx"\} \d+/)
+    expect(text).toMatch(/ams_works\{kind="series"\} \d+/)
+    expect(text).toMatch(/ams_uptime_seconds \d/)
+
+    // A lock to travel: the first series' sort title, set by hand.
+    const { items } = await (await page.request.get('/api/v1/items?kind=series&limit=1')).json()
+    const work = (items as { id: string }[])[0]
+    expect(work).toBeTruthy()
+    const locked = await page.request.put(`/api/v1/items/${work.id}/overrides`, {
+      data: { scope: 'item', field: 'sortTitle', value: 'zz travelling lock' },
+    })
+    expect(locked.status()).toBe(200)
+
+    const exported = await page.request.get('/api/v1/admin/locks')
+    expect(exported.status()).toBe(200)
+    const locks = await exported.json()
+    expect(locks.version).toBe(1)
+    expect(locks.locks.length).toBeGreaterThan(0)
+    const travelling = locks.locks.find(
+      (l: { work: { id: string }; field: string }) => l.work.id === work.id && l.field === 'sortTitle',
+    )
+    expect(travelling.value).toBe('zz travelling lock')
+    expect(travelling.work.kind).toBe('series')
+
+    // Imported back, every lock is already so; named by its ids alone, it
+    // still finds its work.
+    const imported = await page.request.post('/api/v1/admin/locks', { data: locks })
+    expect(imported.status()).toBe(200)
+    const done = await imported.json()
+    expect(done.applied + done.unchanged).toBe(locks.locks.length)
+    expect(done.unchanged).toBeGreaterThan(0)
+    expect(done.unmatched).toEqual([])
+    expect(done.refused).toEqual([])
+    const bare = { ...travelling, work: { ...travelling.work, id: undefined }, value: 'zz travelled lock' }
+    const again = await page.request.post('/api/v1/admin/locks', { data: { version: 1, locks: [bare] } })
+    expect((await again.json()).applied).toBe(1)
+
+    // A field a work cannot be read without is never cleared.
+    const cleared = await page.request.post('/api/v1/admin/locks', {
+      data: { version: 1, locks: [{ ...travelling, field: 'title', value: null }] },
+    })
+    expect((await cleared.json()).refused.length).toBe(1)
+
+    // And the lock is taken off again, so the list keeps its order.
+    expect((await page.request.delete(`/api/v1/items/${work.id}/overrides/item/sortTitle`)).status()).toBe(204)
+
+    // A lock on a work nobody holds is named, not set.
+    const stray = await page.request.post('/api/v1/admin/locks', {
+      data: {
+        version: 1,
+        locks: [{ work: { kind: 'movie', title: 'Nobody Holds This', tmdb: 999999991 }, scope: 'item', field: 'title', value: 'x' }],
+      },
+    })
+    expect(stray.status()).toBe(200)
+    expect((await stray.json()).unmatched).toEqual(['Nobody Holds This'])
+
+    // And the panel offers both.
+    await page.goto('/admin')
+    const panel = page.locator('#locks-file')
+    await expect(panel.getByRole('button', { name: /download the locks|télécharger les verrous/i })).toBeVisible()
+    await expect(panel.getByText(/import a locks file|importer un fichier de verrous/i)).toBeVisible()
+  })
+})
+
+test.describe('what is the administrator’s alone', () => {
+  test('the scrape and the locks turn a visitor away', async ({ request }) => {
+    expect((await request.get('/api/v1/admin/metrics')).status()).toBe(401)
+    expect((await request.get('/api/v1/admin/locks')).status()).toBe(401)
+    expect((await request.post('/api/v1/admin/locks', { data: { version: 1, locks: [] } })).status()).toBe(401)
+  })
 })

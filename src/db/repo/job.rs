@@ -185,6 +185,18 @@ pub async fn count_matching(db: &Db, q: &Query) -> Result<i64> {
     Ok(row.big("n")?)
 }
 
+/// How many runs the log holds of each kind, in each state.
+pub async fn counts(db: &Db) -> Result<Vec<(String, String, i64)>> {
+    let rows = sqlx::query(db.sql(
+        "SELECT kind, status, COUNT(*) AS n FROM job_run GROUP BY kind, status ORDER BY kind, status",
+    ))
+    .fetch_all(db.pool())
+    .await?;
+    rows.iter()
+        .map(|row| Ok((row.text("kind")?, row.text("status")?, row.big("n")?)))
+        .collect()
+}
+
 pub async fn count(db: &Db) -> Result<i64> {
     let row = sqlx::query(db.sql("SELECT COUNT(*) AS n FROM job_run"))
         .fetch_one(db.pool())
@@ -224,6 +236,37 @@ pub async fn fail_orphaned(db: &Db) -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn runs_are_counted_by_kind_and_state() {
+        let db = crate::db::Db::connect(&crate::config::Database {
+            url: "sqlite::memory:".into(),
+            max_connections: 1,
+            acquire_timeout: std::time::Duration::from_secs(5),
+        })
+        .await
+        .expect("in-memory database");
+        db.migrate().await.expect("migrations");
+        assert!(counts(&db).await.unwrap().is_empty());
+
+        let done = start(&db, kinds::REFRESH_ITEM, Some("x")).await.unwrap();
+        finish(&db, &done, Some("refreshed"), None).await.unwrap();
+        let failed = start(&db, kinds::REFRESH_ITEM, Some("y")).await.unwrap();
+        finish(&db, &failed, None, Some("no provider"))
+            .await
+            .unwrap();
+        start(&db, kinds::REFRESH_ITEM, Some("z")).await.unwrap();
+
+        let by = counts(&db).await.unwrap();
+        let of = |status: &str| {
+            by.iter()
+                .find(|(k, s, _)| k == kinds::REFRESH_ITEM && s == status)
+                .map(|(_, _, n)| *n)
+        };
+        assert_eq!(of("succeeded"), Some(1));
+        assert_eq!(of("failed"), Some(1));
+        assert_eq!(of("running"), Some(1));
+    }
     use crate::config;
 
     async fn db() -> Db {

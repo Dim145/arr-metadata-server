@@ -119,14 +119,20 @@ impl TvmazeClient {
             anyhow::bail!("TVmaze's queue is full; this fetch goes without it");
         }
 
+        let started = std::time::Instant::now();
         let response = self
             .http
             .get(url)
             .query(query)
             .timeout(std::time::Duration::from_secs(20))
             .send()
-            .await
-            .with_context(|| format!("TVmaze request failed: {url}"))?;
+            .await;
+        crate::metrics::upstream(
+            "tvmaze",
+            started,
+            response.as_ref().ok().map(|r| r.status()),
+        );
+        let response = response.with_context(|| format!("TVmaze request failed: {url}"))?;
 
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);

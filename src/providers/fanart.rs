@@ -89,14 +89,20 @@ impl FanartClient {
 
         let url = format!("{}/{path}", self.base);
 
+        let started = std::time::Instant::now();
         let response = self
             .http
             .get(&url)
             .query(&[("api_key", key)])
             .timeout(std::time::Duration::from_secs(20))
             .send()
-            .await
-            .with_context(|| format!("Fanart.tv request failed: {url}"))?;
+            .await;
+        crate::metrics::upstream(
+            "fanart",
+            started,
+            response.as_ref().ok().map(|r| r.status()),
+        );
+        let response = response.with_context(|| format!("Fanart.tv request failed: {url}"))?;
 
         // Fanart.tv answers 404 for anything it has no artwork for, which is
         // most of the long tail rather than an error.

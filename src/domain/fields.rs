@@ -253,10 +253,19 @@ pub struct Override {
 
 /// Reject an edit that names an unknown field or carries the wrong type, before
 /// it ever reaches the database.
+/// Fields a work cannot be read without: cleared, they would leave the work
+/// unreadable — not on its own page, not by Sonarr — so a lock on one holds
+/// a value or is not held.
+const NEVER_CLEARED: &[&str] = &["title", "genres", "keywords"];
+
 pub fn validate(scope: Scope, field: &str, value: Option<&Value>) -> Result<(), String> {
     let Some(def) = scope.field(field) else {
         return Err(format!("{field:?} is not editable on scope {scope}"));
     };
+
+    if value.is_none_or(Value::is_null) && NEVER_CLEARED.contains(&field) {
+        return Err(format!("{field:?} cannot be cleared: set it, or unlock it"));
+    }
 
     match value {
         None => Ok(()),
@@ -514,7 +523,11 @@ mod tests {
     #[test]
     fn validation_rejects_bad_input_up_front() {
         assert!(validate(Scope::Item, "title", Some(&"ok".into())).is_ok());
-        assert!(validate(Scope::Item, "title", None).is_ok());
+        // A field a work cannot be read without is never cleared; one it can
+        // do without is.
+        assert!(validate(Scope::Item, "title", None).is_err());
+        assert!(validate(Scope::Item, "title", Some(&serde_json::Value::Null)).is_err());
+        assert!(validate(Scope::Item, "overview", None).is_ok());
         assert!(validate(Scope::Item, "runtime", Some(&"nope".into())).is_err());
         assert!(validate(Scope::Item, "nonexistent", Some(&"x".into())).is_err());
         // `network` belongs to the work, not to an episode.

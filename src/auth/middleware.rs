@@ -521,6 +521,8 @@ mod browse_tests {
         assert!(allowed("/api/v1/collections"));
         assert!(allowed("/api/v1/figures"));
         assert!(!allowed("/api/v1/admin/health"));
+        assert!(!allowed("/api/v1/admin/metrics"));
+        assert!(!allowed("/api/v1/admin/locks"));
         assert!(allowed(
             "/api/v1/items/01a0cff7-d8dc-70bc-a6b1-38379ee39bd0/orders"
         ));

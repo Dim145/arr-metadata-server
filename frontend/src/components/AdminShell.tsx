@@ -18,7 +18,7 @@ import { Link, NavLink, Navigate, Outlet, useLocation, useNavigate } from 'react
 import { api } from '../lib/api'
 import { useNavigationReset } from '../lib/hooks'
 import { cn } from '../lib/cn'
-import { useI18n, type Dict, type Lang } from '../lib/i18n'
+import { LANGS, LANGUAGES, useI18n, type Dict } from '../lib/i18n'
 import { ThemeToggle } from './ThemeToggle'
 import { describeIdentity } from '../lib/labels'
 import type { Me, Settings } from '../lib/types'
@@ -348,12 +348,14 @@ function LanguageToggle({ compact }: { compact?: boolean }) {
         compact ? '' : 'w-fit',
       )}
     >
-      {(['en', 'fr'] as Lang[]).map((code) => (
+      {LANGS.map((code) => (
         <button
           key={code}
           type="button"
           onClick={() => setLang(code)}
           aria-pressed={lang === code}
+          title={LANGUAGES[code].name}
+          lang={code}
           className={cn(
             'h-full min-w-11 cursor-pointer px-2.5 font-mono text-[0.6875rem] font-medium tracking-wider uppercase',
             'transition-colors duration-150',

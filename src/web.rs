@@ -146,6 +146,8 @@ fn build_router(state: AppState) -> Router {
         ))
         .layer(CatchPanicLayer::new())
         .layer(TraceLayer::new_for_http())
+        // Counted last of all, so what is counted is what was answered.
+        .layer(axum::middleware::from_fn(crate::metrics::observe))
 }
 
 /// Refuse a request addressed to a name this server does not answer to.

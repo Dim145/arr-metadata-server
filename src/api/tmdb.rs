@@ -158,10 +158,10 @@ pub async fn proxy(State(state): State<AppState>, request: Request) -> AppResult
         upstream = upstream.body(body_bytes.to_vec());
     }
 
-    let response = upstream
-        .send()
-        .await
-        .map_err(|e| AppError::UpstreamUnavailable(e.into()))?;
+    let started = std::time::Instant::now();
+    let response = upstream.send().await;
+    crate::metrics::upstream("tmdb", started, response.as_ref().ok().map(|r| r.status()));
+    let response = response.map_err(|e| AppError::UpstreamUnavailable(e.into()))?;
 
     let status =
         StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);

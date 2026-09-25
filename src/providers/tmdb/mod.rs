@@ -100,13 +100,15 @@ impl TmdbClient {
             .await
             .expect("semaphore is never closed");
 
+        let started = std::time::Instant::now();
         let response = self
             .get(url)?
             .query(params)
             .timeout(Duration::from_secs(20))
             .send()
-            .await
-            .with_context(|| format!("TMDB request failed: {url}"))?;
+            .await;
+        crate::metrics::upstream("tmdb", started, response.as_ref().ok().map(|r| r.status()));
+        let response = response.with_context(|| format!("TMDB request failed: {url}"))?;
 
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);

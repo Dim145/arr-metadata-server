@@ -48,6 +48,7 @@ actions! {
     OverrideSet => "override.set",
     OverrideRemoved => "override.removed",
     OverridesCleared => "override.cleared",
+    LocksImported => "override.imported",
     ClientCreated => "client.created",
     ClientUpdated => "client.updated",
     ClientRevoked => "client.revoked",

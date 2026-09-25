@@ -124,6 +124,7 @@ impl RadarrMetadataClient {
         query: &[(&str, &str)],
         timeout_secs: u64,
     ) -> Result<Option<reqwest::Response>> {
+        let started = std::time::Instant::now();
         let response = self
             .http
             .get(url)
@@ -131,7 +132,13 @@ impl RadarrMetadataClient {
             .header(LOOP_HEADER, &self.instance)
             .timeout(std::time::Duration::from_secs(timeout_secs))
             .send()
-            .await
+            .await;
+        crate::metrics::upstream(
+            "radarr",
+            started,
+            response.as_ref().ok().map(|r| r.status()),
+        );
+        let response = response
             .with_context(|| format!("request to Radarr's metadata service failed: {url}"))?;
 
         if response.status() == reqwest::StatusCode::NOT_FOUND {

@@ -8,6 +8,7 @@
  */
 
 import { useQuery } from '@tanstack/react-query'
+import { useRef, useState } from 'react'
 import { Link } from 'react-router'
 
 import {
@@ -20,12 +21,12 @@ import {
   Skeleton,
   type GlyphName,
 } from '../../components/ui'
-import { api, query } from '../../lib/api'
+import { ApiError, api, query } from '../../lib/api'
 import { cn } from '../../lib/cn'
 import * as fmt from '../../lib/format'
 import { useI18n } from '../../lib/i18n'
 import { policyLabel, providerName } from '../../lib/labels'
-import type { ItemPage, JobsResponse, Settings, Stats, Health } from '../../lib/types'
+import type { ItemPage, JobsResponse, Settings, Stats, Health, Locks, LocksImported } from '../../lib/types'
 import { RunStatus } from './Jobs'
 
 export function Dashboard() {
@@ -90,6 +91,7 @@ export function Dashboard() {
         <RecentRuns />
         <Surfaces settings={settings.data} />
         <Locking />
+        <LocksFile />
         <HealthPanel />
       </div>
     </div>
@@ -337,6 +339,130 @@ function Locking() {
             <span>{text}</span>
           </p>
         ))}
+      </div>
+    </Panel>
+  )
+}
+
+/* ── The locks, as a file ─────────────────────────────────────────────────── */
+
+/** The most locks sent in one request; the server takes two thousand. */
+const LOCKS_PER_REQUEST = 500
+
+/**
+ * Every lock as a document: downloaded to keep, or carried to another
+ * catalogue and imported there — in parts, a request body being a megabyte
+ * at most. The import says what it set, what was already so, and what it
+ * could not set.
+ */
+function LocksFile() {
+  const { t } = useI18n()
+  const [busy, setBusy] = useState(false)
+  const [outcome, setOutcome] = useState<{ tone: 'fine' | 'bad'; lines: string[] }>()
+  const picker = useRef<HTMLInputElement>(null)
+
+  const download = async () => {
+    setBusy(true)
+    try {
+      const locks = await api.get<Locks>('/admin/locks')
+      const blob = new Blob([JSON.stringify(locks, null, 2)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const link = window.document.createElement('a')
+      link.href = url
+      link.download = `cinematheque-locks-${locks.exportedAt.slice(0, 10)}.json`
+      link.click()
+      setTimeout(() => URL.revokeObjectURL(url), 10_000)
+    } catch {
+      setOutcome({ tone: 'bad', lines: [t.admin.overview.locksExportFailed] })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const upload = async (file: File | undefined) => {
+    if (!file) return
+    setBusy(true)
+    try {
+      const parsed = JSON.parse(await file.text()) as Locks
+      if (!Array.isArray(parsed.locks)) throw new Error('not a locks document')
+      const total: LocksImported = { applied: 0, unchanged: 0, works: 0, unmatched: [], refused: [] }
+      for (let at = 0; at < parsed.locks.length || at === 0; at += LOCKS_PER_REQUEST) {
+        const part = await api.post<LocksImported>('/admin/locks', {
+          version: parsed.version,
+          locks: parsed.locks.slice(at, at + LOCKS_PER_REQUEST),
+        })
+        total.applied += part.applied
+        total.unchanged += part.unchanged
+        total.works += part.works
+        total.unmatched.push(...part.unmatched)
+        total.refused.push(...part.refused)
+        if (!parsed.locks.length) break
+      }
+      const unmatched = [...new Set(total.unmatched)]
+      setOutcome({
+        tone: total.refused.length || unmatched.length ? 'bad' : 'fine',
+        lines: [
+          t.admin.overview.locksImported(total.applied, total.works),
+          total.unchanged ? t.admin.overview.locksUnchanged(total.unchanged) : undefined,
+          unmatched.length ? t.admin.overview.locksUnmatched(unmatched.slice(0, 5)) : undefined,
+          total.refused.length ? t.admin.overview.locksRefused(total.refused.length) : undefined,
+          ...total.refused.slice(0, 3),
+        ].filter((line): line is string => Boolean(line)),
+      })
+    } catch (error) {
+      // What the server said, where it said something; otherwise the file
+      // was not a document at all.
+      const said =
+        error instanceof ApiError
+          ? error.status === 413
+            ? t.admin.overview.locksTooBig
+            : error.message
+          : t.admin.overview.locksFailed
+      setOutcome({ tone: 'bad', lines: [said] })
+    } finally {
+      setBusy(false)
+      if (picker.current) picker.current.value = ''
+    }
+  }
+
+  return (
+    <Panel className="rise" style={{ animationDelay: '170ms' }} id="locks-file">
+      <PanelHead title={t.admin.overview.locksTitle} />
+      <div className="p-5">
+        <p className="text-sm leading-relaxed text-bone-dim">{t.admin.overview.locksHint}</p>
+        <div className="mt-4 flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={() => void download()}
+            disabled={busy}
+            className="inline-flex min-h-11 items-center gap-2 rounded-full border border-rule-bright px-4 text-sm text-bone transition-colors duration-150 hover:border-vermillion hover:text-vermillion disabled:opacity-50"
+          >
+            <Glyph name="download" className="size-4" />
+            {t.admin.overview.locksExport}
+          </button>
+          <label className="inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-full border border-brass-deep px-4 text-sm text-brass transition-colors duration-150 hover:bg-brass/10 focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-vermillion has-[:disabled]:opacity-50">
+            <Glyph name="lock" className="size-4" />
+            {busy ? t.admin.overview.locksImporting : t.admin.overview.locksImport}
+            <input
+              ref={picker}
+              type="file"
+              accept="application/json,.json"
+              className="sr-only"
+              disabled={busy}
+              onChange={(event) => void upload(event.target.files?.[0])}
+            />
+          </label>
+        </div>
+        {outcome ? (
+          <ul
+            role="status"
+            className={cn('mt-4 space-y-1 text-sm', outcome.tone === 'bad' ? 'text-vermillion' : 'text-moss')}
+          >
+            {outcome.lines.map((line, index) => (
+              <li key={`${index}-${line}`}>{line}</li>
+            ))}
+          </ul>
+        ) : null}
       </div>
     </Panel>
   )

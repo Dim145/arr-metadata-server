@@ -6,7 +6,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use axum::{Extension, Json, extract::State};
+use axum::{Extension, Json, extract::State, http::header};
 use serde::Serialize;
 use utoipa::ToSchema;
 use utoipa_axum::{router::OpenApiRouter, routes};
@@ -30,6 +30,7 @@ pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(figures))
         .routes(routes!(health))
+        .routes(routes!(metrics))
 }
 
 #[derive(Serialize, ToSchema)]
@@ -262,4 +263,144 @@ async fn health(
         )
         .await?,
     }))
+}
+
+/// What the server counts about itself, in the text Prometheus reads:
+/// requests by surface, calls upstream by provider, what the caches keep,
+/// what the catalogue holds, what the jobs did, and how long it has been up.
+/// For an administrator, or a key with the `admin` scope — which a scraper
+/// sends as `Authorization: Bearer`. What the database holds is left out of
+/// a scrape it cannot answer, rather than the whole scrape failing when it
+/// matters most.
+#[utoipa::path(
+    get, path = "/admin/metrics", tag = TAG,
+    responses(
+        (status = 200, description = "The Prometheus text exposition", content_type = "text/plain"),
+        (status = 403, description = "The caller is not an administrator"),
+    ),
+)]
+async fn metrics(
+    State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
+) -> AppResult<([(header::HeaderName, &'static str); 1], String)> {
+    if !identity.is_admin() {
+        return Err(AppError::Forbidden);
+    }
+    use crate::metrics::{Metric, label};
+
+    let mut gauges = match held(&state).await {
+        Ok(gauges) => gauges,
+        Err(e) => {
+            tracing::warn!(error = %e, "the scrape goes without what the database holds");
+            Vec::new()
+        }
+    };
+    let caches: [(&str, u64, u64); 3] = [
+        (
+            "items",
+            state.caches.items.entry_count(),
+            state.caches.items.weighted_size(),
+        ),
+        (
+            "searches",
+            state.caches.searches.entry_count(),
+            state.caches.searches.weighted_size(),
+        ),
+        (
+            "lists",
+            state.caches.lists.entry_count(),
+            state.caches.lists.weighted_size(),
+        ),
+    ];
+    gauges.push(Metric {
+        name: "ams_cache_entries",
+        help: "Entries kept in each cache.",
+        samples: caches
+            .iter()
+            .map(|(name, entries, _)| (format!("cache=\"{name}\""), *entries as f64))
+            .collect(),
+    });
+    gauges.push(Metric {
+        name: "ams_cache_bytes",
+        help: "Bytes kept in each cache.",
+        samples: caches
+            .iter()
+            .map(|(name, _, bytes)| (format!("cache=\"{name}\""), *bytes as f64))
+            .collect(),
+    });
+    gauges.push(Metric {
+        name: "ams_uptime_seconds",
+        help: "Seconds since the server started.",
+        samples: vec![(String::new(), STARTED.elapsed().as_secs_f64())],
+    });
+    gauges.push(Metric {
+        name: "ams_build_info",
+        help: "The version running; always 1.",
+        samples: vec![(
+            format!("version=\"{}\"", label(env!("CARGO_PKG_VERSION"))),
+            1.0,
+        )],
+    });
+
+    Ok((
+        [(
+            header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )],
+        crate::metrics::render(&gauges),
+    ))
+}
+
+/// What the database holds, as gauges: works, episodes, locks, job runs.
+async fn held(state: &AppState) -> anyhow::Result<Vec<crate::metrics::Metric>> {
+    use crate::metrics::{Metric, label};
+
+    let everything = repo::item::Query {
+        include_adult: true,
+        include_disabled: true,
+        ..Default::default()
+    };
+    let of = |kind: MediaKind| repo::item::Query {
+        kind: Some(kind),
+        ..everything.clone()
+    };
+    let series = repo::item::count_matching(&state.db, &of(MediaKind::Series)).await?;
+    let movies = repo::item::count_matching(&state.db, &of(MediaKind::Movie)).await?;
+    let episodes = repo::item::episode_count(&state.db, true, true).await?;
+    let locks = repo::override_field::count(&state.db).await?;
+    let runs = repo::job::counts(&state.db).await?;
+
+    Ok(vec![
+        Metric {
+            name: "ams_works",
+            help: "Works held, by kind.",
+            samples: vec![
+                ("kind=\"series\"".into(), series as f64),
+                ("kind=\"movie\"".into(), movies as f64),
+            ],
+        },
+        Metric {
+            name: "ams_episodes",
+            help: "Episodes held.",
+            samples: vec![(String::new(), episodes as f64)],
+        },
+        Metric {
+            name: "ams_locks",
+            help: "Fields locked by a manual edit.",
+            samples: vec![(String::new(), locks as f64)],
+        },
+        Metric {
+            name: "ams_job_runs",
+            help: "Job runs kept in the log, by kind and status.",
+            samples: runs
+                .into_iter()
+                .map(|(kind, status, n)| {
+                    (
+                        format!("kind=\"{}\",status=\"{}\"", label(&kind), label(&status)),
+                        n as f64,
+                    )
+                })
+                .collect(),
+        },
+    ])
 }

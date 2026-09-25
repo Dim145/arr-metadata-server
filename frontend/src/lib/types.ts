@@ -435,6 +435,31 @@ export interface CacheFigures {
   bytes: number
 }
 
+/** A lock, as it travels: the work by every id it can be found by, the field and its value. */
+export interface Lock {
+  work: { id?: string; kind: MediaKind; title: string; year?: number; tmdb?: number; tvdb?: number; imdb?: string }
+  scope: string
+  field: string
+  value?: unknown
+}
+
+export interface Locks {
+  version: number
+  exportedAt: string
+  locks: Lock[]
+}
+
+/** What an import did. */
+export interface LocksImported {
+  applied: number
+  /** Locks already set to the same value. */
+  unchanged: number
+  /** The works written to. */
+  works: number
+  unmatched: string[]
+  refused: string[]
+}
+
 export interface Health {
   version: string
   uptimeSeconds: number

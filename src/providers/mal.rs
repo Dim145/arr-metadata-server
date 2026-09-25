@@ -73,11 +73,13 @@ impl MalClient {
             None => self.http.get(format!("{}/anime/{id}", self.jikan)),
         };
 
+        let started = std::time::Instant::now();
         let response = request
             .timeout(std::time::Duration::from_secs(20))
             .send()
-            .await
-            .context("MyAnimeList request failed")?;
+            .await;
+        crate::metrics::upstream("mal", started, response.as_ref().ok().map(|r| r.status()));
+        let response = response.context("MyAnimeList request failed")?;
 
         let status = response.status();
         if status == reqwest::StatusCode::NOT_FOUND {

@@ -79,6 +79,7 @@ impl AnilistClient {
             anyhow::bail!("AniList's queue is full; this fetch goes without it");
         }
 
+        let started = std::time::Instant::now();
         let response = self
             .http
             .post(&self.endpoint)
@@ -86,8 +87,13 @@ impl AnilistClient {
             .json(&json!({ "query": QUERY, "variables": { "id": id } }))
             .timeout(std::time::Duration::from_secs(20))
             .send()
-            .await
-            .context("AniList request failed")?;
+            .await;
+        crate::metrics::upstream(
+            "anilist",
+            started,
+            response.as_ref().ok().map(|r| r.status()),
+        );
+        let response = response.context("AniList request failed")?;
 
         let status = response.status();
         if status == reqwest::StatusCode::NOT_FOUND {
