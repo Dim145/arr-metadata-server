@@ -118,6 +118,16 @@ export const en = {
     skipToContent: 'Skip to content',
     calendar: 'Schedule',
     seasons: 'Seasons',
+    browseMenu: 'Browse: the menu',
+    quick: {
+      all: 'The whole catalogue',
+      added: 'Newly added',
+      rated: 'Best rated',
+      popular: 'Most popular',
+    },
+    allSeries: 'All series',
+    allFilms: 'All films',
+    also: 'And also',
   },
   home: {
     loadFailed: 'The catalogue could not be loaded just now. Try again in a moment.',

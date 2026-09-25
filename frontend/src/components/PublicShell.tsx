@@ -18,6 +18,7 @@ import { useMe, useNavigationReset } from '../lib/hooks'
 import { cn } from '../lib/cn'
 import { LANGS, LANGUAGES, useI18n } from '../lib/i18n'
 import { ThemeToggle } from './ThemeToggle'
+import { BrowseTab, Tab } from './nav'
 import { providerName } from '../lib/labels'
 import { poster } from '../lib/media'
 import type { ItemPage, Me, Sources } from '../lib/types'
@@ -78,9 +79,10 @@ export function PublicShell({ me }: { me?: Me }) {
           <Wordmark />
 
           <nav aria-label={t.nav.browse} className="hidden items-center gap-0.5 md:flex lg:gap-1">
-            <Tab to="/browse">{t.nav.browse}</Tab>
-            <Tab to="/browse?kind=series">{t.nav.series}</Tab>
-            <Tab to="/browse?kind=movie">{t.nav.films}</Tab>
+            {/* The catalogue, with its shortcuts hanging from the tab: the
+                series and the films were tabs of their own, three ways to
+                the same page across a bar that had no room for them. */}
+            <BrowseTab />
             <Tab to="/calendar">{t.nav.calendar}</Tab>
             <Tab to="/seasons" section>
               {t.nav.seasons}
@@ -161,12 +163,19 @@ export function PublicShell({ me }: { me?: Me }) {
               <Tab to="/browse" block>
                 {t.nav.browse}
               </Tab>
-              <Tab to="/browse?kind=series" block>
-                {t.nav.series}
-              </Tab>
-              <Tab to="/browse?kind=movie" block>
-                {t.nav.films}
-              </Tab>
+              {/* No pointer to rest on the tab here: the ways into the
+                  catalogue are listed beneath it instead. */}
+              <div className="ml-4 grid gap-0.5 border-l border-rule pl-2">
+                <Tab to="/browse?kind=series" block>
+                  {t.nav.series}
+                </Tab>
+                <Tab to="/browse?kind=movie" block>
+                  {t.nav.films}
+                </Tab>
+                <Tab to="/collections" block section>
+                  {t.collections.label}
+                </Tab>
+              </div>
               <Tab to="/calendar" block>
                 {t.nav.calendar}
               </Tab>
@@ -211,61 +220,6 @@ function Wordmark() {
         className="hidden h-3 w-px bg-rule-bright lg:block"
       />
       <span className="label hidden lg:block">arr</span>
-    </Link>
-  )
-}
-
-/**
- * A section tab.
- *
- * `NavLink` decides what is active from the path alone, and these three tabs
- * differ only by a query parameter — so on `/browse?kind=series` it lit both
- * Series and Films. The comparison has to include the parameter, which means
- * making it here rather than letting the router guess.
- */
-function Tab({
-  to,
-  children,
-  block,
-  section,
-}: {
-  to: string
-  children: React.ReactNode
-  block?: boolean
-  /** Current anywhere beneath it too: every season is the seasons' tab. */
-  section?: boolean
-}) {
-  const location = useLocation()
-
-  const [path, search] = to.split('?')
-  const wanted = new URLSearchParams(search).get('kind')
-  const current = new URLSearchParams(location.search).get('kind')
-
-  const isActive = section
-    ? location.pathname === path || location.pathname.startsWith(`${path}/`)
-    : location.pathname === path && (wanted ?? null) === (current ?? null)
-
-  return (
-    <Link
-      to={to}
-      aria-current={isActive ? 'page' : undefined}
-      className={cn(
-        // Closer between `md` and `lg`, where five of these share the bar with
-        // everything else on a screen not much wider than they are.
-        'relative flex min-h-11 items-center rounded-full px-2.5 text-sm font-medium transition-colors duration-200 lg:px-3.5',
-        block ? 'w-full' : '',
-        isActive ? 'text-bone' : 'text-bone-dim hover:bg-ink-high hover:text-bone',
-      )}
-    >
-      {children}
-      {/* The active mark is a rule, not a pill: a catalogue underlines. */}
-      <span
-        aria-hidden
-        className={cn(
-          'absolute inset-x-3.5 -bottom-0.5 h-0.5 origin-left rounded-full bg-vermillion transition-transform duration-300 ease-[var(--ease-out-soft)]',
-          isActive ? 'scale-x-100' : 'scale-x-0',
-        )}
-      />
     </Link>
   )
 }

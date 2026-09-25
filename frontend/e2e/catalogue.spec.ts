@@ -458,13 +458,13 @@ test.describe('reaching the interface', () => {
   test('marks one section at a time, not every tab sharing a path', async ({ page, isMobile }) => {
     test.skip(isMobile, 'the tabs are behind the menu at this width')
 
-    // Browse, Series and Films all point at /browse and differ only by a query
-    // parameter, which a path comparison cannot tell apart — so all three lit
-    // at once. One is current, and it is the one whose parameter matches.
+    // The catalogue's tab is current on the catalogue whatever it is narrowed
+    // to, and on nothing else; the schedule's is current on the schedule.
     for (const [path, expected] of [
       ['/browse', 'Browse'],
-      ['/browse?kind=series', 'Series'],
-      ['/browse?kind=movie', 'Films'],
+      ['/browse?kind=series', 'Browse'],
+      ['/browse?kind=movie', 'Browse'],
+      ['/calendar', 'Schedule'],
     ] as const) {
       await page.goto(path)
       await catalogueLoaded(page)

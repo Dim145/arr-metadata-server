@@ -117,6 +117,16 @@ export const fr: Dict = {
     skipToContent: 'Aller au contenu',
     calendar: 'Programme',
     seasons: 'Saisons',
+    browseMenu: 'Parcourir : le menu',
+    quick: {
+      all: 'Tout le catalogue',
+      added: 'Nouveautés',
+      rated: 'Les mieux notées',
+      popular: 'Les plus populaires',
+    },
+    allSeries: 'Toutes les séries',
+    allFilms: 'Tous les films',
+    also: 'Et aussi',
   },
   home: {
     loadFailed: 'Le catalogue n’a pas pu être chargé pour le moment. Réessayez dans un instant.',

@@ -89,7 +89,7 @@ export function Genre({
 }
 
 /** One of eight film-stock tints, the same one every time for a given name. */
-function stockOf(name: string): number {
+export function stockOf(name: string): number {
   let hash = 0
   for (let index = 0; index < name.length; index += 1) {
     hash = (hash * 31 + name.charCodeAt(index)) | 0
