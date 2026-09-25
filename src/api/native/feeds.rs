@@ -259,16 +259,23 @@ async fn airing_atom(
         .episodes
         .iter()
         .filter_map(|Airing { work_id, episode }| {
-            let event = episode_event(&origin, works.get(work_id.as_str())?, episode)?;
-            // An episode still to come is dated now rather than ahead: a
-            // reader may hide what is dated in the future, and would hide
-            // the point of the feed.
+            let work = works.get(work_id.as_str())?;
+            let event = episode_event(&origin, work, episode)?;
+            // An episode still to come is dated by its work's last change
+            // rather than ahead: a reader may hide what is dated in the
+            // future, and a date that moved every second would never let a
+            // poll be answered "unchanged".
             let aired = rfc3339(&browse::aired_at(episode)?)?;
+            let updated = if aired > now {
+                rfc3339(&work.updated_at).unwrap_or_else(|| now.clone())
+            } else {
+                aired
+            };
             Some(Entry {
                 id: format!("urn:ams:episode:{}", episode.id),
                 title: event.summary,
                 link: event.url,
-                updated: if aired > now { now.clone() } else { aired },
+                updated,
                 summary: episode.overview.clone(),
                 categories: event.categories,
             })
@@ -427,6 +434,17 @@ fn now_rfc3339() -> String {
     Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
 
+/// A stored moment as iCalendar writes one, or the present for a moment
+/// that does not read.
+fn stamp_of(raw: &str) -> String {
+    rfc3339(raw)
+        .and_then(|at| DateTime::parse_from_rfc3339(&at).ok())
+        .map(|at| at.with_timezone(&Utc))
+        .unwrap_or_else(Utc::now)
+        .format("%Y%m%dT%H%M%SZ")
+        .to_string()
+}
+
 /// A stored moment as Atom wants it: RFC 3339, in UTC. The store writes
 /// instants in more than one shape; a feed reader forgives none of them.
 fn rfc3339(raw: &str) -> Option<String> {
@@ -471,6 +489,10 @@ enum When {
 
 struct Event {
     uid: String,
+    /// When the event was last revised: the work's own last change, so the
+    /// document holds still between changes and a poll can be answered
+    /// "unchanged".
+    stamp: String,
     start: When,
     end: When,
     summary: String,
@@ -517,6 +539,7 @@ fn episode_event(origin: &str, work: &MediaItem, episode: &Episode) -> Option<Ev
 
     Some(Event {
         uid: format!("episode-{}@arr-metadata-server", episode.id),
+        stamp: stamp_of(&work.updated_at),
         start,
         end,
         summary,
@@ -543,6 +566,7 @@ fn release_event(origin: &str, work: &MediaItem) -> Option<Event> {
 
     Some(Event {
         uid: format!("release-{}@arr-metadata-server", work.id),
+        stamp: stamp_of(&work.updated_at),
         start: When::Day(day),
         end: When::Day(day + Duration::days(1)),
         summary: titled(work),
@@ -554,7 +578,6 @@ fn release_event(origin: &str, work: &MediaItem) -> Option<Event> {
 
 /// The whole document, lines folded and joined as the format requires.
 fn document(name: &str, events: &[Event]) -> String {
-    let stamp = Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
     let mut lines = vec![
         "BEGIN:VCALENDAR".to_string(),
         "VERSION:2.0".to_string(),
@@ -568,7 +591,7 @@ fn document(name: &str, events: &[Event]) -> String {
     for event in events {
         lines.push("BEGIN:VEVENT".to_string());
         lines.push(format!("UID:{}", event.uid));
-        lines.push(format!("DTSTAMP:{stamp}"));
+        lines.push(format!("DTSTAMP:{}", event.stamp));
         lines.push(when("DTSTART", &event.start));
         lines.push(when("DTEND", &event.end));
         lines.push(format!("SUMMARY:{}", escape(&event.summary)));

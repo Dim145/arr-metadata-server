@@ -12,6 +12,7 @@ import { Link } from 'react-router'
 
 import { Artwork, PosterCard, PosterShelf, Score } from '../components/media'
 import { EmptyState, Genre, Glyph, Label, SectionTitle, Skeleton } from '../components/ui'
+import { useMe } from '../lib/hooks'
 import { api, query } from '../lib/api'
 import * as fmt from '../lib/format'
 import { useI18n } from '../lib/i18n'
@@ -53,12 +54,16 @@ export function Home() {
     return <HomeSkeleton />
   }
 
-  if (!everything.length) {
+  if (series.isError || films.isError) {
     return (
       <div className="pt-16">
-        <EmptyState title={t.home.empty} hint={t.home.emptyHint} />
+        <EmptyState title={t.home.loadFailed} />
       </div>
     )
+  }
+
+  if (!everything.length) {
+    return <FirstVisit />
   }
 
   return (
@@ -456,6 +461,85 @@ function HomeSkeleton() {
           ))}
         </PosterShelf>
       </div>
+    </div>
+  )
+}
+
+/**
+ * The catalogue before anything is in it: what this server is for, and the
+ * three things that fill it, said once, on the page a first visit lands on.
+ * Whoever may write is pointed at the screens; a reader is told who does.
+ */
+function FirstVisit() {
+  const { t } = useI18n()
+  const me = useMe()
+  const writes = me.data?.canWrite === true
+  const administers = me.data?.isAdmin === true
+  const steps = [
+    writes
+      ? null
+      : {
+          key: 'signIn',
+          title: t.home.first.signIn,
+          body: t.home.first.signInHint,
+          to: '/login',
+          label: t.home.first.signInAction,
+        },
+    {
+      key: 'import',
+      title: t.home.first.import,
+      body: t.home.first.importHint,
+      to: writes ? '/admin/discover' : undefined,
+      label: t.home.first.importAction,
+    },
+    {
+      key: 'connect',
+      title: t.home.first.connect,
+      body: t.home.first.connectHint,
+      // The allowlist is the administrator's; a writer who is not one is
+      // told what to do, not where.
+      to: administers ? '/admin/clients' : undefined,
+      label: t.home.first.connectAction,
+    },
+  ].filter((step) => step !== null)
+
+  return (
+    <div className="pt-16 pb-12">
+      <header className="rise mx-auto max-w-2xl text-center">
+        <Glyph name="reel" className="mx-auto size-10 text-vermillion" />
+        <h1 className="mt-5 font-display text-3xl font-medium text-bone sm:text-4xl">{t.home.first.title}</h1>
+        <p className="mt-3 text-sm leading-relaxed text-bone-dim">{t.home.first.lead}</p>
+      </header>
+      {/* Who is looking decides the steps; until that is known, none are
+          shown rather than shown and renumbered. */}
+      {me.isPending ? null : (
+      <ol className="stagger mx-auto mt-10 grid max-w-4xl gap-4 sm:grid-cols-3">
+        {steps.map((step, index) => (
+          <li key={step.key} className="plate flex flex-col gap-2 rounded-panel border border-rule bg-ink-raised p-5">
+            <span className="font-mono text-xs text-vermillion tabular-nums">{String(index + 1).padStart(2, '0')}</span>
+            <h2 className="font-display text-lg text-bone">{step.title}</h2>
+            <p className="text-sm leading-relaxed text-bone-dim">{step.body}</p>
+            {step.to ? (
+              <Link
+                to={step.to}
+                className="mt-auto inline-flex min-h-11 items-center gap-1.5 pt-2 text-sm text-vermillion underline-offset-4 hover:underline"
+              >
+                {step.label}
+                <Glyph name="chevronRight" className="size-3.5" />
+              </Link>
+            ) : null}
+          </li>
+        ))}
+      </ol>
+      )}
+      {writes ? (
+        <p className="mx-auto mt-8 max-w-2xl text-center text-xs text-bone-faint">
+          {t.home.first.docs}{' '}
+          <a href="/api/docs" className="underline underline-offset-2 transition-colors duration-150 hover:text-bone">
+            /api/docs
+          </a>
+        </p>
+      ) : null}
     </div>
   )
 }

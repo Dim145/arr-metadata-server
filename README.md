@@ -40,6 +40,11 @@ It replaces and merges two earlier projects: `the earlier TMDB relay` and
 - **Curated lists.** Selections composed by hand or by a filter, shown on
   the site and served to Sonarr and Radarr as the custom lists their import
   lists read.
+- **A page that installs, links that unfurl, answers that revalidate.** The
+  site is a web app a phone installs; a link to a work or a list carries its
+  title, line and poster for whoever unfurls it, while the catalogue is open;
+  API answers carry a validator, so a client holding one is told "unchanged"
+  rather than sent it again.
 - **Calendars and feeds.** The schedule, and any one work, as an iCalendar a
   phone subscribes to; what arrives and what airs as Atom feeds.
 - **`.nfo` export with the artwork beside it**, in the layout Kodi defined and
@@ -117,6 +122,14 @@ surfaces — is documented at `/api/docs`, with the spec at `/api/openapi.json`.
 Both are generated from the handlers themselves, so they cannot drift from what
 is actually served, and both sit behind the same credential as the rest of the
 native API.
+
+Every whole `GET` answer under the API — not the documentation, nor a body
+over eight megabytes — carries a weak `ETag`, taken from the bytes before
+compression. Send it back as `If-None-Match` and an unchanged answer is
+a `304` with no body — the interface, Seerr and a feed reader all save the
+transfer, and a poll of a calendar feed costs a header exchange. Answers are
+marked `private, no-cache` unless a handler says how long they may be kept, so
+a browser keeps them and asks.
 
 ## Where the data comes from
 

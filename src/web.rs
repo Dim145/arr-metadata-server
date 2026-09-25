@@ -1,5 +1,7 @@
 //! HTTP server: router assembly, middleware stack, TLS, graceful shutdown.
 
+mod etag;
+
 use anyhow::{Context, Result};
 use axum::{
     Json, Router, ServiceExt,
@@ -107,7 +109,10 @@ fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/ready", get(ready))
-        .merge(surfaces)
+        // Every API answer carries a validator, so a client that holds one is
+        // told "unchanged" rather than sent it again. Inside the compression,
+        // which would otherwise vary the bytes the tag is taken from.
+        .merge(surfaces.layer(axum::middleware::from_fn(etag::conditional)))
         // Documentation sits behind the native guard: it is an administrative
         // view of the server, and the UI reaches it with its session cookie.
         .merge(

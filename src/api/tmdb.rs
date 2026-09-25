@@ -140,10 +140,14 @@ pub async fn proxy(State(state): State<AppState>, request: Request) -> AppResult
         .await
         .map_err(|e| AppError::BadRequest(format!("could not read the request body: {e}")))?;
 
-    let mut upstream = state
-        .http
-        .request(parts.method.clone(), &target)
-        .headers(forwarded_headers(&parts.headers));
+    let mut upstream =
+        state
+            .http
+            .request(parts.method.clone(), &target)
+            .headers(forwarded_headers(
+                &parts.headers,
+                patch_target(parts.uri.path()).is_some(),
+            ));
 
     // A v4 token authenticates by header; the query parameter is ignored then.
     if api_key.starts_with("eyJ") {
@@ -175,7 +179,18 @@ pub async fn proxy(State(state): State<AppState>, request: Request) -> AppResult
         && let Ok(mut document) = serde_json::from_slice::<Value>(&bytes)
         && patch(&state, &mut document, target).await?
     {
-        return Ok((status, response_headers(&headers), axum::Json(document)).into_response());
+        // TMDB's validators described TMDB's bytes; the patched document is
+        // tagged by this server's own layer, and kept as long as it says.
+        let mut patched = response_headers(&headers);
+        for name in [
+            header::ETAG,
+            header::LAST_MODIFIED,
+            header::CACHE_CONTROL,
+            header::EXPIRES,
+        ] {
+            patched.remove(name);
+        }
+        return Ok((status, patched, axum::Json(document)).into_response());
     }
 
     Ok((status, response_headers(&headers), Body::from(bytes)).into_response())
@@ -266,10 +281,16 @@ fn climbs(path: &str) -> bool {
     })
 }
 
-fn forwarded_headers(headers: &HeaderMap) -> HeaderMap {
+/// The caller's headers as TMDB is asked with them. For a document this
+/// server patches, the caller's validators stay here: TMDB would answer
+/// "unchanged" for a body it never saw the final shape of.
+fn forwarded_headers(headers: &HeaderMap, patchable: bool) -> HeaderMap {
     headers
         .iter()
         .filter(|(name, _)| !HOP_HEADERS.contains(&name.as_str()))
+        .filter(|(name, _)| {
+            !(patchable && matches!(*name, &header::IF_NONE_MATCH | &header::IF_MODIFIED_SINCE))
+        })
         // The client's Authorization is its credential for *this* server, not
         // for TMDB; forwarding it would leak it upstream.
         .filter(|(name, _)| *name != header::AUTHORIZATION)
