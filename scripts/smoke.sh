@@ -114,6 +114,18 @@ step "the TMDB relay matches a multi-segment path"
 code=$(curl -s -o /dev/null -w '%{http_code}' -H "x-api-key: ${KEY}" "${BASE}/3/movie/329865?language=en-US")
 [ "$code" = "503" ] || { printf 'expected 503, got %s\n' "$code"; exit 1; }; ok
 
+step "the TMDB v4 relay is reached, and only for lists"
+# The same 503 as v3 without a key — but reached, not the UI's 404 — and an
+# account path refused before anything is asked upstream.
+code=$(curl -s -o /dev/null -w '%{http_code}' -H "x-api-key: ${KEY}" "${BASE}/4/list/8136")
+[ "$code" = "503" ] || { printf 'expected 503, got %s\n' "$code"; exit 1; }
+code=$(curl -s -o /dev/null -w '%{http_code}' -H "x-api-key: ${KEY}" "${BASE}/4/account/1/lists")
+[ "$code" = "403" ] || { printf 'expected 403, got %s\n' "$code"; exit 1; }; ok
+
+step "Radarr's IMDb lists are validated before the metadata service is asked"
+code=$(curl -s -o /dev/null -w '%{http_code}' "${BASE}/v1/list/imdb/ls012345678")
+[ "$code" = "400" ] || { printf 'expected 400, got %s\n' "$code"; exit 1; }; ok
+
 step "the OpenAPI spec is behind the same guard"
 [ "$(curl -s -o /dev/null -w '%{http_code}' "${BASE}/api/openapi.json")" = "401" ]
 curl -fsS -b "$COOKIES" "${BASE}/api/openapi.json" | grep -q '"openapi"'; ok

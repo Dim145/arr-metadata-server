@@ -21,7 +21,7 @@ struct Assets;
 /// Paths that belong to the API. A request under one of these must 404 rather
 /// than fall through to the UI's index page, or a mistyped endpoint would
 /// answer `200 text/html` and confuse every client.
-const API_PREFIXES: &[&str] = &["/api/", "/v1/", "/3/", "/health", "/ready"];
+const API_PREFIXES: &[&str] = &["/api/", "/v1/", "/3/", "/4/", "/health", "/ready"];
 
 pub fn router() -> Router<crate::state::AppState> {
     Router::new().fallback(any(serve))
@@ -93,6 +93,7 @@ mod tests {
             "/api/v1/items",
             "/v1/tvdb/search/en",
             "/3/tv/1",
+            "/4/list/8136",
             "/health",
             "/ready",
         ] {

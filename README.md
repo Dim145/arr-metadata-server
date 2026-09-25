@@ -288,8 +288,8 @@ what they can send:
 |---|---|---|
 | Native API and web UI | `/api/v1/*` | API key (header or query) |
 | Public browsing | a fixed subset of `/api/v1/*` | **off** (`AMS_PUBLIC_BROWSE`) |
-| TMDB-compatible | `/3/*` | API key (`api_key` query parameter) |
-| Sonarr / Radarr compatible | `/v1/*` | IP allowlist |
+| TMDB-compatible | `/3/*`, and the public lists of `/4/list/*` | API key (`api_key` query parameter) |
+| Sonarr / Radarr compatible | `/v1/*`, including the IMDb lists Radarr imports from | IP allowlist |
 
 ### Letting anyone browse
 
@@ -390,6 +390,10 @@ A few things worth knowing before this is reachable from anywhere:
 - **The relay reads and does not write.** It exists for Jellyseerr, Overseerr and
   Plex, which only read; a forwarded `POST` would let any key issued here rate a
   film, or empty a list, using the operator's TMDB credentials.
+- **Of TMDB's v4 API, only the public lists are relayed** (`/4/list/{id}`), and
+  only with a v4 read token configured: Radarr's TMDb list imports read them
+  there. An account's own lists, ratings and watchlist need that account's
+  token, which the relay carries for nobody.
 - **The settings, the job history and the audit trail need an administrator**,
   not merely a credential. A key issued to Jellyseerr cannot read which surface
   takes which credential or whether authentication is off.

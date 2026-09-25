@@ -47,7 +47,7 @@ requirement are those; they are not open.",
     ),
     // The TMDB relay is registered with an axum wildcard, which `routes!` cannot
     // collect; name it here so it still reaches the spec.
-    paths(tmdb::proxy),
+    paths(tmdb::proxy, tmdb::proxy_v4),
     modifiers(&SecurityAddon),
     security(("apiKey" = []), ("apiKeyQuery" = []), ("session" = [])),
     tags(
@@ -229,7 +229,9 @@ mod tests {
             "/api/v1/settings",
             "/v1/tvdb/shows/{language}/{tvdb_id}",
             "/v1/movie/{tmdb_id}",
+            "/v1/list/imdb/{id}",
             "/3/{path}",
+            "/4/{path}",
         ] {
             assert!(paths.contains_key(expected), "{expected} is not documented");
         }

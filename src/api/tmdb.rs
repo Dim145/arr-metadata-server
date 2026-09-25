@@ -59,7 +59,9 @@ pub fn router() -> OpenApiRouter<AppState> {
     // wildcard (`{*path}`) to match every TMDB path, and OpenAPI has no
     // wildcard syntax to express that. The documented path is attached to the
     // spec separately, in `ApiDoc`.
-    OpenApiRouter::new().route("/3/{*path}", any(proxy))
+    OpenApiRouter::new()
+        .route("/3/{*path}", any(proxy))
+        .route("/4/{*path}", any(proxy_v4))
 }
 
 /// Relay any TMDB v3 request, with this server's edits applied on the way back.
@@ -87,9 +89,27 @@ pub async fn proxy(State(state): State<AppState>, request: Request) -> AppResult
         return Err(AppError::ProviderNotConfigured);
     }
 
+    // TMDB's v4 API, for the lists Radarr's import lists read from it when
+    // TMDB is redirected here too. Only the public lists: an account's own
+    // lists, ratings and watchlist are read with that account's token, which
+    // this relay must not carry. Forwarding a caller's would relay a
+    // credential; substituting the operator's would serve the operator's
+    // account to every caller. Refused before any key is looked for, so the
+    // answer is the same whatever is configured.
+    let v4 = request.uri().path().starts_with("/4/");
+    if v4 && !v4_allowed(request.uri().path()) {
+        return Err(AppError::Forbidden);
+    }
+
     let Some(api_key) = state.config.tmdb.api_key.clone() else {
         return Err(AppError::ProviderNotConfigured);
     };
+
+    // A v4 path is answered only with a v4 read token; a v3 key is refused
+    // there, and the relay says so rather than passing the refusal on.
+    if v4 && !api_key.starts_with("eyJ") {
+        return Err(AppError::ProviderNotConfigured);
+    }
 
     let (parts, body) = request.into_parts();
 
@@ -108,6 +128,13 @@ pub async fn proxy(State(state): State<AppState>, request: Request) -> AppResult
     }
 
     let target = upstream_url(&state, &parts.uri, &api_key);
+
+    // The parser that builds the outgoing request has the last word on where
+    // it goes — a backslash is a slash to it, and there may be spellings
+    // `climbs` has not met — so the path it reads must be the path checked.
+    if !url::Url::parse(&target).is_ok_and(|url| url.path().ends_with(parts.uri.path())) {
+        return Err(AppError::BadRequest("that is not a TMDB path".into()));
+    }
 
     let body_bytes = axum::body::to_bytes(body, 2 * 1024 * 1024)
         .await
@@ -199,16 +226,40 @@ fn upstream_url(state: &AppState, uri: &Uri, api_key: &str) -> String {
 /// help; the request is same-site.
 const OUR_CREDENTIALS: &[&str] = &["x-api-key", "cookie"];
 
-/// Whether any segment of `path` is a dot segment, encoded or not.
+/// The v4 route, registered by hand as `/4/{*path}` like the v3 one: the same
+/// relay, with the checks above that hold it to the public lists.
+#[utoipa::path(
+    get, path = "/4/{path}", tag = TAG,
+    params(("path" = String, Path, description = "A TMDB v4 list path: `list/{id}`")),
+    responses(
+        (status = 200, description = "TMDB's own response"),
+        (status = 403, description = "Not a public list, or not a read"),
+        (status = 503, description = "No TMDB v4 read token is configured"),
+    ),
+)]
+pub async fn proxy_v4(state: State<AppState>, request: Request) -> AppResult<Response> {
+    proxy(state, request).await
+}
+
+/// The v4 paths relayed: the public lists, and nothing of an account.
+fn v4_allowed(path: &str) -> bool {
+    path.starts_with("/4/list/") && path.len() > "/4/list/".len()
+}
+
+/// Whether any segment of `path` could be read as leaving its place: a dot
+/// segment, encoded or not, or a separator hidden inside a segment.
 ///
 /// Percent-decoded first, because `%2e%2e` and `..` mean the same thing to the
 /// URL parser that builds the outgoing request and different things to a naive
-/// comparison. An un-decodable escape is treated as suspicious rather than
-/// harmless — nothing TMDB addresses needs one.
+/// comparison. To that parser a backslash is a slash, so `list/..\account`
+/// is `account`; and `%2F` survives it, but what TMDB's own edge makes of
+/// `..%2F` is not this server's to find out. An un-decodable escape is
+/// treated as suspicious rather than harmless — nothing TMDB addresses needs
+/// one.
 fn climbs(path: &str) -> bool {
     path.split('/').any(|segment| {
         match urlencoding::decode(segment) {
-            Ok(decoded) => matches!(decoded.as_ref(), "." | ".."),
+            Ok(decoded) => matches!(decoded.as_ref(), "." | "..") || decoded.contains(['/', '\\']),
             // Not valid UTF-8 once decoded: not a TMDB path either.
             Err(_) => true,
         }
@@ -393,10 +444,38 @@ fn tmdb_series_status(status: &str) -> &'static str {
 mod tests {
     #[test]
     fn a_path_that_climbs_out_of_v3_is_not_a_tmdb_path() {
+        use super::climbs;
         // The outgoing URL is built by interpolation and parsed by reqwest,
         // which resolves dot segments — so this one would have left the v3 API
         // for the v4 one, carrying the operator's credentials with it.
         assert!(climbs("/3/%2e%2e/4/account"));
+        // A backslash is a slash to that parser: this one would have left the
+        // public lists for an account's, carrying the operator's token.
+        assert!(climbs("/4/list/..\\account/1/lists"));
+        assert!(climbs("/4/list/8136%2F..%2F..%2Faccount"));
+        assert!(climbs("/3/movie/238%5C..%5C4"));
+        // The parser's own reading of it — why the outgoing URL is checked
+        // against the path too, whatever `climbs` misses.
+        let url = url::Url::parse("https://api.themoviedb.org/4/list/..\\account/1/lists").unwrap();
+        assert_eq!(url.path(), "/4/account/1/lists");
+        assert!(!url.path().ends_with("/4/list/..\\account/1/lists"));
+        let url = url::Url::parse("https://api.themoviedb.org/3/movie/238?api_key=x").unwrap();
+        assert!(url.path().ends_with("/3/movie/238"));
+    }
+
+    #[test]
+    fn of_tmdbs_v4_only_the_public_lists_are_relayed() {
+        assert!(v4_allowed("/4/list/8136"));
+        assert!(v4_allowed("/4/list/8136/item_status"));
+        for refused in [
+            "/4/list/",
+            "/4/list",
+            "/4/account/123/movie/watchlist",
+            "/4/auth/request_token",
+            "/4/",
+        ] {
+            assert!(!v4_allowed(refused), "{refused}");
+        }
         assert!(climbs("/3/../4/account"));
         assert!(climbs("/3/tv/%2E%2E/list"));
         assert!(climbs("/3/./tv/1396"));

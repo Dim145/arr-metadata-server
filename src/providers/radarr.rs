@@ -9,6 +9,7 @@
 //! calling it carries a risk of calling ourselves. See [`LOOP_HEADER`].
 
 use anyhow::{Context, Result};
+use bytes::Bytes;
 use serde_json::Value;
 
 use crate::{config, wire::radarr::MovieResource};
@@ -82,13 +83,53 @@ impl RadarrMetadataClient {
         Ok(serde_json::from_value(value).unwrap_or_default())
     }
 
+    /// One of IMDb's lists as Radarr's metadata service compiles them —
+    /// `top250`, `popular`, or a user's ratings by `ur…` id — as the bytes it
+    /// came as, for a caller that reads it whole. `None` where the service
+    /// has no such list. The Top 250 is thirteen megabytes of whole movie
+    /// resources, so it is given longer than a movie to arrive — and read
+    /// under the same ceiling as every provider answer, this host being one
+    /// a deployment redirects by design.
+    pub async fn imdb_list(&self, id: &str) -> Result<Option<Bytes>> {
+        let url = format!("{}/v1/list/imdb/{id}", self.base);
+        let Some(response) = self.send(&url, &[], 90).await? else {
+            return Ok(None);
+        };
+        crate::providers::read_body(response, crate::providers::MAX_BODY_BYTES)
+            .await
+            .map(|body| Some(Bytes::from(body)))
+            .with_context(|| format!("Radarr's metadata service cut off its answer: {url}"))
+    }
+
     async fn fetch(&self, url: &str, query: &[(&str, &str)]) -> Result<Option<Value>> {
+        let Some(response) = self.send(url, query, 20).await? else {
+            return Ok(None);
+        };
+
+        crate::providers::read_json(response)
+            .await
+            .map(Some)
+            .with_context(|| {
+                format!(
+                    "Radarr's metadata service returned a body this server could not read: {url}"
+                )
+            })
+    }
+
+    /// One request to the service, answered or not: `None` for a 404, an
+    /// error for anything else that is not success.
+    async fn send(
+        &self,
+        url: &str,
+        query: &[(&str, &str)],
+        timeout_secs: u64,
+    ) -> Result<Option<reqwest::Response>> {
         let response = self
             .http
             .get(url)
             .query(query)
             .header(LOOP_HEADER, &self.instance)
-            .timeout(std::time::Duration::from_secs(20))
+            .timeout(std::time::Duration::from_secs(timeout_secs))
             .send()
             .await
             .with_context(|| format!("request to Radarr's metadata service failed: {url}"))?;
@@ -110,13 +151,6 @@ impl RadarrMetadataClient {
             anyhow::bail!("Radarr's metadata service returned {status} for {url}");
         }
 
-        crate::providers::read_json(response)
-            .await
-            .map(Some)
-            .with_context(|| {
-                format!(
-                    "Radarr's metadata service returned a body this server could not read: {url}"
-                )
-            })
+        Ok(Some(response))
     }
 }

@@ -5,7 +5,10 @@
 
 use axum::{
     Extension, Json,
+    body::Bytes,
     extract::{Path, Query, State},
+    http::header,
+    response::{IntoResponse, Response},
 };
 use serde::Deserialize;
 use utoipa_axum::{router::OpenApiRouter, routes};
@@ -34,6 +37,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(search))
         .routes(routes!(popular))
         .routes(routes!(trending))
+        .routes(routes!(imdb_list))
 }
 
 /// Radarr's format, in the language this caller is served in.
@@ -225,6 +229,108 @@ async fn popular(
     Ok(Json(served(&state, &identity, items)))
 }
 
+/// One of IMDb's lists, as Radarr's "IMDb Lists" import asks for it: `top250`,
+/// `popular`, or a user's ratings by `ur…` id.
+///
+/// The one route of Radarr's that this server cannot answer from what it
+/// holds — the lists are IMDb's, compiled by Radarr's own metadata service —
+/// so it is answered from that service and kept a day. Radarr reads only the
+/// TMDB ids out of it and then asks for each movie here, where the operator's
+/// edits apply. With the service switched off there is no list to give.
+#[utoipa::path(
+    get, path = "/v1/list/imdb/{id}", tag = TAG,
+    params(("id" = String, Path, description = "`top250`, `popular`, or an IMDb user id such as `ur12345678`")),
+    responses(
+        (status = 200, body = Vec<MovieResource>),
+        (status = 400, description = "Not one of IMDb's lists"),
+        (status = 403, description = "The caller's address is not in the allowlist"),
+        (status = 404, description = "Radarr's metadata service has no such list"),
+        (status = 502, description = "Radarr's metadata service could not be asked"),
+        (status = 503, description = "Radarr's metadata service is switched off here"),
+    ),
+    security(),
+)]
+async fn imdb_list(State(state): State<AppState>, Path(id): Path<String>) -> AppResult<Response> {
+    // Only what Radarr can ask for reaches the service: this route must not
+    // become a way to fetch arbitrary paths of it through this server.
+    if !is_imdb_list(&id) {
+        return Err(AppError::BadRequest(
+            "an IMDb list is top250, popular, or a user id such as ur12345678".into(),
+        ));
+    }
+    let provider = &state.config.radarr_metadata;
+    if !(provider.fallback || provider.enrich) {
+        return Err(AppError::ProviderNotConfigured);
+    }
+
+    let key = format!("list:imdb:{id}");
+    // One download for every Radarr asking at once, run in a task of its own:
+    // a caller that gives up — Radarr's patience, or this server's own request
+    // timeout — does not take the download with it, and the next to ask finds
+    // the list in the cache rather than starting it over.
+    let body = state
+        .caches
+        .lists
+        .try_get_with(key.clone(), {
+            let state = state.clone();
+            async move {
+                tokio::spawn(async move { fetch_imdb_list(&state, &key, &id).await })
+                    .await
+                    .map_err(|e| ListFailure::Upstream(e.into()))?
+            }
+        })
+        .await
+        .map_err(|failure| match &*failure {
+            ListFailure::Missing => AppError::NotFound,
+            ListFailure::Upstream(e) => AppError::UpstreamUnavailable(anyhow::anyhow!("{e:#}")),
+        })?;
+
+    Ok(([(header::CONTENT_TYPE, "application/json")], body).into_response())
+}
+
+/// Why a list was not had — kept apart so a missing list stays a 404 through
+/// the cache's sharing of one download between callers.
+enum ListFailure {
+    Missing,
+    Upstream(anyhow::Error),
+}
+
+/// The list from the service, checked and cached.
+async fn fetch_imdb_list(state: &AppState, key: &str, id: &str) -> Result<Bytes, ListFailure> {
+    let bytes = state
+        .radarr_metadata
+        .imdb_list(id)
+        .await
+        .map_err(ListFailure::Upstream)?
+        .ok_or(ListFailure::Missing)?;
+    // Checked here to be the shape Radarr parses, once, rather than found out
+    // by every Radarr that asks.
+    serde_json::from_slice::<Vec<MovieResource>>(&bytes).map_err(|e| {
+        ListFailure::Upstream(anyhow::anyhow!(
+            "Radarr's metadata service returned a list this server could not interpret: {e}"
+        ))
+    })?;
+    state
+        .caches
+        .lists
+        .insert(key.to_string(), bytes.clone())
+        .await;
+    Ok(bytes)
+}
+
+/// Whether `id` names a list Radarr's metadata service compiles from IMDb.
+fn is_imdb_list(id: &str) -> bool {
+    match id {
+        "top250" | "popular" => true,
+        _ => {
+            id.len() >= 6
+                && id.len() <= 14
+                && id.starts_with("ur")
+                && id[2..].bytes().all(|b| b.is_ascii_digit())
+        }
+    }
+}
+
 /// TMDB's trending movies for the week.
 #[utoipa::path(
     get, path = "/v1/list/tmdb/trending", tag = TAG,
@@ -238,4 +344,36 @@ async fn trending(
     let items = movie::trending(&state).await?;
 
     Ok(Json(served(&state, &identity, items)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_imdbs_lists_are_asked_of_the_service() {
+        for ok in [
+            "top250",
+            "popular",
+            "ur1234",
+            "ur12345678",
+            "ur123456789012",
+        ] {
+            assert!(is_imdb_list(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            "top",
+            "ls012345678",
+            "ur",
+            "ur12",
+            "ur12345678901234",
+            "urabc",
+            "../movie/1",
+            "top250/x",
+            "UR12345678",
+        ] {
+            assert!(!is_imdb_list(bad), "{bad}");
+        }
+    }
 }

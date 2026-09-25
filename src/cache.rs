@@ -5,6 +5,7 @@
 
 use std::time::Duration;
 
+use bytes::Bytes;
 use moka::future::Cache as Moka;
 
 use crate::config;
@@ -15,6 +16,11 @@ pub struct Caches {
     pub items: Moka<String, String>,
     /// Search result sets, keyed by `{surface}:{language}:{term}`.
     pub searches: Moka<String, String>,
+    /// Whole lists relayed from a metadata service — IMDb's Top 250 is
+    /// thirteen megabytes — kept a day, apart from the searches they would
+    /// otherwise push out of memory. Bytes, handed out shared: a hit is a
+    /// reference count, not a thirteen-megabyte copy.
+    pub lists: Moka<String, Bytes>,
     /// Which settings a cached search was computed under.
     ///
     /// Bumped once a settings change has reached every provider, and part of
@@ -37,6 +43,10 @@ pub struct Caches {
 /// nothing but the smallest documents was ever served from memory.
 const TYPICAL_ENTRY: u64 = 16 * 1024;
 
+/// Room for a few relayed lists at once: the Top 250, the popular hundred,
+/// and a user's ratings or two.
+const LISTS_CAPACITY: u64 = 64 * 1024 * 1024;
+
 impl Caches {
     pub fn new(cfg: &config::Cache) -> Self {
         Self {
@@ -45,6 +55,7 @@ impl Caches {
                 (cfg.max_entries / 2).saturating_mul(TYPICAL_ENTRY),
                 cfg.search_ttl,
             ),
+            lists: build(LISTS_CAPACITY, Duration::from_secs(24 * 60 * 60)),
             generation: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
     }
@@ -52,16 +63,20 @@ impl Caches {
     pub async fn invalidate_all(&self) {
         self.items.invalidate_all();
         self.searches.invalidate_all();
+        self.lists.invalidate_all();
     }
 }
 
-fn build(capacity: u64, ttl: Duration) -> Moka<String, String> {
+fn build<V>(capacity: u64, ttl: Duration) -> Moka<String, V>
+where
+    V: AsRef<[u8]> + Clone + Send + Sync + 'static,
+{
     Moka::builder()
         .max_capacity(capacity.max(1))
         .time_to_live(ttl)
         // Values are serialized documents; weigh by byte length so a few huge
         // series with full episode lists cannot evict everything else.
-        .weigher(|k: &String, v: &String| (k.len() + v.len()).try_into().unwrap_or(u32::MAX))
+        .weigher(|k: &String, v: &V| (k.len() + v.as_ref().len()).try_into().unwrap_or(u32::MAX))
         .build()
 }
 

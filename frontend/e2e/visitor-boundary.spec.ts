@@ -151,6 +151,20 @@ test.describe('a visitor with no credential', () => {
     }
   })
 
+  test('reaches TMDB’s v4 lists only with a credential, and IMDb’s lists only by name', async ({
+    request,
+  }) => {
+    // The v4 relay is a surface like the v3 one: closed to a visitor.
+    expect((await request.get('/4/list/8136')).status()).toBe(401)
+    // Radarr's IMDb lists: the route exists, and takes only what Radarr can
+    // ask for, so it is never a way to reach the metadata service by any path.
+    // Knocking as Radarr does: the arr surface remembers its last caller's
+    // agent per address, and another test reads it back as Sonarr's.
+    const asRadarr = { headers: { 'user-agent': 'Sonarr/4.0.20.3014 (e2e)' } }
+    expect((await request.get('/v1/list/imdb/ls012345678', asRadarr)).status()).toBe(400)
+    expect((await request.get('/v1/list/imdb/..%2Fmovie%2F238', asRadarr)).status()).toBe(400)
+  })
+
   test('is offered a way in rather than an admin link', async ({ page }) => {
     await page.goto('/')
 
