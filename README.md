@@ -40,6 +40,11 @@ It replaces and merges two earlier projects: `the earlier TMDB relay` and
 - **Curated lists.** Selections composed by hand or by a filter, shown on
   the site and served to Sonarr and Radarr as the custom lists their import
   lists read.
+- **A command palette, and actions on many works at once.** ⌘K or Ctrl K
+  anywhere finds a place to go or a work by its title; in the catalogue,
+  whoever maintains it selects rows and refreshes, switches off or on,
+  deletes, or adds them to a list, all at once — each work its own request
+  and its own line in the audit trail.
 - **What goes with a work.** A work's page offers the catalogue's own works
   in the same vein — its kind, sharing its genres, keywords, network or
   decade — and a film's whole collection, held or not, on a page of its own;

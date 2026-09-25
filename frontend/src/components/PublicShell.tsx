@@ -20,6 +20,7 @@ import { useI18n, type Lang } from '../lib/i18n'
 import { providerName } from '../lib/labels'
 import { poster } from '../lib/media'
 import type { ItemPage, Me, Sources } from '../lib/types'
+import { CommandPalette, openPalette, paletteShortcut } from './CommandPalette'
 import { Artwork } from './media'
 import { Glyph, Input } from './ui'
 
@@ -94,6 +95,15 @@ export function PublicShell({ me }: { me?: Me }) {
 
           <div className="ml-auto flex items-center gap-2">
             <SearchBox className="hidden w-64 lg:block" />
+            <button
+              type="button"
+              onClick={openPalette}
+              aria-label={t.palette.open}
+              title={t.palette.open}
+              className="hidden min-h-11 items-center rounded-full border border-rule px-2.5 font-mono text-[0.6875rem] text-bone-faint transition-colors duration-150 hover:border-rule-bright hover:text-bone lg:inline-flex"
+            >
+              {paletteShortcut()}
+            </button>
 
             {/* Below the width where the field fits, search is still one tap
                 away rather than buried in the menu: it is the thing people
@@ -175,6 +185,7 @@ export function PublicShell({ me }: { me?: Me }) {
 
       <main id="main" tabIndex={-1} className="relative z-10 mx-auto max-w-7xl px-4 pb-24 outline-none sm:px-6">
         <Outlet />
+        <CommandPalette admin={Boolean(me?.canWrite)} />
       </main>
 
       <Footer />

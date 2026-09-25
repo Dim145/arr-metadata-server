@@ -13,7 +13,7 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 
 import {
@@ -41,7 +41,7 @@ import { cn } from '../../lib/cn'
 import * as fmt from '../../lib/format'
 import { useSettled } from '../../lib/debounce'
 import { useI18n } from '../../lib/i18n'
-import type { ItemPage, MediaItem, MediaKind } from '../../lib/types'
+import type { ItemPage, MediaItem, MediaKind, CuratedListPage, CuratedLists } from '../../lib/types'
 
 /** What an operator is being asked to confirm, and about which entry. */
 type Asking = { item: MediaItem; what: 'delete' | 'disable' }
@@ -121,6 +121,87 @@ export function Catalogue() {
       invalidate()
     },
   })
+
+  // A selection across the rows, and what is done to all of it at once: each
+  // work its own request, a few at a time, so one that fails does not take
+  // the rest with it — and each its own line in the audit trail.
+  const [selected, setSelected] = useState<Set<string>>(() => new Set())
+  const [bulkAsk, setBulkAsk] = useState(false)
+  const [bulkBusy, setBulkBusy] = useState(false)
+  const [bulkNote, setBulkNote] = useState<string | null>(null)
+  const curated = useQuery({
+    queryKey: ['admin-lists'],
+    queryFn: () => api.get<CuratedLists>('/lists'),
+    staleTime: 60_000,
+  })
+  const toggle = (id: string, on: boolean) => {
+    setBulkNote(null)
+    setSelected((current) => {
+      const next = new Set(current)
+      if (on) next.add(id)
+      else next.delete(id)
+      return next
+    })
+  }
+  // The selection is of what is on screen: a work that a new filter or a
+  // refetch took off the page leaves it, so nothing is done to what cannot
+  // be seen.
+  const shown = list.data?.items
+  useEffect(() => {
+    if (!shown) return
+    setSelected((current) => {
+      const kept = new Set([...current].filter((id) => shown.some((item) => item.id === id)))
+      return kept.size === current.size ? current : kept
+    })
+  }, [shown])
+  // A partial selection shows as such in the box that selects every row.
+  const allBox = useRef<HTMLInputElement>(null)
+  const allShown = Boolean(shown?.length) && Boolean(shown?.every((item) => selected.has(item.id)))
+  useEffect(() => {
+    if (allBox.current) allBox.current.indeterminate = selected.size > 0 && !allShown
+  }, [selected, allShown])
+  const runBulk = async (act: (id: string) => Promise<unknown>) => {
+    const ids = [...selected]
+    setBulkBusy(true)
+    setBulkNote(null)
+    let ok = 0
+    let failed = 0
+    const queue = [...ids]
+    const worker = async () => {
+      for (let id = queue.shift(); id !== undefined; id = queue.shift()) {
+        try {
+          await act(id)
+          ok += 1
+        } catch {
+          failed += 1
+        }
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(4, ids.length) }, worker))
+    setBulkBusy(false)
+    setBulkNote(failed ? t.admin.works.bulk.failed(ok, failed) : t.admin.works.bulk.done(ok))
+    setSelected(new Set())
+    invalidate()
+  }
+  const addToList = async (listId: string) => {
+    const list = curated.data?.lists.find((l) => l.id === listId)
+    if (!list) return
+    setBulkBusy(true)
+    setBulkNote(null)
+    try {
+      const page = await api.get<CuratedListPage>(`/lists/${listId}`)
+      const members = [...new Set([...page.items.map((item) => item.id), ...selected])]
+      await api.put(`/lists/${listId}/items`, { items: members })
+      setBulkNote(t.admin.works.bulk.added(selected.size, list.name))
+      setSelected(new Set())
+      void queryClient.invalidateQueries({ queryKey: ['admin-lists'] })
+      void queryClient.invalidateQueries({ queryKey: ['lists'] })
+    } catch (error) {
+      setBulkNote(error instanceof Error ? error.message : t.common.actionFailed)
+    } finally {
+      setBulkBusy(false)
+    }
+  }
 
   const filtered = Boolean(term || kind || manualOnly || failedOnly)
 
@@ -250,10 +331,89 @@ export function Catalogue() {
             hint={filtered ? t.admin.works.emptyFilteredHint : t.admin.works.emptyHint}
           />
         ) : (
+          <>
+          {selected.size > 0 || bulkNote ? (
+            <div
+              role="region"
+              aria-label={t.admin.works.bulk.selected(selected.size)}
+              className="flex flex-wrap items-center gap-2 border-b border-rule bg-ink-high px-4 py-2"
+            >
+              <span className="mr-2 font-mono text-xs text-bone tabular-nums">
+                {t.admin.works.bulk.selected(selected.size)}
+              </span>
+              {selected.size > 0 ? (
+                <>
+                  <Button size="sm" disabled={bulkBusy} onClick={() => void runBulk((id) => api.post(`/items/${id}/refresh`))}>
+                    <Glyph name="refresh" className="size-3.5" />
+                    {t.admin.works.bulk.refresh}
+                  </Button>
+                  <Button size="sm" disabled={bulkBusy} onClick={() => void runBulk((id) => api.patch(`/items/${id}`, { isEnabled: true }))}>
+                    {t.admin.works.bulk.enable}
+                  </Button>
+                  <Button size="sm" disabled={bulkBusy} onClick={() => void runBulk((id) => api.patch(`/items/${id}`, { isEnabled: false }))}>
+                    {t.admin.works.bulk.disable}
+                  </Button>
+                  {curated.data?.lists.some((list) => list.mode === 'manual') ? (
+                    <Select
+                      aria-label={t.admin.works.bulk.addTo}
+                      value=""
+                      disabled={bulkBusy}
+                      onChange={(event) => {
+                        if (event.target.value) void addToList(event.target.value)
+                      }}
+                      className="min-h-9 w-auto py-0 text-xs"
+                    >
+                      <option value="">{t.admin.works.bulk.addTo}</option>
+                      {curated.data.lists
+                        .filter((list) => list.mode === 'manual')
+                        .map((list) => (
+                          <option key={list.id} value={list.id}>
+                            {list.name}
+                          </option>
+                        ))}
+                    </Select>
+                  ) : null}
+                  <Button size="sm" variant="danger" disabled={bulkBusy} onClick={() => setBulkAsk(true)}>
+                    <Glyph name="trash" className="size-3.5" />
+                    {t.admin.works.bulk.delete}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="quiet"
+                    disabled={bulkBusy}
+                    onClick={() => {
+                      setSelected(new Set())
+                      setBulkNote(null)
+                    }}
+                  >
+                    {t.admin.works.bulk.clear}
+                  </Button>
+                </>
+              ) : null}
+              {bulkBusy ? <Spinner className="size-4" /> : null}
+              {bulkNote ? (
+                <span role="status" className="text-xs text-bone-dim">
+                  {bulkNote}
+                </span>
+              ) : null}
+            </div>
+          ) : null}
           <TableScroll label={t.admin.catalogue}>
             <table className="w-full min-w-[20rem] border-collapse text-left">
               <thead>
                 <tr>
+                  <Th className="w-8 pr-0">
+                    <input
+                      ref={allBox}
+                      type="checkbox"
+                      aria-label={t.admin.works.bulk.selectAll}
+                      className="size-4 accent-vermillion"
+                      checked={allShown}
+                      onChange={(event) =>
+                        setSelected(event.target.checked ? new Set(list.data.items.map((item) => item.id)) : new Set())
+                      }
+                    />
+                  </Th>
                   <Th>{t.admin.works.colTitle}</Th>
                   <Th className="hidden lg:table-cell">{t.admin.works.colIds}</Th>
                   <Th className="hidden sm:table-cell">{t.admin.works.colState}</Th>
@@ -276,11 +436,14 @@ export function Catalogue() {
                     onRefresh={() => refresh.mutate(item.id)}
                     onEnable={() => setEnabled.mutate({ id: item.id, enabled: true })}
                     onAsk={(what) => setAsking({ item, what })}
+                    selected={selected.has(item.id)}
+                    onSelect={(on) => toggle(item.id, on)}
                   />
                 ))}
               </tbody>
             </table>
           </TableScroll>
+          </>
         )}
       </Panel>
 
@@ -324,6 +487,30 @@ export function Catalogue() {
       >
         {asking ? t.admin.works.disableBody(asking.item.title) : null}
       </Dialog>
+
+      <Dialog
+        open={bulkAsk}
+        title={t.admin.works.bulk.deleteTitle(selected.size)}
+        onClose={() => setBulkAsk(false)}
+        footer={
+          <>
+            <Button onClick={() => setBulkAsk(false)}>{t.common.cancel}</Button>
+            <Button
+              variant="danger"
+              disabled={bulkBusy}
+              onClick={() => {
+                setBulkAsk(false)
+                void runBulk((id) => api.delete(`/items/${id}`))
+              }}
+            >
+              <Glyph name="trash" className="size-4" />
+              {t.admin.works.bulk.delete}
+            </Button>
+          </>
+        }
+      >
+        {t.admin.works.bulk.deleteBody}
+      </Dialog>
     </div>
   )
 }
@@ -336,6 +523,8 @@ function Row({
   onRefresh,
   onEnable,
   onAsk,
+  selected,
+  onSelect,
 }: {
   item: MediaItem
   locale: string
@@ -344,6 +533,8 @@ function Row({
   onRefresh: () => void
   onEnable: () => void
   onAsk: (what: Asking['what']) => void
+  selected: boolean
+  onSelect: (on: boolean) => void
 }) {
   const { t } = useI18n()
 
@@ -351,7 +542,17 @@ function Row({
   const ids = item.externalIds
 
   return (
-    <Tr className={cn('group', item.isEnabled ? '' : 'opacity-60')}>
+    <Tr className={cn('group', item.isEnabled ? '' : 'opacity-60', selected && 'bg-ink-high')}>
+      {/* Above the stretched link, or the box would open the editor. */}
+      <Td className="w-8 pr-0">
+        <input
+          type="checkbox"
+          aria-label={t.admin.works.bulk.select(item.title)}
+          className="relative z-10 size-4 accent-vermillion"
+          checked={selected}
+          onChange={(event) => onSelect(event.target.checked)}
+        />
+      </Td>
       <Td className="w-full max-w-0">
         {/* The cell is the target: the pseudo-element grows the link to the
             height of the row, so a thumb landing anywhere in the column opens

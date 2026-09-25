@@ -21,6 +21,7 @@ import { cn } from '../lib/cn'
 import { useI18n, type Dict, type Lang } from '../lib/i18n'
 import { describeIdentity } from '../lib/labels'
 import type { Me, Settings } from '../lib/types'
+import { CommandPalette } from './CommandPalette'
 import { Glyph, Spinner, type GlyphName } from './ui'
 
 type Entry = {
@@ -119,6 +120,7 @@ export function AdminShell() {
         >
           <TitleContext value={setOverride}>
             <Outlet />
+            <CommandPalette admin />
           </TitleContext>
         </main>
 
