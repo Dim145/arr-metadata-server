@@ -40,6 +40,11 @@ It replaces and merges two earlier projects: `the earlier TMDB relay` and
 - **Curated lists.** Selections composed by hand or by a filter, shown on
   the site and served to Sonarr and Radarr as the custom lists their import
   lists read.
+- **What goes with a work.** A work's page offers the catalogue's own works
+  in the same vein — its kind, sharing its genres, keywords, network or
+  decade — and a film's whole collection, held or not, on a page of its own;
+  whoever maintains the catalogue is shown what TMDB recommends beside a
+  work, to import in one click.
 - **Where to watch.** A work's page lists the services carrying it in a
   country — streaming, rent, buy — from the JustWatch data TMDB serves, named
   beside it as TMDB's terms ask; the country is a setting (`tmdb.watchRegion`,

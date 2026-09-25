@@ -255,7 +255,15 @@ fn browsable(method: &axum::http::Method, path: &str) -> bool {
         "/api/v1/calendar.ics" | "/api/v1/feed/added.atom" | "/api/v1/feed/airing.atom" => true,
         // The curated lists, and the shapes the clients import them in. A
         // private list is refused inside, as a hidden work is.
-        "/api/v1/lists" => true,
+        "/api/v1/lists" | "/api/v1/collections" => true,
+        rest if rest
+            .strip_prefix("/api/v1/collections/")
+            .is_some_and(|tail| {
+                !tail.is_empty() && tail.len() <= 18 && tail.bytes().all(|b| b.is_ascii_digit())
+            }) =>
+        {
+            true
+        }
         rest if rest.strip_prefix("/api/v1/lists/").is_some_and(|tail| {
             match tail.split('/').collect::<Vec<_>>().as_slice() {
                 [key] => !key.is_empty(),
@@ -296,6 +304,7 @@ fn browsable(method: &axum::http::Method, path: &str) -> bool {
                 .strip_suffix("/calendar.ics")
                 .or_else(|| tail.strip_suffix("/lists"))
                 .or_else(|| tail.strip_suffix("/watch"))
+                .or_else(|| tail.strip_suffix("/similar"))
                 .unwrap_or(tail);
             !id.is_empty() && !id.contains('/')
         }),
@@ -506,6 +515,13 @@ mod browse_tests {
         assert!(!allowed("/api/v1/lists//sonarr.json"));
         assert!(allowed(&format!("/api/v1/items/{id}/lists")));
         assert!(allowed(&format!("/api/v1/items/{id}/watch")));
+        assert!(allowed(&format!("/api/v1/items/{id}/similar")));
+        assert!(!allowed(&format!("/api/v1/items/{id}/suggestions")));
+        assert!(allowed("/api/v1/collections"));
+        assert!(allowed("/api/v1/collections/10"));
+        assert!(!allowed("/api/v1/collections/ten"));
+        assert!(!allowed("/api/v1/collections/10/x"));
+        assert!(!allowed("/api/v1/collections/99999999999999999999"));
         assert!(!allowed(&format!("/api/v1/items/{id}/watch/x")));
     }
 

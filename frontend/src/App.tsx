@@ -27,6 +27,7 @@ const Calendar = named(() => import('./routes/Calendar'), 'Calendar')
 const Seasons = named(() => import('./routes/Seasons'), 'Seasons')
 const Lists = named(() => import('./routes/Lists'), 'Lists')
 const ListDetail = named(() => import('./routes/Lists'), 'ListDetail')
+const CollectionDetail = named(() => import('./routes/Lists'), 'CollectionDetail')
 
 const Login = named(() => import('./routes/Login'), 'Login')
 const AdminShell = named(() => import('./components/AdminShell'), 'AdminShell')
@@ -91,6 +92,7 @@ function Router() {
           <Route path="/calendar" element={<Calendar />} />
           <Route path="/lists" element={<Lists />} />
           <Route path="/lists/:slug" element={<ListDetail />} />
+          <Route path="/collections/:id" element={<CollectionDetail />} />
           <Route path="/seasons" element={<Seasons />} />
           <Route path="/seasons/:year/:season" element={<Seasons />} />
           {/* Said, not redirected: see `NotFound`. */}

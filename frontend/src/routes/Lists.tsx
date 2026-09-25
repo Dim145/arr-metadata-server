@@ -10,11 +10,11 @@ import { useState } from 'react'
 import { Link, useParams } from 'react-router'
 
 import { PosterCard, PosterGrid } from '../components/media'
-import { Button, Chip, EmptyState, Glyph, Label, Skeleton } from '../components/ui'
+import { Button, Chip, EmptyState, Glyph, Label, SectionTitle, Skeleton } from '../components/ui'
 import { ApiError, api, query } from '../lib/api'
 import { useTitle } from '../lib/hooks'
 import { useI18n } from '../lib/i18n'
-import type { CuratedList, CuratedListPage, CuratedLists } from '../lib/types'
+import type { CollectionPage, Collections, CuratedList, CuratedListPage, CuratedLists } from '../lib/types'
 
 export function Lists() {
   const { t } = useI18n()
@@ -55,6 +55,166 @@ export function Lists() {
           ))}
         </ul>
       )}
+
+      <CollectionsSection />
+    </div>
+  )
+}
+
+/** The film collections the catalogue holds part of, beneath the lists. */
+function CollectionsSection() {
+  const { t } = useI18n()
+  const collections = useQuery({
+    queryKey: ['collections'],
+    queryFn: () => api.get<Collections>('/collections'),
+    staleTime: 10 * 60_000,
+    retry: false,
+  })
+  const cards = collections.data?.collections ?? []
+  if (!cards.length) return null
+
+  return (
+    <section className="mt-14">
+      <SectionTitle>{t.collections.title}</SectionTitle>
+      <p className="mb-6 max-w-prose text-sm leading-relaxed text-bone-dim">{t.collections.lead}</p>
+      <ul className="stagger grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {cards.map((collection) => (
+          <li key={collection.tmdbId} className="min-w-0">
+            <Link
+              to={`/collections/${collection.tmdbId}`}
+              className="plate group flex gap-4 rounded-panel border border-rule bg-ink-raised p-4 transition-colors duration-150 hover:border-rule-bright"
+            >
+              {collection.poster ? (
+                <img
+                  src={collection.poster}
+                  alt=""
+                  width={64}
+                  height={96}
+                  loading="lazy"
+                  className="h-24 w-16 shrink-0 rounded-sm object-cover"
+                />
+              ) : (
+                <span className="h-24 w-16 shrink-0 rounded-sm bg-ink-high" />
+              )}
+              <span className="min-w-0">
+                <span className="block font-display text-lg text-bone transition-colors duration-150 group-hover:text-vermillion">
+                  {collection.name ?? t.collections.unnamed(collection.tmdbId)}
+                </span>
+                <span className="mt-1 block font-mono text-xs text-bone-faint tabular-nums">
+                  {t.collections.held(collection.count, 0)}
+                </span>
+              </span>
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </section>
+  )
+}
+
+export function CollectionDetail() {
+  const { id = '' } = useParams()
+  const { t, lang } = useI18n()
+
+  const page = useQuery({
+    queryKey: ['collection-page', id, lang],
+    queryFn: () => api.get<CollectionPage>(`/collections/${encodeURIComponent(id)}${query({ language: lang })}`),
+    retry: false,
+  })
+  const name = page.data?.name ?? t.collections.unnamed(Number(id))
+  useTitle(page.data ? name : t.collections.one)
+
+  if (page.isPending) {
+    return (
+      <div className="pt-10 pb-12">
+        <Skeleton className="h-4 w-24" />
+        <Skeleton className="mt-4 h-10 w-2/3" />
+        <PosterGrid className="mt-10 lg:grid-cols-4 xl:grid-cols-5">
+          {Array.from({ length: 4 }, (_, index) => (
+            <Skeleton key={index} className="aspect-[2/3] w-full" />
+          ))}
+        </PosterGrid>
+      </div>
+    )
+  }
+  if (page.isError) {
+    const missing = page.error instanceof ApiError && page.error.status === 404
+    return (
+      <div className="pt-10 pb-12">
+        <EmptyState
+          title={missing ? t.collections.notFound : t.collections.loadFailed}
+          action={
+            <Link to="/lists" className="text-sm text-vermillion underline-offset-4 hover:underline">
+              {t.lists.label}
+            </Link>
+          }
+        />
+      </div>
+    )
+  }
+
+  const { items, parts } = page.data
+  const heldIds = new Set(items.map((item) => item.id))
+
+  return (
+    <div className="pt-10 pb-12">
+      <header className="rise mb-8">
+        <Link
+          to="/lists"
+          className="-ml-3 inline-flex min-h-11 items-center gap-1.5 rounded-full px-3 text-sm text-bone-dim transition-colors duration-150 hover:bg-ink-high hover:text-bone"
+        >
+          <Glyph name="chevronLeft" className="size-4" />
+          {t.lists.label}
+        </Link>
+        <div className="mt-2">
+          <Label>{t.collections.one}</Label>
+        </div>
+        <h1 className="mt-2 font-display text-3xl font-medium text-bone sm:text-4xl">{name}</h1>
+        {page.data.overview ? (
+          <p className="mt-3 max-w-prose text-sm leading-relaxed text-bone-dim">{page.data.overview}</p>
+        ) : null}
+        <p className="mt-2 font-mono text-sm text-bone-faint tabular-nums">
+          {t.collections.held(items.length, parts.length)}
+        </p>
+      </header>
+
+      {items.length ? (
+        <PosterGrid className="lg:grid-cols-4 xl:grid-cols-5">
+          {items.map((item) => (
+            <PosterCard key={item.id} item={item} to={`/work/${item.id}`} />
+          ))}
+        </PosterGrid>
+      ) : (
+        <EmptyState title={t.collections.notFound} />
+      )}
+
+      {parts.length ? (
+        <section className="mt-14">
+          <SectionTitle>{t.collections.parts}</SectionTitle>
+          <ol className="divide-y divide-rule rounded-panel border border-rule">
+            {parts.map((part) => (
+              <li key={part.tmdbId} className="flex items-center gap-3 px-4 py-2">
+                {part.poster ? (
+                  <img src={part.poster} alt="" width={32} height={48} loading="lazy" className="h-12 w-8 shrink-0 rounded-sm object-cover" />
+                ) : (
+                  <span className="h-12 w-8 shrink-0 rounded-sm bg-ink-high" />
+                )}
+                <span className="min-w-0 flex-1 text-sm break-words text-bone">
+                  {part.held && heldIds.has(part.held) ? (
+                    <Link to={`/work/${part.held}`} className="underline-offset-4 hover:underline">
+                      {part.title}
+                    </Link>
+                  ) : (
+                    part.title
+                  )}
+                  {part.year ? <span className="text-bone-faint"> · {part.year}</span> : null}
+                </span>
+                <Chip tone={part.held ? 'neutral' : 'accent'}>{part.held ? t.collections.inCatalogue : t.collections.missing}</Chip>
+              </li>
+            ))}
+          </ol>
+        </section>
+      ) : null}
     </div>
   )
 }

@@ -233,6 +233,8 @@ mod tests {
             "/api/v1/feed/airing.atom",
             "/api/v1/lists",
             "/api/v1/items/{id}/watch",
+            "/api/v1/items/{id}/similar",
+            "/api/v1/collections/{tmdbId}",
             "/api/v1/lists/{key}/sonarr.json",
             "/v1/tvdb/shows/{language}/{tvdb_id}",
             "/v1/movie/{tmdb_id}",

@@ -39,13 +39,13 @@ import {
   Spinner,
   Textarea,
 } from '../../components/ui'
-import { api, query } from '../../lib/api'
+import { ApiError, api, query } from '../../lib/api'
 import { cn } from '../../lib/cn'
 import * as fmt from '../../lib/format'
 import { providerName, statusLabel } from '../../lib/labels'
 import { useI18n, type Dict } from '../../lib/i18n'
 import { episodeCode, episodesOf, poster, seasonName, seasonNumbers } from '../../lib/media'
-import type { Episode, FieldDef, FieldRegistry, MediaItem, Override, Snapshot } from '../../lib/types'
+import type { Episode, FieldDef, FieldRegistry, MediaItem, Override, Snapshot, Suggestion, Suggestions as SuggestionsResponse } from '../../lib/types'
 
 /** Worth offering without asking the server which translations it holds. */
 const LANGUAGES = [
@@ -320,6 +320,7 @@ export function WorkEditor() {
           { id: 'identifiers', label: t.work.identifiers },
           { id: 'record', label: t.admin.editor.record },
           { id: 'sources', label: t.work.sources },
+          { id: 'suggestions', label: t.admin.editor.suggestions },
         ]}
       />
 
@@ -358,7 +359,7 @@ export function WorkEditor() {
       ) : null}
 
       <div
- className="mt-6 grid gap-6 lg:grid-cols-3">
+ className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-3">
         <Panel id="identifiers" className="rise" style={{ animationDelay: '400ms' }}>
           <PanelHead title={t.work.identifiers} />
           <dl className="divide-y divide-rule">
@@ -397,6 +398,7 @@ export function WorkEditor() {
         </Panel>
 
         <Sources itemId={id} snapshots={snapshots.data} isManual={work.isManual} />
+        <Suggestions work={work} />
       </div>
 
       <Dialog
@@ -1050,4 +1052,106 @@ function EditorSkeleton() {
  */
 function fieldLabel(def: FieldDef, t: Dict): string {
   return (t.labels.fields as Record<string, string>)[def.name] ?? def.label
+}
+
+/* ── What TMDB suggests ───────────────────────────────────────────────────── */
+
+/**
+ * What TMDB recommends beside the work: a click imports one, and one the
+ * catalogue already holds opens instead. Absent where no TMDB key lets it
+ * be asked.
+ */
+function Suggestions({ work }: { work: MediaItem }) {
+  const { t } = useI18n()
+  const queryClient = useQueryClient()
+  const [imported, setImported] = useState<Record<number, string>>({})
+
+  const suggestions = useQuery({
+    queryKey: ['suggestions', work.id],
+    queryFn: () => api.get<SuggestionsResponse>(`/items/${work.id}/suggestions`),
+    retry: false,
+    staleTime: 60 * 60_000,
+  })
+
+  const take = useMutation({
+    mutationFn: (suggestion: Suggestion) =>
+      api.post<MediaItem>('/discover/import', { kind: suggestion.kind, tmdbId: suggestion.tmdbId }),
+    onSuccess: (item, suggestion) => {
+      setImported((held) => ({ ...held, [suggestion.tmdbId]: item.id }))
+      void queryClient.invalidateQueries({ queryKey: ['items'] })
+      void queryClient.invalidateQueries({ queryKey: ['stats'] })
+    },
+  })
+
+  if (suggestions.isError && suggestions.error instanceof ApiError && suggestions.error.status === 503) {
+    return null
+  }
+  const list = suggestions.data?.suggestions ?? []
+
+  return (
+    <Panel id="suggestions" className="rise" style={{ animationDelay: '520ms' }}>
+      <PanelHead title={t.admin.editor.suggestions} />
+      <div className="p-5">
+        <p className="max-w-prose text-sm leading-relaxed text-bone-dim">{t.admin.editor.suggestionsHint}</p>
+        {suggestions.isPending ? (
+          <Skeleton className="mt-4 h-24 w-full" />
+        ) : suggestions.isError ? (
+          <p role="alert" className="mt-4 text-sm text-vermillion">
+            {t.admin.editor.suggestionsFailed}
+          </p>
+        ) : list.length === 0 ? (
+          <p className="mt-4 text-sm text-bone-faint">{t.admin.editor.suggestionsNone}</p>
+        ) : (
+          <ul className="mt-4 divide-y divide-rule">
+            {list.map((suggestion) => {
+              const held = suggestion.held ?? imported[suggestion.tmdbId]
+              const busy = take.isPending && take.variables?.tmdbId === suggestion.tmdbId
+              return (
+                <li key={suggestion.tmdbId} className="flex items-center gap-3 py-2">
+                  {suggestion.poster ? (
+                    <img
+                      src={suggestion.poster}
+                      alt=""
+                      width={32}
+                      height={48}
+                      loading="lazy"
+                      className="h-12 w-8 shrink-0 rounded-sm object-cover"
+                    />
+                  ) : (
+                    <span className="h-12 w-8 shrink-0 rounded-sm bg-ink-high" />
+                  )}
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-sm break-words text-bone">
+                      {suggestion.title}
+                      {suggestion.year ? <span className="text-bone-faint"> · {suggestion.year}</span> : null}
+                    </span>
+                    {suggestion.score ? (
+                      <span className="font-mono text-xs text-bone-faint tabular-nums">{suggestion.score.toFixed(1)}</span>
+                    ) : null}
+                  </span>
+                  {held ? (
+                    <Link
+                      to={`/admin/catalogue/${held}`}
+                      className="text-sm text-vermillion underline-offset-4 hover:underline"
+                    >
+                      {t.admin.editor.suggestionsHeld}
+                    </Link>
+                  ) : (
+                    <Button size="sm" disabled={busy} onClick={() => take.mutate(suggestion)}>
+                      {busy ? t.admin.editor.suggestionsImporting : t.admin.editor.suggestionsImport}
+                    </Button>
+                  )}
+                </li>
+              )
+            })}
+          </ul>
+        )}
+        {take.isError ? (
+          <p role="alert" className="mt-3 text-sm text-vermillion">
+            {take.error.message}
+          </p>
+        ) : null}
+      </div>
+    </Panel>
+  )
 }

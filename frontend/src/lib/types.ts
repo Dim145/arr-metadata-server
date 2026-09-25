@@ -313,6 +313,58 @@ export interface WhereToWatch {
   attribution: string
 }
 
+/** The catalogue's own works in the same vein as one. */
+export interface Similar {
+  items: MediaItem[]
+}
+
+/** What TMDB recommends beside a work, for whoever maintains the catalogue. */
+export interface Suggestion {
+  tmdbId: number
+  kind: MediaKind
+  title: string
+  year?: number
+  overview?: string
+  poster?: string
+  score?: number
+  /** The catalogue's own id, where the work is already in it. */
+  held?: string
+}
+
+export interface Suggestions {
+  suggestions: Suggestion[]
+}
+
+export interface CollectionCard {
+  tmdbId: number
+  name?: string
+  poster?: string
+  /** How many of its films the catalogue holds. */
+  count: number
+}
+
+export interface Collections {
+  collections: CollectionCard[]
+}
+
+export interface CollectionPart {
+  tmdbId: number
+  title: string
+  year?: number
+  poster?: string
+  held?: string
+}
+
+export interface CollectionPage {
+  tmdbId: number
+  name?: string
+  overview?: string
+  poster?: string
+  backdrop?: string
+  items: MediaItem[]
+  parts: CollectionPart[]
+}
+
 export type ListKind = 'series' | 'movie' | 'mixed'
 export type ListMode = 'manual' | 'filter'
 

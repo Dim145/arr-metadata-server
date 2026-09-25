@@ -11,7 +11,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router'
 
 import { ExternalLink } from '../components/elsewhere'
-import { Artwork, PosterCard, PosterGrid, Score } from '../components/media'
+import { Artwork, PosterCard, PosterGrid, Score, PosterShelf } from '../components/media'
 import { Lightbox, Trailer, useLightbox } from '../components/Theatre'
 import {
   Button,
@@ -54,7 +54,7 @@ import {
   seasonNumbers,
   seasonPoster,
 } from '../lib/media'
-import type { Credit, Episode, ItemPage, MediaItem, CuratedLists, WhereToWatch } from '../lib/types'
+import type { Credit, Episode, ItemPage, MediaItem, CuratedLists, WhereToWatch, Similar } from '../lib/types'
 import { NotFound, Unavailable } from './NotFound'
 
 export function Work() {
@@ -100,6 +100,7 @@ export function Work() {
           {item.kind === 'series' ? <Seasons item={item} /> : null}
           <Gallery item={item} />
           {item.kind === 'movie' && item.collectionTmdbId ? <Collection item={item} /> : null}
+          <Similar item={item} />
           <AlsoKnownAs item={item} />
         </div>
       </div>
@@ -805,6 +806,43 @@ function Collection({ item }: { item: MediaItem }) {
           <PosterCard key={film.id} item={film} to={`/work/${film.id}`} />
         ))}
       </PosterGrid>
+      <Link
+        to={`/collections/${item.collectionTmdbId}`}
+        className="-ml-3 mt-4 inline-flex min-h-11 items-center gap-1.5 rounded-full px-3 text-sm text-vermillion transition-colors duration-150 hover:bg-vermillion/10"
+      >
+        {t.work.wholeCollection}
+        <Glyph name="chevronRight" className="size-3.5" />
+      </Link>
+    </section>
+  )
+}
+
+/**
+ * The catalogue's own works in the same vein — its kind, sharing its genres,
+ * keywords, network or decade — for a reader who liked this one. Nothing
+ * where nothing is close enough.
+ */
+function Similar({ item }: { item: MediaItem }) {
+  const { t, lang } = useI18n()
+
+  const alike = useQuery({
+    queryKey: ['similar', item.id, lang],
+    queryFn: () => api.get<Similar>(`/items/${item.id}/similar${query({ language: lang })}`),
+    staleTime: 10 * 60_000,
+    retry: false,
+  })
+
+  const works = alike.data?.items ?? []
+  if (!works.length) return null
+
+  return (
+    <section>
+      <SectionTitle>{t.work.similar}</SectionTitle>
+      <PosterShelf label={t.work.similar}>
+        {works.map((work) => (
+          <PosterCard key={work.id} item={work} to={`/work/${work.id}`} />
+        ))}
+      </PosterShelf>
     </section>
   )
 }

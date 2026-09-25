@@ -344,6 +344,30 @@ impl TmdbClient {
         self.fetch(&url, &[]).await
     }
 
+    /// What TMDB recommends beside a work, in the language the answers are
+    /// in: the `results` of `/{tv|movie}/{id}/recommendations`, whole.
+    pub async fn recommendations(&self, kind: MediaKind, id: i64) -> Result<Option<Value>> {
+        let path = match kind {
+            MediaKind::Series => "tv",
+            MediaKind::Movie => "movie",
+        };
+        let url = format!("{}/{path}/{id}/recommendations", self.base);
+        let params = [("language", self.language())];
+        Ok(self
+            .fetch(&url, &params)
+            .await?
+            .and_then(|v| v.get("results").cloned()))
+    }
+
+    /// A collection as TMDB has it — name, overview, pictures, parts — in a
+    /// language, and untyped, for a reader that wants the record rather
+    /// than the model.
+    pub async fn collection_raw(&self, id: i64, language: &str) -> Result<Option<Value>> {
+        let url = format!("{}/collection/{id}", self.base);
+        let params = [("language", language.to_string())];
+        self.fetch(&url, &params).await
+    }
+
     async fn fetch_movie(&self, id: i64, language: &str) -> Result<Option<Value>> {
         let url = format!("{}/movie/{id}", self.base);
         let params = [

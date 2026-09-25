@@ -188,6 +188,36 @@ pub async fn titles(db: &Db, ids: &[String]) -> Result<std::collections::HashMap
 }
 
 /// Which of some identifiers of one source the store holds a work for.
+/// The works holding each of these external ids, by the id's value — one
+/// query per four hundred values, not one per value.
+pub async fn held_external_ids(
+    db: &Db,
+    source: ExternalSource,
+    values: &[String],
+) -> Result<std::collections::HashMap<String, String>> {
+    let mut held = std::collections::HashMap::new();
+    for chunk in values.chunks(400) {
+        let mut args = AnyArguments::default();
+        args.add(source.as_str().to_string())
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        for value in chunk {
+            args.add(value.clone())
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+        }
+        let placeholders = vec!["?"; chunk.len()].join(", ");
+        let sql = format!(
+            "SELECT value, media_id FROM media_external_id WHERE source = ? AND value IN ({placeholders})"
+        );
+        let rows = sqlx::query_with(db.sql(&sql), args)
+            .fetch_all(db.pool())
+            .await?;
+        for row in rows {
+            held.insert(row.text("value")?, row.text("media_id")?);
+        }
+    }
+    Ok(held)
+}
+
 pub async fn held_externals(
     db: &Db,
     source: ExternalSource,
@@ -1105,6 +1135,31 @@ pub async fn load_artwork(db: &Db, items: &mut [MediaItem]) -> Result<()> {
 ///
 /// The same predicate as [`search`], because a result count that counted
 /// something else would be worse than no count at all.
+/// The most collections one listing carries.
+pub const MOST_COLLECTIONS: usize = 200;
+
+/// The collections the catalogue's films belong to, by TMDB id, with how
+/// many of each it holds — most films first. Only films switched on, and
+/// adult ones only where asked.
+pub async fn collections(db: &Db, include_adult: bool) -> Result<Vec<(i64, i64)>> {
+    let sql = format!(
+        "SELECT collection_tmdb_id AS id, COUNT(*) AS n FROM media_item
+          WHERE kind = 'movie' AND is_enabled = 1 AND collection_tmdb_id IS NOT NULL{}
+          GROUP BY collection_tmdb_id
+          ORDER BY n DESC, id
+          LIMIT {MOST_COLLECTIONS}",
+        if include_adult {
+            ""
+        } else {
+            " AND is_adult = 0"
+        }
+    );
+    let rows = sqlx::query(db.sql(&sql)).fetch_all(db.pool()).await?;
+    rows.iter()
+        .map(|row| Ok((row.big("id")?, row.big("n")?)))
+        .collect()
+}
+
 pub async fn count_matching(db: &Db, q: &Query) -> Result<i64> {
     let mut sql = format!(
         "SELECT COUNT(*) AS n FROM {} WHERE 1 = 1",
