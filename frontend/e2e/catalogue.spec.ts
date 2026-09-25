@@ -411,6 +411,26 @@ test.describe('the bar on the narrowest phone', () => {
   })
 })
 
+test.describe('the bar on a tablet', () => {
+  // Between the phone's menu and the wide bar's field: every control in the
+  // bar at once, on a screen not much wider than they are.
+  for (const width of [768, 820]) {
+    test(`keeps every control on a ${width}px screen`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 1024 })
+      await page.goto('/')
+
+      for (const name of [/^(sign in|se connecter|admin|administration)$/i, /^(search|rechercher)/i, /^(menu)$/i]) {
+        const control = page.getByRole(/menu/.test(name.source) ? 'button' : 'link', { name }).first()
+        if (!(await control.count())) continue
+        if (!(await control.isVisible())) continue
+        const box = (await control.boundingBox())!
+        expect(box.x + box.width, `${name} past the edge`).toBeLessThanOrEqual(width)
+      }
+      expect(await scrollsSideways(page)).toBe(false)
+    })
+  }
+})
+
 test.describe('reaching the interface', () => {
   test('offers a skip link before anything else', async ({ page }) => {
     await page.goto('/')

@@ -71,10 +71,10 @@ export function PublicShell({ me }: { me?: Me }) {
       </a>
 
       <header className="sticky top-0 z-30 border-b border-rule bg-ink">
-        <div className="mx-auto flex h-16 max-w-7xl items-center gap-4 px-4 sm:px-6">
+        <div className="mx-auto flex h-16 max-w-7xl items-center gap-3 px-4 sm:px-6 lg:gap-4">
           <Wordmark />
 
-          <nav aria-label={t.nav.browse} className="hidden items-center gap-1 md:flex">
+          <nav aria-label={t.nav.browse} className="hidden items-center gap-0.5 md:flex lg:gap-1">
             <Tab to="/browse">{t.nav.browse}</Tab>
             <Tab to="/browse?kind=series">{t.nav.series}</Tab>
             <Tab to="/browse?kind=movie">{t.nav.films}</Tab>
@@ -182,9 +182,9 @@ function Wordmark() {
       </span>
       <span
         aria-hidden
-        className="hidden h-3 w-px bg-rule-bright sm:block"
+        className="hidden h-3 w-px bg-rule-bright lg:block"
       />
-      <span className="label hidden sm:block">arr</span>
+      <span className="label hidden lg:block">arr</span>
     </Link>
   )
 }
@@ -224,7 +224,9 @@ function Tab({
       to={to}
       aria-current={isActive ? 'page' : undefined}
       className={cn(
-        'relative flex min-h-11 items-center rounded-full px-3.5 text-sm font-medium transition-colors duration-200',
+        // Closer between `md` and `lg`, where five of these share the bar with
+        // everything else on a screen not much wider than they are.
+        'relative flex min-h-11 items-center rounded-full px-2.5 text-sm font-medium transition-colors duration-200 lg:px-3.5',
         block ? 'w-full' : '',
         isActive ? 'text-bone' : 'text-bone-dim hover:bg-ink-high hover:text-bone',
       )}
@@ -494,8 +496,11 @@ function AdminLink({ me, labelled = false }: { me?: Me; labelled?: boolean }) {
           : 'text-bone-dim hover:bg-ink-high hover:text-bone',
       )}
     >
+      {/* The word from `lg` up only: between `md` and `lg` the bar holds
+          the tabs, the search, the language and this, and with the word it
+          was wider than an 820px tablet — this link cut off past the edge. */}
       <Glyph name={signedIn ? 'settings' : 'user'} className="size-4" />
-      <span className={labelled ? undefined : 'hidden sm:inline'}>{label}</span>
+      <span className={labelled ? undefined : 'hidden lg:inline'}>{label}</span>
     </Link>
   )
 }
