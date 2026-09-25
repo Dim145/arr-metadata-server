@@ -24,6 +24,7 @@ import { cn } from '../lib/cn'
 import * as fmt from '../lib/format'
 import { useTitle } from '../lib/hooks'
 import { useI18n } from '../lib/i18n'
+import { GenreFilter } from '../components/GenreFilter'
 import { genreLabel, languageName, listedGenres, statusLabel } from '../lib/labels'
 import type { Facet, Facets, ItemPage } from '../lib/types'
 
@@ -75,6 +76,8 @@ function read(params: URLSearchParams) {
     // As the catalogue lists them: a series' page links "Action & Adventure",
     // which is its "Action" and "Adventure", the chips on offer.
     genres: listedGenres(list('genre')),
+    // All of them unless asked otherwise; the address says `any` in a word.
+    genreMode: params.get('genreMode') === 'any' ? ('any' as const) : ('all' as const),
     keyword: params.get('keyword') ?? '',
     yearFrom: params.get('yearFrom') ?? year,
     yearTo: params.get('yearTo') ?? year,
@@ -105,6 +108,7 @@ export function Browse() {
     kind: f.kind,
     term: f.term,
     genre: f.genres.join(','),
+    genreMode: f.genreMode === 'any' ? 'any' : '',
     keyword: f.keyword,
     yearFrom: f.yearFrom,
     yearTo: f.yearTo,
@@ -430,7 +434,7 @@ function FilterPanel({
   change: (changes: Record<string, string>) => void
   idPrefix: string
 }) {
-  const { t, lang, locale } = useI18n()
+  const { t, locale } = useI18n()
   const id = (name: string) => `${idPrefix}-${name}`
   const update = (name: string, value: string) => change({ [name]: value })
 
@@ -442,7 +446,8 @@ function FilterPanel({
 
   const toggleGenre = (genre: string) => {
     const next = f.genres.includes(genre) ? f.genres.filter((g) => g !== genre) : [...f.genres, genre]
-    update('genre', next.join(','))
+    // How they combine only means something for two or more.
+    change({ genre: next.join(','), genreMode: next.length >= 2 && f.genreMode === 'any' ? 'any' : '' })
   }
 
   return (
@@ -476,34 +481,15 @@ function FilterPanel({
         </div>
       </fieldset>
 
-      {facets?.genres.length ? (
-        <fieldset>
-          <legend className="label mb-2">{t.work.genres}</legend>
-          <div className="flex flex-wrap gap-x-1.5 gap-y-3">
-            {facets.genres.map((genre) => {
-              const on = f.genres.includes(genre.value)
-              return (
-                <button
-                  key={genre.value}
-                  type="button"
-                  aria-pressed={on}
-                  onClick={() => toggleGenre(genre.value)}
-                  className={cn(
-                    'hit inline-flex min-h-8 cursor-pointer items-center gap-1.5 rounded-full border px-2.5 text-xs',
-                    'transition-colors duration-150',
-                    on
-                      ? 'border-vermillion bg-vermillion/15 text-bone'
-                      : 'border-rule-bright text-bone-dim hover:border-bone-faint hover:text-bone',
-                  )}
-                >
-                  {on ? <Glyph name="check" className="size-3 text-vermillion" /> : null}
-                  {genreLabel(genre.value, lang)}
-                  <span className="font-mono text-[0.625rem] text-bone-faint tabular-nums">{genre.count}</span>
-                </button>
-              )
-            })}
-          </div>
-        </fieldset>
+      {facets?.genres.length || f.genres.length ? (
+        <GenreFilter
+          genres={facets?.genres ?? []}
+          selected={f.genres}
+          mode={f.genreMode}
+          onToggle={toggleGenre}
+          onMode={(mode) => update('genreMode', mode === 'any' ? 'any' : '')}
+          idPrefix={idPrefix}
+        />
       ) : null}
 
       <fieldset>

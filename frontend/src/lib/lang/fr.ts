@@ -164,6 +164,12 @@ export const fr: Dict = {
   },
   browse: {
     title: 'Parcourir',
+    genresSearch: 'Chercher un genre',
+    genresOthers: (n: number) => (n <= 1 ? `L’autre` : `Les ${n} autres, de A à Z`),
+    genresNone: 'Aucun genre de ce nom.',
+    genreMode: 'Œuvres portant',
+    genreAll: 'Tous ces genres',
+    genreAny: 'L’un d’eux',
     filters: 'Filtres',
     kind: 'Type',
     all: 'Tout',

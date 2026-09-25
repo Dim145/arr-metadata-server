@@ -696,6 +696,8 @@ fn filter_query(filter: &ListFilter, adult: bool, kind: ListKind) -> AppResult<r
         )));
     }
     Ok(repo::item::Query {
+        // A list's genres are a narrowing: all of them, as ever.
+        genre_any: false,
         term: short(&filter.term, "term")?,
         kind: match kind {
             ListKind::Series => Some(MediaKind::Series),

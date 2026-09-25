@@ -54,6 +54,9 @@ pub struct ListQuery {
     pub include_disabled: bool,
     /// Genres the works must all carry, comma-separated: `Drama,Crime`.
     pub genre: Option<String>,
+    /// How several combine: `all`, the default — every one of them — or
+    /// `any`, at least one.
+    pub genre_mode: Option<String>,
     /// A keyword the works must carry.
     pub keyword: Option<String>,
     #[serde(default, deserialize_with = "crate::api::extract::empty_as_none")]
@@ -165,6 +168,7 @@ pub(super) fn to_query(
             .as_deref()
             .map(|g| g.split(',').map(|s| s.trim().to_string()).collect())
             .unwrap_or_default(),
+        genre_any: query.genre_mode.as_deref() == Some("any"),
         keyword: query.keyword,
         year_from: query.year_from,
         year_to: query.year_to,

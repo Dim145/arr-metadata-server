@@ -173,6 +173,52 @@ test.describe('the catalogue', () => {
     await expect(page).not.toHaveURL(/genre=/)
   })
 
+  test('the genres beyond the commonest fold away, and a name finds one', async ({ page }) => {
+    await page.goto('/browse')
+    await catalogueLoaded(page)
+
+    const panel = await filters(page)
+    const group = panel.getByRole('group', { name: /^(genres)$/i })
+    const all = await group.locator('button[aria-pressed]').count()
+    test.skip(all <= 10, 'the catalogue has ten genres or fewer, so nothing folds away')
+
+    // Ten in view, the rest behind one line that says how many.
+    await expect(group.locator('button[aria-pressed]:visible')).toHaveCount(10)
+    const others = group.locator('summary')
+    await expect(others).toHaveText(new RegExp(`${all - 10}`))
+    await others.click()
+    await expect(group.locator('button[aria-pressed]:visible')).toHaveCount(all)
+
+    // A name finds one, accents or not.
+    const field = group.getByRole('searchbox', { name: /find a genre|chercher un genre/i })
+    await field.fill('dram')
+    await expect(group.locator('button[aria-pressed]:visible')).toHaveCount(1)
+    await expect(group.locator('button[aria-pressed]:visible')).toHaveText(/drama|drame/i)
+    await field.fill('zzzz')
+    await expect(group.getByText(/no genre by that name|aucun genre de ce nom/i)).toBeVisible()
+  })
+
+  test('two genres combine as all of them, or as any of them', async ({ page, request }) => {
+    const every = (await (await request.get('/api/v1/items?genre=Drama,Crime&limit=1')).json()).total as number
+    const either = (await (await request.get('/api/v1/items?genre=Drama,Crime&genreMode=any&limit=1')).json())
+      .total as number
+    expect(either).toBeGreaterThanOrEqual(every)
+    test.skip(either === every, 'no work here tells the two apart')
+
+    await page.goto('/browse?genre=Drama,Crime')
+    await catalogueLoaded(page)
+    await expect(page.getByText(new RegExp(`^${every} (works?|œuvres?)$`))).toBeVisible()
+
+    const panel = await filters(page)
+    // The radio is off screen; its label is what a finger presses.
+    await panel.getByText(/^(any of them|l’un d’eux)$/i).click()
+    await expect(panel.getByRole('radio', { name: /^(any of them|l’un d’eux)$/i })).toBeChecked()
+    await expect(page).toHaveURL(/genreMode=any/)
+    await backToResults(page)
+    await catalogueLoaded(page)
+    await expect(page.getByText(new RegExp(`^${either} (works?|œuvres?)$`))).toBeVisible()
+  })
+
   test('an order is asked of the server, and kept in the URL', async ({ page }) => {
     await page.goto('/browse')
     await catalogueLoaded(page)

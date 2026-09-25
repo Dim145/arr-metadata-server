@@ -165,6 +165,12 @@ export const en = {
   },
   browse: {
     title: 'Browse',
+    genresSearch: 'Find a genre',
+    genresOthers: (n: number) => (n === 1 ? 'The other one' : `The ${n} others, A to Z`),
+    genresNone: 'No genre by that name.',
+    genreMode: 'Works carrying',
+    genreAll: 'All of them',
+    genreAny: 'Any of them',
     filters: 'Filters',
     kind: 'Kind',
     all: 'All',

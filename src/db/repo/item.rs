@@ -878,6 +878,8 @@ pub struct Query {
     pub include_adult: bool,
     /// Works carrying every one of these genres.
     pub genres: Vec<String>,
+    /// Or any one of them, where asked: a mood rather than a narrowing.
+    pub genre_any: bool,
     pub keyword: Option<String>,
     pub year_from: Option<i32>,
     pub year_to: Option<i32>,
@@ -1411,10 +1413,13 @@ fn narrow(q: &Query, sql: &mut String, args: &mut AnyArguments) -> Result<()> {
     // both. Or the combined name itself, as a work not yet listed again since
     // the change still holds it. Each part once, however often it is asked.
     let mut asked = std::collections::HashSet::new();
+    let mut clauses: Vec<String> = Vec::new();
     for genre in q.genres.iter().map(|g| g.trim()).filter(|g| !g.is_empty()) {
         let parts: Vec<String> = crate::domain::genre_parts(genre)
             .into_iter()
-            .filter(|p| asked.insert(p.clone()))
+            // All of them: a part asked twice is asked once. Any of them:
+            // each genre stands on its own, parts shared or not.
+            .filter(|p| q.genre_any || asked.insert(p.clone()))
             .collect();
         if parts.is_empty() {
             continue;
@@ -1422,18 +1427,22 @@ fn narrow(q: &Query, sql: &mut String, args: &mut AnyArguments) -> Result<()> {
         let each =
             vec!["REPLACE(listed_genres, ?, '') <> listed_genres"; parts.len()].join(" AND ");
         if parts.len() > 1 {
-            sql.push_str(&format!(
-                " AND (REPLACE(listed_genres, ?, '') <> listed_genres OR ({each}))"
+            clauses.push(format!(
+                "(REPLACE(listed_genres, ?, '') <> listed_genres OR ({each}))"
             ));
             args.add(json_element(genre))
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
         } else {
-            sql.push_str(&format!(" AND {each}"));
+            clauses.push(each);
         }
         for part in &parts {
             args.add(json_element(part))
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
         }
+    }
+    if !clauses.is_empty() {
+        let joined = clauses.join(if q.genre_any { " OR " } else { " AND " });
+        sql.push_str(&format!(" AND ({joined})"));
     }
 
     if let Some(keyword) = q
@@ -3160,6 +3169,11 @@ mod tests {
             i.genres = vec!["Drama".into()];
         })
         .await;
+        stored(&db, |i| {
+            i.title = "Crime only".into();
+            i.genres = vec!["Crime".into()];
+        })
+        .await;
 
         let mut drama = titles(
             &db,
@@ -3201,6 +3215,19 @@ mod tests {
         )
         .await;
         assert_eq!(both, ["Both"]);
+
+        // Any of them: what carries one or the other, the way a mood browses.
+        let mut either = titles(
+            &db,
+            Query {
+                genres: vec!["Drama".into(), "Crime".into()],
+                genre_any: true,
+                ..Default::default()
+            },
+        )
+        .await;
+        either.sort();
+        assert_eq!(either, ["Both", "Crime only", "Drama only"]);
     }
 
     #[tokio::test]
