@@ -37,6 +37,9 @@ It replaces and merges two earlier projects: `the earlier TMDB relay` and
   `?language=`. Translations are fetched the first time a language is asked for
   and kept — from TMDB, then TheTVDB for the many languages TMDB does not carry.
   A locked field stays locked in every language.
+- **Curated lists.** Selections composed by hand or by a filter, shown on
+  the site and served to Sonarr and Radarr as the custom lists their import
+  lists read.
 - **Calendars and feeds.** The schedule, and any one work, as an iCalendar a
   phone subscribes to; what arrives and what airs as Atom feeds.
 - **`.nfo` export with the artwork beside it**, in the layout Kodi defined and
@@ -317,7 +320,7 @@ The schedule, and one work's dates, as calendars a phone or a desktop
 subscribes to; what arrives and what airs as Atom feeds a reader follows.
 Read under the same rule as the pages they mirror: open under public
 browsing, otherwise with a key, which a calendar app carries in the address
-(`?api_key=…`).
+(`?apikey=…`).
 
 | Feed | Path |
 |---|---|
@@ -337,6 +340,34 @@ the host and scheme the request came to, as the proxy forwarded them if it is
 among `AMS_TRUSTED_PROXIES`, or as the socket saw them. A window holding more
 episodes than one answer carries is cut short and says so in an
 `X-AMS-Truncated` header.
+
+### Lists
+
+Whoever maintains the catalogue composes lists under *Lists* in the
+administration: a name, a description, what the list holds (series, films or
+both), and either its members by hand, in an order, or a filter — genres,
+keyword, years, score, status, language, network, order, how many — evaluated
+whenever the list is read. Each is a page on the site, under *Selections*,
+unless it is marked private; a work's own page says which hand-made
+selections hold it.
+
+Each list is also served in the shapes the clients import, so a selection
+made here becomes what those clients add on their own:
+
+| Client | Import list to add | Address | Shape |
+|---|---|---|---|
+| Sonarr | Settings → Import Lists → *Custom List* | `/api/v1/lists/{slug}/sonarr.json` | `[{ "title", "tvdbId" }]` — the series with a TheTVDB id |
+| Radarr | Settings → Lists → *Custom Lists* | `/api/v1/lists/{slug}/radarr.json` | `[{ "id", "title" }]` — the films with a TMDB id, `id` being it |
+| Radarr | Settings → Lists → *StevenLu Custom* | `/api/v1/lists/{slug}/stevenlu.json` | `[{ "title", "imdb_id" }]` — the films with an IMDb id |
+
+The addresses are on each list's page, with a button to copy them. They are
+read under the same rule as the page: open under public browsing, otherwise
+with a key appended (`?apikey=…` — that spelling, which Sonarr's and Radarr's
+logs redact; `api_key` works too but would be logged). A private list answers
+nobody but a caller who may write, so importing one takes a write-scoped key:
+make the list public instead where a client's key should not be able to edit
+the catalogue. The whole list API is under `/api/v1/lists` and in the OpenAPI
+document.
 
 ### What is a setting, and what is not
 

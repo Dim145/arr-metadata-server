@@ -53,6 +53,8 @@ const TABLES: &[&str] = &[
     "anime_mapping",
     "imdb_rating",
     "data_import",
+    "curated_list",
+    "curated_list_item",
 ];
 
 /// Rows carried per statement. Large enough to be quick, small enough to stay

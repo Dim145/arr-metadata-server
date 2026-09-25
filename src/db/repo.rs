@@ -9,6 +9,7 @@ pub mod imdb;
 pub mod import;
 pub mod item;
 pub mod job;
+pub mod list;
 pub mod network;
 pub mod override_field;
 pub mod season;

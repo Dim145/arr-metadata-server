@@ -231,6 +231,8 @@ mod tests {
             "/api/v1/items/{id}/calendar.ics",
             "/api/v1/feed/added.atom",
             "/api/v1/feed/airing.atom",
+            "/api/v1/lists",
+            "/api/v1/lists/{key}/sonarr.json",
             "/v1/tvdb/shows/{language}/{tvdb_id}",
             "/v1/movie/{tmdb_id}",
             "/v1/list/imdb/{id}",

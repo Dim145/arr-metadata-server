@@ -292,6 +292,62 @@ export interface ItemPage {
   total: number
 }
 
+export type ListKind = 'series' | 'movie' | 'mixed'
+export type ListMode = 'manual' | 'filter'
+
+/** A filter kept with a list, in the list query's own vocabulary. */
+export interface ListFilter {
+  term?: string
+  genres?: string[]
+  keyword?: string
+  yearFrom?: number
+  yearTo?: number
+  status?: string
+  originalLanguage?: string
+  network?: string
+  collection?: number
+  minRating?: number
+  sort?: string
+  descending?: boolean
+  limit?: number
+}
+
+/** A curated list: a selection composed by hand, or by a filter kept current. */
+export interface CuratedList {
+  id: string
+  slug: string
+  name: string
+  description?: string
+  kind: ListKind
+  mode: ListMode
+  filter?: ListFilter
+  isPublic: boolean
+  /** The members of a hand-made list; nought for one composed by a filter. */
+  itemCount: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface CuratedLists {
+  lists: CuratedList[]
+}
+
+export interface CuratedListPage {
+  list: CuratedList
+  items: MediaItem[]
+  total: number
+}
+
+export interface CuratedListRequest {
+  name: string
+  description?: string
+  kind: ListKind
+  mode: ListMode
+  filter?: ListFilter
+  isPublic: boolean
+  items?: string[]
+}
+
 /** One value a list can be narrowed to, and how many works it would leave. */
 export interface Facet {
   value: string

@@ -25,6 +25,8 @@ const Episode = named(() => import('./routes/Episode'), 'Episode')
 const Person = named(() => import('./routes/Person'), 'Person')
 const Calendar = named(() => import('./routes/Calendar'), 'Calendar')
 const Seasons = named(() => import('./routes/Seasons'), 'Seasons')
+const Lists = named(() => import('./routes/Lists'), 'Lists')
+const ListDetail = named(() => import('./routes/Lists'), 'ListDetail')
 
 const Login = named(() => import('./routes/Login'), 'Login')
 const AdminShell = named(() => import('./components/AdminShell'), 'AdminShell')
@@ -33,6 +35,7 @@ const Catalogue = named(() => import('./routes/admin/Catalogue'), 'Catalogue')
 const WorkEditor = named(() => import('./routes/admin/WorkEditor'), 'WorkEditor')
 const Discover = named(() => import('./routes/admin/Discover'), 'Discover')
 const Clients = named(() => import('./routes/admin/Clients'), 'Clients')
+const AdminLists = named(() => import('./routes/admin/Lists'), 'Lists')
 const Jobs = named(() => import('./routes/admin/Jobs'), 'Jobs')
 const Audit = named(() => import('./routes/admin/Audit'), 'Audit')
 const Settings = named(() => import('./routes/admin/Settings'), 'Settings')
@@ -86,6 +89,8 @@ function Router() {
           <Route path="/work/:id/season/:season/episode/:episode" element={<Episode />} />
           <Route path="/person/:tmdbId" element={<Person />} />
           <Route path="/calendar" element={<Calendar />} />
+          <Route path="/lists" element={<Lists />} />
+          <Route path="/lists/:slug" element={<ListDetail />} />
           <Route path="/seasons" element={<Seasons />} />
           <Route path="/seasons/:year/:season" element={<Seasons />} />
           {/* Said, not redirected: see `NotFound`. */}
@@ -102,6 +107,7 @@ function Router() {
           <Route path="catalogue/:id" element={<WorkEditor />} />
           <Route path="discover" element={<Discover />} />
           <Route path="clients" element={<Clients />} />
+          <Route path="lists" element={<AdminLists />} />
           <Route path="jobs" element={<Jobs />} />
           <Route path="audit" element={<Audit />} />
           <Route path="settings" element={<Settings />} />

@@ -41,6 +41,7 @@ const NAV: Entry[] = [
   { to: '/admin/catalogue', glyph: 'list', label: (t) => t.admin.catalogue, tab: true },
   { to: '/admin/discover', glyph: 'discover', label: (t) => t.admin.discover, tab: true },
   { to: '/admin/clients', glyph: 'key', label: (t) => t.admin.clients, tab: true },
+  { to: '/admin/lists', glyph: 'list', label: (t) => t.admin.lists },
   { to: '/admin/jobs', glyph: 'clock', label: (t) => t.admin.jobs },
   { to: '/admin/audit', glyph: 'journal', label: (t) => t.admin.audit },
   { to: '/admin/settings', glyph: 'settings', label: (t) => t.admin.settings, tab: true },

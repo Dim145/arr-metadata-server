@@ -53,7 +53,7 @@ import {
   seasonNumbers,
   seasonPoster,
 } from '../lib/media'
-import type { Credit, Episode, ItemPage, MediaItem } from '../lib/types'
+import type { Credit, Episode, ItemPage, MediaItem, CuratedLists } from '../lib/types'
 import { NotFound, Unavailable } from './NotFound'
 
 export function Work() {
@@ -115,6 +115,13 @@ function Plate({ item }: { item: MediaItem }) {
   const subscribable =
     me.data?.publicBrowse === true &&
     (item?.kind === 'series' || Boolean(item?.inCinemas || item?.digitalRelease || item?.physicalRelease))
+  // The selections this work is part of: the public ones, and for whoever
+  // maintains them the private ones too.
+  const inLists = useQuery({
+    queryKey: ['work-lists', item.id],
+    queryFn: () => api.get<CuratedLists>(`/items/${item.id}/lists`),
+    staleTime: 60_000,
+  })
   const [trailer, setTrailer] = useState(false)
   const art = backdrop(item)
   const sheet = poster(item)
@@ -269,6 +276,21 @@ function Plate({ item }: { item: MediaItem }) {
                     {t.work.edit}
                   </Link>
                 ) : null}
+              </div>
+            ) : null}
+
+            {inLists.data?.lists.length ? (
+              <div className="mt-4 flex flex-wrap items-center gap-2">
+                <span className="label">{t.lists.inLists}</span>
+                {inLists.data.lists.map((list) => (
+                  <Link
+                    key={list.id}
+                    to={`/lists/${list.slug}`}
+                    className="inline-flex min-h-9 items-center rounded-full border border-rule px-3 text-sm text-bone transition-colors duration-150 hover:border-rule-bright hover:text-vermillion"
+                  >
+                    {list.name}
+                  </Link>
+                ))}
               </div>
             ) : null}
 

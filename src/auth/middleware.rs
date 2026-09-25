@@ -253,6 +253,22 @@ fn browsable(method: &axum::http::Method, path: &str) -> bool {
         // The feeds: the schedule again, and the arrivals, in shapes a
         // calendar app or a feed reader takes.
         "/api/v1/calendar.ics" | "/api/v1/feed/added.atom" | "/api/v1/feed/airing.atom" => true,
+        // The curated lists, and the shapes the clients import them in. A
+        // private list is refused inside, as a hidden work is.
+        "/api/v1/lists" => true,
+        rest if rest.strip_prefix("/api/v1/lists/").is_some_and(|tail| {
+            match tail.split('/').collect::<Vec<_>>().as_slice() {
+                [key] => !key.is_empty(),
+                [key, shape] => {
+                    !key.is_empty()
+                        && matches!(*shape, "sonarr.json" | "radarr.json" | "stevenlu.json")
+                }
+                _ => false,
+            }
+        }) =>
+        {
+            true
+        }
         // Somebody's work, as the catalogue holds it.
         rest if rest
             .strip_prefix("/api/v1/people/")
@@ -276,7 +292,10 @@ fn browsable(method: &axum::http::Method, path: &str) -> bool {
         // its calendar is the same dates again; its snapshots and overrides
         // are their own paths and are not listed.
         rest => rest.strip_prefix("/api/v1/items/").is_some_and(|tail| {
-            let id = tail.strip_suffix("/calendar.ics").unwrap_or(tail);
+            let id = tail
+                .strip_suffix("/calendar.ics")
+                .or_else(|| tail.strip_suffix("/lists"))
+                .unwrap_or(tail);
             !id.is_empty() && !id.contains('/')
         }),
     }
@@ -478,6 +497,13 @@ mod browse_tests {
         assert!(allowed("/api/v1/feed/added.atom"));
         assert!(allowed("/api/v1/feed/airing.atom"));
         assert!(!allowed("/api/v1/feed/other.atom"));
+        assert!(allowed("/api/v1/lists"));
+        assert!(allowed("/api/v1/lists/autumn-2026"));
+        assert!(allowed("/api/v1/lists/autumn-2026/sonarr.json"));
+        assert!(allowed("/api/v1/lists/autumn-2026/radarr.json"));
+        assert!(!allowed("/api/v1/lists/autumn-2026/items"));
+        assert!(!allowed("/api/v1/lists//sonarr.json"));
+        assert!(allowed(&format!("/api/v1/items/{id}/lists")));
     }
 
     #[test]

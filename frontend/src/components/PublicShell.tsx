@@ -83,6 +83,13 @@ export function PublicShell({ me }: { me?: Me }) {
             <Tab to="/seasons" section>
               {t.nav.seasons}
             </Tab>
+            {/* A sixth tab is one too many between a tablet's width and a
+                laptop's; there the selections are a footer link away. */}
+            <div className="hidden lg:contents">
+              <Tab to="/lists" section>
+                {t.nav.lists}
+              </Tab>
+            </div>
           </nav>
 
           <div className="ml-auto flex items-center gap-2">
@@ -149,6 +156,9 @@ export function PublicShell({ me }: { me?: Me }) {
               </Tab>
               <Tab to="/calendar" block>
                 {t.nav.calendar}
+              </Tab>
+              <Tab to="/lists" block section>
+                {t.nav.lists}
               </Tab>
               <Tab to="/seasons" block section>
                 {t.nav.seasons}
@@ -524,6 +534,12 @@ function Footer() {
         <div className="flex flex-col gap-1">
           <span className="font-display text-base text-bone-dim">{t.brand.name}</span>
           <span className="text-xs text-bone-faint">{t.brand.tagline}</span>
+          <Link
+            to="/lists"
+            className="mt-1 inline-flex min-h-11 items-center text-xs text-bone-dim transition-colors duration-150 hover:text-bone"
+          >
+            {t.nav.lists}
+          </Link>
         </div>
         {/* What a reader can follow from elsewhere: the schedule in a
             calendar app, the arrivals and the week in a feed reader. Only

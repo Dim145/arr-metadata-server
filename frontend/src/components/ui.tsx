@@ -806,6 +806,7 @@ const PATHS = {
   chevronRight: <path d="M6 3.5 10.5 8 6 12.5" />,
   chevronLeft: <path d="M10 3.5 5.5 8 10 12.5" />,
   chevronDown: <path d="M3.5 6 8 10.5 12.5 6" />,
+  chevronUp: <path d="M3.5 10 8 5.5 12.5 10" />,
   lock: (
     <>
       <path d="M5 7V5a3 3 0 1 1 6 0v2" />

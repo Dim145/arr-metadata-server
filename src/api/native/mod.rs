@@ -12,6 +12,7 @@ pub mod discover;
 pub mod export;
 pub mod feeds;
 pub mod items;
+pub mod lists;
 pub mod meta;
 pub mod network;
 pub mod overrides;
@@ -28,6 +29,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(items::router())
         .merge(browse::router())
         .merge(feeds::router())
+        .merge(lists::router())
         .merge(seasons::router())
         .merge(children::router())
         .merge(export::router())
