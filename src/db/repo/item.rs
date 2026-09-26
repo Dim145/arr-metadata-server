@@ -439,6 +439,90 @@ async fn load_relations(db: &Db, media_id: &str) -> Result<Vec<Relation>> {
         .collect()
 }
 
+/// The Fan-Kai cut from a work, as relations of it: every production whose
+/// wiki page names one of this work's AniList or MyAnimeList entries as its
+/// original.
+///
+/// Found when read, never stored: a work's own relations are AniList's, and a
+/// refresh writes them over whole — a Fan-Kai added later would not appear,
+/// and one stored beside them would be lost.
+pub async fn recuts(db: &Db, media_id: &str, ids: &ExternalIds) -> Result<Vec<Relation>> {
+    let marks = |n: usize| vec!["?"; n].join(", ");
+    let mut matches = Vec::new();
+    let mut values: Vec<i64> = Vec::new();
+
+    if !ids.anilist.is_empty() {
+        matches.push(format!(
+            "(r.source = 'anilist' AND r.external_id IN ({}))",
+            marks(ids.anilist.len())
+        ));
+        values.extend(&ids.anilist);
+    }
+    if !ids.mal.is_empty() {
+        let list = marks(ids.mal.len());
+        matches.push(format!(
+            "(r.source = 'mal' AND r.external_id IN ({list})) OR r.mal_id IN ({list})"
+        ));
+        values.extend(&ids.mal);
+        values.extend(&ids.mal);
+    }
+    if matches.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let sql = format!(
+        "SELECT DISTINCT r.media_id, w.title, w.year, w.is_adult,
+                (SELECT x.value FROM media_external_id x
+                  WHERE x.media_id = r.media_id AND x.source = 'fankai' LIMIT 1) AS fankai_id,
+                (SELECT i.url FROM media_image i
+                  WHERE i.media_id = r.media_id AND i.cover_type = 'poster'
+                    AND i.season_number IS NULL
+                  ORDER BY i.sort_order LIMIT 1) AS poster
+           FROM media_relation r
+           JOIN media_item w ON w.id = r.media_id
+          WHERE r.relation_type = 'ORIGINAL' AND w.is_enabled = 1 AND r.media_id <> ?
+            AND ({})
+          ORDER BY w.year, w.title",
+        matches.join(" OR ")
+    );
+
+    let mut query = sqlx::query(db.sql(&sql)).bind(media_id);
+    for value in values {
+        query = query.bind(value);
+    }
+
+    let mut out: Vec<Relation> = Vec::new();
+    for row in query.fetch_all(db.pool()).await? {
+        let work_id = row.text("media_id")?;
+        if out
+            .iter()
+            .any(|r| r.work_id.as_deref() == Some(work_id.as_str()))
+        {
+            continue;
+        }
+        out.push(Relation {
+            id: format!("recut:{work_id}"),
+            relation_type: "RECUT".to_string(),
+            source: "fankai".to_string(),
+            external_id: row
+                .opt_text("fankai_id")?
+                .and_then(|v| v.parse().ok())
+                .unwrap_or_default(),
+            mal_id: None,
+            title: row.text("title")?,
+            medium: "anime".to_string(),
+            format: None,
+            year: row.opt_int("year")?,
+            image: row.opt_text("poster")?,
+            is_adult: row.flag("is_adult")?,
+            work_id: Some(work_id),
+            sort_order: i32::try_from(out.len()).unwrap_or(i32::MAX),
+        });
+    }
+
+    Ok(out)
+}
+
 fn map_relation(row: &sqlx::any::AnyRow) -> Result<Relation> {
     Ok(Relation {
         id: row.text("id")?,
@@ -2796,6 +2880,103 @@ mod tests {
 
             assert_eq!(found.len(), 1, "{term:?} should have found it");
         }
+    }
+
+    #[tokio::test]
+    async fn an_anime_leads_to_the_fan_kai_cut_from_it() {
+        let db = db().await;
+
+        let mut original = sample();
+        original.id = crate::db::new_id();
+        original.kind = MediaKind::Series;
+        original.title = "Naruto Shippuden".into();
+        original.external_ids = ExternalIds {
+            tvdb: Some(79824),
+            anilist: vec![1735],
+            mal: vec![1735],
+            ..Default::default()
+        };
+
+        let mut recut = sample();
+        recut.id = crate::db::new_id();
+        recut.kind = MediaKind::Series;
+        recut.title = "Naruto Shippuden Yabai".into();
+        recut.year = Some(2007);
+        recut.external_ids = ExternalIds {
+            fankai: Some(12),
+            ..Default::default()
+        };
+        recut.images[0].url = "https://metadata.fankai.fr/series/12/image/poster".into();
+        recut.relations = vec![Relation {
+            id: String::new(),
+            relation_type: "ORIGINAL".into(),
+            source: "anilist".into(),
+            external_id: 1735,
+            mal_id: Some(1735),
+            title: "Naruto Shippuden".into(),
+            medium: "anime".into(),
+            format: Some("TV".into()),
+            year: Some(2007),
+            image: None,
+            is_adult: false,
+            work_id: None,
+            sort_order: 0,
+        }];
+
+        // Another anime's Fan-Kai, which must not be offered here.
+        let mut other = recut.clone();
+        other.id = crate::db::new_id();
+        other.title = "Naruto Yabai".into();
+        other.external_ids.fankai = Some(25);
+        other.relations[0].external_id = 20;
+        other.relations[0].mal_id = Some(20);
+
+        for item in [&original, &recut, &other] {
+            upsert(
+                &db,
+                ItemWrite {
+                    item,
+                    replace_children: true,
+                },
+            )
+            .await
+            .expect("the writes succeed");
+        }
+
+        let found = recuts(&db, &original.id, &original.external_ids)
+            .await
+            .unwrap();
+        assert_eq!(found.len(), 1, "one Fan-Kai, listed once: {found:?}");
+        assert_eq!(found[0].relation_type, "RECUT");
+        assert_eq!(found[0].work_id.as_deref(), Some(recut.id.as_str()));
+        assert_eq!(found[0].external_id, 12);
+        assert_eq!(found[0].title, "Naruto Shippuden Yabai");
+        assert_eq!(
+            found[0].image.as_deref(),
+            Some("https://metadata.fankai.fr/series/12/image/poster")
+        );
+
+        // By MyAnimeList alone, it is found too; the Fan-Kai itself finds nothing.
+        let by_mal = ExternalIds {
+            mal: vec![1735],
+            ..Default::default()
+        };
+        assert_eq!(recuts(&db, &original.id, &by_mal).await.unwrap().len(), 1);
+        assert!(
+            recuts(&db, &recut.id, &recut.external_ids)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        // And the Fan-Kai's own relation leads back to the anime held here.
+        let stored = get(&db, &recut.id).await.unwrap().expect("the Fan-Kai");
+        let mut stored = stored;
+        load_children(&db, &mut stored).await.unwrap();
+        assert_eq!(
+            stored.relations[0].work_id.as_deref(),
+            Some(original.id.as_str())
+        );
     }
 
     #[tokio::test]

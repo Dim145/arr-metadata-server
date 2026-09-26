@@ -259,7 +259,7 @@ still answers.
 
 ### Further sources
 
-Five more, each off until switched on under **Settings → Further sources**.
+Six more, each off until switched on under **Settings → Further sources**.
 None needs a key.
 
 | Source | Brings | Costs |
@@ -269,6 +269,7 @@ None needs a key.
 | **MyAnimeList** | its score and titles — for anime; through its own API when `AMS_MAL_CLIENT_ID` is set, through [Jikan](https://jikan.moe) otherwise | one call per anime fetch |
 | **IMDb** | IMDb's rating, for every work with an IMDb id | one download a day |
 | **Fankai** | the Fan-Kai productions — anime recut into films, each as a series with its sagas as seasons — from Fankai's own metadata service | one call per saga, and three more per production fetch |
+| **Wiki Fankai** | for each Fan-Kai, the anime it was cut from and the Fan-Kai that follows it — only while Fankai is on | one call per Fan-Kai fetch |
 
 None of the first four changes the shape of an answer: Sonarr and Radarr are
 served the same fields as before, some of them now more accurate. Fankai adds
@@ -317,12 +318,23 @@ the NFO export, with Fankai's id as a `uniqueid`. The kaïeur and the voice cast
 are its credits; the kind of recut — Kaï, Yabai, Henshū — is a tag rather than
 a genre. One call a second, and the listing is kept and revalidated by its ETag.
 
+**The Fankai wiki says what each Fan-Kai was cut from.** Fankai's service
+leaves a production's ids blank; the community's wiki, at
+[fan-kai.fandom.com](https://fan-kai.fandom.com/fr/), links each one's AniList
+and MyAnimeList entries and names the Fan-Kai that follows it. With it on, a
+Fan-Kai's page leads to its anime — to the anime's own page once Sonarr holds
+it — and to the next Fan-Kai, and the anime's page leads back to every Fan-Kai
+cut from it. The wiki keeps a page per cut, so a production is matched on its
+name and on its kaïeur, never on a guess between two. With AniList on too, the
+anime's title, year and poster come from there. The ids are never given to the
+Fan-Kai itself: sharing one would merge it into the anime.
+
 The lists and their last download are shown under the switches, with a button
 to download one now rather than wait for its turn, and every download is a job. Their terms: TVmaze's data is CC BY-SA; IMDb's datasets are
 for personal, non-commercial use; AniList's API is free for non-commercial use
 and asks not to be crawled or stored wholesale — this server asks only about
 works a client requested; Fankai publishes its metadata for its own productions,
-and is asked about one at a time. Every public page credits the sources that
+and is asked about one at a time; the Fankai wiki's content is CC BY-SA. Every public page credits the sources that
 are on, with the notices TMDB and IMDb require.
 
 ## Languages

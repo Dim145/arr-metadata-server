@@ -135,6 +135,33 @@ pub fn as_card(work: &mut MediaItem) {
     work.images = kept;
 }
 
+/// Put first among a work's relations the Fan-Kai cut from it, which the
+/// catalogue holds by definition — see `repo::item::recuts`. A failure costs
+/// the links, not the page.
+pub async fn add_recuts(state: &AppState, item: &mut MediaItem) {
+    if item.external_ids.anilist.is_empty() && item.external_ids.mal.is_empty() {
+        return;
+    }
+
+    match repo::item::recuts(&state.db, &item.id, &item.external_ids).await {
+        Ok(found) => {
+            let fresh: Vec<_> = found
+                .into_iter()
+                .filter(|r| {
+                    !item
+                        .relations
+                        .iter()
+                        .any(|known| known.work_id == r.work_id)
+                })
+                .collect();
+            item.relations.splice(0..0, fresh);
+        }
+        Err(e) => {
+            tracing::warn!(id = %item.id, error = %e, "the Fan-Kai cut from a work could not be read")
+        }
+    }
+}
+
 /// Keep from a reader who may not see adult works the entries filed beside
 /// a work that are for adults — by AniList's flag, or by what the catalogue
 /// holds of them — as the list would have kept the works themselves.
@@ -369,6 +396,10 @@ pub static FETCHING: std::sync::LazyLock<Keyed> = std::sync::LazyLock::new(Keyed
 /// A list that came back with *fewer* entries is left alone. That is a provider
 /// disagreeing rather than a provider missing, and picking a winner there is
 /// what the merge is for.
+///
+/// Relations too: they come from one source each — AniList for an anime, the
+/// Fankai wiki for a Fan-Kai — so one of them timing out on a refresh left a
+/// work with none, and an anime without the Fan-Kai cut from it.
 fn keep_what_nobody_answered(item: &mut MediaItem, stored: MediaItem) {
     fn keep<T>(fresh: &mut Vec<T>, stored: Vec<T>) {
         if fresh.is_empty() {
@@ -383,6 +414,7 @@ fn keep_what_nobody_answered(item: &mut MediaItem, stored: MediaItem) {
     keep(&mut item.alternative_titles, stored.alternative_titles);
     keep(&mut item.ratings, stored.ratings);
     keep(&mut item.translations, stored.translations);
+    keep(&mut item.relations, stored.relations);
 }
 
 /// Store a freshly fetched work and its raw provider payload.
@@ -578,6 +610,39 @@ mod keyed_tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
+
+    #[test]
+    fn a_refresh_nobody_answered_for_keeps_what_was_filed_beside_the_work() {
+        let related = |id: i64| crate::domain::Relation {
+            id: String::new(),
+            relation_type: "ORIGINAL".into(),
+            source: "anilist".into(),
+            external_id: id,
+            mal_id: None,
+            title: "Naruto: Shippuden".into(),
+            medium: "anime".into(),
+            format: None,
+            year: None,
+            image: None,
+            is_adult: false,
+            work_id: None,
+            sort_order: 0,
+        };
+
+        let mut stored = MediaItem::empty(crate::domain::MediaKind::Series);
+        stored.relations = vec![related(1735)];
+
+        // The wiki timed out: nothing said about relations, so they stand.
+        let mut fresh = MediaItem::empty(crate::domain::MediaKind::Series);
+        keep_what_nobody_answered(&mut fresh, stored.clone());
+        assert_eq!(fresh.relations.len(), 1);
+
+        // It answered: what it said replaces what was there.
+        let mut answered = MediaItem::empty(crate::domain::MediaKind::Series);
+        answered.relations = vec![related(20)];
+        keep_what_nobody_answered(&mut answered, stored);
+        assert_eq!(answered.relations[0].external_id, 20);
+    }
 
     #[tokio::test]
     async fn the_same_key_is_done_once_at_a_time() {

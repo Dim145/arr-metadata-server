@@ -142,6 +142,11 @@ pub const REGISTRY: &[Definition] = &[
         kind: Kind::Bool,
         scopes: SERVER_ONLY,
     },
+    Definition {
+        key: "fankai.wiki",
+        kind: Kind::Bool,
+        scopes: SERVER_ONLY,
+    },
     // ── Refresh ──────────────────────────────────────────────────────────────
     Definition {
         key: "refresh.enabled",

@@ -52,6 +52,7 @@ pub struct Config {
     pub mal: Mal,
     pub imdb: Imdb,
     pub fankai: Fankai,
+    pub fankai_wiki: FankaiWiki,
     pub anime_mapping: AnimeMapping,
     /// Which provider wins when two disagree, most trusted first.
     pub provider_priority: Vec<String>,
@@ -173,6 +174,15 @@ pub struct Tvmaze {
 pub struct Fankai {
     pub upstream: String,
     /// Seeds the `fankai.enabled` setting once; the interface decides after.
+    pub enabled: bool,
+}
+
+/// The Fankai wiki: which anime each Fan-Kai was cut from. No key.
+#[derive(Clone, Debug)]
+pub struct FankaiWiki {
+    /// MediaWiki's API for the wiki, `…/api.php`.
+    pub upstream: String,
+    /// Seeds the `fankai.wiki` setting once; the interface decides after.
     pub enabled: bool,
 }
 
@@ -387,6 +397,13 @@ impl Config {
                     .to_string(),
                 enabled: flag(&["AMS_FANKAI_ENABLED"], false)?,
             },
+            fankai_wiki: FankaiWiki {
+                upstream: var_or(
+                    &["AMS_FANKAI_WIKI_UPSTREAM"],
+                    "https://fan-kai.fandom.com/fr/api.php",
+                ),
+                enabled: flag(&["AMS_FANKAI_WIKI_ENABLED"], false)?,
+            },
             anilist: Anilist {
                 upstream: var_or(&["AMS_ANILIST_UPSTREAM"], "https://graphql.anilist.co")
                     .trim_end_matches('/')
@@ -422,8 +439,16 @@ impl Config {
                     // key; the arr services then fill what it leaves; artwork
                     // providers last, since they only ever add images.
                     [
-                        "tmdb", "tvdb", "skyhook", "radarr", "fanart", "tvmaze", "anilist", "mal",
+                        "tmdb",
+                        "tvdb",
+                        "skyhook",
+                        "radarr",
+                        "fanart",
+                        "tvmaze",
+                        "anilist",
+                        "mal",
                         "fankai",
+                        "fankaiwiki",
                     ]
                     .iter()
                     .map(|s| s.to_string())

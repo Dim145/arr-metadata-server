@@ -834,10 +834,21 @@ function Related({ item }: { item: MediaItem }) {
   const related = item.relations ?? []
   if (!related.length) return null
 
+  // A Fan-Kai's come from the Fankai wiki; an anime's from AniList, with the
+  // Fan-Kai cut from it first.
+  const recuts = related.filter((relation) => relation.relationType === 'RECUT').length
+  const hint = item.externalIds.fankai
+    ? t.work.relatedHintFankai
+    : recuts === related.length
+      ? t.work.relatedHintRecutOnly
+      : recuts
+        ? t.work.relatedHintRecut
+        : t.work.relatedHint
+
   return (
     <section>
       <SectionTitle>{t.work.related}</SectionTitle>
-      <p className="-mt-3 mb-4 text-xs text-bone-faint">{t.work.relatedHint}</p>
+      <p className="-mt-3 mb-4 text-xs text-bone-faint">{hint}</p>
       <PosterShelf label={t.work.related}>
         {related.map((relation) => (
           <RelationCard key={relation.id} relation={relation} />
@@ -845,6 +856,20 @@ function Related({ item }: { item: MediaItem }) {
       </PosterShelf>
     </section>
   )
+}
+
+/** Where an entry the catalogue does not hold is found, by where it is filed. */
+function relationHome(relation: Relation): string {
+  const id = encodeURIComponent(String(relation.externalId))
+  const medium = relation.medium === 'manga' ? 'manga' : 'anime'
+  switch (relation.source) {
+    case 'fankai':
+      return `https://fankai.fr/productions/${id}`
+    case 'mal':
+      return `https://myanimelist.net/${medium}/${id}`
+    default:
+      return `https://anilist.co/${medium}/${id}`
+  }
 }
 
 function RelationCard({ relation }: { relation: Relation }) {
@@ -879,7 +904,9 @@ function RelationCard({ relation }: { relation: Relation }) {
           {relation.title}
         </h3>
         <p className="font-mono text-[0.6875rem] text-bone-faint tabular-nums">
-          {relation.workId ? caption : [caption, t.work.onAnilist].filter(Boolean).join(' · ')}
+          {relation.workId
+            ? caption
+            : [caption, t.work.onSite(providerName(relation.source))].filter(Boolean).join(' · ')}
         </p>
       </div>
     </>
@@ -891,7 +918,7 @@ function RelationCard({ relation }: { relation: Relation }) {
     </Link>
   ) : (
     <a
-      href={`https://anilist.co/${relation.medium === 'manga' ? 'manga' : 'anime'}/${relation.externalId}`}
+      href={relationHome(relation)}
       target="_blank"
       rel="noreferrer noopener"
       aria-label={label}

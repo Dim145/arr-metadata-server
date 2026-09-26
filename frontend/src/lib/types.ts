@@ -51,9 +51,13 @@ export interface Credit {
  */
 export interface Relation {
   id: string
-  /** SEQUEL, PREQUEL, PARENT, SIDE_STORY, SPIN_OFF, ALTERNATIVE, SUMMARY, COMPILATION, CONTAINS, SOURCE, ADAPTATION, CHARACTER or OTHER. */
+  /**
+   * SEQUEL, PREQUEL, PARENT, SIDE_STORY, SPIN_OFF, ALTERNATIVE, SUMMARY, COMPILATION, CONTAINS, SOURCE,
+   * ADAPTATION, CHARACTER or OTHER, as AniList names them; ORIGINAL, the anime a Fan-Kai was cut from;
+   * RECUT, a Fan-Kai cut from this work.
+   */
   relationType: string
-  /** Where the other work is filed — `anilist` — and its id there. */
+  /** Where the other work is filed — `anilist`, `mal` or `fankai` — and its id there. */
   source: string
   externalId: number
   malId?: number

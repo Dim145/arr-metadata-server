@@ -565,6 +565,7 @@ const HOMES: Record<string, string> = {
   mal: 'https://myanimelist.net',
   imdb: 'https://www.imdb.com',
   fankai: 'https://fankai.fr',
+  fankaiwiki: 'https://fan-kai.fandom.com/fr/',
 }
 
 /**

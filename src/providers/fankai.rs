@@ -30,7 +30,7 @@ use crate::{
     db::{new_id, now},
     domain::{
         CoverType, Credit, CreditType, Episode, ExternalIds, Image, MediaItem, MediaKind, Rating,
-        Season,
+        Relation, Season,
     },
     providers::{PATIENCE, Pacer, alternative_title, names},
 };
@@ -108,6 +108,48 @@ impl FankaiClient {
             .take(limit)
             .map(|production| to_item(production, &[], &[], self.french))
             .collect())
+    }
+
+    /// A production by its name, as another source writes it — the wiki names
+    /// the Fan-Kai that follows one by its page — as a relation of
+    /// `relation_type`. Only a name Fankai gives it, however it is spelt.
+    pub async fn relation(&self, name: &str, relation_type: &str) -> Result<Option<Relation>> {
+        let wanted = fold(name);
+        if wanted.is_empty() {
+            return Ok(None);
+        }
+
+        let productions = self.catalogue().await?;
+        let Some(production) = productions.iter().find(|p| {
+            [
+                Some(p.title.as_str()),
+                p.show_title.as_deref(),
+                p.title_for_plex.as_deref(),
+            ]
+            .into_iter()
+            .flatten()
+            .any(|n| fold(n) == wanted)
+        }) else {
+            return Ok(None);
+        };
+
+        Ok(Some(Relation {
+            id: String::new(),
+            relation_type: relation_type.to_string(),
+            source: names::FANKAI.to_string(),
+            external_id: production.id,
+            mal_id: None,
+            title: production.title.trim().to_string(),
+            medium: "anime".to_string(),
+            format: None,
+            year: production
+                .year
+                .or_else(|| production.premiered.as_deref()?.get(..4)?.parse().ok()),
+            image: production.images.poster.clone().filter(|u| !u.is_empty()),
+            is_adult: false,
+            work_id: None,
+            sort_order: 0,
+        }))
     }
 
     /// A production with its sagas, films and people, by Fankai's id. Returns
@@ -659,7 +701,13 @@ fn to_item(
                 .map(str::trim)
                 .filter(|r| !r.is_empty())
                 .map(String::from),
-            image: actor.thumb_url.clone().filter(|u| !u.is_empty()),
+            // The kaïeurs' picture is the wiki's own logo, on Fandom's
+            // servers, which refuse to be shown on any other site: a broken
+            // image where the initials would do.
+            image: actor
+                .thumb_url
+                .clone()
+                .filter(|u| !u.is_empty() && !u.contains("static.wikia.nocookie.net")),
             tmdb_person_id: actor.profile_url.as_deref().and_then(tmdb_person),
             credit_tmdb_id: None,
             sort_order: slot as i32,
@@ -877,7 +925,7 @@ fn matching<'a>(productions: &'a [Production], needle: &str) -> Vec<&'a Producti
 
 /// Text as a reader types it: lower case, accents gone, one space between
 /// words. `Horimiya Kaï` and `horimiya kai` are the same name.
-fn fold(text: &str) -> String {
+pub(crate) fn fold(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
 
     for c in text.chars().flat_map(char::to_lowercase) {
@@ -1222,6 +1270,7 @@ mod tests {
         assert_eq!(maker.person_name, "Triggerforce");
         assert_eq!(maker.character_name.as_deref(), Some("Kaïeur"));
         assert_eq!(maker.tmdb_person_id, None);
+        assert_eq!(maker.image, None, "Fandom's logo is not shown elsewhere");
         let voice = &item.credits[1];
         assert_eq!(voice.character_name.as_deref(), Some("Gaara (voice)"));
         assert_eq!(voice.tmdb_person_id, Some(81244));

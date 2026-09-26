@@ -252,6 +252,7 @@ const PROVIDERS: Record<string, string> = {
   anilist: 'AniList',
   fanart: 'Fanart.tv',
   fankai: 'Fankai',
+  fankaiwiki: 'Wiki Fankai',
   imdb: 'IMDb',
   mal: 'MyAnimeList',
   metacritic: 'Metacritic',

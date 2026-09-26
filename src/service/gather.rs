@@ -35,7 +35,13 @@ const MAX_SEASONS: usize = 200;
 /// When nothing else answered, what these returned is not stored. There is no
 /// work to attach it to — only a name and some pictures filed under an id, or
 /// a series with no episodes that would reach Sonarr as one.
-const SUPPLEMENTS: &[&str] = &[names::FANART, names::TVMAZE, names::ANILIST, names::MAL];
+const SUPPLEMENTS: &[&str] = &[
+    names::FANART,
+    names::TVMAZE,
+    names::ANILIST,
+    names::MAL,
+    names::FANKAI_WIKI,
+];
 
 /// What one provider returned: its raw body, and the canonical form of it.
 struct Answer {
@@ -145,15 +151,119 @@ pub async fn fankai_series(state: &AppState, fankai_id: i64) -> Result<Option<Me
         return Ok(None);
     };
 
-    store(
-        state,
-        vec![Answer {
-            provider: names::FANKAI,
-            payload: raw,
-            item,
-        }],
-    )
-    .await
+    let wiki = if state.flag("fankai.wiki", false) {
+        fankai_from_wiki(state, &item).await
+    } else {
+        None
+    };
+
+    let mut answers = vec![Answer {
+        provider: names::FANKAI,
+        payload: raw,
+        item,
+    }];
+    answers.extend(wiki);
+
+    store(state, answers).await
+}
+
+/// What the Fankai wiki says a production was cut from, and which Fan-Kai
+/// follows it, as the production's relations.
+///
+/// A supplement: its answer carries those and nothing else. The original's
+/// title, year and cover come from AniList when that source is on, and from
+/// the wiki's own links otherwise; a sequel is only named when Fankai lists it.
+async fn fankai_from_wiki(state: &AppState, production: &MediaItem) -> Option<Answer> {
+    use crate::providers::fankai::fold;
+
+    // The wiki keeps a page per cut; whoever made this one tells them apart.
+    let kaieurs: Vec<&str> = production
+        .credits
+        .iter()
+        .filter(|c| {
+            c.character_name
+                .as_deref()
+                .is_some_and(|r| fold(r) == "kaieur")
+        })
+        .map(|c| c.person_name.as_str())
+        .collect();
+
+    let (raw, page) = match state.fankai_wiki.page(&production.title, &kaieurs).await {
+        Ok(Some(found)) => found,
+        Ok(None) => {
+            tracing::debug!(title = %production.title, "the Fankai wiki has no page for this production");
+            return None;
+        }
+        Err(e) => {
+            tracing::warn!(
+                title = %production.title,
+                error = format_args!("{e:#}"),
+                "the Fankai wiki could not be asked"
+            );
+            return None;
+        }
+    };
+
+    let mut relations = Vec::new();
+
+    for original in &page.originals {
+        let from_anilist = match original.anilist {
+            Some(id) if state.flag("anilist.enabled", false) => {
+                match state.anilist.entry(id, "ORIGINAL").await {
+                    Ok(found) => found,
+                    Err(e) => {
+                        tracing::warn!(
+                            anilist_id = id,
+                            error = format_args!("{e:#}"),
+                            "AniList could not describe a Fan-Kai's original; using the wiki's"
+                        );
+                        None
+                    }
+                }
+            }
+            _ => None,
+        };
+
+        let relation = match from_anilist {
+            Some(mut relation) => {
+                relation.mal_id = relation.mal_id.or(original.mal);
+                Some(relation)
+            }
+            None => original.relation(),
+        };
+        relations.extend(relation);
+    }
+
+    for sequel in &page.sequels {
+        let name = crate::providers::fankai_wiki::base_name(sequel);
+        match state.fankai.relation(name, "SEQUEL").await {
+            Ok(Some(relation)) if Some(relation.external_id) != production.external_ids.fankai => {
+                relations.push(relation);
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!(
+                sequel = %sequel,
+                error = format_args!("{e:#}"),
+                "the Fan-Kai that follows could not be looked up"
+            ),
+        }
+    }
+
+    if relations.is_empty() {
+        return None;
+    }
+    for (index, relation) in relations.iter_mut().enumerate() {
+        relation.sort_order = i32::try_from(index).unwrap_or(i32::MAX);
+    }
+
+    let mut item = MediaItem::empty(MediaKind::Series);
+    item.relations = relations;
+
+    Some(Answer {
+        provider: names::FANKAI_WIKI,
+        payload: raw,
+        item,
+    })
 }
 
 /// Whether anything that can stand for a work on its own answered.

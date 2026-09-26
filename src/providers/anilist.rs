@@ -53,6 +53,17 @@ const QUERY: &str = "query ($id: Int) {
   }
 }";
 
+/// Just enough of an entry to show it as another work's relation: the entry a
+/// Fan-Kai was cut from, say.
+const ENTRY: &str = "query ($id: Int) {
+  Media(id: $id, type: ANIME) {
+    id idMal type format isAdult
+    title { romaji english native }
+    startDate { year }
+    coverImage { extraLarge large }
+  }
+}";
+
 /// Tags ranked below this are ones a minority of voters agreed with.
 const TAG_RANK: i32 = 60;
 
@@ -75,6 +86,33 @@ impl AnilistClient {
     /// One AniList entry, as a contribution to the work of `kind`. Returns the
     /// raw answer alongside the parsed one.
     pub async fn media(&self, id: i64, kind: MediaKind) -> Result<Option<(Value, MediaItem)>> {
+        let Some(raw) = self.ask(QUERY, id).await? else {
+            return Ok(None);
+        };
+
+        let media = Media::deserialize(&raw["data"]["Media"])
+            .context("AniList returned an entry this server could not read")?;
+
+        let item = to_item(&media, kind);
+        Ok(Some((raw, item)))
+    }
+
+    /// One AniList entry as another work's relation of `relation_type`, with
+    /// its title, year and cover — one small query, for a work that is not
+    /// AniList's own but points at one of its entries.
+    pub async fn entry(&self, id: i64, relation_type: &str) -> Result<Option<Relation>> {
+        let Some(raw) = self.ask(ENTRY, id).await? else {
+            return Ok(None);
+        };
+
+        let node = Node::deserialize(&raw["data"]["Media"])
+            .context("AniList returned an entry this server could not read")?;
+
+        Ok(relation(&node, relation_type.to_string()))
+    }
+
+    /// One query about one entry: the answer, when it names one.
+    async fn ask(&self, query: &str, id: i64) -> Result<Option<Value>> {
         if !self.pacer.turn(1, PATIENCE).await {
             anyhow::bail!("AniList's queue is full; this fetch goes without it");
         }
@@ -84,7 +122,7 @@ impl AnilistClient {
             .http
             .post(&self.endpoint)
             .header(reqwest::header::ACCEPT, "application/json")
-            .json(&json!({ "query": QUERY, "variables": { "id": id } }))
+            .json(&json!({ "query": query, "variables": { "id": id } }))
             .timeout(std::time::Duration::from_secs(20))
             .send()
             .await;
@@ -110,19 +148,15 @@ impl AnilistClient {
             .await
             .context("AniList returned a body this server could not read")?;
 
-        let Some(media) = raw.pointer("/data/Media").filter(|m| !m.is_null()) else {
+        if raw.pointer("/data/Media").is_none_or(Value::is_null) {
             // GraphQL reports its errors in the body, with a 200 as often as not.
             if let Some(errors) = raw.get("errors") {
                 anyhow::bail!("AniList refused the query: {errors}");
             }
             return Ok(None);
-        };
+        }
 
-        let media = Media::deserialize(media)
-            .context("AniList returned an entry this server could not read")?;
-
-        let item = to_item(&media, kind);
-        Ok(Some((raw, item)))
+        Ok(Some(raw))
     }
 }
 
@@ -347,37 +381,7 @@ fn relations(media: &Media) -> Vec<Relation> {
         .relations
         .iter()
         .flat_map(|r| &r.edges)
-        .filter_map(|edge| {
-            let node = edge.node.as_ref()?;
-            let relation_type = edge.relation_type.clone()?;
-            let title = [&node.title.english, &node.title.romaji, &node.title.native]
-                .into_iter()
-                .find_map(|t| t.as_deref().map(str::trim).filter(|t| !t.is_empty()))?
-                .to_string();
-            Some(Relation {
-                id: String::new(),
-                relation_type,
-                source: "anilist".to_string(),
-                external_id: node.id,
-                mal_id: node.id_mal,
-                title,
-                medium: node
-                    .medium
-                    .as_deref()
-                    .unwrap_or("ANIME")
-                    .to_ascii_lowercase(),
-                format: node.format.clone(),
-                year: node.start_date.as_ref().and_then(|d| d.year),
-                image: node
-                    .cover_image
-                    .as_ref()
-                    .and_then(|c| c.extra_large.clone().or_else(|| c.large.clone()))
-                    .filter(|u| u.starts_with("https://")),
-                is_adult: node.is_adult,
-                work_id: None,
-                sort_order: 0,
-            })
-        })
+        .filter_map(|edge| relation(edge.node.as_ref()?, edge.relation_type.clone()?))
         .collect();
     related.sort_by_key(|r| {
         (
@@ -390,6 +394,38 @@ fn relations(media: &Media) -> Vec<Relation> {
         relation.sort_order = i32::try_from(index).unwrap_or(i32::MAX);
     }
     related
+}
+
+/// The entry at the other end of a relation, as the relation shows it.
+fn relation(node: &Node, relation_type: String) -> Option<Relation> {
+    let title = [&node.title.english, &node.title.romaji, &node.title.native]
+        .into_iter()
+        .find_map(|t| t.as_deref().map(str::trim).filter(|t| !t.is_empty()))?
+        .to_string();
+
+    Some(Relation {
+        id: String::new(),
+        relation_type,
+        source: "anilist".to_string(),
+        external_id: node.id,
+        mal_id: node.id_mal,
+        title,
+        medium: node
+            .medium
+            .as_deref()
+            .unwrap_or("ANIME")
+            .to_ascii_lowercase(),
+        format: node.format.clone(),
+        year: node.start_date.as_ref().and_then(|d| d.year),
+        image: node
+            .cover_image
+            .as_ref()
+            .and_then(|c| c.extra_large.clone().or_else(|| c.large.clone()))
+            .filter(|u| u.starts_with("https://")),
+        is_adult: node.is_adult,
+        work_id: None,
+        sort_order: 0,
+    })
 }
 
 /// Where a kind of relation stands: the story's own line first.

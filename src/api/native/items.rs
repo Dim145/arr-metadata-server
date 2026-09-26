@@ -276,6 +276,9 @@ async fn detail(
     if hidden && !identity.can_write() {
         return Err(AppError::NotFound);
     }
+    // The Fan-Kai cut from it, which the catalogue holds whatever AniList says.
+    service::add_recuts(&state, &mut item).await;
+
     // Nor what is filed beside it that the same policy would keep from them.
     if !adult && !identity.can_write() {
         service::hide_adult_relations(std::slice::from_mut(&mut item));

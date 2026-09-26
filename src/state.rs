@@ -10,9 +10,9 @@ use crate::{
     config::Config,
     db::{Db, repo},
     providers::{
-        anilist::AnilistClient, fanart::FanartClient, fankai::FankaiClient, mal::MalClient,
-        radarr::RadarrMetadataClient, skyhook::SkyhookClient, tmdb::TmdbClient, tvdb::TvdbClient,
-        tvmaze::TvmazeClient,
+        anilist::AnilistClient, fanart::FanartClient, fankai::FankaiClient,
+        fankai_wiki::FankaiWikiClient, mal::MalClient, radarr::RadarrMetadataClient,
+        skyhook::SkyhookClient, tmdb::TmdbClient, tvdb::TvdbClient, tvmaze::TvmazeClient,
     },
     settings::{Scope, Store},
 };
@@ -34,6 +34,7 @@ pub struct Inner {
     pub anilist: AnilistClient,
     pub mal: MalClient,
     pub fankai: FankaiClient,
+    pub fankai_wiki: FankaiWikiClient,
     pub limiter: Limiter,
     /// Who may call the address-guarded surfaces, as the database holds it.
     ///
@@ -100,6 +101,7 @@ impl AppState {
         let anilist = AnilistClient::new(http.clone(), &config.anilist);
         let mal = MalClient::new(http.clone(), &config.mal);
         let fankai = FankaiClient::new(http.clone(), &config.fankai, &config.tmdb.language);
+        let fankai_wiki = FankaiWikiClient::new(http.clone(), &config.fankai_wiki);
 
         if config.fanart.enabled && !fanart.is_configured() {
             tracing::info!("no Fanart.tv key configured; artwork enrichment is off");
@@ -138,6 +140,7 @@ impl AppState {
             anilist,
             mal,
             fankai,
+            fankai_wiki,
             limiter,
             instance,
         }));
@@ -190,6 +193,7 @@ impl AppState {
                 ("mal.enabled", cfg.mal.enabled.to_string()),
                 ("imdb.enabled", cfg.imdb.enabled.to_string()),
                 ("fankai.enabled", cfg.fankai.enabled.to_string()),
+                ("fankai.wiki", cfg.fankai_wiki.enabled.to_string()),
                 (
                     "webhooks.events",
                     crate::service::webhook::DEFAULT_EVENTS.to_string(),

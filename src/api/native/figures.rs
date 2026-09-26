@@ -248,6 +248,10 @@ async fn health(
                 on: state.flag("fankai.enabled", false),
             },
             Source {
+                name: "fankaiwiki",
+                on: state.flag("fankai.enabled", false) && state.flag("fankai.wiki", false),
+            },
+            Source {
                 name: "skyhook",
                 on: state.flag("skyhook.fallback", false) || state.flag("skyhook.enrich", false),
             },
