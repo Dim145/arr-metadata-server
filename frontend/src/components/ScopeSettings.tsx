@@ -64,7 +64,7 @@ export const GROUPS = [
   { id: 'refresh', prefixes: ['refresh'] },
   // Kept on the Opening & APIs page, where each is explained with what it
   // governs; never drawn among the rest.
-  { id: 'access', prefixes: ['keys', 'site', 'registration', 'api'] },
+  { id: 'access', prefixes: ['keys', 'site', 'registration', 'api', 'oidc', 'auth'] },
   { id: 'adult', prefixes: ['adult'] },
 ] as const
 
@@ -389,6 +389,7 @@ function fallback(def: SettingDef): string {
     case 'choice':
       return def.kind.options[0] ?? ''
     case 'text':
+    case 'secret':
       return ''
   }
 }

@@ -69,6 +69,9 @@ export default defineConfig({
       testMatch: SERVER_WIDE,
       dependencies: ['desktop', 'mobile'],
       fullyParallel: false,
+      // One file at a time too: a private site from one spec and passwords
+      // switched off by another would otherwise meet.
+      workers: 1,
       use: { ...devices['Desktop Chrome'], channel: 'chromium', viewport: { width: 1440, height: 900 } },
     },
   ],

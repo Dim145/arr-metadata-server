@@ -50,7 +50,19 @@ pub enum Kind {
     Choice {
         options: &'static [&'static str],
     },
+    /// Text that is written and never read back: the settings API shows it
+    /// masked and the journal says only that it changed.
+    Secret,
 }
+
+impl Kind {
+    pub fn is_secret(&self) -> bool {
+        matches!(self, Kind::Secret)
+    }
+}
+
+/// What a secret is shown as, once set.
+pub const MASK: &str = "••••••••";
 
 #[derive(Clone, Copy, Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
@@ -67,7 +79,15 @@ const PER_CLIENT: &[Scope] = &[Scope::Client, Scope::Peer];
 
 /// The text settings that may be set to nothing, which switches them off:
 /// an address to post to is one, a language is not.
-const OPTIONAL: &[&str] = &["webhooks.url"];
+const OPTIONAL: &[&str] = &[
+    "webhooks.url",
+    "oidc.issuer",
+    "oidc.clientId",
+    "oidc.buttonLabel",
+    "oidc.roleClaim",
+    "oidc.adminValues",
+    "oidc.editorValues",
+];
 
 pub const REGISTRY: &[Definition] = &[
     // ── Answering ────────────────────────────────────────────────────────────
@@ -195,6 +215,72 @@ pub const REGISTRY: &[Definition] = &[
         kind: Kind::Bool,
         scopes: SERVER_ONLY,
     },
+    // ── Signing in through an identity provider ──────────────────────────────
+    Definition {
+        key: "oidc.enabled",
+        kind: Kind::Bool,
+        scopes: SERVER_ONLY,
+    },
+    Definition {
+        // The provider's issuer URL; its discovery document is read from it.
+        key: "oidc.issuer",
+        kind: Kind::Text,
+        scopes: SERVER_ONLY,
+    },
+    Definition {
+        key: "oidc.clientId",
+        kind: Kind::Text,
+        scopes: SERVER_ONLY,
+    },
+    Definition {
+        // AMS_OIDC_CLIENT_SECRET wins over this when it is set.
+        key: "oidc.clientSecret",
+        kind: Kind::Secret,
+        scopes: SERVER_ONLY,
+    },
+    Definition {
+        // Space-separated; `openid` is always asked for.
+        key: "oidc.scopes",
+        kind: Kind::Text,
+        scopes: SERVER_ONLY,
+    },
+    Definition {
+        key: "oidc.buttonLabel",
+        kind: Kind::Text,
+        scopes: SERVER_ONLY,
+    },
+    Definition {
+        // Open an account for someone the provider vouches for and who has
+        // none here yet.
+        key: "oidc.autoRegister",
+        kind: Kind::Bool,
+        scopes: SERVER_ONLY,
+    },
+    Definition {
+        // The claim roles are read from — `groups`, `realm_access.roles` — and
+        // the values that make an administrator or an editor. With a claim
+        // named, the provider decides the role at every sign-in.
+        key: "oidc.roleClaim",
+        kind: Kind::Text,
+        scopes: SERVER_ONLY,
+    },
+    Definition {
+        key: "oidc.adminValues",
+        kind: Kind::Text,
+        scopes: SERVER_ONLY,
+    },
+    Definition {
+        key: "oidc.editorValues",
+        kind: Kind::Text,
+        scopes: SERVER_ONLY,
+    },
+    Definition {
+        // Off, only the identity provider signs people in — except the
+        // account AMS_ADMIN_USERNAME names, which keeps a door.
+        key: "auth.passwordLogin",
+        kind: Kind::Bool,
+        scopes: SERVER_ONLY,
+    },
     Definition {
         // Members on the TMDB relay, which spends the operator's quota.
         key: "api.tmdbMembers",
@@ -302,6 +388,17 @@ pub fn validate(def: &Definition, value: &str) -> Result<(), String> {
                 Ok(())
             } else {
                 Err(format!("must be one of {}", options.join(", ")))
+            }
+        }
+        Kind::Secret => {
+            if value.contains(MASK) {
+                Err("is the mask a stored secret is shown as, not a secret".to_string())
+            } else if value.trim().is_empty() {
+                Err("must not be empty; clear it instead".to_string())
+            } else if value.len() > 1000 {
+                Err("is too long".to_string())
+            } else {
+                Ok(())
             }
         }
     }

@@ -13,13 +13,14 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
-import { Navigate } from 'react-router'
+import { Navigate, useLocation } from 'react-router'
 
 import { ChangePassword } from '../components/account/ChangePassword'
 import { RoleChip } from '../components/account/people'
 import { SecretReveal } from '../components/account/SecretReveal'
 import {
   Button,
+  ButtonLink,
   Chip,
   Dialog,
   EmptyState,
@@ -37,6 +38,7 @@ import {
 import { describeAgent } from '../lib/agent'
 import { ApiError, api } from '../lib/api'
 import { dateTime } from '../lib/format'
+import { useAuthOptions } from '../lib/hooks'
 import { LANGS, useI18n, type Lang } from '../lib/i18n'
 import type { AccountKeys, AccountSession, ApiClient, IssuedKey, User } from '../lib/types'
 
@@ -89,11 +91,49 @@ export function Account() {
               <p className="p-5 text-sm leading-relaxed text-bone-dim">{t.account.passwordNone}</p>
             )}
           </Panel>
+          <Provider me={me} />
           <Sessions />
         </div>
         <Keys />
       </div>
     </div>
+  )
+}
+
+/* ── The identity provider ────────────────────────────────────────────────── */
+
+/**
+ * Tying this account to the one its owner has at the identity provider: a
+ * sign-in there, started from here while signed in here, so both sides are
+ * proved by the same person. Offered only when a provider is set up.
+ */
+function Provider({ me }: { me: User }) {
+  const { t } = useI18n()
+  const options = useAuthOptions()
+  const { pathname } = useLocation()
+
+  if (!options.data?.oidc && !me.oidcLinked) return null
+
+  return (
+    <Panel label={t.account.provider} className="rise" style={{ animationDelay: '100ms' }}>
+      <PanelHead title={t.account.provider} />
+      <div className="space-y-4 p-5">
+        {me.oidcLinked ? (
+          <p className="flex items-center gap-2 text-sm text-bone">
+            <Glyph name="link" className="size-4 text-moss" />
+            {t.account.providerTied}
+          </p>
+        ) : (
+          <>
+            <p className="text-sm leading-relaxed text-bone-dim">{t.account.providerLead}</p>
+            <ButtonLink href={`/api/v1/auth/oidc/start?link=1&next=${encodeURIComponent(pathname)}`}>
+              <Glyph name="link" className="size-4" />
+              {t.account.providerTie}
+            </ButtonLink>
+          </>
+        )}
+      </div>
+    </Panel>
   )
 }
 

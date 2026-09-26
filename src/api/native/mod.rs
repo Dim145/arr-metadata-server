@@ -20,6 +20,7 @@ pub mod lists;
 pub mod locks;
 pub mod meta;
 pub mod network;
+pub mod oidc;
 pub mod orders;
 pub mod overrides;
 pub mod recommend;
@@ -58,6 +59,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(users::router())
         .merge(invitations::router())
         .merge(access::router())
+        .merge(oidc::router())
         .merge(auth::authenticated_router())
         .merge(crate::api::audit::router())
 }
@@ -65,5 +67,7 @@ pub fn router() -> OpenApiRouter<AppState> {
 /// Routes that must stay reachable without a credential, or nobody could ever
 /// obtain one.
 pub fn public_router() -> OpenApiRouter<AppState> {
-    auth::public_router().merge(signup::router())
+    auth::public_router()
+        .merge(signup::router())
+        .merge(oidc::public_router())
 }

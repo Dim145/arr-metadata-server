@@ -24,6 +24,7 @@ import {
   Skeleton,
   Toggle,
 } from '../../components/ui'
+import { OidcSettings } from '../../components/account/OidcSettings'
 import { api } from '../../lib/api'
 import { cn } from '../../lib/cn'
 import { relative } from '../../lib/format'
@@ -264,6 +265,9 @@ export function Access() {
             <p>{a.uptime(relative(started, locale) ?? '')}</p>
           </div>
         </Question>
+
+        {/* 4 · the identity provider */}
+        <OidcSettings number={4} delay={200} />
 
         {/* Keys per member */}
         <Panel label={a.keysTitle} className="rise" style={{ animationDelay: '200ms' }}>

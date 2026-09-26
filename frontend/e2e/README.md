@@ -11,12 +11,16 @@ cd frontend && npm run build          # the binary serves frontend/dist
 
 AMS_PUBLIC_BROWSE=true \
 AMS_SIGNUPS_PER_HOUR=1000 AMS_SIGNUPS_PER_HOUR_TOTAL=1000 \
-AMS_BIND_ADDRESS=127.0.0.1:8479 \
+AMS_BIND_ADDRESS=127.0.0.1:8479 AMS_PUBLIC_URL=http://127.0.0.1:8479 \
 AMS_DATABASE_URL='sqlite://data/e2e.db?mode=rwc' \
 AMS_ADMIN_USERNAME=admin AMS_ADMIN_PASSWORD='choose-one' \
 AMS_RATE_LIMIT_PER_MINUTE=6000 \
   ./target/debug/arr-metadata-server
 ```
+
+`AMS_PUBLIC_URL` is what the identity provider sends people back to; without
+it `oidc.serial.spec.ts` stands aside. That spec brings its own provider
+(`support/oidc-provider.ts`), which listens on a free port of 127.0.0.1.
 
 `AMS_PUBLIC_BROWSE=true` gives a new database a public site; after that the
 *Opening & APIs* page decides, and the suite expects it public. The sign-up

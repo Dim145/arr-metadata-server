@@ -441,6 +441,37 @@ API answers `503`, which Sonarr and Radarr read as "try again later".
 that they are a way back in: when no active administrator is left, a restart
 makes the account they name an active administrator again, with that password.
 
+### Signing in through an identity provider
+
+Any OpenID Connect provider with a discovery document — Authentik, Keycloak,
+Authelia, Kanidm, Google — can sign people in, set up on *Opening & APIs*:
+the issuer, a client ID and its secret (or `AMS_OIDC_CLIENT_SECRET`, which wins
+and keeps it out of the database), the scopes. Register
+`{AMS_PUBLIC_URL}/api/v1/auth/oidc/callback` at the provider as the return
+address; without `AMS_PUBLIC_URL` there is none, and the button is not offered.
+
+The flow is the authorization code with PKCE, a state and a nonce, carried in
+a cookie sealed with a key only the running server holds (`__Host-` over
+HTTPS); the ID token's signature — asymmetric only — issuer, audience, expiry
+and `at_hash` are checked. The issuer, and every endpoint it publishes, must be
+HTTPS unless it is a local address. A returning person is found by the
+provider's own identifier. Someone who already has an account here ties it to
+theirs at the provider from their account page, signed in, which proves both
+sides; nothing is ever tied by e-mail, since an address typed into a profile
+proves nothing. Otherwise, if allowed, an account is opened — a member's, or
+the role a claim gives (`groups`, a path such as `realm_access.roles`, or a
+namespaced `https://…/roles`, with the values that make an administrator or an
+editor). With a claim named, the provider decides the role at every sign-in,
+but never takes away the last administrator, and a sign-in whose claims did
+not carry it changes nobody's role.
+
+Password sign-in can then be switched off — only once the provider answers its
+discovery test, and only when somebody could still be let back in: the
+administrator switching it off is tied to the provider, or `AMS_ADMIN_USERNAME`
+names an active administrator, whose password keeps working for the day the
+provider is down. Sign-ups by password close with it. `AMS_FORCE_PASSWORD_LOGIN=true`
+turns passwords back on whatever the settings say.
+
 ### Feeds
 
 The schedule, and one work's dates, as calendars a phone or a desktop

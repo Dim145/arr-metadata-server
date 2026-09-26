@@ -217,6 +217,48 @@ pub async fn find_by_username(db: &Db, username: &str) -> Result<Option<Credenti
     }))
 }
 
+/// The account an identity provider names.
+pub async fn find_by_oidc(db: &Db, issuer: &str, subject: &str) -> Result<Option<User>> {
+    let row = sqlx::query(db.sql(&format!(
+        "SELECT {COLUMNS} FROM admin_user WHERE oidc_issuer = ? AND oidc_subject = ?"
+    )))
+    .bind(issuer)
+    .bind(subject)
+    .fetch_optional(db.pool())
+    .await?;
+
+    row.as_ref().map(map).transpose()
+}
+
+/// Tie an account to the identity provider that vouches for it.
+pub async fn link_oidc(db: &Db, id: &str, issuer: &str, subject: &str) -> Result<bool> {
+    let result = sqlx::query(db.sql(
+        "UPDATE admin_user SET oidc_issuer = ?, oidc_subject = ?, updated_at = ? WHERE id = ?",
+    ))
+    .bind(issuer)
+    .bind(subject)
+    .bind(now())
+    .bind(id)
+    .execute(db.pool())
+    .await?;
+
+    Ok(result.rows_affected() > 0)
+}
+
+/// Untie an account from its identity provider, so it can be tied again —
+/// to another account there, say, or after the provider was changed.
+pub async fn unlink_oidc(db: &Db, id: &str) -> Result<bool> {
+    let result = sqlx::query(db.sql(
+        "UPDATE admin_user SET oidc_issuer = NULL, oidc_subject = NULL, updated_at = ? WHERE id = ?",
+    ))
+    .bind(now())
+    .bind(id)
+    .execute(db.pool())
+    .await?;
+
+    Ok(result.rows_affected() > 0)
+}
+
 /// An account and its password hash, by id: what checking the password of
 /// someone already signed in reads, rather than their username, which another
 /// account could share but for its case.

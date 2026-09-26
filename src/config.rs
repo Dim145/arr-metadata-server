@@ -121,6 +121,14 @@ pub struct Security {
     /// without an invitation.
     pub signups_per_hour: usize,
     pub signups_per_hour_total: usize,
+    /// The identity provider's client secret, when the environment holds it
+    /// rather than the settings: it wins over a stored one, and keeps the
+    /// secret out of the database and its backups.
+    pub oidc_client_secret: Option<String>,
+    /// AMS_FORCE_PASSWORD_LOGIN: passwords stay on whatever the settings say —
+    /// the way back in when the identity provider fails and nobody kept a
+    /// door.
+    pub force_password_login: bool,
     pub native_policy: SurfacePolicy,
     pub tmdb_policy: SurfacePolicy,
     pub arr_policy: SurfacePolicy,
@@ -327,6 +335,8 @@ impl Config {
                 },
                 signups_per_hour: num(&["AMS_SIGNUPS_PER_HOUR"], 5)?,
                 signups_per_hour_total: num(&["AMS_SIGNUPS_PER_HOUR_TOTAL"], 100)?,
+                oidc_client_secret: opt(&["AMS_OIDC_CLIENT_SECRET"]),
+                force_password_login: flag(&["AMS_FORCE_PASSWORD_LOGIN"], false)?,
                 native_policy: policy(&["AMS_NATIVE_AUTH"], SurfacePolicy::ApiKey)?,
                 tmdb_policy: policy(&["AMS_TMDB_AUTH"], SurfacePolicy::ApiKey)?,
                 arr_policy: policy(&["AMS_ARR_AUTH"], SurfacePolicy::Allowlist)?,

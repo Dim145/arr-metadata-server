@@ -552,6 +552,18 @@ async fn resolve_key(
 #[derive(Clone, Debug)]
 pub struct CurrentSession(pub String);
 
+/// The person a request's session belongs to, for a route outside the guards
+/// that still wants to know — tying an account to the identity provider.
+pub(crate) async fn session_user(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> AppResult<Option<crate::db::repo::user::User>> {
+    Ok(match resolve_session(state, headers).await? {
+        Some((Identity::User(user), _)) => Some(*user),
+        _ => None,
+    })
+}
+
 async fn resolve_session(
     state: &AppState,
     headers: &HeaderMap,

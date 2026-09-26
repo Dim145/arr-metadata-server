@@ -319,6 +319,53 @@ export type Registration = 'closed' | 'invite' | 'approval' | 'open'
 export interface AuthOptions {
   site: 'public' | 'private'
   registration: Registration
+  /** Whether the password form is offered to everyone. */
+  passwordLogin: boolean
+  /** The identity provider's button, when signing in through one is on. */
+  oidc?: { label?: string }
+}
+
+/** How people sign in through the identity provider, as an administrator sets it. */
+export interface OidcConfiguration {
+  enabled: boolean
+  issuer: string
+  clientId: string
+  /** A secret is stored; it is never sent back. */
+  secretSet: boolean
+  /** AMS_OIDC_CLIENT_SECRET holds it, and wins. */
+  secretFromEnv: boolean
+  scopes: string
+  buttonLabel: string
+  autoRegister: boolean
+  roleClaim: string
+  adminValues: string
+  editorValues: string
+  passwordLogin: boolean
+  /** AMS_FORCE_PASSWORD_LOGIN keeps passwords on whatever is set. */
+  passwordForced: boolean
+  /** To register at the provider; absent without AMS_PUBLIC_URL. */
+  redirectUri?: string
+  ready: boolean
+  /** The account AMS_ADMIN_USERNAME names, which keeps its password. */
+  breakGlass?: string
+}
+
+/** What the test button found, or why it found nothing. */
+export interface OidcTest {
+  ok: boolean
+  error?: string
+  discovery?: OidcDiscovery
+}
+
+/** What the provider's discovery document said. */
+export interface OidcDiscovery {
+  issuer: string
+  authorizationEndpoint: string
+  tokenEndpoint?: string
+  userinfoEndpoint?: string
+  keys: number
+  signingAlgorithms: string[]
+  scopes: string[]
 }
 
 export interface InvitationOffer {
@@ -795,6 +842,8 @@ export type SettingKind =
   | { type: 'int'; min: number; max: number }
   | { type: 'text' }
   | { type: 'choice'; options: string[] }
+  /** Written, never read back: shown masked, and only on its own page. */
+  | { type: 'secret' }
 
 export type SettingScope = 'server' | 'client' | 'peer'
 

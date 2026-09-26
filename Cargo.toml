@@ -63,6 +63,13 @@ getrandom = "0.4.3"
 base64 = "0.23.1"
 sha2 = "0.11.0"
 subtle = "2.6.1"
+# Signing in through an identity provider. No default features: its reqwest
+# is an older one, and the requests go through this crate's own client
+# (see `auth::oidc`), which never follows a redirect.
+openidconnect = { version = "4.0.1", default-features = false }
+# The lifetime of the cookie a sign-in through the provider travels in; the
+# version the cookie crate already brings.
+time = { version = "0.3.55", default-features = false }
 ipnet = { version = "2.12.2", features = ["serde"] }
 governor = "0.10.4"
 

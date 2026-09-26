@@ -104,6 +104,16 @@ async fn put(
 
     let (scope, id) = address(&scope, &id)?;
 
+    // The identity provider and the password switch are written as a whole,
+    // where they are checked together — a password switch stored here would
+    // wait, unchecked, for the provider to become ready and lock the door.
+    if write.key.starts_with("oidc.") || write.key.starts_with("auth.") {
+        return Err(AppError::BadRequest(format!(
+            "{} is set with the identity provider, on the Opening & APIs page",
+            write.key
+        )));
+    }
+
     match write.value {
         Some(value) => state
             .settings
@@ -121,6 +131,15 @@ async fn put(
 
     state.sync_providers().await;
 
+    // A secret's value never reaches the journal: only that it moved.
+    let now_set = state.settings.at(scope, &id, &write.key);
+    let detail = match crate::settings::registry::find(&write.key) {
+        Some(def) if def.kind.is_secret() => {
+            Some(if now_set.is_some() { "set" } else { "cleared" })
+        }
+        _ => now_set.as_deref().or(Some("inherited")),
+    };
+
     audit::record(
         &state,
         Event {
@@ -128,11 +147,7 @@ async fn put(
             ip: &ip,
             action: Action::SettingChanged,
             target: Some(&format!("{}:{}", scope.as_str(), write.key)),
-            detail: state
-                .settings
-                .at(scope, &id, &write.key)
-                .as_deref()
-                .or(Some("inherited")),
+            detail,
         },
     )
     .await;

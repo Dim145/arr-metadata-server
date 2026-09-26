@@ -92,6 +92,20 @@ async fn login(
         return Err(AppError::Unauthorized);
     }
 
+    // Passwords switched off: the identity provider signs people in, and only
+    // the account the environment names keeps a door — the way back in when
+    // the provider is down, and only while it is an active administrator.
+    // Every refusal then reads the same, a wrong password on that door
+    // included, so nobody learns which name it is.
+    let passwords_off = !state.password_login();
+    let refused = || AppError::Refused {
+        code: "password_login_off",
+        message: "this server signs people in through its identity provider".into(),
+    };
+    if passwords_off && !state.is_break_glass_name(&request.username) {
+        return Err(refused());
+    }
+
     let found = repo::user::find_by_username(&state.db, request.username.trim()).await?;
 
     // Verify even when the user does not exist, so a wrong username and a wrong
@@ -135,8 +149,18 @@ async fn login(
         )
         .await;
 
-        return Err(AppError::Unauthorized);
+        return Err(if passwords_off {
+            refused()
+        } else {
+            AppError::Unauthorized
+        });
     };
+
+    if passwords_off
+        && !(user.role == repo::user::Role::Admin && user.status == repo::user::Status::Active)
+    {
+        return Err(refused());
+    }
 
     // Told only to whoever proved the password: the account exists, and why it
     // may not come in yet.
@@ -224,7 +248,7 @@ pub(crate) async fn open_session(
 /// explain it. Set where it can be honoured: this server terminating TLS
 /// itself, or a public URL that says `https` because something in front of it
 /// does.
-fn secure_flag(state: &AppState) -> &'static str {
+pub(crate) fn secure_flag(state: &AppState) -> &'static str {
     let terminates_tls = state.config.server.tls.is_some();
     let published_over_tls = state
         .config

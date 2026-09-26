@@ -94,6 +94,10 @@ pub struct Inner {
     accounts: tokio::sync::Mutex<()>,
     /// What each API answered since the start.
     pub calls: Calls,
+    /// Seals the cookies a sign-in through the identity provider travels in.
+    /// Made at start and never stored: a restart only costs a sign-in that
+    /// was halfway through, which is asked again.
+    pub cookie_key: axum_extra::extract::cookie::Key,
 }
 
 impl std::ops::Deref for AppState {
@@ -190,6 +194,7 @@ impl AppState {
             instance,
             accounts: tokio::sync::Mutex::new(()),
             calls: Calls::default(),
+            cookie_key: axum_extra::extract::cookie::Key::generate(),
         }));
 
         state.bootstrap_admin().await?;
@@ -262,6 +267,10 @@ impl AppState {
                 // Off: the relay spends the operator's TMDB quota, and with
                 // sign-ups open a member is anybody.
                 ("api.tmdbMembers", "false".to_string()),
+                ("oidc.enabled", "false".to_string()),
+                ("oidc.scopes", "openid profile email".to_string()),
+                ("oidc.autoRegister", "false".to_string()),
+                ("auth.passwordLogin", "true".to_string()),
                 (
                     "webhooks.events",
                     crate::service::webhook::DEFAULT_EVENTS.to_string(),
@@ -391,6 +400,129 @@ impl AppState {
     /// setting says.
     pub fn site_locked(&self) -> bool {
         self.config.security.public_browse_env == Some(false)
+    }
+
+    /// A setting's text, when it says something.
+    fn text(&self, key: &str) -> Option<String> {
+        self.settings
+            .resolve(key, None, None)
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+    }
+
+    /// Where the identity provider sends a browser back: this server's public
+    /// address, which the provider must know in advance — so without
+    /// AMS_PUBLIC_URL there is none, rather than one guessed from a header.
+    pub fn oidc_redirect_uri(&self) -> Option<String> {
+        self.config
+            .server
+            .public_url
+            .as_deref()
+            .map(|base| format!("{base}/api/v1/auth/oidc/callback"))
+    }
+
+    /// The identity provider, when signing in through it is on and every
+    /// part of it is set.
+    pub fn oidc_provider(&self) -> Option<crate::auth::oidc::Provider> {
+        self.oidc_provider_from(&|key| self.settings.resolve(key, None, None))
+    }
+
+    /// The identity provider the settings `setting` reads would make: what a
+    /// change is checked against before it is written.
+    pub fn oidc_provider_from(
+        &self,
+        setting: &dyn Fn(&str) -> Option<String>,
+    ) -> Option<crate::auth::oidc::Provider> {
+        let text = |key: &str| {
+            setting(key)
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+        };
+        if text("oidc.enabled").as_deref() != Some("true") {
+            return None;
+        }
+
+        let mut scopes: Vec<String> = text("oidc.scopes")
+            .unwrap_or_else(|| "openid profile email".into())
+            .split_whitespace()
+            .map(str::to_string)
+            .collect();
+        if !scopes.iter().any(|s| s == "openid") {
+            scopes.insert(0, "openid".into());
+        }
+
+        Some(crate::auth::oidc::Provider {
+            issuer: text("oidc.issuer")?,
+            client_id: text("oidc.clientId")?,
+            client_secret: self
+                .config
+                .security
+                .oidc_client_secret
+                .clone()
+                .or_else(|| text("oidc.clientSecret")),
+            scopes,
+            redirect_uri: self.oidc_redirect_uri()?,
+        })
+    }
+
+    /// Whether `name` is the account the environment names: the one that
+    /// keeps a password door, which no sign-up and no provider may claim.
+    pub fn is_break_glass_name(&self, name: &str) -> bool {
+        self.config
+            .security
+            .bootstrap_admin
+            .as_ref()
+            .is_some_and(|(door, _)| door.eq_ignore_ascii_case(name.trim()))
+    }
+
+    /// Whether that door opens onto anything: the account exists, is an
+    /// active administrator, and has a password.
+    pub async fn break_glass_ready(&self) -> anyhow::Result<bool> {
+        let Some((name, _)) = self.config.security.bootstrap_admin.as_ref() else {
+            return Ok(false);
+        };
+        Ok(repo::user::find_by_username(&self.db, name)
+            .await?
+            .is_some_and(|found| {
+                found.user.role == repo::user::Role::Admin
+                    && found.user.status == repo::user::Status::Active
+                    && found.password_hash != repo::user::NO_PASSWORD
+            }))
+    }
+
+    /// How the provider's claims become a role here.
+    pub fn oidc_mapping(&self) -> crate::auth::oidc::RoleMapping {
+        let values = |key: &str| {
+            self.text(key)
+                .map(|v| {
+                    v.split([',', ' '])
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+
+        crate::auth::oidc::RoleMapping {
+            claim: self.text("oidc.roleClaim"),
+            admin: values("oidc.adminValues"),
+            editor: values("oidc.editorValues"),
+        }
+    }
+
+    /// What the sign-in page's button says.
+    pub fn oidc_button(&self) -> Option<String> {
+        self.text("oidc.buttonLabel")
+    }
+
+    /// Whether the password form is offered. Off, only the account
+    /// AMS_ADMIN_USERNAME names may still sign in with one — the way back in
+    /// when the provider is down.
+    pub fn password_login(&self) -> bool {
+        self.config.security.force_password_login
+            || self.flag("auth.passwordLogin", true)
+            || self.oidc_provider().is_none()
     }
 
     /// Whether members, in person or with their keys, may use the TMDB relay.
@@ -561,6 +693,9 @@ impl AppState {
             repo::user::set_status(&self.db, id, repo::user::Status::Active).await?;
             repo::user::set_password(&self.db, id, &hash).await?;
             repo::user::delete_sessions_for_user(&self.db, id).await?;
+            // Whoever it was tied to at the identity provider is not who the
+            // environment's password is for.
+            repo::user::unlink_oidc(&self.db, id).await?;
 
             tracing::warn!(
                 %username,

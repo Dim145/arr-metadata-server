@@ -134,7 +134,12 @@ impl Store {
         if let Some(value) = self.at(scope, scope_id, def.key) {
             return Some(Effective {
                 key: def.key.to_string(),
-                value,
+                // Set, and never shown: what it is stays on the server.
+                value: if def.kind.is_secret() {
+                    registry::MASK.to_string()
+                } else {
+                    value
+                },
                 source: scope.as_str().to_string(),
                 overridden: true,
             });
@@ -149,7 +154,11 @@ impl Store {
 
         inherited.map(|value| Effective {
             key: def.key.to_string(),
-            value,
+            value: if def.kind.is_secret() {
+                registry::MASK.to_string()
+            } else {
+                value
+            },
             source: Scope::Server.as_str().to_string(),
             overridden: false,
         })

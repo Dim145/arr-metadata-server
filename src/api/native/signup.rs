@@ -181,6 +181,19 @@ pub struct AuthOptions {
     /// sign in first.
     pub site: &'static str,
     pub registration: Registration,
+    /// Whether the password form is offered to everyone.
+    pub password_login: bool,
+    /// The identity provider's button, when signing in through one is on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub oidc: Option<OidcButton>,
+}
+
+#[derive(Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct OidcButton {
+    /// What the button says; the interface words its own when this is absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 /// What the sign-in page offers: whether one may sign up, and how.
@@ -196,7 +209,17 @@ async fn options(State(state): State<AppState>) -> Json<AuthOptions> {
         } else {
             "private"
         },
-        registration: state.registration(),
+        // Sign-ups open accounts with a password: none while passwords are
+        // off.
+        registration: if state.password_login() {
+            state.registration()
+        } else {
+            Registration::Closed
+        },
+        password_login: state.password_login(),
+        oidc: state.oidc_provider().map(|_| OidcButton {
+            label: state.oidc_button(),
+        }),
     })
 }
 
@@ -231,7 +254,7 @@ async fn check_invitation(
     State(state): State<AppState>,
     Json(request): Json<InvitationCheck>,
 ) -> AppResult<Json<InvitationOffer>> {
-    if state.registration() == Registration::Closed {
+    if state.registration() == Registration::Closed || !state.password_login() {
         return Err(closed());
     }
 
@@ -285,7 +308,9 @@ async fn register(
     Json(request): Json<RegisterRequest>,
 ) -> AppResult<Response> {
     let mode = state.registration();
-    if mode == Registration::Closed {
+    // A password account, where passwords do not open the door, would be a
+    // way in around the identity provider.
+    if mode == Registration::Closed || !state.password_login() {
         return Err(closed());
     }
 
@@ -295,6 +320,13 @@ async fn register(
     }
 
     let username = users::clean_username(&request.username)?;
+    // The name the environment gives its administrator is theirs alone: it
+    // keeps a password door, and the account it names is restored to them.
+    if state.is_break_glass_name(&username) {
+        return Err(AppError::Conflict(format!(
+            "the username {username:?} is taken"
+        )));
+    }
     let display_name = users::clean_display_name(request.display_name.as_deref())?;
     let email = users::clean_email(request.email.as_deref())?;
 

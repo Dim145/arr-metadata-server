@@ -152,6 +152,7 @@ export function UserDetail() {
 
           <ProfileEditor user={user} onSaved={refresh} />
           <PasswordReset id={id} />
+          {user.oidcLinked ? <ProviderLink user={user} onChanged={refresh} /> : null}
         </div>
 
         <div className="space-y-6">
@@ -287,6 +288,50 @@ function PasswordReset({ id }: { id: string }) {
           <SecretReveal title={t.admin.people.resetDone} secret={reset.data.password} onDismiss={() => reset.reset()} />
         ) : null}
       </form>
+    </Panel>
+  )
+}
+
+/** The tie to the identity provider, and the way to undo it. */
+function ProviderLink({ user, onChanged }: { user: User; onChanged: () => void }) {
+  const { t } = useI18n()
+  const [asking, setAsking] = useState(false)
+
+  const unlink = useMutation({
+    mutationFn: () => api.delete(`/users/${encodeURIComponent(user.id)}/oidc`),
+    onSuccess: () => {
+      setAsking(false)
+      onChanged()
+    },
+  })
+
+  return (
+    <Panel label={t.admin.people.linked} className="rise" style={{ animationDelay: '120ms' }}>
+      <div className="flex flex-wrap items-center justify-between gap-3 p-5">
+        <Chip tone="provider">
+          <Glyph name="link" className="size-3" />
+          {t.admin.people.linked}
+        </Chip>
+        <Button size="sm" variant="danger" onClick={() => setAsking(true)}>
+          {t.admin.people.unlink}
+        </Button>
+      </div>
+      <Dialog
+        open={asking}
+        title={t.admin.people.unlinkTitle}
+        onClose={() => setAsking(false)}
+        footer={
+          <>
+            <Button onClick={() => setAsking(false)}>{t.account.cancel}</Button>
+            <Button variant="danger" disabled={unlink.isPending} onClick={() => unlink.mutate()}>
+              {unlink.isPending ? <Spinner className="size-4" /> : null}
+              {t.admin.people.unlink}
+            </Button>
+          </>
+        }
+      >
+        <p className="text-sm leading-relaxed text-bone-dim">{t.admin.people.unlinkBody}</p>
+      </Dialog>
     </Panel>
   )
 }

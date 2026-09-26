@@ -6,6 +6,7 @@
 pub mod ip;
 pub mod middleware;
 pub mod naming;
+pub mod oidc;
 pub mod ratelimit;
 pub mod secrets;
 
