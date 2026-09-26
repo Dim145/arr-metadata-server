@@ -26,6 +26,7 @@ use crate::{
     db::repo::audit::Action,
     domain::{MediaItem, MediaKind},
     error::{AppError, AppResult},
+    providers::names,
     service,
     state::AppState,
 };
@@ -42,11 +43,20 @@ pub fn router() -> OpenApiRouter<AppState> {
 #[into_params(parameter_in = Query)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchQuery {
+    /// A title, a `prefix:id` lookup (`tvdb:81189`, `imdb:tt0903747`…), or the
+    /// address of the work's page at TMDB, IMDb, TheTVDB, AniList, MyAnimeList
+    /// or Fankai.
     pub term: String,
     /// `series` or `movie`. Both are searched when this is absent.
     pub kind: Option<String>,
     #[serde(default, deserialize_with = "crate::api::extract::empty_as_none")]
     pub year: Option<i32>,
+    /// One source to ask, rather than the usual order: `tmdb`, `tvdb`,
+    /// `skyhook` or `fankai` for series, `tmdb` or `radarr` for films. The
+    /// usual order stops at the first that finds anything; this finds what
+    /// that one has, even when another would have answered first.
+    #[serde(default, deserialize_with = "crate::api::extract::empty_as_none")]
+    pub source: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -89,31 +99,58 @@ async fn search(
 ) -> AppResult<Json<Vec<Found>>> {
     require_write(&identity)?;
 
-    let term = query.term.trim();
+    // A page pasted whole is the lookup it stands for, and says which kind it
+    // is when its address does.
+    let (term, kind_of_link) = match from_link(&query.term) {
+        Some((lookup, kind)) => (lookup, kind),
+        None => (query.term.trim().to_string(), None),
+    };
+    let term = term.as_str();
     if term.is_empty() {
         return Ok(Json(Vec::new()));
     }
 
-    let wanted = query
+    let asked = query
         .kind
         .as_deref()
         .map(str::parse::<MediaKind>)
         .transpose()
         .map_err(|e| AppError::BadRequest(e.to_string()))?;
+    let wanted = kind_of_link.or(asked);
+
+    // A lookup names its own source; one chosen beside it has nothing to add.
+    let source = match query.source.as_deref().map(str::trim) {
+        Some(source) if !is_lookup(term) => Some(chosen(&state, source)?),
+        _ => None,
+    };
 
     let mut found = Vec::new();
 
     if wanted != Some(MediaKind::Movie) {
-        match service::series::search(&state, term).await {
+        let hits = match source {
+            Some(source) if SERIES_SOURCES.contains(&source) => {
+                service::series::search_at(&state, source, term).await
+            }
+            Some(_) => Ok(Vec::new()),
+            None => service::series::search(&state, term).await,
+        };
+        match hits {
             Ok(hits) => found.extend(hits.iter().map(describe)),
-            Err(e) => tracing::warn!(term, error = %e, "series search failed"),
+            Err(e) => tracing::warn!(term, ?source, error = %e, "series search failed"),
         }
     }
 
     if wanted != Some(MediaKind::Series) {
-        match service::movie::search(&state, term, query.year).await {
+        let hits = match source {
+            Some(source) if MOVIE_SOURCES.contains(&source) => {
+                service::movie::search_at(&state, source, term, query.year).await
+            }
+            Some(_) => Ok(Vec::new()),
+            None => service::movie::search(&state, term, query.year).await,
+        };
+        match hits {
             Ok(hits) => found.extend(hits.iter().map(describe)),
-            Err(e) => tracing::warn!(term, error = %e, "movie search failed"),
+            Err(e) => tracing::warn!(term, ?source, error = %e, "movie search failed"),
         }
     }
 
@@ -268,9 +305,174 @@ async fn held(state: &AppState, hit: &Found) -> bool {
     false
 }
 
+/// The sources a search can be sent to alone, by kind.
+const SERIES_SOURCES: &[&str] = &[names::TMDB, names::TVDB, names::SKYHOOK, names::FANKAI];
+const MOVIE_SOURCES: &[&str] = &[names::TMDB, names::RADARR];
+
+/// The source asked for, as long as it is one and it is on.
+fn chosen(state: &AppState, source: &str) -> AppResult<&'static str> {
+    let known = SERIES_SOURCES
+        .iter()
+        .chain(MOVIE_SOURCES)
+        .copied()
+        .find(|known| *known == source)
+        .ok_or_else(|| AppError::BadRequest(format!("{source} cannot be searched on its own")))?;
+
+    if !service::gather::switched_on(state, known) {
+        return Err(AppError::BadRequest(format!("{known} is switched off")));
+    }
+    Ok(known)
+}
+
+fn is_lookup(term: &str) -> bool {
+    !matches!(
+        service::ids::classify(term),
+        service::ids::TermLookup::Text(_)
+    )
+}
+
+/// The lookup a provider's page stands for: its address pasted whole, as the
+/// `prefix:id` term the search already understands, and the kind of work
+/// when the address says.
+fn from_link(term: &str) -> Option<(String, Option<MediaKind>)> {
+    let url = url::Url::parse(term.trim()).ok()?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return None;
+    }
+
+    let host = url.host_str()?.to_ascii_lowercase();
+    let host = host
+        .strip_prefix("www.")
+        .or_else(|| host.strip_prefix("m."))
+        .unwrap_or(&host);
+    let parts: Vec<&str> = url
+        .path_segments()
+        .map(|segments| segments.filter(|s| !s.is_empty()).collect())
+        .unwrap_or_default();
+
+    // `1396-breaking-bad`, `21`: the number a slug starts with.
+    let number = |segment: &str| -> Option<i64> {
+        let digits: String = segment.chars().take_while(char::is_ascii_digit).collect();
+        digits.parse().ok()
+    };
+
+    match (host, parts.as_slice()) {
+        ("themoviedb.org", ["tv", id, ..]) => {
+            Some((format!("tmdb:{}", number(id)?), Some(MediaKind::Series)))
+        }
+        ("themoviedb.org", ["movie", id, ..]) => {
+            Some((format!("tmdb:{}", number(id)?), Some(MediaKind::Movie)))
+        }
+        // In the reader's language too: `/fr/title/tt…`.
+        ("imdb.com", ["title", id, ..]) | ("imdb.com", [_, "title", id, ..]) if is_tconst(id) => {
+            Some((format!("imdb:{id}"), None))
+        }
+        ("anilist.co", ["anime", id, ..]) => {
+            Some((format!("anilist:{}", number(id)?), Some(MediaKind::Series)))
+        }
+        ("myanimelist.net", ["anime", id, ..]) => {
+            Some((format!("mal:{}", number(id)?), Some(MediaKind::Series)))
+        }
+        ("fankai.fr", ["productions", id, ..]) => {
+            Some((format!("fankai:{}", number(id)?), Some(MediaKind::Series)))
+        }
+        // TheTVDB's pages are named by slug; only its older addresses, and the
+        // ones it redirects through, carry the number.
+        ("thetvdb.com", ["dereferrer", "series", id, ..]) | ("thetvdb.com", ["series", id, ..]) => {
+            number(id)
+                .filter(|_| id.bytes().all(|b| b.is_ascii_digit()))
+                .map(|id| (format!("tvdb:{id}"), Some(MediaKind::Series)))
+        }
+        ("thetvdb.com", _) => url
+            .query_pairs()
+            .find(|(key, _)| key == "id" || key == "seriesid")
+            .and_then(|(_, value)| value.parse::<i64>().ok())
+            .map(|id| (format!("tvdb:{id}"), Some(MediaKind::Series))),
+        _ => None,
+    }
+}
+
+/// `tt0903747`: an IMDb title's id, and nothing else.
+fn is_tconst(id: &str) -> bool {
+    id.len() > 2 && id.starts_with("tt") && id[2..].bytes().all(|b| b.is_ascii_digit())
+}
+
 fn require_write(identity: &Identity) -> AppResult<()> {
     identity
         .can_write()
         .then_some(())
         .ok_or(AppError::Forbidden)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_pasted_page_is_the_lookup_it_stands_for() {
+        let cases = [
+            (
+                "https://www.themoviedb.org/tv/1396-breaking-bad?language=fr",
+                "tmdb:1396",
+                Some(MediaKind::Series),
+            ),
+            (
+                "https://www.themoviedb.org/movie/603-the-matrix",
+                "tmdb:603",
+                Some(MediaKind::Movie),
+            ),
+            (
+                "https://m.imdb.com/title/tt0903747/",
+                "imdb:tt0903747",
+                None,
+            ),
+            (
+                "https://www.imdb.com/fr/title/tt0903747/?ref_=nv_sr",
+                "imdb:tt0903747",
+                None,
+            ),
+            (
+                "https://anilist.co/anime/21/ONE-PIECE/",
+                "anilist:21",
+                Some(MediaKind::Series),
+            ),
+            (
+                "https://myanimelist.net/anime/21/One_Piece",
+                "mal:21",
+                Some(MediaKind::Series),
+            ),
+            (
+                "https://fankai.fr/productions/42",
+                "fankai:42",
+                Some(MediaKind::Series),
+            ),
+            (
+                "https://thetvdb.com/dereferrer/series/81189",
+                "tvdb:81189",
+                Some(MediaKind::Series),
+            ),
+            (
+                "https://thetvdb.com/?tab=series&id=81189",
+                "tvdb:81189",
+                Some(MediaKind::Series),
+            ),
+        ];
+        for (link, lookup, kind) in cases {
+            assert_eq!(from_link(link), Some((lookup.to_string(), kind)), "{link}");
+        }
+    }
+
+    #[test]
+    fn anything_else_is_searched_as_typed() {
+        for term in [
+            "Breaking Bad",
+            "tvdb:81189",
+            "https://thetvdb.com/series/breaking-bad",
+            "https://www.imdb.com/title/nm0000123/",
+            "https://example.com/tv/1396",
+            "ftp://themoviedb.org/tv/1396",
+        ] {
+            assert_eq!(from_link(term), None, "{term}");
+        }
+    }
 }

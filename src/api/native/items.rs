@@ -31,6 +31,8 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(detail, update, remove))
         .routes(routes!(refresh))
         .routes(routes!(snapshots))
+        .routes(routes!(provenance))
+        .routes(routes!(sync))
 }
 
 #[derive(Deserialize, IntoParams)]
@@ -618,6 +620,262 @@ pub struct SnapshotQuery {
 
 fn yes() -> bool {
     true
+}
+
+/// One provider a work could be synced from.
+#[derive(Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncSource {
+    /// `tmdb`, `tvdb`, `skyhook`…
+    pub provider: String,
+    /// When it last answered for this work, if it ever has.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fetched_at: Option<String>,
+    /// Why it cannot be asked now, when it cannot.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unavailable: Option<service::gather::Unavailable>,
+    /// Asked along with it, because part of what it gives is theirs.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub brings: Vec<String>,
+}
+
+/// Where a work's values came from, and what it can be synced from.
+#[derive(Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ProvenanceReport {
+    /// Who gave what, as the last merge worked out. Absent for a work entered
+    /// by hand, and for one not refreshed since the server began keeping it:
+    /// such a work can only be refreshed in full.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<crate::merge::provenance::Provenance>,
+    /// Every provider that could describe the work, in the order a refresh
+    /// asks them.
+    pub sources: Vec<SyncSource>,
+}
+
+/// Who gave the work its values, and whom it can be synced from.
+///
+/// Field by field the provider whose value was kept, those that said the
+/// same, those that said otherwise and those ahead of it that said nothing;
+/// the images by source; the provider of the episode list. For the people who
+/// keep the catalogue — a field locked by hand says so in the work itself.
+#[utoipa::path(
+    get, path = "/items/{id}/provenance", tag = TAG,
+    params(("id" = String, Path, description = "The work's identifier")),
+    responses(
+        (status = 200, body = ProvenanceReport),
+        (status = 403, description = "The caller may not write"),
+        (status = 404, description = "No such work"),
+    ),
+)]
+async fn provenance(
+    State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
+    Path(id): Path<String>,
+) -> AppResult<Json<ProvenanceReport>> {
+    require_write(&identity)?;
+
+    let stored = repo::item::get(&state.db, &id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let provenance = repo::item::provenance(&state.db, &id).await?;
+    let fetched = repo::snapshot::fetched(&state.db, &id).await?;
+
+    let sources = if stored.is_manual {
+        // Nothing to sync from, but what answered before can still be read.
+        let mut answered: Vec<SyncSource> = fetched
+            .iter()
+            .map(|(provider, at)| SyncSource {
+                provider: provider.clone(),
+                fetched_at: Some(at.clone()),
+                unavailable: Some(service::gather::Unavailable::Manual),
+                brings: Vec::new(),
+            })
+            .collect();
+        answered.sort_by(|a, b| a.provider.cmp(&b.provider));
+        answered
+    } else {
+        service::gather::askable(&state, &stored, provenance.as_ref())
+            .into_iter()
+            .map(|source| SyncSource {
+                provider: source.provider.to_string(),
+                fetched_at: fetched
+                    .iter()
+                    .find(|(provider, _)| provider == source.provider)
+                    .map(|(_, at)| at.clone()),
+                unavailable: source.unavailable,
+                brings: source.brings.iter().map(|p| p.to_string()).collect(),
+            })
+            .collect()
+    };
+
+    Ok(Json(ProvenanceReport {
+        provenance,
+        sources,
+    }))
+}
+
+#[derive(Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncRequest {
+    /// The providers to ask again: `tmdb`, `tvdb`, `fanart`…
+    pub sources: Vec<String>,
+}
+
+#[derive(Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncOutcome {
+    /// The work as it now stands.
+    pub item: MediaItem,
+    /// Asked, and answered: what they said now stands.
+    pub answered: Vec<String>,
+    /// Asked, and failed or had nothing to say: what they gave before stands.
+    pub silent: Vec<String>,
+}
+
+/// Ask some of a work's sources again, and only them.
+///
+/// What they say is weighed against what every other source said last time,
+/// by the usual priority: the result is what a full refresh would make had
+/// nobody else changed their mind. Fields locked by hand are not touched, and
+/// the work's refresh schedule stands — this is not a refresh.
+#[utoipa::path(
+    post, path = "/items/{id}/sync", tag = TAG,
+    params(("id" = String, Path, description = "The work's identifier")),
+    request_body = SyncRequest,
+    responses(
+        (status = 200, body = SyncOutcome),
+        (status = 400, description = "No sources, or one this work cannot be asked about"),
+        (status = 403, description = "The caller may not write"),
+        (status = 404, description = "No such work"),
+        (status = 409, description = "Entered by hand, or not refreshed since the server began recording where values come from"),
+        (status = 502, description = "None of the sources asked answered; nothing was changed"),
+    ),
+)]
+async fn sync(
+    State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
+    ip: ClientIp,
+    Path(id): Path<String>,
+    Json(request): Json<SyncRequest>,
+) -> AppResult<Json<SyncOutcome>> {
+    require_write(&identity)?;
+    if request.sources.is_empty() {
+        return Err(AppError::BadRequest("name the sources to ask again".into()));
+    }
+
+    let mut stored = repo::item::get(&state.db, &id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    if stored.is_manual {
+        return Err(AppError::Conflict(
+            "a work entered by hand has no sources to sync from".into(),
+        ));
+    }
+    let Some(provenance) = repo::item::provenance(&state.db, &id).await? else {
+        return Err(AppError::Conflict(
+            "this work has not been refreshed since the server began recording where its values \
+             come from; refresh it in full once"
+                .into(),
+        ));
+    };
+
+    let askable = service::gather::askable(&state, &stored, Some(&provenance));
+    if request.sources.len() > askable.len() {
+        return Err(AppError::BadRequest("name the sources to ask again".into()));
+    }
+
+    let mut asking: Vec<&'static str> = Vec::new();
+    for name in &request.sources {
+        let source = askable
+            .iter()
+            .find(|s| s.provider == name.trim())
+            .ok_or_else(|| AppError::BadRequest(format!("{name} does not describe this work")))?;
+        if source.unavailable.is_some() {
+            return Err(AppError::BadRequest(format!(
+                "{} cannot be asked about this work now",
+                source.provider
+            )));
+        }
+        for provider in std::iter::once(source.provider).chain(source.brings.iter().copied()) {
+            if !asking.contains(&provider) {
+                asking.push(provider);
+            }
+        }
+    }
+
+    repo::item::load_children(&state.db, &mut stored).await?;
+
+    let by = identity.label();
+    let record = repo::job::start_by(
+        &state.db,
+        repo::job::kinds::REFRESH_ITEM,
+        Some(&id),
+        Some(&by),
+    )
+    .await
+    .inspect_err(|e| tracing::warn!(error = %e, "could not open a job run"))
+    .ok();
+
+    use service::gather::ResyncOutcome;
+
+    let outcome = service::gather::resync(&state, &stored, &provenance, &asking).await;
+    let said = match &outcome {
+        Ok(ResyncOutcome::Synced(done)) => format!("synced from {}", done.answered.join(", ")),
+        Ok(ResyncOutcome::NoneAnswered) => format!("none of {} answered", asking.join(", ")),
+        Ok(ResyncOutcome::Changed) => "changed while syncing; nothing written".to_string(),
+        Ok(ResyncOutcome::Gone) => "deleted while syncing".to_string(),
+        Err(e) => e.to_string(),
+    };
+
+    if let Some(record) = record {
+        let closed = match &outcome {
+            Ok(ResyncOutcome::Synced(_)) | Ok(ResyncOutcome::NoneAnswered) => {
+                repo::job::finish(&state.db, &record, Some(&said), None).await
+            }
+            Ok(ResyncOutcome::Changed) | Ok(ResyncOutcome::Gone) | Err(_) => {
+                repo::job::finish(&state.db, &record, None, Some(&said)).await
+            }
+        };
+        if let Err(e) = closed {
+            tracing::warn!(error = %e, "could not close the job run");
+        }
+    }
+
+    let done = match outcome.map_err(AppError::UpstreamUnavailable)? {
+        ResyncOutcome::Synced(done) => done,
+        ResyncOutcome::NoneAnswered => {
+            return Err(AppError::UpstreamUnavailable(anyhow::anyhow!(
+                "none of the sources asked answered; nothing was changed"
+            )));
+        }
+        ResyncOutcome::Gone => return Err(AppError::NotFound),
+        ResyncOutcome::Changed => {
+            return Err(AppError::Conflict(
+                "the work was written by something else while its sources were asked; nothing \
+                 was changed — sync again"
+                    .into(),
+            ));
+        }
+    };
+
+    audit::record(
+        &state,
+        Event {
+            identity: Some(&identity),
+            ip: &ip,
+            action: Action::ItemSynced,
+            target: Some(&id),
+            detail: Some(&said),
+        },
+    )
+    .await;
+
+    Ok(Json(SyncOutcome {
+        item: done.item,
+        answered: done.answered.iter().map(|p| p.to_string()).collect(),
+        silent: done.silent.iter().map(|p| p.to_string()).collect(),
+    }))
 }
 
 /// The raw provider documents behind an entry.

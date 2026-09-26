@@ -19,6 +19,9 @@
 //!   most of them phantoms Sonarr would then hunt for files of. One list, many
 //!   opinions about each entry.
 
+pub mod provenance;
+pub mod rules;
+
 use crate::domain::{
     AlternativeTitle, CoverType, Episode, ExternalIds, Image, MediaItem, Rating, Season,
     Translation,
@@ -37,11 +40,11 @@ pub struct Contribution {
 /// Piece into 23 seasons where TVDB has 21 — so serving TMDB's numbering under
 /// a TVDB id would have Sonarr map files to the wrong episodes. When one of
 /// these has a list, it is the list, whatever the general priority says.
-const TVDB_NUMBERED: &[&str] = &["tvdb", "skyhook"];
+pub(crate) const TVDB_NUMBERED: &[&str] = &["tvdb", "skyhook"];
 
 /// Providers whose episodes are matched to the spine by broadcast date as well
 /// as by number, and whose broadcast instant replaces anyone else's.
-const DATE_CHECKED: &[&str] = &["tvmaze"];
+pub(crate) const DATE_CHECKED: &[&str] = &["tvmaze"];
 
 /// Providers whose studio replaces anyone else's.
 ///
@@ -49,7 +52,7 @@ const DATE_CHECKED: &[&str] = &["tvmaze"];
 /// that animated it. What TMDB supplies as a studio is the first production
 /// company it happens to list: Production I.G for *Attack on Titan*, whose
 /// first three seasons Wit Studio animated.
-const STUDIO_AUTHORITIES: &[&str] = &["anilist", "mal"];
+pub(crate) const STUDIO_AUTHORITIES: &[&str] = &["anilist", "mal"];
 
 /// Fold contributions into one entity, most trusted first.
 ///
@@ -336,7 +339,7 @@ fn fill(into: &mut Option<String>, other: Option<String>) {
 }
 
 /// Identifiers are additive: each provider knows some the others do not.
-fn merge_ids(into: &mut ExternalIds, other: ExternalIds) {
+pub(crate) fn merge_ids(into: &mut ExternalIds, other: ExternalIds) {
     into.tmdb = into.tmdb.or(other.tmdb);
     into.tvdb = into.tvdb.or(other.tvdb);
     into.imdb = into.imdb.take().or(other.imdb);

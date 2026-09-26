@@ -69,8 +69,10 @@ pub async fn by_tvdb_id(state: &AppState, tvdb_id: i64) -> Result<Option<MediaIt
         match state.skyhook.show(tvdb_id).await {
             Ok(Some((raw, show))) => {
                 let item = sonarr::to_item(&show);
+                let provenance = crate::merge::provenance::single(names::SKYHOOK, &item);
                 let snapshots = vec![(names::SKYHOOK.to_string(), raw)];
-                return Ok(Some(persist(state, item, &snapshots).await?));
+                let stored = persist(state, item, &snapshots, provenance).await?;
+                return Ok(Some(stored));
             }
             Ok(None) => {}
             Err(e) => tracing::warn!(tvdb_id, error = %e, "Skyhook fallback failed"),
@@ -361,6 +363,29 @@ async fn fetch_from_tmdb(state: &AppState, tmdb_id: i64) -> Result<Option<MediaI
     };
 
     gather::series(state, Some(tmdb_id), tvdb_id).await
+}
+
+/// What one source lists under `term`, and no other: the search a person runs
+/// to find the entry they know is there when the usual order would have
+/// stopped at another. Not cached — it is asked for by hand, rarely.
+pub async fn search_at(state: &AppState, source: &str, term: &str) -> Result<Vec<MediaItem>> {
+    let term = term.trim();
+    let limit = state.search_limit();
+
+    match source {
+        names::TMDB => tmdb_search(state, term).await,
+        names::TVDB => state.tvdb.search(term, limit).await,
+        names::SKYHOOK => Ok(state
+            .skyhook
+            .search(term)
+            .await?
+            .iter()
+            .take(limit)
+            .map(sonarr::to_item)
+            .collect()),
+        names::FANKAI => state.fankai.search(term, limit).await,
+        _ => Ok(Vec::new()),
+    }
 }
 
 /// Map TMDB search hits, resolving each one's TVDB id so Sonarr can address it.

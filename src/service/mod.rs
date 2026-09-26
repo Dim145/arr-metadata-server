@@ -427,7 +427,11 @@ pub async fn persist(
     state: &AppState,
     mut item: MediaItem,
     snapshots: &[(String, Value)],
+    provenance: crate::merge::provenance::Provenance,
 ) -> Result<MediaItem> {
+    // As the merge came back, before what it lacked is put back.
+    let returned = crate::merge::provenance::Returned::of(&item);
+
     if let Some(existing_id) = find_existing(state, &item).await?
         && let Some(mut existing) = repo::item::get(&state.db, &existing_id).await?
     {
@@ -448,23 +452,109 @@ pub async fn persist(
 
     let _writing = WRITING.lock(&item.id).await;
 
-    repo::item::upsert(
+    // What the write keeps when every provider came back without it is still
+    // whoever gave it before. Read under the lock every writer of the record
+    // takes, and written in the same transaction as the work.
+    let mut provenance = provenance;
+    match repo::item::provenance(&state.db, &item.id).await {
+        Ok(Some(before)) => {
+            crate::merge::provenance::carry_over(&mut provenance, &before, &returned);
+        }
+        Ok(None) => {}
+        Err(e) => {
+            tracing::warn!(id = %item.id, error = %e, "could not read where the work's values came from")
+        }
+    }
+
+    repo::item::upsert_traced(
         &state.db,
         repo::item::ItemWrite {
             item: &item,
             replace_children: true,
         },
+        &provenance,
     )
     .await?;
 
+    after_write(state, &item.id, snapshots).await
+}
+
+/// What became of a sync's write.
+pub enum SyncWrite {
+    Written(Box<MediaItem>),
+    /// Something else wrote the work after the sync read it. Nothing was
+    /// written: values rebuilt from the older copy would have undone it.
+    Changed,
+    /// The work was deleted meanwhile.
+    Gone,
+}
+
+/// Store a sync's result in the work it was made from.
+///
+/// Into that row and no other: a fresh answer can name an id another work
+/// holds, and the lookup [`persist`] makes by id would write this work over
+/// that one. With the work's own identity, identifiers and schedule — a sync
+/// asks some sources again, it neither re-keys the work nor counts as its
+/// refresh — and only if nothing else has written the work since `stored` was
+/// read, checked in the write's own transaction. The provenance is written in
+/// it too, so it always describes the write beside it.
+pub async fn persist_sync(
+    state: &AppState,
+    mut item: MediaItem,
+    snapshots: &[(String, Value)],
+    stored: &MediaItem,
+    provenance: &crate::merge::provenance::Provenance,
+) -> Result<SyncWrite> {
+    item.id.clone_from(&stored.id);
+    item.slug.clone_from(&stored.slug);
+    item.created_at.clone_from(&stored.created_at);
+    item.updated_at = crate::db::now();
+    item.is_manual = stored.is_manual;
+    item.is_enabled = stored.is_enabled;
+    item.external_ids = stored.external_ids.clone();
+    keep_what_nobody_answered(&mut item, stored.clone());
+    crate::merge::drop_own_title(&mut item);
+
+    item.refreshed_at.clone_from(&stored.refreshed_at);
+    item.refresh_after.clone_from(&stored.refresh_after);
+    item.refresh_error.clone_from(&stored.refresh_error);
+
+    let _writing = WRITING.lock(&item.id).await;
+
+    let written = repo::item::upsert_unchanged(
+        &state.db,
+        repo::item::ItemWrite {
+            item: &item,
+            replace_children: true,
+        },
+        &stored.updated_at,
+        provenance,
+    )
+    .await?;
+
+    match written {
+        repo::item::Conditional::Written => after_write(state, &item.id, snapshots)
+            .await
+            .map(|item| SyncWrite::Written(Box::new(item))),
+        repo::item::Conditional::Changed => Ok(SyncWrite::Changed),
+        repo::item::Conditional::Gone => Ok(SyncWrite::Gone),
+    }
+}
+
+/// Everything a write of a work entails beyond its row, under its lock.
+async fn after_write(
+    state: &AppState,
+    id: &str,
+    snapshots: &[(String, Value)],
+) -> Result<MediaItem> {
     // Every provider's raw answer is kept, so a mapping fix can be replayed
     // without spending the calls again.
     for (provider, payload) in snapshots {
-        repo::snapshot::put(&state.db, &item.id, provider, payload, None).await?;
+        repo::snapshot::put(&state.db, id, provider, payload, None).await?;
     }
 
     // Listed by what it now holds, with its locks, before anyone lists it.
-    listing::after_write(state, &item.id).await;
+    listing::after_write(state, id).await;
 
     // A refresh can add episodes, so whatever was fetched for another language
     // no longer covers the whole run. The stored text stays — it is keyed by
@@ -474,24 +564,20 @@ pub async fn persist(
     // stays true, so the episodes this refresh added are never fetched in that
     // language again and nothing ever retries. An operator seeing French titles
     // stop appearing has nothing else to go on.
-    if let Err(e) = repo::translation::clear_fetched(&state.db, &item.id).await {
+    if let Err(e) = repo::translation::clear_fetched(&state.db, id).await {
         tracing::error!(
-            id = %item.id,
+            id = %id,
             error = %e,
             "could not reset the language markers; episodes added by this refresh will not be \
              translated until the next successful one"
         );
     }
 
-    state
-        .caches
-        .items
-        .invalidate(&format!("item:{}", item.id))
-        .await;
+    state.caches.items.invalidate(&format!("item:{}", id)).await;
 
     // Re-read so the caller sees the same thing every later request will: the
     // stored row, with manual overrides applied on top.
-    load(state, &item.id)
+    load(state, id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("item vanished immediately after being written"))
 }

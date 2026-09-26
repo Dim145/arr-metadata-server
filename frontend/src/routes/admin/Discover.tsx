@@ -30,7 +30,28 @@ import {
 import { Artwork } from '../../components/media'
 import { api, query } from '../../lib/api'
 import { useI18n } from '../../lib/i18n'
-import type { Found, MediaItem, MediaKind } from '../../lib/types'
+import { providerName } from '../../lib/labels'
+import type { Found, MediaItem, MediaKind, SourceRules } from '../../lib/types'
+
+/**
+ * A term the server looks up rather than searches — `tvdb:81189`, or a page's
+ * address — names its own source, and the one chosen beside it is not asked.
+ */
+function isLookup(term: string) {
+  return (
+    /^\s*(tvdb|tvdbid|tmdb|tmdbid|mal|myanimelist|anilist|fankai|fan-kai|fankaiid|imdb|imdbid)\s*:\s*\S/i.test(term) ||
+    /^\s*https?:\/\//i.test(term)
+  )
+}
+
+/** Mirrors the server's: who can be searched alone, for which kind. */
+const SEARCHABLE: { id: string; kinds: MediaKind[] }[] = [
+  { id: 'tmdb', kinds: ['series', 'movie'] },
+  { id: 'tvdb', kinds: ['series'] },
+  { id: 'skyhook', kinds: ['series'] },
+  { id: 'fankai', kinds: ['series'] },
+  { id: 'radarr', kinds: ['movie'] },
+]
 
 /** What a hit is, across searches: whichever identifiers the provider gave. */
 function keyOf(found: Found) {
@@ -51,10 +72,11 @@ export function Discover() {
   const [term, setTerm] = useState('')
   const [kind, setKind] = useState<'' | MediaKind>('')
   const [year, setYear] = useState('')
+  const [source, setSource] = useState('')
 
   // What was actually asked, as opposed to what is in the fields. The two
   // differ for as long as somebody is typing, which is the point.
-  const [asked, setAsked] = useState<{ term: string; kind: string; year: string } | null>(null)
+  const [asked, setAsked] = useState<{ term: string; kind: string; year: string; source: string } | null>(null)
   const [imported, setImported] = useState<Record<string, string>>({})
 
   const results = useQuery({
@@ -62,7 +84,7 @@ export function Discover() {
     queryFn: () =>
       asked
         ? api.get<Found[]>(
-            `/discover${query({ term: asked.term, kind: asked.kind, year: asked.year })}`,
+            `/discover${query({ term: asked.term, kind: asked.kind, year: asked.year, source: asked.source })}`,
           )
         : Promise.resolve([]),
     enabled: asked !== null,
@@ -71,6 +93,15 @@ export function Discover() {
     retry: false,
     staleTime: 5 * 60_000,
   })
+
+  // Which sources answer at all, to offer the rest as switched off.
+  const rules = useQuery({
+    queryKey: ['sources', 'rules'],
+    queryFn: () => api.get<SourceRules>('/sources/rules'),
+    staleTime: 60_000,
+  })
+  const on = (id: string) => rules.data?.providers.find((p) => p.id === id)?.on ?? true
+  const offered = SEARCHABLE.filter((s) => kind === '' || s.kinds.includes(kind))
 
   const take = useMutation({
     mutationFn: (found: Found) =>
@@ -102,14 +133,14 @@ export function Discover() {
 
       <Panel label={t.admin.discover} className="rise mb-6" style={{ animationDelay: '60ms' }}>
         <form
-          className="grid gap-4 p-5 sm:grid-cols-[minmax(0,1fr)_9rem_7rem]"
+          className="grid gap-4 p-5 sm:grid-cols-[9rem_minmax(0,1fr)_7rem]"
           onSubmit={(event) => {
             event.preventDefault()
             take.reset()
-            setAsked({ term: term.trim(), kind, year })
+            setAsked({ term: term.trim(), kind, year, source })
           }}
         >
-          <div className="sm:col-span-3 lg:col-span-1">
+          <div className="sm:col-span-3">
             <label htmlFor="intake-term" className="label mb-1.5 block">
               {t.admin.intake.term}
             </label>
@@ -136,12 +167,39 @@ export function Discover() {
             <Select
               id="intake-kind"
               value={kind}
-              onChange={(event) => setKind(event.target.value as '' | MediaKind)}
+              onChange={(event) => {
+                const next = event.target.value as '' | MediaKind
+                setKind(next)
+                // A source that has none of that kind is no longer on offer.
+                if (next && !SEARCHABLE.find((s) => s.id === source)?.kinds.includes(next)) setSource('')
+              }}
             >
               <option value="">{t.admin.intake.bothKinds}</option>
               <option value="series">{t.nav.series}</option>
               <option value="movie">{t.nav.films}</option>
             </Select>
+          </div>
+
+          <div>
+            <label htmlFor="intake-source" className="label mb-1.5 block">
+              {t.admin.intake.source}
+            </label>
+            <Select
+              id="intake-source"
+              value={source}
+              aria-describedby="intake-source-hint"
+              onChange={(event) => setSource(event.target.value)}
+            >
+              <option value="">{t.admin.intake.inOrder}</option>
+              {offered.map((s) => (
+                <option key={s.id} value={s.id} disabled={!on(s.id)}>
+                  {on(s.id) ? providerName(s.id) : t.admin.intake.sourceOff(providerName(s.id))}
+                </option>
+              ))}
+            </Select>
+            <p id="intake-source-hint" className="mt-1 text-xs text-bone-faint">
+              {t.admin.intake.sourceHint}
+            </p>
           </div>
 
           <div>
@@ -179,7 +237,9 @@ export function Discover() {
           action={
             results.data?.length ? (
               <span className="font-mono text-xs text-bone-faint tabular-nums">
-                {t.admin.intake.results(results.data.length)}
+                {asked?.source && !isLookup(asked.term)
+                  ? t.admin.intake.resultsAt(results.data.length, providerName(asked.source))
+                  : t.admin.intake.results(results.data.length)}
               </span>
             ) : null
           }

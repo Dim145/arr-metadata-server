@@ -2031,13 +2031,85 @@ pub async fn person_credits(
 
 /// Insert or update a work and, optionally, its provider-sourced children.
 pub async fn upsert(db: &Db, write: ItemWrite<'_>) -> Result<()> {
+    write_item(db, write, None, None).await.map(|_| ())
+}
+
+/// [`upsert`], with where its values came from in the same transaction: a
+/// reader never finds the one beside the other's predecessor.
+pub async fn upsert_traced(
+    db: &Db,
+    write: ItemWrite<'_>,
+    provenance: &crate::merge::provenance::Provenance,
+) -> Result<()> {
+    write_item(db, write, None, Some(provenance))
+        .await
+        .map(|_| ())
+}
+
+/// How a write made on condition went.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Conditional {
+    Written,
+    /// Written by something else since it was read: nothing was written.
+    Changed,
+    /// Gone since it was read.
+    Gone,
+}
+
+/// [`upsert_traced`], only if the work is still as it was when `read_at` —
+/// its `updated_at` then — was read. The look and the write share the
+/// transaction, under SQLite's write lock or the row's own on PostgreSQL, so
+/// nothing lands between them: not a refresh, not a work switched off.
+pub async fn upsert_unchanged(
+    db: &Db,
+    write: ItemWrite<'_>,
+    read_at: &str,
+    provenance: &crate::merge::provenance::Provenance,
+) -> Result<Conditional> {
+    write_item(db, write, Some(read_at), Some(provenance)).await
+}
+
+async fn write_item(
+    db: &Db,
+    write: ItemWrite<'_>,
+    read_at: Option<&str>,
+    provenance: Option<&crate::merge::provenance::Provenance>,
+) -> Result<Conditional> {
     let mut tx = db.begin_write().await?;
+
+    if let Some(read_at) = read_at {
+        let sql = match db.dialect() {
+            crate::db::Dialect::Postgres => {
+                "SELECT updated_at FROM media_item WHERE id = ? FOR UPDATE"
+            }
+            crate::db::Dialect::Sqlite => "SELECT updated_at FROM media_item WHERE id = ?",
+        };
+        let current: Option<String> = sqlx::query_scalar(db.sql(sql))
+            .bind(&write.item.id)
+            .fetch_optional(&mut *tx)
+            .await
+            .context("failed to read the work before writing it")?;
+        match current {
+            None => return Ok(Conditional::Gone),
+            Some(current) if current != read_at => return Ok(Conditional::Changed),
+            Some(_) => {}
+        }
+    }
 
     upsert_row(db, &mut tx, write.item).await?;
     let displaced = upsert_external_ids(db, &mut tx, write.item).await?;
 
     if write.replace_children {
         replace_children(db, &mut tx, write.item).await?;
+    }
+
+    if let Some(provenance) = provenance {
+        sqlx::query(db.sql("UPDATE media_item SET provenance = ? WHERE id = ?"))
+            .bind(serde_json::to_string(provenance)?)
+            .bind(&write.item.id)
+            .execute(&mut *tx)
+            .await
+            .context("failed to record where the work's values came from")?;
     }
 
     tx.commit().await.context("failed to commit item write")?;
@@ -2048,7 +2120,7 @@ pub async fn upsert(db: &Db, write: ItemWrite<'_>) -> Result<()> {
         mark_changed(db, &other).await?;
     }
 
-    Ok(())
+    Ok(Conditional::Written)
 }
 
 /// A slug no other work of this kind is already using.
@@ -2573,6 +2645,18 @@ pub async fn set_enabled(db: &Db, id: &str, enabled: bool) -> Result<bool> {
 }
 
 // ─── refresh bookkeeping ─────────────────────────────────────────────────────
+
+/// Who gave a work its values, when a merge has said.
+pub async fn provenance(db: &Db, id: &str) -> Result<Option<crate::merge::provenance::Provenance>> {
+    let row = sqlx::query(db.sql("SELECT provenance FROM media_item WHERE id = ?"))
+        .bind(id)
+        .fetch_optional(db.pool())
+        .await?;
+
+    Ok(row
+        .and_then(|row| row.opt_text("provenance").ok().flatten())
+        .and_then(|json| serde_json::from_str(&json).ok()))
+}
 
 /// What a refresh of everything works through: the enabled works that have
 /// an identifier elsewhere and are not entries made by hand, in id order,

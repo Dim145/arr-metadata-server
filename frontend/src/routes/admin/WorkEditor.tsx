@@ -21,6 +21,16 @@ import { useAdminTitle } from '../../components/AdminShell'
 import { ManualChildren } from '../../components/ManualChildren'
 import { Artwork } from '../../components/media'
 import {
+  OriginChip,
+  OriginLegend,
+  RulesPanel,
+  SourcesPanel,
+  SummaryRow,
+  imagesSummary,
+  originNote,
+  witnesses,
+} from '../../components/origins'
+import {
   Button,
   ButtonLink,
   Chip,
@@ -45,7 +55,20 @@ import * as fmt from '../../lib/format'
 import { providerName, statusLabel } from '../../lib/labels'
 import { useI18n, type Dict } from '../../lib/i18n'
 import { episodeCode, episodesOf, poster, seasonName, seasonNumbers } from '../../lib/media'
-import type { Episode, FieldDef, FieldRegistry, MediaItem, Override, Snapshot, Suggestion, Suggestions as SuggestionsResponse } from '../../lib/types'
+import type {
+  Episode,
+  FieldDef,
+  FieldRegistry,
+  MediaItem,
+  Override,
+  ProvenanceReport,
+  Snapshot,
+  Suggestion,
+  Suggestions as SuggestionsResponse,
+  SyncSource,
+  ValueSource,
+  WorkProvenance,
+} from '../../lib/types'
 
 /** Worth offering without asking the server which translations it holds. */
 const LANGUAGES = [
@@ -62,9 +85,6 @@ const LANGUAGES = [
   ['ru', 'Русский'],
 ] as const
 
-/** Mirrors `TVDB_NUMBERED` in the merge engine: these supply the episode list. */
-const NUMBERING = new Set(['tvdb', 'skyhook'])
-
 export function WorkEditor() {
   const { id = '' } = useParams()
   const { t, locale } = useI18n()
@@ -73,6 +93,7 @@ export function WorkEditor() {
 
   const [language, setLanguage] = useState('')
   const [asking, setAsking] = useState<'unlockAll' | 'disable' | 'delete' | null>(null)
+  const [viewing, setViewing] = useState<string | null>(null)
 
   const item = useQuery({
     queryKey: ['item', id, language],
@@ -83,10 +104,10 @@ export function WorkEditor() {
     queryFn: () => api.get<FieldRegistry>('/fields'),
     staleTime: Infinity,
   })
-  // Who answered and when. The documents themselves run to megabytes.
-  const snapshots = useQuery({
-    queryKey: ['item', id, 'snapshots'],
-    queryFn: () => api.get<Snapshot[]>(`/items/${id}/snapshots?payload=false`),
+  // Who gave what, and whom the work can be synced from.
+  const report = useQuery({
+    queryKey: ['item', id, 'provenance'],
+    queryFn: () => api.get<ProvenanceReport>(`/items/${id}/provenance`),
   })
   const overrides = useQuery({
     queryKey: ['overrides', id],
@@ -165,9 +186,12 @@ export function WorkEditor() {
   const allLocks = overrides.data?.length ?? 0
   const deeperLocks = allLocks - locks.size
   const sheet = poster(work)
+  const provenance = report.data?.provenance
+  const traced = provenance !== undefined
+  const fieldNames = new Set(registry.data.item.map((def) => def.name))
 
   return (
-    <div className="mx-auto max-w-5xl">
+    <div className="mx-auto max-w-6xl">
       <Link
         to="/admin/catalogue"
         className="label hidden min-h-11 items-center gap-2 transition-colors duration-150 hover:text-vermillion lg:inline-flex"
@@ -303,6 +327,8 @@ export function WorkEditor() {
         </p>
       ) : null}
 
+      {traced ? <OriginLegend /> : null}
+
       <OnThisPage
         label={t.admin.inPage}
         entries={[
@@ -324,24 +350,51 @@ export function WorkEditor() {
         ]}
       />
 
-      <Panel id="fields" className="rise" style={{ animationDelay: '80ms' }}>
-        <PanelHead
-          title={t.admin.editor.fields}
-          action={<span className="label hidden sm:inline">{t.admin.editor.fieldsHint}</span>}
-        />
-        <ul className="divide-y divide-rule">
-          {registry.data.item.map((def) => (
-            <FieldRow
-              key={def.name}
-              itemId={id}
-              def={def}
-              value={(work as unknown as Record<string, unknown>)[def.name]}
-              lock={locks.get(def.name)}
-              onChanged={invalidate}
-            />
-          ))}
-        </ul>
-      </Panel>
+      {/* The fields, and beside them who gave each: the sources stay in view
+          while the list scrolls, so ticking one to sync is never a trip to
+          the bottom of the page. */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_20rem] lg:items-start">
+        <Panel id="fields" className="rise" style={{ animationDelay: '80ms' }}>
+          <PanelHead
+            title={t.admin.editor.fields}
+            action={<span className="label hidden sm:inline">{t.admin.editor.fieldsHint}</span>}
+          />
+          <ul className="divide-y divide-rule">
+            {registry.data.item.map((def) => (
+              <FieldRow
+                key={def.name}
+                itemId={id}
+                def={def}
+                value={(work as unknown as Record<string, unknown>)[def.name]}
+                lock={locks.get(def.name)}
+                origin={provenance?.fields?.[def.name]}
+                traced={traced}
+                onChanged={invalidate}
+              />
+            ))}
+            {provenance ? (
+              <Summaries work={work} provenance={provenance} sources={report.data?.sources ?? []} />
+            ) : null}
+          </ul>
+        </Panel>
+
+        <div className="space-y-6 lg:sticky lg:top-16">
+          <SourcesPanel
+            itemId={id}
+            report={report.data}
+            failed={report.isError}
+            onRetry={() => void report.refetch()}
+            isManual={work.isManual}
+            refreshAfter={work.refreshAfter}
+            fieldNames={fieldNames}
+            onRaw={setViewing}
+            onRefresh={() => refresh.mutate()}
+            refreshing={refresh.isPending}
+            onSynced={invalidate}
+          />
+          {work.isManual ? null : <RulesPanel />}
+        </div>
+      </div>
 
       <div className="mt-6">
         <ManualChildren item={work} onChanged={invalidate} />
@@ -397,9 +450,10 @@ export function WorkEditor() {
           </dl>
         </Panel>
 
-        <Sources itemId={id} snapshots={snapshots.data} isManual={work.isManual} />
         <Suggestions work={work} />
       </div>
+
+      <RawSnapshot itemId={id} provider={viewing} onClose={() => setViewing(null)} />
 
       <Dialog
         open={asking === 'unlockAll'}
@@ -476,6 +530,8 @@ function FieldRow({
   def,
   value,
   lock,
+  origin,
+  traced = false,
   onChanged,
 }: {
   itemId: string
@@ -484,6 +540,10 @@ function FieldRow({
   def: FieldDef
   value: unknown
   lock?: Override
+  /** Who gave the value, when the last merge said. */
+  origin?: ValueSource
+  /** Whether the work's provenance is known at all: without it, a row says nothing of where its value came from. */
+  traced?: boolean
   onChanged: () => void
 }) {
   const { t, locale } = useI18n()
@@ -507,6 +567,7 @@ function FieldRow({
 
   const locked = lock !== undefined
   const display = readable(value, t)
+  const note = traced ? originNote(def.name, origin, { hasValue: display !== '', locked }, t, locale) : null
   const multiline = def.fieldType === 'longText'
   const inputId = `field-${scope.replace(/\W/g, '-')}-${def.name}`
 
@@ -624,6 +685,16 @@ function FieldRow({
               )}
             </p>
           )}
+          {/* Under the value on a phone, where the name's column is too
+              narrow to share with a chip. */}
+          {traced && !locked && !editing ? (
+            <div className="mt-2 sm:hidden">
+              <OriginChip source={origin} hasValue={display !== ''} />
+            </div>
+          ) : null}
+          {note && !editing ? (
+            <p className="mt-1 text-xs leading-relaxed text-bone-faint">{note}</p>
+          ) : null}
         </div>
 
         {editing ? null : (
@@ -649,10 +720,17 @@ function FieldRow({
                 </Button>
               </>
             ) : (
-              <Button size="sm" variant="quiet" onClick={begin}>
-                <Glyph name="pencil" className="size-4" />
-                {t.common.edit}
-              </Button>
+              <>
+                {traced ? (
+                  <span className="hidden sm:contents">
+                    <OriginChip source={origin} hasValue={display !== ''} />
+                  </span>
+                ) : null}
+                <Button size="sm" variant="quiet" onClick={begin}>
+                  <Glyph name="pencil" className="size-4" />
+                  {t.common.edit}
+                </Button>
+              </>
             )}
           </div>
         )}
@@ -839,61 +917,75 @@ function EpisodeFields({
   )
 }
 
-/* ── Sources ──────────────────────────────────────────────────────────────── */
+/* ── What is not one field ────────────────────────────────────────────────── */
 
-function Sources({
-  itemId,
-  snapshots,
-  isManual,
+/**
+ * The lists at the end of the fields: the pictures, gathered from every
+ * source; the cast, one source's whole; the episodes, one source's list with
+ * the others filling it in.
+ */
+function Summaries({
+  work,
+  provenance,
+  sources,
 }: {
-  itemId: string
-  snapshots?: Snapshot[]
-  isManual?: boolean
+  work: MediaItem
+  provenance: WorkProvenance
+  sources: SyncSource[]
 }) {
   const { t, locale } = useI18n()
-  const [viewing, setViewing] = useState<string | null>(null)
+  const o = t.admin.editor.origin
+  const images = imagesSummary(provenance, t, locale)
+  const spine = provenance.episodes
+  // The seasons' own beside the work's, as the tally beneath counts them.
+  const pictures =
+    (work.images?.length ?? 0) + (work.seasons ?? []).reduce((sum, season) => sum + (season.images?.length ?? 0), 0)
 
-  const sorted = [...(snapshots ?? [])].sort((a, b) => b.fetchedAt.localeCompare(a.fetchedAt))
+  // Who else describes episodes, of those that have answered for this work,
+  // fills the list in where it is blank.
+  const answered = new Set(sources.filter((source) => source.fetchedAt).map((source) => source.provider))
+  const fillers = witnesses(['tmdb', 'tvdb', 'skyhook'].filter((p) => p !== spine && answered.has(p)))
 
   return (
-    <Panel id="sources" className="rise" style={{ animationDelay: '480ms' }}>
-      <PanelHead title={t.work.sources} />
-
-      {sorted.length === 0 ? (
-        <p className="px-5 py-4 text-sm text-bone-faint">
-          {isManual ? t.admin.editor.handEntered : t.admin.editor.noSources}
-        </p>
-      ) : (
-        <dl className="divide-y divide-rule">
-          {sorted.map((snapshot) => (
-            <Field key={snapshot.provider} label={providerName(snapshot.provider)}>
-              <span className="inline-flex items-center gap-2">
-                <span title={fmt.dateTime(snapshot.fetchedAt, locale)}>
-                  {fmt.relative(snapshot.fetchedAt, locale)}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setViewing(snapshot.provider)}
-                  className="hit min-h-8 min-w-11 cursor-pointer rounded-card px-2 font-mono text-[0.6875rem] text-slate transition-colors duration-150 hover:bg-ink-high hover:text-bone"
-                  aria-label={t.admin.editor.rawOf(providerName(snapshot.provider))}
-                >
-                  {'{ }'}
-                </button>
-              </span>
-            </Field>
-          ))}
-        </dl>
-      )}
-
-      {sorted.some((snapshot) => NUMBERING.has(snapshot.provider)) ? (
-        <p className="flex items-start gap-2 border-t border-rule px-5 py-3 text-xs leading-relaxed text-bone-faint">
-          <Glyph name="cloud" className="mt-0.5 size-3.5 shrink-0 text-slate" />
-          {t.work.numbering}
-        </p>
+    <>
+      {pictures ? (
+        <SummaryRow
+          label={o.images}
+          value={o.imageCount(pictures)}
+          chip={images.chip}
+          note={images.note}
+          to="artwork"
+        />
       ) : null}
-
-      <RawSnapshot itemId={itemId} provider={viewing} onClose={() => setViewing(null)} />
-    </Panel>
+      {work.credits?.length ? (
+        <SummaryRow
+          label={o.credits}
+          value={o.creditCount(work.credits.length)}
+          chip={<OriginChip source={provenance.fields?.credits} hasValue />}
+          note={o.creditsFrom}
+          to="credits"
+        />
+      ) : null}
+      {work.kind === 'series' && work.episodes?.length ? (
+        <SummaryRow
+          label={o.episodes}
+          value={t.admin.editor.contentValue(work.seasons?.length ?? 0, work.episodes.length)}
+          chip={spine ? <Provenance manual={false} label={providerName(spine)} /> : null}
+          note={
+            spine
+              ? [
+                  o.episodesFrom(providerName(spine)),
+                  answered.has('tvmaze') && spine !== 'tvmaze' ? o.episodesTimes : null,
+                  fillers.length ? o.episodesFill(fmt.list(fillers.map(providerName), locale)) : null,
+                ]
+                  .filter(Boolean)
+                  .join(' ')
+              : null
+          }
+          to={seasonNumbers(work).length ? 'season-fields' : 'episodes'}
+        />
+      ) : null}
+    </>
   )
 }
 

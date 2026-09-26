@@ -57,6 +57,21 @@ pub async fn list(db: &Db, media_id: &str) -> Result<Vec<Snapshot>> {
     rows.iter().map(map).collect()
 }
 
+/// Which providers have answered for a work, and when, without their
+/// documents: a long series' run to megabytes.
+pub async fn fetched(db: &Db, media_id: &str) -> Result<Vec<(String, String)>> {
+    let rows = sqlx::query(
+        db.sql("SELECT provider, fetched_at FROM media_provider_snapshot WHERE media_id = ?"),
+    )
+    .bind(media_id)
+    .fetch_all(db.pool())
+    .await?;
+
+    rows.iter()
+        .map(|row| Ok((row.text("provider")?, row.text("fetched_at")?)))
+        .collect()
+}
+
 fn map(row: &sqlx::any::AnyRow) -> Result<Snapshot> {
     Ok(Snapshot {
         provider: row.text("provider")?,

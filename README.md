@@ -257,6 +257,33 @@ still answers.
 > with the fix in the message — but point the upstreams elsewhere, or turn
 > enrichment off, when that is your setup.
 
+### Who gave what, and asking one source again
+
+Every refresh records, field by field, which provider's value was kept, which
+others said the same and which said otherwise; the pictures are counted by
+source, and the episode list names whoever numbered it. The work editor shows
+it beside each field: the provider's name, **Multi-sources** with the count
+when several agree (Skyhook is not counted beside the TheTVDB it
+republishes), **Locked** for an edit by hand, **Kept** for a value no source
+gives any more, **No source** when nobody gave one. None of this reaches a
+visitor. **Administration › Sources** lays out the rules themselves: who can
+supply what, in the configured order, and who replaces the rest.
+
+The editor's **Sources** panel asks chosen providers again, and only them. The
+others are handed back what they gave last time, so the ordinary merge weighs
+the fresh answers against them by the ordinary priority: a sync from TheTVDB
+alone takes its new runtime without handing it a title TMDB outranks it on.
+Locked fields do not move, the refresh schedule and the work's identifiers
+stand, and the episode list stays whoever numbered it unless that provider
+gives one anew. Some sources come along with the ones asked: TVmaze with the
+provider that numbers the episodes, whose broadcast instants it corrects, and
+that provider with any source that fills the episodes in, so the list is
+merged as a refresh merges it. A sync that finds the work written by something
+else meanwhile — a refresh, another sync — writes nothing and says so. A work
+refreshed before this was recorded needs one full refresh first. The same through the API: `GET /api/v1/items/{id}/provenance`,
+`POST /api/v1/items/{id}/sync` with `{"sources": ["tvdb", "fanart"]}`, and
+`GET /api/v1/sources/rules`.
+
 ### Further sources
 
 Six more, each off until switched on under **Settings → Further sources**.

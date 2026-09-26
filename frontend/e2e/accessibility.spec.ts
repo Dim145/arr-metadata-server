@@ -225,6 +225,7 @@ test.describe('the administration side', () => {
       '/admin/discover',
       '/admin/clients',
       '/admin/jobs',
+      '/admin/sources',
       '/admin/audit',
       '/admin/settings',
       // A season to come, with what TMDB lists for it to import.

@@ -44,6 +44,7 @@ actions! {
     ItemImported => "item.imported",
     ItemUpdated => "item.updated",
     ItemRefreshed => "item.refreshed",
+    ItemSynced => "item.synced",
     ItemDeleted => "item.deleted",
     OverrideSet => "override.set",
     OverrideRemoved => "override.removed",

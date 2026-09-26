@@ -34,7 +34,7 @@ import {
 import { ApiError, api, query } from '../../lib/api'
 import * as fmt from '../../lib/format'
 import { useI18n } from '../../lib/i18n'
-import { describeIdentity } from '../../lib/labels'
+import { describeIdentity, providerName } from '../../lib/labels'
 import type { Dict } from '../../lib/i18n'
 import type { Job, JobsResponse, Task, TaskId } from '../../lib/types'
 
@@ -56,6 +56,10 @@ export function describeDetail(detail: string | undefined, t: Dict): string {
   if ((m = detail.match(/^(\d+) refreshed, (\d+) failed(?:, of (\d+))?$/)))
     return s.refreshed(n(m[1]), n(m[2]), m[3] === undefined ? undefined : n(m[3]))
   if ((m = detail.match(/^(\d+) works, (\d+) episodes, (\d+) failed$/))) return s.exported(n(m[1]), n(m[2]), n(m[3]))
+  // A sync from chosen sources names them by their keys.
+  const names = (keys: string | undefined) => (keys ?? '').split(', ').map(providerName).join(', ')
+  if ((m = detail.match(/^synced from (.+)$/))) return s.synced(names(m[1]))
+  if ((m = detail.match(/^none of (.+) answered$/))) return s.noneAnswered(names(m[1]))
   return t.admin.runs.notes[detail] ?? detail
 }
 
@@ -176,7 +180,7 @@ function TaskCard({ task, delay }: { task: Task; delay: number }) {
                     </span>
                   </div>
                   <p className={last.error ? 'text-xs break-words text-vermillion' : 'text-xs text-bone-dim'}>
-                    {last.error ?? describeDetail(last.detail, t)}
+                    {describeDetail(last.error ?? last.detail, t)}
                   </p>
                   {last.status === 'failed' && task.lastSuccessAt ? (
                     <p className="text-xs text-bone-faint">
@@ -395,7 +399,7 @@ export function JobTable({ jobs }: { jobs: Job[] }) {
             </Link>
           ) : null}
           <p className={job.error ? 'text-xs break-words text-vermillion' : 'text-xs text-bone-dim'}>
-            {job.error ?? describeDetail(job.detail, t)}
+            {describeDetail(job.error ?? job.detail, t)}
           </p>
           <p className="font-mono text-[0.6875rem] text-bone-faint tabular-nums">
             {fmt.relative(job.createdAt, locale)} · {who(job)} · {took(job, locale)}
@@ -449,7 +453,7 @@ export function JobTable({ jobs }: { jobs: Job[] }) {
                     </Link>
                   ) : null}
                   <span className={job.error ? 'block truncate text-vermillion' : 'block truncate text-bone-dim'} title={job.error ?? job.detail}>
-                    {job.error ?? (job.detail ? describeDetail(job.detail, t) : job.work ? '' : '—')}
+                    {job.error ? describeDetail(job.error, t) : job.detail ? describeDetail(job.detail, t) : job.work ? '' : '—'}
                   </span>
                 </Td>
                 <Td className="whitespace-nowrap">

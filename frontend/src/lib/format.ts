@@ -128,6 +128,11 @@ export function runtime(minutes: number | undefined, locale: string): string | u
     : `${hours}h ${rest}m`
 }
 
+/** `TMDB, TheTVDB and TVmaze` / `TMDB, TheTVDB et TVmaze`. */
+export function list(items: string[], locale: string): string {
+  return new Intl.ListFormat(locale, { style: 'long', type: 'conjunction' }).format(items)
+}
+
 /** `28 707` / `28,707`. Vote counts, catalogue sizes. */
 export function count(value: number | undefined, locale: string): string {
   if (value === undefined || value === null) return '—'

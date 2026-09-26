@@ -91,6 +91,37 @@ pub async fn bulk(state: &AppState, tmdb_ids: &[i64]) -> Result<Vec<MediaItem>> 
         .collect())
 }
 
+/// What one source lists under `term`, and no other. See
+/// [`super::series::search_at`].
+pub async fn search_at(
+    state: &AppState,
+    source: &str,
+    term: &str,
+    year: Option<i32>,
+) -> Result<Vec<MediaItem>> {
+    let term = term.trim();
+    let limit = state.search_limit();
+
+    match source {
+        crate::providers::names::TMDB => Ok(state
+            .tmdb
+            .search_movie(term, year, limit)
+            .await?
+            .iter()
+            .map(tmdb_map::movie_summary_to_item)
+            .collect()),
+        crate::providers::names::RADARR => Ok(state
+            .radarr_metadata
+            .search(term, year)
+            .await?
+            .iter()
+            .take(limit)
+            .map(crate::wire::radarr::to_item)
+            .collect()),
+        _ => Ok(Vec::new()),
+    }
+}
+
 pub async fn search(state: &AppState, term: &str, year: Option<i32>) -> Result<Vec<MediaItem>> {
     match ids::classify(term) {
         ids::TermLookup::Tmdb(id) => return Ok(by_tmdb_id(state, id).await?.into_iter().collect()),
@@ -315,9 +346,12 @@ async fn from_radarr(
     match found {
         Ok(Some((raw, movie))) => {
             let item = crate::wire::radarr::to_item(&movie);
+            let provenance =
+                crate::merge::provenance::single(crate::providers::names::RADARR, &item);
             let snapshots = vec![(crate::providers::names::RADARR.to_string(), raw)];
 
-            Ok(Some(persist(state, item, &snapshots).await?))
+            let stored = persist(state, item, &snapshots, provenance).await?;
+            Ok(Some(stored))
         }
         Ok(None) => Ok(None),
         Err(e) => {

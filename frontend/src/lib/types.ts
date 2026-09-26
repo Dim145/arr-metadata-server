@@ -561,6 +561,76 @@ export interface Snapshot {
   payload?: unknown
 }
 
+/** Who gave one of a work's values, as its last merge worked out. */
+export interface ValueSource {
+  /** The provider whose value was kept. */
+  from: string
+  /** Others that gave the same value. Skyhook is listed beside TheTVDB, whose answer it republishes. */
+  agreed?: string[]
+  /** Others that gave another value, and lost to it. */
+  differed?: string[]
+  /** Those ahead of it that gave none: why a lower source's value stands. */
+  passed?: string[]
+}
+
+/** Where a work's values came from. */
+export interface WorkProvenance {
+  /** By field name, as the registry names fields; `credits` and `relations` too. */
+  fields?: Record<string, ValueSource>
+  /** The images kept, counted by the provider they came from. */
+  images?: Record<string, number>
+  /** The provider of the episode list and its numbering. */
+  episodes?: string
+  /** Each translation kept, by language, to the provider it came from. */
+  translations?: Record<string, string>
+  /** Each rating kept, by the agency it is filed under, to the provider that reported it. */
+  ratings?: Record<string, string>
+}
+
+/** One provider a work could be synced from. */
+export interface SyncSource {
+  provider: string
+  /** When it last answered for this work, if it ever has. */
+  fetchedAt?: string
+  /** Why it cannot be asked now. */
+  unavailable?: 'off' | 'noId' | 'manual'
+  /** Asked along with it, because part of what it gives is theirs. */
+  brings?: string[]
+}
+
+export interface ProvenanceReport {
+  /** Absent for a work entered by hand, or not refreshed since provenance began to be kept. */
+  provenance?: WorkProvenance
+  sources: SyncSource[]
+}
+
+export interface SyncOutcome {
+  item: MediaItem
+  answered: string[]
+  silent: string[]
+}
+
+/** What each source gives a work, and which wins. */
+export interface SourceRules {
+  /** Every provider, in the order the merge consults them. */
+  providers: { id: string; rank: number; on: boolean }[]
+  rows: SourceRule[]
+}
+
+export interface SourceRule {
+  group: 'identity' | 'release' | 'classification' | 'people' | 'episodes'
+  /** A key of the page's own row names. */
+  field: string
+  /** `first` the first with a value; `whole` a list taken whole from the first that has one; `union` every source adds its own; `spine` whoever numbers the episodes first; `either` true if anyone says so. */
+  rule: 'first' | 'whole' | 'union' | 'spine' | 'either'
+  /** Who supplies it, in the order their values are taken. */
+  suppliers: string[]
+  /** Whose value replaces every other's. */
+  authorities?: string[]
+  /** When it applies to one kind of work only. */
+  only?: 'series' | 'movie'
+}
+
 export interface ItemPage {
   items: MediaItem[]
   total: number
