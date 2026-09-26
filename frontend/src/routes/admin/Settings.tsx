@@ -10,7 +10,7 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 
 import {
@@ -29,10 +29,10 @@ import {
   Spinner,
 } from '../../components/ui'
 import { type GroupId, ServerSettings, groupOf, useRegistry } from '../../components/ScopeSettings'
-import { ApiError, api } from '../../lib/api'
+import { ApiError, api, query } from '../../lib/api'
 import { cn } from '../../lib/cn'
 import { useI18n } from '../../lib/i18n'
-import type { ExportSummary, Settings as Config } from '../../lib/types'
+import type { ExportStarted, JobsResponse, Settings as Config } from '../../lib/types'
 import { PolicyChip } from './Dashboard'
 
 export function Settings() {
@@ -234,16 +234,50 @@ function State({ on }: { on: boolean }) {
 }
 
 /** Write a `.nfo` document for everything, for a library Plex reads. */
+/** `N works, N episodes, N failed`, as the server words an export's run. */
+function exportCounts(detail?: string) {
+  const match = detail?.match(/^(\d+) works, (\d+) episodes, (\d+) failed$/)
+  return match ? { works: Number(match[1]), episodes: Number(match[2]), failed: Number(match[3]) } : undefined
+}
+
+/**
+ * The export, written in the background: a library's artwork is thousands of
+ * downloads. A run seen during this visit is followed until it ends — the one
+ * started here, or one another tab started — and what it wrote is read off its
+ * record. One that ended before the visit is the jobs page's to tell.
+ */
 function NfoExport() {
   const { t } = useI18n()
   const queryClient = useQueryClient()
 
   const run = useMutation({
-    mutationFn: () => api.post<ExportSummary>('/export/nfo'),
+    mutationFn: () => api.post<ExportStarted>('/export/nfo'),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['jobs'] })
     },
   })
+
+  const latest = useQuery({
+    queryKey: ['jobs', 'export.nfo'],
+    queryFn: () => api.get<JobsResponse>(`/jobs${query({ kind: 'export.nfo', limit: 1 })}`),
+    refetchInterval: (state) => (state.state.data?.jobs[0]?.status === 'running' ? 3000 : false),
+    // Asked again on coming back to the tab, whatever the app's default: an
+    // export another tab started is otherwise never seen here.
+    refetchOnWindowFocus: 'always',
+  })
+  const job = latest.data?.jobs[0]
+  const [followed, setFollowed] = useState<string>()
+  // When this page was opened: a run started after it is one of this visit's,
+  // even when it has ended by the time this tab asks.
+  const [opened] = useState(() => Date.now())
+  const started = run.data?.jobId
+  useEffect(() => {
+    if (started) setFollowed(started)
+    else if (job && (job.status === 'running' || Date.parse(job.createdAt) >= opened)) setFollowed(job.id)
+  }, [started, job, opened])
+  const mine = job && job.id === followed ? job : undefined
+  const counts = mine?.status === 'succeeded' ? exportCounts(mine.detail) : undefined
+  const writing = run.isPending || job?.status === 'running'
 
   // The code alone. On this route `provider_not_configured` has exactly one
   // cause — no export path is set — and matching on the message text as well
@@ -258,18 +292,32 @@ function NfoExport() {
           {t.admin.config.exportBody}
         </p>
 
-        {run.isSuccess ? (
+        {writing ? (
+          <p role="status" className="mt-2 max-w-prose text-xs leading-relaxed text-bone-dim">
+            {t.admin.config.exportBackground}{' '}
+            <Link to="/admin/jobs" className="text-vermillion underline-offset-2 hover:underline">
+              {t.admin.config.exportJobs}
+            </Link>
+          </p>
+        ) : counts ? (
           <p
+            role="status"
             className={cn(
               'mt-2 font-mono text-xs',
               // Green says "this worked". A run that wrote nothing and failed on
               // every work did not, whatever status code carried the summary.
-              run.data.works === 0 && run.data.failed > 0 ? 'text-vermillion' : 'text-moss',
+              counts.works === 0 && counts.failed > 0 ? 'text-vermillion' : 'text-moss',
             )}
           >
-            {t.admin.config.exportDone(run.data.works, run.data.episodes)}
-            {run.data.failed > 0 ? ` · ${t.admin.config.exportFailed(run.data.failed)}` : ''}
-            <span className="mt-0.5 block break-all text-bone-faint">{run.data.root}</span>
+            {t.admin.config.exportDone(counts.works, counts.episodes)}
+            {counts.failed > 0 ? ` · ${t.admin.config.exportFailed(counts.failed)}` : ''}
+            {run.data ? (
+              <span className="mt-0.5 block break-all text-bone-faint">{run.data.root}</span>
+            ) : null}
+          </p>
+        ) : mine?.status === 'failed' ? (
+          <p role="alert" className="mt-2 text-xs text-vermillion">
+            {mine.error}
           </p>
         ) : null}
 
@@ -280,9 +328,9 @@ function NfoExport() {
         ) : null}
       </div>
 
-      <Button variant="primary" onClick={() => run.mutate()} disabled={run.isPending}>
-        {run.isPending ? <Spinner className="size-4" /> : <Glyph name="download" className="size-4" />}
-        {run.isPending ? t.admin.config.exportRunning : t.admin.config.exportRun}
+      <Button variant="primary" onClick={() => run.mutate()} disabled={writing}>
+        {writing ? <Spinner className="size-4" /> : <Glyph name="download" className="size-4" />}
+        {writing ? t.admin.config.exportRunning : t.admin.config.exportRun}
       </Button>
     </div>
   )

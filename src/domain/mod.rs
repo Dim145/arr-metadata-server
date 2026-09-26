@@ -101,6 +101,10 @@ pub struct MediaItem {
     pub homepage: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trailer_youtube_id: Option<String>,
+    /// Where the work's theme music is, as its provider keeps it: an address,
+    /// like an image's. Fankai keeps one for every Fan-Kai.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theme_music: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub popularity: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -185,6 +189,7 @@ impl MediaItem {
             content_rating_country: None,
             homepage: None,
             trailer_youtube_id: None,
+            theme_music: None,
             popularity: None,
             collection_tmdb_id: None,
             genres: Vec::new(),

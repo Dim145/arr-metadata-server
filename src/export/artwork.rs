@@ -24,7 +24,7 @@ use crate::domain::{CoverType, Episode, MediaItem, MediaKind};
 /// is a redirect to something that is not a picture.
 const MAX_BYTES: u64 = 25 * 1024 * 1024;
 
-/// One picture to place at one path.
+/// One file to place at one path: a picture, or the theme.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Download {
     /// Relative to the export root, using `/` as the separator.
@@ -32,7 +32,8 @@ pub struct Download {
     pub url: String,
 }
 
-/// Every picture a work's documents refer to, and where each one belongs.
+/// Every picture a work's documents refer to, and its theme music, and where
+/// each one belongs.
 ///
 /// Pure, so the layout can be checked without a network or a filesystem.
 pub fn plan(item: &MediaItem) -> Vec<Download> {
@@ -91,6 +92,20 @@ pub fn plan(item: &MediaItem) -> Vec<Download> {
 
         let path = format!("{folder}/.actors/{name}");
 
+        if taken.insert(path.clone()) {
+            downloads.push(Download {
+                path,
+                url: url.to_string(),
+            });
+        }
+    }
+
+    // The theme, where one is known. `theme.mp3` beside the show's documents is
+    // what Plex's local assets, Jellyfin and Kodi's theme add-ons play.
+    if item.kind == MediaKind::Series
+        && let Some(url) = item.theme_music.as_deref().filter(|u| !u.trim().is_empty())
+    {
+        let path = format!("{folder}/theme.mp3");
         if taken.insert(path.clone()) {
             downloads.push(Download {
                 path,
@@ -290,6 +305,27 @@ mod tests {
         let mut item = MediaItem::empty(MediaKind::Series);
         item.slug = "breaking-bad-2008".into();
         item
+    }
+
+    #[test]
+    fn a_theme_lands_as_theme_mp3_beside_the_show() {
+        let mut item = series();
+        item.theme_music = Some("https://metadata.fankai.fr/series/12/theme?t=1".into());
+
+        let downloads = plan(&item);
+        assert_eq!(
+            downloads,
+            vec![Download {
+                path: "series/breaking-bad-2008/theme.mp3".into(),
+                url: "https://metadata.fankai.fr/series/12/theme?t=1".into(),
+            }]
+        );
+
+        // A film's folder has no theme to play.
+        let mut film = MediaItem::empty(MediaKind::Movie);
+        film.slug = "arrival-2016".into();
+        film.theme_music = item.theme_music.clone();
+        assert!(plan(&film).is_empty());
     }
 
     #[test]

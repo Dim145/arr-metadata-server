@@ -230,6 +230,7 @@ series/breaking-bad-2008/tvshow.nfo
 series/breaking-bad-2008/poster.jpg      fanart.jpg  banner.jpg  clearlogo.png
 series/breaking-bad-2008/season01-poster.jpg
 series/breaking-bad-2008/.actors/Bryan Cranston.jpg
+series/naruto-shippuden-yabai-2007/theme.mp3             where the provider keeps a theme
 series/breaking-bad-2008/Season 01/S01E01.nfo
 series/breaking-bad-2008/Season 01/S01E01-thumb.jpg
 movies/arrival-2016/movie.nfo            poster.jpg  fanart.jpg  …
@@ -241,12 +242,20 @@ Plex often will not. Copy or link this tree next to your media. Re-running the
 export rewrites the documents and leaves existing pictures alone, so it is cheap
 to repeat. Set `AMS_NFO_EXPORT_ARTWORK=false` for documents only.
 
+The call answers at once, `202` with the job it started, and the export is
+written in the background: a library's artwork is thousands of downloads,
+more than a request can wait for. The run is listed under **Jobs** as
+`export.nfo`, with what it wrote once it is done; a second export asked for
+while one is running is refused with `409`.
+
 A Fan-Kai comes out the same way once the Fankai source is on and the
 production has been imported or asked for by Sonarr: `series/{slug}/tvshow.nfo`
 with `<uniqueid type="fankai">`, and one document per film under the season
 its saga is, numbered as Fankai names the files — `Season 01/S01E02.nfo` beside
 `Horimiya Kaï.S01E02.MULTI.1080p.x265-FANKAI.mkv`. Plex reads it through the
-same agent; Jellyfin and Kodi read it as they read any `.nfo`.
+same agent; Jellyfin and Kodi read it as they read any `.nfo`. Its theme music
+lands beside it as `theme.mp3`, the name Plex's local assets, Jellyfin and
+Kodi's theme add-ons play as the show's theme.
 
 Jellyfin and Emby are a different matter — both accept metadata plugins, so a
 direct provider for them is possible. It is not built yet.

@@ -33,7 +33,7 @@ const ITEM_COLUMNS: &str = "
     id, kind, slug, title, sort_title, original_title, overview, status,
     original_language, original_country, runtime, year, first_aired, last_aired,
     in_cinemas, physical_release, digital_release, air_time, network, studio,
-    content_rating, content_rating_country, homepage, trailer_youtube_id, popularity, genres, keywords,
+    content_rating, content_rating_country, homepage, trailer_youtube_id, theme_music, popularity, genres, keywords,
     collection_tmdb_id, is_manual, is_enabled, is_adult, created_at, updated_at,
     refreshed_at, refresh_after, refresh_error
 ";
@@ -66,6 +66,7 @@ fn map_item(row: &sqlx::any::AnyRow) -> Result<MediaItem> {
         content_rating_country: row.opt_text("content_rating_country")?,
         homepage: row.opt_text("homepage")?,
         trailer_youtube_id: row.opt_text("trailer_youtube_id")?,
+        theme_music: row.opt_text("theme_music")?,
         popularity: row.opt_real("popularity")?,
         collection_tmdb_id: row.opt_big("collection_tmdb_id")?,
         genres: row.text_list("genres")?,
@@ -2057,13 +2058,22 @@ pub async fn upsert(db: &Db, write: ItemWrite<'_>) -> Result<()> {
 /// slug addresses one work, which means the collision has to be resolved here
 /// rather than rejected: an entry nobody can look up is worth less than one
 /// under `ram-2023-2`.
+///
+/// A work that arrives without one is given one from its title and year: an
+/// empty slug named the NFO export's folder `series/`, which the export
+/// refuses to write, and the next such work `series/-2`.
 async fn free_slug(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaItem) -> Result<String> {
     let sql = "SELECT id FROM media_item WHERE kind = ? AND slug = ? LIMIT 1";
+    let base = if item.slug.trim().is_empty() {
+        crate::domain::make_slug(&item.title, item.year)
+    } else {
+        item.slug.clone()
+    };
 
     for attempt in 1..=50 {
         let candidate = match attempt {
-            1 => item.slug.clone(),
-            n => format!("{}-{n}", item.slug),
+            1 => base.clone(),
+            n => format!("{base}-{n}"),
         };
 
         let taken: Option<String> = sqlx::query_scalar(db.sql(sql))
@@ -2080,7 +2090,7 @@ async fn free_slug(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaItem) -> 
     }
 
     // Fifty works sharing a title and year is not a collision any more.
-    Ok(format!("{}-{}", item.slug, &item.id[..8]))
+    Ok(format!("{base}-{}", &item.id[..8]))
 }
 
 async fn upsert_row(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaItem) -> Result<()> {
@@ -2092,14 +2102,14 @@ async fn upsert_row(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaItem) ->
             id, kind, slug, title, sort_title, original_title, overview, status,
             original_language, original_country, runtime, year, first_aired, last_aired,
             in_cinemas, physical_release, digital_release, air_time, network, studio,
-            content_rating, content_rating_country, homepage, trailer_youtube_id,
+            content_rating, content_rating_country, homepage, trailer_youtube_id, theme_music,
             popularity, genres, keywords, collection_tmdb_id, is_manual, is_enabled, is_adult,
             created_at, updated_at, refreshed_at, refresh_after, refresh_error,
             listed_title, listed_year, listed_genres, listed_keywords, listed_network,
             listed_studio, listed_status, listed_language, listed_release, listed_score
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                   ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (id) DO UPDATE SET
             kind = excluded.kind,
             slug = excluded.slug,
@@ -2124,6 +2134,7 @@ async fn upsert_row(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaItem) ->
             content_rating_country = excluded.content_rating_country,
             homepage = excluded.homepage,
             trailer_youtube_id = excluded.trailer_youtube_id,
+            theme_music = excluded.theme_music,
             popularity = excluded.popularity,
             genres = excluded.genres,
             keywords = excluded.keywords,
@@ -2171,6 +2182,7 @@ async fn upsert_row(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaItem) ->
         .bind(&item.content_rating_country)
         .bind(&item.homepage)
         .bind(&item.trailer_youtube_id)
+        .bind(&item.theme_music)
         .bind(item.popularity)
         .bind(text_list(&item.genres))
         .bind(text_list(&item.keywords))
@@ -2649,6 +2661,7 @@ mod tests {
         item.genres = vec!["Drama".into(), "Mystery".into()];
         item.keywords = vec!["test".into()];
         item.popularity = Some(12.5);
+        item.theme_music = Some("https://example.invalid/theme.mp3".into());
         item.external_ids = ExternalIds {
             tmdb: Some(4242),
             imdb: Some("tt4242424".into()),
@@ -3021,6 +3034,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_work_that_arrives_without_a_slug_is_given_one() {
+        let db = db().await;
+
+        let mut item = sample();
+        item.slug = String::new();
+        upsert(
+            &db,
+            ItemWrite {
+                item: &item,
+                replace_children: true,
+            },
+        )
+        .await
+        .expect("the write succeeds");
+
+        let stored = get(&db, &item.id).await.unwrap().expect("stored");
+        assert_eq!(stored.slug, "round-trip-2026");
+    }
+
+    #[tokio::test]
     async fn rewriting_the_same_work_keeps_its_slug() {
         let db = db().await;
         let item = sample();
@@ -3068,6 +3101,7 @@ mod tests {
         assert_eq!(read.status, written.status);
         assert_eq!(read.runtime, written.runtime);
         assert_eq!(read.content_rating, written.content_rating);
+        assert_eq!(read.theme_music, written.theme_music);
         assert_eq!(read.content_rating_country, written.content_rating_country);
         assert_eq!(read.in_cinemas, written.in_cinemas);
         assert_eq!(read.genres, written.genres);

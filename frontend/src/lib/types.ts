@@ -165,6 +165,8 @@ export interface MediaItem {
   contentRating?: string
   homepage?: string
   trailerYoutubeId?: string
+  /** Where the work's theme music is: Fankai keeps one for every Fan-Kai. */
+  themeMusic?: string
   popularity?: number
   collectionTmdbId?: number
   isAdult?: boolean
@@ -270,11 +272,11 @@ export interface JobsResponse {
   total: number
 }
 
-export interface ExportSummary {
+/** An export under way, written in the background and recorded as a job. */
+export interface ExportStarted {
   root: string
-  works: number
-  episodes: number
-  failed: number
+  /** The `export.nfo` run in the jobs list; its detail reads `N works, N episodes, N failed`. */
+  jobId?: string
 }
 
 export interface Stats {

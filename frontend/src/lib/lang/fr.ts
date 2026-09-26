@@ -234,6 +234,9 @@ export const fr: Dict = {
     relatedHint: 'Telles qu’AniList les range à côté de celle-ci.',
     relatedHintRecut: 'Les Fan-Kai qui en sont tirés d’abord, puis les œuvres qu’AniList range à côté.',
     relatedHintRecutOnly: 'Les Fan-Kai qui en sont tirés.',
+    theme: 'Générique',
+    themeHint: 'Le générique, tel que sa source le conserve',
+    themeFailed: 'Générique indisponible',
     relatedHintFankai: 'Telles que le wiki Fankai les range : l’anime dont il est tiré, et le Fan-Kai qui lui fait suite.',
     onSite: (site: string) => `Sur ${site}`,
     notHeld: 'Absente de ce catalogue',
@@ -1060,6 +1063,8 @@ export const fr: Dict = {
         `${works <= 1 ? `${works} œuvre` : `${works} œuvres`}, ${episodes <= 1 ? `${episodes} épisode` : `${episodes} épisodes`}`,
       exportFailed: (n: number) => `${n} en échec`,
       exportNoPath: 'AMS_NFO_EXPORT_PATH n’est pas défini.',
+      exportBackground: 'Écrit en arrière-plan : cette page peut être quittée, et l’exécution est consignée.',
+      exportJobs: 'La suivre dans Tâches',
       docs: 'Documentation de l’API',
       docsTitle: 'Toutes les routes que ce serveur sert',
       docsBody:

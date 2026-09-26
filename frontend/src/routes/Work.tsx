@@ -246,7 +246,7 @@ function Plate({ item }: { item: MediaItem }) {
               </div>
             </div>
 
-            {item.trailerYoutubeId || item.homepage || subscribable || me.data?.canWrite ? (
+            {item.trailerYoutubeId || item.themeMusic || item.homepage || subscribable || me.data?.canWrite ? (
               <div className="mt-5 flex flex-wrap items-center gap-2">
                 {item.trailerYoutubeId ? (
                   <Button onClick={() => setTrailer(true)}>
@@ -254,6 +254,7 @@ function Plate({ item }: { item: MediaItem }) {
                     {t.trailer.play}
                   </Button>
                 ) : null}
+                {item.themeMusic ? <ThemeMusic key={item.themeMusic} url={item.themeMusic} /> : null}
                 {item.homepage ? (
                   <ExternalLink href={item.homepage} className="min-h-11 px-3 text-sm text-bone-dim">
                     {t.work.homepage}
@@ -855,6 +856,61 @@ function Related({ item }: { item: MediaItem }) {
         ))}
       </PosterShelf>
     </section>
+  )
+}
+
+/**
+ * The work's theme, played on demand: nothing is fetched until somebody
+ * presses the button, and leaving the page stops it.
+ */
+function ThemeMusic({ url }: { url: string }) {
+  const { t } = useI18n()
+  const audio = useRef<HTMLAudioElement>(null)
+  const [playing, setPlaying] = useState(false)
+  const [failed, setFailed] = useState(false)
+
+  useEffect(() => {
+    const element = audio.current
+    return () => element?.pause()
+  }, [])
+
+  return (
+    <>
+      {/* Unavailable, it says so in words: a disabled button shows no tooltip. */}
+      <Button
+        aria-pressed={failed ? undefined : playing}
+        title={failed ? undefined : t.work.themeHint}
+        disabled={failed}
+        onClick={() => {
+          const element = audio.current
+          if (!element) return
+          if (element.paused) {
+            // A pause pressed before playback began rejects the play() it
+            // interrupted: that is the reader's doing, not a broken file.
+            element.play().catch((error: unknown) => {
+              if (!(error instanceof DOMException && error.name === 'AbortError')) setFailed(true)
+            })
+          } else {
+            element.pause()
+          }
+        }}
+      >
+        <Glyph name={failed ? 'alert' : playing ? 'pause' : 'play'} className="size-4" />
+        {failed ? t.work.themeFailed : t.work.theme}
+      </Button>
+      <audio
+        ref={audio}
+        src={url}
+        preload="none"
+        onPlay={() => setPlaying(true)}
+        onPause={() => setPlaying(false)}
+        onEnded={() => setPlaying(false)}
+        onError={() => {
+          setPlaying(false)
+          setFailed(true)
+        }}
+      />
+    </>
   )
 }
 

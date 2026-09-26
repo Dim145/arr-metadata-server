@@ -155,6 +155,7 @@ const PATHS = {
     </>
   ),
   play: <path d="M5 3.3v9.4l7.6-4.7Z" />,
+  pause: <path d="M5.5 3.5v9M10.5 3.5v9" />,
   calendar: (
     <>
       <path d="M2.5 4.5h11v8.8h-11Z" />

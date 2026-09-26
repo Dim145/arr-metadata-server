@@ -314,7 +314,8 @@ Lagoon Henshū* — or as `fankai:` and its id, and on the import page; nothing 
 fetched until it is asked for, so Fankai's catalogue never lands here whole.
 Sonarr is handed an id of this server's own, Fankai's plus 200 000 000, the way
 a TMDB-only series gets one; Plex, Jellyfin and Kodi get the production through
-the NFO export, with Fankai's id as a `uniqueid`. The kaïeur and the voice cast
+the NFO export, with Fankai's id as a `uniqueid` and its theme music beside
+it as `theme.mp3`, which a work's page also plays on demand. The kaïeur and the voice cast
 are its credits; the kind of recut — Kaï, Yabai, Henshū — is a tag rather than
 a genre. One call a second, and the listing is kept and revalidated by its ETag.
 

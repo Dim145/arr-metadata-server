@@ -129,17 +129,48 @@ pub struct ExportSummary {
     pub failed: usize,
 }
 
+/// An export under way: where it writes, and the job run that records it.
+#[derive(Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportStarted {
+    pub root: String,
+    /// The run under `export.nfo` in the jobs list. Its detail, once it is
+    /// done, reads `N works, N episodes, N failed`; the settings page reads
+    /// the counts out of it.
+    pub job_id: Option<String>,
+}
+
+/// Whether an export is being written. One at a time: two would write the
+/// same files, each over the other's.
+static EXPORTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Lets the next export in, however this one ends — a panic included.
+struct Exporting;
+
+impl Drop for Exporting {
+    fn drop(&mut self) {
+        EXPORTING.store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+
 /// Write a `.nfo` document for everything, under `AMS_NFO_EXPORT_PATH`.
 ///
 /// The layout is `series/{slug}/tvshow.nfo`, `series/{slug}/Season NN/SNNENN.nfo`
 /// and `movies/{slug}/movie.nfo`. That directory structure is this server's own:
 /// nothing here can know how your library is laid out, so the files land
 /// somewhere predictable for you to copy or link from.
+///
+/// Answered at once, and written in the background: a library's artwork is
+/// thousands of downloads — One Piece alone has a still for each of more than
+/// a thousand episodes — and a request is cut off after a minute, which used
+/// to stop the export wherever it had got to. The run is a job; its record
+/// says when it is done and what it wrote.
 #[utoipa::path(
     post, path = "/export/nfo", tag = TAG,
     responses(
-        (status = 200, body = ExportSummary),
+        (status = 202, body = ExportStarted),
         (status = 403, description = "The caller may not write"),
+        (status = 409, description = "An export is already being written"),
         (status = 503, description = "AMS_NFO_EXPORT_PATH is not set"),
     ),
 )]
@@ -147,7 +178,7 @@ async fn export_all(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
     ip: ClientIp,
-) -> AppResult<Json<ExportSummary>> {
+) -> AppResult<(StatusCode, Json<ExportStarted>)> {
     if !identity.can_write() {
         return Err(AppError::Forbidden);
     }
@@ -156,53 +187,71 @@ async fn export_all(
         return Err(AppError::ProviderNotConfigured);
     };
 
+    if EXPORTING.swap(true, std::sync::atomic::Ordering::AcqRel) {
+        return Err(AppError::Conflict(
+            "an export is already being written; its run is in the jobs list".into(),
+        ));
+    }
+    let exporting = Exporting;
+
     let record = job::start(&state.db, KIND, None)
         .await
         .inspect_err(|e| tracing::warn!(error = %e, "could not open a job run"))
         .ok();
 
-    let outcome = write_everything(&state, &root).await;
+    let started = ExportStarted {
+        root: root.display().to_string(),
+        job_id: record.clone(),
+    };
 
-    if let Some(record) = record {
-        let closed = match &outcome {
-            Ok(s) => {
-                job::finish(
-                    &state.db,
-                    &record,
-                    Some(&format!(
-                        "{} works, {} episodes, {} failed",
-                        s.works, s.episodes, s.failed
-                    )),
-                    None,
-                )
-                .await
+    tokio::spawn(async move {
+        let _exporting = exporting;
+        let outcome = write_everything(&state, &root).await;
+
+        if let Some(record) = record {
+            let closed = match &outcome {
+                Ok(s) => {
+                    job::finish(
+                        &state.db,
+                        &record,
+                        Some(&format!(
+                            "{} works, {} episodes, {} failed",
+                            s.works, s.episodes, s.failed
+                        )),
+                        None,
+                    )
+                    .await
+                }
+                Err(e) => job::finish(&state.db, &record, None, Some(&format!("{e:#}"))).await,
+            };
+
+            if let Err(e) = closed {
+                tracing::warn!(error = %e, "could not close the job run");
             }
-            Err(e) => job::finish(&state.db, &record, None, Some(&e.to_string())).await,
-        };
-
-        if let Err(e) = closed {
-            tracing::warn!(error = %e, "could not close the job run");
         }
-    }
 
-    let summary = outcome.map_err(AppError::Internal)?;
+        match outcome {
+            Ok(summary) => {
+                audit::record(
+                    &state,
+                    Event {
+                        identity: Some(&identity),
+                        ip: &ip,
+                        action: Action::NfoExported,
+                        target: Some(&summary.root),
+                        detail: Some(&format!(
+                            "{} works, {} episodes",
+                            summary.works, summary.episodes
+                        )),
+                    },
+                )
+                .await;
+            }
+            Err(e) => tracing::error!(error = format_args!("{e:#}"), "the .nfo export failed"),
+        }
+    });
 
-    audit::record(
-        &state,
-        Event {
-            identity: Some(&identity),
-            ip: &ip,
-            action: Action::NfoExported,
-            target: Some(&summary.root),
-            detail: Some(&format!(
-                "{} works, {} episodes",
-                summary.works, summary.episodes
-            )),
-        },
-    )
-    .await;
-
-    Ok(Json(summary))
+    Ok((StatusCode::ACCEPTED, Json(started)))
 }
 
 const KIND: &str = "export.nfo";

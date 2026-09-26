@@ -214,6 +214,8 @@ fn strip_port(host: &str) -> &str {
 /// * **inline styles** are how React writes a `style` attribute, and the
 ///   interface uses them for per-card animation delays and accent colours.
 ///
+/// * **media** from the same hosts, for a work's theme music, fetched only
+///   once somebody presses play;
 /// * **one frame**: a work's trailer, played from YouTube's no-cookie domain —
 ///   and only once somebody presses play, so the page itself sends nobody to
 ///   YouTube.
@@ -224,6 +226,7 @@ fn strip_port(host: &str) -> &str {
 /// two ways a stray tag could redirect a relative URL or a form off-origin.
 const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; \
      img-src 'self' data: https:; \
+     media-src 'self' https:; \
      style-src 'self' 'unsafe-inline'; \
      script-src 'self'; \
      connect-src 'self'; \

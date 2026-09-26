@@ -403,6 +403,8 @@ struct Production {
     #[serde(default)]
     images: Images,
     statistics: Option<Statistics>,
+    /// The production's theme, an MP3 of a couple of minutes.
+    theme_music: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -504,6 +506,7 @@ fn to_item(
     item.year = production
         .year
         .or_else(|| production.premiered.as_deref()?.get(..4)?.parse().ok());
+    item.slug = crate::domain::make_slug(&item.title, item.year);
     item.first_aired = production.premiered.clone().filter(|d| !d.is_empty());
     item.last_aired = production
         .statistics
@@ -520,6 +523,10 @@ fn to_item(
             .unwrap_or_else(|| "Fan-Kai".to_string()),
     );
     item.homepage = Some(format!("{SITE}/productions/{}", production.id));
+    item.theme_music = production
+        .theme_music
+        .clone()
+        .filter(|u| u.starts_with("https://"));
 
     if let Some((country, language)) = production.country.as_deref().and_then(country) {
         item.original_country = Some(country.to_string());
@@ -981,7 +988,8 @@ mod tests {
             "statistics": {
                 "episodes_count": 36, "first_aired": "2022-11-06",
                 "last_aired": "2024-11-16", "seasons_count": 4
-            }
+            },
+            "theme_music": "https://metadata.fankai.fr/series/12/theme?t=1"
         }))
         .unwrap()
     }
@@ -1142,6 +1150,8 @@ mod tests {
         let item = to_item(&production(), &seasons(), &actors(), true);
 
         assert_eq!(item.title, "Naruto Shippuden Yabai");
+        // The export's folder, among other things, is named after it.
+        assert_eq!(item.slug, "naruto-shippuden-yabai-2007");
         assert_eq!(item.original_title.as_deref(), Some("ナルト 疾風伝"));
         assert_eq!(item.external_ids.fankai, Some(12));
         assert_eq!(item.external_ids.tvdb, None);
@@ -1156,6 +1166,10 @@ mod tests {
         assert_eq!(
             item.homepage.as_deref(),
             Some("https://fankai.fr/productions/12")
+        );
+        assert_eq!(
+            item.theme_music.as_deref(),
+            Some("https://metadata.fankai.fr/series/12/theme?t=1")
         );
         assert_eq!(
             item.overview.as_deref(),

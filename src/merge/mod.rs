@@ -197,6 +197,7 @@ fn fold(into: &mut MediaItem, other: MediaItem) {
     );
     fill(&mut into.homepage, other.homepage);
     fill(&mut into.trailer_youtube_id, other.trailer_youtube_id);
+    fill(&mut into.theme_music, other.theme_music);
 
     if into.title.trim().is_empty() {
         into.title = other.title;

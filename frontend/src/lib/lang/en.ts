@@ -235,6 +235,9 @@ export const en = {
     relatedHint: 'As AniList files them beside this one.',
     relatedHintRecut: 'The Fan-Kai cut from it first, then the works AniList files beside it.',
     relatedHintRecutOnly: 'The Fan-Kai cut from it.',
+    theme: 'Theme',
+    themeHint: 'The theme music, as its provider keeps it',
+    themeFailed: 'Theme unavailable',
     relatedHintFankai: 'As the Fankai wiki files them: the anime it was cut from, and the Fan-Kai that follows it.',
     onSite: (site: string) => `On ${site}`,
     notHeld: 'Not in this catalogue',
@@ -1056,6 +1059,8 @@ export const en = {
         `${works === 1 ? '1 work' : `${works} works`}, ${episodes === 1 ? '1 episode' : `${episodes} episodes`}`,
       exportFailed: (n: number) => `${n} failed`,
       exportNoPath: 'AMS_NFO_EXPORT_PATH is not set.',
+      exportBackground: 'Written in the background — this page can be left, and the run is recorded.',
+      exportJobs: 'Follow it in Jobs',
       docs: 'API documentation',
       docsTitle: 'Every route this server answers',
       docsBody:
