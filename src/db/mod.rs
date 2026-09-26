@@ -148,6 +148,27 @@ pub struct Db {
     dialect: Dialect,
 }
 
+/// A PostgreSQL address with its statement cache switched off, unless the
+/// operator sized the cache themselves.
+///
+/// sqlx 0.9's `Any` driver binds a missing double as a single-precision null
+/// — `sqlx-core`'s `any/arguments.rs` has `Real` and `Double` the wrong way
+/// round — and PostgreSQL fixes a cached statement's parameter types the first
+/// time it is prepared. A statement first run with a missing rating is
+/// prepared for a four-byte float and refuses the eight bytes of the next real
+/// one: "incorrect binary data format", and the work is not stored. A Fan-Kai
+/// has no rating on any episode, so the series stored after one on the same
+/// connection failed. An unnamed statement is typed by each run's own values,
+/// which a null of either width satisfies.
+fn uncached(url: &str) -> String {
+    if url.contains("statement-cache-capacity=") {
+        return url.to_string();
+    }
+
+    let joiner = if url.contains('?') { '&' } else { '?' };
+    format!("{url}{joiner}statement-cache-capacity=0")
+}
+
 impl Db {
     pub async fn connect(cfg: &config::Database) -> Result<Self> {
         sqlx::any::install_default_drivers();
@@ -157,6 +178,11 @@ impl Db {
         if dialect == Dialect::Sqlite {
             ensure_sqlite_parent_dir(&cfg.url)?;
         }
+
+        let url = match dialect {
+            Dialect::Postgres => uncached(&cfg.url),
+            Dialect::Sqlite => cfg.url.clone(),
+        };
 
         let pool = AnyPoolOptions::new()
             // SQLite tolerates concurrent readers but a single writer; a wide pool
@@ -184,7 +210,7 @@ impl Db {
                     Ok(())
                 })
             })
-            .connect(&cfg.url)
+            .connect(&url)
             .await
             .with_context(|| format!("failed to connect to {}", redact(&cfg.url)))?;
 
@@ -408,6 +434,25 @@ pub const DEFAULT_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_postgres_address_is_opened_without_a_statement_cache() {
+        use super::uncached;
+
+        assert_eq!(
+            uncached("postgres://ams@db/ams"),
+            "postgres://ams@db/ams?statement-cache-capacity=0"
+        );
+        assert_eq!(
+            uncached("postgres://ams@db/ams?sslmode=disable"),
+            "postgres://ams@db/ams?sslmode=disable&statement-cache-capacity=0"
+        );
+        // An operator who sized it keeps their size.
+        assert_eq!(
+            uncached("postgres://ams@db/ams?statement-cache-capacity=50"),
+            "postgres://ams@db/ams?statement-cache-capacity=50"
+        );
+    }
+
     #[test]
     fn a_question_mark_that_is_not_a_placeholder_is_left_alone() {
         let pg = Dialect::Postgres;
