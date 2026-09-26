@@ -391,6 +391,7 @@ test.describe('credits', () => {
     anilist: 'AniList',
     mal: 'MyAnimeList',
     imdb: 'IMDb',
+    fankai: 'Fankai',
   }
 
   test('name every source that is switched on, and only those', async ({ page, request }) => {

@@ -270,7 +270,8 @@ async fn find_existing(state: &AppState, item: &MediaItem) -> Result<Option<Stri
 /// between TMDB entries; MyAnimeList and AniList number films and series in
 /// one sequence, and one of their entries is filed under a series by Skyhook
 /// and under another by the anime identifier list; TVmaze and TVRage ids are
-/// only as right as the provider that relayed them.
+/// only as right as the provider that relayed them. Fankai numbers each of
+/// its productions once, and nothing else carries its ids.
 fn names_one_work(source: ExternalSource) -> bool {
     matches!(
         source,
@@ -280,6 +281,7 @@ fn names_one_work(source: ExternalSource) -> bool {
             | ExternalSource::TvdbMovie
             | ExternalSource::TraktShow
             | ExternalSource::TraktMovie
+            | ExternalSource::Fankai
     )
 }
 

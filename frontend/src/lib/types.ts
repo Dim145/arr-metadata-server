@@ -11,6 +11,8 @@ export interface ExternalIds {
   mal?: number[]
   anilist?: number[]
   trakt?: number
+  /** Fankai's id, for a Fan-Kai production. */
+  fankai?: number
 }
 
 export interface Rating {
@@ -659,6 +661,8 @@ export interface Found {
   tmdbId?: number
   tvdbId?: number
   imdbId?: string
+  /** Fankai's id, for a Fan-Kai production. */
+  fankaiId?: number
   /** Whether this server already holds it, so the screen can say so. */
   stored: boolean
   isAdult: boolean

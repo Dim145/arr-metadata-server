@@ -21,8 +21,8 @@ use axum::{extract::Request, middleware::Next, response::Response};
 pub const SURFACES: [&str; 6] = ["sonarr", "radarr", "tmdb", "native", "probe", "ui"];
 
 /// The providers asked upstream, in the order they are counted.
-pub const PROVIDERS: [&str; 8] = [
-    "tmdb", "tvdb", "tvmaze", "anilist", "mal", "fanart", "skyhook", "radarr",
+pub const PROVIDERS: [&str; 9] = [
+    "tmdb", "tvdb", "tvmaze", "anilist", "mal", "fanart", "skyhook", "radarr", "fankai",
 ];
 
 /// How an upstream call ended: answered (a 404 is an answer), refused by the
@@ -94,15 +94,15 @@ struct Registry {
     requests: [[AtomicU64; 5]; 6],
     request_time: [Histogram; 6],
     /// Calls made upstream, by provider and outcome.
-    upstream: [[AtomicU64; 4]; 8],
-    upstream_time: [Histogram; 8],
+    upstream: [[AtomicU64; 4]; PROVIDERS.len()],
+    upstream_time: [Histogram; PROVIDERS.len()],
 }
 
 static REGISTRY: Registry = Registry {
     requests: [const { [const { AtomicU64::new(0) }; 5] }; 6],
     request_time: [const { Histogram::new() }; 6],
-    upstream: [const { [const { AtomicU64::new(0) }; 4] }; 8],
-    upstream_time: [const { Histogram::new() }; 8],
+    upstream: [const { [const { AtomicU64::new(0) }; 4] }; PROVIDERS.len()],
+    upstream_time: [const { Histogram::new() }; PROVIDERS.len()],
 };
 
 /// Which surface a path lands on.

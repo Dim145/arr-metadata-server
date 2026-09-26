@@ -25,6 +25,9 @@ pub enum ExternalSource {
     AniList,
     TraktShow,
     TraktMovie,
+    /// Fankai's id for a Fan-Kai production — a recut TheTVDB and TMDB list
+    /// nothing of, so it is the one id such a work has.
+    Fankai,
 }
 
 impl ExternalSource {
@@ -40,6 +43,7 @@ impl ExternalSource {
         Self::AniList,
         Self::TraktShow,
         Self::TraktMovie,
+        Self::Fankai,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -55,6 +59,7 @@ impl ExternalSource {
             Self::AniList => "anilist",
             Self::TraktShow => "trakt_show",
             Self::TraktMovie => "trakt_movie",
+            Self::Fankai => "fankai",
         }
     }
 
@@ -116,6 +121,9 @@ pub struct ExternalIds {
     pub anilist: Vec<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trakt: Option<i64>,
+    /// Fankai's id, for a Fan-Kai production; see `providers::fankai`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fankai: Option<i64>,
 }
 
 impl ExternalIds {
@@ -135,6 +143,7 @@ impl ExternalIds {
             ExternalSource::Mal => self.mal.extend(as_int()),
             ExternalSource::AniList => self.anilist.extend(as_int()),
             ExternalSource::TraktShow | ExternalSource::TraktMovie => self.trakt = as_int(),
+            ExternalSource::Fankai => self.fankai = as_int(),
         }
     }
 
@@ -170,6 +179,9 @@ impl ExternalIds {
             };
             out.push((src, v.to_string()));
         }
+        if let Some(v) = self.fankai {
+            out.push((ExternalSource::Fankai, v.to_string()));
+        }
 
         out
     }
@@ -184,6 +196,7 @@ impl ExternalIds {
             && self.mal.is_empty()
             && self.anilist.is_empty()
             && self.trakt.is_none()
+            && self.fankai.is_none()
     }
 }
 
@@ -247,12 +260,14 @@ mod tests {
             tvdb: Some(81189),
             imdb: Some("tt0903747".into()),
             mal: vec![7, 9],
+            fankai: Some(12),
             ..Default::default()
         };
 
         let rows = ids.rows(MediaKind::Series);
         assert!(rows.contains(&(ExternalSource::TmdbTv, "1396".into())));
         assert!(rows.contains(&(ExternalSource::TvdbSeries, "81189".into())));
+        assert!(rows.contains(&(ExternalSource::Fankai, "12".into())));
 
         let mut rebuilt = ExternalIds::default();
         for (source, value) in &rows {

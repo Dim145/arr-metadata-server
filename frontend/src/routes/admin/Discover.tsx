@@ -5,7 +5,7 @@
  * server fetches it — which is the right default and a poor way to add one
  * particular film, since it would mean making Radarr ask for it.
  *
- * Everything on this screen is a call to TMDB and TheTVDB over the network, so
+ * Everything on this screen is a call to TMDB, TheTVDB and Fankai over the network, so
  * nothing here happens on a keystroke: you say what you want, the screen says
  * it is asking, and it waits. A search that fired as you typed would open four
  * conversations with two providers to answer none of them.
@@ -34,13 +34,13 @@ import type { Found, MediaItem, MediaKind } from '../../lib/types'
 
 /** What a hit is, across searches: whichever identifiers the provider gave. */
 function keyOf(found: Found) {
-  return `${found.kind}:${found.tmdbId ?? ''}:${found.tvdbId ?? ''}:${found.imdbId ?? ''}`
+  return `${found.kind}:${found.tmdbId ?? ''}:${found.tvdbId ?? ''}:${found.imdbId ?? ''}:${found.fankaiId ?? ''}`
 }
 
 /** Whether the import route has anything to fetch this one by. */
 function fetchable(found: Found) {
   return found.kind === 'series'
-    ? Boolean(found.tvdbId || found.tmdbId || found.imdbId)
+    ? Boolean(found.tvdbId || found.tmdbId || found.imdbId || found.fankaiId)
     : Boolean(found.tmdbId || found.imdbId)
 }
 
@@ -79,6 +79,7 @@ export function Discover() {
         tmdbId: found.tmdbId,
         tvdbId: found.tvdbId,
         imdbId: found.imdbId,
+        fankaiId: found.fankaiId,
       }),
     onSuccess: (item, found) => {
       setImported((held) => ({ ...held, [keyOf(found)]: item.id }))
@@ -251,6 +252,7 @@ function Result({
     found.tmdbId ? `tmdb:${found.tmdbId}` : null,
     found.tvdbId ? `tvdb:${found.tvdbId}` : null,
     found.imdbId,
+    found.fankaiId ? `fankai:${found.fankaiId}` : null,
   ].filter(Boolean)
 
   return (

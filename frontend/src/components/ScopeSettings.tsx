@@ -60,7 +60,7 @@ export const SERVER: Scope = { scope: 'server', id: '-' }
 export const GROUPS = [
   { id: 'answering', prefixes: ['tmdb'] },
   { id: 'providers', prefixes: ['skyhook', 'radarr', 'sonarr', 'tvdb'] },
-  { id: 'sources', prefixes: ['tvmaze', 'anilist', 'mal', 'imdb'] },
+  { id: 'sources', prefixes: ['tvmaze', 'anilist', 'mal', 'imdb', 'fankai'] },
   { id: 'refresh', prefixes: ['refresh'] },
   { id: 'adult', prefixes: ['adult'] },
 ] as const

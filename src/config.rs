@@ -51,6 +51,7 @@ pub struct Config {
     pub anilist: Anilist,
     pub mal: Mal,
     pub imdb: Imdb,
+    pub fankai: Fankai,
     pub anime_mapping: AnimeMapping,
     /// Which provider wins when two disagree, most trusted first.
     pub provider_priority: Vec<String>,
@@ -164,6 +165,14 @@ pub struct Tvdb {
 pub struct Tvmaze {
     pub upstream: String,
     /// Seeds the `tvmaze.enabled` setting once; the interface decides after.
+    pub enabled: bool,
+}
+
+/// Fankai: the Fan-Kai productions, from their own metadata service. No key.
+#[derive(Clone, Debug)]
+pub struct Fankai {
+    pub upstream: String,
+    /// Seeds the `fankai.enabled` setting once; the interface decides after.
     pub enabled: bool,
 }
 
@@ -364,13 +373,19 @@ impl Config {
                 pin: opt(&["AMS_TVDB_PIN"]),
                 enabled: flag(&["AMS_TVDB_ENABLED"], true)?,
             },
-            // The four below are off until somebody turns them on: each is a
+            // The sources below are off until somebody turns them on: each is a
             // new party this server talks to, and that is the operator's call.
             tvmaze: Tvmaze {
                 upstream: var_or(&["AMS_TVMAZE_UPSTREAM"], "https://api.tvmaze.com")
                     .trim_end_matches('/')
                     .to_string(),
                 enabled: flag(&["AMS_TVMAZE_ENABLED"], false)?,
+            },
+            fankai: Fankai {
+                upstream: var_or(&["AMS_FANKAI_UPSTREAM"], "https://metadata.fankai.fr")
+                    .trim_end_matches('/')
+                    .to_string(),
+                enabled: flag(&["AMS_FANKAI_ENABLED"], false)?,
             },
             anilist: Anilist {
                 upstream: var_or(&["AMS_ANILIST_UPSTREAM"], "https://graphql.anilist.co")
@@ -408,6 +423,7 @@ impl Config {
                     // providers last, since they only ever add images.
                     [
                         "tmdb", "tvdb", "skyhook", "radarr", "fanart", "tvmaze", "anilist", "mal",
+                        "fankai",
                     ]
                     .iter()
                     .map(|s| s.to_string())

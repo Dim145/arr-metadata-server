@@ -41,6 +41,8 @@ export function identifierLink(
       return `https://myanimelist.net/anime/${id}`
     case 'anilist':
       return `https://anilist.co/anime/${id}`
+    case 'fankai':
+      return `https://fankai.fr/productions/${id}`
     default:
       return undefined
   }
@@ -51,7 +53,7 @@ export function workLinks(item: MediaItem): Destination[] {
   const out: Destination[] = []
   const ids = item.externalIds
 
-  for (const source of ['tmdb', 'tvdb', 'imdb', 'tvmaze'] as const) {
+  for (const source of ['tmdb', 'tvdb', 'imdb', 'tvmaze', 'fankai'] as const) {
     const value = ids[source]
     const href = value === undefined || value === null ? undefined : identifierLink(source, value, item.kind)
     if (href) out.push({ source, href })

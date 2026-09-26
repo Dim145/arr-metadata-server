@@ -241,5 +241,12 @@ Plex often will not. Copy or link this tree next to your media. Re-running the
 export rewrites the documents and leaves existing pictures alone, so it is cheap
 to repeat. Set `AMS_NFO_EXPORT_ARTWORK=false` for documents only.
 
+A Fan-Kai comes out the same way once the Fankai source is on and the
+production has been imported or asked for by Sonarr: `series/{slug}/tvshow.nfo`
+with `<uniqueid type="fankai">`, and one document per film under the season
+its saga is, numbered as Fankai names the files — `Season 01/S01E02.nfo` beside
+`Horimiya Kaï.S01E02.MULTI.1080p.x265-FANKAI.mkv`. Plex reads it through the
+same agent; Jellyfin and Kodi read it as they read any `.nfo`.
+
 Jellyfin and Emby are a different matter — both accept metadata plugins, so a
 direct provider for them is possible. It is not built yet.

@@ -251,6 +251,7 @@ export function statusLabel(status: string | undefined, t: Dict): string | undef
 const PROVIDERS: Record<string, string> = {
   anilist: 'AniList',
   fanart: 'Fanart.tv',
+  fankai: 'Fankai',
   imdb: 'IMDb',
   mal: 'MyAnimeList',
   metacritic: 'Metacritic',

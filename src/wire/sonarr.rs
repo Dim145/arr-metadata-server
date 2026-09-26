@@ -352,6 +352,7 @@ pub fn to_item(show: &ShowResource) -> MediaItem {
         mal: show.mal_ids.clone(),
         anilist: show.ani_list_ids.clone(),
         trakt: None,
+        fankai: None,
     };
 
     // IMDb's rating, republished: Breaking Bad's is 9.5 from 2 679 821 votes

@@ -177,7 +177,11 @@ fn unique_ids(out: &mut String, item: &MediaItem) {
     // Exactly one id must be marked default, and it should be the one the
     // client's own agent keys on.
     let primary = match item.kind {
-        MediaKind::Series => ids.tvdb.map(|_| "tvdb").or(ids.tmdb.map(|_| "tmdb")),
+        MediaKind::Series => ids
+            .tvdb
+            .map(|_| "tvdb")
+            .or(ids.tmdb.map(|_| "tmdb"))
+            .or(ids.fankai.map(|_| "fankai")),
         MediaKind::Movie => ids
             .tmdb
             .map(|_| "tmdb")
@@ -205,6 +209,9 @@ fn unique_ids(out: &mut String, item: &MediaItem) {
     }
     if let Some(v) = &ids.imdb {
         emit("imdb", v.clone());
+    }
+    if let Some(v) = ids.fankai {
+        emit("fankai", v.to_string());
     }
 }
 
@@ -399,6 +406,32 @@ mod tests {
             escape("keep\ttabs\nand newlines"),
             "keep\ttabs\nand newlines"
         );
+    }
+
+    #[test]
+    fn a_fan_kai_is_keyed_on_fankai_s_id() {
+        // Nothing else names a recut, so Fankai's id is the one the client's
+        // agent can key on — and the only one written.
+        let mut item = series();
+        item.external_ids = ExternalIds {
+            fankai: Some(12),
+            ..Default::default()
+        };
+        let nfo = for_item(&item);
+
+        assert!(nfo.contains("<uniqueid type=\"fankai\" default=\"true\">12</uniqueid>"));
+        assert!(!nfo.contains("type=\"tvdb\""));
+        assert!(!nfo.contains("type=\"tmdb\""));
+    }
+
+    #[test]
+    fn fankai_s_id_rides_beside_the_others_without_taking_the_default() {
+        let mut item = series();
+        item.external_ids.fankai = Some(12);
+        let nfo = for_item(&item);
+
+        assert!(nfo.contains("<uniqueid type=\"tvdb\" default=\"true\">81189</uniqueid>"));
+        assert!(nfo.contains("<uniqueid type=\"fankai\">12</uniqueid>"));
     }
 
     #[test]

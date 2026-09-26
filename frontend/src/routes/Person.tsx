@@ -215,7 +215,13 @@ function Portraits({ name, photos }: { name: string; photos: string[] }) {
   return (
     <section className="mt-8">
       <Label>{t.person.portraits}</Label>
-      <ul className="mt-3 flex gap-3 overflow-x-auto pb-2" aria-label={t.person.portraits}>
+      {/* Focusable: a row that scrolls must be reachable from the keyboard,
+          and nothing in it is a control. */}
+      <ul
+        tabIndex={0}
+        className="mt-3 flex gap-3 overflow-x-auto rounded-card pb-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-vermillion"
+        aria-label={t.person.portraits}
+      >
         {photos.map((url, index) => (
           <li key={url} className="w-20 shrink-0 sm:w-24">
             <Artwork

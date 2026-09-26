@@ -12,9 +12,19 @@
 //! The offset is chosen so the two spaces cannot overlap. Real TVDB series ids
 //! are below 500 000 and TMDB TV ids below 1 000 000; 100 000 000 clears both
 //! and still fits in the `int` Sonarr stores it in.
+//!
+//! Fankai's productions take a second range, from 200 000 000: a Fan-Kai is a
+//! recut TheTVDB and TMDB list nothing of, so its client id is Fankai's own id
+//! plus that offset, and the two ranges are told apart by size alone.
 
 /// Start of the synthetic id range.
 pub const SYNTHETIC_OFFSET: i64 = 100_000_000;
+
+/// Start of the range that stands for Fankai's productions.
+///
+/// Above the TMDB range, which TMDB's own ids — nowhere near a hundred million
+/// — never fill, so an id says which it is by its size.
+pub const FANKAI_OFFSET: i64 = 200_000_000;
 
 /// Largest id that still fits Sonarr's 32-bit column.
 const MAX_SONARR_ID: i64 = i32::MAX as i64;
@@ -22,20 +32,29 @@ const MAX_SONARR_ID: i64 = i32::MAX as i64;
 /// Wrap a TMDB id as a synthetic TVDB id.
 ///
 /// Returns `None` if the result would not fit in the client's integer column,
-/// which would otherwise be silently truncated into a collision.
+/// which would otherwise be silently truncated into a collision — or would
+/// reach into the range that names Fankai's productions.
 pub fn to_synthetic(tmdb_id: i64) -> Option<i64> {
     let encoded = SYNTHETIC_OFFSET.checked_add(tmdb_id)?;
-    (tmdb_id > 0 && encoded <= MAX_SONARR_ID).then_some(encoded)
-}
-
-/// True when an id was minted by [`to_synthetic`].
-pub fn is_synthetic(id: i64) -> bool {
-    id >= SYNTHETIC_OFFSET
+    (tmdb_id > 0 && encoded < FANKAI_OFFSET).then_some(encoded)
 }
 
 /// Recover the TMDB id from a synthetic one.
 pub fn from_synthetic(id: i64) -> Option<i64> {
-    is_synthetic(id).then(|| id - SYNTHETIC_OFFSET)
+    (SYNTHETIC_OFFSET..FANKAI_OFFSET)
+        .contains(&id)
+        .then(|| id - SYNTHETIC_OFFSET)
+}
+
+/// Wrap Fankai's id for a production as a client id.
+pub fn to_fankai(fankai_id: i64) -> Option<i64> {
+    let encoded = FANKAI_OFFSET.checked_add(fankai_id)?;
+    (fankai_id > 0 && encoded <= MAX_SONARR_ID).then_some(encoded)
+}
+
+/// Recover Fankai's id from a client id made by [`to_fankai`].
+pub fn from_fankai(id: i64) -> Option<i64> {
+    (id >= FANKAI_OFFSET).then(|| id - FANKAI_OFFSET)
 }
 
 /// A search term of the form `prefix:value`, which Sonarr and Radarr both use
@@ -47,6 +66,8 @@ pub enum TermLookup<'a> {
     Imdb(String),
     Mal(i64),
     AniList(i64),
+    /// One of Fankai's productions, by its id there.
+    Fankai(i64),
     /// An ordinary free-text search.
     Text(&'a str),
 }
@@ -55,7 +76,8 @@ pub enum TermLookup<'a> {
 ///
 /// Sonarr sends `imdb:`, `tmdb:`, `mal:` and `anilist:` straight through to the
 /// metadata server, and resolves `tvdb:` itself — but accepting `tvdb:` here too
-/// costs nothing and makes the endpoint usable by hand.
+/// costs nothing and makes the endpoint usable by hand. `fankai:` is this
+/// server's own, for a production nothing else has an id for.
 pub fn classify(term: &str) -> TermLookup<'_> {
     let trimmed = term.trim();
 
@@ -71,6 +93,9 @@ pub fn classify(term: &str) -> TermLookup<'_> {
         "tmdb" | "tmdbid" => numeric().map_or(TermLookup::Text(trimmed), TermLookup::Tmdb),
         "mal" | "myanimelist" => numeric().map_or(TermLookup::Text(trimmed), TermLookup::Mal),
         "anilist" => numeric().map_or(TermLookup::Text(trimmed), TermLookup::AniList),
+        "fankai" | "fan-kai" | "fankaiid" => {
+            numeric().map_or(TermLookup::Text(trimmed), TermLookup::Fankai)
+        }
         "imdb" | "imdbid" => crate::domain::ids::normalize_imdb_id(rest)
             .map_or(TermLookup::Text(trimmed), TermLookup::Imdb),
         _ => TermLookup::Text(trimmed),
@@ -85,16 +110,28 @@ mod tests {
     fn synthetic_ids_round_trip() {
         let encoded = to_synthetic(1396).unwrap();
         assert_eq!(encoded, 100_001_396);
-        assert!(is_synthetic(encoded));
         assert_eq!(from_synthetic(encoded), Some(1396));
+    }
+
+    #[test]
+    fn fankai_ids_take_the_second_range() {
+        let encoded = to_fankai(12).unwrap();
+        assert_eq!(encoded, 200_000_012);
+        assert_eq!(from_fankai(encoded), Some(12));
+        // Not a TMDB id in disguise, and a TMDB id never reaches into it.
+        assert_eq!(from_synthetic(encoded), None);
+        assert_eq!(to_synthetic(100_000_000), None);
+        assert_eq!(from_fankai(100_001_396), None);
+        assert_eq!(to_fankai(0), None);
+        assert_eq!(to_fankai(i64::MAX), None);
     }
 
     #[test]
     fn real_tvdb_ids_are_never_mistaken_for_synthetic_ones() {
         // The largest TVDB series ids in circulation are around 500 000.
         for id in [1, 81189, 499_999, 1_000_000, 99_999_999] {
-            assert!(!is_synthetic(id), "{id} should not look synthetic");
-            assert_eq!(from_synthetic(id), None);
+            assert_eq!(from_synthetic(id), None, "{id} should not look synthetic");
+            assert_eq!(from_fankai(id), None, "{id} should not look like a Fan-Kai");
         }
     }
 
@@ -115,6 +152,8 @@ mod tests {
         assert_eq!(classify("tmdb:1396"), TermLookup::Tmdb(1396));
         assert_eq!(classify("mal:5114"), TermLookup::Mal(5114));
         assert_eq!(classify("anilist:9253"), TermLookup::AniList(9253));
+        assert_eq!(classify("fankai:12"), TermLookup::Fankai(12));
+        assert_eq!(classify("Fan-Kai: 12"), TermLookup::Fankai(12));
         assert_eq!(
             classify("imdb:tt0903747"),
             TermLookup::Imdb("tt0903747".into())

@@ -6,6 +6,7 @@
 
 pub mod anilist;
 pub mod fanart;
+pub mod fankai;
 pub mod lang;
 pub mod mal;
 pub mod radarr;
@@ -191,6 +192,7 @@ pub mod names {
     pub const ANILIST: &str = "anilist";
     pub const MAL: &str = "mal";
     pub const IMDB: &str = "imdb";
+    pub const FANKAI: &str = "fankai";
 }
 
 #[cfg(test)]

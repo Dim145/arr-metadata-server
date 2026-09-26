@@ -60,6 +60,8 @@ pub struct Found {
     pub tmdb_id: Option<i64>,
     pub tvdb_id: Option<i64>,
     pub imdb_id: Option<String>,
+    /// Fankai's id, for a Fan-Kai production.
+    pub fankai_id: Option<i64>,
     /// Whether this server already holds it, so the interface can say "stored"
     /// rather than offering to import it twice.
     pub stored: bool,
@@ -144,6 +146,7 @@ pub struct ImportRequest {
     pub tmdb_id: Option<i64>,
     pub tvdb_id: Option<i64>,
     pub imdb_id: Option<String>,
+    pub fankai_id: Option<i64>,
 }
 
 /// Fetch a work from its providers and store it.
@@ -174,10 +177,18 @@ async fn import(
         .map_err(|e: anyhow::Error| AppError::BadRequest(e.to_string()))?;
 
     let found = match kind {
-        MediaKind::Series => match (request.tvdb_id, request.tmdb_id, request.imdb_id.as_deref()) {
-            (Some(tvdb), _, _) => service::series::by_tvdb_id(&state, tvdb).await?,
-            (_, Some(tmdb), _) => service::series::by_tmdb_id(&state, tmdb).await?,
-            (_, _, Some(imdb)) => service::series::by_imdb_id(&state, imdb).await?,
+        MediaKind::Series => match (
+            request.fankai_id,
+            request.tvdb_id,
+            request.tmdb_id,
+            request.imdb_id.as_deref(),
+        ) {
+            // Fankai first: a Fan-Kai carries no other id, and one sent beside
+            // it would fetch the anime it was cut from instead.
+            (Some(fankai), _, _, _) => service::series::by_fankai_id(&state, fankai).await?,
+            (_, Some(tvdb), _, _) => service::series::by_tvdb_id(&state, tvdb).await?,
+            (_, _, Some(tmdb), _) => service::series::by_tmdb_id(&state, tmdb).await?,
+            (_, _, _, Some(imdb)) => service::series::by_imdb_id(&state, imdb).await?,
             _ => return Err(AppError::BadRequest("no identifier to fetch by".into())),
         },
         MediaKind::Movie => match (request.tmdb_id, request.imdb_id.as_deref()) {
@@ -218,6 +229,7 @@ fn describe(item: &MediaItem) -> Found {
         tmdb_id: item.external_ids.tmdb,
         tvdb_id: item.external_ids.tvdb,
         imdb_id: item.external_ids.imdb.clone(),
+        fankai_id: item.external_ids.fankai,
         // Filled in afterwards, against the store.
         stored: false,
         is_adult: item.is_adult,
@@ -226,9 +238,10 @@ fn describe(item: &MediaItem) -> Found {
 
 /// Whether this server already holds the work a hit stands for.
 async fn held(state: &AppState, hit: &Found) -> bool {
-    use crate::domain::ExternalSource::{Imdb, TmdbMovie, TmdbTv, TvdbSeries};
+    use crate::domain::ExternalSource::{Fankai, Imdb, TmdbMovie, TmdbTv, TvdbSeries};
 
-    let lookups: [(crate::domain::ExternalSource, Option<String>); 3] = [
+    let lookups: [(crate::domain::ExternalSource, Option<String>); 4] = [
+        (Fankai, hit.fankai_id.map(|id| id.to_string())),
         (TvdbSeries, hit.tvdb_id.map(|id| id.to_string())),
         (
             if hit.kind == MediaKind::Series {

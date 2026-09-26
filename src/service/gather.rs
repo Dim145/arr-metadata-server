@@ -130,6 +130,32 @@ pub async fn movie(
     store(state, answers).await
 }
 
+/// Fetch a Fan-Kai production from Fankai, and store it.
+///
+/// Fankai alone: it is the only source that lists a recut, and the ids the
+/// other providers would need are absent by design — TheTVDB's or TMDB's would
+/// name the anime it was cut from, and merge the two into one work. A failure
+/// is the caller's to see: with one source there is nothing to go on without.
+pub async fn fankai_series(state: &AppState, fankai_id: i64) -> Result<Option<MediaItem>> {
+    if !state.flag("fankai.enabled", false) {
+        return Ok(None);
+    }
+
+    let Some((raw, item)) = state.fankai.series(fankai_id).await? else {
+        return Ok(None);
+    };
+
+    store(
+        state,
+        vec![Answer {
+            provider: names::FANKAI,
+            payload: raw,
+            item,
+        }],
+    )
+    .await
+}
+
 /// Whether anything that can stand for a work on its own answered.
 fn describes_a_work(answers: &[Answer]) -> bool {
     answers.iter().any(|a| !SUPPLEMENTS.contains(&a.provider))

@@ -259,7 +259,7 @@ still answers.
 
 ### Further sources
 
-Four more, each off until switched on under **Settings → Further sources**.
+Five more, each off until switched on under **Settings → Further sources**.
 None needs a key.
 
 | Source | Brings | Costs |
@@ -268,9 +268,11 @@ None needs a key.
 | **AniList** | its score, the romaji, native and English titles and synonyms, the main studio, an adult flag — for anime | one call per anime fetch |
 | **MyAnimeList** | its score and titles — for anime; through its own API when `AMS_MAL_CLIENT_ID` is set, through [Jikan](https://jikan.moe) otherwise | one call per anime fetch |
 | **IMDb** | IMDb's rating, for every work with an IMDb id | one download a day |
+| **Fankai** | the Fan-Kai productions — anime recut into films, each as a series with its sagas as seasons — from Fankai's own metadata service | one call per saga, and three more per production fetch |
 
-None of them changes the shape of an answer: Sonarr and Radarr are served the
-same fields as before, some of them now more accurate.
+None of the first four changes the shape of an answer: Sonarr and Radarr are
+served the same fields as before, some of them now more accurate. Fankai adds
+works instead — ones no other source has.
 
 **TVmaze corrects `airDateUtc`**, the moment after which Sonarr counts an
 episode as aired. TheTVDB keeps one broadcast time per series and Skyhook stamps
@@ -300,12 +302,28 @@ The daily list keeps that figure current and supplies it when Skyhook and
 Radarr's service are off. Only the ratings of works stored here are kept, and
 the list is fetched again within the hour when works are added.
 
+**Fankai lists the Fan-Kai productions**: anime recut into films by the
+[Fankai](https://fankai.fr) team, which neither TheTVDB nor TMDB carries. Each
+production is a series, its sagas are its seasons, and its films are its
+episodes, numbered as Fankai names its files — `Horimiya
+Kaï.S01E02.MULTI.1080p.x265-FANKAI.mkv` is season 1, episode 2, and a second
+saga carries on from the first: `S02E08` is the eighth film. A production turns
+up in Sonarr's search under its own name — *Naruto Shippuden Yabai*, *Black
+Lagoon Henshū* — or as `fankai:` and its id, and on the import page; nothing is
+fetched until it is asked for, so Fankai's catalogue never lands here whole.
+Sonarr is handed an id of this server's own, Fankai's plus 200 000 000, the way
+a TMDB-only series gets one; Plex, Jellyfin and Kodi get the production through
+the NFO export, with Fankai's id as a `uniqueid`. The kaïeur and the voice cast
+are its credits; the kind of recut — Kaï, Yabai, Henshū — is a tag rather than
+a genre. One call a second, and the listing is kept and revalidated by its ETag.
+
 The lists and their last download are shown under the switches, with a button
 to download one now rather than wait for its turn, and every download is a job. Their terms: TVmaze's data is CC BY-SA; IMDb's datasets are
 for personal, non-commercial use; AniList's API is free for non-commercial use
 and asks not to be crawled or stored wholesale — this server asks only about
-works a client requested. Every public page credits the sources that are on,
-with the notices TMDB and IMDb require.
+works a client requested; Fankai publishes its metadata for its own productions,
+and is asked about one at a time. Every public page credits the sources that
+are on, with the notices TMDB and IMDb require.
 
 ## Languages
 

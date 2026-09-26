@@ -94,7 +94,7 @@ async fn stats(State(state): State<AppState>) -> AppResult<Json<Stats>> {
 
 #[derive(Serialize, ToSchema)]
 pub struct Sources {
-    /// `tmdb`, `tvdb`, `fanart`, `tvmaze`, `anilist`, `mal`, `imdb`: those
+    /// `tmdb`, `tvdb`, `fanart`, `tvmaze`, `anilist`, `mal`, `imdb`, `fankai`: those
     /// switched on and able to answer, in that order.
     pub sources: Vec<&'static str>,
 }
@@ -117,6 +117,7 @@ async fn sources(State(state): State<AppState>) -> Json<Sources> {
         (names::ANILIST, state.flag("anilist.enabled", false)),
         (names::MAL, state.flag("mal.enabled", false)),
         (names::IMDB, state.flag("imdb.enabled", false)),
+        (names::FANKAI, state.flag("fankai.enabled", false)),
     ];
 
     Json(Sources {

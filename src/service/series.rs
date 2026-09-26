@@ -15,12 +15,16 @@ use crate::{
 /// Resolve a series by the id Sonarr asked for.
 ///
 /// The id is either a real TVDB id or one this server synthesised for a
-/// TMDB-only show — see [`crate::service::ids`].
+/// TMDB-only show or a Fan-Kai production — see [`crate::service::ids`].
 ///
 /// No language: a work is stored once, in the language the server fetches in,
 /// and [`crate::service::language`] overlays the one the caller asked for on
 /// the way out. Resolution is the same work whoever is asking.
 pub async fn by_client_id(state: &AppState, requested_id: i64) -> Result<Option<MediaItem>> {
+    if let Some(fankai_id) = ids::from_fankai(requested_id) {
+        return by_fankai_id(state, fankai_id).await;
+    }
+
     if let Some(tmdb_id) = ids::from_synthetic(requested_id) {
         return by_tmdb_id(state, tmdb_id).await;
     }
@@ -108,6 +112,34 @@ pub async fn by_imdb_id(state: &AppState, imdb_id: &str) -> Result<Option<MediaI
     fetch_from_tmdb(state, summary.id).await
 }
 
+/// A Fan-Kai production, by Fankai's id for it.
+///
+/// Fetched from Fankai alone: nothing else lists a recut, and the TheTVDB or
+/// TMDB entry nearest to one is the anime it was cut from — another work, with
+/// other episodes. Nothing is fetched until a client or the import page asks
+/// for it by id, so Fankai's catalogue never lands here on its own.
+pub async fn by_fankai_id(state: &AppState, fankai_id: i64) -> Result<Option<MediaItem>> {
+    let value = fankai_id.to_string();
+
+    // Off means not asked again, not forgotten: a production fetched while
+    // the source was on is served as it was, however old, rather than going
+    // missing from Sonarr the day its refresh falls due.
+    if !state.flag("fankai.enabled", false) {
+        return held(state, ExternalSource::Fankai, &value).await;
+    }
+
+    if let Some(item) = local(state, ExternalSource::Fankai, &value).await? {
+        return Ok(Some(item));
+    }
+
+    let _fetching = FETCHING.lock(&format!("series:fankai:{fankai_id}")).await;
+    if let Some(item) = local(state, ExternalSource::Fankai, &value).await? {
+        return Ok(Some(item));
+    }
+
+    gather::fankai_series(state, fankai_id).await
+}
+
 /// A series by one of its MyAnimeList or AniList entries.
 ///
 /// This is how Sonarr's AniList and MyAnimeList import lists find a series:
@@ -170,6 +202,9 @@ pub async fn search(state: &AppState, term: &str) -> Result<Vec<MediaItem>> {
                 .await?
                 .into_iter()
                 .collect());
+        }
+        ids::TermLookup::Fankai(id) => {
+            return Ok(by_fankai_id(state, id).await?.into_iter().collect());
         }
         ids::TermLookup::Text(_) => {}
     }
@@ -234,6 +269,20 @@ pub async fn search(state: &AppState, term: &str) -> Result<Vec<MediaItem>> {
             }
         }
 
+        // Fankai's productions, after everything else. Not a fallback: a recut
+        // is asked for by its name, and its name carries the kind — Kaï, Yabai,
+        // Henshū — so it stands beside the anime it was cut from rather than
+        // in its place, whether or not the others answered.
+        if state.flag("fankai.enabled", false) {
+            match state.fankai.search(term, state.search_limit()).await {
+                Ok(hits) => merge_results(&mut results, hits),
+                Err(e) => {
+                    tracing::warn!(term, error = format_args!("{e:#}"), "Fankai search failed");
+                    degraded = true;
+                }
+            }
+        }
+
         Ok(Found {
             items: results,
             degraded,
@@ -267,6 +316,16 @@ async fn local(state: &AppState, source: ExternalSource, value: &str) -> Result<
     }
 
     Ok(None)
+}
+
+/// A locally stored series whatever its age, for a source that is switched
+/// off: what it fetched while on is served as it is.
+async fn held(state: &AppState, source: ExternalSource, value: &str) -> Result<Option<MediaItem>> {
+    let Some(id) = repo::item::find_id_by_external(&state.db, source, value).await? else {
+        return Ok(None);
+    };
+
+    Ok(load(state, &id).await?.filter(|item| item.is_enabled))
 }
 
 async fn local_search(state: &AppState, term: &str) -> Result<Vec<MediaItem>> {
@@ -341,6 +400,7 @@ fn merge_results(into: &mut Vec<MediaItem>, incoming: Vec<MediaItem>) {
         let already_present = into.iter().any(|existing| {
             same_id(existing.external_ids.tmdb, candidate.external_ids.tmdb)
                 || same_id(existing.external_ids.tvdb, candidate.external_ids.tvdb)
+                || same_id(existing.external_ids.fankai, candidate.external_ids.fankai)
         });
 
         if !already_present {
@@ -355,12 +415,14 @@ fn same_id(a: Option<i64>, b: Option<i64>) -> bool {
 
 /// The id a client should be handed for this series.
 ///
-/// A real TVDB id when there is one; otherwise a synthetic id derived from TMDB.
-/// Returns `None` for a work the client has no way to address.
+/// A real TVDB id when there is one; otherwise a synthetic id derived from
+/// TMDB's, or from Fankai's for a Fan-Kai. Returns `None` for a work the client
+/// has no way to address.
 pub fn client_id(item: &MediaItem) -> Option<i64> {
     item.external_ids
         .tvdb
         .or_else(|| item.external_ids.tmdb.and_then(ids::to_synthetic))
+        .or_else(|| item.external_ids.fankai.and_then(ids::to_fankai))
 }
 
 #[cfg(test)]
@@ -386,6 +448,29 @@ mod tests {
     #[test]
     fn a_tmdb_only_series_gets_a_synthetic_id() {
         assert_eq!(client_id(&series(Some(1396), None)), Some(100_001_396));
+    }
+
+    #[test]
+    fn a_fan_kai_is_addressed_by_fankai_s_id() {
+        let mut item = series(None, None);
+        item.external_ids.fankai = Some(12);
+        assert_eq!(client_id(&item), Some(200_000_012));
+    }
+
+    #[test]
+    fn merging_knows_a_fan_kai_already_listed() {
+        let mut held = series(None, None);
+        held.external_ids.fankai = Some(12);
+        let mut results = vec![held];
+
+        let mut again = series(None, None);
+        again.external_ids.fankai = Some(12);
+        let mut other = series(None, None);
+        other.external_ids.fankai = Some(13);
+        merge_results(&mut results, vec![again, other]);
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[1].external_ids.fankai, Some(13));
     }
 
     #[test]

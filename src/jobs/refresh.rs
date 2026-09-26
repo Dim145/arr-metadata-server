@@ -47,6 +47,13 @@ pub async fn refresh_one(state: &AppState, item: &MediaItem) -> Result<Option<Me
 async fn refresh_series(state: &AppState, item: &MediaItem) -> Result<Option<MediaItem>> {
     let ids = &item.external_ids;
 
+    // A Fan-Kai has one source. It carries no TheTVDB or TMDB id for the
+    // others to be asked by, and one given by hand would have them answer for
+    // the anime it was cut from.
+    if let Some(fankai_id) = ids.fankai {
+        return crate::service::gather::fankai_series(state, fankai_id).await;
+    }
+
     // Both ids are already known here, so every provider is asked at once
     // rather than one resolving the other first.
     if (ids.tmdb.is_some() || ids.tvdb.is_some())

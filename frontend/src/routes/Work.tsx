@@ -473,7 +473,8 @@ function Seasons({ item }: { item: MediaItem }) {
 
       <p className="mb-6 flex items-start gap-2 text-xs leading-relaxed text-bone-faint">
         <Glyph name="cloud" className="mt-0.5 size-3.5 shrink-0 text-slate" />
-        {t.work.numbering}
+        {/* A Fan-Kai is numbered by Fankai alone: TheTVDB has never seen it. */}
+        {item.externalIds.fankai && !item.externalIds.tvdb ? t.work.numberingFankai : t.work.numbering}
       </p>
 
       {/* Bleeds past the container on the right so a clipped card shows there

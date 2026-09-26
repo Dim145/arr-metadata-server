@@ -244,6 +244,10 @@ async fn health(
                 on: state.flag("imdb.enabled", false),
             },
             Source {
+                name: "fankai",
+                on: state.flag("fankai.enabled", false),
+            },
+            Source {
                 name: "skyhook",
                 on: state.flag("skyhook.fallback", false) || state.flag("skyhook.enrich", false),
             },
