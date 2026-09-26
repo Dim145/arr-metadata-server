@@ -17,6 +17,9 @@ use crate::{
     settings::{Scope, Store},
 };
 
+/// Keys a member or an editor may hold until an administrator says otherwise.
+pub const DEFAULT_KEYS_PER_USER: i64 = 5;
+
 #[derive(Clone)]
 pub struct AppState(Arc<Inner>);
 
@@ -49,6 +52,12 @@ pub struct Inner {
     /// Identifies this process on outbound calls to hostnames it also answers
     /// on, so a request that loops back can be recognised and refused.
     pub instance: String,
+    /// Held by whatever changes accounts or their keys, so that a rule checked
+    /// before a write — "another administrator remains", "under the key
+    /// limit" — still holds when the write lands. Two administrators demoting
+    /// each other at the same moment would otherwise both pass, and leave
+    /// nobody.
+    accounts: tokio::sync::Mutex<()>,
 }
 
 impl std::ops::Deref for AppState {
@@ -143,6 +152,7 @@ impl AppState {
             fankai_wiki,
             limiter,
             instance,
+            accounts: tokio::sync::Mutex::new(()),
         }));
 
         state.bootstrap_admin().await?;
@@ -194,6 +204,7 @@ impl AppState {
                 ("imdb.enabled", cfg.imdb.enabled.to_string()),
                 ("fankai.enabled", cfg.fankai.enabled.to_string()),
                 ("fankai.wiki", cfg.fankai_wiki.enabled.to_string()),
+                ("keys.maxPerUser", DEFAULT_KEYS_PER_USER.to_string()),
                 (
                     "webhooks.events",
                     crate::service::webhook::DEFAULT_EVENTS.to_string(),
@@ -282,6 +293,19 @@ impl AppState {
                     .nth(1)
                     .and_then(two_letters)
             })
+    }
+
+    /// Wait for, then hold, the right to change accounts and their keys. See
+    /// the field for why; held for a few statements at most.
+    pub async fn accounts_lock(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.accounts.lock().await
+    }
+
+    /// How many keys a person who is not an administrator may hold.
+    pub fn keys_per_user(&self) -> i64 {
+        self.settings
+            .int_at("keys.maxPerUser", None, None)
+            .unwrap_or(DEFAULT_KEYS_PER_USER)
     }
 
     pub fn search_limit(&self) -> usize {
@@ -386,18 +410,51 @@ impl AppState {
             return Ok(());
         };
 
-        if repo::user::find_by_username(&self.db, &username)
-            .await?
-            .is_some()
-        {
-            tracing::debug!(%username, "administrator already exists");
+        // The variables open the first account, and let an operator back in
+        // who has lost every administrator. They are not a standing order:
+        // once administrators exist, an account deleted or demoted from the
+        // interface stays that way, whatever the environment still says.
+        if repo::user::count_active_admins(&self.db, None).await? > 0 {
+            tracing::debug!(%username, "administrators exist; AMS_ADMIN_USERNAME is left alone");
             return Ok(());
         }
 
         let hash = crate::auth::secrets::hash_password(&password)
             .context("AMS_ADMIN_PASSWORD was rejected")?;
 
-        repo::user::create(&self.db, &username, &hash, true).await?;
+        if let Some(found) = repo::user::find_by_username(&self.db, &username).await? {
+            // Nobody can administer the server, and the environment names an
+            // account: it is given back its rights, with the password the
+            // environment holds, since whoever set that one controls the
+            // server anyway.
+            let id = &found.user.id;
+            repo::user::set_role(&self.db, id, repo::user::Role::Admin).await?;
+            repo::user::set_status(&self.db, id, repo::user::Status::Active).await?;
+            repo::user::set_password(&self.db, id, &hash).await?;
+            repo::user::delete_sessions_for_user(&self.db, id).await?;
+
+            tracing::warn!(
+                %username,
+                "no active administrator was left: AMS_ADMIN_USERNAME was made an active \
+                 administrator again, with AMS_ADMIN_PASSWORD"
+            );
+            return Ok(());
+        }
+
+        repo::user::create(
+            &self.db,
+            repo::user::NewUser {
+                username: &username,
+                password_hash: &hash,
+                role: repo::user::Role::Admin,
+                status: repo::user::Status::Active,
+                display_name: None,
+                email: None,
+                invited_by: None,
+                oidc: None,
+            },
+        )
+        .await?;
 
         tracing::info!(%username, "created the bootstrap administrator");
         Ok(())

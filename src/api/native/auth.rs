@@ -1,4 +1,4 @@
-//! Administrator sign-in.
+//! Signing in and out, for every account.
 
 use axum::{
     Extension, Json,
@@ -30,7 +30,7 @@ const SESSION_TTL_HOURS: i64 = 12;
 /// Generous for anything a person would type or a password manager would make,
 /// and short enough that the work of hashing it and recording the attempt is
 /// bounded. The body limit alone is a megabyte, which is not a bound at all.
-const MAX_CREDENTIAL: usize = 256;
+pub(crate) const MAX_CREDENTIAL: usize = 256;
 
 /// The tag every route here is filed under in the documentation.
 pub const TAG: &str = "Session";
@@ -58,6 +58,10 @@ pub struct LoginRequest {
 pub struct LoginResponse {
     pub username: String,
     pub expires_at: String,
+    pub role: repo::user::Role,
+    /// Whether the account may maintain the catalogue, which decides where the
+    /// interface takes it next.
+    pub can_write: bool,
 }
 
 /// Sign in and receive a session cookie.
@@ -70,6 +74,7 @@ pub struct LoginResponse {
     responses(
         (status = 200, description = "Signed in; a session cookie is set", body = LoginResponse),
         (status = 401, description = "Those credentials were not accepted"),
+        (status = 403, description = "The account is waiting for approval, or disabled"),
     ),
     security(),
 )]
@@ -92,6 +97,14 @@ async fn login(
     // Verify even when the user does not exist, so a wrong username and a wrong
     // password take the same time and cannot be told apart.
     let (user, ok) = match found {
+        // An account an identity provider made has no password: checked
+        // against the dummy all the same, so it takes as long as any other.
+        Some(creds) if creds.password_hash == repo::user::NO_PASSWORD => {
+            let _ =
+                secrets::verify_password_async(request.password.clone(), DUMMY_HASH.to_string())
+                    .await;
+            (Some(creds.user), false)
+        }
         Some(creds) => {
             let ok =
                 secrets::verify_password_async(request.password.clone(), creds.password_hash).await;
@@ -125,6 +138,38 @@ async fn login(
         return Err(AppError::Unauthorized);
     };
 
+    // Told only to whoever proved the password: the account exists, and why it
+    // may not come in yet.
+    match user.status {
+        repo::user::Status::Active => {}
+        repo::user::Status::Pending => {
+            return Err(AppError::Refused {
+                code: "account_pending",
+                message: "this account is waiting for an administrator to approve it".into(),
+            });
+        }
+        repo::user::Status::Disabled => {
+            return Err(AppError::Refused {
+                code: "account_disabled",
+                message: "this account has been disabled".into(),
+            });
+        }
+    }
+
+    let (cookie, answer) = open_session(&state, user, &headers, &ip).await?;
+
+    Ok((StatusCode::OK, [(header::SET_COOKIE, cookie)], Json(answer)))
+}
+
+/// Open a session for someone who has shown who they are — by their password,
+/// by signing up, or through the identity provider — and say so in the
+/// journal. Returns the cookie to set and what the interface is told.
+pub(crate) async fn open_session(
+    state: &AppState,
+    user: repo::user::User,
+    headers: &HeaderMap,
+    ip: &ClientIp,
+) -> AppResult<(String, LoginResponse)> {
     let (token, token_hash) = secrets::generate_session_token()?;
 
     let expires_at = repo::user::create_session(
@@ -141,12 +186,12 @@ async fn login(
 
     repo::user::mark_login(&state.db, &user.id).await?;
 
-    let identity = Identity::Admin(Box::new(user.clone()));
+    let identity = Identity::User(Box::new(user.clone()));
     audit::record(
-        &state,
+        state,
         Event {
             identity: Some(&identity),
-            ip: &ip,
+            ip,
             action: Action::SignedIn,
             target: Some(&user.username),
             detail: None,
@@ -156,17 +201,18 @@ async fn login(
 
     let cookie = format!(
         "{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict{}; Max-Age={}",
-        secure_flag(&state),
+        secure_flag(state),
         SESSION_TTL_HOURS * 3600
     );
 
     Ok((
-        StatusCode::OK,
-        [(header::SET_COOKIE, cookie)],
-        Json(LoginResponse {
+        cookie,
+        LoginResponse {
+            can_write: identity.can_write(),
+            role: user.role,
             username: user.username,
             expires_at,
-        }),
+        },
     ))
 }
 
@@ -244,10 +290,27 @@ pub struct MeResponse {
     pub identity: String,
     pub can_write: bool,
     pub is_admin: bool,
+    /// The signed-in person, when this is a session rather than a key.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user: Option<MeUser>,
     /// Whether a reader with no credential may browse the catalogue — and so
     /// whether an address handed to a calendar app or a feed reader, which
     /// carries none, will answer.
     pub public_browse: bool,
+}
+
+/// The signed-in person, as the interface needs them on every page.
+#[derive(Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MeUser {
+    pub id: String,
+    pub username: String,
+    /// What to call them: the name they gave, or their username.
+    pub name: String,
+    pub role: repo::user::Role,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub locale: Option<String>,
+    pub has_password: bool,
 }
 
 /// Who this request is authenticated as, and what it may do.
@@ -266,6 +329,14 @@ async fn me(
         identity: identity.label(),
         can_write: identity.can_write(),
         is_admin: identity.is_admin(),
+        user: identity.user().map(|u| MeUser {
+            id: u.id.clone(),
+            username: u.username.clone(),
+            name: u.name().to_string(),
+            role: u.role,
+            locale: u.locale.clone(),
+            has_password: u.has_password,
+        }),
         public_browse: state.config.security.public_browse,
     })
 }
@@ -277,7 +348,7 @@ pub struct ChangePasswordRequest {
     pub new_password: String,
 }
 
-/// Change the signed-in administrator's password.
+/// Change the signed-in person's password.
 ///
 /// Every existing session is invalidated: they were all authorised under the
 /// old password.
@@ -288,7 +359,7 @@ pub struct ChangePasswordRequest {
         (status = 204, description = "Changed; sign in again"),
         (status = 400, description = "The new password was rejected"),
         (status = 401, description = "The current password was wrong"),
-        (status = 403, description = "An API key has no password to change"),
+        (status = 403, description = "An API key, or an account an identity provider made, has no password to change"),
     ),
 )]
 async fn change_password(
@@ -297,15 +368,22 @@ async fn change_password(
     ip: ClientIp,
     Json(request): Json<ChangePasswordRequest>,
 ) -> AppResult<StatusCode> {
-    let Identity::Admin(user) = &identity else {
-        // An API key cannot change a password: it has no password to change,
-        // and letting it set one would be a privilege escalation.
-        return Err(AppError::Forbidden);
-    };
+    // An API key cannot change a password: it has no password to change, and
+    // letting it set one would be a privilege escalation.
+    let user = identity.require_user()?;
 
-    let Some(creds) = repo::user::find_by_username(&state.db, &user.username).await? else {
+    let Some(creds) = repo::user::credentials(&state.db, &user.id).await? else {
         return Err(AppError::NotFound);
     };
+
+    // One the identity provider vouches for has no password to prove.
+    if creds.password_hash == repo::user::NO_PASSWORD {
+        return Err(AppError::Refused {
+            code: "no_password",
+            message: "this account signs in through its identity provider and has no password"
+                .into(),
+        });
+    }
 
     if request.current_password.len() > MAX_CREDENTIAL
         || request.new_password.len() > MAX_CREDENTIAL

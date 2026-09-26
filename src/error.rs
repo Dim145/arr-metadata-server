@@ -29,6 +29,11 @@ pub enum AppError {
     #[error("{0}")]
     Conflict(String),
 
+    /// Refused for a reason the caller may be told, under a code the interface
+    /// reads: an account waiting for approval, a key limit reached.
+    #[error("{message}")]
+    Refused { code: &'static str, message: String },
+
     #[error("upstream provider unavailable")]
     UpstreamUnavailable(#[source] anyhow::Error),
 
@@ -66,6 +71,7 @@ impl AppError {
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
             Self::Forbidden => StatusCode::FORBIDDEN,
             Self::Conflict(_) => StatusCode::CONFLICT,
+            Self::Refused { .. } => StatusCode::FORBIDDEN,
             Self::UpstreamUnavailable(_) => StatusCode::BAD_GATEWAY,
             Self::ProviderNotConfigured => StatusCode::SERVICE_UNAVAILABLE,
             Self::RateLimited => StatusCode::TOO_MANY_REQUESTS,
@@ -82,6 +88,7 @@ impl AppError {
             Self::Unauthorized => "unauthorized",
             Self::Forbidden => "forbidden",
             Self::Conflict(_) => "conflict",
+            Self::Refused { code, .. } => code,
             Self::UpstreamUnavailable(_) => "upstream_unavailable",
             Self::ProviderNotConfigured => "provider_not_configured",
             Self::RateLimited => "rate_limited",
@@ -99,6 +106,7 @@ impl AppError {
             | Self::Unauthorized
             | Self::Forbidden
             | Self::Conflict(_)
+            | Self::Refused { .. }
             | Self::ProviderNotConfigured
             | Self::RateLimited
             | Self::LoopDetected => self.to_string(),

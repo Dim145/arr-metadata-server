@@ -290,9 +290,13 @@ export function describeIdentity(identity: string, t: Dict): { name: string; rol
 
   switch (kind) {
     case 'admin':
-      return { name, role: t.labels.roles.admin }
+    case 'editor':
+    case 'member':
+      return { name, role: t.labels.roles[kind] }
     case 'client':
-      return { name, role: t.labels.roles.client }
+      // A person's key reads `client:owner/name`: the key's own name is what
+      // the list of keys calls it.
+      return { name: name.includes('/') ? name.slice(name.indexOf('/') + 1) : name, role: t.labels.roles.client }
     case 'anonymous':
       return { name: t.labels.roles.anonymous, role: '' }
     default:

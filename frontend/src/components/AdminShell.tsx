@@ -32,6 +32,10 @@ type Entry = {
   end?: boolean
   /** Whether it earns one of the five places a thumb can reach. */
   tab?: boolean
+  /** The part of the administration it belongs to, as the sidebar groups it. */
+  group: 'catalogue' | 'system' | 'access'
+  /** Shown to an administrator only: an editor keeps the catalogue. */
+  admin?: boolean
 }
 
 // The bottom bar holds five. Jobs was already off it and the audit trail now
@@ -39,15 +43,23 @@ type Entry = {
 // the dashboard's figures link to each. Importing takes the place that frees,
 // because adding a work is an errand somebody actually runs from a phone.
 const NAV: Entry[] = [
-  { to: '/admin', glyph: 'gauge', label: (t) => t.admin.dashboard, end: true, tab: true },
-  { to: '/admin/catalogue', glyph: 'list', label: (t) => t.admin.catalogue, tab: true },
-  { to: '/admin/discover', glyph: 'discover', label: (t) => t.admin.discover, tab: true },
-  { to: '/admin/clients', glyph: 'key', label: (t) => t.admin.clients, tab: true },
-  { to: '/admin/lists', glyph: 'list', label: (t) => t.admin.lists },
-  { to: '/admin/jobs', glyph: 'clock', label: (t) => t.admin.jobs },
-  { to: '/admin/audit', glyph: 'journal', label: (t) => t.admin.audit },
-  { to: '/admin/settings', glyph: 'settings', label: (t) => t.admin.settings, tab: true },
+  { to: '/admin', glyph: 'gauge', label: (t) => t.admin.dashboard, end: true, tab: true, group: 'catalogue' },
+  { to: '/admin/catalogue', glyph: 'list', label: (t) => t.admin.catalogue, tab: true, group: 'catalogue' },
+  { to: '/admin/discover', glyph: 'discover', label: (t) => t.admin.discover, tab: true, group: 'catalogue' },
+  { to: '/admin/lists', glyph: 'list', label: (t) => t.admin.lists, group: 'catalogue' },
+  { to: '/admin/jobs', glyph: 'clock', label: (t) => t.admin.jobs, group: 'system', admin: true },
+  { to: '/admin/audit', glyph: 'journal', label: (t) => t.admin.audit, group: 'system', admin: true },
+  { to: '/admin/users', glyph: 'user', label: (t) => t.admin.users, group: 'access', admin: true },
+  { to: '/admin/clients', glyph: 'key', label: (t) => t.admin.clients, tab: true, group: 'access', admin: true },
+  { to: '/admin/settings', glyph: 'settings', label: (t) => t.admin.settings, tab: true, group: 'access', admin: true },
 ]
+
+const GROUPS = ['catalogue', 'system', 'access'] as const
+
+/** The entries this person may open: an editor does not see the keys to the house. */
+function allowed(me: Me) {
+  return NAV.filter((entry) => !entry.admin || me.isAdmin)
+}
 
 /**
  * What the narrow top bar says, when a page knows better than its route does.
@@ -88,10 +100,13 @@ export function AdminShell() {
     )
   }
 
-  // Both a rejected credential and a signed-in reader who may not write end up
-  // at the door: there is nothing on this side for either of them.
-  if (me.isError || !me.data.canWrite) {
+  // A rejected credential goes to the door. A member signed in has nothing on
+  // this side either, but a place of their own: their account.
+  if (me.isError) {
     return <Navigate to="/login" replace />
+  }
+  if (!me.data.canWrite) {
+    return <Navigate to={me.data.user ? '/account' : '/login'} replace />
   }
 
   const current = NAV.find((entry) =>
@@ -109,7 +124,7 @@ export function AdminShell() {
         {t.nav.skipToContent}
       </a>
 
-      <Sidebar identity={me.data.identity} />
+      <Sidebar me={me.data} />
 
       <div className="flex min-w-0 flex-col">
         <TopBar title={override ?? (current ? current.label(t) : t.admin.title)} />
@@ -125,7 +140,7 @@ export function AdminShell() {
           </TitleContext>
         </main>
 
-        <TabBar />
+        <TabBar me={me.data} />
       </div>
     </div>
   )
@@ -133,14 +148,21 @@ export function AdminShell() {
 
 /* ── Wide ─────────────────────────────────────────────────────────────────── */
 
-function Sidebar({ identity }: { identity: string }) {
+function Sidebar({ me }: { me: Me }) {
   const { t } = useI18n()
-  const who = describeIdentity(identity, t)
+  const identity = me.identity
+  const who = me.user
+    ? { name: me.user.name, role: t.labels.roles[me.user.role] }
+    : describeIdentity(identity, t)
+  const entries = allowed(me)
 
+  // The version is read off the settings, which only an administrator may
+  // read; an editor's sidebar goes without it rather than logging a refusal.
   const settings = useQuery({
     queryKey: ['settings'],
     queryFn: () => api.get<Settings>('/settings'),
     staleTime: 5 * 60_000,
+    enabled: me.isAdmin,
   })
 
   return (
@@ -162,12 +184,35 @@ function Sidebar({ identity }: { identity: string }) {
       </div>
 
       <nav aria-label={t.admin.sections} className="flex-1 overflow-y-auto py-3">
-        {NAV.map((entry) => (
-          <NavRow key={entry.to} entry={entry} />
-        ))}
+        {GROUPS.map((group) => {
+          const inGroup = entries.filter((entry) => entry.group === group)
+          if (!inGroup.length) return null
+          return (
+            <div key={group} className="mb-2">
+              <h2 className="label px-5 pt-3 pb-1.5">{t.admin.groups[group]}</h2>
+              {inGroup.map((entry) => (
+                <NavRow key={entry.to} entry={entry} />
+              ))}
+            </div>
+          )
+        })}
       </nav>
 
       <div className="space-y-3 border-t border-rule px-5 py-4">
+        {me.user ? (
+          <NavLink
+            to="/admin/account"
+            className={({ isActive }) =>
+              cn(
+                'flex min-h-11 items-center gap-2 text-sm transition-colors duration-150',
+                isActive ? 'text-vermillion' : 'text-bone-dim hover:text-bone',
+              )
+            }
+          >
+            <Glyph name="user" className="size-4" />
+            {t.admin.account}
+          </NavLink>
+        ) : null}
         <Link
           to="/"
           className="flex min-h-11 items-center gap-2 text-sm text-bone-dim transition-colors duration-150 hover:text-bone"
@@ -176,7 +221,10 @@ function Sidebar({ identity }: { identity: string }) {
           {t.admin.backToSite}
         </Link>
 
-        <ThemeToggle /><LanguageToggle />
+        <div className="flex flex-wrap items-center gap-2">
+          <ThemeToggle />
+          <LanguageToggle />
+        </div>
 
         <div className="border-t border-rule pt-3">
           <span className="label block">{t.admin.operator}</span>
@@ -202,7 +250,7 @@ function NavRow({ entry }: { entry: Entry }) {
       end={entry.end}
       className={({ isActive }) =>
         cn(
-          'relative flex h-[46px] items-center gap-3 px-5 text-sm font-medium',
+          'relative flex h-[42px] items-center gap-3 px-5 text-sm font-medium',
           'transition-colors duration-150',
           isActive ? 'bg-ink-high text-vermillion' : 'text-bone-dim hover:bg-ink-high hover:text-bone',
         )
@@ -270,15 +318,19 @@ function TopBar({ title }: { title: string }) {
   )
 }
 
-function TabBar() {
+function TabBar({ me }: { me: Me }) {
   const { t } = useI18n()
+  const tabs = allowed(me).filter((entry) => entry.tab)
 
   return (
     <nav
       aria-label={t.admin.sections}
-      className="fixed inset-x-0 bottom-0 z-40 grid grid-cols-5 border-t border-rule bg-ink-raised pb-[env(safe-area-inset-bottom)] lg:hidden"
+      className={cn(
+        'fixed inset-x-0 bottom-0 z-40 grid border-t border-rule bg-ink-raised pb-[env(safe-area-inset-bottom)] lg:hidden',
+        tabs.length === 5 ? 'grid-cols-5' : 'grid-cols-3',
+      )}
     >
-      {NAV.filter((entry) => entry.tab).map((entry) => (
+      {tabs.map((entry) => (
         <NavLink
           key={entry.to}
           to={entry.to}

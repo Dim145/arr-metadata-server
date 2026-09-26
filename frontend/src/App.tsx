@@ -31,6 +31,9 @@ const ListDetail = named(() => import('./routes/Lists'), 'ListDetail')
 const CollectionDetail = named(() => import('./routes/Lists'), 'CollectionDetail')
 
 const Login = named(() => import('./routes/Login'), 'Login')
+const Account = named(() => import('./routes/Account'), 'Account')
+const Users = named(() => import('./routes/admin/Users'), 'Users')
+const UserDetail = named(() => import('./routes/admin/UserDetail'), 'UserDetail')
 const AdminShell = named(() => import('./components/AdminShell'), 'AdminShell')
 const Dashboard = named(() => import('./routes/admin/Dashboard'), 'Dashboard')
 const Catalogue = named(() => import('./routes/admin/Catalogue'), 'Catalogue')
@@ -97,6 +100,7 @@ function Router() {
           <Route path="/collections/:id" element={<CollectionDetail />} />
           <Route path="/seasons" element={<Seasons />} />
           <Route path="/seasons/:year/:season" element={<Seasons />} />
+          <Route path="/account" element={<Account />} />
           {/* Said, not redirected: see `NotFound`. */}
           <Route path="*" element={<NotFound />} />
         </Route>
@@ -111,6 +115,9 @@ function Router() {
           <Route path="catalogue/:id" element={<WorkEditor />} />
           <Route path="discover" element={<Discover />} />
           <Route path="clients" element={<Clients />} />
+          <Route path="users" element={<Users />} />
+          <Route path="users/:id" element={<UserDetail />} />
+          <Route path="account" element={<Account />} />
           <Route path="lists" element={<AdminLists />} />
           <Route path="jobs" element={<Jobs />} />
           <Route path="audit" element={<Audit />} />

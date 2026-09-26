@@ -4,6 +4,7 @@
 //! catalogue. Unlike the compatibility surfaces, it speaks the canonical model
 //! directly.
 
+pub mod account;
 pub mod auth;
 pub mod browse;
 pub mod children;
@@ -22,6 +23,7 @@ pub mod overrides;
 pub mod recommend;
 pub mod seasons;
 pub mod settings;
+pub mod users;
 pub mod watch;
 
 use utoipa_axum::router::OpenApiRouter;
@@ -49,6 +51,8 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(network::router())
         .merge(settings::router())
         .merge(discover::router())
+        .merge(account::router())
+        .merge(users::router())
         .merge(auth::authenticated_router())
         .merge(crate::api::audit::router())
 }

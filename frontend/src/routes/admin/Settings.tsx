@@ -11,16 +11,14 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
-import { Link, useNavigate } from 'react-router'
+import { Link } from 'react-router'
 
 import {
   Button,
   ButtonLink,
   Chip,
   Field,
-  FormField,
   Glyph,
-  Input,
   Label,
   OnThisPage,
   Panel,
@@ -66,7 +64,7 @@ export function Settings() {
   const config = settings.data
   // The groups the server's settings fall in, for the index: the same
   // grouping the panels below are drawn by.
-  const groups: GroupId[] = (['answering', 'providers', 'sources', 'refresh', 'adult', 'other'] as GroupId[]).filter(
+  const groups: GroupId[] = (['answering', 'providers', 'sources', 'refresh', 'accounts', 'adult', 'other'] as GroupId[]).filter(
     (group) => (registry.data ?? []).some((def) => def.scopes.includes('server') && groupOf(def.key) === group),
   )
 
@@ -216,7 +214,16 @@ export function Settings() {
 
       <Panel id="settings-password" className="rise mt-6 mb-4" style={{ animationDelay: '460ms' }}>
         <PanelHead title={t.admin.config.password} />
-        <ChangePassword />
+        <p className="flex flex-wrap items-center gap-x-3 gap-y-2 p-5 text-sm text-bone-dim">
+          {t.admin.config.passwordMoved}
+          <Link
+            to="/admin/account"
+            className="inline-flex min-h-11 items-center gap-1.5 text-vermillion transition-colors duration-150 hover:text-vermillion-bright"
+          >
+            {t.admin.account}
+            <Glyph name="chevronRight" className="size-3.5" />
+          </Link>
+        </p>
       </Panel>
     </div>
   )
@@ -364,110 +371,3 @@ function ClearCache() {
   )
 }
 
-/**
- * The password, changed.
- *
- * The server ends every session when it succeeds — they were all authorised
- * under the old password — so this form's success state is the sign-in page.
- * Saying so beforehand is the difference between that and looking like a crash.
- */
-function ChangePassword() {
-  const { t } = useI18n()
-  const navigate = useNavigate()
-  const queryClient = useQueryClient()
-
-  const [current, setCurrent] = useState('')
-  const [next, setNext] = useState('')
-  const [repeat, setRepeat] = useState('')
-
-  const change = useMutation({
-    mutationFn: () =>
-      api.post('/auth/password', { currentPassword: current, newPassword: next }),
-    onSuccess: () => {
-      queryClient.clear()
-      navigate('/login', { replace: true })
-    },
-  })
-
-  const mismatch = repeat !== '' && next !== repeat
-  const wrongCurrent = change.error instanceof ApiError && change.error.isUnauthorized
-
-  return (
-    <form
-      className="grid gap-4 p-5 sm:grid-cols-2"
-      onSubmit={(event) => {
-        event.preventDefault()
-        if (!mismatch) change.mutate()
-      }}
-    >
-      <p className="max-w-prose text-xs leading-relaxed text-bone-faint sm:col-span-2">
-        {t.admin.config.passwordTitle}. {t.admin.config.passwordBody}
-      </p>
-
-      <div className="sm:col-span-2">
-        <FormField
-          label={t.admin.config.currentPassword}
-          htmlFor="current-password"
-          error={
-            wrongCurrent
-              ? t.admin.config.passwordWrong
-              : change.isError
-                ? change.error.message
-                : undefined
-          }
-        >
-          <Input
-            id="current-password"
-            type="password"
-            autoComplete="current-password"
-            required
-            value={current}
-            onChange={(event) => setCurrent(event.target.value)}
-          />
-        </FormField>
-      </div>
-
-      <FormField
-        label={t.admin.config.newPassword}
-        htmlFor="new-password"
-        hint={t.admin.config.passwordRule}
-      >
-        <Input
-          id="new-password"
-          type="password"
-          autoComplete="new-password"
-          required
-          minLength={12}
-          value={next}
-          onChange={(event) => setNext(event.target.value)}
-        />
-      </FormField>
-
-      <FormField
-        label={t.admin.config.repeatPassword}
-        htmlFor="repeat-password"
-        error={mismatch ? t.admin.config.passwordMismatch : undefined}
-      >
-        <Input
-          id="repeat-password"
-          type="password"
-          autoComplete="new-password"
-          required
-          value={repeat}
-          onChange={(event) => setRepeat(event.target.value)}
-        />
-      </FormField>
-
-      <div className="sm:col-span-2">
-        <Button
-          type="submit"
-          variant="primary"
-          disabled={change.isPending || mismatch || !current || next.length < 12}
-        >
-          {change.isPending ? <Spinner className="size-4" /> : <Glyph name="lock" className="size-4" />}
-          {t.admin.config.passwordSubmit}
-        </Button>
-      </div>
-    </form>
-  )
-}

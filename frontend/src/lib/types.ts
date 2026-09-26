@@ -233,6 +233,81 @@ export interface ApiClient {
   lastUsedAt?: string
   lastUsedIp?: string
   note?: string
+  /** The account it belongs to; absent for one of the server's own keys. */
+  ownerId?: string
+  ownerName?: string
+}
+
+/** What an account may do, least first. */
+export type AccountRole = 'member' | 'editor' | 'admin'
+export type AccountStatus = 'active' | 'pending' | 'disabled'
+
+/** The signed-in person, as every page needs them. */
+export interface SessionUser {
+  id: string
+  username: string
+  /** What to call them: the name they gave, or their username. */
+  name: string
+  role: AccountRole
+  locale?: string
+  hasPassword: boolean
+}
+
+export interface User {
+  id: string
+  username: string
+  displayName?: string
+  email?: string
+  role: AccountRole
+  status: AccountStatus
+  locale?: string
+  oidcLinked: boolean
+  hasPassword: boolean
+  invitedBy?: string
+  createdAt: string
+  updatedAt?: string
+  lastLoginAt?: string
+}
+
+export interface ListedUser extends User {
+  keys: number
+  sessions: number
+}
+
+export interface UsersPage {
+  users: ListedUser[]
+  total: number
+  counts: { total: number; pending: number; admins: number; oidc: number }
+}
+
+export interface AccountSession {
+  id: string
+  createdAt: string
+  expiresAt: string
+  lastSeenAt?: string
+  userAgent?: string
+  ip?: string
+  current: boolean
+}
+
+export interface UserDetail {
+  user: User
+  keys: ApiClient[]
+  sessions: AccountSession[]
+}
+
+export interface AccountKeys {
+  keys: ApiClient[]
+  /** How many may be held; absent for an administrator. */
+  limit?: number
+  /** The rights this person's role lets a key carry. */
+  scopes: string[]
+}
+
+export interface IssuedKey {
+  key: ApiClient
+  /** Shown once. */
+  secret: string
 }
 
 export interface AuditEntry {
@@ -330,6 +405,8 @@ export interface Me {
   isAdmin: boolean
   /** Whether a reader with no credential may browse: the feeds answer a calendar app only then. */
   publicBrowse: boolean
+  /** The signed-in person, when this is a session rather than a key. */
+  user?: SessionUser
 }
 
 export interface Snapshot {

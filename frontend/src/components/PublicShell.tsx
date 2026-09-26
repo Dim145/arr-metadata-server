@@ -463,12 +463,14 @@ function LanguageToggle() {
 function AdminLink({ me, labelled = false }: { me?: Me; labelled?: boolean }) {
   const { t } = useI18n()
   const signedIn = Boolean(me?.canWrite)
+  // A member is signed in too, with no administration to go to: their account.
+  const member = !signedIn && Boolean(me?.user)
 
-  const label = signedIn ? t.nav.admin : t.nav.signIn
+  const label = signedIn ? t.nav.admin : member ? t.nav.account : t.nav.signIn
 
   return (
     <Link
-      to={signedIn ? '/admin' : '/login'}
+      to={signedIn ? '/admin' : member ? '/account' : '/login'}
       aria-label={label}
       className={cn(
         'flex min-h-11 items-center gap-2 rounded-card px-3 text-sm font-medium',

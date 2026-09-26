@@ -46,7 +46,9 @@ async fn list(
 ) -> AppResult<Json<Vec<ApiClient>>> {
     require_admin(&identity)?;
 
-    Ok(Json(repo::client::list(&state.db).await?))
+    Ok(Json(
+        repo::client::list(&state.db, repo::client::Owner::Any).await?,
+    ))
 }
 
 /// One client.
@@ -135,6 +137,14 @@ async fn create(
         }
     }
 
+    // The server's keys share one namespace; a person's are theirs alone.
+    let _held = state.accounts_lock().await;
+    if repo::client::name_taken(&state.db, None, name, None).await? {
+        return Err(AppError::Conflict(format!(
+            "a client named {name:?} already exists"
+        )));
+    }
+
     let generated = secrets::generate_api_key()?;
 
     let client = repo::client::create(
@@ -146,6 +156,7 @@ async fn create(
             scopes: &request.scopes,
             expires_at: request.expires_at.as_deref(),
             note: request.note.as_deref(),
+            owner_id: None,
         },
     )
     .await

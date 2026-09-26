@@ -13,7 +13,6 @@ import { useNavigate } from 'react-router'
 import { Button, FormField, Glyph, Input } from '../components/ui'
 import { ApiError, api } from '../lib/api'
 import { useI18n } from '../lib/i18n'
-import type { Me } from '../lib/types'
 
 export function Login() {
   const { t } = useI18n()
@@ -24,16 +23,21 @@ export function Login() {
   const [password, setPassword] = useState('')
 
   const signIn = useMutation({
-    mutationFn: () => api.post<Me>('/auth/login', { username, password }),
-    onSuccess: async () => {
+    mutationFn: () => api.post<{ canWrite: boolean }>('/auth/login', { username, password }),
+    onSuccess: async (answer) => {
       // The whole interface keys off who you are; nothing cached before the
       // sign-in was answered for this person.
       await queryClient.invalidateQueries()
-      navigate('/admin')
+      // Where each belongs: the catalogue's maintainers to the administration,
+      // a member back to the catalogue — or to the page they were sent from.
+      navigate(sameSite(new URLSearchParams(window.location.search).get('next')) ?? (answer.canWrite ? '/admin' : '/'))
     },
   })
 
   const failed = signIn.isError
+  const code = signIn.error instanceof ApiError ? signIn.error.code : undefined
+  const refusal =
+    code === 'account_pending' ? t.auth.pending : code === 'account_disabled' ? t.auth.disabled : undefined
   const wrongCredentials =
     signIn.error instanceof ApiError && (signIn.error.isUnauthorized || signIn.error.status === 403)
 
@@ -73,7 +77,7 @@ export function Login() {
           <FormField
             label={t.auth.password}
             htmlFor="password"
-            error={failed ? (wrongCredentials ? t.auth.failed : t.common.error) : undefined}
+            error={failed ? (refusal ?? (wrongCredentials ? t.auth.failed : t.common.error)) : undefined}
           >
             <Input
               id="password"
@@ -106,4 +110,19 @@ export function Login() {
       </div>
     </div>
   )
+}
+
+/**
+ * A page of this site to go back to, or nothing. Resolved the way the browser
+ * would resolve it, then compared by origin: `/\evil.example` and a tab after
+ * the slash both look like paths and both leave the site.
+ */
+function sameSite(next: string | null): string | undefined {
+  if (!next?.startsWith('/')) return undefined
+  try {
+    const url = new URL(next, window.location.origin)
+    return url.origin === window.location.origin ? `${url.pathname}${url.search}${url.hash}` : undefined
+  } catch {
+    return undefined
+  }
 }

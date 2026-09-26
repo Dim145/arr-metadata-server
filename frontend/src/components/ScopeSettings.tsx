@@ -62,6 +62,7 @@ export const GROUPS = [
   { id: 'providers', prefixes: ['skyhook', 'radarr', 'sonarr', 'tvdb'] },
   { id: 'sources', prefixes: ['tvmaze', 'anilist', 'mal', 'imdb', 'fankai'] },
   { id: 'refresh', prefixes: ['refresh'] },
+  { id: 'accounts', prefixes: ['keys'] },
   { id: 'adult', prefixes: ['adult'] },
 ] as const
 

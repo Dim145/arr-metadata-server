@@ -147,6 +147,12 @@ pub const REGISTRY: &[Definition] = &[
         kind: Kind::Bool,
         scopes: SERVER_ONLY,
     },
+    // ── Accounts ─────────────────────────────────────────────────────────────
+    Definition {
+        key: "keys.maxPerUser",
+        kind: Kind::Int { min: 0, max: 50 },
+        scopes: SERVER_ONLY,
+    },
     // ── Refresh ──────────────────────────────────────────────────────────────
     Definition {
         key: "refresh.enabled",

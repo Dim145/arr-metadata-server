@@ -106,10 +106,13 @@ async fn authorize(
         SurfacePolicy::ApiKey => {
             let presented = extract_key(request.headers(), request.uri().query());
 
-            // An admin session is accepted wherever a key is, so the web UI can
-            // call the same endpoints without minting a key for itself.
+            // A session is accepted wherever a key is, so the web UI can call
+            // the same endpoints without minting a key for itself.
             match resolve_session(&state, request.headers()).await? {
-                Some(identity) => identity,
+                Some((identity, session)) => {
+                    request.extensions_mut().insert(CurrentSession(session));
+                    identity
+                }
                 None => match presented {
                     Some(key) => resolve_key(&state, &key, client_ip).await?,
                     // Nobody said who they are. That is allowed only for the
@@ -125,6 +128,17 @@ async fn authorize(
             }
         }
     };
+
+    // A member reads what a visitor may, and keeps their own account; the rest
+    // of this surface is for the people who keep the catalogue. Decided here
+    // rather than in each handler, so that an endpoint added later is closed
+    // to members until it is listed, as it is to visitors.
+    if surface == Surface::Native
+        && identity.is_member()
+        && !member_may(request.method(), request.uri().path())
+    {
+        return Err(AppError::Forbidden);
+    }
 
     request.extensions_mut().insert(identity);
     if let Some(addr) = client_ip {
@@ -312,6 +326,17 @@ fn browsable(method: &axum::http::Method, path: &str) -> bool {
     }
 }
 
+/// What a member may reach, in person or with their key: what a visitor may,
+/// their own account, and the session they are in.
+fn member_may(method: &axum::http::Method, path: &str) -> bool {
+    let path = path.trim_end_matches('/');
+
+    browsable(method, path)
+        || path == "/api/v1/account"
+        || path.starts_with("/api/v1/account/")
+        || matches!(path, "/api/v1/auth/logout" | "/api/v1/auth/password")
+}
+
 /// Refuse a request this server sent to itself.
 ///
 /// `skyhook.sonarr.tv` and `api.radarr.video` are hostnames this server both
@@ -416,16 +441,43 @@ async fn resolve_key(
         return Err(AppError::Forbidden);
     }
 
+    // A person's key is them: it stops when they do, and does no more than
+    // their role allows — demoting someone demotes their keys, whatever
+    // scopes the keys were made with.
+    let mut client = found.client;
+    if client.owner_id.is_some() {
+        let Some((role, status)) = client.owner else {
+            return Err(AppError::Forbidden);
+        };
+        if status != crate::db::repo::user::Status::Active {
+            tracing::warn!(client = %client.name, "rejected: the key's owner may not sign in");
+            return Err(AppError::Refused {
+                code: "owner_inactive",
+                message: "the account this key belongs to is not active".into(),
+            });
+        }
+        let allowed = role.scopes();
+        client.scopes.retain(|s| allowed.contains(&s.as_str()));
+    }
+
     let ip_text = client_ip.map(|ip| ip.to_string());
-    if let Err(e) = repo::client::touch(&state.db, &found.client.id, ip_text.as_deref()).await {
+    if let Err(e) = repo::client::touch(&state.db, &client.id, ip_text.as_deref()).await {
         // Bookkeeping must never fail a request that was otherwise authorised.
         tracing::warn!(error = %e, "could not record key usage");
     }
 
-    Ok(Identity::Client(Box::new(found.client)))
+    Ok(Identity::Client(Box::new(client)))
 }
 
-async fn resolve_session(state: &AppState, headers: &HeaderMap) -> AppResult<Option<Identity>> {
+/// The session a request was authenticated by: the SHA-256 of its token, which
+/// is the session's id. Lets a person's device list say which one is theirs.
+#[derive(Clone, Debug)]
+pub struct CurrentSession(pub String);
+
+async fn resolve_session(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> AppResult<Option<(Identity, String)>> {
     let Some(token) = session_token(headers) else {
         return Ok(None);
     };
@@ -434,7 +486,7 @@ async fn resolve_session(state: &AppState, headers: &HeaderMap) -> AppResult<Opt
 
     Ok(repo::user::find_session_user(&state.db, &hash)
         .await?
-        .map(|user| Identity::Admin(Box::new(user))))
+        .map(|user| (Identity::User(Box::new(user)), hash)))
 }
 
 fn session_token(headers: &HeaderMap) -> Option<String> {
@@ -550,6 +602,36 @@ mod browse_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_member_reads_the_catalogue_and_keeps_their_account() {
+        use axum::http::Method;
+
+        assert!(member_may(&Method::GET, "/api/v1/items"));
+        assert!(member_may(&Method::GET, "/api/v1/items/0190c0de"));
+        assert!(member_may(&Method::GET, "/api/v1/auth/me"));
+        assert!(member_may(&Method::GET, "/api/v1/account"));
+        assert!(member_may(&Method::POST, "/api/v1/account/keys"));
+        assert!(member_may(&Method::DELETE, "/api/v1/account/sessions/abc"));
+        assert!(member_may(&Method::POST, "/api/v1/auth/password"));
+        assert!(member_may(&Method::POST, "/api/v1/auth/logout"));
+
+        // Operational reads, and anything that writes, are not theirs.
+        assert!(!member_may(
+            &Method::GET,
+            "/api/v1/items/0190c0de/snapshots"
+        ));
+        assert!(!member_may(
+            &Method::GET,
+            "/api/v1/items/0190c0de/overrides"
+        ));
+        assert!(!member_may(&Method::GET, "/api/v1/items/0190c0de/nfo"));
+        assert!(!member_may(&Method::GET, "/api/v1/jobs"));
+        assert!(!member_may(&Method::GET, "/api/v1/users"));
+        assert!(!member_may(&Method::POST, "/api/v1/items"));
+        assert!(!member_may(&Method::GET, "/api/v1/accountant"));
+        assert!(!member_may(&Method::GET, "/api/docs"));
+    }
 
     fn headers(pairs: &[(&str, &str)]) -> HeaderMap {
         let mut h = HeaderMap::new();

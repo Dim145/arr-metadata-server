@@ -43,9 +43,10 @@ const TABLES: &[&str] = &[
     "media_translation",
     "media_episode_translation",
     "media_language_fetch",
-    "api_client",
+    // People before their keys: a key names its owner.
     "admin_user",
     "admin_session",
+    "api_client",
     "job_run",
     "audit_log",
     "network_rule",
