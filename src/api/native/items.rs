@@ -537,10 +537,16 @@ async fn refresh(
 
     // Someone is waiting on this one, so it earns a row of its own rather than
     // being folded into a sweep summary.
-    let record = repo::job::start(&state.db, repo::job::kinds::REFRESH_ITEM, Some(&id))
-        .await
-        .inspect_err(|e| tracing::warn!(error = %e, "could not open a job run"))
-        .ok();
+    let by = identity.label();
+    let record = repo::job::start_by(
+        &state.db,
+        repo::job::kinds::REFRESH_ITEM,
+        Some(&id),
+        Some(&by),
+    )
+    .await
+    .inspect_err(|e| tracing::warn!(error = %e, "could not open a job run"))
+    .ok();
 
     let outcome = crate::jobs::refresh::refresh_one(&state, &item).await;
 

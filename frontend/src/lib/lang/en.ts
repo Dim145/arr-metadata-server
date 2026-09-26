@@ -1247,6 +1247,75 @@ export const en = {
       loadFailed: 'The clients could not be loaded.',
     },
 
+    tasks: {
+      lead: 'What the server does on its own: when each task runs, how it last went, and when it runs next. Any of them can be run now; a run somebody started says whose it was.',
+      names: {
+        'refresh.sweep': 'Refresh what is due',
+        'refresh.all': 'Refresh everything',
+        'import.anime': 'Anime identifier list',
+        'import.imdb': 'IMDb ratings',
+        'export.nfo': 'NFO export',
+        'refresh.item': 'One work refreshed',
+      } as Record<string, string>,
+      about: {
+        'refresh.sweep': 'Works whose details have aged — a series still airing every few hours, an ended one weekly — asked of their sources again, a batch at a time.',
+        'refresh.all': 'Every work that has an identifier elsewhere, asked of its sources now, one after the other. It can be stopped; what is left is then refreshed by the schedule.',
+        'import.anime': 'The list that ties AniList and MyAnimeList to TheTVDB and TMDB, downloaded whole.',
+        'import.imdb': 'IMDb’s ratings file, downloaded whole and kept for the works held here.',
+        'export.nfo': 'A .nfo document for every work, for a library Plex, Jellyfin or Kodi reads.',
+      } as Record<string, string>,
+      every: (seconds: number) =>
+        seconds >= 604_800 && seconds % 604_800 === 0
+          ? seconds === 604_800 ? 'Weekly' : `Every ${seconds / 604_800} weeks`
+          : seconds >= 86_400 && seconds % 86_400 === 0
+            ? seconds === 86_400 ? 'Daily' : `Every ${seconds / 86_400} days`
+            : seconds >= 3_600 && seconds % 3_600 === 0
+              ? `Every ${seconds / 3_600} h`
+              : `Every ${Math.round(seconds / 60)} min`,
+      manual: 'On demand',
+      off: 'Off',
+      blocked: {
+        source_off: 'Its source is switched off.',
+        not_configured: 'AMS_NFO_EXPORT_PATH is not set.',
+        running: 'Running now.',
+        busy: 'Waiting: a task that shares its work is running.',
+      } as Record<string, string>,
+      last: 'Last run',
+      never: 'Never run yet',
+      next: 'Next',
+      lastSuccess: (when: string) => `last succeeded ${when}`,
+      run: 'Run now',
+      stop: 'Stop',
+      stopAsked: 'Stops after the work in hand.',
+      started: 'Started. Its run is in the history below.',
+      confirmAll: 'Refresh every work now?',
+      confirmAllBody: 'Each work that has an identifier elsewhere is asked of its sources again, one after the other: for a large catalogue, thousands of requests over an hour or more. It can be stopped at any time.',
+      confirmAllGo: 'Refresh everything',
+      history: 'History',
+      allTasks: 'Every task',
+      allOutcomes: 'Every outcome',
+      everyone: 'Everyone',
+      theSchedule: 'The schedule',
+      someone: 'Someone',
+      filterTask: 'Task',
+      filterOutcome: 'Outcome',
+      filterBy: 'Started by',
+      colBy: 'Started by',
+      colTook: 'Took',
+      schedule: 'the schedule',
+      again: 'Run again',
+      summaries: {
+        refreshed: (done: number, failed: number, of?: number) =>
+          `${done} refreshed, ${failed} failed${of === undefined ? '' : `, of ${of}`}`,
+        stopped: (done: number, failed: number, of: number) =>
+          `Stopped: ${done} refreshed, ${failed} failed, of ${of}`,
+        progress: (at: number, of: number, done: number, failed: number) =>
+          `${at} of ${of}: ${done} refreshed, ${failed} failed`,
+        exported: (works: number, episodes: number, failed: number) =>
+          `${works} works, ${episodes} episodes${failed ? `, ${failed} failed` : ''}`,
+        nothingDue: 'Nothing was due',
+      },
+    },
     runs: {
       lead: 'What the scheduler has been doing. One row per run, not per work.',
       colWhen: 'When',
@@ -1256,6 +1325,7 @@ export const en = {
       running: 'Running',
       succeeded: 'Succeeded',
       failed: 'Failed',
+      stopped: 'Stopped',
       empty: 'Nothing has run yet',
       emptyHint:
         'A sweep is recorded each time the scheduler wakes, and a refresh you trigger gets its own row.',
@@ -1313,6 +1383,8 @@ export const en = {
         'user.linked': 'Tied to the identity provider',
         'user.unlinked': 'Untied from the identity provider',
         'oidc.configured': 'Identity provider set up',
+        'task.started': 'Task started',
+        'task.stopped': 'Task stopped',
         'list.created': 'List created',
         'list.updated': 'List changed',
         'list.deleted': 'List deleted',

@@ -5,7 +5,10 @@
 //! refresh replaces provider snapshots and provider-sourced children. It does
 //! not touch `media_override`, which is what makes a manual edit permanent.
 
-use std::time::Duration;
+use std::{
+    sync::{Arc, LazyLock},
+    time::Duration,
+};
 
 use anyhow::Result;
 
@@ -88,6 +91,152 @@ async fn refresh_movie(state: &AppState, item: &MediaItem) -> Result<Option<Medi
     crate::service::gather::movie(state, ids.tmdb, ids.imdb.as_deref()).await
 }
 
+/// Held by whatever is refreshing works in bulk — a sweep, the schedule's or
+/// one asked for by hand, or a refresh of everything — so that two never run
+/// at once and ask the providers the same thing twice.
+static SWEEPING: LazyLock<Arc<tokio::sync::Mutex<()>>> =
+    LazyLock::new(|| Arc::new(tokio::sync::Mutex::new(())));
+
+fn busy() -> crate::error::AppError {
+    crate::error::AppError::Conflict(
+        "works are being refreshed already; its run is in the history".into(),
+    )
+}
+
+/// One sweep now, as `by` asked, in the background: the run's id at once.
+pub async fn sweep_now(state: &AppState, by: &str) -> crate::error::AppResult<Option<String>> {
+    let held = SWEEPING.clone().try_lock_owned().map_err(|_| busy())?;
+    let record = job::start_by(&state.db, job::kinds::REFRESH_SWEEP, None, Some(by))
+        .await
+        .inspect_err(|e| tracing::warn!(error = %e, "could not open a job run"))
+        .ok();
+
+    let state = state.clone();
+    let id = record.clone();
+    tokio::spawn(async move {
+        let _held = held;
+        close(&state, record, sweep(&state, batch(&state)).await).await;
+    });
+
+    Ok(id)
+}
+
+/// Every work that has an identifier elsewhere, refreshed now, as `by`
+/// asked: one pass over them in id order, gently, the run saying how far it
+/// has got. It can be stopped between two works, and nothing about the works'
+/// own schedule is touched to make it — stopped, the rest simply keep theirs.
+pub async fn refresh_everything(
+    state: &AppState,
+    by: &str,
+) -> crate::error::AppResult<Option<String>> {
+    let held = SWEEPING.clone().try_lock_owned().map_err(|_| busy())?;
+    let total = repo::item::count_refresh_candidates(&state.db).await?;
+    // Not without its record: a run nobody can see is a run nobody can stop.
+    let record = job::start_by(&state.db, job::kinds::REFRESH_ALL, None, Some(by)).await?;
+
+    let state = state.clone();
+    let id = record.clone();
+    tokio::spawn(async move {
+        let _held = held;
+        let flag = super::cancel::register(&record);
+        match everything(&state, total, &record, &flag).await {
+            Ok(Pass::Done(summary)) => close(&state, Some(record), Ok(summary)).await,
+            Ok(Pass::Stopped(summary)) => {
+                if let Err(e) = job::stop(&state.db, &record, &summary).await {
+                    tracing::warn!(error = %e, "could not close the stopped run");
+                }
+            }
+            Err(e) => close(&state, Some(record), Err(e)).await,
+        }
+    });
+
+    Ok(Some(id))
+}
+
+/// The pause between two works of a refresh of everything: providers are
+/// asked for thousands of things, and are not in a hurry.
+const EVERYTHING_PAUSE: Duration = Duration::from_millis(250);
+
+/// How a pass over everything ended.
+enum Pass {
+    Done(String),
+    Stopped(String),
+}
+
+async fn everything(
+    state: &AppState,
+    total: i64,
+    record: &str,
+    flag: &super::cancel::Registered,
+) -> Result<Pass> {
+    let (mut done, mut failed) = (0i64, 0i64);
+    let mut after: Option<String> = None;
+
+    loop {
+        let batch = repo::item::refresh_candidates(&state.db, after.as_deref(), 25).await?;
+        let Some((last, _)) = batch.last() else {
+            break;
+        };
+        after = Some(last.clone());
+
+        for (id, _kind) in batch {
+            if flag.stopped() {
+                return Ok(Pass::Stopped(format!(
+                    "stopped: {done} refreshed, {failed} failed, of {total}"
+                )));
+            }
+
+            if refresh_due(state, &id).await {
+                done += 1;
+            } else {
+                failed += 1;
+            }
+
+            if (done + failed) % 5 == 0
+                && let Err(e) = job::progress(
+                    &state.db,
+                    record,
+                    &format!(
+                        "{} of {total}: {done} refreshed, {failed} failed",
+                        done + failed
+                    ),
+                )
+                .await
+            {
+                tracing::debug!(error = %e, "could not say how far the refresh got");
+            }
+
+            tokio::time::sleep(EVERYTHING_PAUSE).await;
+        }
+    }
+
+    Ok(Pass::Done(format!(
+        "{done} refreshed, {failed} failed, of {total}"
+    )))
+}
+
+/// Whether works are being refreshed in bulk right now — what tells a run
+/// that is still marked running from one a crash left behind.
+pub fn is_busy() -> bool {
+    SWEEPING.try_lock().is_err()
+}
+
+/// Close a run with what came of it.
+async fn close(state: &AppState, record: Option<String>, outcome: Result<String>) {
+    if let Some(record) = record {
+        let closed = match &outcome {
+            Ok(summary) => job::finish(&state.db, &record, Some(summary), None).await,
+            Err(e) => job::finish(&state.db, &record, None, Some(&format!("{e:#}"))).await,
+        };
+        if let Err(e) = closed {
+            tracing::warn!(error = %e, "could not close the job run");
+        }
+    }
+    if let Err(e) = outcome {
+        tracing::error!(error = ?e, "a bulk refresh failed");
+    }
+}
+
 /// Run the scheduler until the process shuts down.
 pub async fn run(state: AppState) {
     // The scheduler always runs. Whether it does anything is a setting now, and
@@ -121,7 +270,11 @@ pub async fn run(state: AppState) {
     loop {
         ticker.tick().await;
 
-        if state.flag("refresh.enabled", true) && swept.elapsed() >= interval(&state) {
+        // Not while works are being refreshed by hand: the next tick asks again.
+        if state.flag("refresh.enabled", true)
+            && swept.elapsed() >= interval(&state)
+            && let Ok(_held) = SWEEPING.try_lock()
+        {
             swept = tokio::time::Instant::now();
             run_sweep(&state, batch(&state)).await;
         }
@@ -146,7 +299,7 @@ pub async fn run(state: AppState) {
     }
 }
 
-fn interval(state: &AppState) -> Duration {
+pub fn interval(state: &AppState) -> Duration {
     state
         .settings
         .int_at("refresh.intervalSeconds", None, None)
@@ -205,40 +358,61 @@ async fn sweep(state: &AppState, batch: i64) -> Result<String> {
     let mut failed = 0usize;
 
     for (id, _kind) in due {
-        // Not `?`. An entry that cannot be read — a bad override, a corrupt row
-        // — would otherwise end the sweep before the rest of the batch was
-        // touched, and never have its own deadline pushed out: it sorts first
-        // by `refresh_after`, so it would be the first entry of every sweep
-        // from then on, and nothing in the library would be refreshed again.
-        let item = match crate::service::load(state, &id).await {
-            Ok(Some(item)) => item,
-            Ok(None) => continue,
-            Err(e) => {
-                tracing::warn!(%id, error = format_args!("{e:#}"), "could not read an entry due for refresh");
-                mark_failure(state, &id, &format!("could not be read: {e}")).await;
-                failed += 1;
-                continue;
-            }
-        };
-
-        match refresh_one(state, &item).await {
-            Ok(Some(_)) => succeeded += 1,
-            Ok(None) => {
-                // Nothing to refresh from. Push the deadline out so this entry
-                // does not occupy a slot in every future batch.
-                mark_failure(state, &id, "no provider could resolve this entry").await;
-                failed += 1;
-            }
-            Err(e) => {
-                tracing::warn!(%id, error = %e, "refresh failed");
-                mark_failure(state, &id, &e.to_string()).await;
-                failed += 1;
-            }
+        if refresh_due(state, &id).await {
+            succeeded += 1;
+        } else {
+            failed += 1;
         }
     }
 
     tracing::info!(succeeded, failed, "refresh sweep finished");
     Ok(format!("{succeeded} refreshed, {failed} failed"))
+}
+
+/// Refresh one work that is due; whether it came back from a provider.
+///
+/// Never `?`: a work that cannot be read — a bad override, a corrupt row —
+/// would otherwise end the sweep before the rest of the batch was touched,
+/// and never have its own deadline pushed out: it sorts first by
+/// `refresh_after`, so it would be the first work of every sweep from then
+/// on, and nothing in the library would be refreshed again.
+async fn refresh_due(state: &AppState, id: &str) -> bool {
+    let item = match crate::service::load(state, id).await {
+        Ok(Some(item)) => item,
+        // Gone since it was listed.
+        Ok(None) => return true,
+        Err(e) => {
+            tracing::warn!(%id, error = format_args!("{e:#}"), "could not read an entry due for refresh");
+            mark_failure(state, id, &format!("could not be read: {e}")).await;
+            return false;
+        }
+    };
+
+    match refresh_one(state, &item).await {
+        // Answered with what was stored — no provider had it — and still due:
+        // pushed out, or it would take the first slot of every sweep.
+        Ok(Some(fresh))
+            if fresh
+                .refresh_after
+                .as_deref()
+                .is_some_and(|at| at <= crate::db::now().as_str()) =>
+        {
+            mark_failure(state, id, "no provider answered; the stored entry was kept").await;
+            false
+        }
+        Ok(Some(_)) => true,
+        Ok(None) => {
+            // Nothing to refresh from. Push the deadline out so this entry
+            // does not occupy a slot in every future batch.
+            mark_failure(state, id, "no provider could resolve this entry").await;
+            false
+        }
+        Err(e) => {
+            tracing::warn!(%id, error = %e, "refresh failed");
+            mark_failure(state, id, &e.to_string()).await;
+            false
+        }
+    }
 }
 
 /// Drop job runs past the retention window, which shares the audit setting.

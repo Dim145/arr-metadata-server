@@ -458,14 +458,32 @@ export interface Job {
   id: string
   kind: string
   target?: string
-  status: 'running' | 'succeeded' | 'failed'
+  status: 'running' | 'succeeded' | 'failed' | 'stopped'
   startedAt?: string
   finishedAt?: string
   error?: string
   detail?: string
   createdAt: string
+  /** Who started it, as the journal names them; absent for the schedule. */
+  triggeredBy?: string
   /** The work it acted on, while it is held. */
   work?: { id: string; title: string; kind: MediaKind }
+}
+
+export type TaskId = 'refresh.sweep' | 'refresh.all' | 'import.anime' | 'import.imdb' | 'export.nfo'
+
+/** A background task as it stands: when it runs, how it last went. */
+export interface Task {
+  id: TaskId
+  mode: 'scheduled' | 'manual' | 'off'
+  everySeconds?: number
+  last?: Job
+  lastSuccessAt?: string
+  nextAt?: string
+  running?: Job
+  cancelable: boolean
+  /** Why it cannot run now: `source_off`, `not_configured`, `running`. */
+  blocked?: 'source_off' | 'not_configured' | 'running' | 'busy'
 }
 
 export interface JobsResponse {

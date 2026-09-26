@@ -1259,6 +1259,75 @@ export const fr: Dict = {
       loadFailed: 'Les clients n’ont pas pu être chargés.',
     },
 
+    tasks: {
+      lead: 'Ce que le serveur fait de lui-même : quand chaque tâche tourne, comment s’est passé son dernier passage, et quand vient le prochain. Chacune peut être lancée tout de suite ; un passage lancé par quelqu’un dit par qui.',
+      names: {
+        'refresh.sweep': 'Actualiser ce qui est dû',
+        'refresh.all': 'Tout actualiser',
+        'import.anime': 'Liste des identifiants d’anime',
+        'import.imdb': 'Notes IMDb',
+        'export.nfo': 'Export NFO',
+        'refresh.item': 'Une fiche actualisée',
+      } as Record<string, string>,
+      about: {
+        'refresh.sweep': 'Les fiches dont les informations ont vieilli — une série en cours toutes les quelques heures, une série terminée chaque semaine — redemandées à leurs sources, par lots.',
+        'refresh.all': 'Toutes les fiches qui ont un identifiant ailleurs, redemandées à leurs sources maintenant, l’une après l’autre. On peut l’arrêter ; le reste est alors actualisé par le programme.',
+        'import.anime': 'La liste qui relie AniList et MyAnimeList à TheTVDB et TMDB, téléchargée en entier.',
+        'import.imdb': 'Le fichier des notes d’IMDb, téléchargé en entier et gardé pour les œuvres présentes ici.',
+        'export.nfo': 'Un document .nfo pour chaque œuvre, pour une bibliothèque que lisent Plex, Jellyfin ou Kodi.',
+      } as Record<string, string>,
+      every: (seconds: number) =>
+        seconds >= 604_800 && seconds % 604_800 === 0
+          ? seconds === 604_800 ? 'Chaque semaine' : `Toutes les ${seconds / 604_800} semaines`
+          : seconds >= 86_400 && seconds % 86_400 === 0
+            ? seconds === 86_400 ? 'Chaque jour' : `Tous les ${seconds / 86_400} jours`
+            : seconds >= 3_600 && seconds % 3_600 === 0
+              ? `Toutes les ${seconds / 3_600} h`
+              : `Toutes les ${Math.round(seconds / 60)} min`,
+      manual: 'À la demande',
+      off: 'Coupée',
+      blocked: {
+        source_off: 'Sa source est coupée.',
+        not_configured: 'AMS_NFO_EXPORT_PATH n’est pas défini.',
+        running: 'En cours.',
+        busy: 'En attente : une tâche qui partage son travail est en cours.',
+      } as Record<string, string>,
+      last: 'Dernier passage',
+      never: 'Jamais lancée',
+      next: 'Prochain',
+      lastSuccess: (when: string) => `dernière réussite ${when}`,
+      run: 'Lancer',
+      stop: 'Arrêter',
+      stopAsked: 'S’arrête après la fiche en cours.',
+      started: 'Lancée. Son passage est dans l’historique ci-dessous.',
+      confirmAll: 'Actualiser toutes les fiches maintenant ?',
+      confirmAllBody: 'Chaque fiche qui a un identifiant ailleurs est redemandée à ses sources, l’une après l’autre : pour un grand catalogue, des milliers de requêtes pendant une heure ou plus. On peut l’arrêter à tout moment.',
+      confirmAllGo: 'Tout actualiser',
+      history: 'Historique',
+      allTasks: 'Toutes les tâches',
+      allOutcomes: 'Tous les résultats',
+      everyone: 'Tout le monde',
+      theSchedule: 'Le programme',
+      someone: 'Quelqu’un',
+      filterTask: 'Tâche',
+      filterOutcome: 'Résultat',
+      filterBy: 'Lancée par',
+      colBy: 'Lancée par',
+      colTook: 'Durée',
+      schedule: 'le programme',
+      again: 'Relancer',
+      summaries: {
+        refreshed: (done: number, failed: number, of?: number) =>
+          `${done} actualisée${done > 1 ? 's' : ''}, ${failed} en échec${of === undefined ? '' : `, sur ${of}`}`,
+        stopped: (done: number, failed: number, of: number) =>
+          `Arrêtée : ${done} actualisée${done > 1 ? 's' : ''}, ${failed} en échec, sur ${of}`,
+        progress: (at: number, of: number, done: number, failed: number) =>
+          `${at} sur ${of} : ${done} actualisée${done > 1 ? 's' : ''}, ${failed} en échec`,
+        exported: (works: number, episodes: number, failed: number) =>
+          `${works} œuvres, ${episodes} épisodes${failed ? `, ${failed} en échec` : ''}`,
+        nothingDue: 'Rien n’était dû',
+      },
+    },
     runs: {
       lead: 'Ce que l’ordonnanceur a fait. Une ligne par exécution, pas par œuvre.',
       colWhen: 'Quand',
@@ -1268,6 +1337,7 @@ export const fr: Dict = {
       running: 'En cours',
       succeeded: 'Réussie',
       failed: 'Échouée',
+      stopped: 'Arrêtée',
       empty: 'Rien n’a encore tourné',
       emptyHint:
         'Un balayage est enregistré à chaque réveil de l’ordonnanceur, et un rafraîchissement que vous déclenchez a sa propre ligne.',
@@ -1325,6 +1395,8 @@ export const fr: Dict = {
         'user.linked': 'Lié au fournisseur d’identité',
         'user.unlinked': 'Délié du fournisseur d’identité',
         'oidc.configured': 'Fournisseur d’identité configuré',
+        'task.started': 'Tâche lancée',
+        'task.stopped': 'Tâche arrêtée',
         'list.created': 'Liste créée',
         'list.updated': 'Liste modifiée',
         'list.deleted': 'Liste supprimée',

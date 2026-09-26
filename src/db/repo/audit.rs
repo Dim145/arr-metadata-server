@@ -65,6 +65,8 @@ actions! {
     UserLinked => "user.linked",
     UserUnlinked => "user.unlinked",
     OidcConfigured => "oidc.configured",
+    TaskStarted => "task.started",
+    TaskStopped => "task.stopped",
     ListCreated => "list.created",
     ListUpdated => "list.updated",
     ListDeleted => "list.deleted",

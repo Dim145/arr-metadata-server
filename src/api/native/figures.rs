@@ -268,10 +268,8 @@ async fn health(
         jobs: repo::job::list(
             &state.db,
             &repo::job::Query {
-                kind: None,
-                status: None,
                 limit: 8,
-                offset: 0,
+                ..Default::default()
             },
         )
         .await?,

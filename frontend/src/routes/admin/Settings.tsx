@@ -285,7 +285,9 @@ function NfoExport() {
   // The code alone. On this route `provider_not_configured` has exactly one
   // cause — no export path is set — and matching on the message text as well
   // only ever mislabelled something else as that.
-  const missingPath = run.error instanceof ApiError && run.error.code === 'provider_not_configured'
+  const missingPath =
+    run.error instanceof ApiError &&
+    (run.error.code === 'export_not_configured' || run.error.code === 'provider_not_configured')
 
   return (
     <div className="flex flex-wrap items-center justify-between gap-4 p-5">

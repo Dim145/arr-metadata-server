@@ -33,8 +33,8 @@ pub const IMDB: &str = "imdb-ratings";
 
 /// How often each list is fetched again. The anime list moves by a handful of
 /// entries a week; IMDb republishes its ratings daily.
-const ANIME_EVERY: chrono::Duration = chrono::Duration::days(7);
-const IMDB_EVERY: chrono::Duration = chrono::Duration::days(1);
+pub const ANIME_EVERY: chrono::Duration = chrono::Duration::days(7);
+pub const IMDB_EVERY: chrono::Duration = chrono::Duration::days(1);
 
 /// How soon IMDb's ratings are fetched again for works added since the last
 /// import. Only the works held here are kept from the file, so a work added an
@@ -43,7 +43,7 @@ const IMDB_EVERY: chrono::Duration = chrono::Duration::days(1);
 const IMDB_CATCH_UP: chrono::Duration = chrono::Duration::hours(1);
 
 /// How long a failed import waits before it is tried again.
-const RETRY_AFTER: Duration = Duration::from_secs(60 * 60);
+pub const RETRY_AFTER: Duration = Duration::from_secs(60 * 60);
 
 /// How often the scheduler looks. Short, so a source switched on in the
 /// interface has what it needs within a minute rather than at the next day.
@@ -84,7 +84,7 @@ pub async fn run(state: AppState) {
         if anime_wanted(&state) && retry_allowed(anime_failed) && anime_due(&state).await {
             let _importing = IMPORTING.lock().await;
             if anime_due(&state).await {
-                let ok = record(&state, job::kinds::IMPORT_ANIME, import_anime(&state))
+                let ok = record(&state, job::kinds::IMPORT_ANIME, None, import_anime(&state))
                     .await
                     .is_ok();
                 anime_failed = (!ok).then(tokio::time::Instant::now);
@@ -95,7 +95,7 @@ pub async fn run(state: AppState) {
         {
             let _importing = IMPORTING.lock().await;
             if imdb_due(&state).await {
-                let ok = record(&state, job::kinds::IMPORT_IMDB, import_imdb(&state))
+                let ok = record(&state, job::kinds::IMPORT_IMDB, None, import_imdb(&state))
                     .await
                     .is_ok();
                 imdb_failed = (!ok).then(tokio::time::Instant::now);
@@ -179,11 +179,64 @@ pub enum Asked {
     Failed(anyhow::Error),
 }
 
+/// Import one list now, in the background, as `identity` asked from the
+/// tasks page: told at once whether it started, its outcome in the history.
+/// The lock is taken here and handed to the run, so a started import is
+/// always one that happens.
+pub fn import_in_background(
+    state: &AppState,
+    name: &'static str,
+    identity: &crate::auth::Identity,
+    ip: crate::api::extract::ClientIp,
+) -> crate::error::AppResult<Option<String>> {
+    let wanted = match name {
+        ANIME => anime_wanted(state),
+        IMDB => state.flag("imdb.enabled", false),
+        _ => return Err(crate::error::AppError::NotFound),
+    };
+    if !wanted {
+        return Err(crate::error::AppError::Conflict(
+            "its source is switched off".into(),
+        ));
+    }
+    let Ok(importing) = IMPORTING.try_lock() else {
+        return Err(crate::error::AppError::Conflict(
+            "an import is already running".into(),
+        ));
+    };
+
+    let state = state.clone();
+    let identity = identity.clone();
+    tokio::spawn(async move {
+        let _importing = importing;
+        let by = identity.label();
+        if let Asked::Imported(summary) = import_held(&state, name, Some(&by)).await {
+            crate::api::audit::record(
+                &state,
+                crate::api::audit::Event {
+                    identity: Some(&identity),
+                    ip: &ip,
+                    action: repo::audit::Action::DatasetImported,
+                    target: Some(name),
+                    detail: Some(&summary),
+                },
+            )
+            .await;
+        }
+    });
+    Ok(None)
+}
+
+/// Whether an import is running now.
+pub fn is_busy() -> bool {
+    IMPORTING.try_lock().is_err()
+}
+
 /// Import one list now, rather than when the schedule next says.
 ///
 /// For an operator who has just switched a source on, or who suspects a list
 /// is stale. Recorded as a job like any other import.
-pub async fn import_now(state: &AppState, name: &str) -> Asked {
+pub async fn import_now(state: &AppState, name: &str, by: Option<&str>) -> Asked {
     let wanted = match name {
         ANIME => anime_wanted(state),
         IMDB => state.flag("imdb.enabled", false),
@@ -197,9 +250,14 @@ pub async fn import_now(state: &AppState, name: &str) -> Asked {
         return Asked::Busy;
     };
 
+    import_held(state, name, by).await
+}
+
+/// Import one list, the import lock held by the caller.
+async fn import_held(state: &AppState, name: &str, by: Option<&str>) -> Asked {
     let outcome = match name {
-        ANIME => record(state, job::kinds::IMPORT_ANIME, import_anime(state)).await,
-        _ => record(state, job::kinds::IMPORT_IMDB, import_imdb(state)).await,
+        ANIME => record(state, job::kinds::IMPORT_ANIME, by, import_anime(state)).await,
+        _ => record(state, job::kinds::IMPORT_IMDB, by, import_imdb(state)).await,
     };
 
     match outcome {
@@ -212,9 +270,10 @@ pub async fn import_now(state: &AppState, name: &str) -> Asked {
 async fn record(
     state: &AppState,
     kind: &str,
+    by: Option<&str>,
     work: impl Future<Output = Result<String>>,
 ) -> Result<String> {
-    let run = match job::start(&state.db, kind, None).await {
+    let run = match job::start_by(&state.db, kind, None, by).await {
         Ok(id) => Some(id),
         Err(e) => {
             // Losing the record must not stop the work.

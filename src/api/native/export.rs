@@ -144,6 +144,11 @@ pub struct ExportStarted {
 /// same files, each over the other's.
 static EXPORTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// Whether an export is being written now.
+pub fn is_exporting() -> bool {
+    EXPORTING.load(std::sync::atomic::Ordering::Acquire)
+}
+
 /// Lets the next export in, however this one ends — a panic included.
 struct Exporting;
 
@@ -183,8 +188,23 @@ async fn export_all(
         return Err(AppError::Forbidden);
     }
 
+    let (root, job_id) = start_export(&state, &identity, &ip).await?;
+
+    Ok((StatusCode::ACCEPTED, Json(ExportStarted { root, job_id })))
+}
+
+/// Begin writing the export in the background, as `identity` asked; the
+/// folder it writes under, and its run. What the tasks page runs too.
+pub async fn start_export(
+    state: &AppState,
+    identity: &Identity,
+    ip: &ClientIp,
+) -> AppResult<(String, Option<String>)> {
     let Some(root) = state.config.export.nfo_path.clone() else {
-        return Err(AppError::ProviderNotConfigured);
+        return Err(AppError::Disabled {
+            code: "export_not_configured",
+            message: "AMS_NFO_EXPORT_PATH is not set: there is nowhere to write the export".into(),
+        });
     };
 
     if EXPORTING.swap(true, std::sync::atomic::Ordering::AcqRel) {
@@ -194,15 +214,17 @@ async fn export_all(
     }
     let exporting = Exporting;
 
-    let record = job::start(&state.db, KIND, None)
+    let by = identity.label();
+    let record = job::start_by(&state.db, KIND, None, Some(&by))
         .await
         .inspect_err(|e| tracing::warn!(error = %e, "could not open a job run"))
         .ok();
 
-    let started = ExportStarted {
-        root: root.display().to_string(),
-        job_id: record.clone(),
-    };
+    let shown = root.display().to_string();
+    let job_id = record.clone();
+    let state = state.clone();
+    let identity = identity.clone();
+    let ip = *ip;
 
     tokio::spawn(async move {
         let _exporting = exporting;
@@ -251,10 +273,10 @@ async fn export_all(
         }
     });
 
-    Ok((StatusCode::ACCEPTED, Json(started)))
+    Ok((shown, job_id))
 }
 
-const KIND: &str = "export.nfo";
+const KIND: &str = job::kinds::EXPORT_NFO;
 
 /// How many works one export pass handles. Enough for any realistic library,
 /// and bounded so a runaway catalogue cannot fill a disk unnoticed.

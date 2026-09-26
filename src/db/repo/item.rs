@@ -2574,6 +2574,53 @@ pub async fn set_enabled(db: &Db, id: &str, enabled: bool) -> Result<bool> {
 
 // ─── refresh bookkeeping ─────────────────────────────────────────────────────
 
+/// What a refresh of everything works through: the enabled works that have
+/// an identifier elsewhere and are not entries made by hand, in id order,
+/// after `after` — a cursor, so the run is one pass that ends, and nothing
+/// about the works' own schedule is touched to make it.
+pub async fn refresh_candidates(
+    db: &Db,
+    after: Option<&str>,
+    limit: i64,
+) -> Result<Vec<(String, MediaKind)>> {
+    const ELIGIBLE: &str = "SELECT id, kind FROM media_item
+         WHERE is_enabled = 1 AND is_manual = 0
+           AND EXISTS (SELECT 1 FROM media_external_id e WHERE e.media_id = media_item.id)";
+
+    let rows = match after {
+        Some(after) => {
+            sqlx::query(db.sql(&format!("{ELIGIBLE} AND id > ? ORDER BY id LIMIT ?")))
+                .bind(after)
+                .bind(limit.clamp(1, 500))
+                .fetch_all(db.pool())
+                .await?
+        }
+        None => {
+            sqlx::query(db.sql(&format!("{ELIGIBLE} ORDER BY id LIMIT ?")))
+                .bind(limit.clamp(1, 500))
+                .fetch_all(db.pool())
+                .await?
+        }
+    };
+
+    rows.iter()
+        .map(|row| Ok((row.text("id")?, row.text("kind")?.parse()?)))
+        .collect()
+}
+
+/// How many works a refresh of everything has before it.
+pub async fn count_refresh_candidates(db: &Db) -> Result<i64> {
+    let row = sqlx::query(db.sql(
+        "SELECT COUNT(*) AS n FROM media_item
+         WHERE is_enabled = 1 AND is_manual = 0
+           AND EXISTS (SELECT 1 FROM media_external_id e WHERE e.media_id = media_item.id)",
+    ))
+    .fetch_one(db.pool())
+    .await?;
+
+    Ok(row.big("n")?)
+}
+
 /// Works whose `refresh_after` has passed, oldest first.
 ///
 /// Manual-only entries are excluded: with no external id there is nothing to

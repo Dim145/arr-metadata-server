@@ -27,6 +27,7 @@ pub mod recommend;
 pub mod seasons;
 pub mod settings;
 pub mod signup;
+pub mod tasks;
 pub mod users;
 pub mod watch;
 
@@ -60,6 +61,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(invitations::router())
         .merge(access::router())
         .merge(oidc::router())
+        .merge(tasks::router())
         .merge(auth::authenticated_router())
         .merge(crate::api::audit::router())
 }

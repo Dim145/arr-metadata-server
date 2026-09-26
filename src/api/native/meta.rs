@@ -238,10 +238,13 @@ fn require_admin(identity: &Identity) -> AppResult<()> {
 #[into_params(parameter_in = Query)]
 #[serde(rename_all = "camelCase")]
 pub struct JobQuery {
-    /// `refresh.sweep` or `refresh.item`.
+    /// A task's name: `refresh.sweep`, `refresh.item`, `refresh.all`,
+    /// `import.anime`, `import.imdb`, `export.nfo`.
     pub kind: Option<String>,
     /// `running`, `succeeded` or `failed`.
     pub status: Option<String>,
+    /// `schedule`, or `person` for the runs somebody started.
+    pub by: Option<String>,
     #[serde(default, deserialize_with = "crate::api::extract::empty_as_none")]
     pub limit: Option<i64>,
     #[serde(default, deserialize_with = "crate::api::extract::empty_as_none")]
@@ -278,6 +281,7 @@ async fn jobs(
     let filter = repo::job::Query {
         kind: query.kind,
         status: query.status,
+        by: query.by,
         limit: query.limit.unwrap_or(50),
         offset: query.offset.unwrap_or(0),
     };
@@ -385,7 +389,8 @@ async fn import_dataset(
     let actor = identity.clone();
     let list = name.clone();
     tokio::spawn(async move {
-        let asked = import_now(&task, &list).await;
+        let by = actor.label();
+        let asked = import_now(&task, &list, Some(&by)).await;
         if let Asked::Imported(summary) = &asked {
             audit::record(
                 &task,

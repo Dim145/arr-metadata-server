@@ -16,6 +16,8 @@ pub enum Status {
     Running,
     Succeeded,
     Failed,
+    /// Asked to stop partway, and did: neither a success nor a failure.
+    Stopped,
 }
 
 impl Status {
@@ -24,6 +26,7 @@ impl Status {
             Self::Running => "running",
             Self::Succeeded => "succeeded",
             Self::Failed => "failed",
+            Self::Stopped => "stopped",
         }
     }
 }
@@ -38,6 +41,10 @@ pub mod kinds {
     pub const IMPORT_ANIME: &str = "import.anime";
     /// IMDb's ratings, downloaded whole.
     pub const IMPORT_IMDB: &str = "import.imdb";
+    /// Every work with an identifier elsewhere, refreshed at once, by hand.
+    pub const REFRESH_ALL: &str = "refresh.all";
+    /// The `.nfo` documents, written for the whole library.
+    pub const EXPORT_NFO: &str = "export.nfo";
 }
 
 #[derive(Clone, Debug, Serialize, ToSchema)]
@@ -53,19 +60,33 @@ pub struct Job {
     pub error: Option<String>,
     pub detail: Option<String>,
     pub created_at: String,
+    /// Who started it, as the journal names them; nothing for the schedule.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub triggered_by: Option<String>,
     /// The work it acted on, while it is held.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub work: Option<crate::db::repo::item::WorkRef>,
 }
 
-/// Open a job row and return its id. Mark it done with [`finish`].
+/// Open a job row the schedule started and return its id. Mark it done with
+/// [`finish`].
 pub async fn start(db: &Db, kind: &str, target: Option<&str>) -> Result<String> {
+    start_by(db, kind, target, None).await
+}
+
+/// Open a job row somebody started — `by` as the journal names them.
+pub async fn start_by(
+    db: &Db,
+    kind: &str,
+    target: Option<&str>,
+    by: Option<&str>,
+) -> Result<String> {
     let id = new_id();
     let at = now();
 
     sqlx::query(db.sql(
-        "INSERT INTO job_run (id, kind, target, status, started_at, created_at)
-         VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO job_run (id, kind, target, status, started_at, created_at, triggered_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
     ))
     .bind(&id)
     .bind(kind)
@@ -73,10 +94,88 @@ pub async fn start(db: &Db, kind: &str, target: Option<&str>) -> Result<String> 
     .bind(Status::Running.as_str())
     .bind(&at)
     .bind(&at)
+    .bind(by)
     .execute(db.pool())
     .await?;
 
     Ok(id)
+}
+
+/// Close a run that was asked to stop, saying how far it got.
+pub async fn stop(db: &Db, id: &str, detail: &str) -> Result<()> {
+    sqlx::query(db.sql(
+        "UPDATE job_run SET status = ?, finished_at = ?, detail = ?, error = NULL WHERE id = ?",
+    ))
+    .bind(Status::Stopped.as_str())
+    .bind(now())
+    .bind(detail)
+    .bind(id)
+    .execute(db.pool())
+    .await?;
+
+    Ok(())
+}
+
+/// Say how far a run has got, while it runs.
+pub async fn progress(db: &Db, id: &str, detail: &str) -> Result<()> {
+    sqlx::query(db.sql("UPDATE job_run SET detail = ? WHERE id = ? AND status = 'running'"))
+        .bind(detail)
+        .bind(id)
+        .execute(db.pool())
+        .await?;
+
+    Ok(())
+}
+
+const COLUMNS: &str =
+    "id, kind, target, status, started_at, finished_at, error, detail, created_at, triggered_by";
+
+fn map(row: &sqlx::any::AnyRow) -> Result<Job> {
+    Ok(Job {
+        id: row.text("id")?,
+        kind: row.text("kind")?,
+        target: row.opt_text("target")?,
+        status: row.text("status")?,
+        started_at: row.opt_text("started_at")?,
+        finished_at: row.opt_text("finished_at")?,
+        error: row.opt_text("error")?,
+        detail: row.opt_text("detail")?,
+        created_at: row.text("created_at")?,
+        triggered_by: row.opt_text("triggered_by")?,
+        work: None,
+    })
+}
+
+pub async fn get(db: &Db, id: &str) -> Result<Option<Job>> {
+    let row = sqlx::query(db.sql(&format!("SELECT {COLUMNS} FROM job_run WHERE id = ?")))
+        .bind(id)
+        .fetch_optional(db.pool())
+        .await?;
+
+    row.as_ref().map(map).transpose()
+}
+
+/// A kind's latest run, whatever its outcome, and when it last succeeded.
+pub async fn latest(db: &Db, kind: &str) -> Result<(Option<Job>, Option<String>)> {
+    let last = sqlx::query(db.sql(&format!(
+        "SELECT {COLUMNS} FROM job_run WHERE kind = ? ORDER BY created_at DESC, id DESC LIMIT 1"
+    )))
+    .bind(kind)
+    .fetch_optional(db.pool())
+    .await?;
+
+    let succeeded =
+        sqlx::query(db.sql(
+            "SELECT MAX(finished_at) AS at FROM job_run WHERE kind = ? AND status = 'succeeded'",
+        ))
+        .bind(kind)
+        .fetch_one(db.pool())
+        .await?;
+
+    Ok((
+        last.as_ref().map(map).transpose()?,
+        succeeded.opt_text("at")?,
+    ))
 }
 
 /// Close a job row. `error` decides whether it succeeded.
@@ -107,6 +206,8 @@ pub async fn finish(db: &Db, id: &str, detail: Option<&str>, error: Option<&str>
 pub struct Query {
     pub kind: Option<String>,
     pub status: Option<String>,
+    /// `schedule`, or `person` for the runs somebody started.
+    pub by: Option<String>,
     pub limit: i64,
     pub offset: i64,
 }
@@ -130,6 +231,11 @@ fn filtered(q: &Query) -> Result<(String, sqlx::any::AnyArguments)> {
         sql.push_str(" AND status = ?");
         bind(&mut args, status.clone())?;
     }
+    match q.by.as_deref() {
+        Some("schedule") => sql.push_str(" AND triggered_by IS NULL"),
+        Some("person") => sql.push_str(" AND triggered_by IS NOT NULL"),
+        _ => {}
+    }
 
     Ok((sql, args))
 }
@@ -138,10 +244,7 @@ pub async fn list(db: &Db, q: &Query) -> Result<Vec<Job>> {
     use sqlx::Arguments;
 
     let (conditions, mut args) = filtered(q)?;
-    let mut sql = format!(
-        "SELECT id, kind, target, status, started_at, finished_at, error, detail, created_at
-         FROM job_run{conditions}"
-    );
+    let mut sql = format!("SELECT {COLUMNS} FROM job_run{conditions}");
 
     // Ids are UUIDv7, so they break a timestamp tie in creation order.
     sql.push_str(" ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?");
@@ -154,22 +257,7 @@ pub async fn list(db: &Db, q: &Query) -> Result<Vec<Job>> {
         .fetch_all(db.pool())
         .await?;
 
-    rows.iter()
-        .map(|row| {
-            Ok(Job {
-                id: row.text("id")?,
-                kind: row.text("kind")?,
-                target: row.opt_text("target")?,
-                status: row.text("status")?,
-                started_at: row.opt_text("started_at")?,
-                finished_at: row.opt_text("finished_at")?,
-                error: row.opt_text("error")?,
-                detail: row.opt_text("detail")?,
-                created_at: row.text("created_at")?,
-                work: None,
-            })
-        })
-        .collect()
+    rows.iter().map(map).collect()
 }
 
 /// How many runs a query's conditions match, however many pages of them.
