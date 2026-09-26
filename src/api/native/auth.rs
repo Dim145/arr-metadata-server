@@ -337,7 +337,7 @@ async fn me(
             locale: u.locale.clone(),
             has_password: u.has_password,
         }),
-        public_browse: state.config.security.public_browse,
+        public_browse: state.public_site(),
     })
 }
 

@@ -34,6 +34,11 @@ pub enum AppError {
     #[error("{message}")]
     Refused { code: &'static str, message: String },
 
+    /// Switched off by an administrator, such as a whole API surface. Told as
+    /// a 503, which is what Sonarr and Radarr treat as "try again later".
+    #[error("{message}")]
+    Disabled { code: &'static str, message: String },
+
     #[error("upstream provider unavailable")]
     UpstreamUnavailable(#[source] anyhow::Error),
 
@@ -72,6 +77,7 @@ impl AppError {
             Self::Forbidden => StatusCode::FORBIDDEN,
             Self::Conflict(_) => StatusCode::CONFLICT,
             Self::Refused { .. } => StatusCode::FORBIDDEN,
+            Self::Disabled { .. } => StatusCode::SERVICE_UNAVAILABLE,
             Self::UpstreamUnavailable(_) => StatusCode::BAD_GATEWAY,
             Self::ProviderNotConfigured => StatusCode::SERVICE_UNAVAILABLE,
             Self::RateLimited => StatusCode::TOO_MANY_REQUESTS,
@@ -88,7 +94,7 @@ impl AppError {
             Self::Unauthorized => "unauthorized",
             Self::Forbidden => "forbidden",
             Self::Conflict(_) => "conflict",
-            Self::Refused { code, .. } => code,
+            Self::Refused { code, .. } | Self::Disabled { code, .. } => code,
             Self::UpstreamUnavailable(_) => "upstream_unavailable",
             Self::ProviderNotConfigured => "provider_not_configured",
             Self::RateLimited => "rate_limited",
@@ -107,6 +113,7 @@ impl AppError {
             | Self::Forbidden
             | Self::Conflict(_)
             | Self::Refused { .. }
+            | Self::Disabled { .. }
             | Self::ProviderNotConfigured
             | Self::RateLimited
             | Self::LoopDetected => self.to_string(),
@@ -127,7 +134,9 @@ impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let status = self.status();
 
-        if status.is_server_error() {
+        // A surface an administrator switched off answers 503 on purpose:
+        // a Sonarr library refresh against it is not a line of errors.
+        if status.is_server_error() && !matches!(self, Self::Disabled { .. }) {
             tracing::error!(error = ?self, "request failed");
         } else {
             tracing::debug!(error = %self, "request rejected");

@@ -18,6 +18,9 @@ import { defineConfig, devices } from '@playwright/test'
  */
 const baseURL = process.env.AMS_E2E_URL ?? 'http://127.0.0.1:8479'
 
+/** The specs that change server-wide settings: see the last project. */
+const SERVER_WIDE = /.*\.serial\.spec\.ts/
+
 export default defineConfig({
   testDir: './e2e',
   fullyParallel: true,
@@ -38,6 +41,7 @@ export default defineConfig({
   projects: [
     {
       name: 'desktop',
+      testIgnore: SERVER_WIDE,
       use: { ...devices['Desktop Chrome'], channel: 'chromium', viewport: { width: 1440, height: 900 } },
     },
     {
@@ -54,6 +58,18 @@ export default defineConfig({
         isMobile: true,
         hasTouch: true,
       },
+      testIgnore: SERVER_WIDE,
+    },
+    {
+      // What changes how the whole server answers — a private site, an API
+      // switched off — runs after everything else, alone: both projects run
+      // at once against one server, and a site closed for three seconds is a
+      // dozen unrelated failures in the other.
+      name: 'server-wide',
+      testMatch: SERVER_WIDE,
+      dependencies: ['desktop', 'mobile'],
+      fullyParallel: false,
+      use: { ...devices['Desktop Chrome'], channel: 'chromium', viewport: { width: 1440, height: 900 } },
     },
   ],
 })

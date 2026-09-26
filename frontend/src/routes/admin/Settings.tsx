@@ -64,7 +64,7 @@ export function Settings() {
   const config = settings.data
   // The groups the server's settings fall in, for the index: the same
   // grouping the panels below are drawn by.
-  const groups: GroupId[] = (['answering', 'providers', 'sources', 'refresh', 'accounts', 'adult', 'other'] as GroupId[]).filter(
+  const groups: GroupId[] = (['answering', 'providers', 'sources', 'refresh', 'adult', 'other'] as GroupId[]).filter(
     (group) => (registry.data ?? []).some((def) => def.scopes.includes('server') && groupOf(def.key) === group),
   )
 
@@ -136,9 +136,6 @@ export function Settings() {
                 </Chip>
               )}
             </Field>
-            <Field label={t.admin.config.publicBrowse}>
-              <State on={config.publicBrowse} />
-            </Field>
           </dl>
           <p className="border-t border-rule px-5 py-4 text-xs leading-relaxed text-bone-faint">
             {t.admin.config.runtimeHint}
@@ -165,6 +162,16 @@ export function Settings() {
           </dl>
           <p className="border-t border-rule px-5 py-4 text-xs leading-relaxed text-bone-faint">
             {t.admin.config.policyHint}
+          </p>
+          <p className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-rule px-5 py-3 text-sm text-bone-dim">
+            {t.admin.config.accessMoved}
+            <Link
+              to="/admin/access"
+              className="inline-flex min-h-11 items-center gap-1.5 text-vermillion transition-colors duration-150 hover:text-vermillion-bright"
+            >
+              {t.admin.accessPage}
+              <Glyph name="chevronRight" className="size-3.5" />
+            </Link>
           </p>
         </Panel>
       </div>
@@ -226,17 +233,6 @@ export function Settings() {
         </p>
       </Panel>
     </div>
-  )
-}
-
-function State({ on }: { on: boolean }) {
-  const { t } = useI18n()
-
-  return (
-    <Chip tone={on ? 'provider' : 'neutral'}>
-      <Glyph name={on ? 'check' : 'close'} className="size-3" />
-      {on ? t.admin.config.enabled : t.admin.config.disabled}
-    </Chip>
   )
 }
 

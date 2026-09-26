@@ -111,6 +111,16 @@ pub struct Security {
     /// whoever can reach the port. It grants a fixed list of read-only paths
     /// and nothing else — see `crate::auth::middleware::browsable`.
     pub public_browse: bool,
+    /// `AMS_PUBLIC_BROWSE` when the environment names it at all. It gives the
+    /// `site.access` setting its first value, and the setting decides after
+    /// that — except that an explicit `false` keeps the site private whatever
+    /// the setting says: closing the catalogue from the environment must not
+    /// be undone by a value stored before.
+    pub public_browse_env: Option<bool>,
+    /// Accounts one address, and the whole server, may open in an hour
+    /// without an invitation.
+    pub signups_per_hour: usize,
+    pub signups_per_hour_total: usize,
     pub native_policy: SurfacePolicy,
     pub tmdb_policy: SurfacePolicy,
     pub arr_policy: SurfacePolicy,
@@ -311,6 +321,12 @@ impl Config {
             security: Security {
                 auth_disabled: flag(&["AMS_AUTH_DISABLED"], false)?,
                 public_browse: flag(&["AMS_PUBLIC_BROWSE"], false)?,
+                public_browse_env: match opt(&["AMS_PUBLIC_BROWSE"]) {
+                    Some(_) => Some(flag(&["AMS_PUBLIC_BROWSE"], false)?),
+                    None => None,
+                },
+                signups_per_hour: num(&["AMS_SIGNUPS_PER_HOUR"], 5)?,
+                signups_per_hour_total: num(&["AMS_SIGNUPS_PER_HOUR_TOTAL"], 100)?,
                 native_policy: policy(&["AMS_NATIVE_AUTH"], SurfacePolicy::ApiKey)?,
                 tmdb_policy: policy(&["AMS_TMDB_AUTH"], SurfacePolicy::ApiKey)?,
                 arr_policy: policy(&["AMS_ARR_AUTH"], SurfacePolicy::Allowlist)?,
@@ -486,6 +502,50 @@ impl Config {
             Surface::Tmdb => self.security.tmdb_policy,
             Surface::Arr => self.security.arr_policy,
         }
+    }
+}
+
+/// The APIs an administrator can switch off one by one. Finer than a
+/// [`Surface`]: Sonarr and Radarr share a guard, but not a switch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum Api {
+    /// `/v1/tvdb/*`, in Skyhook's place.
+    Sonarr,
+    /// `/v1/movie/*`, `/v1/search`, `/v1/list/*`, in api.radarr.video's place.
+    Radarr,
+    /// `/3/*` and `/4/*`, the TMDB relay.
+    Tmdb,
+    /// `/api/v1/*` called with a key. The interface's session is not an API
+    /// call, and is never switched off.
+    Native,
+}
+
+impl Api {
+    pub const ALL: [Api; 4] = [Api::Sonarr, Api::Radarr, Api::Tmdb, Api::Native];
+
+    /// The setting that switches it.
+    pub fn setting(self) -> &'static str {
+        match self {
+            Api::Sonarr => "api.sonarr",
+            Api::Radarr => "api.radarr",
+            Api::Tmdb => "api.tmdb",
+            Api::Native => "api.native",
+        }
+    }
+
+    /// Which API a request to `surface` at `path` is a call to.
+    pub fn of(surface: Surface, path: &str) -> Api {
+        match surface {
+            Surface::Arr if path.starts_with("/v1/tvdb") => Api::Sonarr,
+            Surface::Arr => Api::Radarr,
+            Surface::Tmdb => Api::Tmdb,
+            Surface::Native => Api::Native,
+        }
+    }
+
+    pub fn index(self) -> usize {
+        self as usize
     }
 }
 

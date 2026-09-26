@@ -4,6 +4,7 @@
 //! catalogue. Unlike the compatibility surfaces, it speaks the canonical model
 //! directly.
 
+pub mod access;
 pub mod account;
 pub mod auth;
 pub mod browse;
@@ -13,6 +14,7 @@ pub mod discover;
 pub mod export;
 pub mod feeds;
 pub mod figures;
+pub mod invitations;
 pub mod items;
 pub mod lists;
 pub mod locks;
@@ -23,6 +25,7 @@ pub mod overrides;
 pub mod recommend;
 pub mod seasons;
 pub mod settings;
+pub mod signup;
 pub mod users;
 pub mod watch;
 
@@ -53,6 +56,8 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(discover::router())
         .merge(account::router())
         .merge(users::router())
+        .merge(invitations::router())
+        .merge(access::router())
         .merge(auth::authenticated_router())
         .merge(crate::api::audit::router())
 }
@@ -60,5 +65,5 @@ pub fn router() -> OpenApiRouter<AppState> {
 /// Routes that must stay reachable without a credential, or nobody could ever
 /// obtain one.
 pub fn public_router() -> OpenApiRouter<AppState> {
-    auth::public_router()
+    auth::public_router().merge(signup::router())
 }

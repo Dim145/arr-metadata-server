@@ -19,7 +19,7 @@ use axum::{
 
 use crate::{
     auth::{Identity, ip, secrets},
-    config::{Surface, SurfacePolicy},
+    config::{Api, Surface, SurfacePolicy},
     db::repo,
     error::{AppError, AppResult},
     state::AppState,
@@ -78,6 +78,61 @@ async fn authorize(
         &state.config.server.trusted_proxies,
     );
 
+    let api = Api::of(surface, request.uri().path());
+
+    // What the access page counts as a call to an API: everything on Sonarr's,
+    // Radarr's and the relay's surfaces, and what came with a key on the
+    // native one. The interface's own requests are not API calls.
+    let counted = surface != Surface::Native
+        || extract_key(request.headers(), request.uri().query()).is_some();
+
+    let identity = match identify(&state, surface, api, client_ip, &mut request).await {
+        Ok(identity) => {
+            if counted {
+                state.calls.note(api, true);
+            }
+            identity
+        }
+        Err(refusal) => {
+            if counted {
+                state.calls.note(api, false);
+            }
+            return Err(refusal);
+        }
+    };
+
+    request.extensions_mut().insert(identity);
+    if let Some(addr) = client_ip {
+        request.extensions_mut().insert(ClientAddr(addr));
+    }
+
+    Ok(next.run(request).await)
+}
+
+/// Who is calling, or why they may not.
+async fn identify(
+    state: &AppState,
+    surface: Surface,
+    api: Api,
+    client_ip: Option<IpAddr>,
+    request: &mut Request,
+) -> AppResult<Identity> {
+    // Switched off is switched off, whoever asks: before any credential is
+    // looked at, so a surface nobody should be calling costs nothing. The
+    // native API is the interface's too, so there only what carries a key is
+    // turned away — and that whatever the surface's policy, or a listed
+    // address would keep calling with a key the page says is refused.
+    if surface != Surface::Native && !state.api_on(api) {
+        return Err(switched_off(api));
+    }
+    if surface == Surface::Native
+        && !state.api_on(Api::Native)
+        && extract_key(request.headers(), request.uri().query()).is_some()
+        && resolve_session(state, request.headers()).await?.is_none()
+    {
+        return Err(switched_off(Api::Native));
+    }
+
     let identity = match state.config.policy_for(surface) {
         SurfacePolicy::Open => Identity::Anonymous,
 
@@ -89,7 +144,7 @@ async fn authorize(
             // Recorded either way. A refusal is the only trace a client that
             // cannot reach this server leaves anywhere, and an operator needs
             // its address to do anything about it.
-            note_caller(&state, client_ip, &request, surface, allowed);
+            note_caller(state, client_ip, request, surface, allowed);
 
             if !allowed {
                 tracing::warn!(
@@ -108,17 +163,17 @@ async fn authorize(
 
             // A session is accepted wherever a key is, so the web UI can call
             // the same endpoints without minting a key for itself.
-            match resolve_session(&state, request.headers()).await? {
+            match resolve_session(state, request.headers()).await? {
                 Some((identity, session)) => {
                     request.extensions_mut().insert(CurrentSession(session));
                     identity
                 }
                 None => match presented {
-                    Some(key) => resolve_key(&state, &key, client_ip).await?,
+                    Some(key) => resolve_key(state, &key, client_ip).await?,
                     // Nobody said who they are. That is allowed only for the
-                    // browse paths, and only when an operator asked for it.
+                    // browse paths, and only while the site is public.
                     None if surface == Surface::Native
-                        && state.config.security.public_browse
+                        && state.public_site()
                         && browsable(request.method(), request.uri().path()) =>
                     {
                         Identity::Visitor
@@ -130,22 +185,45 @@ async fn authorize(
     };
 
     // A member reads what a visitor may, and keeps their own account; the rest
-    // of this surface is for the people who keep the catalogue. Decided here
-    // rather than in each handler, so that an endpoint added later is closed
-    // to members until it is listed, as it is to visitors.
-    if surface == Surface::Native
-        && identity.is_member()
-        && !member_may(request.method(), request.uri().path())
-    {
-        return Err(AppError::Forbidden);
+    // of the native surface is for the people who keep the catalogue. Decided
+    // here rather than in each handler, so that an endpoint added later is
+    // closed to members until it is listed, as it is to visitors.
+    //
+    // The other surfaces are the operator's: Sonarr's and Radarr's stand in
+    // for services that store what they are asked about, and the relay spends
+    // the operator's TMDB quota — with sign-ups open, a member is anybody.
+    if identity.is_member() {
+        match surface {
+            Surface::Native if !member_may(request.method(), request.uri().path()) => {
+                return Err(AppError::Forbidden);
+            }
+            Surface::Tmdb if !state.relay_for_members() => {
+                return Err(AppError::Refused {
+                    code: "relay_not_for_members",
+                    message: "members may not use the TMDB relay on this server".into(),
+                });
+            }
+            Surface::Arr => return Err(AppError::Forbidden),
+            _ => {}
+        }
     }
 
-    request.extensions_mut().insert(identity);
-    if let Some(addr) = client_ip {
-        request.extensions_mut().insert(ClientAddr(addr));
-    }
+    Ok(identity)
+}
 
-    Ok(next.run(request).await)
+fn switched_off(api: Api) -> AppError {
+    AppError::Disabled {
+        code: "surface_disabled",
+        message: format!(
+            "the {} API is switched off on this server",
+            match api {
+                Api::Sonarr => "Sonarr",
+                Api::Radarr => "Radarr",
+                Api::Tmdb => "TMDB",
+                Api::Native => "native",
+            }
+        ),
+    }
 }
 
 /// How often the same address is written back to the callers table.

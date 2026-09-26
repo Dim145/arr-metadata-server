@@ -17,7 +17,9 @@ const SCREENS = [
   ['/admin', /dashboard|tableau de bord/i],
   ['/admin/catalogue', /catalogue/i],
   ['/admin/discover', /^(import|importer)$/i],
-  ['/admin/clients', /^(access|accès)$/i],
+  ['/admin/clients', /^(keys & network|clés & réseau)$/i],
+  ['/admin/users', /^(members|membres)$/i],
+  ['/admin/access', /^(opening & apis|ouverture & api)$/i],
   ['/admin/jobs', /jobs|tâches/i],
   ['/admin/audit', /audit|journal/i],
   ['/admin/settings', /settings|réglages/i],
@@ -260,7 +262,10 @@ test.describe('network access', () => {
     // tell an operator which container to fix.
     await expect(callers.getByText('127.0.0.1').first()).toBeVisible()
     await expect(callers.getByText(/localhost/).first()).toBeVisible()
-    await expect(callers.getByText(/Sonarr\//).first()).toBeVisible()
+    // An address is written down once a minute at most, so the client named
+    // is whichever knocked first in that minute: this test's Sonarr, or the
+    // Radarr of the visitor tests running beside it.
+    await expect(callers.getByText(/(Sonarr|Radarr)\//).first()).toBeVisible()
   })
 })
 

@@ -13,6 +13,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useDeferredValue, useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 
+import { Invitations } from '../../components/account/Invitations'
 import { Initial, RoleChip, StatusLamp } from '../../components/account/people'
 import { SecretReveal } from '../../components/account/SecretReveal'
 import {
@@ -246,6 +247,8 @@ export function Users() {
           </TableScroll>
         )}
       </Panel>
+
+      <Invitations />
 
       <CreateAccount open={creating} onClose={() => setCreating(false)} />
 

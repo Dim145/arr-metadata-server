@@ -302,12 +302,91 @@ export interface AccountKeys {
   limit?: number
   /** The rights this person's role lets a key carry. */
   scopes: string[]
+  /** Whether these keys also open the TMDB relay. */
+  relay: boolean
 }
 
 export interface IssuedKey {
   key: ApiClient
   /** Shown once. */
   secret: string
+}
+
+/** Who may open an account for themselves. */
+export type Registration = 'closed' | 'invite' | 'approval' | 'open'
+
+/** What the sign-in page offers, readable before anyone signs in. */
+export interface AuthOptions {
+  site: 'public' | 'private'
+  registration: Registration
+}
+
+export interface InvitationOffer {
+  role: AccountRole
+  expiresAt?: string
+}
+
+export interface Invitation {
+  id: string
+  /** The code's first group: `K7QM`. */
+  codePrefix: string
+  role: AccountRole
+  maxUses: number
+  uses: number
+  expiresAt?: string
+  note?: string
+  createdBy?: string
+  createdByName?: string
+  createdAt: string
+  revokedAt?: string
+  /** Whether its maker is still an active administrator: it is void otherwise. */
+  creatorActive: boolean
+}
+
+export interface Invitations {
+  invitations: Invitation[]
+  usable: number
+  /** Accounts the usable ones may still open. */
+  places: number
+}
+
+export interface IssuedInvitation {
+  invitation: Invitation
+  /** `K7QM-2XRP-9DHT-4WCN`. Shown once. */
+  code: string
+  /** The link to send, at the server's public address when it has one. */
+  link?: string
+}
+
+export type ApiName = 'sonarr' | 'radarr' | 'tmdb' | 'native'
+export type SurfacePolicyName = 'apikey' | 'allowlist' | 'open'
+
+export interface ApiState {
+  api: ApiName
+  enabled: boolean
+  policy: SurfacePolicyName
+  served: number
+  refused: number
+}
+
+/** The way in, on one page. */
+export interface AccessReport {
+  site: 'public' | 'private'
+  /** AMS_PUBLIC_BROWSE=false keeps the site private whatever is chosen. */
+  siteLocked: boolean
+  relayForMembers: boolean
+  registration: Registration
+  registrationRole: AccountRole
+  keysPerUser: number
+  authDisabled: boolean
+  uptimeSeconds: number
+  apis: ApiState[]
+  pending: number
+  invitations: number
+  places: number
+  allowlistRules: number
+  serverKeys: number
+  personalKeys: number
 }
 
 export interface AuditEntry {

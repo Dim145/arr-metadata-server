@@ -385,13 +385,15 @@ what they can send:
 | Surface | Path | Default policy |
 |---|---|---|
 | Native API and web UI | `/api/v1/*` | API key (header or query) |
-| Public browsing | a fixed subset of `/api/v1/*` | **off** (`AMS_PUBLIC_BROWSE`) |
+| Public browsing | a fixed subset of `/api/v1/*` | **off**, chosen on *Opening & APIs* |
 | TMDB-compatible | `/3/*`, and the public lists of `/4/list/*` | API key (`api_key` query parameter) |
 | Sonarr / Radarr compatible | `/v1/*`, including the IMDb lists Radarr imports from | IP allowlist |
 
 ### Letting anyone browse
 
-`AMS_PUBLIC_BROWSE=true` opens the catalogue to a reader with no credential:
+Whether the catalogue can be read without signing in is chosen on the
+administration's **Opening & APIs** page (the `site.access` setting). *Public*
+opens it to a reader with no credential:
 the list of works, one work, the totals, what the filters offer
 (`/api/v1/facets`), the schedule (`/api/v1/calendar`), a season chart
 (`/api/v1/seasons/{year}/{season}`), a person's credits
@@ -404,8 +406,40 @@ raw provider payloads and the record of who edited what all stay behind a
 credential — and an endpoint added later is closed until somebody decides
 otherwise. Administration is never reachable this way.
 
-It is off by default, because turning it on publishes what this server knows to
-whoever can reach the port.
+*Private* sends every page to the sign-in page, turns link previews off, and
+leaves the feeds and the import lists to whoever holds a key.
+
+It is private by default, because a public catalogue publishes what this server
+knows to whoever can reach the port. `AMS_PUBLIC_BROWSE` gives the setting its
+first value on a new deployment and is not read for anything else — except that
+`AMS_PUBLIC_BROWSE=false` keeps the site private whatever the page says, so that
+closing the catalogue from the environment cannot be undone by a value stored
+before. Remove the variable to let the page decide.
+
+### Accounts, sign-ups and API switches
+
+Every account has a role — *member* (browses, and holds keys of their own),
+*editor* (corrects the catalogue), *administrator* (settles everything) — and a
+status: active, pending (waiting for approval), disabled. A key a person makes
+acts with no more than their role grants, and stops with them. Members reach
+what a visitor may, plus their own account page; the Sonarr and Radarr surfaces
+are never theirs, and the TMDB relay only when *Opening & APIs* lets members use
+it, since it spends the operator's TMDB quota.
+
+Sign-ups are *closed* (an administrator opens accounts), *by invitation* (a code
+made on the Members page, shown once, which also says the role), *with approval*
+(anybody signs up and waits), or *open*. An open door only ever opens a member's
+account, and no sign-up ever makes an administrator. Uninvited sign-ups are
+limited to `AMS_SIGNUPS_PER_HOUR` (5) per address — an IPv6 address counts by
+its /64 — and `AMS_SIGNUPS_PER_HOUR_TOTAL` (100) for the whole server.
+
+The same page switches each API off — Sonarr's, Radarr's, the TMDB relay, and
+the native API's keys (the interface's own session is never cut). A switched-off
+API answers `503`, which Sonarr and Radarr read as "try again later".
+
+`AMS_ADMIN_USERNAME` and `AMS_ADMIN_PASSWORD` open the first administrator. After
+that they are a way back in: when no active administrator is left, a restart
+makes the account they name an active administrator again, with that password.
 
 ### Feeds
 

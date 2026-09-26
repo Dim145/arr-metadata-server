@@ -103,6 +103,9 @@ const PATHS = {
   ),
   signOut: <path d="M6.5 14h-3a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1h3M10.5 11.5 14 8l-3.5-3.5M14 8H6" />,
   plus: <path d="M8 3v10M3 8h10" />,
+  minus: <path d="M3 8h10" />,
+  // A listed address: the allowlist's mark, beside the key's.
+  shield: <path d="M8 2 3 4v3.6c0 3 2.1 5.4 5 6.4 2.9-1 5-3.4 5-6.4V4L8 2Z" />,
   trash: (
     <>
       <path d="M2.5 4.5h11" />

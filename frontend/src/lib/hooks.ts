@@ -12,7 +12,7 @@ import { useLocation, useNavigationType } from 'react-router'
 
 import { api, query } from './api'
 import { useI18n } from './i18n'
-import type { MediaItem, Me, Orders } from './types'
+import type { AuthOptions, MediaItem, Me, Orders } from './types'
 
 export function useWork(id: string) {
   const { lang } = useI18n()
@@ -82,6 +82,19 @@ export function useMe() {
   return useQuery({
     queryKey: ['me'],
     queryFn: () => api.get<Me>('/auth/me'),
+    retry: false,
+    staleTime: 5 * 60_000,
+  })
+}
+
+/**
+ * Whether the site is open, and whether one may sign up: readable before
+ * anybody signs in, which is when it is needed.
+ */
+export function useAuthOptions() {
+  return useQuery({
+    queryKey: ['auth', 'options'],
+    queryFn: () => api.get<AuthOptions>('/auth/options'),
     retry: false,
     staleTime: 5 * 60_000,
   })

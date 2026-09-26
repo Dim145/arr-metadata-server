@@ -20,6 +20,40 @@ use crate::{
 /// Keys a member or an editor may hold until an administrator says otherwise.
 pub const DEFAULT_KEYS_PER_USER: i64 = 5;
 
+/// Who may open an account for themselves. See `api::native::signup`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum Registration {
+    Closed,
+    Invite,
+    Approval,
+    Open,
+}
+
+/// Calls each API answered and refused since this process started, for the
+/// access page. Counted in memory: a number an administrator glances at to
+/// see whether Sonarr still calls, not a record anybody audits.
+#[derive(Default)]
+pub struct Calls {
+    counts: [[std::sync::atomic::AtomicU64; 2]; 4],
+}
+
+impl Calls {
+    pub fn note(&self, api: crate::config::Api, served: bool) {
+        self.counts[api.index()][usize::from(served)]
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Served, then refused.
+    pub fn read(&self, api: crate::config::Api) -> (u64, u64) {
+        let [refused, served] = &self.counts[api.index()];
+        (
+            served.load(std::sync::atomic::Ordering::Relaxed),
+            refused.load(std::sync::atomic::Ordering::Relaxed),
+        )
+    }
+}
+
 #[derive(Clone)]
 pub struct AppState(Arc<Inner>);
 
@@ -58,6 +92,8 @@ pub struct Inner {
     /// each other at the same moment would otherwise both pass, and leave
     /// nobody.
     accounts: tokio::sync::Mutex<()>,
+    /// What each API answered since the start.
+    pub calls: Calls,
 }
 
 impl std::ops::Deref for AppState {
@@ -153,6 +189,7 @@ impl AppState {
             limiter,
             instance,
             accounts: tokio::sync::Mutex::new(()),
+            calls: Calls::default(),
         }));
 
         state.bootstrap_admin().await?;
@@ -205,6 +242,26 @@ impl AppState {
                 ("fankai.enabled", cfg.fankai.enabled.to_string()),
                 ("fankai.wiki", cfg.fankai_wiki.enabled.to_string()),
                 ("keys.maxPerUser", DEFAULT_KEYS_PER_USER.to_string()),
+                // The one variable the site's opening came from, until it was
+                // a setting.
+                (
+                    "site.access",
+                    if cfg.security.public_browse {
+                        "public"
+                    } else {
+                        "private"
+                    }
+                    .to_string(),
+                ),
+                ("registration.mode", "closed".to_string()),
+                ("registration.role", "member".to_string()),
+                ("api.sonarr", "true".to_string()),
+                ("api.radarr", "true".to_string()),
+                ("api.tmdb", "true".to_string()),
+                ("api.native", "true".to_string()),
+                // Off: the relay spends the operator's TMDB quota, and with
+                // sign-ups open a member is anybody.
+                ("api.tmdbMembers", "false".to_string()),
                 (
                     "webhooks.events",
                     crate::service::webhook::DEFAULT_EVENTS.to_string(),
@@ -236,6 +293,24 @@ impl AppState {
                 "gave the settings a starting value from the environment; they are \
                  editable now, and the variables are not read again"
             );
+        }
+
+        // The one variable that is still read: said at every start when it
+        // and the setting disagree, since one of them is being overruled.
+        let stored_public = self
+            .settings
+            .resolve("site.access", None, None)
+            .is_some_and(|access| access == "public");
+        match cfg.security.public_browse_env {
+            Some(false) if stored_public => tracing::warn!(
+                "AMS_PUBLIC_BROWSE=false keeps the site private, although Opening & APIs says \
+                 public; remove the variable to let the setting decide"
+            ),
+            Some(true) if !stored_public => tracing::info!(
+                "AMS_PUBLIC_BROWSE=true only gave the site its first opening; it is private \
+                 now because Opening & APIs says so"
+            ),
+            _ => {}
         }
 
         self.sync_providers().await;
@@ -299,6 +374,60 @@ impl AppState {
     /// the field for why; held for a few statements at most.
     pub async fn accounts_lock(&self) -> tokio::sync::MutexGuard<'_, ()> {
         self.accounts.lock().await
+    }
+
+    /// Whether the catalogue may be read without signing in: the setting
+    /// says so, and the environment does not forbid it.
+    pub fn public_site(&self) -> bool {
+        !self.site_locked()
+            && self
+                .settings
+                .resolve("site.access", None, None)
+                .map(|access| access == "public")
+                .unwrap_or(self.config.security.public_browse)
+    }
+
+    /// Whether `AMS_PUBLIC_BROWSE=false` keeps the site private whatever the
+    /// setting says.
+    pub fn site_locked(&self) -> bool {
+        self.config.security.public_browse_env == Some(false)
+    }
+
+    /// Whether members, in person or with their keys, may use the TMDB relay.
+    /// Editors and administrators may whenever it is on.
+    pub fn relay_for_members(&self) -> bool {
+        self.flag("api.tmdbMembers", false)
+    }
+
+    /// Who may open an account for themselves.
+    pub fn registration(&self) -> Registration {
+        match self
+            .settings
+            .resolve("registration.mode", None, None)
+            .as_deref()
+        {
+            Some("invite") => Registration::Invite,
+            Some("approval") => Registration::Approval,
+            Some("open") => Registration::Open,
+            _ => Registration::Closed,
+        }
+    }
+
+    /// The role of an account opened without an invitation.
+    pub fn registration_role(&self) -> repo::user::Role {
+        match self
+            .settings
+            .resolve("registration.role", None, None)
+            .as_deref()
+        {
+            Some("editor") => repo::user::Role::Editor,
+            _ => repo::user::Role::Member,
+        }
+    }
+
+    /// Whether an administrator left this API on.
+    pub fn api_on(&self, api: crate::config::Api) -> bool {
+        self.flag(api.setting(), true)
     }
 
     /// How many keys a person who is not an administrator may hold.

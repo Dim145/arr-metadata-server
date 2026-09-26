@@ -208,7 +208,7 @@ fn absolute_site_image(html: &str, public_url: &str) -> String {
 fn open_to_readers(state: &AppState) -> bool {
     match state.config.security.native_policy {
         SurfacePolicy::Open => true,
-        SurfacePolicy::ApiKey => state.config.security.public_browse,
+        SurfacePolicy::ApiKey => state.public_site(),
         SurfacePolicy::Allowlist => false,
     }
 }

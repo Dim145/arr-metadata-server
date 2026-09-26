@@ -62,7 +62,9 @@ export const GROUPS = [
   { id: 'providers', prefixes: ['skyhook', 'radarr', 'sonarr', 'tvdb'] },
   { id: 'sources', prefixes: ['tvmaze', 'anilist', 'mal', 'imdb', 'fankai'] },
   { id: 'refresh', prefixes: ['refresh'] },
-  { id: 'accounts', prefixes: ['keys'] },
+  // Kept on the Opening & APIs page, where each is explained with what it
+  // governs; never drawn among the rest.
+  { id: 'access', prefixes: ['keys', 'site', 'registration', 'api'] },
   { id: 'adult', prefixes: ['adult'] },
 ] as const
 

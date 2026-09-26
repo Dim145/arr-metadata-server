@@ -302,6 +302,9 @@ function Keys() {
       />
       <div className="space-y-4 p-5">
         <p className="text-sm leading-relaxed text-bone-dim">{t.account.keysLead}</p>
+        <p className="text-xs leading-relaxed text-bone-faint">
+          {keys.data.relay ? t.account.relayYes : t.account.relayNo}
+        </p>
 
         {issued ? (
           <SecretReveal title={t.account.newSecret} secret={issued.secret} onDismiss={() => setIssued(null)} />

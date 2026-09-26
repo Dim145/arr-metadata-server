@@ -219,7 +219,7 @@ async fn settings(
         skyhook_fallback: state.flag("skyhook.fallback", true),
         refresh_enabled: state.flag("refresh.enabled", true),
         auth_disabled: state.config.security.auth_disabled,
-        public_browse: state.config.security.public_browse,
+        public_browse: state.public_site(),
         native_policy: policy_name(state.config.policy_for(Surface::Native)),
         tmdb_policy: policy_name(state.config.policy_for(Surface::Tmdb)),
         arr_policy: policy_name(state.config.policy_for(Surface::Arr)),
@@ -435,7 +435,7 @@ async fn import_dataset(
     }
 }
 
-fn policy_name(policy: SurfacePolicy) -> &'static str {
+pub(crate) fn policy_name(policy: SurfacePolicy) -> &'static str {
     match policy {
         SurfacePolicy::ApiKey => "apikey",
         SurfacePolicy::Allowlist => "allowlist",

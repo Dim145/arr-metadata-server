@@ -10,12 +10,18 @@ cargo build
 cd frontend && npm run build          # the binary serves frontend/dist
 
 AMS_PUBLIC_BROWSE=true \
+AMS_SIGNUPS_PER_HOUR=1000 AMS_SIGNUPS_PER_HOUR_TOTAL=1000 \
 AMS_BIND_ADDRESS=127.0.0.1:8479 \
 AMS_DATABASE_URL='sqlite://data/e2e.db?mode=rwc' \
 AMS_ADMIN_USERNAME=admin AMS_ADMIN_PASSWORD='choose-one' \
 AMS_RATE_LIMIT_PER_MINUTE=6000 \
   ./target/debug/arr-metadata-server
 ```
+
+`AMS_PUBLIC_BROWSE=true` gives a new database a public site; after that the
+*Opening & APIs* page decides, and the suite expects it public. The sign-up
+limits are raised for the same reason as the rate limit below: every sign-up the
+suite makes comes from one address, and the sixth in an hour would be refused.
 
 The rate limit is raised because every request of the suite comes from one
 address, two browsers at a time: at the default of 600 a minute, a second run
@@ -35,6 +41,13 @@ than falling back to a guessed one: a suite that signed in as `admin/admin`
 would eventually run against somebody's real instance.
 
 `AMS_E2E_URL` points the suite somewhere other than `http://127.0.0.1:8479`.
+
+Specs named `*.serial.spec.ts` change how the whole server answers — a private
+site, sign-ups opened, an API switched off — and run in a third project,
+`server-wide`, once the desktop and phone projects have both finished, one test
+at a time; each puts back what it changed. Run them alone with
+`--project server-wide --no-deps`. They do not run at all when a test of the
+other two projects failed: fix that one first.
 
 `accessibility.spec.ts` scans every screen against WCAG 2.1 AA with axe-core, at
 both widths. An automated scan catches perhaps a third of what a person with a

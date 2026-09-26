@@ -21,7 +21,7 @@ import { cn } from '../lib/cn'
 import { LANGS, LANGUAGES, useI18n, type Dict } from '../lib/i18n'
 import { ThemeToggle } from './ThemeToggle'
 import { describeIdentity } from '../lib/labels'
-import type { Me, Settings } from '../lib/types'
+import type { Me, Settings, UsersPage } from '../lib/types'
 import { CommandPalette } from './CommandPalette'
 import { Glyph, Spinner, type GlyphName } from './ui'
 
@@ -50,6 +50,7 @@ const NAV: Entry[] = [
   { to: '/admin/jobs', glyph: 'clock', label: (t) => t.admin.jobs, group: 'system', admin: true },
   { to: '/admin/audit', glyph: 'journal', label: (t) => t.admin.audit, group: 'system', admin: true },
   { to: '/admin/users', glyph: 'user', label: (t) => t.admin.users, group: 'access', admin: true },
+  { to: '/admin/access', glyph: 'globe', label: (t) => t.admin.accessPage, group: 'access', admin: true },
   { to: '/admin/clients', glyph: 'key', label: (t) => t.admin.clients, tab: true, group: 'access', admin: true },
   { to: '/admin/settings', glyph: 'settings', label: (t) => t.admin.settings, tab: true, group: 'access', admin: true },
 ]
@@ -165,6 +166,16 @@ function Sidebar({ me }: { me: Me }) {
     enabled: me.isAdmin,
   })
 
+  // Sign-ups waiting for approval, beside Members: the reason an
+  // administrator would open that page today.
+  const waiting = useQuery({
+    queryKey: ['users', 'waiting'],
+    queryFn: () => api.get<UsersPage>('/users?status=pending&limit=1'),
+    staleTime: 60_000,
+    enabled: me.isAdmin,
+  })
+  const pending = waiting.data?.counts.pending ?? 0
+
   return (
     <aside className="hidden border-r border-rule bg-ink-raised lg:sticky lg:top-0 lg:flex lg:h-dvh lg:flex-col">
       <div className="border-b border-rule px-5 py-5">
@@ -191,7 +202,11 @@ function Sidebar({ me }: { me: Me }) {
             <div key={group} className="mb-2">
               <h2 className="label px-5 pt-3 pb-1.5">{t.admin.groups[group]}</h2>
               {inGroup.map((entry) => (
-                <NavRow key={entry.to} entry={entry} />
+                <NavRow
+                  key={entry.to}
+                  entry={entry}
+                  badge={entry.to === '/admin/users' && pending > 0 ? pending : undefined}
+                />
               ))}
             </div>
           )
@@ -241,7 +256,7 @@ function Sidebar({ me }: { me: Me }) {
   )
 }
 
-function NavRow({ entry }: { entry: Entry }) {
+function NavRow({ entry, badge }: { entry: Entry; badge?: number }) {
   const { t } = useI18n()
 
   return (
@@ -269,6 +284,12 @@ function NavRow({ entry }: { entry: Entry }) {
           />
           <Glyph name={entry.glyph} className="size-4" />
           {entry.label(t)}
+          {badge ? (
+            <span className="ml-auto rounded-full border border-brass/60 px-2 py-0.5 font-mono text-[0.6875rem] text-brass tabular-nums">
+              <span className="sr-only">{t.admin.people.pending}: </span>
+              {badge}
+            </span>
+          ) : null}
         </>
       )}
     </NavLink>

@@ -75,6 +75,63 @@ pub fn generate_session_token() -> Result<(String, String)> {
     Ok((token, hash))
 }
 
+/// The letters an invitation code is written in: Crockford's base 32, which
+/// leaves out I, L, O and U, so a code read aloud or copied by hand survives.
+const CODE_ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
+/// Characters in an invitation code, not counting the dashes: 80 bits.
+const CODE_LEN: usize = 16;
+
+/// A new invitation code, `K7QM-2XRP-9DHT-4WCN`: four groups a person can
+/// type, the first of which is shown in lists to tell invitations apart.
+///
+/// Not a key: a key is pasted into a program, a code may be dictated over the
+/// phone. Eighty bits is still far beyond guessing through a rate limit.
+pub fn generate_invitation_code() -> Result<GeneratedKey> {
+    let mut bytes = [0u8; CODE_LEN];
+    getrandom::fill(&mut bytes).context("failed to read from the system CSPRNG")?;
+
+    // 256 is a multiple of 32, so the low five bits of a byte are uniform.
+    let letters: Vec<u8> = bytes
+        .iter()
+        .map(|b| CODE_ALPHABET[usize::from(b & 31)])
+        .collect();
+
+    let plaintext = letters
+        .chunks(4)
+        .map(|group| String::from_utf8_lossy(group).into_owned())
+        .collect::<Vec<_>>()
+        .join("-");
+    let prefix = plaintext[..4].to_string();
+    let hash = hash_api_key(&String::from_utf8_lossy(&letters));
+
+    Ok(GeneratedKey {
+        plaintext,
+        prefix,
+        hash,
+    })
+}
+
+/// The hash an invitation code is kept under, however it was typed: case,
+/// spaces and dashes aside, and the letters people take for digits read as
+/// those digits. Nothing when it cannot be a code at all.
+pub fn hash_invitation_code(typed: &str) -> Option<String> {
+    let normal: String = typed
+        .chars()
+        // Spaces of every kind, and every dash a keyboard or a mail client
+        // might put between the groups: the interface strips the same.
+        .filter(|c| !(c.is_whitespace() || matches!(c, '-' | '\u{2010}'..='\u{2015}' | '\u{2212}')))
+        .map(|c| match c.to_ascii_uppercase() {
+            'O' => '0',
+            'I' | 'L' => '1',
+            c => c,
+        })
+        .collect();
+
+    let valid = normal.len() == CODE_LEN && normal.bytes().all(|b| CODE_ALPHABET.contains(&b));
+    valid.then(|| hash_api_key(&normal))
+}
+
 /// Hash an admin password with argon2id, returning a PHC string.
 pub fn hash_password(password: &str) -> Result<String> {
     if password.chars().count() < 12 {
@@ -140,6 +197,44 @@ fn hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_invitation_code_is_four_groups_and_survives_being_retyped() {
+        let code = generate_invitation_code().unwrap();
+
+        assert_eq!(code.plaintext.len(), CODE_LEN + 3);
+        assert_eq!(code.plaintext.matches('-').count(), 3);
+        assert!(code.plaintext.starts_with(&code.prefix));
+        assert_eq!(
+            hash_invitation_code(&code.plaintext).as_deref(),
+            Some(code.hash.as_str())
+        );
+
+        // Lower case, no dashes, spaces: the same code.
+        let retyped = code.plaintext.to_lowercase().replace('-', " ");
+        assert_eq!(
+            hash_invitation_code(&retyped).as_deref(),
+            Some(code.hash.as_str())
+        );
+
+        assert_ne!(generate_invitation_code().unwrap().hash, code.hash);
+    }
+
+    #[test]
+    fn letters_taken_for_digits_are_read_as_digits() {
+        assert_eq!(
+            hash_invitation_code("O0IL-1111-0000-2222"),
+            hash_invitation_code("0011-1111-0000-2222")
+        );
+        // En dashes and a non-breaking space, as a mail client may leave them.
+        assert_eq!(
+            hash_invitation_code("0011\u{2013}1111\u{00a0}0000\u{2014}2222"),
+            hash_invitation_code("0011-1111-0000-2222")
+        );
+        assert_eq!(hash_invitation_code("too short"), None);
+        assert_eq!(hash_invitation_code("UUUU-UUUU-UUUU-UUUU"), None);
+        assert_eq!(hash_invitation_code(""), None);
+    }
 
     #[test]
     fn generated_keys_are_prefixed_and_unique() {

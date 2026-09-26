@@ -8,16 +8,21 @@
 
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
-import { useNavigate } from 'react-router'
+import { Link, useNavigate } from 'react-router'
 
 import { Button, FormField, Glyph, Input } from '../components/ui'
 import { ApiError, api } from '../lib/api'
+import { useAuthOptions } from '../lib/hooks'
 import { useI18n } from '../lib/i18n'
 
 export function Login() {
   const { t } = useI18n()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
+
+  const options = useAuthOptions()
+  const closedSite = options.data?.site === 'private'
+  const registration = options.data?.registration ?? 'closed'
 
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
@@ -53,7 +58,9 @@ export function Login() {
         </a>
 
         <h1 className="font-display text-3xl font-medium text-bone">{t.auth.signIn}</h1>
-        <p className="mt-2 mb-8 text-sm leading-relaxed text-bone-dim">{t.auth.lead}</p>
+        <p className="mt-2 mb-8 text-sm leading-relaxed text-bone-dim">
+          {closedSite ? t.auth.privateLead : t.auth.lead}
+        </p>
 
         <form
           className="space-y-5"
@@ -100,13 +107,32 @@ export function Login() {
           </Button>
         </form>
 
-        <a
-          href="/"
-          className="mt-8 inline-flex items-center gap-2 text-sm text-bone-faint transition-colors duration-200 hover:text-bone"
-        >
-          <Glyph name="arrowLeft" className="size-4" />
-          {t.work.back}
-        </a>
+        {registration === 'closed' ? null : (
+          <p className="mt-8 text-sm text-bone-faint">
+            {t.auth.noAccount}{' '}
+            <Link
+              to="/register"
+              className="inline-flex min-h-11 items-center text-vermillion transition-colors duration-150 hover:text-vermillion-bright"
+            >
+              {registration === 'invite'
+                ? t.auth.withInvitation
+                : registration === 'approval'
+                  ? t.auth.askForOne
+                  : t.auth.createOne}
+            </Link>
+          </p>
+        )}
+
+        {/* Nothing to go back to on a private site: the catalogue is behind this door. */}
+        {closedSite ? null : (
+          <a
+            href="/"
+            className="mt-6 inline-flex items-center gap-2 text-sm text-bone-faint transition-colors duration-200 hover:text-bone"
+          >
+            <Glyph name="arrowLeft" className="size-4" />
+            {t.work.back}
+          </a>
+        )}
       </div>
     </div>
   )

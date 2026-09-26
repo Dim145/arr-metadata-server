@@ -226,6 +226,9 @@ pub struct AccountKeys {
     pub limit: Option<i64>,
     /// The scopes your role lets a key carry.
     pub scopes: Vec<String>,
+    /// Whether these keys also open the TMDB relay: an editor's and an
+    /// administrator's do, a member's only when an administrator allows it.
+    pub relay: bool,
 }
 
 /// How many keys this person may hold: none for an administrator's limit.
@@ -250,6 +253,8 @@ async fn keys(
         keys: repo::client::list(&state.db, repo::client::Owner::User(&me.id)).await?,
         limit: limit_for(&state, me),
         scopes: me.role.scopes().iter().map(|s| s.to_string()).collect(),
+        relay: state.api_on(crate::config::Api::Tmdb)
+            && (me.role != Role::Member || state.relay_for_members()),
     }))
 }
 

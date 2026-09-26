@@ -108,6 +108,7 @@ export function CommandPalette({ admin }: { admin: boolean }) {
             { key: 'discover', label: t.admin.discover, to: '/admin/discover', admin: true },
             { key: 'clients', label: t.admin.clients, to: '/admin/clients', admin: true },
             { key: 'users', label: t.admin.users, to: '/admin/users', admin: true },
+            { key: 'access', label: t.admin.accessPage, to: '/admin/access', admin: true },
             { key: 'account', label: t.admin.account, to: '/admin/account', admin: true },
             { key: 'admin-lists', label: t.admin.lists, to: '/admin/lists', admin: true },
             { key: 'jobs', label: t.admin.jobs, to: '/admin/jobs', admin: true },

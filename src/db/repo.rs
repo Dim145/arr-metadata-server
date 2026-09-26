@@ -7,6 +7,7 @@ pub mod child;
 pub mod client;
 pub mod imdb;
 pub mod import;
+pub mod invitation;
 pub mod item;
 pub mod job;
 pub mod list;

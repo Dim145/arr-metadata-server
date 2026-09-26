@@ -25,6 +25,11 @@ const TAG: &str = super::meta::TAG;
 /// the start.
 static STARTED: LazyLock<Instant> = LazyLock::new(Instant::now);
 
+/// How long this process has been answering, in seconds.
+pub fn uptime_seconds() -> u64 {
+    STARTED.elapsed().max(Duration::ZERO).as_secs()
+}
+
 pub fn router() -> OpenApiRouter<AppState> {
     LazyLock::force(&STARTED);
     OpenApiRouter::new()

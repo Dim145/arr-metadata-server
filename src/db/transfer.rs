@@ -47,6 +47,8 @@ const TABLES: &[&str] = &[
     "admin_user",
     "admin_session",
     "api_client",
+    // After the accounts, whose administrators made them.
+    "user_invitation",
     "job_run",
     "audit_log",
     "network_rule",

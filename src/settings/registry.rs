@@ -153,6 +153,62 @@ pub const REGISTRY: &[Definition] = &[
         kind: Kind::Int { min: 0, max: 50 },
         scopes: SERVER_ONLY,
     },
+    // ── Access ───────────────────────────────────────────────────────────────
+    Definition {
+        // Whether the catalogue can be read without signing in. The APIs are
+        // not the site: they ask for their credential either way.
+        key: "site.access",
+        kind: Kind::Choice {
+            options: &["private", "public"],
+        },
+        scopes: SERVER_ONLY,
+    },
+    Definition {
+        key: "registration.mode",
+        kind: Kind::Choice {
+            options: &["closed", "invite", "approval", "open"],
+        },
+        scopes: SERVER_ONLY,
+    },
+    Definition {
+        // The role an account gets once an administrator approves it. Never
+        // `admin`, and only in approval mode: an open door always opens a
+        // member's account, or anybody on the internet could edit.
+        key: "registration.role",
+        kind: Kind::Choice {
+            options: &["member", "editor"],
+        },
+        scopes: SERVER_ONLY,
+    },
+    Definition {
+        key: "api.sonarr",
+        kind: Kind::Bool,
+        scopes: SERVER_ONLY,
+    },
+    Definition {
+        key: "api.radarr",
+        kind: Kind::Bool,
+        scopes: SERVER_ONLY,
+    },
+    Definition {
+        key: "api.tmdb",
+        kind: Kind::Bool,
+        scopes: SERVER_ONLY,
+    },
+    Definition {
+        // Members on the TMDB relay, which spends the operator's quota.
+        key: "api.tmdbMembers",
+        kind: Kind::Bool,
+        scopes: SERVER_ONLY,
+    },
+    Definition {
+        // Keys on the native API only: the interface goes through its session
+        // whatever this says, or switching it off would lock the door on the
+        // person who did.
+        key: "api.native",
+        kind: Kind::Bool,
+        scopes: SERVER_ONLY,
+    },
     // ── Refresh ──────────────────────────────────────────────────────────────
     Definition {
         key: "refresh.enabled",

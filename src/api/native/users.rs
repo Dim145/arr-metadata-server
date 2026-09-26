@@ -527,6 +527,10 @@ async fn delete_one(
         }
     }
 
+    // An invitation made by someone who is no longer an administrator is void
+    // already; one made by someone deleted would lose its maker, and with it
+    // the check, so it is withdrawn first.
+    repo::invitation::revoke_by_creator(&state.db, &target.id).await?;
     repo::user::delete(&state.db, &target.id).await?;
 
     audit::record(
