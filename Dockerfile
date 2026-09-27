@@ -50,11 +50,15 @@ COPY --from=server /src/target/release/arr-metadata-server /usr/local/bin/arr-me
 WORKDIR /data
 USER nonroot:nonroot
 
+# Everything the server keeps, under the one directory a volume mounts:
+# the relative defaults would land under /data/data otherwise.
 ENV AMS_BIND_ADDRESS=0.0.0.0:8080 \
     AMS_DATABASE_URL=sqlite:///data/ams.db?mode=rwc \
+    AMS_TLS_DIR=/data/tls \
+    AMS_MEDIA_DIR=/data/media \
     AMS_LOG=info
 
-EXPOSE 8080
+EXPOSE 8080 443
 
 # There is no shell here; the binary probes itself.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \

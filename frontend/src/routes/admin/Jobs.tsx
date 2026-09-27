@@ -46,6 +46,7 @@ const TASKS: TaskId[] = [
   'export.nfo',
   'media.store',
   'media.sweep',
+  'tls.renew',
 ]
 
 /**
@@ -68,6 +69,10 @@ export function describeDetail(detail: string | undefined, t: Dict): string {
   if ((m = detail.match(/^(\d+) of (\d+): (\d+) stored, (\d+) failed$/))) return s.storedProgress(n(m[1]), n(m[2]), n(m[3]), n(m[4]))
   if ((m = detail.match(/^(\d+) stored, (\d+) failed, of (\d+)$/))) return s.stored(n(m[1]), n(m[2]), n(m[3]))
   if ((m = detail.match(/^(\d+) forgotten, (\d+) files removed$/))) return s.swept(n(m[1]), n(m[2]))
+  // A certificate's end, as the reader's locale writes a date.
+  const day = (iso: string | undefined) => (iso ? new Date(`${iso}T00:00:00Z`).toLocaleDateString(undefined, { dateStyle: 'medium', timeZone: 'UTC' }) : '')
+  if ((m = detail.match(/^renewed; valid until (\d{4}-\d{2}-\d{2})$/))) return s.renewed(day(m[1]))
+  if ((m = detail.match(/^valid until (\d{4}-\d{2}-\d{2}); nothing to do$/))) return s.certValid(day(m[1]))
   // A sync from chosen sources names them by their keys.
   const names = (keys: string | undefined) => (keys ?? '').split(', ').map(providerName).join(', ')
   if ((m = detail.match(/^synced from (.+)$/))) return s.synced(names(m[1]))

@@ -58,6 +58,42 @@ pub async fn serve(state: AppState) -> Result<()> {
         .route("/api/docs/", get(docs_entry))
         .fallback_service(normalized);
 
+    // The clients' door, when there is one: bound first, so a port that is
+    // taken stops the start rather than being found out later.
+    let clients_door = match &state.tls.clients {
+        Some(clients) => {
+            let listener = std::net::TcpListener::bind(clients.bind)
+                .with_context(|| format!("cannot bind {} for the clients", clients.bind))?;
+            listener
+                .set_nonblocking(true)
+                .context("could not set the clients' listener non-blocking")?;
+            let handle = axum_server::Handle::new();
+            let clients_router = NormalizePathLayer::trim_trailing_slash()
+                .layer(build_clients_router(state.clone()));
+            tracing::info!(
+                bind = %clients.bind,
+                names = ?clients.names.iter().map(ToString::to_string).collect::<Vec<_>>(),
+                "listening for the clients (TLS)"
+            );
+            let server = axum_server::from_tcp_rustls(listener, clients.rustls.clone())
+                .context("could not take the clients' listener over")?
+                .handle(handle.clone())
+                .serve(
+                    ServiceExt::<Request>::into_make_service_with_connect_info::<
+                        std::net::SocketAddr,
+                    >(clients_router),
+                );
+            let task = tokio::spawn(async move {
+                if let Err(e) = server.await {
+                    tracing::error!(error = %e, "the clients' listener failed");
+                }
+            });
+            tokio::spawn(crate::tls::run_renewals(state.clone()));
+            Some((handle, task))
+        }
+        None => None,
+    };
+
     match state.config.server.tls.clone() {
         Some(tls) => {
             let config = axum_server::tls_rustls::RustlsConfig::from_pem_file(&tls.cert, &tls.key)
@@ -72,7 +108,17 @@ pub async fn serve(state: AppState) -> Result<()> {
 
             tracing::info!(%bind, "listening (TLS)");
 
+            // Drained on a signal like the plain listener is.
+            let handle = axum_server::Handle::new();
+            tokio::spawn({
+                let handle = handle.clone();
+                async move {
+                    shutdown_signal().await;
+                    handle.graceful_shutdown(Some(DRAIN));
+                }
+            });
             axum_server::bind_rustls(bind, config)
+                .handle(handle)
                 .serve(
                     ServiceExt::<Request>::into_make_service_with_connect_info::<
                         std::net::SocketAddr,
@@ -100,9 +146,20 @@ pub async fn serve(state: AppState) -> Result<()> {
         }
     }
 
+    // The clients' door drains too, and is waited for: a Sonarr mid-fetch
+    // gets its answer before the database goes.
+    if let Some((handle, task)) = clients_door {
+        handle.graceful_shutdown(Some(DRAIN));
+        if let Err(e) = task.await {
+            tracing::warn!(error = %e, "the clients' listener did not end cleanly");
+        }
+    }
     state.db.close().await;
     Ok(())
 }
+
+/// How long in-flight requests are given to finish once a stop is asked.
+const DRAIN: std::time::Duration = std::time::Duration::from_secs(5);
 
 fn build_router(state: AppState) -> Router {
     let timeout = state.config.server.request_timeout;
@@ -117,6 +174,11 @@ fn build_router(state: AppState) -> Router {
         // The media kept, outside every guard: a key is a hash nobody
         // guesses, and Sonarr fetches a poster with no credential.
         .route("/media/{key}", get(crate::media::serve::get))
+        // The authority the clients are to trust, and the script that makes
+        // a container trust it: public, since a client fetches them before
+        // it can trust anything.
+        .route("/ca.crt", get(crate::tls::ca_certificate))
+        .route("/trust-ca.sh", get(crate::tls::trust_script))
         // Every API answer carries a validator, so a client that holds one is
         // told "unchanged" rather than sent it again. Inside the compression,
         // which would otherwise vary the bytes the tag is taken from.
@@ -165,6 +227,61 @@ fn build_router(state: AppState) -> Router {
         .layer(axum::middleware::from_fn(crate::metrics::observe))
 }
 
+/// The clients' door: Sonarr's, Radarr's and the TMDB relay's surfaces and
+/// nothing of the interface's — under the names the clients have compiled
+/// in, which is the one host check that needs no configuring.
+fn build_clients_router(state: AppState) -> Router {
+    let timeout = state.config.server.request_timeout;
+    let names: std::sync::Arc<Vec<String>> = std::sync::Arc::new(
+        state
+            .tls
+            .clients
+            .as_ref()
+            .map(|clients| clients.names.iter().map(ToString::to_string).collect())
+            .unwrap_or_default(),
+    );
+
+    Router::new()
+        .route("/health", get(health))
+        .route("/ca.crt", get(crate::tls::ca_certificate))
+        .route("/trust-ca.sh", get(crate::tls::trust_script))
+        .merge(
+            api::build_clients(state.clone()).layer(axum::middleware::from_fn(etag::conditional)),
+        )
+        // A router's layers wrap its default fallback too: without a fallback
+        // of its own, this door would answer an unknown path with a surface's
+        // refusal rather than "nothing here".
+        .fallback(|| async { StatusCode::NOT_FOUND })
+        .with_state(state)
+        .layer(axum::middleware::from_fn(
+            move |request: Request, next: axum::middleware::Next| {
+                let names = names.clone();
+                async move { answer_to(&names, request, next).await }
+            },
+        ))
+        .layer(header_layer(header::X_CONTENT_TYPE_OPTIONS, "nosniff"))
+        .layer(axum::extract::DefaultBodyLimit::max(MAX_BODY_BYTES))
+        .layer(CompressionLayer::new())
+        .layer(TimeoutLayer::with_status_code(
+            StatusCode::GATEWAY_TIMEOUT,
+            timeout,
+        ))
+        .layer(CatchPanicLayer::new())
+        .layer(TraceLayer::new_for_http())
+        .layer(axum::middleware::from_fn(crate::metrics::observe))
+}
+
+/// Refuse a request addressed to a name the clients' door does not answer
+/// to: the names in its certificate, and the operator's.
+async fn answer_to(names: &[String], request: Request, next: axum::middleware::Next) -> Response {
+    let host = host_of(&request);
+    if names.iter().any(|name| name == &host) {
+        return next.run(request).await;
+    }
+    tracing::warn!(%host, "refused a request addressed to a name the clients' door does not answer to");
+    (StatusCode::MISDIRECTED_REQUEST, "unknown host").into_response()
+}
+
 /// Refuse a request addressed to a name this server does not answer to.
 ///
 /// The defence against DNS rebinding. A name with a one-second TTL that
@@ -189,20 +306,29 @@ async fn check_host(
         return next.run(request).await;
     }
 
-    let host = request
-        .headers()
-        .get(header::HOST)
-        .and_then(|v| v.to_str().ok())
-        .map(strip_port)
-        .unwrap_or_default()
-        .to_ascii_lowercase();
+    let host = host_of(&request);
 
-    if allowed.iter().any(|a| a == &host) {
+    if allowed.iter().any(|a| a.trim_matches(['[', ']']) == host) {
         return next.run(request).await;
     }
 
     tracing::warn!(%host, "refused a request addressed to a name this server does not answer to");
     (StatusCode::MISDIRECTED_REQUEST, "unknown host").into_response()
+}
+
+/// The name a request was addressed to, without its port: the `Host` header
+/// over HTTP/1, the `:authority` hyper files in the URI over HTTP/2. An
+/// IPv6 address loses its brackets, so it reads as the address is written.
+fn host_of(request: &Request) -> String {
+    request
+        .headers()
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .or_else(|| request.uri().host())
+        .map(strip_port)
+        .unwrap_or_default()
+        .trim_matches(['[', ']'])
+        .to_ascii_lowercase()
 }
 
 /// `example.com:8080` is `example.com`; `[::1]:8080` is `[::1]`.

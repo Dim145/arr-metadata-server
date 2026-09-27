@@ -16,6 +16,7 @@ mod service;
 mod settings;
 mod state;
 mod telemetry;
+mod tls;
 mod ui;
 mod web;
 mod wire;

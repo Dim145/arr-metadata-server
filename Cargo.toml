@@ -69,7 +69,7 @@ subtle = "2.6.1"
 openidconnect = { version = "4.0.1", default-features = false }
 # The lifetime of the cookie a sign-in through the provider travels in; the
 # version the cookie crate already brings.
-time = { version = "0.3.55", default-features = false }
+time = { version = "0.3.55", default-features = false, features = ["std", "formatting"] }
 ipnet = { version = "2.12.2", features = ["serde"] }
 governor = "0.10.4"
 
@@ -104,6 +104,11 @@ imagesize = "0.15.0"
 # Thumbnails of the pictures kept, so a page of cards is not a page of
 # originals. Only the formats posters come in.
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp", "gif"] }
+rcgen = { version = "0.14.10", default-features = false, features = ["aws_lc_rs", "pem", "x509-parser"] }
+x509-parser = "0.18.1"
+# The authority checks what it issued the way rustls will judge it.
+rustls-webpki = { version = "0.103.15", features = ["aws-lc-rs", "std"] }
+rustls-pki-types = { version = "1.15.1", features = ["std"] }
 
 [dev-dependencies]
 tokio = { version = "1.53.1", features = ["full", "test-util"] }

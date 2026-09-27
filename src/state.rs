@@ -96,6 +96,8 @@ pub struct Inner {
     pub calls: Calls,
     /// The media kept: the store, and the index of what is in it.
     pub media: crate::media::Media,
+    /// The doors' certificates: the clients' listener and what it shows.
+    pub tls: crate::tls::Tls,
     /// Seals the cookies a sign-in through the identity provider travels in.
     /// Made at start and never stored: a restart only costs a sign-in that
     /// was halfway through, which is asked again.
@@ -173,6 +175,7 @@ impl AppState {
         }
 
         let settings = Store::new(db.clone());
+        let tls = crate::tls::Tls::open(&config).await?;
         let media = crate::media::Media::open(&config.media, config.server.public_url.as_deref())?;
         if media.is_on() {
             media.load_index(&db).await?;
@@ -207,6 +210,7 @@ impl AppState {
             accounts: tokio::sync::Mutex::new(()),
             calls: Calls::default(),
             cookie_key: axum_extra::extract::cookie::Key::generate(),
+            tls,
             media,
         }));
 

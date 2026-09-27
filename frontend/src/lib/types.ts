@@ -478,6 +478,7 @@ export type TaskId =
   | 'export.nfo'
   | 'media.store'
   | 'media.sweep'
+  | 'tls.renew'
 
 /** A background task as it stands: when it runs, how it last went. */
 export interface Task {
@@ -490,7 +491,7 @@ export interface Task {
   running?: Job
   cancelable: boolean
   /** Why it cannot run now: `source_off`, `not_configured`, `running`. */
-  blocked?: 'source_off' | 'not_configured' | 'running' | 'busy'
+  blocked?: 'source_off' | 'not_configured' | 'running' | 'busy' | 'media_off' | 'no_authority'
 }
 
 export interface JobsResponse {
@@ -1075,4 +1076,23 @@ export interface SeasonCandidate {
   originalLanguage?: string
   score?: number
   votes?: number
+}
+
+/** The server's doors: the interface's, and the clients' when there is one. */
+export interface Listeners {
+  web: { bind: string; tls: boolean }
+  clients: ClientsListener | null
+}
+
+export interface ClientsListener {
+  bind: string
+  /** `authority`: a certificate issued here; `own`: the operator's files. */
+  mode: 'authority' | 'own'
+  names: string[]
+  /** Names the authority may not certify: its constraints predate them. */
+  refused: string[]
+  certificate?: { names: string[]; notAfter: string; fingerprint: string; due: boolean }
+  authority?: { subject: string; fingerprint: string; notAfter: string }
+  renewing: boolean
+  renewBeforeDays: number
 }

@@ -60,6 +60,9 @@ pub struct Config {
     pub refresh: Refresh,
     pub export: Export,
     pub media: Media,
+    /// The clients' door: a second listener, in TLS, under the names Sonarr,
+    /// Radarr and the TMDB clients have compiled in. None when unset.
+    pub clients: Option<ClientsDoor>,
 }
 
 #[derive(Clone, Debug)]
@@ -95,6 +98,22 @@ pub struct Server {
 pub struct Tls {
     pub cert: PathBuf,
     pub key: PathBuf,
+}
+
+/// The clients' listener. Independent of the interface's: that one may stay
+/// plain, behind a reverse proxy or on a home network, while this one is
+/// always in TLS, since the clients call `https://…` and nothing else.
+#[derive(Clone, Debug)]
+pub struct ClientsDoor {
+    pub bind: SocketAddr,
+    /// The operator's own certificate and key, instead of the authority this
+    /// server keeps.
+    pub tls: Option<Tls>,
+    /// Names the listener answers to besides the compiled-in ones — and,
+    /// with the authority, names its certificate carries.
+    pub names: Vec<String>,
+    /// Where the authority and the certificate it issues are kept.
+    pub dir: PathBuf,
 }
 
 #[derive(Clone, Debug)]
@@ -598,6 +617,29 @@ impl Config {
                     dir: PathBuf::from(var_or(&["AMS_MEDIA_DIR"], "data/media")),
                     s3,
                 }
+            },
+            clients: match opt(&["AMS_CLIENTS_BIND"]) {
+                Some(bind) => Some(ClientsDoor {
+                    bind: bind
+                        .parse()
+                        .context("AMS_CLIENTS_BIND is not a valid socket address")?,
+                    tls: match (
+                        opt(&["AMS_CLIENTS_TLS_CERT"]),
+                        opt(&["AMS_CLIENTS_TLS_KEY"]),
+                    ) {
+                        (Some(cert), Some(key)) => Some(Tls {
+                            cert: cert.into(),
+                            key: key.into(),
+                        }),
+                        (None, None) => None,
+                        _ => bail!(
+                            "AMS_CLIENTS_TLS_CERT and AMS_CLIENTS_TLS_KEY must be set together"
+                        ),
+                    },
+                    names: list(&["AMS_CLIENTS_NAMES"]),
+                    dir: PathBuf::from(var_or(&["AMS_TLS_DIR"], "data/tls")),
+                }),
+                None => None,
             },
             refresh: Refresh {
                 enabled: flag(&["AMS_REFRESH_ENABLED"], true)?,

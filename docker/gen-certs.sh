@@ -1,6 +1,11 @@
 #!/usr/bin/env sh
 # Generate a local CA and one server certificate covering every hostname this
-# server impersonates.
+# server impersonates — by hand, with openssl.
+#
+# The server does this itself now: with AMS_CLIENTS_BIND set it makes its own
+# authority under AMS_TLS_DIR and serves it at /ca.crt. This script remains
+# for whoever would rather run an authority of their own and hand the result
+# to AMS_CLIENTS_TLS_CERT / AMS_CLIENTS_TLS_KEY.
 #
 # Sonarr, Radarr and TMDB clients have their metadata URLs compiled in, so the
 # only way to reach a different server is to resolve those hostnames to this
@@ -68,7 +73,7 @@ echo
 echo "Done. In $DIR:"
 ls -1 ca.crt ca.key server.crt server.key
 echo
-echo "  server.crt / server.key  → AMS_TLS_CERT / AMS_TLS_KEY on the metadata server"
+echo "  server.crt / server.key  → AMS_CLIENTS_TLS_CERT / AMS_CLIENTS_TLS_KEY on the metadata server"
 echo "  ca.crt                   → add to each client's trust store:"
 echo "      Node clients (Jellyseerr, Overseerr): NODE_EXTRA_CA_CERTS=/path/ca.crt"
 echo "      .NET clients (Sonarr, Radarr):        mount into /usr/local/share/ca-certificates"

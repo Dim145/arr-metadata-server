@@ -146,27 +146,38 @@ pub fn build(state: AppState) -> (Router<AppState>, utoipa::openapi::OpenApi) {
             state.clone(),
             crate::auth::ratelimit::limit,
         )))
-        .merge(
-            arr.layer(from_fn_with_state(state.clone(), guards::guard_arr))
-                // Outermost on this surface: a loop has to be caught before any
-                // work is done, and before the allowlist rejects our own address.
-                .layer(from_fn_with_state(state.clone(), guards::reject_self_calls))
-                // These two surfaces went without one for a while, on the
-                // reasoning that they answer Sonarr and Radarr rather than the
-                // open web. But the allowlist is what decides that, and a host
-                // that is not on it can still spend this server's time being
-                // told so — and the relay spends the operator's TMDB quota.
-                .layer(from_fn_with_state(
-                    state.clone(),
-                    crate::auth::ratelimit::limit,
-                )),
-        )
-        .merge(
-            tmdb.layer(from_fn_with_state(state.clone(), guards::guard_tmdb))
-                .layer(from_fn_with_state(state, crate::auth::ratelimit::limit)),
-        );
+        .merge(arr_surface(state.clone(), arr))
+        .merge(tmdb_surface(state, tmdb));
 
     (router, api)
+}
+
+/// The surfaces the clients with compiled-in addresses call, for their own
+/// door: the same handlers under the same guards, and nothing else.
+pub fn build_clients(state: AppState) -> Router<AppState> {
+    let (arr, _) = sonarr::router().merge(radarr::router()).split_for_parts();
+    let (tmdb, _) = tmdb::router().split_for_parts();
+    Router::new()
+        .merge(arr_surface(state.clone(), arr))
+        .merge(tmdb_surface(state, tmdb))
+}
+
+fn arr_surface(state: AppState, arr: Router<AppState>) -> Router<AppState> {
+    arr.layer(from_fn_with_state(state.clone(), guards::guard_arr))
+        // Outermost on this surface: a loop has to be caught before any
+        // work is done, and before the allowlist rejects our own address.
+        .layer(from_fn_with_state(state.clone(), guards::reject_self_calls))
+        // These two surfaces went without one for a while, on the
+        // reasoning that they answer Sonarr and Radarr rather than the
+        // open web. But the allowlist is what decides that, and a host
+        // that is not on it can still spend this server's time being
+        // told so — and the relay spends the operator's TMDB quota.
+        .layer(from_fn_with_state(state, crate::auth::ratelimit::limit))
+}
+
+fn tmdb_surface(state: AppState, tmdb: Router<AppState>) -> Router<AppState> {
+    tmdb.layer(from_fn_with_state(state.clone(), guards::guard_tmdb))
+        .layer(from_fn_with_state(state, crate::auth::ratelimit::limit))
 }
 
 /// Assemble the spec alone, without the state a running server needs.

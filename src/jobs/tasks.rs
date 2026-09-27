@@ -22,9 +22,10 @@ pub const IMPORT_IMDB: &str = repo::job::kinds::IMPORT_IMDB;
 pub const EXPORT_NFO: &str = repo::job::kinds::EXPORT_NFO;
 pub const MEDIA_STORE: &str = repo::job::kinds::MEDIA_STORE;
 pub const MEDIA_SWEEP: &str = repo::job::kinds::MEDIA_SWEEP;
+pub const TLS_RENEW: &str = repo::job::kinds::TLS_RENEW;
 
 /// Every task, in the order the page shows them.
-pub const ALL: [&str; 7] = [
+pub const ALL: [&str; 8] = [
     REFRESH_SWEEP,
     REFRESH_ALL,
     IMPORT_ANIME,
@@ -32,6 +33,7 @@ pub const ALL: [&str; 7] = [
     EXPORT_NFO,
     MEDIA_STORE,
     MEDIA_SWEEP,
+    TLS_RENEW,
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
@@ -90,6 +92,7 @@ fn lock_busy(id: &str) -> bool {
         EXPORT_NFO => crate::api::native::export::is_exporting(),
         MEDIA_STORE => crate::media::worker::is_storing(),
         MEDIA_SWEEP => crate::media::worker::is_sweeping(),
+        TLS_RENEW => crate::tls::is_renewing(),
         _ => false,
     }
 }
@@ -150,6 +153,14 @@ async fn state_of(state: &AppState, id: &'static str) -> anyhow::Result<TaskStat
                 if on { Mode::Scheduled } else { Mode::Off },
                 on.then(|| crate::media::worker::SWEEP_EVERY.as_secs() as i64),
                 (!on).then_some("media_off"),
+            )
+        }
+        TLS_RENEW => {
+            let on = crate::tls::renews(state);
+            (
+                if on { Mode::Scheduled } else { Mode::Off },
+                on.then(|| crate::tls::RENEW_EVERY.as_secs() as i64),
+                (!on).then_some("no_authority"),
             )
         }
         _ => (Mode::Off, None, None),

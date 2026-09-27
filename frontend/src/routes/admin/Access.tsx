@@ -25,6 +25,7 @@ import {
   Toggle,
 } from '../../components/ui'
 import { OidcSettings } from '../../components/account/OidcSettings'
+import { ListenersPanel } from '../../components/ListenersPanel'
 import { api } from '../../lib/api'
 import { cn } from '../../lib/cn'
 import { relative } from '../../lib/format'
@@ -265,6 +266,9 @@ export function Access() {
             <p>{a.uptime(relative(started, locale) ?? '')}</p>
           </div>
         </Question>
+
+        {/* The clients' door: where Sonarr and Radarr come in, in TLS. */}
+        <ListenersPanel delay={180} />
 
         {/* 4 · the identity provider */}
         <OidcSettings number={4} delay={200} />

@@ -57,12 +57,13 @@ pub struct Started {
 /// Run a task now, in the background.
 #[utoipa::path(
     post, path = "/tasks/{id}/run", tag = TAG,
-    params(("id" = String, Path, description = "`refresh.sweep`, `refresh.all`, `import.anime`, `import.imdb`, `export.nfo`, `media.store` or `media.sweep`")),
+    params(("id" = String, Path, description = "`refresh.sweep`, `refresh.all`, `import.anime`, `import.imdb`, `export.nfo`, `media.store`, `media.sweep` or `tls.renew`")),
     responses(
         (status = 202, body = Started),
         (status = 403, description = "The caller is not an administrator"),
         (status = 404, description = "No such task"),
-        (status = 409, description = "It is running already, or its source is off"),
+        (status = 409, description = "It is running already"),
+        (status = 503, description = "Its source or its switch is off: no media store, no export path, no certificate of the server's own"),
     ),
 )]
 async fn run(
@@ -90,6 +91,7 @@ async fn run(
         }
         tasks::MEDIA_STORE => crate::media::worker::store_all(&state, &by).await?,
         tasks::MEDIA_SWEEP => crate::media::worker::sweep_now(&state, &by).await?,
+        tasks::TLS_RENEW => crate::tls::renew_now(&state, &by).await?,
         _ => return Err(AppError::NotFound),
     };
 

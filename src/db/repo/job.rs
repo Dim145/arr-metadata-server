@@ -49,6 +49,8 @@ pub mod kinds {
     pub const MEDIA_STORE: &str = "media.store";
     /// The media nobody points at any more, forgotten and deleted.
     pub const MEDIA_SWEEP: &str = "media.sweep";
+    /// The clients' certificate, looked at and renewed when it is time.
+    pub const TLS_RENEW: &str = "tls.renew";
 }
 
 #[derive(Clone, Debug, Serialize, ToSchema)]

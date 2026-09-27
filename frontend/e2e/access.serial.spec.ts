@@ -182,6 +182,39 @@ test.describe('the way in', () => {
     }
   })
 
+  test('the clients’ door is read back, and its authority and script are served', async ({ page }) => {
+    await page.goto('/admin/access')
+    const panel = page.getByRole('region', { name: /clients’ door|porte des clients/i }).or(page.locator('section', { hasText: /clients’ door|porte des clients/i }))
+    await expect(panel.first()).toBeVisible()
+
+    const status = (await (await page.request.get('/api/v1/admin/tls')).json()) as {
+      web: { bind: string; tls: boolean }
+      clients: { names: string[]; authority?: { fingerprint: string } } | null
+    }
+    expect(status.web.bind).toBeTruthy()
+    const served = await page.request.get('/ca.crt')
+    // Without a door the page says so and nothing is served; the rest of
+    // the test needs the suite's server started with AMS_CLIENTS_BIND.
+    test.skip(!status.clients?.authority, 'no clients’ door with an authority on this server: set AMS_CLIENTS_BIND')
+    if (status.clients?.authority) {
+      // A door with an authority of the server's own: both files, public.
+      expect(served.status()).toBe(200)
+      expect(await served.text()).toContain('BEGIN CERTIFICATE')
+      expect(status.clients.names).toContain('skyhook.sonarr.tv')
+      await expect(panel.first().getByText('skyhook.sonarr.tv', { exact: true }).first()).toBeVisible()
+      const script = await page.request.get('/trust-ca.sh')
+      expect(script.status()).toBe(200)
+      expect(await script.text()).toContain('update-ca-certificates')
+      // And a stranger reads them too: they hold no secret.
+      const stranger = await page.context().browser()!.newContext()
+      expect((await stranger.request.get('/ca.crt')).status()).toBe(200)
+      expect((await stranger.request.get('/api/v1/admin/tls')).status()).toBe(401)
+      await stranger.close()
+    } else {
+      expect(served.status()).toBe(404)
+    }
+  })
+
   test('an API switched off from the page answers 503, and the others keep answering', async ({ page }) => {
     await page.goto('/admin/access')
     const sonarr = page.getByRole('switch', { name: /sonarr/i })

@@ -47,6 +47,7 @@ actions! {
     ItemSynced => "item.synced",
     MediaUploaded => "media.uploaded",
     MediaRemoved => "media.removed",
+    CertificateRenewed => "tls.renewed",
     ItemDeleted => "item.deleted",
     OverrideSet => "override.set",
     OverrideRemoved => "override.removed",

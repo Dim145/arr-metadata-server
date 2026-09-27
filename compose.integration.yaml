@@ -2,17 +2,18 @@
 # server instead of by the public ones.
 #
 # Prerequisites
-#   1. ./docker/gen-certs.sh
-#   2. A .env with AMS_TMDB_API_KEY, AMS_ADMIN_USERNAME, AMS_ADMIN_PASSWORD
-#      (and, recommended, TVDB_API_KEY and FANARTTV_API_KEY)
+#   A .env with AMS_TMDB_API_KEY, AMS_ADMIN_USERNAME, AMS_ADMIN_PASSWORD
+#   (and, recommended, TVDB_API_KEY and FANARTTV_API_KEY)
 #
 # Run
 #   docker compose -f compose.integration.yaml up -d
 #
 # How it works: each client resolves the metadata hostname it has compiled in to
-# this server's address on the shared network (extra_hosts), and trusts the CA
-# that issued its certificate. Nothing in the clients is reconfigured — they
-# cannot be. See docs/integration.md.
+# this server's address on the shared network (extra_hosts), and trusts the
+# authority the server made on its first start — fetched from the server over
+# the stack's own network as the client starts (Sonarr, Radarr), or mounted as
+# a file downloaded once from the administration page (Jellyseerr). Nothing in
+# the clients is reconfigured — they cannot be. See docs/integration.md.
 
 services:
   metadata:
@@ -22,10 +23,12 @@ services:
     restart: unless-stopped
 
     environment:
-      # 443 so the clients reach it on the port they expect.
-      AMS_BIND_ADDRESS: 0.0.0.0:443
-      AMS_TLS_CERT: /certs/server.crt
-      AMS_TLS_KEY: /certs/server.key
+      # The web UI and the native API, plain: on the host, or behind your own
+      # reverse proxy.
+      AMS_BIND_ADDRESS: 0.0.0.0:8080
+      # The clients' door: TLS on the port they expect, with a certificate the
+      # server issues itself. The authority lands in /data/tls.
+      AMS_CLIENTS_BIND: 0.0.0.0:443
       AMS_DATABASE_URL: sqlite:///data/ams.db?mode=rwc
       AMS_TMDB_API_KEY: ${AMS_TMDB_API_KEY:?AMS_TMDB_API_KEY is required}
       # TheTVDB settles the episode and season numbering, which is what Sonarr
@@ -43,11 +46,10 @@ services:
 
     volumes:
       - metadata-data:/data
-      - ./docker/certs:/certs:ro
 
     ports:
       # The web UI, on the host. The clients reach :443 over the shared network.
-      - "${AMS_PORT:-8080}:443"
+      - "${AMS_PORT:-8080}:8080"
 
     networks:
       stack:
@@ -58,23 +60,32 @@ services:
       - /tmp:size=64m,mode=1777
     security_opt:
       - no-new-privileges:true
+    # 443 needs no privilege here: Docker lets a container's process bind any
+    # port (net.ipv4.ip_unprivileged_port_start=0 in its namespace, since
+    # 20.10). On an older engine, map "443:8443" and bind 8443 instead.
 
   sonarr:
     image: lscr.io/linuxserver/sonarr:latest
     container_name: sonarr
     restart: unless-stopped
-    depends_on: [metadata]
+    # Started once the server answers: the authority is fetched at start.
+    depends_on:
+      metadata:
+        condition: service_healthy
 
     environment:
       PUID: ${PUID:-1000}
       PGID: ${PGID:-1000}
       TZ: ${TZ:-UTC}
+      # Where the init script below fetches the authority from: the server's
+      # web door, over the stack's own network. Pin it, once known, with
+      # AMS_CA_FINGERPRINT — the SHA-256 the administration page shows.
+      AMS_CA_URL: http://172.31.0.10:8080/ca.crt
 
     volumes:
       - sonarr-config:/config
-      # Mounting the CA is not enough: these images do not rebuild the trust
-      # bundle on their own. The init script below is what does it.
-      - ./docker/certs/ca.crt:/usr/local/share/ca-certificates/arr-metadata.crt:ro
+      # Fetching the authority is not enough: these images do not rebuild the
+      # trust bundle on their own. The init script is what does it.
       - ./docker/trust-ca.sh:/custom-cont-init.d/10-trust-arr-metadata-ca:ro
 
     # Sonarr's metadata URL is compiled in; this is what redirects it.
@@ -89,16 +100,18 @@ services:
     image: lscr.io/linuxserver/radarr:latest
     container_name: radarr
     restart: unless-stopped
-    depends_on: [metadata]
+    depends_on:
+      metadata:
+        condition: service_healthy
 
     environment:
       PUID: ${PUID:-1000}
       PGID: ${PGID:-1000}
       TZ: ${TZ:-UTC}
+      AMS_CA_URL: http://172.31.0.10:8080/ca.crt
 
     volumes:
       - radarr-config:/config
-      - ./docker/certs/ca.crt:/usr/local/share/ca-certificates/arr-metadata.crt:ro
       - ./docker/trust-ca.sh:/custom-cont-init.d/10-trust-arr-metadata-ca:ro
 
     extra_hosts:
@@ -112,11 +125,15 @@ services:
     image: fallenbagel/jellyseerr:latest
     container_name: jellyseerr
     restart: unless-stopped
-    depends_on: [metadata]
+    depends_on:
+      metadata:
+        condition: service_healthy
 
     environment:
       # Node merges this PEM with its built-in roots, which is why this works on
-      # the slim Alpine image without touching /etc/ssl.
+      # the slim Alpine image without touching /etc/ssl. The file is the
+      # authority downloaded once from Opening & APIs (or /ca.crt), put beside
+      # this compose file.
       NODE_EXTRA_CA_CERTS: /etc/arr-metadata-ca.crt
       TZ: ${TZ:-UTC}
 
@@ -129,7 +146,7 @@ services:
       # restart — verified. A bind mount starts empty and silences the warning,
       # at the cost of host permissions to get right.
       - jellyseerr-config:/app/config
-      - ./docker/certs/ca.crt:/etc/arr-metadata-ca.crt:ro
+      - ./arr-metadata-ca.crt:/etc/arr-metadata-ca.crt:ro
 
     extra_hosts:
       - "api.themoviedb.org:172.31.0.10"

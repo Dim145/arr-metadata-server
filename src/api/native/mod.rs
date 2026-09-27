@@ -30,6 +30,7 @@ pub mod seasons;
 pub mod settings;
 pub mod signup;
 pub mod tasks;
+pub mod tls;
 pub mod users;
 pub mod watch;
 
@@ -52,6 +53,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(seasons::router())
         .merge(children::router())
         .merge(export::router())
+        .merge(tls::router())
         .merge(overrides::router())
         .merge(clients::router())
         .merge(meta::router())

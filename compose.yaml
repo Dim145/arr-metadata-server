@@ -19,6 +19,10 @@ services:
       AMS_ADMIN_USERNAME: ${AMS_ADMIN_USERNAME:-}
       AMS_ADMIN_PASSWORD: ${AMS_ADMIN_PASSWORD:-}
       AMS_ARR_ALLOWLIST: ${AMS_ARR_ALLOWLIST:-172.16.0.0/12,10.0.0.0/8,192.168.0.0/16,127.0.0.0/8}
+      # The clients' door for Sonarr, Radarr and the TMDB relay: TLS on 443,
+      # with a certificate the server issues itself. Map "443:443" below too;
+      # no privilege is needed inside a container. See docs/integration.md.
+      # AMS_CLIENTS_BIND: 0.0.0.0:443
       AMS_LOG: ${AMS_LOG:-info}
       TZ: ${TZ:-UTC}
 

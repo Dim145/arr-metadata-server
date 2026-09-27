@@ -736,6 +736,22 @@ To put a whole stack behind it — Sonarr, Radarr and Jellyseerr all served from
 here — see [`docs/integration.md`](docs/integration.md) and the runnable
 [`compose.integration.yaml`](compose.integration.yaml).
 
+## The clients' door
+
+Sonarr, Radarr and the TMDB clients call `https://skyhook.sonarr.tv`,
+`https://api.radarr.video` and `https://api.themoviedb.org` — compiled in, on
+443, and nothing else. Resolve those names to this server and it answers them
+on a **second door**, `AMS_CLIENTS_BIND=0.0.0.0:443`: those surfaces alone,
+always in TLS, with a certificate the server issues itself from an authority it
+makes on first start, constrained to those names, and renews before it runs
+out. The interface's own door, `AMS_BIND_ADDRESS`, is untouched by it — plain,
+in TLS from your files, or behind your reverse proxy, as you decide. Each
+client trusts the authority once (`/ca.crt`, and `/trust-ca.sh` for a
+linuxserver.io container); the administration's **Opening & APIs** page shows
+the door, its certificate and the files. [`docs/integration.md`](docs/integration.md)
+walks through it, and [`scripts/e2e-sonarr.sh`](scripts/e2e-sonarr.sh) proves
+it against a real Sonarr.
+
 ## Development
 
 ```bash
