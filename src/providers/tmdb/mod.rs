@@ -108,11 +108,16 @@ impl TmdbClient {
             .send()
             .await
             // A request error names the address it was sent to, key and
-            // all; the error is logged, so the address is taken off it —
-            // `url` here is the path alone.
-            .map_err(reqwest::Error::without_url);
+            // all, and the error is logged: what is kept of it is its kind
+            // and what lay under it — `url` here is the path alone.
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "TMDB request failed: {url}: {}",
+                    crate::providers::describe_request_error(&e)
+                )
+            });
         crate::metrics::upstream("tmdb", started, response.as_ref().ok().map(|r| r.status()));
-        let response = response.with_context(|| format!("TMDB request failed: {url}"))?;
+        let response = response?;
 
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);

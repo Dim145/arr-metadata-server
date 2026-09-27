@@ -29,6 +29,33 @@ pub const MAX_BODY_BYTES: u64 = 64 * 1024 * 1024;
 ///
 /// Streamed rather than trusting `Content-Length`, which a chunked answer does
 /// not carry and a careless one can understate.
+/// A request error as a log may carry it: what kind of failure it was and
+/// what lay under it — never the address it was sent to, which carries this
+/// server's key in its query.
+pub fn describe_request_error(e: &reqwest::Error) -> String {
+    let kind = if e.is_timeout() {
+        "timed out"
+    } else if e.is_connect() {
+        "could not connect"
+    } else if e.is_redirect() {
+        "too many redirects"
+    } else if e.is_body() || e.is_decode() {
+        "the body could not be read"
+    } else if e.is_request() {
+        "the request could not be sent"
+    } else {
+        "failed"
+    };
+    let mut text = kind.to_string();
+    let mut cause = std::error::Error::source(e);
+    while let Some(under) = cause {
+        text.push_str(": ");
+        text.push_str(&under.to_string());
+        cause = under.source();
+    }
+    text
+}
+
 pub async fn read_json(response: reqwest::Response) -> anyhow::Result<serde_json::Value> {
     let body = read_body(response, MAX_BODY_BYTES).await?;
     Ok(serde_json::from_slice(&body)?)

@@ -97,14 +97,20 @@ impl FanartClient {
             .timeout(std::time::Duration::from_secs(20))
             .send()
             .await
-            // The error would name the address, key and all; it is logged.
-            .map_err(reqwest::Error::without_url);
+            // The error would name the address, key and all, and it is
+            // logged: its kind and what lay under it are kept instead.
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "Fanart.tv request failed: {url}: {}",
+                    crate::providers::describe_request_error(&e)
+                )
+            });
         crate::metrics::upstream(
             "fanart",
             started,
             response.as_ref().ok().map(|r| r.status()),
         );
-        let response = response.with_context(|| format!("Fanart.tv request failed: {url}"))?;
+        let response = response?;
 
         // Fanart.tv answers 404 for anything it has no artwork for, which is
         // most of the long tail rather than an error.

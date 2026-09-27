@@ -190,11 +190,16 @@ pub async fn proxy(State(state): State<AppState>, request: Request) -> AppResult
 
         let started = std::time::Instant::now();
         // The error would name the address it was sent to, this server's own
-        // key in its query; it is logged and answered, so the address is
-        // taken off it.
-        let response = upstream.send().await.map_err(reqwest::Error::without_url);
+        // key in its query; it is logged and answered, so what is kept of it
+        // is its kind and what lay under it.
+        let response = upstream.send().await.map_err(|e| {
+            anyhow::anyhow!(
+                "TMDB request failed: {}",
+                crate::providers::describe_request_error(&e)
+            )
+        });
         crate::metrics::upstream("tmdb", started, response.as_ref().ok().map(|r| r.status()));
-        let response = response.map_err(|e| AppError::UpstreamUnavailable(e.into()))?;
+        let response = response.map_err(AppError::UpstreamUnavailable)?;
 
         let status =
             StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
