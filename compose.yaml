@@ -46,5 +46,18 @@ services:
         limits:
           memory: 512M
 
+  # A second tier of cache, shared and kept across restarts: uncomment this
+  # service and set AMS_REDIS_URL: redis://cache:6379 on the metadata server.
+  # A cache and nothing else: a memory ceiling, the least recently used
+  # evicted, no persistence. See Administration › Cache.
+  # cache:
+  #   image: valkey/valkey:8-alpine
+  #   container_name: arr-metadata-cache
+  #   restart: unless-stopped
+  #   command: valkey-server --maxmemory 256mb --maxmemory-policy allkeys-lru --save "" --appendonly no
+  #   read_only: true
+  #   security_opt:
+  #     - no-new-privileges:true
+
 volumes:
   metadata-data:

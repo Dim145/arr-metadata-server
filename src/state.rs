@@ -141,7 +141,7 @@ impl AppState {
             .build()
             .context("failed to build the outbound HTTP client")?;
 
-        let caches = Caches::new(&config.cache);
+        let caches = Caches::new(&config.cache, crate::cache::RedisSlot::default());
         let limiter = Limiter::new(config.security.rate_limit_per_minute);
         let instance = crate::db::new_id();
         let tmdb = TmdbClient::new(http.clone(), &config.tmdb);
@@ -281,6 +281,11 @@ impl AppState {
                 // server, the cast's photographs and the themes included.
                 ("media.store", "true".to_string()),
                 ("media.serve", "proxy".to_string()),
+                ("cache.items", "true".to_string()),
+                ("cache.searches", "true".to_string()),
+                ("cache.lists", "true".to_string()),
+                ("cache.relay", "true".to_string()),
+                ("cache.sessions", "true".to_string()),
                 ("media.people", "true".to_string()),
                 ("media.audio", "true".to_string()),
                 ("api.sonarr", "true".to_string()),
@@ -363,18 +368,21 @@ impl AppState {
         // After the tune, not before: a search that started in between reads
         // the old generation, so whatever it caches is filed where nothing
         // will look for it again.
-        self.caches
-            .generation
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.caches.bump_generation().await;
 
         // A cached search was computed under the old settings. The generation
         // already means none of it will be served; this gives the memory back
         // now rather than at the end of the TTL.
-        self.caches.searches.invalidate_all();
+        self.caches.searches.invalidate_all().await;
 
         // A cached work carries what the settings put on it when it was read —
         // IMDb's rating, for one — so it is read again under the new ones.
-        self.caches.items.invalidate_all();
+        self.caches.items.invalidate_all().await;
+
+        // The relay's documents were patched with the old settings too, and
+        // each space's switch is a setting.
+        self.caches.relay.invalidate_all().await;
+        self.caches.sync_switches(|key| self.flag(key, true));
     }
 
     /// The language to answer a caller in.

@@ -362,9 +362,12 @@ async fn account_for(state: &AppState, ip: &ClientIp, vouched: &Vouched) -> Resu
             Some(_) => {}
             None if owner.oidc_linked => return Err(Failure::LinkedElsewhere),
             None => {
+                // The account changes shape: whoever holds its session reads it anew.
+                state.caches.forget_sessions();
                 repo::user::link_oidc(db, &owner.id, &vouched.issuer, &vouched.subject)
                     .await
                     .map_err(internal)?;
+                state.caches.forget_sessions();
                 record(
                     state,
                     ip,
@@ -475,9 +478,11 @@ async fn sync_role(
         return Ok(user);
     }
 
+    state.caches.forget_sessions();
     repo::user::set_role(&state.db, &user.id, role)
         .await
         .map_err(internal)?;
+    state.caches.forget_sessions();
     record(
         state,
         ip,
@@ -940,7 +945,9 @@ async fn unlink(
 
     repo::user::unlink_oidc(&state.db, &id).await?;
     // Signed in through the tie being undone: not any more.
+    state.caches.forget_sessions();
     repo::user::delete_sessions_for_user(&state.db, &id).await?;
+    state.caches.forget_sessions();
     record(
         &state,
         &ip,

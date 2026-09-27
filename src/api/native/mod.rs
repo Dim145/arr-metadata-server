@@ -8,6 +8,7 @@ pub mod access;
 pub mod account;
 pub mod auth;
 pub mod browse;
+pub mod cache;
 pub mod children;
 pub mod clients;
 pub mod discover;
@@ -54,6 +55,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(children::router())
         .merge(export::router())
         .merge(tls::router())
+        .merge(cache::router())
         .merge(overrides::router())
         .merge(clients::router())
         .merge(meta::router())

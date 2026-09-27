@@ -109,6 +109,9 @@ x509-parser = "0.18.1"
 # The authority checks what it issued the way rustls will judge it.
 rustls-webpki = { version = "0.103.15", features = ["aws-lc-rs", "std"] }
 rustls-pki-types = { version = "1.15.1", features = ["std"] }
+redis = { version = "1.7.1", features = ["tokio-comp", "connection-manager", "tokio-rustls-comp"] }
+mimalloc = "0.1.52"
+arc-swap = "1.9.2"
 
 [dev-dependencies]
 tokio = { version = "1.53.1", features = ["full", "test-util"] }

@@ -403,6 +403,7 @@ async fn update(
     if display_name.is_some() || email.is_some() {
         let display_name = display_name.unwrap_or_else(|| target.display_name.clone());
         let email = email.unwrap_or_else(|| target.email.clone());
+        state.caches.forget_sessions();
         repo::user::update_profile(
             &state.db,
             &id,
@@ -411,6 +412,7 @@ async fn update(
             target.locale.as_deref(),
         )
         .await?;
+        state.caches.forget_sessions();
     }
 
     audit::record(
@@ -454,12 +456,16 @@ async fn change(
     let mut changes = Vec::new();
 
     if let Some(role) = role.filter(|r| *r != target.role) {
+        state.caches.forget_sessions();
         repo::user::set_role(&state.db, &target.id, role).await?;
+        state.caches.forget_sessions();
         changes.push(format!("role {} → {}", target.role, role.as_str()));
     }
 
     if let Some(status) = status.filter(|s| *s != target.status) {
+        state.caches.forget_sessions();
         repo::user::set_status(&state.db, &target.id, status).await?;
+        state.caches.forget_sessions();
         if status != Status::Active {
             repo::user::delete_sessions_for_user(&state.db, &target.id).await?;
         }
@@ -531,7 +537,9 @@ async fn delete_one(
     // already; one made by someone deleted would lose its maker, and with it
     // the check, so it is withdrawn first.
     repo::invitation::revoke_by_creator(&state.db, &target.id).await?;
+    state.caches.forget_sessions();
     repo::user::delete(&state.db, &target.id).await?;
+    state.caches.forget_sessions();
 
     audit::record(
         state,
@@ -600,7 +608,9 @@ async fn reset_password(
         .await
         .map_err(|e| AppError::BadRequest(e.to_string()))?;
 
+    state.caches.forget_sessions();
     repo::user::set_password(&state.db, &id, &hash).await?;
+    state.caches.forget_sessions();
     repo::user::delete_sessions_for_user(&state.db, &id).await?;
 
     audit::record(
@@ -641,7 +651,9 @@ async fn revoke_sessions(
     let target = repo::user::get(&state.db, &id)
         .await?
         .ok_or(AppError::NotFound)?;
+    state.caches.forget_sessions();
     let closed = repo::user::delete_sessions_for_user(&state.db, &id).await?;
+    state.caches.forget_sessions();
 
     audit::record(
         &state,

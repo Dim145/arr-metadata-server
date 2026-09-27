@@ -583,7 +583,7 @@ async fn after_write(
         );
     }
 
-    state.caches.items.invalidate(&format!("item:{}", id)).await;
+    state.caches.touched(id).await;
 
     // Re-read so the caller sees the same thing every later request will: the
     // stored row, with manual overrides applied on top.
@@ -678,10 +678,7 @@ where
 {
     // Read once, before anything is fetched, so the answer is filed under the
     // settings it was actually computed with. See `Caches::generation`.
-    let generation = state
-        .caches
-        .generation
-        .load(std::sync::atomic::Ordering::SeqCst);
+    let generation = state.caches.stamp();
     let key = format!("{generation}:{key}");
 
     if let Some(cached) = state.caches.searches.get(&key).await {

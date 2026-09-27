@@ -199,9 +199,9 @@ async fn health(
         include_disabled: true,
         ..Default::default()
     };
-    let cache = |c: &moka::future::Cache<String, String>| CacheFigures {
-        entries: c.entry_count(),
-        bytes: c.weighted_size(),
+    let cache = |c: &crate::cache::Space<String>| CacheFigures {
+        entries: c.l1_entries(),
+        bytes: c.l1_bytes(),
     };
     Ok(Json(Health {
         version: env!("CARGO_PKG_VERSION"),
@@ -224,8 +224,8 @@ async fn health(
         items_cache: cache(&state.caches.items),
         searches_cache: cache(&state.caches.searches),
         lists_cache: CacheFigures {
-            entries: state.caches.lists.entry_count(),
-            bytes: state.caches.lists.weighted_size(),
+            entries: state.caches.lists.l1_entries(),
+            bytes: state.caches.lists.l1_bytes(),
         },
         sources: vec![
             Source {
@@ -306,39 +306,141 @@ async fn metrics(
             Vec::new()
         }
     };
-    let caches: [(&str, u64, u64); 3] = [
+    let c = &state.caches;
+    let caches: [(&str, u64, u64, crate::cache::Tally, crate::cache::Tally); 4] = [
         (
             "items",
-            state.caches.items.entry_count(),
-            state.caches.items.weighted_size(),
+            c.items.l1_entries(),
+            c.items.l1_bytes(),
+            c.items.l1_tally(),
+            c.items.l2_tally(),
         ),
         (
             "searches",
-            state.caches.searches.entry_count(),
-            state.caches.searches.weighted_size(),
+            c.searches.l1_entries(),
+            c.searches.l1_bytes(),
+            c.searches.l1_tally(),
+            c.searches.l2_tally(),
         ),
         (
             "lists",
-            state.caches.lists.entry_count(),
-            state.caches.lists.weighted_size(),
+            c.lists.l1_entries(),
+            c.lists.l1_bytes(),
+            c.lists.l1_tally(),
+            c.lists.l2_tally(),
+        ),
+        (
+            "relay",
+            c.relay.l1_entries(),
+            c.relay.l1_bytes(),
+            c.relay.l1_tally(),
+            c.relay.l2_tally(),
         ),
     ];
     gauges.push(Metric {
         name: "ams_cache_entries",
-        help: "Entries kept in each cache.",
+        help: "Entries kept in each cache, in this process's memory.",
         samples: caches
             .iter()
-            .map(|(name, entries, _)| (format!("cache=\"{name}\""), *entries as f64))
+            .map(|(name, entries, ..)| (format!("cache=\"{name}\""), *entries as f64))
+            .chain([("cache=\"sessions\"".to_string(), c.session_entries() as f64)])
             .collect(),
     });
     gauges.push(Metric {
         name: "ams_cache_bytes",
-        help: "Bytes kept in each cache.",
+        help: "Bytes kept in each cache, in this process's memory.",
         samples: caches
             .iter()
-            .map(|(name, _, bytes)| (format!("cache=\"{name}\""), *bytes as f64))
+            .map(|(name, _, bytes, ..)| (format!("cache=\"{name}\""), *bytes as f64))
             .collect(),
     });
+    let mut hits = Vec::new();
+    let mut misses = Vec::new();
+    for (name, _, _, l1, l2) in &caches {
+        hits.push((format!("cache=\"{name}\",tier=\"memory\""), l1.hits as f64));
+        misses.push((
+            format!("cache=\"{name}\",tier=\"memory\""),
+            l1.misses as f64,
+        ));
+        hits.push((format!("cache=\"{name}\",tier=\"server\""), l2.hits as f64));
+        misses.push((
+            format!("cache=\"{name}\",tier=\"server\""),
+            l2.misses as f64,
+        ));
+    }
+    let sessions = c.session_tally();
+    hits.push((
+        "cache=\"sessions\",tier=\"memory\"".to_string(),
+        sessions.hits as f64,
+    ));
+    misses.push((
+        "cache=\"sessions\",tier=\"memory\"".to_string(),
+        sessions.misses as f64,
+    ));
+    gauges.push(Metric {
+        name: "ams_cache_hits_total",
+        help: "Reads each cache answered, by tier, since the start.",
+        samples: hits,
+    });
+    gauges.push(Metric {
+        name: "ams_cache_misses_total",
+        help: "Reads each cache could not answer, by tier, since the start.",
+        samples: misses,
+    });
+    if c.wants_redis() {
+        let redis = c.redis();
+        let up = redis.as_ref().is_some_and(|r| r.is_up());
+        gauges.push(Metric {
+            name: "ams_redis_up",
+            help: "Whether the cache server answers: 1 when it does.",
+            samples: vec![(String::new(), if up { 1.0 } else { 0.0 })],
+        });
+        if let Some(redis) = redis {
+            gauges.push(Metric {
+                name: "ams_redis_latency_seconds",
+                help: "The cache server's last round trip.",
+                samples: vec![(String::new(), redis.latency().as_secs_f64())],
+            });
+            gauges.push(Metric {
+                name: "ams_redis_errors_total",
+                help: "Commands the cache server did not answer, since the start.",
+                samples: vec![(
+                    String::new(),
+                    redis.errors.load(std::sync::atomic::Ordering::Relaxed) as f64,
+                )],
+            });
+            if let Some(info) = redis.info().await {
+                for (name, help, value) in [
+                    (
+                        "ams_redis_used_memory_bytes",
+                        "Memory the cache server uses.",
+                        info.used_memory,
+                    ),
+                    (
+                        "ams_redis_maxmemory_bytes",
+                        "The cache server's memory ceiling; 0 when none.",
+                        info.maxmemory,
+                    ),
+                    (
+                        "ams_redis_evicted_keys_total",
+                        "Keys the cache server evicted for room.",
+                        info.evicted_keys,
+                    ),
+                    (
+                        "ams_redis_connected_clients",
+                        "Clients the cache server has.",
+                        info.connected_clients,
+                    ),
+                ] {
+                    gauges.push(Metric {
+                        name,
+                        help,
+                        samples: vec![(String::new(), value as f64)],
+                    });
+                }
+            }
+        }
+    }
     gauges.push(Metric {
         name: "ams_uptime_seconds",
         help: "Seconds since the server started.",

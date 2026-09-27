@@ -3,7 +3,8 @@
 use axum::{
     Extension, Json,
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{StatusCode, header},
+    response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
@@ -203,9 +204,35 @@ async fn list(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
     Query(query): Query<ListQuery>,
-) -> AppResult<Json<ListResponse>> {
+) -> AppResult<Response> {
     let language = query.language.clone();
     let query_for_count = to_query(&state, &identity, query)?;
+
+    // The same page asked again — reloaded, paged back to — is answered as
+    // it was: under the stamp every write and every settings change moves
+    // on, and by reader, since what a visitor may see is not what an editor
+    // may. The filters are part of the key, checked and complete.
+    let cache_key = {
+        use sha2::{Digest as _, Sha256};
+        let filters: String =
+            Sha256::digest(format!("{language:?}:{query_for_count:?}").as_bytes())
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect();
+        format!(
+            "list:{}:{}:{filters}",
+            state.caches.stamp(),
+            reader_class(&identity)
+        )
+    };
+    if let Some(cached) = state.caches.searches.get(&cache_key).await {
+        return Ok((
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "application/json")],
+            cached,
+        )
+            .into_response());
+    }
 
     let mut items = repo::item::search(&state.db, &query_for_count).await?;
 
@@ -237,7 +264,23 @@ async fn list(
     }
     service::redact_for_reader(&identity, &mut items);
 
-    Ok(Json(ListResponse { items, total }))
+    let response = ListResponse { items, total };
+    if let Ok(encoded) = serde_json::to_string(&response) {
+        state.caches.searches.insert(cache_key, encoded).await;
+    }
+    Ok(Json(response).into_response())
+}
+
+/// Who is reading, as far as a list differs by it: the classes
+/// `redact_for_reader` and the filters tell apart.
+fn reader_class(identity: &Identity) -> &'static str {
+    match identity {
+        Identity::Visitor => "visitor",
+        Identity::Network(_) => "network",
+        _ if identity.is_admin() => "admin",
+        _ if identity.can_write() => "writer",
+        _ => "member",
+    }
 }
 
 #[derive(Deserialize, IntoParams)]
@@ -447,7 +490,7 @@ async fn update(
         if !repo::item::set_enabled(&state.db, &id, enabled).await? {
             return Err(AppError::NotFound);
         }
-        state.caches.items.invalidate(&format!("item:{id}")).await;
+        state.caches.touched(&id).await;
 
         audit::record(
             &state,
@@ -494,7 +537,7 @@ async fn remove(
         return Err(AppError::NotFound);
     }
 
-    state.caches.items.invalidate(&format!("item:{id}")).await;
+    state.caches.touched(&id).await;
     tracing::info!(%id, actor = %identity.label(), "deleted an entry");
 
     audit::record(

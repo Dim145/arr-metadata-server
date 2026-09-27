@@ -87,8 +87,8 @@ async fn stats(State(state): State<AppState>) -> AppResult<Json<Stats>> {
         clients: repo::client::count(&state.db).await?,
         audit_entries: repo::audit::count(&state.db).await?,
         jobs: repo::job::count(&state.db).await?,
-        cached_items: state.caches.items.entry_count(),
-        cached_searches: state.caches.searches.entry_count(),
+        cached_items: state.caches.items.l1_entries(),
+        cached_searches: state.caches.searches.l1_entries(),
     }))
 }
 

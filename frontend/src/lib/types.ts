@@ -1096,3 +1096,50 @@ export interface ClientsListener {
   renewing: boolean
   renewBeforeDays: number
 }
+
+/** The caches, as the Cache page reads them. */
+export interface CacheReport {
+  server: CacheServer
+  spaces: CacheSpace[]
+  generation: number
+  epoch: number
+  publicSeconds: number
+}
+
+export interface CacheServer {
+  configured: boolean
+  attached: boolean
+  up: boolean
+  address?: string
+  prefix: string
+  latencyMs?: number
+  lastError?: string
+  errors: number
+  keys?: number
+  info?: {
+    server: string
+    version: string
+    usedMemory: number
+    maxmemory: number
+    evictionPolicy: string
+    evictedKeys: number
+    expiredKeys: number
+    connectedClients: number
+    uptimeSeconds: number
+    keyspaceHits: number
+    keyspaceMisses: number
+  }
+}
+
+export interface CacheSpace {
+  id: 'items' | 'searches' | 'lists' | 'relay' | 'sessions'
+  enabled: boolean
+  ttlSeconds: number
+  memory: { entries: number; bytes?: number; hits: number; misses: number }
+  server?: { keys?: number; hits: number; misses: number }
+}
+
+export interface CacheFlushed {
+  spaces: string[]
+  keys: number
+}

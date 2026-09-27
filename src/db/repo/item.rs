@@ -1034,7 +1034,7 @@ pub async fn search(db: &Db, q: &Query) -> Result<Vec<MediaItem>> {
         from_clause(db, q)
     );
     let mut args = AnyArguments::default();
-    narrow(q, &mut sql, &mut args)?;
+    narrow(db.dialect(), q, &mut sql, &mut args)?;
 
     sql.push_str(" ORDER BY ");
     sql.push_str(&order_clause(q));
@@ -1460,7 +1460,7 @@ pub async fn count_matching(db: &Db, q: &Query) -> Result<i64> {
         from_clause(db, q)
     );
     let mut args = AnyArguments::default();
-    narrow(q, &mut sql, &mut args)?;
+    narrow(db.dialect(), q, &mut sql, &mut args)?;
 
     let row = sqlx::query_with(db.sql(&sql), args)
         .fetch_one(db.pool())
@@ -1470,7 +1470,12 @@ pub async fn count_matching(db: &Db, q: &Query) -> Result<i64> {
 }
 
 /// Append the filters a [`Query`] asks for to a statement being built.
-fn narrow(q: &Query, sql: &mut String, args: &mut AnyArguments) -> Result<()> {
+fn narrow(
+    dialect: crate::db::Dialect,
+    q: &Query,
+    sql: &mut String,
+    args: &mut AnyArguments,
+) -> Result<()> {
     if !q.include_disabled {
         sql.push_str(" AND is_enabled = 1");
     }
@@ -1601,6 +1606,19 @@ fn narrow(q: &Query, sql: &mut String, args: &mut AnyArguments) -> Result<()> {
     }
 
     if let Some(term) = q.term.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+        // SQLite: the trigram index over every title the work goes by, folded
+        // of case and accents — a substring match like `LIKE`'s, read off an
+        // index. A trigram needs three characters; shorter, `LIKE` it is.
+        // PostgreSQL runs the `LIKE`s below, which pg_trgm indexes as they
+        // are written.
+        if dialect == crate::db::Dialect::Sqlite && term.chars().count() >= 3 {
+            sql.push_str(
+                " AND id IN (SELECT media_id FROM media_search WHERE media_search MATCH ?)",
+            );
+            args.add(fts_phrase(term))
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            return Ok(());
+        }
         let pattern = format!("%{}%", term.to_lowercase());
 
         // The stored title is the provider's. Someone who renamed a work will
@@ -1632,6 +1650,12 @@ fn narrow(q: &Query, sql: &mut String, args: &mut AnyArguments) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// A term as one FTS5 phrase: quoted, so nothing in it is read as syntax,
+/// and matched whole — every trigram of it, in order.
+fn fts_phrase(term: &str) -> String {
+    format!("\"{}\"", term.replace('"', "\"\""))
 }
 
 pub async fn count(db: &Db, kind: Option<MediaKind>) -> Result<i64> {
@@ -1833,7 +1857,7 @@ async fn facet_rows(db: &Db, q: &Query) -> Result<Vec<sqlx::any::AnyRow>> {
         from_clause(db, q)
     );
     let mut args = AnyArguments::default();
-    narrow(q, &mut sql, &mut args)?;
+    narrow(db.dialect(), q, &mut sql, &mut args)?;
 
     Ok(sqlx::query_with(db.sql(&sql), args)
         .fetch_all(db.pool())
@@ -2922,7 +2946,7 @@ mod tests {
             from_clause(db, q)
         );
         let mut args = AnyArguments::default();
-        narrow(q, &mut sql, &mut args).expect("narrowed");
+        narrow(db.dialect(), q, &mut sql, &mut args).expect("narrowed");
         sql.push_str(" ORDER BY ");
         sql.push_str(&order_clause(q));
         sql.push_str(" LIMIT 36");

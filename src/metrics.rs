@@ -230,7 +230,13 @@ pub fn render(gauges: &[Metric]) -> String {
 
     for metric in gauges {
         out.push_str(&format!("# HELP {} {}\n", metric.name, metric.help));
-        out.push_str(&format!("# TYPE {} gauge\n", metric.name));
+        // What only grows is a counter, and says so by its name.
+        let kind = if metric.name.ends_with("_total") {
+            "counter"
+        } else {
+            "gauge"
+        };
+        out.push_str(&format!("# TYPE {} {kind}\n", metric.name));
         for (labels, value) in &metric.samples {
             if labels.is_empty() {
                 out.push_str(&format!("{} {value}\n", metric.name));

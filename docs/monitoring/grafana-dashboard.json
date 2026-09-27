@@ -1,0 +1,169 @@
+{
+  "title": "arr-metadata-server",
+  "uid": "arr-metadata-server",
+  "description": "Requests, latency, providers, caches and the cache server, as the server counts them at /api/v1/admin/metrics.",
+  "tags": ["arr-metadata-server"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "query": "prometheus",
+        "label": "Prometheus",
+        "current": {}
+      },
+      {
+        "name": "instance",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "query": "label_values(ams_uptime_seconds, instance)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "current": { "text": "All", "value": "$__all" }
+      }
+    ]
+  },
+  "panels": [
+    { "type": "row", "title": "Requests", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }, "id": 1, "collapsed": false },
+    {
+      "type": "timeseries", "id": 2, "title": "Requests a second, by surface",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [{ "refId": "A", "expr": "sum by (surface) (rate(ams_http_requests_total{instance=~\"$instance\"}[5m]))", "legendFormat": "{{surface}}" }]
+    },
+    {
+      "type": "timeseries", "id": 3, "title": "Latency p95, by surface",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [{ "refId": "A", "expr": "histogram_quantile(0.95, sum by (le, surface) (rate(ams_http_request_duration_seconds_bucket{instance=~\"$instance\"}[5m])))", "legendFormat": "{{surface}}" }]
+    },
+    {
+      "type": "stat", "id": 4, "title": "Answers that were errors (5xx)",
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 9 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "orange", "value": 0.01 }, { "color": "red", "value": 0.05 }] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [{ "refId": "A", "expr": "sum(rate(ams_http_requests_total{instance=~\"$instance\",status=\"5xx\"}[5m])) / sum(rate(ams_http_requests_total{instance=~\"$instance\"}[5m]))" }]
+    },
+    {
+      "type": "stat", "id": 5, "title": "Up for",
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 9 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [{ "refId": "A", "expr": "ams_uptime_seconds{instance=~\"$instance\"}" }]
+    },
+    {
+      "type": "stat", "id": 6, "title": "Works held",
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 9 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [{ "refId": "A", "expr": "sum by (kind) (ams_works{instance=~\"$instance\"})", "legendFormat": "{{kind}}" }]
+    },
+    {
+      "type": "stat", "id": 7, "title": "Episodes held",
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 9 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [{ "refId": "A", "expr": "ams_episodes{instance=~\"$instance\"}" }]
+    },
+    { "type": "row", "title": "Providers", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 }, "id": 10, "collapsed": false },
+    {
+      "type": "timeseries", "id": 11, "title": "Calls upstream a second, by provider and outcome",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 15 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [{ "refId": "A", "expr": "sum by (provider, outcome) (rate(ams_upstream_requests_total{instance=~\"$instance\"}[5m]))", "legendFormat": "{{provider}} · {{outcome}}" }]
+    },
+    {
+      "type": "timeseries", "id": 12, "title": "Upstream latency p95, by provider",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 15 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [{ "refId": "A", "expr": "histogram_quantile(0.95, sum by (le, provider) (rate(ams_upstream_duration_seconds_bucket{instance=~\"$instance\"}[5m])))", "legendFormat": "{{provider}}" }]
+    },
+    { "type": "row", "title": "Caches", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 23 }, "id": 20, "collapsed": false },
+    {
+      "type": "timeseries", "id": 21, "title": "Hit ratio, by cache and tier",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 }, "overrides": [] },
+      "targets": [{ "refId": "A", "expr": "sum by (cache, tier) (rate(ams_cache_hits_total{instance=~\"$instance\"}[5m])) / (sum by (cache, tier) (rate(ams_cache_hits_total{instance=~\"$instance\"}[5m])) + sum by (cache, tier) (rate(ams_cache_misses_total{instance=~\"$instance\"}[5m])))", "legendFormat": "{{cache}} · {{tier}}" }]
+    },
+    {
+      "type": "timeseries", "id": 22, "title": "Reads a second, by cache and tier",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (cache, tier) (rate(ams_cache_hits_total{instance=~\"$instance\"}[5m]))", "legendFormat": "{{cache}} · {{tier}} hits" },
+        { "refId": "B", "expr": "sum by (cache, tier) (rate(ams_cache_misses_total{instance=~\"$instance\"}[5m]))", "legendFormat": "{{cache}} · {{tier}} misses" }
+      ]
+    },
+    {
+      "type": "timeseries", "id": 23, "title": "Entries in memory, by cache",
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 32 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [{ "refId": "A", "expr": "ams_cache_entries{instance=~\"$instance\"}", "legendFormat": "{{cache}}" }]
+    },
+    {
+      "type": "timeseries", "id": 24, "title": "Bytes in memory, by cache",
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 32 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "targets": [{ "refId": "A", "expr": "ams_cache_bytes{instance=~\"$instance\"}", "legendFormat": "{{cache}}" }]
+    },
+    { "type": "row", "title": "Cache server (Valkey / Redis)", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 39 }, "id": 30, "collapsed": false },
+    {
+      "type": "stat", "id": 31, "title": "Answering",
+      "gridPos": { "h": 5, "w": 4, "x": 0, "y": 40 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "mappings": [{ "type": "value", "options": { "0": { "text": "down", "color": "red" }, "1": { "text": "up", "color": "green" } } }], "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+      "targets": [{ "refId": "A", "expr": "ams_redis_up{instance=~\"$instance\"}" }]
+    },
+    {
+      "type": "stat", "id": 32, "title": "Round trip",
+      "gridPos": { "h": 5, "w": 4, "x": 4, "y": 40 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [{ "refId": "A", "expr": "ams_redis_latency_seconds{instance=~\"$instance\"}" }]
+    },
+    {
+      "type": "timeseries", "id": 33, "title": "Memory used, and the ceiling",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 40 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "ams_redis_used_memory_bytes{instance=~\"$instance\"}", "legendFormat": "used" },
+        { "refId": "B", "expr": "ams_redis_maxmemory_bytes{instance=~\"$instance\"}", "legendFormat": "maxmemory" }
+      ]
+    },
+    {
+      "type": "timeseries", "id": 34, "title": "Keys evicted a second, and commands unanswered",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 40 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        { "refId": "A", "expr": "rate(ams_redis_evicted_keys_total{instance=~\"$instance\"}[5m])", "legendFormat": "evicted" },
+        { "refId": "B", "expr": "rate(ams_redis_errors_total{instance=~\"$instance\"}[5m])", "legendFormat": "errors" }
+      ]
+    },
+    {
+      "type": "stat", "id": 35, "title": "Clients connected",
+      "gridPos": { "h": 3, "w": 8, "x": 0, "y": 45 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [{ "refId": "A", "expr": "ams_redis_connected_clients{instance=~\"$instance\"}" }]
+    }
+  ]
+}

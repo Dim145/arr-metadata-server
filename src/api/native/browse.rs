@@ -74,10 +74,7 @@ async fn facets(
     // what a new install says for the minutes before its first works arrive.
     let key = format!(
         "facets:{filters:?}:{}:{}",
-        state
-            .caches
-            .generation
-            .load(std::sync::atomic::Ordering::SeqCst),
+        state.caches.stamp(),
         repo::item::catalogue_stamp(&state.db).await?
     );
 

@@ -101,12 +101,39 @@ async fn authorize(
         }
     };
 
+    let visitor = matches!(identity, Identity::Visitor);
+    let method = request.method().clone();
     request.extensions_mut().insert(identity);
     if let Some(addr) = client_ip {
         request.extensions_mut().insert(ClientAddr(addr));
     }
 
-    Ok(next.run(request).await)
+    let mut response = next.run(request).await;
+
+    // A page anyone may read, read by nobody in particular: a browser or a
+    // proxy may keep it a minute, and serve it stale while it asks again —
+    // and never to a request that carries a credential, which `Vary` says.
+    let public_seconds = state.config.cache.public_seconds;
+    if visitor
+        && public_seconds > 0
+        && method == axum::http::Method::GET
+        && response.status() == axum::http::StatusCode::OK
+        && !response.headers().contains_key(header::CACHE_CONTROL)
+    {
+        let headers = response.headers_mut();
+        if let Ok(value) = axum::http::HeaderValue::from_str(&format!(
+            "public, max-age={public_seconds}, stale-while-revalidate={}",
+            public_seconds.saturating_mul(5)
+        )) {
+            headers.insert(header::CACHE_CONTROL, value);
+        }
+        headers.append(
+            header::VARY,
+            axum::http::HeaderValue::from_static("Cookie, Authorization, X-Api-Key"),
+        );
+    }
+
+    Ok(response)
 }
 
 /// Who is calling, or why they may not.
@@ -574,9 +601,21 @@ async fn resolve_session(
 
     let hash = secrets::hash_api_key(&token);
 
-    Ok(repo::user::find_session_user(&state.db, &hash)
-        .await?
-        .map(|user| (Identity::User(Box::new(user)), hash)))
+    // Read on every authenticated request: remembered a few seconds, and
+    // forgotten when a session ends or an account changes — the number read
+    // before the database is asked says whether that happened meanwhile.
+    if let Some(user) = state.caches.session(&hash).await {
+        return Ok(Some((Identity::User(Box::new((*user).clone())), hash)));
+    }
+    let seen = state.caches.session_epoch();
+    let found = repo::user::find_session_user(&state.db, &hash).await?;
+    if let Some(user) = &found {
+        state
+            .caches
+            .remember_session(hash.clone(), std::sync::Arc::new(user.clone()), seen)
+            .await;
+    }
+    Ok(found.map(|user| (Identity::User(Box::new(user)), hash)))
 }
 
 fn session_token(headers: &HeaderMap) -> Option<String> {

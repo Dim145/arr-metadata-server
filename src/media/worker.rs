@@ -126,7 +126,7 @@ async fn fetch_all(
 
     // Whatever cards were drawn of these works are drawn again with the
     // copies kept.
-    state.caches.searches.invalidate_all();
+    state.caches.searches.invalidate_all().await;
 
     let stored = outcomes.iter().filter(|ok| **ok).count();
     (stored, outcomes.len() - stored)
@@ -137,7 +137,7 @@ async fn fetch_one(state: &AppState, asset: &Asset) -> bool {
     match store_one(state, asset).await {
         Ok(()) => {
             if let Some(work) = &asset.wanted_by {
-                state.caches.items.invalidate(&format!("item:{work}")).await;
+                state.caches.touched(work).await;
             }
             true
         }

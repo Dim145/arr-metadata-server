@@ -288,7 +288,9 @@ async fn logout(
         .find(|(name, _)| *name == SESSION_COOKIE)
         .map(|(_, value)| value.trim().to_string())
     {
+        state.caches.forget_sessions();
         repo::user::delete_session(&state.db, &secrets::hash_api_key(&token)).await?;
+        state.caches.forget_sessions();
     }
 
     audit::record(
@@ -424,7 +426,9 @@ async fn change_password(
         .await
         .map_err(|e| AppError::BadRequest(e.to_string()))?;
 
+    state.caches.forget_sessions();
     repo::user::set_password(&state.db, &user.id, &hash).await?;
+    state.caches.forget_sessions();
 
     // Every existing session was authorised under the old password.
     repo::user::delete_sessions_for_user(&state.db, &user.id).await?;

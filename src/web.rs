@@ -38,6 +38,8 @@ pub async fn serve(state: AppState) -> Result<()> {
     // The media in line, fetched; the media nobody points at, swept.
     tokio::spawn(crate::media::worker::run(state.clone()));
     tokio::spawn(crate::media::worker::run_sweeps(state.clone()));
+    // The cache server, attached when it answers and listened to.
+    tokio::spawn(crate::cache::attach(state.clone()));
 
     // Sonarr builds its URLs from `.../v1/tvdb/{route}/{language}/` — with a
     // trailing slash — and its hostname is compiled in, so there is no way to

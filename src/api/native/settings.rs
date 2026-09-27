@@ -129,7 +129,13 @@ async fn put(
         }
     }
 
-    state.sync_providers().await;
+    // A cache switch is a setting of its own: flipped here and felt nowhere
+    // else, not a reason to move every provider on and empty every space.
+    if write.key.starts_with("cache.") {
+        state.caches.sync_switches(|key| state.flag(key, true));
+    } else {
+        state.sync_providers().await;
+    }
 
     // A secret's value never reaches the journal: only that it moved.
     let now_set = state.settings.at(scope, &id, &write.key);

@@ -21,6 +21,7 @@ use serde_json::{Value, json};
 use utoipa_axum::router::OpenApiRouter;
 
 use crate::{
+    cache,
     db::repo,
     domain::{ExternalSource, MediaItem, MediaKind},
     error::{AppError, AppResult},
@@ -33,6 +34,9 @@ const HOP_HEADERS: &[&str] = &[
     "connection",
     "content-length",
     "content-encoding",
+    // What the client would accept is not what the relay's client accepts:
+    // reqwest asks for what it can decode, and what is kept is decoded.
+    "accept-encoding",
     "host",
     "keep-alive",
     "proxy-authenticate",
@@ -136,41 +140,101 @@ pub async fn proxy(State(state): State<AppState>, request: Request) -> AppResult
         return Err(AppError::BadRequest("that is not a TMDB path".into()));
     }
 
-    let body_bytes = axum::body::to_bytes(body, 2 * 1024 * 1024)
-        .await
-        .map_err(|e| AppError::BadRequest(format!("could not read the request body: {e}")))?;
+    // What TMDB answered last time, while it is still good: a document is
+    // keyed by the path and query asked, without the credential, under the
+    // generation the settings are on — and patched with the local overrides
+    // on each serve, so an edit shows at once whatever the cache holds.
+    let relay_key = (parts.method == Method::GET).then(|| relay_key(&state, &parts.uri));
+    let remembered = match &relay_key {
+        Some(key) => state
+            .caches
+            .relay
+            .get(key)
+            .await
+            .filter(cache::Relayed::is_fresh),
+        None => None,
+    };
 
-    let mut upstream =
-        state
-            .http
-            .request(parts.method.clone(), &target)
-            .headers(forwarded_headers(
-                &parts.headers,
-                patch_target(parts.uri.path()).is_some(),
-            ));
+    let (status, headers, bytes) = if let Some(hit) = remembered {
+        let mut headers = HeaderMap::new();
+        if let Ok(value) = HeaderValue::from_str(&hit.content_type) {
+            headers.insert(header::CONTENT_TYPE, value);
+        }
+        (
+            StatusCode::from_u16(hit.status).unwrap_or(StatusCode::OK),
+            headers,
+            hit.body,
+        )
+    } else {
+        let body_bytes = axum::body::to_bytes(body, 2 * 1024 * 1024)
+            .await
+            .map_err(|e| AppError::BadRequest(format!("could not read the request body: {e}")))?;
 
-    // A v4 token authenticates by header; the query parameter is ignored then.
-    if api_key.starts_with("eyJ") {
-        upstream = upstream.bearer_auth(&api_key);
-    }
+        let mut upstream =
+            state
+                .http
+                .request(parts.method.clone(), &target)
+                .headers(forwarded_headers(
+                    &parts.headers,
+                    patch_target(parts.uri.path()).is_some(),
+                ));
 
-    if !body_bytes.is_empty() {
-        upstream = upstream.body(body_bytes.to_vec());
-    }
+        // A v4 token authenticates by header; the query parameter is ignored then.
+        if api_key.starts_with("eyJ") {
+            upstream = upstream.bearer_auth(&api_key);
+        }
 
-    let started = std::time::Instant::now();
-    let response = upstream.send().await;
-    crate::metrics::upstream("tmdb", started, response.as_ref().ok().map(|r| r.status()));
-    let response = response.map_err(|e| AppError::UpstreamUnavailable(e.into()))?;
+        if !body_bytes.is_empty() {
+            upstream = upstream.body(body_bytes.to_vec());
+        }
 
-    let status =
-        StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
-    let headers = response.headers().clone();
+        let started = std::time::Instant::now();
+        let response = upstream.send().await;
+        crate::metrics::upstream("tmdb", started, response.as_ref().ok().map(|r| r.status()));
+        let response = response.map_err(|e| AppError::UpstreamUnavailable(e.into()))?;
 
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|e| AppError::UpstreamUnavailable(e.into()))?;
+        let status =
+            StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+        let headers = response.headers().clone();
+
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| AppError::UpstreamUnavailable(e.into()))?;
+
+        // Kept as TMDB gave it: a document for as long as its kind stays
+        // good, a "no such thing" a few minutes, an error not at all.
+        if let Some(key) = relay_key
+            && (status.is_success() || status == StatusCode::NOT_FOUND)
+            && bytes.len() <= RELAY_MAX_BYTES
+        {
+            let ttl = if status == StatusCode::NOT_FOUND {
+                std::time::Duration::from_secs(5 * 60)
+            } else {
+                cache::relay_ttl(parts.uri.path())
+            };
+            let content_type = headers
+                .get(header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("application/json")
+                .to_string();
+            state
+                .caches
+                .relay
+                .insert_for(
+                    key,
+                    cache::Relayed {
+                        status: status.as_u16(),
+                        content_type,
+                        expires_at: cache::now_secs() + ttl.as_secs(),
+                        body: bytes.clone(),
+                    },
+                    ttl,
+                )
+                .await;
+        }
+        (status, headers, bytes)
+    };
 
     // Only JSON documents for a known title are worth inspecting; images,
     // configuration and errors pass through untouched.
@@ -194,6 +258,36 @@ pub async fn proxy(State(state): State<AppState>, request: Request) -> AppResult
     }
 
     Ok((status, response_headers(&headers), Body::from(bytes)).into_response())
+}
+
+/// The largest document the relay keeps; TMDB's biggest run to a few
+/// hundred kilobytes.
+const RELAY_MAX_BYTES: usize = 4 * 1024 * 1024;
+
+/// What a relayed document is filed under: the path and the query asked,
+/// the parameters this server sets left out, in a fixed order — and the
+/// generation, so a settings change files what follows elsewhere.
+fn relay_key(state: &AppState, uri: &Uri) -> String {
+    let mut pairs: Vec<(String, String)> = uri
+        .query()
+        .map(|query| {
+            url::form_urlencoded::parse(query.as_bytes())
+                .filter(|(name, _)| !OVERRIDDEN_PARAMS.contains(&name.as_ref()))
+                .map(|(name, value)| (name.into_owned(), value.into_owned()))
+                .collect()
+        })
+        .unwrap_or_default();
+    pairs.sort();
+    let query = url::form_urlencoded::Serializer::new(String::new())
+        .extend_pairs(pairs)
+        .finish();
+    format!(
+        "{}:{}:{}:{}?{query}",
+        state.caches.generation(),
+        state.config.tmdb.upstream,
+        state.config.tmdb.include_adult,
+        uri.path()
+    )
 }
 
 /// Rebuild the upstream URL, replacing the parameters this server controls.

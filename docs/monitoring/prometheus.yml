@@ -1,0 +1,22 @@
+# Scrape this server's figures: requests by surface and status, their
+# latency, the calls made to providers, what the caches answer from each
+# tier, the cache server's memory and evictions, the catalogue's size, the
+# jobs. The endpoint is administrative — it says which surfaces are open and
+# how the caches are doing — so the scrape carries an administrator's key,
+# made under Keys & network and kept out of this file:
+#
+#   echo 'ams_…' > /etc/prometheus/ams.key   (mode 600)
+#
+# Then `docs/monitoring/grafana-dashboard.json` reads these series.
+scrape_configs:
+  - job_name: arr-metadata-server
+    metrics_path: /api/v1/admin/metrics
+    scheme: http                         # https when AMS_TLS_CERT is set
+    scrape_interval: 30s
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/ams.key
+    static_configs:
+      - targets: ['metadata:8080']
+        labels:
+          instance: metadata

@@ -48,6 +48,7 @@ actions! {
     MediaUploaded => "media.uploaded",
     MediaRemoved => "media.removed",
     CertificateRenewed => "tls.renewed",
+    CacheFlushed => "cache.flushed",
     ItemDeleted => "item.deleted",
     OverrideSet => "override.set",
     OverrideRemoved => "override.removed",

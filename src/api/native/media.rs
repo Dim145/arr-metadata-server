@@ -617,8 +617,8 @@ async fn upload(
         }
     };
 
-    state.caches.items.invalidate(&format!("item:{id}")).await;
-    state.caches.searches.invalidate_all();
+    state.caches.touched(&id).await;
+    state.caches.searches.invalidate_all().await;
     service::listing::after_write(&state, &id).await;
 
     audit::record(
@@ -693,8 +693,8 @@ async fn forget(
 
     remove_asset(&state, &asset).await?;
 
-    state.caches.items.invalidate(&format!("item:{id}")).await;
-    state.caches.searches.invalidate_all();
+    state.caches.touched(&id).await;
+    state.caches.searches.invalidate_all().await;
     audit::record(
         &state,
         Event {

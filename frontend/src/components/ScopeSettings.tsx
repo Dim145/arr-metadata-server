@@ -67,6 +67,8 @@ export const GROUPS = [
   { id: 'access', prefixes: ['keys', 'site', 'registration', 'api', 'oidc', 'auth'] },
   // Kept on the Media page, beside what they govern.
   { id: 'media', prefixes: ['media'] },
+  // Kept on the Cache page, one switch per space.
+  { id: 'cache', prefixes: ['cache'] },
   { id: 'adult', prefixes: ['adult'] },
 ] as const
 

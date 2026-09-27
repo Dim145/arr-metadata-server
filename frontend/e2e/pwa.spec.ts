@@ -60,7 +60,9 @@ test.describe('the page as an app, and as a link', () => {
     expect(first.status()).toBe(200)
     const etag = first.headers()['etag']
     expect(etag).toMatch(/^W\/"[0-9a-f]{32}"$/)
-    expect(first.headers()['cache-control']).toBe('private, no-cache')
+    // Private to whoever holds a credential; a visitor's page, when the site is
+    // public, may be kept a while by a proxy — validated by the tag either way.
+    expect(first.headers()['cache-control']).toMatch(/^(private, no-cache|public, max-age=\d+, stale-while-revalidate=\d+)$/)
 
     const again = await request.get('/api/v1/sources', { headers: { 'if-none-match': etag! } })
     expect(again.status()).toBe(304)

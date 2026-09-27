@@ -296,6 +296,33 @@ pub const REGISTRY: &[Definition] = &[
         scopes: SERVER_ONLY,
     },
     // ── Media ────────────────────────────────────────────────────────────────
+    // Each cache space, switchable from the Cache page: off, it answers
+    // nothing and keeps nothing, and what it held expires.
+    Definition {
+        key: "cache.items",
+        kind: Kind::Bool,
+        scopes: SERVER_ONLY,
+    },
+    Definition {
+        key: "cache.searches",
+        kind: Kind::Bool,
+        scopes: SERVER_ONLY,
+    },
+    Definition {
+        key: "cache.lists",
+        kind: Kind::Bool,
+        scopes: SERVER_ONLY,
+    },
+    Definition {
+        key: "cache.relay",
+        kind: Kind::Bool,
+        scopes: SERVER_ONLY,
+    },
+    Definition {
+        key: "cache.sessions",
+        kind: Kind::Bool,
+        scopes: SERVER_ONLY,
+    },
     Definition {
         // Fetch and keep the media a work points at, as it is stored.
         key: "media.store",

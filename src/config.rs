@@ -282,6 +282,40 @@ pub struct Cache {
     pub max_entries: u64,
     pub item_ttl: Duration,
     pub search_ttl: Duration,
+    /// How long a session's token is remembered before the database is
+    /// asked again: a sign-out or a change of role is felt at once anyway.
+    pub session_ttl: Duration,
+    /// The server behind the second tier — Valkey, Redis or compatible —
+    /// as `redis://[user:password@]host:port[/db]` or `rediss://`. None
+    /// keeps the caches to memory.
+    pub redis_url: Option<RedisUrl>,
+    /// What every key this server writes there begins with.
+    pub redis_prefix: String,
+    /// How long one command may take before the answer is "nothing".
+    pub redis_timeout: Duration,
+    /// How long a public page of the catalogue may be kept by a browser or
+    /// a proxy, in seconds; zero keeps the interface's `no-cache`.
+    pub public_seconds: u64,
+}
+
+/// A cache server's address, which may carry a password: printed without it.
+#[derive(Clone)]
+pub struct RedisUrl(pub String);
+
+impl std::fmt::Debug for RedisUrl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match url::Url::parse(&self.0) {
+            Ok(mut url) => {
+                if url.password().is_some() {
+                    let _ = url.set_password(Some("***"));
+                }
+                // A query can carry a password too (`?pass=`): none is shown.
+                url.set_query(None);
+                write!(f, "{url}")
+            }
+            Err(_) => f.write_str("<invalid>"),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -575,6 +609,14 @@ impl Config {
                 max_entries: num(&["AMS_CACHE_MAX_ENTRIES"], 10_000)?,
                 item_ttl: secs(&["AMS_CACHE_ITEM_TTL", "REDIS_TTL"], 3_600)?,
                 search_ttl: secs(&["AMS_CACHE_SEARCH_TTL", "REDIS_SEARCH_TTL"], 1_800)?,
+                session_ttl: secs(&["AMS_CACHE_SESSION_TTL"], 30)?,
+                redis_url: opt(&["AMS_REDIS_URL", "REDIS_URL"])
+                    .map(|u| u.trim().to_string())
+                    .filter(|u| !u.is_empty())
+                    .map(RedisUrl),
+                redis_prefix: var_or(&["AMS_REDIS_PREFIX"], "ams:"),
+                redis_timeout: Duration::from_millis(num(&["AMS_REDIS_TIMEOUT_MS"], 150)?),
+                public_seconds: num(&["AMS_PUBLIC_CACHE_SECONDS"], 60)?,
             },
             export: Export {
                 nfo_path: opt(&["AMS_NFO_EXPORT_PATH"]).map(PathBuf::from),

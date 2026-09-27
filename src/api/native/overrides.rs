@@ -140,7 +140,7 @@ async fn set(
     )
     .await?;
 
-    state.caches.items.invalidate(&format!("item:{id}")).await;
+    state.caches.touched(&id).await;
     service::listing::after_write(&state, &id).await;
 
     tracing::info!(
@@ -209,7 +209,7 @@ async fn unset(
     }
     super::media::forget_uploads(&state, uploads.iter().map(String::as_str)).await;
 
-    state.caches.items.invalidate(&format!("item:{id}")).await;
+    state.caches.touched(&id).await;
     service::listing::after_write(&state, &id).await;
     tracing::info!(%id, %scope, %field, actor = %identity.label(), "unlocked a field");
 
@@ -255,7 +255,7 @@ async fn clear(
     let removed = repo::override_field::clear(&state.db, &id).await?;
     super::media::forget_uploads(&state, uploads.iter().map(String::as_str)).await;
 
-    state.caches.items.invalidate(&format!("item:{id}")).await;
+    state.caches.touched(&id).await;
     service::listing::after_write(&state, &id).await;
     tracing::info!(%id, removed, actor = %identity.label(), "unlocked every field");
 

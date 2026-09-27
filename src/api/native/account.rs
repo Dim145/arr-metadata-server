@@ -106,6 +106,7 @@ async fn update_profile(
         None => me.locale.clone(),
     };
 
+    state.caches.forget_sessions();
     repo::user::update_profile(
         &state.db,
         &me.id,
@@ -114,6 +115,7 @@ async fn update_profile(
         locale.as_deref(),
     )
     .await?;
+    state.caches.forget_sessions();
 
     audit::record(
         &state,
@@ -175,7 +177,9 @@ async fn sign_out_elsewhere(
         .map(|Extension(CurrentSession(id))| id)
         .unwrap_or_default();
 
+    state.caches.forget_sessions();
     let closed = repo::user::delete_other_sessions(&state.db, &me.id, &keep).await?;
+    state.caches.forget_sessions();
 
     audit::record(
         &state,
@@ -209,6 +213,7 @@ async fn close_session(
 ) -> AppResult<StatusCode> {
     let me = identity.require_user()?;
 
+    state.caches.forget_sessions();
     repo::user::delete_user_session(&state.db, &me.id, &id)
         .await?
         .then_some(StatusCode::NO_CONTENT)
@@ -248,6 +253,7 @@ async fn keys(
     Extension(identity): Extension<Identity>,
 ) -> AppResult<Json<AccountKeys>> {
     let me = identity.require_user()?;
+    state.caches.forget_sessions();
 
     Ok(Json(AccountKeys {
         keys: repo::client::list(&state.db, repo::client::Owner::User(&me.id)).await?,

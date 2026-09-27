@@ -634,7 +634,7 @@ fn check_url(url: &str) -> AppResult<()> {
 
 /// Drop the cached copy and record what happened.
 async fn finish(state: &AppState, identity: &Identity, ip: &ClientIp, id: &str, detail: &str) {
-    state.caches.items.invalidate(&format!("item:{id}")).await;
+    state.caches.touched(id).await;
 
     audit::record(
         state,

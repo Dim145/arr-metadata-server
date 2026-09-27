@@ -23,6 +23,12 @@ mod wire;
 
 use anyhow::{Context, Result};
 
+/// The allocator: a server of many small, short-lived allocations across
+/// many threads, which this one serves faster and with less fragmentation
+/// than the system's.
+#[global_allocator]
+static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 const USAGE: &str = "\
 arr-metadata-server — a metadata server for the *arr stack
 

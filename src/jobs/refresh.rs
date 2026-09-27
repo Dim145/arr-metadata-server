@@ -489,5 +489,5 @@ async fn mark_failure(state: &AppState, id: &str, error: &str) {
         tracing::warn!(%id, error = %e, "could not record the refresh failure");
     }
 
-    state.caches.items.invalidate(&format!("item:{id}")).await;
+    state.caches.touched(id).await;
 }
