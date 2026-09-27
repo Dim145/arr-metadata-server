@@ -119,7 +119,7 @@ jobs:
             -e AMS_ADMIN_USERNAME=ci \
             -e AMS_ADMIN_PASSWORD=ci-password-long-enough \
             -e AMS_REFRESH_ENABLED=false \
-            --read-only --tmpfs /tmp \
+            --read-only --tmpfs /tmp --tmpfs /data:uid=65532,gid=65532 \
             --security-opt no-new-privileges:true --cap-drop ALL \
             arr-metadata-server:ci
 
@@ -128,7 +128,8 @@ jobs:
             sleep 1
           done
 
-          curl -fsS http://127.0.0.1:8080/health
+          # Whatever kept it from answering is in its log.
+          curl -fsS http://127.0.0.1:8080/health || { docker logs ci; exit 1; }
           curl -fsS http://127.0.0.1:8080/ready
           # The UI must be embedded, not the placeholder page.
           curl -fsS http://127.0.0.1:8080/ | grep -q '/assets/' \

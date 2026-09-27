@@ -40,7 +40,8 @@ COPY --from=ui /ui/dist/ ./frontend/dist/
 # `touch` defeats the stale mtime left by the stub build.
 RUN touch src/main.rs build.rs \
  && cargo build --release --locked \
- && strip target/release/arr-metadata-server
+ && strip target/release/arr-metadata-server \
+ && mkdir -p /out/data
 
 
 # ── 3. Runtime ───────────────────────────────────────────────────────────────
@@ -48,8 +49,10 @@ FROM gcr.io/distroless/cc-debian12:nonroot AS runtime
 
 COPY --from=server /src/target/release/arr-metadata-server /usr/local/bin/arr-metadata-server
 
-# uid 65532 is distroless's `nonroot`. A bind-mounted volume must be writable by
-# it: `chown 65532:65532 ./data` on the host, or use a named volume.
+# uid 65532 is distroless's `nonroot`, and /data is its from the start: a named
+# volume takes that ownership over when it is made, and a bind-mounted directory
+# must be given it — `chown 65532:65532 ./data` on the host.
+COPY --from=server --chown=65532:65532 /out/data /data
 WORKDIR /data
 USER nonroot:nonroot
 

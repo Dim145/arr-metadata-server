@@ -20,9 +20,6 @@ permissions:
   contents: read
   packages: write
 
-env:
-  IMAGE: ghcr.io/${{ github.repository }}
-
 # A push that lands while the previous one is still building takes its place.
 concurrency:
   group: publish-${{ github.ref }}
@@ -45,6 +42,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      # The registry wants the name in lower case, whatever the repository's.
+      - name: Name the image
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
 
       # The labels every layer carries: the source, the revision, the licence.
       - name: Describe the image
@@ -95,13 +96,17 @@ jobs:
     needs: build
 
     steps:
+      # The registry wants the name in lower case, whatever the repository's.
+      - name: Name the image
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: /tmp/digests
           pattern: digest-*
           merge-multiple: true
 
-      - name: Name the image
+      - name: Tag the image
         id: meta
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
