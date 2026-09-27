@@ -5,6 +5,17 @@ Every release of arr-metadata-server, newest first. The format follows
 [Semantic Versioning](https://semver.org/): while the major is 0, a minor
 may change what the API or the configuration means, and says so here.
 
+## [Unreleased]
+
+### Changed
+
+- The image is built on Debian 13 (trixie) — the Node and Rust build
+  stages and the distroless runtime alike — and HAProxy 3.2 fronts the
+  clients' door in `compose.multi.yaml`.
+- Every dependency is at its newest: the Rust crates within their ranges,
+  the frontend's `react-router` 8.4 and `@tanstack/react-query` 5.103, the
+  workflows' actions at their latest releases, pinned by commit.
+
 ## [0.1.0] — 2026-09-28
 
 The first public release: everything the server does today, as it went
@@ -88,4 +99,5 @@ and arm64.
 - End-to-end checks against a real Sonarr, against two instances, and a
   Playwright suite over the whole interface.
 
+[Unreleased]: https://github.com/Dim145/arr-metadata-server/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/Dim145/arr-metadata-server/releases/tag/v0.1.0

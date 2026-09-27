@@ -5,7 +5,7 @@
 # manager, and a non-root user by default.
 
 # ── 1. Web UI ────────────────────────────────────────────────────────────────
-FROM node:24-bookworm-slim AS ui
+FROM node:24-trixie-slim AS ui
 
 WORKDIR /ui
 
@@ -18,7 +18,7 @@ RUN npm run build
 
 
 # ── 2. Server ────────────────────────────────────────────────────────────────
-FROM rust:1.98-bookworm AS server
+FROM rust:1.98-trixie AS server
 
 WORKDIR /src
 
@@ -45,7 +45,7 @@ RUN touch src/main.rs build.rs \
 
 
 # ── 3. Runtime ───────────────────────────────────────────────────────────────
-FROM gcr.io/distroless/cc-debian12:nonroot AS runtime
+FROM gcr.io/distroless/cc-debian13:nonroot AS runtime
 
 COPY --from=server /src/target/release/arr-metadata-server /usr/local/bin/arr-metadata-server
 
