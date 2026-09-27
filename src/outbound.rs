@@ -125,7 +125,9 @@ pub fn guarded_client() -> anyhow::Result<reqwest::Client> {
         .user_agent(concat!(
             "arr-metadata-server/",
             env!("CARGO_PKG_VERSION"),
-            " (+https://github.com/Dim145/arr-metadata-server)"
+            " (+",
+            env!("CARGO_PKG_REPOSITORY"),
+            ")"
         ))
         .dns_resolver(std::sync::Arc::new(GuardedResolver))
         .timeout(std::time::Duration::from_secs(60))

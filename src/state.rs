@@ -190,7 +190,9 @@ impl AppState {
             .user_agent(concat!(
                 "arr-metadata-server/",
                 env!("CARGO_PKG_VERSION"),
-                " (+https://github.com/Dim145/arr-metadata-server)"
+                " (+",
+                env!("CARGO_PKG_REPOSITORY"),
+                ")"
             ))
             .timeout(std::time::Duration::from_secs(30))
             .connect_timeout(std::time::Duration::from_secs(10))

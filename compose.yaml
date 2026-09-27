@@ -6,7 +6,7 @@
 services:
   metadata:
     build: .
-    image: arr-metadata-server:latest
+    image: ghcr.io/dim145/arr-metadata-server:latest
     container_name: arr-metadata-server
     restart: unless-stopped
 

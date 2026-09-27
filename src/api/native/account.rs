@@ -569,7 +569,7 @@ mod tests {
     fn person(role: Role) -> User {
         User {
             id: "u1".into(),
-            username: "margaux".into(),
+            username: "alice".into(),
             display_name: None,
             email: None,
             role,

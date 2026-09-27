@@ -40,7 +40,7 @@ test.describe('accounts', () => {
     await expect(page.getByRole('heading', { level: 1 })).toHaveText(/^(members|membres)$/i)
 
     const them = await member(browser, info.project.name)
-    const shown = `Léo ${info.project.name}`
+    const shown = `Zoé ${info.project.name}`
     await page.getByRole('button', { name: /open an account|ouvrir un compte/i }).click()
     const dialog = page.getByRole('dialog')
     await dialog.getByLabel(/^(username|identifiant)$/i).fill(them.username)

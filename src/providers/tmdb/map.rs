@@ -1,7 +1,7 @@
 //! TMDB → canonical model.
 //!
-//! This is the descendant of `the earlier Skyhook stand-in`'s mapper, retargeted: it
-//! now produces a canonical [`MediaItem`] rather than a Skyhook response, and it
+//! This grew out of an earlier Skyhook stand-in's mapper, retargeted: it now
+//! produces a canonical [`MediaItem`] rather than a Skyhook response, and it
 //! handles movies as well as series. Rendering to Sonarr's or Radarr's wire
 //! format happens later, in `api::compat`, from the canonical form.
 

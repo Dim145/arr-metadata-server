@@ -5,8 +5,8 @@ Sonarr, Radarr and TMDB clients already use, keeps its own canonical copy of
 everything it serves, and lets you correct or invent entries by hand — with
 manual edits permanently protected from automatic refreshes.
 
-It replaces and merges two earlier projects: `the earlier TMDB relay` and
-`the earlier Skyhook stand-in`.
+It grew out of two earlier, private tools — a TMDB relay and a stand-in for
+Sonarr's metadata service — and does what both did, from one catalogue.
 
 > **Status: working.** Every surface is implemented, exercised by tests on both
 > database engines, and verified against the live TMDB API and against real
@@ -853,6 +853,11 @@ docker compose up -d                                        # SQLite
 docker compose -f compose.yaml -f compose.postgres.yaml up -d   # PostgreSQL
 ```
 
+The image is published at `ghcr.io/dim145/arr-metadata-server`, for amd64 and
+arm64: `latest` and `main` follow the main branch, and a release `v1.2.3` is
+`1.2.3` and `1.2` (`.github/workflows/docker.yml`). The compose files pull it;
+`docker compose build` builds it from the checkout instead.
+
 The image is distroless: 67 MB, no shell, non-root, and it runs with a read-only
 root filesystem and every capability dropped. It answers its own health check.
 
@@ -912,4 +917,4 @@ to what is already there.
 
 ## Licence
 
-MIT
+MIT — see [`LICENSE`](LICENSE).

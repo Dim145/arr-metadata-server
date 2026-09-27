@@ -803,7 +803,7 @@ mod tests {
 
     #[test]
     fn usernames_are_short_and_plain() {
-        assert_eq!(clean_username("  margaux ").unwrap(), "margaux");
+        assert_eq!(clean_username("  alice ").unwrap(), "alice");
         assert_eq!(clean_username("dim.145-x_y").unwrap(), "dim.145-x_y");
         assert!(clean_username("a").is_err());
         assert!(clean_username("with space").is_err());

@@ -1,8 +1,8 @@
 //! TMDB compatibility: `/3/*`.
 //!
-//! This is the descendant of `the earlier TMDB relay`, with one addition that is the whole
-//! point of merging the projects: responses are **patched with local edits**
-//! before they are returned.
+//! This grew out of an earlier TMDB relay, with one addition that is the whole
+//! point of this server: responses are **patched with local edits** before
+//! they are returned.
 //!
 //! A request is relayed upstream with this server's own TMDB credentials
 //! substituted for whatever the client sent. If the path addresses a title that

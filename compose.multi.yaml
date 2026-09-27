@@ -18,7 +18,7 @@
 
 x-metadata: &metadata
   build: .
-  image: arr-metadata-server:latest
+  image: ghcr.io/dim145/arr-metadata-server:latest
   restart: unless-stopped
   environment: &metadata-env
     AMS_MODE: multi

@@ -1,8 +1,8 @@
 //! Typed configuration, built once at startup from the process environment.
 //!
-//! Every knob is prefixed `AMS_`. Legacy names from the two projects this server
-//! replaces (`TMDB_API_KEY`, `BIND_ADDRESS`, …) are still accepted as fallbacks so
-//! an existing `.env` keeps working.
+//! Every knob is prefixed `AMS_`. A few unprefixed names from the tools this
+//! server grew out of (`TMDB_API_KEY`, `BIND_ADDRESS`, …) are still accepted as
+//! fallbacks so an existing `.env` keeps working.
 
 use std::{net::SocketAddr, path::PathBuf, str::FromStr, time::Duration};
 
@@ -498,10 +498,7 @@ impl Config {
                 .parse()
                 .context("AMS_BIND_ADDRESS is not a valid socket address")?,
                 public_url: opt(&["AMS_PUBLIC_URL"]).map(|u| u.trim_end_matches('/').to_string()),
-                tls: match (
-                    opt(&["AMS_TLS_CERT", "LEGACY_TLS_CERT"]),
-                    opt(&["AMS_TLS_KEY", "LEGACY_TLS_KEY"]),
-                ) {
+                tls: match (opt(&["AMS_TLS_CERT"]), opt(&["AMS_TLS_KEY"])) {
                     (Some(cert), Some(key)) => Some(Tls {
                         cert: cert.into(),
                         key: key.into(),

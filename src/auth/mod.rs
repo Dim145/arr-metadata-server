@@ -47,7 +47,7 @@ impl Identity {
                 None => format!("client:{}", c.name),
             },
             // The role at the time, so the journal says who could do what:
-            // `admin:dim145`, `editor:margaux`, `member:leo`.
+            // `admin:alice`, `editor:bob`, `member:carol`.
             Self::User(u) => format!("{}:{}", u.role.as_str(), u.username),
             Self::Network(Some(rule)) => format!("peer:{rule}"),
             Self::Network(None) => "network".to_string(),
