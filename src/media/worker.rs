@@ -105,7 +105,9 @@ async fn batch(state: &AppState) -> Result<usize> {
     Ok(taken)
 }
 
-/// Fetch these, a few at a time. How many were stored, and how many failed.
+/// Fetch these, a few at a time — each claimed first, so that among
+/// several instances no two fetch the same. How many were stored, and how
+/// many failed.
 async fn fetch_all(
     state: &AppState,
     assets: Vec<Asset>,
@@ -113,16 +115,25 @@ async fn fetch_all(
 ) -> (usize, usize) {
     use futures::StreamExt as _;
 
-    let outcomes: Vec<bool> = futures::stream::iter(assets)
+    let outcomes: Vec<Option<bool>> = futures::stream::iter(assets)
         .map(|asset| async move {
             if flag.is_some_and(|f| f.stopped()) {
-                return false;
+                return Some(false);
             }
-            fetch_one(state, &asset).await
+            match repo::asset::claim(&state.db, &asset.id, &state.coord.instance.name).await {
+                Ok(true) => Some(fetch_one(state, &asset).await),
+                // Another instance got there first, or it was forgotten.
+                Ok(false) => None,
+                Err(e) => {
+                    tracing::warn!(error = %e, "could not claim a medium in line");
+                    None
+                }
+            }
         })
         .buffer_unordered(AT_ONCE)
         .collect()
         .await;
+    let outcomes: Vec<bool> = outcomes.into_iter().flatten().collect();
 
     // Whatever cards were drawn of these works are drawn again with the
     // copies kept.
@@ -320,12 +331,17 @@ pub async fn store_all(state: &AppState, by: &str) -> AppResult<Option<String>> 
         .clone()
         .try_lock_owned()
         .map_err(|_| busy("media are being fetched"))?;
+    let shared = state
+        .coord
+        .hold_for(job::kinds::MEDIA_STORE, "media are being fetched")
+        .await?;
     let record = job::start_by(&state.db, job::kinds::MEDIA_STORE, None, Some(by)).await?;
 
     let state = state.clone();
     let id = record.clone();
     tokio::spawn(async move {
         let _held = held;
+        let _shared = shared;
         let flag = cancel::register(&record);
         let outcome = everything(&state, &record, &flag).await;
         close(&state, &record, outcome).await;
@@ -425,12 +441,17 @@ pub async fn sweep_now(state: &AppState, by: &str) -> AppResult<Option<String>> 
         .clone()
         .try_lock_owned()
         .map_err(|_| busy("the media are being swept"))?;
+    let shared = state
+        .coord
+        .hold_for(job::kinds::MEDIA_SWEEP, "the media are being swept")
+        .await?;
     let record = job::start_by(&state.db, job::kinds::MEDIA_SWEEP, None, Some(by)).await?;
 
     let state = state.clone();
     let id = record.clone();
     tokio::spawn(async move {
         let _held = held;
+        let _shared = shared;
         let outcome = sweep(&state).await.map(Pass::Done);
         close(&state, &record, outcome).await;
     });
@@ -439,14 +460,21 @@ pub async fn sweep_now(state: &AppState, by: &str) -> AppResult<Option<String>> 
 }
 
 /// The sweep, on its schedule: a day after the last, and an hour after the
-/// start, so a server that runs a day at a time still sweeps.
+/// start, so a server that runs a day at a time still sweeps. The leader's
+/// to run; the others look again in an hour.
 pub async fn run_sweeps(state: AppState) {
     if !state.media.is_on() {
         return;
     }
     tokio::time::sleep(Duration::from_secs(3600)).await;
     loop {
-        if let Ok(held) = SWEEPING.clone().try_lock_owned() {
+        if !state.coord.leads() {
+            tokio::time::sleep(Duration::from_secs(3600)).await;
+            continue;
+        }
+        if let Ok(held) = SWEEPING.clone().try_lock_owned()
+            && let Some(shared) = state.coord.hold(job::kinds::MEDIA_SWEEP).await
+        {
             let record = job::start_by(&state.db, job::kinds::MEDIA_SWEEP, None, None)
                 .await
                 .inspect_err(|e| tracing::warn!(error = %e, "could not open the sweep's run"))
@@ -460,6 +488,7 @@ pub async fn run_sweeps(state: AppState) {
                     }
                 }
             }
+            drop(shared);
             drop(held);
         }
         tokio::time::sleep(SWEEP_EVERY).await;

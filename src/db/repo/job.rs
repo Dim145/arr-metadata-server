@@ -5,11 +5,25 @@
 //! the one that failed. A refresh someone asked for by hand gets its own row,
 //! since that is a thing a person is waiting on.
 
+use std::sync::OnceLock;
+
 use anyhow::Result;
 use serde::Serialize;
 use utoipa::ToSchema;
 
 use crate::db::{Db, RowExt, new_id, now};
+
+/// What this instance is called, written on every run it opens: set once at
+/// start. Before that, runs are opened with no instance — the tests', say.
+static INSTANCE: OnceLock<String> = OnceLock::new();
+
+pub fn name_instance(name: &str) {
+    let _ = INSTANCE.set(name.to_string());
+}
+
+fn instance() -> Option<&'static str> {
+    INSTANCE.get().map(String::as_str)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Status {
@@ -69,6 +83,9 @@ pub struct Job {
     /// Who started it, as the journal names them; nothing for the schedule.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub triggered_by: Option<String>,
+    /// Which instance ran it, among several.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instance: Option<String>,
     /// The work it acted on, while it is held.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub work: Option<crate::db::repo::item::WorkRef>,
@@ -91,8 +108,8 @@ pub async fn start_by(
     let at = now();
 
     sqlx::query(db.sql(
-        "INSERT INTO job_run (id, kind, target, status, started_at, created_at, triggered_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO job_run (id, kind, target, status, started_at, created_at, triggered_by, instance)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     ))
     .bind(&id)
     .bind(kind)
@@ -101,6 +118,7 @@ pub async fn start_by(
     .bind(&at)
     .bind(&at)
     .bind(by)
+    .bind(instance())
     .execute(db.pool())
     .await?;
 
@@ -133,8 +151,8 @@ pub async fn progress(db: &Db, id: &str, detail: &str) -> Result<()> {
     Ok(())
 }
 
-const COLUMNS: &str =
-    "id, kind, target, status, started_at, finished_at, error, detail, created_at, triggered_by";
+const COLUMNS: &str = "id, kind, target, status, started_at, finished_at, error, detail, \
+                       created_at, triggered_by, instance";
 
 fn map(row: &sqlx::any::AnyRow) -> Result<Job> {
     Ok(Job {
@@ -148,6 +166,7 @@ fn map(row: &sqlx::any::AnyRow) -> Result<Job> {
         detail: row.opt_text("detail")?,
         created_at: row.text("created_at")?,
         triggered_by: row.opt_text("triggered_by")?,
+        instance: row.opt_text("instance")?,
         work: None,
     })
 }
@@ -309,22 +328,65 @@ pub async fn prune(db: &Db, cutoff: &str) -> Result<u64> {
     Ok(result.rows_affected())
 }
 
-/// Close any run still marked running.
-///
-/// A job row is only ever closed by the task that opened it, so a process that
-/// is killed mid-sweep leaves one behind. Without this they accumulate as
-/// permanently-running phantoms in the UI.
-pub async fn fail_orphaned(db: &Db) -> Result<u64> {
-    let result = sqlx::query(db.sql(
-        "UPDATE job_run
-         SET status = 'failed', finished_at = ?, error = 'the server stopped while this was running'
-         WHERE status = 'running'",
-    ))
-    .bind(now())
-    .execute(db.pool())
-    .await?;
+/// Close any run still marked running: every one of them, alone — a job
+/// row is only ever closed by the task that opened it, so a process killed
+/// mid-sweep leaves one behind, and without this they accumulate as
+/// permanently-running phantoms in the UI. Among several instances, only
+/// what this instance's previous life opened, or what no instance claims:
+/// another instance's runs are its own — alive, it is running them; gone,
+/// the leader closes them.
+pub async fn fail_orphaned(db: &Db, own_only: bool) -> Result<u64> {
+    let result = if own_only {
+        sqlx::query(db.sql(
+            "UPDATE job_run
+             SET status = 'failed', finished_at = ?,
+                 error = 'the server stopped while this was running'
+             WHERE status = 'running' AND (instance IS NULL OR instance = ?)",
+        ))
+        .bind(now())
+        .bind(instance())
+        .execute(db.pool())
+        .await?
+    } else {
+        sqlx::query(db.sql(
+            "UPDATE job_run
+             SET status = 'failed', finished_at = ?,
+                 error = 'the server stopped while this was running'
+             WHERE status = 'running'",
+        ))
+        .bind(now())
+        .execute(db.pool())
+        .await?
+    };
 
     Ok(result.rows_affected())
+}
+
+/// The runs still marked running by instances other than `except`.
+pub async fn running_elsewhere(db: &Db, except: &str) -> Result<Vec<Job>> {
+    let rows = sqlx::query(db.sql(&format!(
+        "SELECT {COLUMNS} FROM job_run
+         WHERE status = 'running' AND instance IS NOT NULL AND instance <> ?"
+    )))
+    .bind(except)
+    .fetch_all(db.pool())
+    .await?;
+    rows.iter().map(map).collect()
+}
+
+/// Close a run whose instance is gone. How many rows that was: none when
+/// it ended meanwhile.
+pub async fn fail_gone(db: &Db, id: &str) -> Result<u64> {
+    let done = sqlx::query(db.sql(
+        "UPDATE job_run
+         SET status = 'failed', finished_at = ?, error = 'the instance running this stopped'
+         WHERE id = ? AND status = 'running'",
+    ))
+    .bind(now())
+    .bind(id)
+    .execute(db.pool())
+    .await?;
+    Ok(done.rows_affected())
 }
 
 #[cfg(test)]
@@ -456,7 +518,7 @@ mod tests {
         let db = db().await;
         start(&db, kinds::REFRESH_SWEEP, None).await.unwrap();
 
-        assert_eq!(fail_orphaned(&db).await.unwrap(), 1);
+        assert_eq!(fail_orphaned(&db, false).await.unwrap(), 1);
 
         let jobs = list(
             &db,
@@ -471,6 +533,32 @@ mod tests {
         assert!(jobs[0].error.as_deref().unwrap().contains("stopped"));
 
         // Running it again must not touch the row it already closed.
-        assert_eq!(fail_orphaned(&db).await.unwrap(), 0);
+        assert_eq!(fail_orphaned(&db, false).await.unwrap(), 0);
+    }
+
+    /// Another instance's run is its own: alone every run is closed at the
+    /// start, among several only this instance's, and the leader closes
+    /// one whose instance is gone.
+    #[tokio::test]
+    async fn another_instances_run_is_left_to_it_or_to_the_leader() {
+        let db = db().await;
+        let id = start(&db, kinds::MEDIA_STORE, None).await.unwrap();
+        sqlx::query(db.sql("UPDATE job_run SET instance = 'b' WHERE id = ?"))
+            .bind(&id)
+            .execute(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(
+            fail_orphaned(&db, true).await.unwrap(),
+            0,
+            "b's, not this instance's"
+        );
+        let elsewhere = running_elsewhere(&db, "a").await.unwrap();
+        assert_eq!(elsewhere.len(), 1);
+        assert_eq!(elsewhere[0].instance.as_deref(), Some("b"));
+        assert!(running_elsewhere(&db, "b").await.unwrap().is_empty());
+        assert_eq!(fail_gone(&db, &id).await.unwrap(), 1);
+        assert_eq!(fail_gone(&db, &id).await.unwrap(), 0, "closed already");
+        assert_eq!(get(&db, &id).await.unwrap().unwrap().status, "failed");
     }
 }

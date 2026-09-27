@@ -126,6 +126,84 @@ fn take_place(ip: Option<IpAddr>, now: Instant, per_address: usize, total: usize
     take_place_in(&RECENT, ip, now, per_address, total)
 }
 
+/// A place in the hour's count on the cache server, given back when it is
+/// dropped unless the account was made — as [`Place`] is, for the count
+/// every instance shares.
+struct SharedPlace {
+    redis: std::sync::Arc<crate::cache::Redis>,
+    keys: Vec<String>,
+    kept: bool,
+}
+
+impl SharedPlace {
+    fn keep(mut self) {
+        self.kept = true;
+    }
+}
+
+impl Drop for SharedPlace {
+    fn drop(&mut self) {
+        if self.kept {
+            return;
+        }
+        let redis = self.redis.clone();
+        let keys = std::mem::take(&mut self.keys);
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(async move {
+                for key in keys {
+                    redis.decr(&key).await;
+                }
+            });
+        }
+    }
+}
+
+/// How long the hour's keys outlive it, so a clock a little off between two
+/// instances never loses a count.
+const SHARED_WINDOW_TTL: Duration = Duration::from_secs(2 * 3600);
+
+/// A place in the count every instance shares: `Ok(None)` where there is
+/// no such count — one instance, or the server not answering, in which
+/// case the memory's count stands alone — and `Err` when the hour is full.
+async fn take_shared_place(
+    state: &AppState,
+    ip: Option<IpAddr>,
+) -> Result<Option<SharedPlace>, ()> {
+    if !state.coord.is_multi() {
+        return Ok(None);
+    }
+    let Some(redis) = state.caches.redis() else {
+        return Ok(None);
+    };
+    let prefix = &state.config.cache.redis_prefix;
+    let hour = crate::cache::now_secs() / 3600;
+    let mut keys = vec![format!("{prefix}signups:all:{hour}")];
+    if let Some(bucket) = ip.map(bucket) {
+        keys.push(format!("{prefix}signups:{bucket}:{hour}"));
+    }
+    let limits = [
+        state.config.security.signups_per_hour_total,
+        state.config.security.signups_per_hour,
+    ];
+    let mut place = SharedPlace {
+        redis: redis.clone(),
+        keys: Vec::new(),
+        kept: false,
+    };
+    for (key, limit) in keys.into_iter().zip(limits) {
+        let Some(count) = redis.incr_window(&key, SHARED_WINDOW_TTL).await else {
+            // The server stopped answering halfway: what was counted is
+            // given back, and the memory's count stands alone.
+            return Ok(None);
+        };
+        place.keys.push(key);
+        if count as usize > limit {
+            return Err(());
+        }
+    }
+    Ok(Some(place))
+}
+
 fn take_place_in(
     counts: &'static Mutex<Recent>,
     ip: Option<IpAddr>,
@@ -368,6 +446,14 @@ async fn register(
             .ok_or(AppError::RateLimited)?,
         ),
     };
+    // Among several instances the hour's count is kept on the cache server
+    // too: one quota, whichever instance the sign-up lands on.
+    let shared = match &invitation {
+        Some(_) => None,
+        None => take_shared_place(&state, ip.0)
+            .await
+            .map_err(|_| AppError::RateLimited)?,
+    };
 
     if repo::user::find_by_username(&state.db, &username)
         .await?
@@ -442,6 +528,9 @@ async fn register(
 
     if let Some(place) = place {
         place.keep();
+    }
+    if let Some(shared) = shared {
+        shared.keep();
     }
 
     audit::record(

@@ -514,7 +514,9 @@ pub async fn attach(state: crate::state::AppState) {
                 let listener = state.clone();
                 tokio::spawn(redis.subscribe(move |message| {
                     let state = listener.clone();
-                    tokio::spawn(async move { state.caches.apply_message(&message).await });
+                    tokio::spawn(
+                        async move { crate::coord::apply_message(&state, &message).await },
+                    );
                 }));
                 return;
             }

@@ -20,3 +20,12 @@ scrape carries an administrator's key.
 
 The same figures are on the administration's **Cache** page and its
 dashboard, read from the server directly; Prometheus keeps the history.
+
+With several instances (`AMS_MODE=multi`), scrape each one: the caches'
+first tier, the request latencies and the uptime are each instance's own,
+while the cache server's figures are the same from every instance.
+`ams_leader{ams_instance="…"}` is 1 on the one that runs the schedules — the
+label is not called `instance`, which Prometheus reserves for the target — and
+`ams_instances` says how many were heard of lately — an alert on
+`sum(ams_leader) != 1` for more than a minute catches a cluster with no
+leader, or two.

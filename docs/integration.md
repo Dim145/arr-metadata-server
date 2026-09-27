@@ -65,6 +65,14 @@ namespace, since 20.10), so `AMS_CLIENTS_BIND=0.0.0.0:443` and `"443:443"` do.
 On an older engine, bind 8443 and map `"443:8443"`. Outside a container on
 Linux, `setcap cap_net_bind_service=+ep` on the binary; macOS asks nothing.
 
+With several instances (`AMS_MODE=multi`, see the README's *Several
+instances*), every instance has a door of its own on 443, and all of them
+serve the one certificate the authority in the database issued: point the
+names at any of them, at a TCP balancer in front of them, or — in Compose —
+give every instance the three names as network aliases, as
+`compose.multi.yaml` does, so Docker's DNS hands a client either address.
+`/ca.crt` is the same on each.
+
 ## 3. Redirect each client
 
 ### Docker Compose

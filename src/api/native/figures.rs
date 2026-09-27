@@ -164,6 +164,17 @@ pub struct Health {
     pub version: &'static str,
     pub uptime_seconds: u64,
     pub database: &'static str,
+    /// One instance, or several.
+    pub mode: crate::config::Mode,
+    /// The instance that answered, by name.
+    pub instance: String,
+    /// Whether it runs the schedules.
+    pub leads: bool,
+    /// Which instance does, by name; none while no lease is held.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub leader: Option<String>,
+    /// How many instances were heard of lately, this one included.
+    pub instances: usize,
     pub works: i64,
     pub episodes: i64,
     /// Works whose last refresh failed.
@@ -210,6 +221,11 @@ async fn health(
             crate::db::Dialect::Sqlite => "sqlite",
             crate::db::Dialect::Postgres => "postgres",
         },
+        mode: state.coord.mode(),
+        instance: state.coord.instance.name.clone(),
+        leads: state.coord.leads(),
+        leader: state.coord.leader(),
+        instances: state.coord.instances().len(),
         works: repo::item::count_matching(&state.db, &everything).await?,
         episodes: repo::item::episode_count(&state.db, true, true).await?,
         refresh_failed: repo::item::count_matching(
@@ -445,6 +461,19 @@ async fn metrics(
         name: "ams_uptime_seconds",
         help: "Seconds since the server started.",
         samples: vec![(String::new(), STARTED.elapsed().as_secs_f64())],
+    });
+    gauges.push(Metric {
+        name: "ams_leader",
+        help: "Whether this instance runs the schedules: 1 when it leads.",
+        samples: vec![(
+            format!("ams_instance=\"{}\"", label(&state.coord.instance.name)),
+            if state.coord.leads() { 1.0 } else { 0.0 },
+        )],
+    });
+    gauges.push(Metric {
+        name: "ams_instances",
+        help: "Instances of this server heard of lately, this one included.",
+        samples: vec![(String::new(), state.coord.instances().len() as f64)],
     });
     gauges.push(Metric {
         name: "ams_build_info",

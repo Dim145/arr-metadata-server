@@ -24,6 +24,13 @@ pub async fn run(state: AppState) {
     tokio::time::sleep(Duration::from_secs(5)).await;
 
     loop {
+        // The leader's work: alone, this instance; among several, the one
+        // holding the lease.
+        if !state.coord.leads() {
+            tokio::time::sleep(TICK).await;
+            continue;
+        }
+
         let (listed, more) =
             match listing::relist_stale(&state.db, listing::imdb_on(&state), MOST).await {
                 Ok(pass) => pass,

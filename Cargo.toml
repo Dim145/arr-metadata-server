@@ -112,6 +112,8 @@ rustls-pki-types = { version = "1.15.1", features = ["std"] }
 redis = { version = "1.7.1", features = ["tokio-comp", "connection-manager", "tokio-rustls-comp"] }
 mimalloc = "0.1.52"
 arc-swap = "1.9.2"
+# The machine's name, to tell one instance from another among several.
+whoami = { version = "2.1.3", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 tokio = { version = "1.53.1", features = ["full", "test-util"] }

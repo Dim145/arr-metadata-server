@@ -159,6 +159,8 @@ pub struct Settings {
     pub version: &'static str,
     pub public_url: Option<String>,
     pub database: &'static str,
+    /// One instance, or several coordinating through the cache server.
+    pub mode: crate::config::Mode,
     pub tmdb_configured: bool,
     pub tmdb_language: String,
     pub skyhook_fallback: bool,
@@ -214,6 +216,7 @@ async fn settings(
             crate::db::Dialect::Sqlite => "sqlite",
             crate::db::Dialect::Postgres => "postgres",
         },
+        mode: state.coord.mode(),
         tmdb_configured: state.tmdb.is_configured(),
         tmdb_language: state.config.tmdb.language.clone(),
         skyhook_fallback: state.flag("skyhook.fallback", true),

@@ -826,6 +826,9 @@ async fn configure(
     }
 
     oidc::forget().await;
+    // The other instances read the settings again, and forget the provider
+    // they discovered too.
+    state.coord.tell(crate::coord::Message::Settings);
 
     if !changes.is_empty() {
         let keys: Vec<&str> = changes.iter().map(|(key, _)| *key).collect();

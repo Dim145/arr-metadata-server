@@ -83,8 +83,9 @@ pub async fn states(state: &AppState) -> anyhow::Result<Vec<TaskState>> {
     Ok(out)
 }
 
-/// Whether the lock a task works under is held right now. A run the history
-/// still calls running, with its lock free, is one a crash left behind.
+/// Whether the lock a task works under is held right now, on this
+/// instance. A run the history still calls running, with its lock free, is
+/// one a crash left behind.
 fn lock_busy(id: &str) -> bool {
     match id {
         REFRESH_SWEEP | REFRESH_ALL => crate::jobs::refresh::is_busy(),
@@ -97,12 +98,51 @@ fn lock_busy(id: &str) -> bool {
     }
 }
 
+/// What a task is held under among several instances; nothing for a task
+/// that is one instance's own.
+pub fn hold_of(id: &str) -> Option<&'static str> {
+    match id {
+        REFRESH_SWEEP | REFRESH_ALL => Some(crate::jobs::refresh::HOLD),
+        IMPORT_ANIME | IMPORT_IMDB => Some(crate::jobs::datasets::HOLD),
+        MEDIA_STORE => Some(repo::job::kinds::MEDIA_STORE),
+        MEDIA_SWEEP => Some(repo::job::kinds::MEDIA_SWEEP),
+        TLS_RENEW => Some(repo::job::kinds::TLS_RENEW),
+        _ => None,
+    }
+}
+
+/// Whether a run of this kind checks for a stop between two works.
+pub fn stops_partway(kind: &str) -> bool {
+    matches!(kind, REFRESH_ALL | MEDIA_STORE)
+}
+
 async fn state_of(state: &AppState, id: &'static str) -> anyhow::Result<TaskState> {
     let (last, last_success_at) = repo::job::latest(&state.db, id).await?;
-    let busy = lock_busy(id);
+    // Held here, or — among several instances — held elsewhere.
+    let busy = lock_busy(id)
+        || match hold_of(id) {
+            Some(name) => state.coord.is_held(name).await,
+            None => false,
+        };
+    // A run is in progress when the history says so and the instance it
+    // names is at it: this one with its lock held, or another still heard of.
+    let mine = |job: &Job| {
+        job.instance
+            .as_deref()
+            .is_none_or(|name| name == state.coord.instance.name)
+    };
     let running = last
         .as_ref()
-        .filter(|job| job.status == "running" && busy)
+        .filter(|job| {
+            job.status == "running"
+                && if mine(job) {
+                    lock_busy(id)
+                } else {
+                    job.instance
+                        .as_deref()
+                        .is_some_and(|name| state.coord.is_alive(name))
+                }
+        })
         .cloned();
 
     let (mode, every, off) = match id {
@@ -209,9 +249,10 @@ async fn state_of(state: &AppState, id: &'static str) -> anyhow::Result<TaskStat
         _ => None,
     };
 
-    let cancelable = running
-        .as_ref()
-        .is_some_and(|job| crate::jobs::cancel::is_cancelable(&job.id));
+    // Stoppable here by its flag; on another instance, by word to it.
+    let cancelable = running.as_ref().is_some_and(|job| {
+        crate::jobs::cancel::is_cancelable(&job.id) || (!mine(job) && stops_partway(&job.kind))
+    });
 
     // Its own run, or its sibling's under the same lock: either way not now.
     let blocked = off.or(if running.is_some() {

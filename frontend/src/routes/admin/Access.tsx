@@ -81,7 +81,9 @@ export function Access() {
   const set = (key: string, value: string) => write.mutate({ key, value })
   const answering = access.apis.filter((x) => x.enabled).map((x) => a.apis[x.api])
   const nativePolicy = access.apis.find((x) => x.api === 'native')?.policy ?? 'apikey'
-  const started = new Date(Date.now() - access.uptimeSeconds * 1000).toISOString()
+  // Since the start alone; among several instances, since the shared tally
+  // was first written, which outlives any one of them.
+  const started = access.countedSince ?? new Date(Date.now() - access.uptimeSeconds * 1000).toISOString()
 
   return (
     <div className="mx-auto max-w-5xl">
@@ -263,7 +265,7 @@ export function Access() {
                 {t.admin.clients}
               </Link>
             </p>
-            <p>{a.uptime(relative(started, locale) ?? '')}</p>
+            <p>{(access.countedSince ? a.countedShared : a.uptime)(relative(started, locale) ?? '')}</p>
           </div>
         </Question>
 

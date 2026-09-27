@@ -843,6 +843,7 @@ export const fr: Dict = {
       offNote: 'Coupée, une API répond 503 à chaque appel : Sonarr et Radarr le lisent comme « réessayer plus tard ».',
       policyNote: 'Ce que demande chaque API est fixé par le déploiement — AMS_ARR_AUTH, AMS_TMDB_AUTH, AMS_NATIVE_AUTH — et les adresses sur la page Clés & réseau.',
       uptime: (since: string) => `Compté depuis le démarrage du serveur, ${since}.`,
+      countedShared: (since: string) => `Compté sur toutes les instances depuis le début du décompte, ${since}.`,
       rules: (n: number) => (n === 1 ? 'une adresse listée' : `${n} adresses listées`),
       authDisabled: 'AMS_AUTH_DISABLED est défini : rien ne demande d’accès. Le site est ouvert à tous, comme toute API laissée ouverte ici.',
       listeners: {
@@ -1041,6 +1042,20 @@ export const fr: Dict = {
       metrics: 'Métriques',
       metricsHint: 'Les mêmes chiffres pour Prometheus et Grafana : GET /api/v1/admin/metrics avec une clé d’administrateur — succès et échecs par espace et par niveau, mémoire du serveur, évictions et aller-retour. Un tableau de bord prêt à importer est dans docs/monitoring/.',
       stamp: (generation: number, epoch: number) => `génération ${generation} · époque ${epoch}`,
+      instances: 'Instances',
+      instancesOne: 'Une instance',
+      instancesMany: (n: number) => (n === 1 ? '1 instance, seule pour l’instant' : `${n} instances`),
+      instancesSingleHint:
+        'Ce serveur tourne seul : il planifie ses propres tâches, et le serveur de cache, quand il y en a un, n’est qu’un second niveau. Définissez AMS_MODE=multi pour faire tourner plusieurs instances sur un même PostgreSQL, un même bucket et un même serveur de cache.',
+      instancesMultiHint: (leader: string | null) =>
+        leader
+          ? `Plusieurs instances partagent le catalogue, le bucket et le serveur de cache ; ${leader} tient les plannings, et n’importe laquelle répond à une requête.`
+          : 'Plusieurs instances partagent le catalogue, le bucket et le serveur de cache. Aucune ne mène pour l’instant : les plannings attendent qu’une prenne le bail — en quelques secondes, dès que le serveur de cache répond.',
+      instanceThis: 'celle-ci',
+      instanceLeads: 'mène',
+      instanceSeen: (when: string) => `vue ${when}`,
+      instanceStarted: (when: string) => `démarrée ${when}`,
+      noLeader: 'aucun leader',
       confirmTitle: 'Vider tout le cache ?',
       confirmBody: (keys: number | null, attached: boolean) =>
         attached
@@ -1203,6 +1218,9 @@ export const fr: Dict = {
       cacheOf: (name: string) => `Cache ${name}`,
       cacheLine: (entries: number, bytes: string) => `${entries} entrées · ${bytes}`,
       sources: 'Sources',
+      instances: 'Instances',
+      instancesLine: (n: number, leader: string | null) => `${n} · ${leader ? `${leader} mène` : 'aucun leader'}`,
+      single: 'une seule, en solo',
       lastJobs: 'Derniers jobs',
       healthFailed: 'La santé n’a pas pu être lue pour le moment.',
       locksTitle: 'Les verrous, en fichier',

@@ -506,6 +506,7 @@ function HealthPanel() {
                   [t.admin.overview.version, health.data.version],
                   [t.admin.overview.uptime, uptime(health.data.uptimeSeconds)],
                   [t.admin.overview.database, health.data.database],
+                  [t.admin.overview.instances, health.data.mode === 'multi' ? t.admin.overview.instancesLine(health.data.instances, health.data.leader ?? null) : t.admin.overview.single],
                   [t.admin.overview.refreshFailed, fmt.count(health.data.refreshFailed, locale)],
                   [t.admin.overview.cacheOf('items'), t.admin.overview.cacheLine(health.data.itemsCache.entries, bytes(health.data.itemsCache.bytes))],
                   [t.admin.overview.cacheOf('searches'), t.admin.overview.cacheLine(health.data.searchesCache.entries, bytes(health.data.searchesCache.bytes))],

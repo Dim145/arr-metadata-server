@@ -118,6 +118,7 @@ export function Cache() {
   const data = report.data
   const server = data.server
   const info = server.info
+  const instances = data.instances
   const tiered = data.spaces.filter((s) => s.server)
   const memoryHits = data.spaces.reduce((n, s) => n + s.memory.hits, 0)
   const memoryMisses = data.spaces.reduce((n, s) => n + s.memory.misses, 0)
@@ -220,6 +221,45 @@ export function Cache() {
                   : []
               }
             />
+          </div>
+        </Panel>
+
+        {/* The instances: one, or several */}
+        <Panel label={p.instances} className="rise" style={{ animationDelay: '100ms' }}>
+          <PanelHead
+            title={p.instances}
+            action={
+              instances.mode === 'single' ? (
+                <Lamp tone="faint">{p.instancesOne}</Lamp>
+              ) : instances.leader ? (
+                <Lamp tone="moss">{p.instancesMany(instances.all.length)}</Lamp>
+              ) : (
+                <Lamp tone="brass">{p.noLeader}</Lamp>
+              )
+            }
+          />
+          <div className="p-5">
+            <p className="text-sm leading-relaxed text-bone-dim">
+              {instances.mode === 'single' ? p.instancesSingleHint : p.instancesMultiHint(instances.leader ?? null)}
+            </p>
+            {instances.mode === 'multi' ? (
+              <ul className="mt-4 divide-y divide-rule">
+                {instances.all.map((one) => (
+                  <li key={one.id} className="flex flex-wrap items-center gap-x-4 gap-y-1 py-2.5 text-sm">
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span aria-hidden className={cn('size-1.5 shrink-0 rounded-full', one.leads ? 'bg-moss' : 'bg-bone-faint')} />
+                      <span className="truncate font-medium text-bone">{one.name}</span>
+                    </span>
+                    {one.leads ? <Lamp tone="moss">{p.instanceLeads}</Lamp> : null}
+                    {one.id === instances.this.id ? <Chip tone="neutral">{p.instanceThis}</Chip> : null}
+                    <span className="ml-auto font-mono text-xs text-bone-faint tabular-nums">
+                      v{one.version} · {p.instanceStarted(relative(one.startedAt, locale) ?? '—')} ·{' '}
+                      {p.instanceSeen(relative(one.seenAt, locale) ?? '—')}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
           </div>
         </Panel>
 

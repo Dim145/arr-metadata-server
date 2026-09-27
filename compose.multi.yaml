@@ -1,0 +1,228 @@
+# Several instances as one: PostgreSQL, a Valkey they coordinate through, a
+# bucket for the media, two instances behind Caddy for the interface and
+# behind a TCP door for the clients. A complete stack of its own, not an
+# overlay on compose.yaml:
+#
+#   cp .env.example .env    # AMS_TMDB_API_KEY, the admin credentials, POSTGRES_PASSWORD,
+#                           # AMS_S3_SECRET_KEY (eight characters at least), AMS_PUBLIC_URL
+#   docker compose -f compose.multi.yaml up -d
+#
+# The interface is on ${AMS_PORT:-8080}, answered by either instance in turn.
+# The clients' door — Sonarr, Radarr, the TMDB relay — is the `door` service:
+# on this network it answers to the names the clients have compiled in and
+# passes each connection, TLS untouched, to whichever instance is up; both
+# serve the one certificate the authority in the database issued. The
+# instances themselves carry none of those names, so their own calls to
+# TMDB, Skyhook and Radarr reach the real ones. See docs/integration.md for
+# the clients' side, and the README's "Several instances".
+
+x-metadata: &metadata
+  build: .
+  image: arr-metadata-server:latest
+  restart: unless-stopped
+  environment: &metadata-env
+    AMS_MODE: multi
+    AMS_BIND_ADDRESS: 0.0.0.0:8080
+    # Where the media are addressed for a client elsewhere: the address
+    # Caddy is reached at from the clients' side. Unset, the clients are
+    # given the providers' own addresses instead.
+    AMS_PUBLIC_URL: ${AMS_PUBLIC_URL:-}
+    AMS_DATABASE_URL: postgres://${POSTGRES_USER:-ams}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-ams}
+    AMS_DATABASE_MAX_CONNECTIONS: ${AMS_DATABASE_MAX_CONNECTIONS:-20}
+    AMS_REDIS_URL: redis://cache:6379
+    AMS_MEDIA_STORAGE: s3
+    AMS_S3_ENDPOINT: http://bucket:9000
+    AMS_S3_REGION: ${AMS_S3_REGION:-us-east-1}
+    AMS_S3_BUCKET: ${AMS_S3_BUCKET:-ams-media}
+    AMS_S3_ACCESS_KEY: ${AMS_S3_ACCESS_KEY:-ams}
+    AMS_S3_SECRET_KEY: ${AMS_S3_SECRET_KEY:?AMS_S3_SECRET_KEY is required}
+    AMS_S3_PATH_STYLE: "true"
+    AMS_CLIENTS_BIND: 0.0.0.0:443
+    AMS_TMDB_API_KEY: ${AMS_TMDB_API_KEY:-}
+    AMS_TMDB_LANGUAGE: ${AMS_TMDB_LANGUAGE:-en-US}
+    AMS_ADMIN_USERNAME: ${AMS_ADMIN_USERNAME:-}
+    AMS_ADMIN_PASSWORD: ${AMS_ADMIN_PASSWORD:-}
+    AMS_ARR_ALLOWLIST: ${AMS_ARR_ALLOWLIST:-172.16.0.0/12,10.0.0.0/8,192.168.0.0/16,127.0.0.0/8}
+    # Caddy alone is trusted for the caller's address: its own, pinned below.
+    AMS_TRUSTED_PROXIES: 172.30.0.10/32
+    AMS_LOG: ${AMS_LOG:-info}
+    TZ: ${TZ:-UTC}
+  depends_on:
+    postgres:
+      condition: service_healthy
+    cache:
+      condition: service_started
+    bucket-init:
+      condition: service_completed_successfully
+  # Nothing is written to disk in multi mode: the authority lives in the
+  # database, the media in the bucket. An authority an earlier, single
+  # deployment kept can be handed over once by mounting its directory read
+  # only at /data/tls; it is taken into the database at the first start.
+  read_only: true
+  tmpfs:
+    - /tmp:size=64m,mode=1777
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  deploy:
+    resources:
+      limits:
+        memory: 512M
+
+services:
+  metadata-a:
+    <<: *metadata
+    container_name: arr-metadata-a
+    environment:
+      <<: *metadata-env
+      AMS_INSTANCE_NAME: a
+
+  metadata-b:
+    <<: *metadata
+    container_name: arr-metadata-b
+    environment:
+      <<: *metadata-env
+      AMS_INSTANCE_NAME: b
+
+  # The interface and the native API, answered by either instance in turn,
+  # the other tried when one does not answer.
+  web:
+    image: caddy:2-alpine
+    container_name: arr-metadata-web
+    restart: unless-stopped
+    configs:
+      - source: caddyfile
+        target: /etc/caddy/Caddyfile
+    ports:
+      - "${AMS_PORT:-8080}:8080"
+    networks:
+      default:
+        ipv4_address: 172.30.0.10
+    depends_on:
+      - metadata-a
+      - metadata-b
+
+  # The clients' door: the names the clients have compiled in, answered
+  # here and passed on, connection by connection, to an instance that is
+  # up. TLS is the instances' own — the same certificate on both.
+  door:
+    image: haproxy:3.1-alpine
+    container_name: arr-metadata-door
+    restart: unless-stopped
+    configs:
+      - source: haproxy
+        target: /usr/local/etc/haproxy/haproxy.cfg
+    networks:
+      default:
+        aliases: [skyhook.sonarr.tv, api.radarr.video, api.themoviedb.org]
+    depends_on:
+      - metadata-a
+      - metadata-b
+
+  postgres:
+    image: postgres:18-alpine
+    container_name: arr-metadata-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ams}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${POSTGRES_DB:-ams}
+      POSTGRES_INITDB_ARGS: "--locale-provider=icu --icu-locale=und-x-icu"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ams} -d ${POSTGRES_DB:-ams}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    security_opt:
+      - no-new-privileges:true
+    expose:
+      - "5432"
+
+  # The cache and the bus: a memory ceiling, the least recently used evicted,
+  # no persistence — nothing durable lives here. Sized so that it never
+  # fills: a server evicting keys may forget who leads (see the README).
+  cache:
+    image: valkey/valkey:8-alpine
+    container_name: arr-metadata-cache
+    restart: unless-stopped
+    command: valkey-server --maxmemory 256mb --maxmemory-policy allkeys-lru --save "" --appendonly no
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    expose:
+      - "6379"
+
+  # The bucket the media are kept in. MinIO here, pinned to the tag you
+  # deploy; Garage, RustFS, Ceph or Amazon's own do as well — point AMS_S3_*
+  # at them and drop this service and the next.
+  bucket:
+    image: minio/minio:latest
+    container_name: arr-metadata-bucket
+    restart: unless-stopped
+    command: server /data
+    environment:
+      MINIO_ROOT_USER: ${AMS_S3_ACCESS_KEY:-ams}
+      MINIO_ROOT_PASSWORD: ${AMS_S3_SECRET_KEY:?AMS_S3_SECRET_KEY is required}
+    volumes:
+      - bucket-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    expose:
+      - "9000"
+
+  # Makes the bucket, once. The secret travels in the environment, never
+  # in the command line.
+  bucket-init:
+    image: minio/mc:latest
+    environment:
+      S3_ACCESS_KEY: ${AMS_S3_ACCESS_KEY:-ams}
+      S3_SECRET_KEY: ${AMS_S3_SECRET_KEY:?AMS_S3_SECRET_KEY is required}
+      S3_BUCKET: ${AMS_S3_BUCKET:-ams-media}
+    depends_on:
+      bucket:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c", "mc alias set local http://bucket:9000 \"$$S3_ACCESS_KEY\" \"$$S3_SECRET_KEY\" && mc mb --ignore-existing \"local/$$S3_BUCKET\""]
+
+configs:
+  caddyfile:
+    content: |
+      :8080 {
+        reverse_proxy metadata-a:8080 metadata-b:8080 {
+          lb_policy round_robin
+          lb_try_duration 5s
+          health_uri /health
+          health_interval 10s
+        }
+      }
+  haproxy:
+    content: |
+      defaults
+        mode tcp
+        timeout connect 5s
+        timeout client 60s
+        timeout server 60s
+      frontend clients
+        bind :443
+        default_backend instances
+      backend instances
+        balance roundrobin
+        option tcp-check
+        server a metadata-a:443 check inter 5s fall 2 rise 1
+        server b metadata-b:443 check inter 5s fall 2 rise 1
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+
+volumes:
+  postgres-data:
+  bucket-data:

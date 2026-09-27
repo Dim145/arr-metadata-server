@@ -85,9 +85,182 @@ impl std::fmt::Display for Name {
     }
 }
 
-/// The authority, as kept on disk.
+/// Where the authority and what it issues are kept: the TLS directory,
+/// alone; the database, among several instances, so that every one of them
+/// shows the same certificate and a new one takes the authority the others
+/// already trust rather than making its own.
+#[derive(Clone)]
+pub enum Keep {
+    Files(PathBuf),
+    /// The database — and the directory an authority may already be in
+    /// from before, taken into the database the first time.
+    Store {
+        db: crate::db::Db,
+        from: PathBuf,
+    },
+}
+
+/// A certificate and its key, as one entry: written together or not at
+/// all, so two instances starting together cannot leave a certificate with
+/// the other's key.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Pair {
+    cert: String,
+    key: String,
+}
+
+impl Keep {
+    /// The authority's pair, when there is one.
+    async fn read_authority(&self) -> Result<Option<Pair>> {
+        match self {
+            Self::Files(dir) => read_pair_files(&dir.join(CA_CERT), &dir.join(CA_KEY)),
+            Self::Store { db, .. } => {
+                read_pair_store(db, crate::db::repo::keystore::names::CA).await
+            }
+        }
+    }
+
+    /// Keep the authority's pair, unless one is there already: the one
+    /// there afterwards.
+    async fn keep_authority(&self, pair: Pair) -> Result<Pair> {
+        match self {
+            Self::Files(dir) => {
+                write_private(&dir.join(CA_KEY), pair.key.as_bytes())?;
+                write_atomic(&dir.join(CA_CERT), pair.cert.as_bytes())?;
+                Ok(pair)
+            }
+            Self::Store { db, .. } => {
+                keep_pair_store(db, crate::db::repo::keystore::names::CA, &pair).await
+            }
+        }
+    }
+
+    /// The certificate issued last, when there is one.
+    async fn read_issued(&self) -> Result<Option<Pair>> {
+        Ok(self.read_issued_raw().await?.and_then(|(_, pair)| pair))
+    }
+
+    /// The certificate issued last, as kept: its text, and the pair it
+    /// reads as — none when it cannot be read, which is said, so that it is
+    /// replaced rather than served or refused.
+    async fn read_issued_raw(&self) -> Result<Option<(String, Option<Pair>)>> {
+        match self {
+            Self::Files(dir) => Ok(read_pair_files(&dir.join(CERT), &dir.join(KEY))?
+                .map(|pair| (String::new(), Some(pair)))),
+            Self::Store { db, .. } => {
+                let name = crate::db::repo::keystore::names::CERT;
+                match crate::db::repo::keystore::get(db, name).await? {
+                    Some(text) => {
+                        let pair = serde_json::from_str::<Pair>(&text).ok();
+                        if pair.is_none() {
+                            tracing::warn!("{name} in the database cannot be read; issuing anew");
+                        }
+                        Ok(Some((text, pair)))
+                    }
+                    None => Ok(None),
+                }
+            }
+        }
+    }
+
+    /// Keep a certificate issued: the one there afterwards is what is
+    /// served. `Over` writes whatever was there — a renewal; `IfAbsent`
+    /// writes only where there is none, and `Replacing` only over the pair
+    /// it was decided against — so two instances starting together, or
+    /// both finding the kept one unusable, settle on one certificate.
+    async fn keep_issued(&self, pair: Pair, how: Write) -> Result<Pair> {
+        match self {
+            Self::Files(dir) => {
+                write_private(&dir.join(KEY), pair.key.as_bytes())?;
+                write_atomic(&dir.join(CERT), pair.cert.as_bytes())?;
+                Ok(pair)
+            }
+            Self::Store { db, .. } => {
+                let name = crate::db::repo::keystore::names::CERT;
+                let text = serde_json::to_string(&pair)?;
+                match how {
+                    Write::Over => {
+                        crate::db::repo::keystore::put(db, name, &text).await?;
+                        Ok(pair)
+                    }
+                    Write::IfAbsent => keep_pair_store(db, name, &pair).await,
+                    Write::Replacing(old) => {
+                        if crate::db::repo::keystore::replace_if(db, name, &old, &text).await? {
+                            return Ok(pair);
+                        }
+                        // Another instance replaced it first: what it
+                        // kept, or what is there now, whichever.
+                        match read_pair_store(db, name).await? {
+                            Some(kept) => Ok(kept),
+                            None => keep_pair_store(db, name, &pair).await,
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn describe(&self) -> String {
+        match self {
+            Self::Files(dir) => dir.display().to_string(),
+            Self::Store { .. } => "the database".to_string(),
+        }
+    }
+}
+
+/// How a certificate issued is written where it is kept.
+enum Write {
+    Over,
+    IfAbsent,
+    /// Over exactly this text, which was read and found wanting.
+    Replacing(String),
+}
+
+fn read_pair_files(cert_path: &Path, key_path: &Path) -> Result<Option<Pair>> {
+    match (cert_path.exists(), key_path.exists()) {
+        (true, true) => Ok(Some(Pair {
+            key: std::fs::read_to_string(key_path)
+                .with_context(|| format!("could not read {}", key_path.display()))?,
+            cert: std::fs::read_to_string(cert_path)
+                .with_context(|| format!("could not read {}", cert_path.display()))?,
+        })),
+        (false, false) => Ok(None),
+        _ => bail!(
+            "{} holds one of {} and {} but not the other; remove it to create the pair anew \
+             (an authority made anew has to be trusted again by every client)",
+            cert_path.parent().unwrap_or(cert_path).display(),
+            cert_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("cert"),
+            key_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("key"),
+        ),
+    }
+}
+
+async fn read_pair_store(db: &crate::db::Db, name: &str) -> Result<Option<Pair>> {
+    match crate::db::repo::keystore::get(db, name).await? {
+        Some(text) => {
+            Ok(Some(serde_json::from_str(&text).with_context(|| {
+                format!("{name} in the database cannot be read")
+            })?))
+        }
+        None => Ok(None),
+    }
+}
+
+async fn keep_pair_store(db: &crate::db::Db, name: &str, pair: &Pair) -> Result<Pair> {
+    let text = serde_json::to_string(pair)?;
+    let stored = crate::db::repo::keystore::put_if_absent(db, name, &text).await?;
+    serde_json::from_str(&stored).with_context(|| format!("{name} in the database cannot be read"))
+}
+
+/// The authority, as kept.
 pub struct Authority {
-    dir: PathBuf,
+    keep: Keep,
     key_pem: String,
     cert_pem: String,
     pub fingerprint: String,
@@ -141,51 +314,67 @@ impl Info {
 }
 
 impl Authority {
-    /// The authority in `dir`, created for `names` when there is none yet.
-    pub fn open(dir: &Path, names: &[Name]) -> Result<Self> {
-        std::fs::create_dir_all(dir)
-            .with_context(|| format!("could not create {}", dir.display()))?;
-        let cert_path = dir.join(CA_CERT);
-        let key_path = dir.join(CA_KEY);
+    /// The authority as kept, created for `names` when there is none yet —
+    /// or, in the database, taken from the directory an earlier deployment
+    /// kept it in, so the clients need not trust a new one.
+    pub async fn open(keep: Keep, names: &[Name]) -> Result<Self> {
+        if let Keep::Files(dir) = &keep {
+            std::fs::create_dir_all(dir)
+                .with_context(|| format!("could not create {}", dir.display()))?;
+        }
 
-        let (key_pem, cert_pem) = match (cert_path.exists(), key_path.exists()) {
-            (true, true) => (
-                std::fs::read_to_string(&key_path)
-                    .with_context(|| format!("could not read {}", key_path.display()))?,
-                std::fs::read_to_string(&cert_path)
-                    .with_context(|| format!("could not read {}", cert_path.display()))?,
-            ),
-            (false, false) => {
-                let (key_pem, cert_pem) = create(names)?;
-                write_private(&key_path, key_pem.as_bytes())?;
-                write_atomic(&cert_path, cert_pem.as_bytes())?;
+        let pair = match keep.read_authority().await? {
+            Some(pair) => pair,
+            None => {
+                let from_files = match &keep {
+                    Keep::Store { from, .. } => {
+                        read_pair_files(&from.join(CA_CERT), &from.join(CA_KEY))?
+                    }
+                    Keep::Files(_) => None,
+                };
+                let (pair, made) = match from_files {
+                    Some(pair) => (pair, false),
+                    None => {
+                        let (key, cert) = create(names)?;
+                        (Pair { cert, key }, true)
+                    }
+                };
+                let own = pair.cert.clone();
+                let kept = keep.keep_authority(pair).await?;
                 tracing::info!(
-                    dir = %dir.display(),
+                    kept_in = %keep.describe(),
                     names = ?names.iter().map(ToString::to_string).collect::<Vec<_>>(),
-                    "created the authority the clients are to trust"
+                    "{}",
+                    if kept.cert != own {
+                        "took the authority another instance created"
+                    } else if made {
+                        "created the authority the clients are to trust"
+                    } else {
+                        "took the authority from its files into the database"
+                    }
                 );
-                (key_pem, cert_pem)
+                kept
             }
-            _ => bail!(
-                "{} holds one of {CA_CERT} and {CA_KEY} but not the other; remove it to \
-                 create the authority anew (every client will have to trust it again)",
-                dir.display()
-            ),
         };
+        let Pair {
+            cert: cert_pem,
+            key: key_pem,
+        } = pair;
 
         let parsed = parse(&cert_pem).context("the authority's certificate cannot be read")?;
         // The key must be the certificate's: a pair put together from two
         // backups would issue certificates no client can verify, silently.
         if !key_matches(&key_pem, &parsed.spki).context("the authority's key cannot be read")? {
             bail!(
-                "{} is not the key of {}; restore the pair together, or remove both to create                  the authority anew (every client will have to trust it again)",
-                key_path.display(),
-                cert_path.display()
+                "the authority's key in {} is not its certificate's; restore the pair together, \
+                 or remove both to create the authority anew (every client will have to trust \
+                 it again)",
+                keep.describe()
             );
         }
 
         Ok(Self {
-            dir: dir.to_path_buf(),
+            keep,
             key_pem,
             cert_pem,
             fingerprint: parsed.fingerprint,
@@ -226,8 +415,55 @@ impl Authority {
             .partition(|name| self.may_certify(name))
     }
 
-    /// Issue a certificate for the names, and keep it beside the authority.
-    pub fn issue(&self, names: &[Name]) -> Result<Issued> {
+    /// Issue a certificate for the names, and keep it beside the authority,
+    /// over whatever was there.
+    pub async fn issue(&self, names: &[Name]) -> Result<Issued> {
+        self.issue_kept(names, Write::Over).await
+    }
+
+    /// Issue a certificate for the names, unless the authority already
+    /// keeps one that will do — which is then what is served: two
+    /// instances starting together settle on one certificate. One that
+    /// will not do — run out, due, without a name asked, another
+    /// authority's — is replaced, and two replacing it at once settle on
+    /// one too.
+    pub async fn issue_unless_kept(&self, names: &[Name]) -> Result<Issued> {
+        let wanted = self.permitted(names).0;
+        let how = match self.keep.read_issued_raw().await? {
+            None => Write::IfAbsent,
+            Some((text, kept)) => match kept.and_then(|kept| self.judge(&kept, &wanted)) {
+                Some(issued) => return Ok(issued),
+                // Replaced as it was read, so that two replacing it at once
+                // settle on one.
+                None => Write::Replacing(text),
+            },
+        };
+        self.issue_kept(names, how).await
+    }
+
+    /// The certificate kept, when it will do: this authority's, its key its
+    /// own, every name asked on it, and time left.
+    fn judge(&self, kept: &Pair, wanted: &[Name]) -> Option<Issued> {
+        let parsed = parse(&kept.cert).ok()?;
+        if !self.verifies(&kept.cert) || !key_matches(&kept.key, &parsed.spki).unwrap_or(false) {
+            return None;
+        }
+        let info = Info {
+            names: parsed.names,
+            not_after: parsed.not_after,
+            fingerprint: parsed.fingerprint,
+        };
+        if !info.covers(wanted) || info.due() {
+            return None;
+        }
+        Some(Issued {
+            chain_pem: format!("{}\n{}", kept.cert.trim_end(), self.cert_pem.trim_end()),
+            key_pem: kept.key.clone(),
+            info,
+        })
+    }
+
+    async fn issue_kept(&self, names: &[Name], how: Write) -> Result<Issued> {
         let (allowed, refused) = self.permitted(names);
         for name in &refused {
             tracing::warn!(
@@ -274,20 +510,36 @@ impl Authority {
         }
 
         let cert = params.signed_by(&key, &issuer)?;
-        let cert_pem = cert.pem();
-        let key_pem = key.serialize_pem();
-        write_private(&self.dir.join(KEY), key_pem.as_bytes())?;
-        write_atomic(&self.dir.join(CERT), cert_pem.as_bytes())?;
-
-        let parsed = parse(&cert_pem)?;
-        tracing::info!(
-            names = ?allowed.iter().map(ToString::to_string).collect::<Vec<_>>(),
-            until = %parsed.not_after.date(),
-            "issued the clients' certificate"
-        );
+        let made = Pair {
+            cert: cert.pem(),
+            key: key.serialize_pem(),
+        };
+        let kept = self.keep.keep_issued(made, how).await?;
+        let taken = kept.cert != cert.pem();
+        let parsed = parse(&kept.cert)?;
+        if taken {
+            // Another instance issued first: what it kept is what every
+            // instance serves — as long as it will do.
+            if self.judge(&kept, &allowed).is_none() {
+                bail!(
+                    "the certificate another instance kept is not this authority's, or will \
+                     not do; renew it from the interface"
+                );
+            }
+            tracing::info!(
+                until = %parsed.not_after.date(),
+                "took the clients' certificate another instance issued"
+            );
+        } else {
+            tracing::info!(
+                names = ?allowed.iter().map(ToString::to_string).collect::<Vec<_>>(),
+                until = %parsed.not_after.date(),
+                "issued the clients' certificate"
+            );
+        }
         Ok(Issued {
-            chain_pem: format!("{}\n{}", cert_pem.trim_end(), self.cert_pem.trim_end()),
-            key_pem,
+            chain_pem: format!("{}\n{}", kept.cert.trim_end(), self.cert_pem.trim_end()),
+            key_pem: kept.key,
             info: Info {
                 names: parsed.names,
                 not_after: parsed.not_after,
@@ -300,30 +552,30 @@ impl Authority {
     /// authority's — signed by it, not merely bearing its name, since every
     /// authority made here bears the same — it still verifies, and its key
     /// is its own. Anything else is issued anew.
-    pub fn issued(&self) -> Result<Option<Issued>> {
-        let cert_path = self.dir.join(CERT);
-        let key_path = self.dir.join(KEY);
-        if !cert_path.exists() || !key_path.exists() {
+    pub async fn issued(&self) -> Result<Option<Issued>> {
+        let Some(Pair {
+            cert: cert_pem,
+            key: key_pem,
+        }) = self.keep.read_issued().await?
+        else {
             return Ok(None);
-        }
-        let cert_pem = std::fs::read_to_string(&cert_path)?;
-        let key_pem = std::fs::read_to_string(&key_path)?;
+        };
         let parsed = match parse(&cert_pem) {
             Ok(parsed) => parsed,
             Err(e) => {
-                tracing::warn!(error = %e, "the certificate on disk cannot be read; issuing anew");
+                tracing::warn!(error = %e, "the certificate kept cannot be read; issuing anew");
                 return Ok(None);
             }
         };
         if !self.verifies(&cert_pem) {
             tracing::warn!(
-                "the certificate on disk is not this authority's, or no longer verifies; \
+                "the certificate kept is not this authority's, or no longer verifies; \
                  issuing anew"
             );
             return Ok(None);
         }
         if !key_matches(&key_pem, &parsed.spki).unwrap_or(false) {
-            tracing::warn!("the key on disk is not the certificate's; issuing anew");
+            tracing::warn!("the key kept is not the certificate's; issuing anew");
             return Ok(None);
         }
         Ok(Some(Issued {
@@ -591,11 +843,13 @@ mod tests {
 
     /// The authority certifies what it was made for, and nothing else; the
     /// certificate it issues carries the names, its signature and its end.
-    #[test]
-    fn the_authority_is_constrained_to_the_names_it_was_made_for() {
+    #[tokio::test]
+    async fn the_authority_is_constrained_to_the_names_it_was_made_for() {
         let dir = scratch();
         let made_for = names(&["skyhook.sonarr.tv", "api.radarr.video", "ams.lan"]);
-        let authority = Authority::open(&dir, &made_for).unwrap();
+        let authority = Authority::open(Keep::Files(dir.clone()), &made_for)
+            .await
+            .unwrap();
         assert_eq!(authority.subject, format!("CN={CA_NAME}"));
         assert!(authority.may_certify(&Name::parse("skyhook.sonarr.tv").unwrap()));
         assert!(authority.may_certify(&Name::parse("deep.ams.lan").unwrap()));
@@ -607,7 +861,7 @@ mod tests {
         assert_eq!(authority.fingerprint.len(), 32 * 3 - 1);
 
         let asked = names(&["skyhook.sonarr.tv", "example.com", "ams.lan"]);
-        let issued = authority.issue(&asked).unwrap();
+        let issued = authority.issue(&asked).await.unwrap();
         assert_eq!(issued.info.names, names(&["skyhook.sonarr.tv", "ams.lan"]));
         assert!(!issued.info.due());
         assert!(issued.info.covers(&names(&["ams.lan"])));
@@ -617,9 +871,15 @@ mod tests {
         assert!(issued.key_pem.contains("PRIVATE KEY"));
 
         // Opened again: the same authority, and the certificate it issued.
-        let again = Authority::open(&dir, &names(&["other.example"])).unwrap();
+        let again = Authority::open(Keep::Files(dir.clone()), &names(&["other.example"]))
+            .await
+            .unwrap();
         assert_eq!(again.fingerprint, authority.fingerprint);
-        let kept = again.issued().unwrap().expect("the certificate issued");
+        let kept = again
+            .issued()
+            .await
+            .unwrap()
+            .expect("the certificate issued");
         assert_eq!(kept.info.fingerprint, issued.info.fingerprint);
         assert_eq!(kept.info.names, issued.info.names);
 
@@ -627,17 +887,23 @@ mod tests {
         // one issued is not its own and is not kept.
         std::fs::remove_file(dir.join(CA_CERT)).unwrap();
         std::fs::remove_file(dir.join(CA_KEY)).unwrap();
-        let renewed = Authority::open(&dir, &made_for).unwrap();
+        let renewed = Authority::open(Keep::Files(dir.clone()), &made_for)
+            .await
+            .unwrap();
         assert_ne!(renewed.fingerprint, authority.fingerprint);
         assert!(
-            renewed.issued().unwrap().is_none(),
+            renewed.issued().await.unwrap().is_none(),
             "the old authority's certificate must not be served under the new one"
         );
 
         // A key that is not the certificate's is refused, not used.
         let stray = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
         std::fs::write(dir.join(CA_KEY), stray.serialize_pem()).unwrap();
-        assert!(Authority::open(&dir, &made_for).is_err());
+        assert!(
+            Authority::open(Keep::Files(dir.clone()), &made_for)
+                .await
+                .is_err()
+        );
 
         // The signature is the authority's: webpki, which rustls uses, says so.
         use rustls_pki_types::pem::PemObject as _;
@@ -678,20 +944,115 @@ mod tests {
 
     /// Made for an address too, the authority certifies that address and no
     /// other.
-    #[test]
-    fn an_address_it_was_made_for_is_certified_and_no_other() {
+    #[tokio::test]
+    async fn an_address_it_was_made_for_is_certified_and_no_other() {
         let dir = scratch();
-        let authority =
-            Authority::open(&dir, &names(&["skyhook.sonarr.tv", "192.168.1.7"])).unwrap();
+        let authority = Authority::open(
+            Keep::Files(dir.clone()),
+            &names(&["skyhook.sonarr.tv", "192.168.1.7"]),
+        )
+        .await
+        .unwrap();
         assert!(authority.may_certify(&Name::parse("192.168.1.7").unwrap()));
         assert!(!authority.may_certify(&Name::parse("192.168.1.8").unwrap()));
         let issued = authority
             .issue(&names(&["skyhook.sonarr.tv", "192.168.1.7", "10.0.0.1"]))
+            .await
             .unwrap();
         assert_eq!(
             issued.info.names,
             names(&["skyhook.sonarr.tv", "192.168.1.7"])
         );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Kept in the database, the authority is one for every instance: the
+    /// second to open it takes the first's, a certificate issued at start is
+    /// the one already there, and a renewal replaces it for everybody. An
+    /// authority a directory held from before is taken in, not replaced.
+    #[tokio::test]
+    async fn in_the_database_every_instance_holds_the_same() {
+        let db = crate::db::Db::connect(&crate::config::Database {
+            url: "sqlite::memory:".into(),
+            max_connections: 1,
+            acquire_timeout: std::time::Duration::from_secs(5),
+        })
+        .await
+        .unwrap();
+        db.migrate().await.unwrap();
+        let made_for = names(&["skyhook.sonarr.tv", "ams.lan"]);
+
+        // From before: an authority in files.
+        let dir = scratch();
+        let earlier = Authority::open(Keep::Files(dir.clone()), &made_for)
+            .await
+            .unwrap();
+        let keep = Keep::Store {
+            db: db.clone(),
+            from: dir.clone(),
+        };
+        let a = Authority::open(keep.clone(), &made_for).await.unwrap();
+        assert_eq!(a.fingerprint, earlier.fingerprint, "taken from the files");
+        let b = Authority::open(keep.clone(), &made_for).await.unwrap();
+        assert_eq!(b.fingerprint, a.fingerprint);
+        assert!(a.issued().await.unwrap().is_none());
+
+        // Both start: whichever issues first is served by both.
+        let first = a.issue_unless_kept(&made_for).await.unwrap();
+        let second = b.issue_unless_kept(&made_for).await.unwrap();
+        assert_eq!(second.info.fingerprint, first.info.fingerprint);
+        assert_eq!(second.key_pem, first.key_pem);
+        assert_eq!(
+            b.issued().await.unwrap().unwrap().info.fingerprint,
+            first.info.fingerprint
+        );
+
+        // A renewal replaces it, for the other instance too.
+        let renewed = a.issue(&made_for).await.unwrap();
+        assert_ne!(renewed.info.fingerprint, first.info.fingerprint);
+        assert_eq!(
+            b.issued().await.unwrap().unwrap().info.fingerprint,
+            renewed.info.fingerprint
+        );
+
+        // A kept certificate without a name now asked will not do: the
+        // instance that starts with the new name replaces it, and the
+        // other takes the replacement rather than serving the old one.
+        let more = names(&["skyhook.sonarr.tv", "ams.lan", "new.ams.lan"]);
+        let widened = a.issue_unless_kept(&more).await.unwrap();
+        assert_ne!(widened.info.fingerprint, renewed.info.fingerprint);
+        assert!(widened.info.covers(&more));
+        assert_eq!(
+            b.issue_unless_kept(&more).await.unwrap().info.fingerprint,
+            widened.info.fingerprint
+        );
+        // One that cannot be read is replaced too, not served or refused.
+        crate::db::repo::keystore::put(&db, crate::db::repo::keystore::names::CERT, "{}")
+            .await
+            .unwrap();
+        assert!(a.issued().await.is_err() || a.issued().await.unwrap().is_none());
+        let again = a.issue_unless_kept(&made_for).await.unwrap();
+        assert!(again.info.covers(&made_for));
+
+        // Without files to take from, an authority is made.
+        let other = crate::db::Db::connect(&crate::config::Database {
+            url: "sqlite::memory:".into(),
+            max_connections: 1,
+            acquire_timeout: std::time::Duration::from_secs(5),
+        })
+        .await
+        .unwrap();
+        other.migrate().await.unwrap();
+        let fresh = Authority::open(
+            Keep::Store {
+                db: other,
+                from: scratch(),
+            },
+            &made_for,
+        )
+        .await
+        .unwrap();
+        assert_ne!(fresh.fingerprint, a.fingerprint);
         std::fs::remove_dir_all(&dir).ok();
     }
 }

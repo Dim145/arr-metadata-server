@@ -89,7 +89,7 @@ impl Door {
 impl Tls {
     /// Open the doors' certificates: the authority read or made, the
     /// certificate read or issued. Nothing listens yet.
-    pub async fn open(config: &Config) -> Result<Self> {
+    pub async fn open(config: &Config, db: &crate::db::Db) -> Result<Self> {
         let Some(cfg) = &config.clients else {
             return Ok(Self { clients: None });
         };
@@ -126,11 +126,22 @@ impl Tls {
                 issued: RwLock::new(None),
             },
             None => {
-                let authority = ca::Authority::open(&cfg.dir, &names)?;
+                // Alone, the authority lives in the TLS directory; among
+                // several instances, in the database they share — taken
+                // from the directory the first time, so the clients need
+                // not trust a new one.
+                let keep = match config.mode {
+                    crate::config::Mode::Single => ca::Keep::Files(cfg.dir.clone()),
+                    crate::config::Mode::Multi => ca::Keep::Store {
+                        db: db.clone(),
+                        from: cfg.dir.clone(),
+                    },
+                };
+                let authority = ca::Authority::open(keep, &names).await?;
                 let wanted = authority.permitted(&names).0;
-                let issued = match authority.issued()? {
+                let issued = match authority.issued().await? {
                     Some(issued) if issued.info.covers(&wanted) && !issued.info.due() => issued,
-                    _ => authority.issue(&names)?,
+                    _ => authority.issue_unless_kept(&names).await?,
                 };
                 let rustls = RustlsConfig::from_pem(
                     issued.chain_pem.clone().into_bytes(),
@@ -202,7 +213,15 @@ pub async fn renew(state: &AppState, force: bool) -> Result<String> {
         ));
     }
 
-    let issued = authority.issue(&clients.names)?;
+    let issued = authority.issue(&clients.names).await?;
+    let until = load(clients, issued).await?;
+    // The other instances serve what the authority now keeps.
+    state.coord.tell(crate::coord::Message::TlsReload);
+    Ok(format!("renewed; valid until {until}"))
+}
+
+/// Serve a certificate: into the listener, and noted. The date it ends.
+async fn load(clients: &Door, issued: ca::Issued) -> Result<String> {
     clients
         .rustls
         .reload_from_pem(
@@ -213,7 +232,31 @@ pub async fn renew(state: &AppState, force: bool) -> Result<String> {
         .context("the new certificate could not be loaded")?;
     let until = issued.info.not_after.date().to_string();
     *clients.issued.write().unwrap_or_else(|e| e.into_inner()) = Some(issued.info);
-    Ok(format!("renewed; valid until {until}"))
+    Ok(until)
+}
+
+/// Serve the certificate the authority keeps, when it is not the one
+/// served: what another instance's renewal asks of this one, and what the
+/// daily look does on an instance that does not lead. Whether it changed.
+pub async fn reload(state: &AppState) -> Result<bool> {
+    let Some(clients) = &state.tls.clients else {
+        return Ok(false);
+    };
+    let Some(authority) = &clients.authority else {
+        return Ok(false);
+    };
+    let Some(kept) = authority.issued().await? else {
+        return Ok(false);
+    };
+    if clients
+        .issued()
+        .is_some_and(|served| served.fingerprint == kept.info.fingerprint)
+    {
+        return Ok(false);
+    }
+    let until = load(clients, kept).await?;
+    tracing::info!(%until, "serving the clients' certificate another instance issued");
+    Ok(true)
 }
 
 /// Renew now, as a task somebody started: the run's id.
@@ -228,26 +271,45 @@ pub async fn renew_now(state: &AppState, by: &str) -> AppResult<Option<String>> 
         .clone()
         .try_lock_owned()
         .map_err(|_| AppError::Conflict("the certificate is being renewed already".into()))?;
+    let shared = state
+        .coord
+        .hold_for(job::kinds::TLS_RENEW, "the certificate is being renewed")
+        .await?;
     let record = job::start_by(&state.db, job::kinds::TLS_RENEW, None, Some(by)).await?;
 
     let state = state.clone();
     let id = record.clone();
     tokio::spawn(async move {
         let _held = held;
+        let _shared = shared;
         let outcome = renew(&state, true).await;
         close(&state, &record, outcome).await;
     });
     Ok(Some(id))
 }
 
-/// The certificate looked at daily, and renewed when it is time.
+/// The certificate looked at daily: renewed when it is time by the instance
+/// that leads, and on every other, brought up to what the leader issued —
+/// in case the word of it was missed.
 pub async fn run_renewals(state: AppState) {
     if !renews(&state) {
         return;
     }
     loop {
         tokio::time::sleep(RENEW_EVERY).await;
+        if !state.coord.leads() {
+            if let Err(e) = reload(&state).await {
+                tracing::warn!(
+                    error = format_args!("{e:#}"),
+                    "could not look at the certificate kept"
+                );
+            }
+            continue;
+        }
         let Ok(held) = RENEWING.clone().try_lock_owned() else {
+            continue;
+        };
+        let Some(shared) = state.coord.hold(job::kinds::TLS_RENEW).await else {
             continue;
         };
         let record = job::start_by(&state.db, job::kinds::TLS_RENEW, None, None)
@@ -263,6 +325,7 @@ pub async fn run_renewals(state: AppState) {
                 }
             }
         }
+        drop(shared);
         drop(held);
     }
 }

@@ -133,6 +133,8 @@ async fn put(
     // else, not a reason to move every provider on and empty every space.
     if write.key.starts_with("cache.") {
         state.caches.sync_switches(|key| state.flag(key, true));
+        // The other instances set their switches from the table too.
+        state.coord.tell(crate::coord::Message::Settings);
     } else {
         state.sync_providers().await;
     }

@@ -280,6 +280,28 @@ impl Db {
         }
     }
 
+    /// Hold the right to start — to create the first administrator, seed
+    /// the rules and the settings — so that several instances starting
+    /// together do it one after the other rather than all at once, each
+    /// finding the table empty. A PostgreSQL advisory lock on a connection
+    /// of its own; nothing on SQLite, which one process has to itself.
+    pub async fn hold_start(&self, shared: bool) -> Result<StartHeld> {
+        // Alone there is nobody to wait for — and a pool of one connection
+        // would wait for itself.
+        if !shared || self.dialect != Dialect::Postgres {
+            return Ok(StartHeld { conn: None });
+        }
+        let mut conn = self
+            .pool
+            .acquire()
+            .await
+            .context("could not take a connection to hold the start")?;
+        conn.execute(sqlx::query("SELECT pg_advisory_lock($1)").bind(START_LOCK))
+            .await
+            .context("could not hold the start")?;
+        Ok(StartHeld { conn: Some(conn) })
+    }
+
     pub async fn health(&self) -> Result<()> {
         sqlx::query("SELECT 1")
             .execute(&self.pool)
@@ -290,6 +312,30 @@ impl Db {
 
     pub async fn close(&self) {
         self.pool.close().await;
+    }
+}
+
+/// The advisory lock the start is held under: any fixed number, the same
+/// for every instance.
+const START_LOCK: i64 = 7_462_391;
+
+/// The start, held: let go of with [`StartHeld::release`], before the
+/// connection goes back to the pool — an advisory lock is the session's,
+/// and a pooled session outlives the start.
+pub struct StartHeld {
+    conn: Option<sqlx::pool::PoolConnection<sqlx::Any>>,
+}
+
+impl StartHeld {
+    pub async fn release(mut self) {
+        if let Some(mut conn) = self.conn.take()
+            && let Err(e) = conn
+                .execute(sqlx::query("SELECT pg_advisory_unlock($1)").bind(START_LOCK))
+                .await
+        {
+            tracing::warn!(error = %e, "could not let go of the start; closing the connection");
+            let _ = conn.close().await;
+        }
     }
 }
 

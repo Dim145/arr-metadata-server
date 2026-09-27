@@ -79,10 +79,12 @@ async fn run(
         tasks::REFRESH_SWEEP => jobs::refresh::sweep_now(&state, &by).await?,
         tasks::REFRESH_ALL => jobs::refresh::refresh_everything(&state, &by).await?,
         tasks::IMPORT_ANIME => {
-            jobs::datasets::import_in_background(&state, jobs::datasets::ANIME, &identity, ip)?
+            jobs::datasets::import_in_background(&state, jobs::datasets::ANIME, &identity, ip)
+                .await?
         }
         tasks::IMPORT_IMDB => {
-            jobs::datasets::import_in_background(&state, jobs::datasets::IMDB, &identity, ip)?
+            jobs::datasets::import_in_background(&state, jobs::datasets::IMDB, &identity, ip)
+                .await?
         }
         tasks::EXPORT_NFO => {
             crate::api::native::export::start_export(&state, &identity, &ip)
@@ -133,9 +135,20 @@ async fn cancel(
         .await?
         .ok_or(AppError::NotFound)?;
     if !jobs::cancel::cancel(&run.id) {
-        return Err(AppError::Conflict(
-            "that run is not running, or cannot be stopped partway".into(),
-        ));
+        // Not running here: perhaps on another instance, which is told.
+        let elsewhere = run.status == "running"
+            && jobs::tasks::stops_partway(&run.kind)
+            && run.instance.as_deref().is_some_and(|name| {
+                name != state.coord.instance.name && state.coord.is_alive(name)
+            });
+        if !elsewhere {
+            return Err(AppError::Conflict(
+                "that run is not running, or cannot be stopped partway".into(),
+            ));
+        }
+        state
+            .coord
+            .tell(crate::coord::Message::Stop(run.id.clone()));
     }
 
     audit::record(

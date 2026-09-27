@@ -243,19 +243,50 @@ pub async fn unknown_origins(db: &Db, people: bool, audio: bool) -> Result<Vec<(
     Ok(out)
 }
 
-/// The next addresses to fetch: in line, and not put off until later.
+/// A claim older than this is a worker that died mid-fetch: the medium is
+/// anybody's again.
+const CLAIM_STALE: chrono::Duration = chrono::Duration::minutes(10);
+
+fn claim_cutoff() -> String {
+    crate::db::to_rfc3339(chrono::Utc::now() - CLAIM_STALE)
+}
+
+/// The next addresses to fetch: in line, not put off until later, and not
+/// claimed lately by a worker — this instance's or another's.
 pub async fn due(db: &Db, limit: i64) -> Result<Vec<Asset>> {
     let rows = sqlx::query(db.sql(&format!(
         "SELECT {COLUMNS} FROM media_asset
          WHERE status = 'pending' AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+           AND (claimed_at IS NULL OR claimed_at < ?)
          ORDER BY created_at ASC
          LIMIT ?"
     )))
     .bind(now())
+    .bind(claim_cutoff())
     .bind(limit.clamp(1, 500))
     .fetch_all(db.pool())
     .await?;
     rows.iter().map(map).collect()
+}
+
+/// Take one in line to fetch it: whether it was this worker's to take —
+/// still in line, and not claimed lately by another. One statement, so two
+/// workers asking at once are answered yes once.
+pub async fn claim(db: &Db, id: &str, by: &str) -> Result<bool> {
+    let done = sqlx::query(db.sql(
+        "UPDATE media_asset SET claimed_by = ?, claimed_at = ?
+         WHERE id = ? AND status = 'pending'
+           AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+           AND (claimed_at IS NULL OR claimed_at < ?)",
+    ))
+    .bind(by)
+    .bind(now())
+    .bind(id)
+    .bind(now())
+    .bind(claim_cutoff())
+    .execute(db.pool())
+    .await?;
+    Ok(done.rows_affected() > 0)
 }
 
 /// How many are in line, put off or not.
@@ -283,7 +314,8 @@ pub async fn mark_stored(db: &Db, id: &str, stored: &Stored<'_>) -> Result<bool>
     let done = sqlx::query(db.sql(
         "UPDATE media_asset
          SET status = 'stored', key = ?, content_type = ?, bytes = ?, sha256 = ?, width = ?,
-             height = ?, has_thumb = ?, error = NULL, next_attempt_at = NULL, stored_at = ?
+             height = ?, has_thumb = ?, error = NULL, next_attempt_at = NULL, stored_at = ?,
+             claimed_by = NULL, claimed_at = NULL
          WHERE id = ?",
     ))
     .bind(stored.key)
@@ -314,16 +346,37 @@ pub async fn mark_failed(
     } else {
         "failed"
     };
-    sqlx::query(db.sql(
-        "UPDATE media_asset SET status = ?, attempts = ?, error = ?, next_attempt_at = ? WHERE id = ?",
-    ))
-    .bind(status)
-    .bind(attempts)
-    .bind(error)
-    .bind(next_attempt_at)
-    .bind(id)
-    .execute(db.pool())
-    .await?;
+    if attempts >= UNFIT {
+        // Filed past every try, whatever the count.
+        sqlx::query(db.sql(
+            "UPDATE media_asset
+             SET status = ?, attempts = ?, error = ?, next_attempt_at = ?,
+                 claimed_by = NULL, claimed_at = NULL
+             WHERE id = ?",
+        ))
+        .bind(status)
+        .bind(attempts)
+        .bind(error)
+        .bind(next_attempt_at)
+        .bind(id)
+        .execute(db.pool())
+        .await?;
+    } else {
+        // One more try, counted on the row itself rather than from what
+        // the worker read — which may be a try behind, on another instance.
+        sqlx::query(db.sql(
+            "UPDATE media_asset
+             SET status = ?, attempts = attempts + 1, error = ?, next_attempt_at = ?,
+                 claimed_by = NULL, claimed_at = NULL
+             WHERE id = ?",
+        ))
+        .bind(status)
+        .bind(error)
+        .bind(next_attempt_at)
+        .bind(id)
+        .execute(db.pool())
+        .await?;
+    }
     Ok(())
 }
 

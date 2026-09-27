@@ -103,9 +103,16 @@ fn busy() -> crate::error::AppError {
     )
 }
 
+/// What every bulk refresh is held under among several instances.
+pub const HOLD: &str = "refresh";
+
 /// One sweep now, as `by` asked, in the background: the run's id at once.
 pub async fn sweep_now(state: &AppState, by: &str) -> crate::error::AppResult<Option<String>> {
     let held = SWEEPING.clone().try_lock_owned().map_err(|_| busy())?;
+    let shared = state
+        .coord
+        .hold_for(HOLD, "works are being refreshed")
+        .await?;
     let record = job::start_by(&state.db, job::kinds::REFRESH_SWEEP, None, Some(by))
         .await
         .inspect_err(|e| tracing::warn!(error = %e, "could not open a job run"))
@@ -115,6 +122,7 @@ pub async fn sweep_now(state: &AppState, by: &str) -> crate::error::AppResult<Op
     let id = record.clone();
     tokio::spawn(async move {
         let _held = held;
+        let _shared = shared;
         close(&state, record, sweep(&state, batch(&state)).await).await;
     });
 
@@ -130,6 +138,10 @@ pub async fn refresh_everything(
     by: &str,
 ) -> crate::error::AppResult<Option<String>> {
     let held = SWEEPING.clone().try_lock_owned().map_err(|_| busy())?;
+    let shared = state
+        .coord
+        .hold_for(HOLD, "works are being refreshed")
+        .await?;
     let total = repo::item::count_refresh_candidates(&state.db).await?;
     // Not without its record: a run nobody can see is a run nobody can stop.
     let record = job::start_by(&state.db, job::kinds::REFRESH_ALL, None, Some(by)).await?;
@@ -138,6 +150,7 @@ pub async fn refresh_everything(
     let id = record.clone();
     tokio::spawn(async move {
         let _held = held;
+        let _shared = shared;
         let flag = super::cancel::register(&record);
         match everything(&state, total, &record, &flag).await {
             Ok(Pass::Done(summary)) => close(&state, Some(record), Ok(summary)).await,
@@ -249,16 +262,26 @@ pub async fn run(state: AppState) {
         "refresh scheduler started"
     );
 
-    // A run is only ever closed by the task that opened it, so a process killed
-    // mid-sweep leaves one behind. Close those before opening any more.
-    match job::fail_orphaned(&state.db).await {
-        Ok(0) => {}
-        Ok(closed) => tracing::warn!(closed, "closed job runs left open by a previous stop"),
-        Err(e) => tracing::warn!(error = %e, "could not close orphaned job runs"),
-    }
-
-    // Let the server finish starting before the first sweep.
+    // Let the server finish starting before the first sweep — and, among
+    // several instances, hear the others announce themselves.
     tokio::time::sleep(Duration::from_secs(30)).await;
+
+    // A run is only ever closed by the task that opened it, so a process killed
+    // mid-sweep leaves one behind. Close those before opening any more — this
+    // instance's own, among several; not while another instance goes by the
+    // same name, whose live runs would be closed with them.
+    if state.coord.has_twin() {
+        tracing::warn!(
+            "runs left open by a previous stop are not closed: another instance goes by this \
+             instance's name"
+        );
+    } else {
+        match job::fail_orphaned(&state.db, state.coord.is_multi()).await {
+            Ok(0) => {}
+            Ok(closed) => tracing::warn!(closed, "closed job runs left open by a previous stop"),
+            Err(e) => tracing::warn!(error = %e, "could not close orphaned job runs"),
+        }
+    }
 
     // The tick is the shortest the setting allows, and each wake decides
     // whether enough time has passed — rather than rebuilding the ticker, which
@@ -270,10 +293,22 @@ pub async fn run(state: AppState) {
     loop {
         ticker.tick().await;
 
-        // Not while works are being refreshed by hand: the next tick asks again.
+        // One rate-limit bucket is kept per address seen; drop the quiet ones.
+        // This instance's own, whether or not it leads.
+        state.limiter.prune();
+
+        // The rest is the leader's: alone, always this instance; among
+        // several, the one holding the lease.
+        if !state.coord.leads() {
+            continue;
+        }
+
+        // Not while works are being refreshed by hand, here or elsewhere:
+        // the next tick asks again.
         if state.flag("refresh.enabled", true)
             && swept.elapsed() >= interval(&state)
             && let Ok(_held) = SWEEPING.try_lock()
+            && let Some(_shared) = state.coord.hold(HOLD).await
         {
             swept = tokio::time::Instant::now();
             run_sweep(&state, batch(&state)).await;
@@ -289,9 +324,6 @@ pub async fn run(state: AppState) {
         if let Err(e) = repo::user::purge_expired_sessions(&state.db).await {
             tracing::warn!(error = %e, "could not purge expired sessions");
         }
-
-        // One rate-limit bucket is kept per address seen; drop the quiet ones.
-        state.limiter.prune();
 
         prune_audit(&state).await;
         prune_jobs(&state).await;

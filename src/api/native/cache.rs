@@ -44,6 +44,25 @@ pub struct Report {
     /// How long a public page may be kept by a browser or a proxy; 0 when
     /// the interface's `no-cache` stands.
     pub public_seconds: u64,
+    /// This instance among the others, and who leads.
+    pub instances: Instances,
+}
+
+/// The instances of this server: one, or several coordinating through
+/// the cache server.
+#[derive(Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Instances {
+    pub mode: crate::config::Mode,
+    /// The instance that answered this request.
+    pub this: crate::coord::Instance,
+    /// Whether it is the one running the schedules.
+    pub leads: bool,
+    /// Which instance leads, by name; none while no lease is held.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub leader: Option<String>,
+    /// Every instance heard of lately, this one included.
+    pub all: Vec<crate::coord::Announced>,
 }
 
 /// The server behind the second tier.
@@ -219,6 +238,13 @@ async fn report(
         generation: c.generation(),
         epoch: c.epoch(),
         public_seconds: state.config.cache.public_seconds,
+        instances: Instances {
+            mode: state.coord.mode(),
+            this: state.coord.instance.clone(),
+            leads: state.coord.leads(),
+            leader: state.coord.leader(),
+            all: state.coord.instances(),
+        },
     }))
 }
 

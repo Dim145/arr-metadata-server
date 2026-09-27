@@ -56,6 +56,11 @@ pub struct Access {
     /// AMS_AUTH_DISABLED: every surface is open, whatever the rest says.
     pub auth_disabled: bool,
     pub uptime_seconds: u64,
+    /// Since when the APIs' numbers count, among several instances: the
+    /// tally on the cache server outlives any one of them. Absent alone,
+    /// where they count since the start.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub counted_since: Option<String>,
     pub apis: Vec<ApiState>,
     /// Accounts waiting for an administrator.
     pub pending: i64,
@@ -82,24 +87,37 @@ async fn access(
 ) -> AppResult<Json<Access>> {
     identity.require_admin()?;
 
-    let apis = Api::ALL
-        .into_iter()
-        .map(|api| {
-            let surface = match api {
-                Api::Sonarr | Api::Radarr => Surface::Arr,
-                Api::Tmdb => Surface::Tmdb,
-                Api::Native => Surface::Native,
-            };
-            let (served, refused) = state.calls.read(api);
-            ApiState {
-                api,
-                enabled: state.api_on(api),
-                policy: meta::policy_name(state.config.policy_for(surface)),
-                served,
-                refused,
+    // Among several instances the counts are added up on the cache server,
+    // so the page shows what every instance answered.
+    let shared = state
+        .coord
+        .is_multi()
+        .then(|| state.caches.redis())
+        .flatten();
+    let mut apis = Vec::with_capacity(Api::ALL.len());
+    for api in Api::ALL {
+        let surface = match api {
+            Api::Sonarr | Api::Radarr => Surface::Arr,
+            Api::Tmdb => Surface::Tmdb,
+            Api::Native => Surface::Native,
+        };
+        let (served, refused) = match &shared {
+            Some(redis) => {
+                state
+                    .calls
+                    .read_shared(redis, &state.config.cache.redis_prefix, api)
+                    .await
             }
-        })
-        .collect();
+            None => state.calls.read(api),
+        };
+        apis.push(ApiState {
+            api,
+            enabled: state.api_on(api),
+            policy: meta::policy_name(state.config.policy_for(surface)),
+            served,
+            refused,
+        });
+    }
 
     let (invitations, places) = repo::invitation::count_usable(&state.db).await?;
     let keys = repo::client::list(&state.db, repo::client::Owner::Any).await?;
@@ -118,6 +136,15 @@ async fn access(
         keys_per_user: state.keys_per_user(),
         auth_disabled: state.config.security.auth_disabled,
         uptime_seconds: figures::uptime_seconds(),
+        counted_since: match &shared {
+            Some(redis) => redis
+                .get_text(&crate::state::Calls::since_key(
+                    &state.config.cache.redis_prefix,
+                ))
+                .await
+                .flatten(),
+            None => None,
+        },
         apis,
         pending: repo::user::counts(&state.db).await?.pending,
         invitations,

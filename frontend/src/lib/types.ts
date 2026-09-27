@@ -427,6 +427,8 @@ export interface AccessReport {
   keysPerUser: number
   authDisabled: boolean
   uptimeSeconds: number
+  /** Since when the counters count, among several instances; absent alone (since the start). */
+  countedSince?: string
   apis: ApiState[]
   pending: number
   invitations: number
@@ -466,6 +468,8 @@ export interface Job {
   createdAt: string
   /** Who started it, as the journal names them; absent for the schedule. */
   triggeredBy?: string
+  /** Which instance ran it, among several. */
+  instance?: string
   /** The work it acted on, while it is held. */
   work?: { id: string; title: string; kind: MediaKind }
 }
@@ -833,6 +837,11 @@ export interface Health {
   version: string
   uptimeSeconds: number
   database: string
+  mode: 'single' | 'multi'
+  instance: string
+  leads: boolean
+  leader?: string
+  instances: number
   works: number
   episodes: number
   refreshFailed: number
@@ -1104,6 +1113,28 @@ export interface CacheReport {
   generation: number
   epoch: number
   publicSeconds: number
+  instances: Instances
+}
+
+/** One instance of the server, as it introduces itself to the others. */
+export interface Instance {
+  id: string
+  name: string
+  version: string
+  startedAt: string
+}
+
+/** The instances: one, or several coordinating through the cache server. */
+export interface Instances {
+  mode: 'single' | 'multi'
+  /** The instance that answered this request. */
+  this: Instance
+  /** Whether it runs the schedules. */
+  leads: boolean
+  /** Which instance leads, by name; absent while no lease is held. */
+  leader?: string
+  /** Every instance heard of lately, this one included. */
+  all: (Instance & { leads: boolean; seenAt: string })[]
 }
 
 export interface CacheServer {

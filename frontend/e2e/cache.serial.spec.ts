@@ -32,6 +32,27 @@ interface Report {
 test.describe('the cache', () => {
   test.skip(!USERNAME || !PASSWORD, 'needs AMS_E2E_USER and AMS_E2E_PASSWORD')
 
+  test('the page says how many instances there are, and which leads', async ({ page }) => {
+    await signIn(page)
+    const report = (await (await page.request.get('/api/v1/admin/cache')).json()) as {
+      instances: { mode: 'single' | 'multi'; leads: boolean; leader?: string; this: { name: string }; all: { name: string; leads: boolean }[] }
+    }
+    // Every instance lists itself, and exactly one leads — alone, this one.
+    expect(report.instances.all.map((i) => i.name)).toContain(report.instances.this.name)
+    expect(report.instances.all.filter((i) => i.leads).length).toBeLessThanOrEqual(1)
+    if (report.instances.mode === 'single') {
+      expect(report.instances.leads).toBe(true)
+      expect(report.instances.leader).toBe(report.instances.this.name)
+    }
+
+    await page.goto('/admin/cache')
+    const panel = page.getByRole('region', { name: /^instances$/i })
+    await expect(panel).toBeVisible()
+    await expect(panel.getByText(report.instances.mode === 'single' ? /one instance|une instance/i : /\d+ instances?\b/)).toBeVisible()
+    // The hint names the way to the other mode, or who leads.
+    await expect(panel.getByText(report.instances.mode === 'single' ? /AMS_MODE=multi/ : /schedules|plannings/)).toBeVisible()
+  })
+
   test('the page reads the tiers back, and a space is switched and emptied', async ({ page }) => {
     await signIn(page)
 

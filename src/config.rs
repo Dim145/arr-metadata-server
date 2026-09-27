@@ -37,8 +37,48 @@ impl FromStr for SurfacePolicy {
     }
 }
 
+/// How many of this server there are.
+///
+/// One, the default: SQLite or PostgreSQL, the media on disk or in a bucket,
+/// every job scheduled by the process itself. Several: every instance reads
+/// and writes the same PostgreSQL, keeps the media in the same bucket, and
+/// coordinates through the cache server — which one schedules, which one is
+/// fetching what, what the others must forget — so that a request may land
+/// on any of them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum Mode {
+    Single,
+    Multi,
+}
+
+impl FromStr for Mode {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "single" | "one" | "" => Ok(Self::Single),
+            "multi" | "multiple" | "cluster" => Ok(Self::Multi),
+            other => bail!("AMS_MODE must be single or multi, not {other:?}"),
+        }
+    }
+}
+
+impl Mode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Single => "single",
+            Self::Multi => "multi",
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Config {
+    pub mode: Mode,
+    /// What this instance is called among the others: `AMS_INSTANCE_NAME`,
+    /// or the machine's hostname — the container's name, in a container.
+    pub instance_name: String,
     pub server: Server,
     pub database: Database,
     pub security: Security,
@@ -411,7 +451,45 @@ pub struct Refresh {
 
 impl Config {
     pub fn from_env() -> Result<Self> {
+        let config = Self::read_env()?;
+        config.check_mode()?;
+        Ok(config)
+    }
+
+    /// What several instances need of the rest of the configuration, checked
+    /// at start rather than found out in production: a database they can all
+    /// write, a store they all reach, and the bus they coordinate on.
+    fn check_mode(&self) -> Result<()> {
+        if self.mode == Mode::Single {
+            return Ok(());
+        }
+        let scheme = self.database.url.split(':').next().unwrap_or_default();
+        if scheme == "sqlite" {
+            bail!(
+                "AMS_MODE=multi needs PostgreSQL: several instances cannot share an SQLite file. \
+                 Point AMS_DATABASE_URL at a postgres:// database, or run one instance"
+            );
+        }
+        if self.media.storage == MediaStorage::Filesystem {
+            bail!(
+                "AMS_MODE=multi needs the media in a bucket every instance reaches: set \
+                 AMS_MEDIA_STORAGE=s3 (or off), not filesystem"
+            );
+        }
+        if self.cache.redis_url.is_none() {
+            bail!(
+                "AMS_MODE=multi needs a cache server: the instances coordinate through it. \
+                 Set AMS_REDIS_URL to a Valkey or Redis address"
+            );
+        }
+        Ok(())
+    }
+
+    fn read_env() -> Result<Self> {
         Ok(Self {
+            mode: var_or(&["AMS_MODE"], "single").parse()?,
+            instance_name: opt(&["AMS_INSTANCE_NAME"])
+                .unwrap_or_else(|| whoami::hostname().unwrap_or_else(|_| "instance".to_string())),
             server: Server {
                 bind: var_or(
                     &["AMS_BIND_ADDRESS", "BIND_ADDRESS", "LISTEN_ADDR"],

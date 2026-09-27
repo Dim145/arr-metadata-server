@@ -57,6 +57,9 @@ const TABLES: &[&str] = &[
     "network_rule",
     "network_caller",
     "setting",
+    // What every instance holds the same of: the cookie key, the authority
+    // the clients trust. Carried over, so the clients need not trust anew.
+    "keystore",
     "search_cache",
     "anime_mapping",
     "imdb_rating",

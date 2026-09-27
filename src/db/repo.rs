@@ -11,6 +11,7 @@ pub mod import;
 pub mod invitation;
 pub mod item;
 pub mod job;
+pub mod keystore;
 pub mod list;
 pub mod network;
 pub mod order;

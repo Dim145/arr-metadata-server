@@ -2,6 +2,7 @@ mod api;
 mod auth;
 mod cache;
 mod config;
+mod coord;
 mod db;
 mod domain;
 mod error;

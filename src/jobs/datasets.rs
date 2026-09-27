@@ -79,11 +79,20 @@ pub async fn run(state: AppState) {
     loop {
         ticker.tick().await;
 
+        // The schedule is the leader's: alone, this instance; among several,
+        // the one holding the lease.
+        if !state.coord.leads() {
+            continue;
+        }
+
         // Asked again once the lock is held: an import somebody asked for by
-        // hand may have been what it waited on, and has just done the work.
+        // hand — here or on another instance — may have been what it waited
+        // on, and has just done the work.
         if anime_wanted(&state) && retry_allowed(anime_failed) && anime_due(&state).await {
             let _importing = IMPORTING.lock().await;
-            if anime_due(&state).await {
+            if let Some(_shared) = state.coord.hold(HOLD).await
+                && anime_due(&state).await
+            {
                 let ok = record(&state, job::kinds::IMPORT_ANIME, None, import_anime(&state))
                     .await
                     .is_ok();
@@ -94,7 +103,9 @@ pub async fn run(state: AppState) {
         if state.flag("imdb.enabled", false) && retry_allowed(imdb_failed) && imdb_due(&state).await
         {
             let _importing = IMPORTING.lock().await;
-            if imdb_due(&state).await {
+            if let Some(_shared) = state.coord.hold(HOLD).await
+                && imdb_due(&state).await
+            {
                 let ok = record(&state, job::kinds::IMPORT_IMDB, None, import_imdb(&state))
                     .await
                     .is_ok();
@@ -103,6 +114,9 @@ pub async fn run(state: AppState) {
         }
     }
 }
+
+/// What every import is held under among several instances.
+pub const HOLD: &str = "import";
 
 fn retry_allowed(failed: Option<tokio::time::Instant>) -> bool {
     failed.is_none_or(|at| at.elapsed() >= RETRY_AFTER)
@@ -183,7 +197,7 @@ pub enum Asked {
 /// tasks page: told at once whether it started, its outcome in the history.
 /// The lock is taken here and handed to the run, so a started import is
 /// always one that happens.
-pub fn import_in_background(
+pub async fn import_in_background(
     state: &AppState,
     name: &'static str,
     identity: &crate::auth::Identity,
@@ -204,11 +218,13 @@ pub fn import_in_background(
             "an import is already running".into(),
         ));
     };
+    let shared = state.coord.hold_for(HOLD, "an import is running").await?;
 
     let state = state.clone();
     let identity = identity.clone();
     tokio::spawn(async move {
         let _importing = importing;
+        let _shared = shared;
         let by = identity.label();
         if let Asked::Imported(summary) = import_held(&state, name, Some(&by)).await {
             crate::api::audit::record(
@@ -247,6 +263,9 @@ pub async fn import_now(state: &AppState, name: &str, by: Option<&str>) -> Asked
     }
 
     let Ok(_importing) = IMPORTING.try_lock() else {
+        return Asked::Busy;
+    };
+    let Some(_shared) = state.coord.hold(HOLD).await else {
         return Asked::Busy;
     };
 

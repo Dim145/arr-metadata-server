@@ -836,6 +836,7 @@ export const en = {
       offNote: 'Switched off, an API answers 503 to every call: Sonarr and Radarr read it as “try again later”.',
       policyNote: 'What each API asks for is set by the deployment — AMS_ARR_AUTH, AMS_TMDB_AUTH, AMS_NATIVE_AUTH — and the addresses on the Keys & network page.',
       uptime: (since: string) => `Counted since the server started, ${since}.`,
+      countedShared: (since: string) => `Counted over every instance since the tally began, ${since}.`,
       rules: (n: number) => (n === 1 ? 'one listed address' : `${n} listed addresses`),
       authDisabled: 'AMS_AUTH_DISABLED is set: nothing asks for a credential. The site is open to anyone, and so is every API left on here.',
       listeners: {
@@ -1034,6 +1035,20 @@ export const en = {
       metrics: 'Metrics',
       metricsHint: 'The same figures for Prometheus and Grafana: GET /api/v1/admin/metrics with an administrator’s key — hits and misses by space and tier, the server’s memory, evictions and round trip. A dashboard to import is in docs/monitoring/.',
       stamp: (generation: number, epoch: number) => `generation ${generation} · epoch ${epoch}`,
+      instances: 'Instances',
+      instancesOne: 'One instance',
+      instancesMany: (n: number) => (n === 1 ? '1 instance, alone for now' : `${n} instances`),
+      instancesSingleHint:
+        'This server runs alone: it schedules its own jobs, and the cache server, when there is one, is a second tier and nothing more. Set AMS_MODE=multi to run several instances over one PostgreSQL, one bucket and one cache server.',
+      instancesMultiHint: (leader: string | null) =>
+        leader
+          ? `Several instances share the catalogue, the bucket and the cache server; ${leader} runs the schedules, and any of them answers a request.`
+          : 'Several instances share the catalogue, the bucket and the cache server. No instance leads right now: the schedules wait until one takes the lease — within seconds, once the cache server answers.',
+      instanceThis: 'this one',
+      instanceLeads: 'leads',
+      instanceSeen: (when: string) => `seen ${when}`,
+      instanceStarted: (when: string) => `started ${when}`,
+      noLeader: 'no leader',
       confirmTitle: 'Flush the whole cache?',
       confirmBody: (keys: number | null, attached: boolean) =>
         attached
@@ -1196,6 +1211,9 @@ export const en = {
       cacheOf: (name: string) => `${name} cache`,
       cacheLine: (entries: number, bytes: string) => `${entries} entries · ${bytes}`,
       sources: 'Sources',
+      instances: 'Instances',
+      instancesLine: (n: number, leader: string | null) => `${n} · ${leader ? `${leader} leads` : 'no leader'}`,
+      single: 'one, on its own',
       lastJobs: 'Last jobs',
       healthFailed: 'The health could not be read just now.',
       locksTitle: 'The locks, as a file',

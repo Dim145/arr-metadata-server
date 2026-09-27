@@ -44,6 +44,10 @@ pub struct Media {
     /// client elsewhere can follow them, or nothing, for the interface alone.
     base: String,
     pub config: config::Media,
+    /// Among several instances: the server the others are told through of
+    /// what this one kept or forgot, and this instance's id, so it can tell
+    /// its own word from theirs.
+    tell: Option<(crate::cache::RedisSlot, String)>,
 }
 
 #[derive(Default)]
@@ -73,7 +77,11 @@ pub struct Keyed {
 }
 
 impl Media {
-    pub fn open(config: &config::Media, public_url: Option<&str>) -> anyhow::Result<Self> {
+    pub fn open(
+        config: &config::Media,
+        public_url: Option<&str>,
+        tell: Option<(crate::cache::RedisSlot, String)>,
+    ) -> anyhow::Result<Self> {
         let store = store::Store::open(config)?.map(Arc::new);
         if let Some(store) = &store {
             tracing::info!(backend = ?store.backend, "media are kept");
@@ -87,7 +95,22 @@ impl Media {
                 .map(|u| u.trim_end_matches('/').to_string())
                 .unwrap_or_default(),
             config: config.clone(),
+            tell,
         })
+    }
+
+    /// Tell the other instances, when there are any.
+    fn tell(&self, message: crate::coord::Message) {
+        let Some((slot, instance)) = &self.tell else {
+            return;
+        };
+        let Some(redis) = slot.load_full() else {
+            return;
+        };
+        let text = message.encode(instance);
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(async move { redis.publish(&text).await });
+        }
     }
 
     /// Whether anything is kept at all.
@@ -112,17 +135,36 @@ impl Media {
         Ok(())
     }
 
-    /// Note an asset as stored.
+    /// Note an asset as stored, here and on every other instance.
     pub fn remember(&self, origin: &str, key: &str, thumb: Thumb, content_type: &str) {
+        self.remember_quietly(origin, key, thumb, content_type);
+        self.tell(crate::coord::Message::MediaKept {
+            origin: origin.to_string(),
+            key: key.to_string(),
+            thumb: thumb.as_i64(),
+            content_type: content_type.to_string(),
+        });
+    }
+
+    /// Note an asset as stored, here alone: what another instance's word
+    /// does.
+    pub fn remember_quietly(&self, origin: &str, key: &str, thumb: Thumb, content_type: &str) {
         self.index
             .write()
             .unwrap_or_else(|e| e.into_inner())
             .insert(origin, key, thumb, content_type);
     }
 
-    /// Forget an asset: its address is a provider's again. Its key stays
-    /// known while another origin holds the same bytes.
+    /// Forget an asset, here and on every other instance: its address is a
+    /// provider's again. Its key stays known while another origin holds the
+    /// same bytes.
     pub fn forget(&self, origin: &str) {
+        self.forget_quietly(origin);
+        self.tell(crate::coord::Message::MediaForgotten(origin.to_string()));
+    }
+
+    /// Forget an asset here alone.
+    pub fn forget_quietly(&self, origin: &str) {
         let mut index = self.index.write().unwrap_or_else(|e| e.into_inner());
         let Some(entry) = index.by_origin.remove(origin) else {
             return;
@@ -376,7 +418,11 @@ impl Media {
             })
             .collect();
         match crate::db::repo::asset::enqueue(&state.db, &rows).await {
-            Ok(added) if added > 0 => self.notify.notify_one(),
+            Ok(added) if added > 0 => {
+                self.notify.notify_one();
+                // Whichever instance is idle may fetch them.
+                self.tell(crate::coord::Message::MediaWake);
+            }
             Ok(_) => {}
             Err(e) => {
                 tracing::warn!(id = %item.id, error = %e, "could not put the work's media in line")
@@ -421,7 +467,7 @@ mod tests {
             dir: std::env::temp_dir().join(format!("ams-media-test-{}", crate::db::new_id())),
             s3: None,
         };
-        Media::open(&config, public_url).unwrap()
+        Media::open(&config, public_url, None).unwrap()
     }
 
     const KEY: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad.jpg";

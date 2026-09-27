@@ -32,10 +32,14 @@ pub enum Registration {
 
 /// Calls each API answered and refused since this process started, for the
 /// access page. Counted in memory: a number an administrator glances at to
-/// see whether Sonarr still calls, not a record anybody audits.
+/// see whether Sonarr still calls, not a record anybody audits. Among
+/// several instances the counts are added up on the cache server every few
+/// seconds, so the page shows what every instance answered.
 #[derive(Default)]
 pub struct Calls {
     counts: [[std::sync::atomic::AtomicU64; 2]; 4],
+    /// How much of each count has been told to the server.
+    told: [[std::sync::atomic::AtomicU64; 2]; 4],
 }
 
 impl Calls {
@@ -44,13 +48,74 @@ impl Calls {
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
-    /// Served, then refused.
+    /// Served, then refused — this process's own.
     pub fn read(&self, api: crate::config::Api) -> (u64, u64) {
         let [refused, served] = &self.counts[api.index()];
         (
             served.load(std::sync::atomic::Ordering::Relaxed),
             refused.load(std::sync::atomic::Ordering::Relaxed),
         )
+    }
+
+    /// The key a count is added up under on the server.
+    pub fn key(prefix: &str, api: crate::config::Api, served: bool) -> String {
+        format!(
+            "{prefix}calls:{}:{}",
+            api.setting().trim_start_matches("api."),
+            if served { "served" } else { "refused" }
+        )
+    }
+
+    /// The key that says since when the server's tally counts.
+    pub fn since_key(prefix: &str) -> String {
+        format!("{prefix}calls:since")
+    }
+
+    /// Add what was counted since last time to the server's tally.
+    pub async fn flush_to(&self, redis: &crate::cache::Redis, prefix: &str) {
+        use std::sync::atomic::Ordering::Relaxed;
+        // Dated once, by whichever instance first has something to tell.
+        redis
+            .set_nx_text(&Self::since_key(prefix), &crate::db::now())
+            .await;
+        for api in crate::config::Api::ALL {
+            for served in [true, false] {
+                let (i, j) = (api.index(), usize::from(served));
+                let counted = self.counts[i][j].load(Relaxed);
+                let told = self.told[i][j].load(Relaxed);
+                if counted > told
+                    && redis
+                        .incr_by(&Self::key(prefix, api, served), counted - told)
+                        .await
+                        .is_some()
+                {
+                    self.told[i][j].store(counted, Relaxed);
+                }
+            }
+        }
+    }
+
+    /// Served, then refused, over every instance: the server's tally plus
+    /// what this process has not told it yet. This process's own when the
+    /// server does not answer.
+    pub async fn read_shared(
+        &self,
+        redis: &crate::cache::Redis,
+        prefix: &str,
+        api: crate::config::Api,
+    ) -> (u64, u64) {
+        use std::sync::atomic::Ordering::Relaxed;
+        let keys = [Self::key(prefix, api, true), Self::key(prefix, api, false)];
+        let Some(shared) = redis.mget_u64(&keys).await else {
+            return self.read(api);
+        };
+        let untold = |served: bool| {
+            let (i, j) = (api.index(), usize::from(served));
+            self.counts[i][j]
+                .load(Relaxed)
+                .saturating_sub(self.told[i][j].load(Relaxed))
+        };
+        (shared[0] + untold(true), shared[1] + untold(false))
     }
 }
 
@@ -98,9 +163,13 @@ pub struct Inner {
     pub media: crate::media::Media,
     /// The doors' certificates: the clients' listener and what it shows.
     pub tls: crate::tls::Tls,
+    /// This instance among the others: who leads, what is held, what is told.
+    pub coord: crate::coord::Coordination,
     /// Seals the cookies a sign-in through the identity provider travels in.
-    /// Made at start and never stored: a restart only costs a sign-in that
-    /// was halfway through, which is asked again.
+    /// Alone: made at start and never stored, so a restart only costs a
+    /// sign-in that was halfway through, which is asked again. Among
+    /// several: kept in the database, since the sign-in may come back to
+    /// another instance than the one it left from.
     pub cookie_key: axum_extra::extract::cookie::Key,
 }
 
@@ -141,9 +210,20 @@ impl AppState {
             .build()
             .context("failed to build the outbound HTTP client")?;
 
-        let caches = Caches::new(&config.cache, crate::cache::RedisSlot::default());
-        let limiter = Limiter::new(config.security.rate_limit_per_minute);
-        let instance = crate::db::new_id();
+        let slot = crate::cache::RedisSlot::default();
+        let caches = Caches::new(&config.cache, slot.clone());
+        let coord = crate::coord::Coordination::new(&config, slot.clone());
+        let limiter = Limiter::new(
+            config.security.rate_limit_per_minute,
+            (config.mode == crate::config::Mode::Multi)
+                .then(|| (slot.clone(), config.cache.redis_prefix.clone())),
+        );
+        let instance = coord.instance.id.clone();
+        crate::db::repo::job::name_instance(&config.instance_name);
+        let cookie_key = match config.mode {
+            crate::config::Mode::Single => axum_extra::extract::cookie::Key::generate(),
+            crate::config::Mode::Multi => shared_cookie_key(&db).await?,
+        };
         let tmdb = TmdbClient::new(http.clone(), &config.tmdb);
         let skyhook = SkyhookClient::new(http.clone(), &config.skyhook, instance.clone());
         let radarr_metadata =
@@ -175,8 +255,12 @@ impl AppState {
         }
 
         let settings = Store::new(db.clone());
-        let tls = crate::tls::Tls::open(&config).await?;
-        let media = crate::media::Media::open(&config.media, config.server.public_url.as_deref())?;
+        let tls = crate::tls::Tls::open(&config, &db).await?;
+        let media = crate::media::Media::open(
+            &config.media,
+            config.server.public_url.as_deref(),
+            (config.mode == crate::config::Mode::Multi).then(|| (slot.clone(), instance.clone())),
+        )?;
         if media.is_on() {
             media.load_index(&db).await?;
             if config.server.public_url.is_none() {
@@ -209,14 +293,22 @@ impl AppState {
             instance,
             accounts: tokio::sync::Mutex::new(()),
             calls: Calls::default(),
-            cookie_key: axum_extra::extract::cookie::Key::generate(),
+            cookie_key,
             tls,
+            coord,
             media,
         }));
 
-        state.bootstrap_admin().await?;
-        state.bootstrap_allowlist().await?;
-        state.bootstrap_settings().await?;
+        // One instance at a time: each finds what the one before it made.
+        let held = state.db.hold_start(state.coord.is_multi()).await?;
+        let started = async {
+            state.bootstrap_admin().await?;
+            state.bootstrap_allowlist().await?;
+            state.bootstrap_settings().await
+        }
+        .await;
+        held.release().await;
+        started?;
 
         Ok(state)
     }
@@ -362,8 +454,12 @@ impl AppState {
     /// to is invisible: the interface would show the new value while the
     /// provider was still asked with the old one.
     pub async fn sync_providers(&self) {
-        self.tmdb
-            .tune(&self.language(None, None), self.adult_visible());
+        self.adopt_settings().await;
+
+        // The other instances read the table again and tune their own
+        // providers — told before the generation moves on, so that nothing
+        // they compute under the old settings is filed under the new one.
+        self.coord.tell_now(crate::coord::Message::Settings).await;
 
         // After the tune, not before: a search that started in between reads
         // the old generation, so whatever it caches is filed where nothing
@@ -372,16 +468,27 @@ impl AppState {
 
         // A cached search was computed under the old settings. The generation
         // already means none of it will be served; this gives the memory back
-        // now rather than at the end of the TTL.
+        // now rather than at the end of the TTL — on the server too.
         self.caches.searches.invalidate_all().await;
 
         // A cached work carries what the settings put on it when it was read —
         // IMDb's rating, for one — so it is read again under the new ones.
         self.caches.items.invalidate_all().await;
 
-        // The relay's documents were patched with the old settings too, and
-        // each space's switch is a setting.
+        // The relay's documents were patched with the old settings too.
         self.caches.relay.invalidate_all().await;
+    }
+
+    /// Take the settings as they stand: tune the providers, forget what
+    /// this process computed under the old ones, set the switches. What a
+    /// change made here does before it moves the generation on, and all a
+    /// change made on another instance asks of this one.
+    pub async fn adopt_settings(&self) {
+        self.tmdb
+            .tune(&self.language(None, None), self.adult_visible());
+        self.caches.searches.forget_local();
+        self.caches.items.forget_local();
+        self.caches.relay.forget_local();
         self.caches.sync_switches(|key| self.flag(key, true));
     }
 
@@ -411,9 +518,28 @@ impl AppState {
     }
 
     /// Wait for, then hold, the right to change accounts and their keys. See
-    /// the field for why; held for a few statements at most.
-    pub async fn accounts_lock(&self) -> tokio::sync::MutexGuard<'_, ()> {
-        self.accounts.lock().await
+    /// the field for why; held for a few statements at most. Among several
+    /// instances the right is held on the cache server too, so two
+    /// administrators on two instances cannot both pass the same check;
+    /// with nobody to ask in time, this process's own lock has to do.
+    pub async fn accounts_lock(&self) -> AccountsHeld<'_> {
+        let local = self.accounts.lock().await;
+        let shared = if self.coord.is_multi() {
+            let held = self.coord.hold_wait("accounts").await;
+            if held.is_none() {
+                tracing::warn!(
+                    "the accounts could not be held on the cache server in time; going on with \
+                     this instance's own lock"
+                );
+            }
+            held
+        } else {
+            None
+        };
+        AccountsHeld {
+            _local: local,
+            _shared: shared,
+        }
     }
 
     /// Whether the catalogue may be read without signing in: the setting
@@ -653,8 +779,16 @@ impl AppState {
         }
     }
 
-    /// Re-read the rules. Called after every change to them.
+    /// Re-read the rules, here and on every other instance. Called after
+    /// every change to them.
     pub async fn reload_allowlist(&self) -> Result<()> {
+        self.reload_allowlist_quietly().await?;
+        self.coord.tell(crate::coord::Message::Allowlist);
+        Ok(())
+    }
+
+    /// Re-read the rules here alone: what another instance's change does.
+    pub async fn reload_allowlist_quietly(&self) -> Result<()> {
         let nets = repo::network::effective(&self.db).await?;
 
         if let Ok(mut list) = self.0.allowlist.write() {
@@ -754,6 +888,29 @@ impl AppState {
         tracing::info!(%username, "created the bootstrap administrator");
         Ok(())
     }
+}
+
+/// The right to change accounts, held: this process's, and — among several
+/// instances — every instance's.
+pub struct AccountsHeld<'a> {
+    _local: tokio::sync::MutexGuard<'a, ()>,
+    _shared: Option<crate::coord::Held>,
+}
+
+/// The key every instance seals the sign-in's cookies with: made by the
+/// first instance to start, kept in the database, taken by the others.
+async fn shared_cookie_key(db: &crate::db::Db) -> Result<axum_extra::extract::cookie::Key> {
+    use base64::Engine as _;
+    let fresh = axum_extra::extract::cookie::Key::generate();
+    let encoded = base64::engine::general_purpose::STANDARD.encode(fresh.master());
+    let stored = repo::keystore::put_if_absent(db, repo::keystore::names::COOKIE_KEY, &encoded)
+        .await
+        .context("could not keep the cookie key in the database")?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(stored)
+        .context("the cookie key in the database is not base64")?;
+    axum_extra::extract::cookie::Key::try_from(bytes.as_slice())
+        .map_err(|e| anyhow::anyhow!("the cookie key in the database cannot be used: {e}"))
 }
 
 /// Whether this caller sees adult titles.

@@ -33,6 +33,35 @@ const SCAN_BATCH: usize = 500;
 /// of keys does not turn a count into a stall.
 const SCAN_LIMIT: u64 = 2_000_000;
 
+/// Push a key's end back, if the key is still the caller's: what a lease
+/// is renewed with, so a lease that ran out and went to another instance
+/// is not taken back from them.
+const KEEP_IF_HELD: &str = r#"
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+    return redis.call('PEXPIRE', KEYS[1], ARGV[2])
+end
+return 0
+"#;
+
+/// Take a key that is free, or the caller's already: a holder that lost
+/// track of its own key — a moment the server did not answer — takes it
+/// back rather than waiting out its own TTL.
+const TAKE_IF_FREE_OR_HELD: &str = r#"
+local held = redis.call('GET', KEYS[1])
+if held == false or held == ARGV[1] then
+    redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2])
+    return 1
+end
+return 0
+"#;
+/// Remove a key, if it is still the caller's.
+const RELEASE_IF_HELD: &str = r#"
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+    return redis.call('DEL', KEYS[1])
+end
+return 0
+"#;
+
 pub struct Redis {
     client: redis::Client,
     manager: ConnectionManager,
@@ -350,6 +379,201 @@ impl Redis {
             .flatten()
     }
 
+    /// Add `n` to a counter that lives until somebody removes it.
+    pub async fn incr_by(&self, key: &str, n: u64) -> Option<u64> {
+        if !self.is_up() {
+            return None;
+        }
+        let mut conn = self.manager.clone();
+        self.run(
+            "INCRBY",
+            async move { conn.incr::<_, _, u64>(key, n).await },
+        )
+        .await
+    }
+
+    /// One more in a window that closes `ttl` after it opened: the count
+    /// after this one. INCR and EXPIRE in one round trip; the window's key
+    /// names its own period, so an EXPIRE repeated only ever pushes the end
+    /// of a key nobody will ask for again.
+    pub async fn incr_window(&self, key: &str, ttl: Duration) -> Option<u64> {
+        if !self.is_up() {
+            return None;
+        }
+        let mut conn = self.manager.clone();
+        let secs = ttl.as_secs().max(1);
+        self.run("INCR", async move {
+            let (count, _): (u64, i64) = redis::pipe()
+                .atomic()
+                .incr(key, 1u64)
+                .expire(key, secs as i64)
+                .query_async(&mut conn)
+                .await?;
+            Ok(count)
+        })
+        .await
+    }
+
+    /// One fewer, for a place given back.
+    pub async fn decr(&self, key: &str) {
+        let mut conn = self.manager.clone();
+        self.run(
+            "DECR",
+            async move { conn.decr::<_, _, i64>(key, 1i64).await },
+        )
+        .await;
+    }
+
+    /// Several counters at once, a missing one read as zero.
+    pub async fn mget_u64(&self, keys: &[String]) -> Option<Vec<u64>> {
+        if !self.is_up() || keys.is_empty() {
+            return None;
+        }
+        let mut conn = self.manager.clone();
+        let keys = keys.to_vec();
+        self.run("MGET", async move {
+            conn.mget::<_, Vec<Option<u64>>>(keys).await
+        })
+        .await
+        .map(|values| values.into_iter().map(Option::unwrap_or_default).collect())
+    }
+
+    /// Write a text where there is none, for good: whether it was written.
+    pub async fn set_nx_text(&self, key: &str, value: &str) -> Option<bool> {
+        if !self.is_up() {
+            return None;
+        }
+        let mut conn = self.manager.clone();
+        let value = value.to_string();
+        self.run("SET NX", async move {
+            let answer: Option<String> = redis::cmd("SET")
+                .arg(key)
+                .arg(value)
+                .arg("NX")
+                .query_async(&mut conn)
+                .await?;
+            Ok(answer.is_some())
+        })
+        .await
+    }
+
+    /// A text, or nothing where there is none: `None` only when the server
+    /// did not answer.
+    pub async fn get_text(&self, key: &str) -> Option<Option<String>> {
+        if !self.is_up() {
+            return None;
+        }
+        let mut conn = self.manager.clone();
+        self.run(
+            "GET",
+            async move { conn.get::<_, Option<String>>(key).await },
+        )
+        .await
+    }
+
+    /// Take a key that nobody holds — or that this holder holds still —
+    /// for `ttl`: whether it is held. The way one instance among several
+    /// becomes the one that schedules, and the way a job is held so no
+    /// other instance starts the same. Tried whatever the server's state:
+    /// a lease is what says whether the server answers at all.
+    pub async fn take(&self, key: &str, holder: &str, ttl: Duration) -> Option<bool> {
+        let mut conn = self.manager.clone();
+        let millis = ttl.as_millis().max(1) as u64;
+        let script = redis::Script::new(TAKE_IF_FREE_OR_HELD);
+        let key = key.to_string();
+        let holder = holder.to_string();
+        self.run("SET NX", async move {
+            script
+                .key(key)
+                .arg(holder)
+                .arg(millis)
+                .invoke_async::<i64>(&mut conn)
+                .await
+                .map(|taken| taken == 1)
+        })
+        .await
+    }
+
+    /// Keep a key taken for `ttl` more — only while it is still the
+    /// holder's, so a key that expired and was taken by another is not
+    /// taken back from under them. Whether it is still held.
+    pub async fn keep(&self, key: &str, holder: &str, ttl: Duration) -> Option<bool> {
+        let mut conn = self.manager.clone();
+        let millis = ttl.as_millis().max(1) as u64;
+        let script = redis::Script::new(KEEP_IF_HELD);
+        let key = key.to_string();
+        let holder = holder.to_string();
+        self.run("PEXPIRE", async move {
+            script
+                .key(key)
+                .arg(holder)
+                .arg(millis)
+                .invoke_async::<i64>(&mut conn)
+                .await
+                .map(|kept| kept == 1)
+        })
+        .await
+    }
+
+    /// Let a key go — only while it is the holder's. Tried whatever the
+    /// server's state: a key that is not let go of holds everybody else for
+    /// its whole TTL.
+    pub async fn release(&self, key: &str, holder: &str) -> Option<bool> {
+        let mut conn = self.manager.clone();
+        let script = redis::Script::new(RELEASE_IF_HELD);
+        let key = key.to_string();
+        let holder = holder.to_string();
+        self.run("DEL", async move {
+            script
+                .key(key)
+                .arg(holder)
+                .invoke_async::<i64>(&mut conn)
+                .await
+                .map(|released| released == 1)
+        })
+        .await
+    }
+
+    /// A field of a hash, written: what the instances announce themselves
+    /// in, one field each.
+    pub async fn hset_text(&self, key: &str, field: &str, value: &str) {
+        if !self.is_up() {
+            return;
+        }
+        let mut conn = self.manager.clone();
+        let (field, value) = (field.to_string(), value.to_string());
+        self.run("HSET", async move {
+            conn.hset::<_, _, _, ()>(key, field, value).await
+        })
+        .await;
+    }
+
+    /// Every field of a hash with its text. `None` when the server did not
+    /// answer.
+    pub async fn hgetall_text(&self, key: &str) -> Option<Vec<(String, String)>> {
+        if !self.is_up() {
+            return None;
+        }
+        let mut conn = self.manager.clone();
+        self.run("HGETALL", async move {
+            conn.hgetall::<_, Vec<(String, String)>>(key).await
+        })
+        .await
+    }
+
+    /// Fields of a hash, removed.
+    pub async fn hdel(&self, key: &str, fields: &[String]) {
+        if !self.is_up() || fields.is_empty() {
+            return;
+        }
+        let mut conn = self.manager.clone();
+        let fields = fields.to_vec();
+        self.run(
+            "HDEL",
+            async move { conn.hdel::<_, _, ()>(key, fields).await },
+        )
+        .await;
+    }
     pub async fn publish(&self, message: &str) {
         let mut conn = self.manager.clone();
         let channel = self.channel();
@@ -518,6 +742,54 @@ mod tests {
         assert_eq!(redis.count_prefix(&redis.key("items", "")).await, Some(1));
         assert_eq!(redis.count_prefix(&prefix).await, Some(2));
 
+        // A lease: taken once, kept by its holder alone, let go by them alone.
+        let lease = format!("{prefix}leader");
+        let ttl = Duration::from_secs(30);
+        assert_eq!(redis.take(&lease, "a", ttl).await, Some(true));
+        assert_eq!(redis.take(&lease, "b", ttl).await, Some(false));
+        assert_eq!(redis.keep(&lease, "a", ttl).await, Some(true));
+        assert_eq!(redis.keep(&lease, "b", ttl).await, Some(false));
+        assert_eq!(redis.release(&lease, "b").await, Some(false));
+        assert_eq!(redis.get_text(&lease).await, Some(Some("a".into())));
+        assert_eq!(redis.release(&lease, "a").await, Some(true));
+        assert_eq!(redis.get_text(&lease).await, Some(None));
+        assert_eq!(redis.take(&lease, "b", ttl).await, Some(true));
+
+        // A window counts, and the counters are read together.
+        let window = format!("{prefix}rl:x");
+        assert_eq!(redis.incr_window(&window, ttl).await, Some(1));
+        assert_eq!(redis.incr_window(&window, ttl).await, Some(2));
+        assert_eq!(redis.incr_by(&format!("{prefix}calls:a"), 5).await, Some(5));
+        assert_eq!(
+            redis
+                .mget_u64(&[
+                    format!("{prefix}calls:a"),
+                    format!("{prefix}calls:none"),
+                    window.clone()
+                ])
+                .await,
+            Some(vec![5, 0, 2])
+        );
+        redis.decr(&window).await;
+        assert_eq!(redis.get_u64(&window).await, Some(1));
+        let hash = format!("{prefix}instances");
+        redis.hset_text(&hash, "i1", "{}").await;
+        redis.hset_text(&hash, "i2", "[]").await;
+        let mut announced = redis.hgetall_text(&hash).await.unwrap();
+        announced.sort();
+        assert_eq!(
+            announced,
+            vec![
+                ("i1".to_string(), "{}".to_string()),
+                ("i2".to_string(), "[]".to_string())
+            ]
+        );
+        redis.hdel(&hash, &["i1".to_string()]).await;
+        assert_eq!(redis.hgetall_text(&hash).await.unwrap().len(), 1);
+        // Taken back by its own holder after a moment nobody answered.
+        assert_eq!(redis.take(&lease, "b", ttl).await, Some(true));
+        assert_eq!(redis.take(&lease, "a", ttl).await, Some(false));
+
         let info = redis.info().await.expect("INFO answers");
         assert!(!info.version.is_empty());
         assert!(info.uptime_seconds > 0 || info.used_memory > 0);
@@ -529,7 +801,7 @@ mod tests {
             .await;
         assert_eq!(redis.unlink_prefix(&redis.key("items", "")).await, 1);
         assert_eq!(redis.get(&other).await.as_deref(), Some(&b"two"[..]));
-        assert_eq!(redis.unlink_prefix(&prefix).await, 2);
+        assert!(redis.unlink_prefix(&prefix).await >= 2);
         assert_eq!(redis.count_prefix(&prefix).await, Some(0));
         assert_eq!(redis.errors.load(Relaxed), 0);
     }
