@@ -54,7 +54,9 @@ COPY --from=server /src/target/release/arr-metadata-server /usr/local/bin/arr-me
 # must be given it — `chown 65532:65532 ./data` on the host.
 COPY --from=server --chown=65532:65532 /out/data /data
 WORKDIR /data
-USER nonroot:nonroot
+# By number, so that a host or an orchestrator that checks for a non-root
+# user can tell without the image's passwd file.
+USER 65532:65532
 
 # Everything the server keeps, under the one directory a volume mounts:
 # the relative defaults would land under /data/data otherwise.

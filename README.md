@@ -854,9 +854,9 @@ docker compose -f compose.yaml -f compose.postgres.yaml up -d   # PostgreSQL
 ```
 
 The image is published at `ghcr.io/dim145/arr-metadata-server`, for amd64 and
-arm64: `latest` and `main` follow the main branch, and a release `v1.2.3` is
-`1.2.3` and `1.2` (`.github/workflows/docker.yml`). The compose files pull it;
-`docker compose build` builds it from the checkout instead.
+arm64, when a version is tagged: `v1.2.3` is `1.2.3`, `1.2` and `latest`
+(`.github/workflows/docker.yml`). The compose files pull it; `docker compose
+build` builds it from the checkout instead.
 
 The image is distroless: 67 MB, no shell, non-root, and it runs with a read-only
 root filesystem and every capability dropped. It answers its own health check.

@@ -1,17 +1,15 @@
 # Builds the container image and publishes it to this repository's registry
-# on GitHub, ghcr.io/<owner>/arr-metadata-server: on every push to main
-# (`main` and `latest`), on every version tag (`v1.2.3` → `1.2.3` and `1.2`)
-# and by hand. Each platform is built on a runner of its own kind — no
-# emulation, which a Rust build with fat LTO would take hours under — and
-# the two are joined into one multi-platform image at the end.
-#
-# Pull requests are built, not published, by ci.yml: a fork's pull request
-# holds a token that may write nothing here.
+# on GitHub, ghcr.io/<owner>/arr-metadata-server, when a version is tagged:
+# `v1.2.3` becomes `1.2.3`, `1.2` and `latest`. A push to main publishes
+# nothing — ci.yml builds the image there and throws it away — and a run
+# started by hand publishes under the branch's name alone, never `latest`.
+# Each platform is built on a runner of its own kind — no emulation, which
+# a Rust build with fat LTO would take hours under — and the two are joined
+# into one multi-platform image at the end.
 name: Publish the image
 
 on:
   push:
-    branches: [main]
     tags: ['v*.*.*']
   workflow_dispatch:
 
@@ -78,10 +76,11 @@ jobs:
           provenance: false
 
       - name: Keep the digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           mkdir -p /tmp/digests
-          digest="${{ steps.build.outputs.digest }}"
-          touch "/tmp/digests/${digest#sha256:}"
+          touch "/tmp/digests/${DIGEST#sha256:}"
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -112,11 +111,10 @@ jobs:
         with:
           images: ${{ env.IMAGE }}
           tags: |
-            type=ref,event=branch
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=sha
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/') }}
+            type=ref,event=branch
 
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
@@ -131,9 +129,13 @@ jobs:
       - name: Join the platforms under the tags
         working-directory: /tmp/digests
         run: |
-          docker buildx imagetools create \
-            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-            $(printf '${{ env.IMAGE }}@sha256:%s ' *)
+          tags=()
+          while IFS= read -r tag; do tags+=(-t "$tag"); done < <(jq -r '.tags[]' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          digests=()
+          for digest in *; do digests+=("$IMAGE@sha256:$digest"); done
+          docker buildx imagetools create "${tags[@]}" "${digests[@]}"
 
       - name: Say what was published
-        run: docker buildx imagetools inspect "${{ env.IMAGE }}:${{ steps.meta.outputs.version }}"
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: docker buildx imagetools inspect "$IMAGE:$VERSION"

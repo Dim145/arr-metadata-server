@@ -166,8 +166,7 @@ ok
 # Sonarr restarts itself once or twice after its first start; a call that
 # finds nobody listening is tried again, an answer of any kind is kept.
 sonarr() {
-  local try
-  for try in $(seq 1 30); do
+  for _ in $(seq 1 30); do
     if curl -sS -H "X-Api-Key: ${APIKEY}" "$@"; then return 0; fi
     sleep 2
   done
