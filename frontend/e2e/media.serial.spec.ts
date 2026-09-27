@@ -102,6 +102,25 @@ test.describe('the media kept', () => {
     expect(store).toBe(true)
     expect(media.find((m) => m.origin === origin)).toMatchObject({ status: 'stored', assetId })
 
+    // Addressed by a path, so a page opened by another name than the public
+    // URL still shows it: the policy allows this server's own origin only,
+    // over http, and an absolute address would be another origin there.
+    expect(url.startsWith('/media/')).toBe(true)
+    const here = new URL(page.url())
+    const otherHost = here.hostname === 'localhost' ? '127.0.0.1' : 'localhost'
+    await page.goto(`${here.protocol}//${otherHost}:${here.port}/work/${id}`)
+    const shown = await page.evaluate(
+      (src) =>
+        new Promise<boolean>((resolve) => {
+          const img = new Image()
+          img.onload = () => resolve(img.naturalWidth > 0)
+          img.onerror = () => resolve(false)
+          img.src = src
+        }),
+      url,
+    )
+    expect(shown, 'the copy is shown from a page at another host').toBe(true)
+
     await page.goto(`/admin/catalogue/${id}#artwork`)
     const panel = page.locator('#artwork')
     await expect(panel.getByText(/kept here|stockée ici/i).first()).toBeVisible()

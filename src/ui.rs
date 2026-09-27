@@ -254,13 +254,14 @@ async fn work_preview(state: &AppState, id: &str) -> Option<Preview> {
         .iter()
         .filter(|i| i.cover_type == CoverType::Poster && i.season_number.is_none())
         .min_by_key(|i| i.sort_order)
-        .map(|i| {
-            // A copy kept, addressed by a path: the provider's address does
-            // for a crawler that cannot follow the path.
+        .and_then(|i| {
+            // A copy kept, addressed by a path: under the public URL for a
+            // crawler, which cannot follow the path, or the provider's
+            // address when there is none.
             if i.url.starts_with(crate::media::ROUTE) {
-                state.media.unlocalize(&i.url)
+                state.media.for_elsewhere(&i.url)
             } else {
-                i.url.clone()
+                Some(i.url.clone())
             }
         })
         .filter(|url| url.starts_with("https://") || url.starts_with("http://"));

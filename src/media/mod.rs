@@ -176,9 +176,11 @@ impl Media {
             .cloned()
     }
 
-    /// Where a key is served from.
+    /// Where a key is served from: a path, which the interface follows
+    /// whatever name it reached this server by. The public URL is for what
+    /// is read elsewhere — see [`Self::for_elsewhere`].
     pub fn url_for(&self, key: &str) -> String {
-        format!("{}{ROUTE}{key}", self.base)
+        format!("{ROUTE}{key}")
     }
 
     /// The key an address of this server's names, whether it begins with the
@@ -247,29 +249,34 @@ impl Media {
         self.localize_optional(&mut item.theme_music);
     }
 
-    /// A work as a client elsewhere reads it. With no public URL, the copies
-    /// kept are addressed by paths only this server's own pages can follow:
-    /// such a client is given the providers' addresses back — and nothing
-    /// at all for an upload, which has no address but the path.
+    /// The address a reader elsewhere can follow, for one of this server's
+    /// own: under the public URL — or, with none set, the provider's, and
+    /// nothing at all for an upload, which has no address but the path.
+    pub fn for_elsewhere(&self, url: &str) -> Option<String> {
+        if !url.starts_with(ROUTE) {
+            return Some(url.to_string());
+        }
+        if !self.base.is_empty() {
+            return Some(format!("{}{url}", self.base));
+        }
+        let origin = self.unlocalize(url);
+        (origin.starts_with("https://") || origin.starts_with("http://")).then_some(origin)
+    }
+
+    /// A work as a client elsewhere reads it: every copy kept is addressed
+    /// by a path only this server's own pages can follow, so each is given
+    /// as [`Self::for_elsewhere`] has it.
     pub fn for_clients(&self, item: &mut MediaItem) {
-        if !self.base.is_empty() || !self.is_on() {
+        if !self.is_on() {
             return;
         }
-        // The provider's address, or none to give.
-        let back = |url: &str| -> Option<String> {
-            if !url.starts_with(ROUTE) {
-                return Some(url.to_string());
-            }
-            let origin = self.unlocalize(url);
-            (origin.starts_with("https://") || origin.starts_with("http://")).then_some(origin)
-        };
         let back_optional = |url: &mut Option<String>| {
             if let Some(current) = url.as_deref() {
-                *url = back(current);
+                *url = self.for_elsewhere(current);
             }
         };
         let back_images = |images: &mut Vec<crate::domain::Image>| {
-            images.retain_mut(|image| match back(&image.url) {
+            images.retain_mut(|image| match self.for_elsewhere(&image.url) {
                 Some(url) => {
                     image.url = url;
                     true
@@ -440,20 +447,27 @@ mod tests {
         media.localize(&mut item);
         assert_eq!(
             item.images[0].url,
-            format!("https://ams.example/media/{KEY}")
+            format!("/media/{KEY}"),
+            "a path, whatever name the interface reached the server by"
         );
         assert_eq!(
             item.theme_music.as_deref(),
             Some("https://p/theme.mp3"),
             "not kept: as it was"
         );
-
         assert_eq!(
             media.unlocalize(&item.images[0].url),
             "https://p/poster.jpg"
         );
+
+        // A client elsewhere is given the copy under the public URL.
+        media.for_clients(&mut item);
         assert_eq!(
-            media.unlocalize(&format!("/media/{KEY}")),
+            item.images[0].url,
+            format!("https://ams.example/media/{KEY}")
+        );
+        assert_eq!(
+            media.unlocalize(&item.images[0].url),
             "https://p/poster.jpg"
         );
         assert_eq!(
@@ -534,6 +548,18 @@ mod tests {
         let urls: Vec<&str> = item.images.iter().map(|i| i.url.as_str()).collect();
         assert_eq!(urls, ["https://p/a.jpg", "https://r/c.jpg"]);
         assert_eq!(item.theme_music, None);
+
+        // Under a public URL, an upload has an address like any other copy.
+        let public = self::tests::media(Some("https://ams.example"));
+        public.remember("upload:0123", UP, Thumb::None, "image/png");
+        assert_eq!(
+            public.for_elsewhere(&format!("/media/{UP}")).as_deref(),
+            Some(&*format!("https://ams.example/media/{UP}"))
+        );
+        assert_eq!(
+            public.for_elsewhere("https://r/c.jpg").as_deref(),
+            Some("https://r/c.jpg")
+        );
     }
 
     #[test]

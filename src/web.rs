@@ -140,9 +140,9 @@ fn build_router(state: AppState) -> Router {
             check_host,
         ))
         .layer(cors(&state))
-        .layer(header_layer(
+        .layer(SetResponseHeaderLayer::overriding(
             header::CONTENT_SECURITY_POLICY,
-            CONTENT_SECURITY_POLICY,
+            content_security_policy(&state),
         ))
         .layer(header_layer(header::REFERRER_POLICY, "no-referrer"))
         .layer(header_layer(header::X_CONTENT_TYPE_OPTIONS, "nosniff"))
@@ -251,6 +251,56 @@ const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; \
      base-uri 'self'; \
      form-action 'self'; \
      frame-ancestors 'none'";
+
+/// The policy, with the bucket a reader is redirected to when the policy
+/// does not allow it already: `https:` covers Amazon's own and any bucket
+/// behind TLS, but a Garage on the home network speaks http.
+fn content_security_policy(state: &AppState) -> HeaderValue {
+    let bucket = state
+        .config
+        .media
+        .s3
+        .as_ref()
+        .map(bucket_origins)
+        .unwrap_or_default();
+    if bucket.is_empty() {
+        return HeaderValue::from_static(CONTENT_SECURITY_POLICY);
+    }
+    let bucket = bucket.join(" ");
+    let policy = CONTENT_SECURITY_POLICY
+        .replace(
+            "img-src 'self' data: https:;",
+            &format!("img-src 'self' data: https: {bucket};"),
+        )
+        .replace(
+            "media-src 'self' https:;",
+            &format!("media-src 'self' https: {bucket};"),
+        );
+    HeaderValue::from_str(&policy)
+        .unwrap_or_else(|_| HeaderValue::from_static(CONTENT_SECURITY_POLICY))
+}
+
+/// The origins a bucket's presigned addresses are on, when they are not on
+/// https: the endpoint's, and the bucket's own host under it when the bucket
+/// is addressed as a subdomain.
+fn bucket_origins(s3: &crate::config::S3) -> Vec<String> {
+    let Some(url) = s3
+        .endpoint
+        .as_deref()
+        .and_then(|endpoint| reqwest::Url::parse(endpoint).ok())
+    else {
+        return Vec::new();
+    };
+    let Some(host) = url.host_str().filter(|_| url.scheme() == "http") else {
+        return Vec::new();
+    };
+    let port = url.port().map(|p| format!(":{p}")).unwrap_or_default();
+    let mut origins = vec![format!("http://{host}{port}")];
+    if !s3.path_style {
+        origins.push(format!("http://{}.{host}{port}", s3.bucket));
+    }
+    origins
+}
 
 /// One fixed response header, on every answer this server gives.
 fn header_layer(
@@ -390,4 +440,56 @@ mod tests {
     }
 
     use super::*;
+}
+
+#[cfg(test)]
+mod policy_tests {
+    use super::*;
+
+    fn s3(endpoint: Option<&str>, path_style: bool) -> crate::config::S3 {
+        crate::config::S3 {
+            endpoint: endpoint.map(str::to_string),
+            region: "garage".into(),
+            bucket: "ams-media".into(),
+            access_key: "k".into(),
+            secret_key: "s".into(),
+            prefix: None,
+            path_style,
+        }
+    }
+
+    /// A bucket over plain http is let in, by its origin; one behind TLS,
+    /// or Amazon's own, is allowed already.
+    #[test]
+    fn a_bucket_on_http_is_let_into_the_policy() {
+        assert_eq!(
+            bucket_origins(&s3(Some("http://127.0.0.1:3900"), true)),
+            ["http://127.0.0.1:3900"]
+        );
+        assert_eq!(
+            bucket_origins(&s3(Some("http://garage.lan"), false)),
+            ["http://garage.lan", "http://ams-media.garage.lan"]
+        );
+        assert!(bucket_origins(&s3(Some("https://s3.example"), true)).is_empty());
+        assert!(bucket_origins(&s3(None, true)).is_empty());
+        assert!(bucket_origins(&s3(Some("not a url"), true)).is_empty());
+    }
+
+    /// The directives the bucket is added to are there to be added to.
+    #[test]
+    fn the_policy_names_the_directives_a_bucket_joins() {
+        assert!(CONTENT_SECURITY_POLICY.contains("img-src 'self' data: https:;"));
+        assert!(CONTENT_SECURITY_POLICY.contains("media-src 'self' https:;"));
+        let policy = CONTENT_SECURITY_POLICY
+            .replace(
+                "img-src 'self' data: https:;",
+                "img-src 'self' data: https: http://127.0.0.1:3900;",
+            )
+            .replace(
+                "media-src 'self' https:;",
+                "media-src 'self' https: http://127.0.0.1:3900;",
+            );
+        assert!(HeaderValue::from_str(&policy).is_ok());
+        assert_eq!(policy.matches("http://127.0.0.1:3900").count(), 2);
+    }
 }
