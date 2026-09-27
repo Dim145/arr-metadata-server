@@ -7,18 +7,19 @@
  * row that carries one says whose it is in a word as well as a colour.
  */
 
-import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { useState, type ReactNode } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useRef, useState, type ReactNode } from 'react'
 
 import { api } from '../lib/api'
 import { cn } from '../lib/cn'
 import * as fmt from '../lib/format'
 import { useI18n } from '../lib/i18n'
-import type { MediaItem } from '../lib/types'
+import type { MediaItem, Uploaded, WorkMedia, WorkMedium } from '../lib/types'
 import { seasonName } from '../lib/media'
 import { Artwork as Picture } from './media'
 import {
   Button,
+  Chip,
   Dialog,
   FormField,
   Glyph,
@@ -115,10 +116,13 @@ function ChildRow({
   children,
   manual,
   onRemove,
+  extra,
 }: {
   children: ReactNode
   manual: boolean
   onRemove?: () => void
+  /** Beside the row's own controls: what is kept of it, and the way to forget it. */
+  extra?: ReactNode
 }) {
   const { t } = useI18n()
 
@@ -130,6 +134,7 @@ function ChildRow({
       )}
     >
       <div className="min-w-0 flex-1">{children}</div>
+      {extra}
       {manual && onRemove ? (
         <>
           <Provenance manual label={t.admin.editor.children.yours} />
@@ -388,84 +393,121 @@ function AlternativeTitles({ item, onDone, onRemove }: PanelProps) {
 
 function Artwork({ item, onDone, onRemove }: PanelProps) {
   const { t } = useI18n()
+  const c = t.admin.editor.children
   const add = useAdd(item.id, 'images', onDone)
+  const queryClient = useQueryClient()
 
   const [url, setUrl] = useState('')
   const [coverType, setCoverType] = useState('poster')
 
+  // What is kept of each address the work points at: shown beside the
+  // picture, and the way to forget a copy.
+  const media = useQuery({
+    queryKey: ['item', item.id, 'media'],
+    queryFn: () => api.get<WorkMedia>(`/items/${item.id}/media`),
+    refetchInterval: (q) => (q.state.data?.media.some((m) => m.status === 'pending') ? 5_000 : false),
+  })
+  const keptOf = (imageUrl: string) =>
+    media.data?.media.find((m) => m.url === imageUrl || m.origin === imageUrl)
+  const storeOn = media.data?.store ?? false
+
+  const done = () => {
+    void queryClient.invalidateQueries({ queryKey: ['item', item.id, 'media'] })
+    onDone()
+  }
+  const forget = useMutation({
+    mutationFn: (assetId: string) => api.delete(`/items/${item.id}/media/${assetId}`),
+    onSuccess: done,
+  })
+
   const images = item.images ?? []
   const kinds = [
-    ['poster', t.admin.editor.children.poster],
-    ['fanart', t.admin.editor.children.fanart],
-    ['banner', t.admin.editor.children.banner],
-    ['clearlogo', t.admin.editor.children.clearlogo],
+    ['poster', c.poster],
+    ['fanart', c.fanart],
+    ['banner', c.banner],
+    ['clearlogo', c.clearlogo],
   ] as const
 
   // The four offered for adding, plus the two providers also send.
   const coverLabel = (kind: string) =>
     kinds.find(([value]) => value === kind)?.[1] ??
-    ({ landscape: t.admin.editor.children.landscape, clearart: t.admin.editor.children.clearart } as Record<string, string>)[kind] ??
+    ({ landscape: c.landscape, clearart: c.clearart } as Record<string, string>)[kind] ??
     kind
 
   return (
     <Panel id="artwork" className="rise" style={{ animationDelay: '280ms' }}>
-      <PanelHead title={t.admin.editor.children.artwork} action={<Count>{images.length}</Count>} />
-      <p className="px-5 pt-3 text-xs leading-relaxed text-bone-faint">
-        {t.admin.editor.children.artworkHint}
-      </p>
+      <PanelHead title={c.artwork} action={<Count>{images.length}</Count>} />
+      <p className="px-5 pt-3 text-xs leading-relaxed text-bone-faint">{c.artworkHint}</p>
 
       {images.length === 0 ? (
-        <Empty>{t.admin.editor.children.none}</Empty>
+        <Empty>{c.none}</Empty>
       ) : (
         <ul className="mt-2 max-h-56 divide-y divide-rule overflow-y-auto"
           // Focusable and named: its rows hold no control of their own when
           // they came from a source, so without this a keyboard cannot
           // scroll the part of the list that does not fit.
           tabIndex={0}
-          aria-label={t.admin.editor.children.artwork}
+          aria-label={c.artwork}
         >
-          {images.map((image) => (
-            <ChildRow
-              key={image.id}
-              manual={image.isManual}
-              onRemove={() => onRemove({ path: `images/${image.id}`, label: image.url })}
-            >
-              {/* The picture itself, small. Eighty-two lines of URLs said which
-                  images existed and nothing about which one was which — the
-                  only thing anybody opening this list wants to know. */}
-              <span className="flex min-w-0 items-center gap-3">
-                <span
-                  className={cn(
-                    'shrink-0 overflow-hidden rounded-card border border-rule bg-ink-high',
-                    image.coverType === 'poster' ? 'aspect-2/3 w-8' : 'aspect-video w-16',
-                  )}
-                >
-                  <Picture url={image.url} role="headshot" alt="" className="size-full object-cover" />
-                </span>
-                <span className="min-w-0">
-                  <span className="block text-xs text-bone">
-                    {coverLabel(image.coverType)}
-                    {image.seasonNumber != null ? ` · ${t.work.season(image.seasonNumber)}` : ''}
+          {images.map((image) => {
+            const kept = keptOf(image.url)
+            return (
+              <ChildRow
+                key={image.id}
+                manual={image.isManual}
+                onRemove={() => onRemove({ path: `images/${image.id}`, label: image.url })}
+                extra={
+                  <Kept
+                    medium={kept}
+                    onForget={forget.mutate}
+                    busy={forget.isPending && forget.variables === kept?.assetId}
+                  />
+                }
+              >
+                {/* The picture itself, small. Eighty-two lines of URLs said which
+                    images existed and nothing about which one was which — the
+                    only thing anybody opening this list wants to know. */}
+                <span className="flex min-w-0 items-center gap-3">
+                  <span
+                    className={cn(
+                      'shrink-0 overflow-hidden rounded-card border border-rule bg-ink-high',
+                      image.coverType === 'poster' ? 'aspect-2/3 w-8' : 'aspect-video w-16',
+                    )}
+                  >
+                    <Picture url={image.url} role="headshot" alt="" className="size-full object-cover" />
                   </span>
-                  <span className="block truncate font-mono text-[0.6875rem] text-bone-faint" title={image.url}>
-                    {hostOf(image.url)}
+                  <span className="min-w-0">
+                    <span className="block text-xs text-bone">
+                      {coverLabel(image.coverType)}
+                      {image.seasonNumber != null ? ` · ${t.work.season(image.seasonNumber)}` : ''}
+                    </span>
+                    <span className="block truncate font-mono text-[0.6875rem] text-bone-faint" title={kept?.origin ?? image.url}>
+                      {kept?.origin.startsWith('upload:')
+                        ? c.uploadedBy(kept.uploadedBy ?? '')
+                        : hostOf(kept?.origin ?? image.url)}
+                    </span>
                   </span>
                 </span>
-              </span>
-            </ChildRow>
-          ))}
+              </ChildRow>
+            )
+          })}
         </ul>
       )}
+      {forget.isError ? (
+        <p role="alert" className="px-5 py-2 text-xs text-vermillion">
+          {forget.error.message || t.common.actionFailed}
+        </p>
+      ) : null}
 
       <AddForm
-        label={t.admin.editor.children.addImage}
+        label={c.addImage}
         pending={add.isPending}
         error={add.error}
         onSubmit={() =>
           add.mutate({ coverType, url, sortOrder: 0 }, { onSuccess: () => setUrl('') })
         }
       >
-        <FormField label={t.admin.editor.children.imageKind} htmlFor="image-kind">
+        <FormField label={c.imageKind} htmlFor="image-kind">
           <Select
             id="image-kind"
             value={coverType}
@@ -478,7 +520,7 @@ function Artwork({ item, onDone, onRemove }: PanelProps) {
             ))}
           </Select>
         </FormField>
-        <FormField label={t.admin.editor.children.url} htmlFor="image-url">
+        <FormField label={c.url} htmlFor="image-url">
           <Input
             id="image-url"
             required
@@ -489,7 +531,188 @@ function Artwork({ item, onDone, onRemove }: PanelProps) {
           />
         </FormField>
       </AddForm>
+
+      {storeOn ? (
+        <>
+          <UploadForm item={item} kind="image" kinds={kinds} onDone={done} />
+          <UploadForm item={item} kind="theme" kinds={kinds} onDone={done} />
+        </>
+      ) : media.data ? (
+        <p className="border-t border-rule px-5 py-3 text-xs leading-relaxed text-bone-faint">{c.storeOff}</p>
+      ) : null}
     </Panel>
+  )
+}
+
+/** What is kept of a picture, and the way to forget the copy. */
+function Kept({
+  medium,
+  onForget,
+  busy,
+}: {
+  medium: WorkMedium | undefined
+  onForget: (assetId: string) => void
+  busy: boolean
+}) {
+  const { t } = useI18n()
+  const c = t.admin.editor.children
+  if (!medium || medium.status === 'absent') return null
+
+  if (medium.status === 'stored') {
+    return (
+      <>
+        <Chip tone="provider">
+          <Glyph name="database" className="size-3" />
+          {c.kept}
+        </Chip>
+        {medium.assetId && !medium.origin.startsWith('upload:') ? (
+          <IconButton
+            glyph="cloud"
+            label={c.forgetCopy}
+            busy={busy}
+            onClick={() => onForget(medium.assetId!)}
+          />
+        ) : null}
+      </>
+    )
+  }
+  return (
+    <Chip tone={medium.status === 'failed' ? 'accent' : 'neutral'}>
+      <Glyph name={medium.status === 'failed' ? 'alert' : 'clock'} className="size-3" />
+      {medium.status === 'failed' ? c.keptFailed : c.keptPending}
+    </Chip>
+  )
+}
+
+/**
+ * A file put on the work: a picture, for a kind and maybe a season, or its
+ * theme. The file goes to the server as it is; the server reads what it is.
+ */
+function UploadForm({
+  item,
+  kind,
+  kinds,
+  onDone,
+}: {
+  item: MediaItem
+  kind: 'image' | 'theme'
+  kinds: readonly (readonly [string, string])[]
+  onDone: () => void
+}) {
+  const { t } = useI18n()
+  const c = t.admin.editor.children
+  const [open, setOpen] = useState(false)
+  const [coverType, setCoverType] = useState('poster')
+  const [season, setSeason] = useState('')
+  const [file, setFile] = useState<File | null>(null)
+  const input = useRef<HTMLInputElement>(null)
+  // The button the form replaces: focus comes back to it on cancel.
+  const trigger = useRef<HTMLButtonElement>(null)
+
+  const upload = useMutation({
+    mutationFn: (form: FormData) => api.upload<Uploaded>(`/items/${item.id}/media`, form),
+    onSuccess: () => {
+      setFile(null)
+      if (input.current) input.current.value = ''
+      onDone()
+    },
+  })
+
+  const ids = `upload-${kind}`
+  if (!open) {
+    return (
+      <div className="border-t border-rule px-5 py-3">
+        <Button ref={trigger} size="sm" onClick={() => setOpen(true)}>
+          <Glyph name={kind === 'image' ? 'image' : 'play'} className="size-4" />
+          {kind === 'image' ? c.upload : c.uploadTheme}
+        </Button>
+        {upload.isSuccess ? (
+          <span role="status" className="ml-3 text-xs text-moss">
+            {c.uploaded}
+          </span>
+        ) : null}
+      </div>
+    )
+  }
+
+  return (
+    <form
+      className="border-t border-rule px-5 py-4"
+      onSubmit={(event) => {
+        event.preventDefault()
+        if (!file) return
+        const form = new FormData()
+        form.set('file', file)
+        form.set('kind', kind)
+        if (kind === 'image') {
+          form.set('coverType', coverType)
+          if (season) form.set('seasonNumber', season)
+        }
+        upload.mutate(form)
+      }}
+    >
+      <p className="mb-3 text-sm text-bone">{kind === 'image' ? c.upload : c.uploadTheme}</p>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <FormField label={c.uploadFile} htmlFor={`${ids}-file`} hint={kind === 'image' ? c.uploadHint : c.themeHint}>
+          <input
+            ref={input}
+            id={`${ids}-file`}
+            type="file"
+            required
+            autoFocus
+            accept={kind === 'image' ? 'image/jpeg,image/png,image/webp,image/gif,image/avif' : 'audio/*'}
+            className="block w-full text-sm text-bone-dim file:mr-3 file:rounded-full file:border file:border-rule-bright file:bg-transparent file:px-3 file:py-1.5 file:text-sm file:text-bone"
+            onChange={(event) => setFile(event.target.files?.[0] ?? null)}
+          />
+        </FormField>
+        {kind === 'image' ? (
+          <>
+            <FormField label={c.imageKind} htmlFor={`${ids}-kind`}>
+              <Select id={`${ids}-kind`} value={coverType} onChange={(event) => setCoverType(event.target.value)}>
+                {kinds.map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
+              </Select>
+            </FormField>
+            {item.seasons?.length ? (
+              <FormField label={c.uploadSeason} htmlFor={`${ids}-season`}>
+                <Select id={`${ids}-season`} value={season} onChange={(event) => setSeason(event.target.value)}>
+                  <option value="">{c.wholeWork}</option>
+                  {item.seasons.map((s) => (
+                    <option key={s.seasonNumber} value={String(s.seasonNumber)}>
+                      {seasonName(s.title, s.seasonNumber, t.work.season)}
+                    </option>
+                  ))}
+                </Select>
+              </FormField>
+            ) : null}
+          </>
+        ) : null}
+      </div>
+      {upload.isError ? (
+        <p role="alert" className="mt-3 text-xs text-vermillion">
+          {upload.error.message || t.common.actionFailed}
+        </p>
+      ) : null}
+      <div className="mt-3 flex flex-wrap gap-2">
+        <Button type="submit" variant="primary" size="sm" disabled={!file || upload.isPending}>
+          {upload.isPending ? <Spinner className="size-4" /> : <Glyph name="download" className="size-4" />}
+          {upload.isPending ? c.uploading : kind === 'image' ? c.upload : c.uploadTheme}
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          onClick={() => {
+            setOpen(false)
+            requestAnimationFrame(() => trigger.current?.focus())
+          }}
+        >
+          {t.common.cancel}
+        </Button>
+      </div>
+    </form>
   )
 }
 

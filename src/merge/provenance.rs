@@ -30,7 +30,6 @@ use super::{Contribution, DATE_CHECKED, TVDB_NUMBERED};
 /// provider back what it gave when another is synced alone.
 const ALSO_TRACKED: &[&str] = &[
     "contentRatingCountry",
-    "themeMusic",
     "popularity",
     "collectionTmdbId",
     "credits",

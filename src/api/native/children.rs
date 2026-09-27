@@ -371,9 +371,12 @@ async fn remove_image(
 ) -> AppResult<StatusCode> {
     writable(&state, &identity, &id).await?;
 
+    // An upload's file goes with its row.
+    let url = repo::child::image_url(&state.db, &id, &image_id).await?;
     if !repo::child::remove_image(&state.db, &id, &image_id).await? {
         return Err(AppError::NotFound);
     }
+    super::media::forget_uploads(&state, url.as_deref()).await;
 
     finish(&state, &identity, &ip, &id, "removed an image").await;
 
@@ -605,6 +608,14 @@ async fn writable(
 /// credential that should only be able to name a picture.
 fn check_url(url: &str) -> AppResult<()> {
     let trimmed = url.trim();
+
+    // Not one of this server's own: an address that only means something
+    // while the copy is kept.
+    if crate::media::Media::key_in(trimmed).is_some() {
+        return Err(AppError::BadRequest(
+            "that is this server's own copy; give the provider's address".into(),
+        ));
+    }
 
     if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
         return Err(AppError::BadRequest(

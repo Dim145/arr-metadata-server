@@ -470,7 +470,14 @@ export interface Job {
   work?: { id: string; title: string; kind: MediaKind }
 }
 
-export type TaskId = 'refresh.sweep' | 'refresh.all' | 'import.anime' | 'import.imdb' | 'export.nfo'
+export type TaskId =
+  | 'refresh.sweep'
+  | 'refresh.all'
+  | 'import.anime'
+  | 'import.imdb'
+  | 'export.nfo'
+  | 'media.store'
+  | 'media.sweep'
 
 /** A background task as it stands: when it runs, how it last went. */
 export interface Task {
@@ -629,6 +636,68 @@ export interface SourceRule {
   authorities?: string[]
   /** When it applies to one kind of work only. */
   only?: 'series' | 'movie'
+}
+
+/** How the media store stands. */
+export interface MediaStatus {
+  backend: 'off' | 'filesystem' | 's3'
+  storing: boolean
+  serve: 'proxy' | 'redirect' | string
+  people: boolean
+  audio: boolean
+  publicUrl: boolean
+  counts: { pending: number; stored: number; failed: number; bytes: number }
+  fetching: boolean
+  sweeping: boolean
+}
+
+/** One medium kept, or in line to be. */
+export interface MediaAsset {
+  id: string
+  origin: string
+  kind: 'image' | 'audio'
+  status: 'pending' | 'stored' | 'failed'
+  key?: string
+  contentType?: string
+  bytes?: number
+  width?: number
+  height?: number
+  hasThumb: boolean
+  attempts: number
+  error?: string
+  nextAttemptAt?: string
+  wantedBy?: string
+  uploadedBy?: string
+  createdAt: string
+  storedAt?: string
+}
+
+/** One address a work points at, and what is kept of it. */
+export interface WorkMedium {
+  origin: string
+  url: string
+  kind: 'image' | 'audio'
+  status: 'stored' | 'pending' | 'failed' | 'absent'
+  assetId?: string
+  bytes?: number
+  width?: number
+  height?: number
+  attempts?: number
+  error?: string
+  uploadedBy?: string
+}
+
+/** A work's media, and whether a store is configured at all. */
+export interface WorkMedia {
+  store: boolean
+  media: WorkMedium[]
+}
+
+export interface Uploaded {
+  assetId: string
+  origin: string
+  url: string
+  item: MediaItem
 }
 
 export interface ItemPage {

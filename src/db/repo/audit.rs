@@ -45,6 +45,8 @@ actions! {
     ItemUpdated => "item.updated",
     ItemRefreshed => "item.refreshed",
     ItemSynced => "item.synced",
+    MediaUploaded => "media.uploaded",
+    MediaRemoved => "media.removed",
     ItemDeleted => "item.deleted",
     OverrideSet => "override.set",
     OverrideRemoved => "override.removed",

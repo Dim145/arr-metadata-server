@@ -77,6 +77,7 @@ async fn show(
 
     // Echo back the id the client asked for: Sonarr has already stored it, and
     // a different one in the response would orphan the series.
+    state.media.for_clients(&mut item);
     Ok(Json(from_item(&item, tvdb_id, &language)))
 }
 
@@ -110,6 +111,7 @@ async fn search(
     // each of ten search results would turn one search into dozens of calls.
     for item in &mut items {
         language::apply_shallow(&state, item, &language);
+        state.media.for_clients(item);
     }
 
     // A result Sonarr cannot address is worse than no result: it would show in

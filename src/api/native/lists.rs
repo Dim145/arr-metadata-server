@@ -783,6 +783,7 @@ async fn resolve(
         }
     }
     for item in &mut items {
+        state.media.localize(item);
         service::as_card(item);
     }
     service::redact_for_reader(identity, &mut items);

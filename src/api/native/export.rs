@@ -81,6 +81,10 @@ async fn item_nfo(State(state): State<AppState>, Path(id): Path<String>) -> AppR
         MediaKind::Movie => "movie.nfo",
     };
 
+    // A document read elsewhere: the copies kept are named as a media
+    // server can fetch them, or as their providers do.
+    let mut item = item;
+    state.media.for_clients(&mut item);
     Ok(xml(nfo::for_item(&item), filename))
 }
 
@@ -105,6 +109,8 @@ async fn episode_nfo(
         .await?
         .ok_or(AppError::NotFound)?;
 
+    let mut item = item;
+    state.media.for_clients(&mut item);
     let episode = item
         .episodes
         .iter()
@@ -332,8 +338,12 @@ async fn write_everything(
         let Some(item) = service::load(state, &shallow.id).await? else {
             continue;
         };
+        // The documents name the pictures as a media server can fetch them;
+        // the pictures themselves are taken from the store when kept.
+        let mut named = item.clone();
+        state.media.for_clients(&mut named);
 
-        match write_one(root, &nfo::relative_path(&item), &nfo::for_item(&item)).await {
+        match write_one(root, &nfo::relative_path(&named), &nfo::for_item(&named)).await {
             Ok(()) => summary.works += 1,
             Err(e) => {
                 tracing::warn!(id = %item.id, error = %e, "could not write the work's nfo");
@@ -342,9 +352,9 @@ async fn write_everything(
             }
         }
 
-        for episode in &item.episodes {
-            let path = nfo::episode_relative_path(&item, episode);
-            match write_one(root, &path, &nfo::for_episode(&item, episode)).await {
+        for episode in &named.episodes {
+            let path = nfo::episode_relative_path(&named, episode);
+            match write_one(root, &path, &nfo::for_episode(&named, episode)).await {
                 Ok(()) => summary.episodes += 1,
                 Err(e) => {
                     tracing::warn!(id = %item.id, %path, error = %e, "could not write an episode nfo");
@@ -384,7 +394,7 @@ async fn write_artwork(
     let mut failed = 0;
 
     for download in artwork::plan(item) {
-        match artwork::fetch_one(&state.http, root, &download).await {
+        match artwork::fetch_one(state, root, &download).await {
             Ok(true) => written += 1,
             // Already on disk from an earlier export.
             Ok(false) => {}

@@ -54,6 +54,10 @@ pub enum AppError {
 
     #[error(transparent)]
     Internal(anyhow::Error),
+
+    /// A body larger than the route takes.
+    #[error("{0}")]
+    PayloadTooLarge(String),
 }
 
 /// Most failures are internal, but a unique-constraint violation is the caller
@@ -73,6 +77,7 @@ impl AppError {
         match self {
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
+            Self::PayloadTooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
             Self::Forbidden => StatusCode::FORBIDDEN,
             Self::Conflict(_) => StatusCode::CONFLICT,
@@ -91,6 +96,7 @@ impl AppError {
         match self {
             Self::NotFound => "not_found",
             Self::BadRequest(_) => "bad_request",
+            Self::PayloadTooLarge(_) => "payload_too_large",
             Self::Unauthorized => "unauthorized",
             Self::Forbidden => "forbidden",
             Self::Conflict(_) => "conflict",
@@ -109,6 +115,7 @@ impl AppError {
             // These carry no internal detail, so the Display form is safe to expose.
             Self::NotFound
             | Self::BadRequest(_)
+            | Self::PayloadTooLarge(_)
             | Self::Unauthorized
             | Self::Forbidden
             | Self::Conflict(_)

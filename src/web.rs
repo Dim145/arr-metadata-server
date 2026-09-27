@@ -15,14 +15,16 @@ use utoipa_swagger_ui::SwaggerUi;
 
 use tower_http::{
     catch_panic::CatchPanicLayer, compression::CompressionLayer, cors::CorsLayer,
-    limit::RequestBodyLimitLayer, normalize_path::NormalizePathLayer,
-    set_header::SetResponseHeaderLayer, timeout::TimeoutLayer, trace::TraceLayer,
+    normalize_path::NormalizePathLayer, set_header::SetResponseHeaderLayer, timeout::TimeoutLayer,
+    trace::TraceLayer,
 };
 
 use crate::{api, state::AppState};
 
-/// Largest request body accepted anywhere. The only sizeable one is a bulk
-/// movie lookup, which is a list of integers.
+/// Largest request body accepted anywhere, but for an upload: the only
+/// sizeable one otherwise is a bulk movie lookup, which is a list of
+/// integers. Axum's own limit rather than a layer that cuts every body, so
+/// the one route that takes a file can be given more.
 const MAX_BODY_BYTES: usize = 1024 * 1024;
 
 pub async fn serve(state: AppState) -> Result<()> {
@@ -33,6 +35,9 @@ pub async fn serve(state: AppState) -> Result<()> {
     tokio::spawn(crate::jobs::refresh::run(state.clone()));
     tokio::spawn(crate::jobs::datasets::run(state.clone()));
     tokio::spawn(crate::jobs::listing::run(state.clone()));
+    // The media in line, fetched; the media nobody points at, swept.
+    tokio::spawn(crate::media::worker::run(state.clone()));
+    tokio::spawn(crate::media::worker::run_sweeps(state.clone()));
 
     // Sonarr builds its URLs from `.../v1/tvdb/{route}/{language}/` — with a
     // trailing slash — and its hostname is compiled in, so there is no way to
@@ -109,6 +114,9 @@ fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/ready", get(ready))
+        // The media kept, outside every guard: a key is a hash nobody
+        // guesses, and Sonarr fetches a poster with no credential.
+        .route("/media/{key}", get(crate::media::serve::get))
         // Every API answer carries a validator, so a client that holds one is
         // told "unchanged" rather than sent it again. Inside the compression,
         // which would otherwise vary the bytes the tag is taken from.
@@ -138,8 +146,15 @@ fn build_router(state: AppState) -> Router {
         ))
         .layer(header_layer(header::REFERRER_POLICY, "no-referrer"))
         .layer(header_layer(header::X_CONTENT_TYPE_OPTIONS, "nosniff"))
-        .layer(RequestBodyLimitLayer::new(MAX_BODY_BYTES))
-        .layer(CompressionLayer::new())
+        .layer(axum::extract::DefaultBodyLimit::max(MAX_BODY_BYTES))
+        // Not the sounds: a song is already as small as it gets, and a range
+        // of one must arrive as the bytes asked for.
+        .layer(CompressionLayer::new().compress_when({
+            use tower_http::compression::Predicate as _;
+            tower_http::compression::DefaultPredicate::new().and(
+                tower_http::compression::predicate::NotForContentType::new("audio/"),
+            )
+        }))
         .layer(TimeoutLayer::with_status_code(
             StatusCode::GATEWAY_TIMEOUT,
             timeout,

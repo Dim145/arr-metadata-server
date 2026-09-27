@@ -232,6 +232,7 @@ async fn list(
 
     let total = repo::item::count_matching(&state.db, &query_for_count).await?;
     for item in &mut items {
+        state.media.localize(item);
         service::as_card(item);
     }
     service::redact_for_reader(&identity, &mut items);

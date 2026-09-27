@@ -69,6 +69,10 @@ pub async fn load(state: &AppState, id: &str) -> Result<Option<MediaItem>> {
     let overrides = repo::override_field::list(&state.db, id).await?;
     fields::apply(&mut item, &overrides)?;
 
+    // After the locks: a still put on an episode by hand is a provider's
+    // address too, and may be kept.
+    state.media.localize(&mut item);
+
     if let Ok(encoded) = serde_json::to_string(&item) {
         state.caches.items.insert(cache_key, encoded).await;
     }
@@ -152,6 +156,12 @@ pub async fn add_recuts(state: &AppState, item: &mut MediaItem) {
                         .relations
                         .iter()
                         .any(|known| known.work_id == r.work_id)
+                })
+                .map(|mut r| {
+                    if let Some(image) = &r.image {
+                        r.image = Some(state.media.localized(image));
+                    }
+                    r
                 })
                 .collect();
             item.relations.splice(0..0, fresh);
@@ -577,9 +587,14 @@ async fn after_write(
 
     // Re-read so the caller sees the same thing every later request will: the
     // stored row, with manual overrides applied on top.
-    load(state, id)
+    let item = load(state, id)
         .await?
-        .ok_or_else(|| anyhow::anyhow!("item vanished immediately after being written"))
+        .ok_or_else(|| anyhow::anyhow!("item vanished immediately after being written"))?;
+
+    // Its pictures and its theme, in line to be kept.
+    state.media.enqueue_for(state, &item).await;
+
+    Ok(item)
 }
 
 /// When this work should next be refetched.

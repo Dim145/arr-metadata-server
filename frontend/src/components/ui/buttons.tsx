@@ -8,6 +8,8 @@ import { cn } from '../../lib/cn'
 import { Glyph, type GlyphName } from './glyphs'
 
 type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
+  /** The element itself, for whoever has to give it focus back. */
+  ref?: React.Ref<HTMLButtonElement>
   variant?: 'primary' | 'ghost' | 'quiet' | 'danger'
   size?: 'sm' | 'md'
 }

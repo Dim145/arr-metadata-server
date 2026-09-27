@@ -81,6 +81,20 @@ const SIZES: Record<ImageRole, string> = {
 }
 
 const TMDB = /^(https:\/\/image\.tmdb\.org\/t\/p\/)original(\/[^?#]+\.(?:jpe?g|png|webp))$/i
+/** A copy this server keeps: its hash, and a thumbnail beside it under `-t`. */
+const KEPT = /^(.*\/media\/)([0-9a-f]{64})\.(?:jpe?g|png|webp|gif|avif)$/i
+/** The roles a thumbnail is wide enough for, and how wide it is drawn. */
+const KEPT_THUMB_WIDTH: Partial<Record<ImageRole, number>> = {
+  card: 480,
+  thumb: 480,
+  poster: 480,
+  headshot: 480,
+  portrait: 480,
+  logo: 960,
+  still: 960,
+  frame: 960,
+  backdrop: 960,
+}
 const TVDB = /^(https:\/\/artworks\.thetvdb\.com\/banners\/.+?)(\.(?:jpe?g|png))$/i
 
 /** The attributes an `<img>` needs to fetch no more than it will show. */
@@ -102,6 +116,20 @@ export interface Sourced {
  * hand, is used as it is.
  */
 export function sized(url: string, role: ImageRole): Sourced {
+  // A copy kept here: the thumbnail for the small roles, with the original
+  // for a wide screen — and served whole where no thumbnail was made.
+  const kept = KEPT.exec(url)
+  const width = KEPT_THUMB_WIDTH[role]
+  if (kept && width) {
+    const thumb = `${kept[1]}${kept[2]}-t.jpg`
+    return {
+      src: thumb,
+      srcSet: `${thumb} ${width}w, ${url} 2000w`,
+      sizes: SIZES[role],
+      original: url,
+    }
+  }
+
   const tmdb = TMDB.exec(url)
   const [, base, path] = tmdb ?? []
   if (base && path) {

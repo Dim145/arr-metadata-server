@@ -489,6 +489,7 @@ async fn cards(
         }
     }
     for item in items.iter_mut() {
+        state.media.localize(item);
         service::as_card(item);
     }
     service::redact_for_reader(identity, items);

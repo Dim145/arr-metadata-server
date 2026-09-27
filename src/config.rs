@@ -59,12 +59,15 @@ pub struct Config {
     pub cache: Cache,
     pub refresh: Refresh,
     pub export: Export,
+    pub media: Media,
 }
 
 #[derive(Clone, Debug)]
 pub struct Server {
     pub bind: SocketAddr,
-    /// Absolute URL the server is reachable at, used to rewrite image URLs it proxies.
+    /// Absolute URL the server is reachable at: what the media it keeps are
+    /// addressed by in what it serves, and where a sign-in or an invitation
+    /// leads back to.
     pub public_url: Option<String>,
     pub tls: Option<Tls>,
     pub request_timeout: Duration,
@@ -272,6 +275,72 @@ pub struct Export {
     /// Kodi fetches them, Plex's Personal Media agent often does not. Off is for
     /// someone who only wants the text, or has no room for a library's artwork.
     pub artwork: bool,
+}
+
+/// Where the media a work points at — its pictures, a Fan-Kai's theme — are
+/// kept once fetched, so the catalogue reads without its providers.
+#[derive(Clone, Debug)]
+pub struct Media {
+    pub storage: MediaStorage,
+    /// The directory, when the storage is the filesystem.
+    pub dir: PathBuf,
+    /// The bucket, when it is S3 or something that speaks it.
+    pub s3: Option<S3>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MediaStorage {
+    /// Nothing is kept: every picture stays a link to its provider.
+    Off,
+    /// Files under `AMS_MEDIA_DIR`, served by this server.
+    Filesystem,
+    /// An S3 bucket, served through this server or by the bucket itself.
+    S3,
+}
+
+impl FromStr for MediaStorage {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "off" | "none" | "" => Ok(Self::Off),
+            "filesystem" | "fs" | "file" | "local" => Ok(Self::Filesystem),
+            "s3" => Ok(Self::S3),
+            other => bail!("AMS_MEDIA_STORAGE must be off, filesystem or s3, not {other:?}"),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct S3 {
+    /// Unset for Amazon's own; set for anything else that speaks S3 —
+    /// Garage, MinIO, RustFS, Ceph — as `http(s)://host:port`.
+    pub endpoint: Option<String>,
+    pub region: String,
+    pub bucket: String,
+    pub access_key: String,
+    pub secret_key: String,
+    /// Under which the keys are filed, when the bucket holds other things.
+    pub prefix: Option<String>,
+    /// `bucket` in the path rather than as a subdomain: what the compatible
+    /// servers speak, and what a bucket name with a dot needs.
+    pub path_style: bool,
+}
+
+/// Written by hand so that no log line, however it came to print the
+/// configuration, can carry the secret.
+impl std::fmt::Debug for S3 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("S3")
+            .field("endpoint", &self.endpoint)
+            .field("region", &self.region)
+            .field("bucket", &self.bucket)
+            .field("access_key", &self.access_key)
+            .field("secret_key", &"…")
+            .field("prefix", &self.prefix)
+            .field("path_style", &self.path_style)
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -491,6 +560,44 @@ impl Config {
             export: Export {
                 nfo_path: opt(&["AMS_NFO_EXPORT_PATH"]).map(PathBuf::from),
                 artwork: flag(&["AMS_NFO_EXPORT_ARTWORK"], true)?,
+            },
+            media: {
+                let storage: MediaStorage = var_or(&["AMS_MEDIA_STORAGE"], "off").parse()?;
+                let s3 = if storage == MediaStorage::S3 {
+                    let endpoint =
+                        opt(&["AMS_S3_ENDPOINT"]).map(|e| e.trim_end_matches('/').to_string());
+                    if let Some(endpoint) = &endpoint
+                        && !endpoint.starts_with("http://")
+                        && !endpoint.starts_with("https://")
+                    {
+                        bail!("AMS_S3_ENDPOINT must start with http:// or https://");
+                    }
+                    let need = |key: &'static str| {
+                        opt(&[key]).ok_or_else(|| {
+                            anyhow::anyhow!("{key} is required when AMS_MEDIA_STORAGE=s3")
+                        })
+                    };
+                    Some(S3 {
+                        // A compatible server speaks the path style; Amazon
+                        // takes either, and the subdomain is its default.
+                        path_style: flag(&["AMS_S3_PATH_STYLE"], endpoint.is_some())?,
+                        endpoint,
+                        region: var_or(&["AMS_S3_REGION"], "us-east-1"),
+                        bucket: need("AMS_S3_BUCKET")?,
+                        access_key: need("AMS_S3_ACCESS_KEY")?,
+                        secret_key: need("AMS_S3_SECRET_KEY")?,
+                        prefix: opt(&["AMS_S3_PREFIX"])
+                            .map(|p| p.trim_matches('/').to_string())
+                            .filter(|p| !p.is_empty()),
+                    })
+                } else {
+                    None
+                };
+                Media {
+                    storage,
+                    dir: PathBuf::from(var_or(&["AMS_MEDIA_DIR"], "data/media")),
+                    s3,
+                }
             },
             refresh: Refresh {
                 enabled: flag(&["AMS_REFRESH_ENABLED"], true)?,

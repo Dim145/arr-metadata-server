@@ -295,6 +295,33 @@ pub const REGISTRY: &[Definition] = &[
         kind: Kind::Bool,
         scopes: SERVER_ONLY,
     },
+    // ── Media ────────────────────────────────────────────────────────────────
+    Definition {
+        // Fetch and keep the media a work points at, as it is stored.
+        key: "media.store",
+        kind: Kind::Bool,
+        scopes: SERVER_ONLY,
+    },
+    Definition {
+        // Through this server, or sent to the bucket's own address.
+        key: "media.serve",
+        kind: Kind::Choice {
+            options: &["proxy", "redirect"],
+        },
+        scopes: SERVER_ONLY,
+    },
+    Definition {
+        // The cast's photographs too: one per person, many per work.
+        key: "media.people",
+        kind: Kind::Bool,
+        scopes: SERVER_ONLY,
+    },
+    Definition {
+        // The themes: a Fan-Kai's, a few megabytes each.
+        key: "media.audio",
+        kind: Kind::Bool,
+        scopes: SERVER_ONLY,
+    },
     // ── Refresh ──────────────────────────────────────────────────────────────
     Definition {
         key: "refresh.enabled",

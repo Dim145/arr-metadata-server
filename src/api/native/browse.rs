@@ -194,7 +194,10 @@ pub(super) async fn window(
     // the reader's language are applied, so a date or a title somebody
     // corrected is the one listed; then they are handed back separately.
     let mut by_work: HashMap<String, Vec<Episode>> = HashMap::new();
-    for a in airing {
+    for mut a in airing {
+        if let Some(still) = &a.episode.image {
+            a.episode.image = Some(state.media.localized(still));
+        }
         by_work.entry(a.media_id).or_default().push(a.episode);
     }
     for work in &mut works {
@@ -212,6 +215,7 @@ pub(super) async fn window(
     }
     service::overlay_imdb_many(state, &mut works).await;
     for work in &mut works {
+        state.media.localize(work);
         service::as_card(work);
     }
     service::redact_for_reader(identity, &mut works);
@@ -359,7 +363,7 @@ async fn person(
     let details = details_for(&state, tmdb_id, query.language.as_deref()).await;
     let image = credits
         .iter()
-        .find_map(|c| c.credit.image.clone())
+        .find_map(|c| c.credit.image.as_deref().map(|u| state.media.localized(u)))
         .or_else(|| details.as_ref().and_then(|d| d.photos.first().cloned()));
 
     let mut ids: Vec<String> = Vec::new();
@@ -380,6 +384,7 @@ async fn person(
     }
 
     for work in &mut works {
+        state.media.localize(work);
         service::as_card(work);
     }
     service::redact_for_reader(&identity, &mut works);

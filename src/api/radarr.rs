@@ -53,6 +53,7 @@ fn served(state: &AppState, identity: &Identity, mut items: Vec<MediaItem>) -> V
 
     for item in &mut items {
         language::apply_shallow(state, item, &language);
+        state.media.for_clients(item);
     }
 
     items.iter().map(from_item).collect()

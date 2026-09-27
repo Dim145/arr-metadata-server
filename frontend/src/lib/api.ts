@@ -84,6 +84,8 @@ export const api = {
   patch: <T,>(path: string, body: unknown) =>
     request<T>(path, { method: 'PATCH', ...json(body) }),
   delete: <T,>(path: string) => request<T>(path, { method: 'DELETE' }),
+  /** A form with a file in it: the browser sets the boundary itself. */
+  upload: <T,>(path: string, form: FormData) => request<T>(path, { method: 'POST', body: form, headers: {} }),
 }
 
 /** Build a query string, dropping empty values so the URL stays readable. */

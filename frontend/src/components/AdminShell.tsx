@@ -49,6 +49,7 @@ const NAV: Entry[] = [
   { to: '/admin/lists', glyph: 'list', label: (t) => t.admin.lists, group: 'catalogue' },
   { to: '/admin/jobs', glyph: 'clock', label: (t) => t.admin.jobs, group: 'system', admin: true },
   { to: '/admin/sources', glyph: 'cloud', label: (t) => t.admin.sourcesNav, group: 'system' },
+  { to: '/admin/media', glyph: 'image', label: (t) => t.admin.mediaNav, group: 'system', admin: true },
   { to: '/admin/audit', glyph: 'journal', label: (t) => t.admin.audit, group: 'system', admin: true },
   { to: '/admin/users', glyph: 'user', label: (t) => t.admin.users, group: 'access', admin: true },
   { to: '/admin/access', glyph: 'globe', label: (t) => t.admin.accessPage, group: 'access', admin: true },

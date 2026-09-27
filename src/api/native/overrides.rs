@@ -88,7 +88,7 @@ async fn set(
     Extension(identity): Extension<Identity>,
     ip: ClientIp,
     Path(id): Path<String>,
-    Json(request): Json<SetRequest>,
+    Json(mut request): Json<SetRequest>,
 ) -> AppResult<Json<SetResponse>> {
     require_write(&identity)?;
 
@@ -96,6 +96,15 @@ async fn set(
         .scope
         .parse()
         .map_err(|e: anyhow::Error| AppError::BadRequest(e.to_string()))?;
+
+    // An address of this server's own — the editor shows the copies kept —
+    // is locked as the provider's: what the sweep looks for, and what stays
+    // right if the copy is ever forgotten.
+    if matches!(request.field.as_str(), "image" | "themeMusic")
+        && let Some(serde_json::Value::String(url)) = &request.value
+    {
+        request.value = Some(serde_json::Value::String(state.media.unlocalize(url)));
+    }
 
     fields::validate(scope, &request.field, request.value.as_ref())
         .map_err(AppError::BadRequest)?;
@@ -193,9 +202,12 @@ async fn unset(
         .parse()
         .map_err(|e: anyhow::Error| AppError::BadRequest(e.to_string()))?;
 
+    // An upload locked into the field goes with the lock.
+    let uploads = uploads_locked(&state, &id, Some((scope, field.as_str()))).await?;
     if !repo::override_field::unset(&state.db, &id, scope, &field).await? {
         return Err(AppError::NotFound);
     }
+    super::media::forget_uploads(&state, uploads.iter().map(String::as_str)).await;
 
     state.caches.items.invalidate(&format!("item:{id}")).await;
     service::listing::after_write(&state, &id).await;
@@ -239,7 +251,9 @@ async fn clear(
 ) -> AppResult<Json<ClearResponse>> {
     require_write(&identity)?;
 
+    let uploads = uploads_locked(&state, &id, None).await?;
     let removed = repo::override_field::clear(&state.db, &id).await?;
+    super::media::forget_uploads(&state, uploads.iter().map(String::as_str)).await;
 
     state.caches.items.invalidate(&format!("item:{id}")).await;
     service::listing::after_write(&state, &id).await;
@@ -265,4 +279,26 @@ fn require_write(identity: &Identity) -> AppResult<()> {
         .can_write()
         .then_some(())
         .ok_or(AppError::Forbidden)
+}
+
+/// The uploads a work's locks point at — one lock's, or every lock's — for
+/// deleting when the lock goes.
+async fn uploads_locked(
+    state: &AppState,
+    id: &str,
+    only: Option<(Scope, &str)>,
+) -> AppResult<Vec<String>> {
+    let locked = repo::override_field::list(&state.db, id).await?;
+    Ok(locked
+        .into_iter()
+        .filter(|lock| {
+            only.is_none_or(|(scope, field)| {
+                lock.field == field && lock.scope.parse::<Scope>().ok() == Some(scope)
+            })
+        })
+        .filter_map(|lock| match lock.value {
+            Some(serde_json::Value::String(url)) if url.starts_with("upload:") => Some(url),
+            _ => None,
+        })
+        .collect())
 }

@@ -94,6 +94,8 @@ pub struct Inner {
     accounts: tokio::sync::Mutex<()>,
     /// What each API answered since the start.
     pub calls: Calls,
+    /// The media kept: the store, and the index of what is in it.
+    pub media: crate::media::Media,
     /// Seals the cookies a sign-in through the identity provider travels in.
     /// Made at start and never stored: a restart only costs a sign-in that
     /// was halfway through, which is asked again.
@@ -171,6 +173,16 @@ impl AppState {
         }
 
         let settings = Store::new(db.clone());
+        let media = crate::media::Media::open(&config.media, config.server.public_url.as_deref())?;
+        if media.is_on() {
+            media.load_index(&db).await?;
+            if config.server.public_url.is_none() {
+                tracing::warn!(
+                    "media are kept, but AMS_PUBLIC_URL is unset: Sonarr, Radarr and the NFO \
+                     documents keep the providers' addresses for them"
+                );
+            }
+        }
 
         let state = Self(Arc::new(Inner {
             allowlist: Arc::new(RwLock::new(Vec::new())),
@@ -195,6 +207,7 @@ impl AppState {
             accounts: tokio::sync::Mutex::new(()),
             calls: Calls::default(),
             cookie_key: axum_extra::extract::cookie::Key::generate(),
+            media,
         }));
 
         state.bootstrap_admin().await?;
@@ -260,6 +273,12 @@ impl AppState {
                 ),
                 ("registration.mode", "closed".to_string()),
                 ("registration.role", "member".to_string()),
+                // The media kept: fetched as works are stored, served by this
+                // server, the cast's photographs and the themes included.
+                ("media.store", "true".to_string()),
+                ("media.serve", "proxy".to_string()),
+                ("media.people", "true".to_string()),
+                ("media.audio", "true".to_string()),
                 ("api.sonarr", "true".to_string()),
                 ("api.radarr", "true".to_string()),
                 ("api.tmdb", "true".to_string()),
@@ -403,7 +422,7 @@ impl AppState {
     }
 
     /// A setting's text, when it says something.
-    fn text(&self, key: &str) -> Option<String> {
+    pub fn text(&self, key: &str) -> Option<String> {
         self.settings
             .resolve(key, None, None)
             .map(|v| v.trim().to_string())

@@ -45,6 +45,10 @@ pub mod kinds {
     pub const REFRESH_ALL: &str = "refresh.all";
     /// The `.nfo` documents, written for the whole library.
     pub const EXPORT_NFO: &str = "export.nfo";
+    /// Every picture and theme the catalogue points at, fetched and kept.
+    pub const MEDIA_STORE: &str = "media.store";
+    /// The media nobody points at any more, forgotten and deleted.
+    pub const MEDIA_SWEEP: &str = "media.sweep";
 }
 
 #[derive(Clone, Debug, Serialize, ToSchema)]

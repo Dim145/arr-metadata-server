@@ -20,14 +20,18 @@ pub const REFRESH_ALL: &str = repo::job::kinds::REFRESH_ALL;
 pub const IMPORT_ANIME: &str = repo::job::kinds::IMPORT_ANIME;
 pub const IMPORT_IMDB: &str = repo::job::kinds::IMPORT_IMDB;
 pub const EXPORT_NFO: &str = repo::job::kinds::EXPORT_NFO;
+pub const MEDIA_STORE: &str = repo::job::kinds::MEDIA_STORE;
+pub const MEDIA_SWEEP: &str = repo::job::kinds::MEDIA_SWEEP;
 
 /// Every task, in the order the page shows them.
-pub const ALL: [&str; 5] = [
+pub const ALL: [&str; 7] = [
     REFRESH_SWEEP,
     REFRESH_ALL,
     IMPORT_ANIME,
     IMPORT_IMDB,
     EXPORT_NFO,
+    MEDIA_STORE,
+    MEDIA_SWEEP,
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
@@ -84,6 +88,8 @@ fn lock_busy(id: &str) -> bool {
         REFRESH_SWEEP | REFRESH_ALL => crate::jobs::refresh::is_busy(),
         IMPORT_ANIME | IMPORT_IMDB => crate::jobs::datasets::is_busy(),
         EXPORT_NFO => crate::api::native::export::is_exporting(),
+        MEDIA_STORE => crate::media::worker::is_storing(),
+        MEDIA_SWEEP => crate::media::worker::is_sweeping(),
         _ => false,
     }
 }
@@ -128,6 +134,22 @@ async fn state_of(state: &AppState, id: &'static str) -> anyhow::Result<TaskStat
                 if set { Mode::Manual } else { Mode::Off },
                 None,
                 (!set).then_some("not_configured"),
+            )
+        }
+        MEDIA_STORE => {
+            let on = state.media.is_on();
+            (
+                if on { Mode::Manual } else { Mode::Off },
+                None,
+                (!on).then_some("media_off"),
+            )
+        }
+        MEDIA_SWEEP => {
+            let on = state.media.is_on();
+            (
+                if on { Mode::Scheduled } else { Mode::Off },
+                on.then(|| crate::media::worker::SWEEP_EVERY.as_secs() as i64),
+                (!on).then_some("media_off"),
             )
         }
         _ => (Mode::Off, None, None),

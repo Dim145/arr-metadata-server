@@ -46,6 +46,7 @@ const Clients = named(() => import('./routes/admin/Clients'), 'Clients')
 const AdminLists = named(() => import('./routes/admin/Lists'), 'Lists')
 const Jobs = named(() => import('./routes/admin/Jobs'), 'Jobs')
 const Sources = named(() => import('./routes/admin/Sources'), 'Sources')
+const Media = named(() => import('./routes/admin/Media'), 'Media')
 const Audit = named(() => import('./routes/admin/Audit'), 'Audit')
 const Settings = named(() => import('./routes/admin/Settings'), 'Settings')
 
@@ -135,6 +136,7 @@ function Router() {
           <Route path="lists" element={<AdminLists />} />
           <Route path="jobs" element={<Jobs />} />
           <Route path="sources" element={<Sources />} />
+          <Route path="media" element={<Media />} />
           <Route path="audit" element={<Audit />} />
           <Route path="settings" element={<Settings />} />
           <Route path="*" element={<NotFound admin />} />

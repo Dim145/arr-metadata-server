@@ -57,7 +57,7 @@ pub struct Started {
 /// Run a task now, in the background.
 #[utoipa::path(
     post, path = "/tasks/{id}/run", tag = TAG,
-    params(("id" = String, Path, description = "`refresh.sweep`, `refresh.all`, `import.anime`, `import.imdb` or `export.nfo`")),
+    params(("id" = String, Path, description = "`refresh.sweep`, `refresh.all`, `import.anime`, `import.imdb`, `export.nfo`, `media.store` or `media.sweep`")),
     responses(
         (status = 202, body = Started),
         (status = 403, description = "The caller is not an administrator"),
@@ -88,6 +88,8 @@ async fn run(
                 .await?
                 .1
         }
+        tasks::MEDIA_STORE => crate::media::worker::store_all(&state, &by).await?,
+        tasks::MEDIA_SWEEP => crate::media::worker::sweep_now(&state, &by).await?,
         _ => return Err(AppError::NotFound),
     };
 

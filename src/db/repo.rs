@@ -2,6 +2,7 @@
 //! [`crate::db::Db::sql`] so it works on both engines.
 
 pub mod anime;
+pub mod asset;
 pub mod audit;
 pub mod child;
 pub mod client;

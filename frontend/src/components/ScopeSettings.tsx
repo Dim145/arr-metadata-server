@@ -65,6 +65,8 @@ export const GROUPS = [
   // Kept on the Opening & APIs page, where each is explained with what it
   // governs; never drawn among the rest.
   { id: 'access', prefixes: ['keys', 'site', 'registration', 'api', 'oidc', 'auth'] },
+  // Kept on the Media page, beside what they govern.
+  { id: 'media', prefixes: ['media'] },
   { id: 'adult', prefixes: ['adult'] },
 ] as const
 

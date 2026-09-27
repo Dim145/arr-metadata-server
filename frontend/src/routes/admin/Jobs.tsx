@@ -38,7 +38,15 @@ import { describeIdentity, providerName } from '../../lib/labels'
 import type { Dict } from '../../lib/i18n'
 import type { Job, JobsResponse, Task, TaskId } from '../../lib/types'
 
-const TASKS: TaskId[] = ['refresh.sweep', 'refresh.all', 'import.anime', 'import.imdb', 'export.nfo']
+const TASKS: TaskId[] = [
+  'refresh.sweep',
+  'refresh.all',
+  'import.anime',
+  'import.imdb',
+  'export.nfo',
+  'media.store',
+  'media.sweep',
+]
 
 /**
  * A run's note in words. The server writes its summaries in one fixed form
@@ -56,6 +64,10 @@ export function describeDetail(detail: string | undefined, t: Dict): string {
   if ((m = detail.match(/^(\d+) refreshed, (\d+) failed(?:, of (\d+))?$/)))
     return s.refreshed(n(m[1]), n(m[2]), m[3] === undefined ? undefined : n(m[3]))
   if ((m = detail.match(/^(\d+) works, (\d+) episodes, (\d+) failed$/))) return s.exported(n(m[1]), n(m[2]), n(m[3]))
+  if ((m = detail.match(/^stopped: (\d+) stored, (\d+) failed, of (\d+)$/))) return s.storedStopped(n(m[1]), n(m[2]), n(m[3]))
+  if ((m = detail.match(/^(\d+) of (\d+): (\d+) stored, (\d+) failed$/))) return s.storedProgress(n(m[1]), n(m[2]), n(m[3]), n(m[4]))
+  if ((m = detail.match(/^(\d+) stored, (\d+) failed, of (\d+)$/))) return s.stored(n(m[1]), n(m[2]), n(m[3]))
+  if ((m = detail.match(/^(\d+) forgotten, (\d+) files removed$/))) return s.swept(n(m[1]), n(m[2]))
   // A sync from chosen sources names them by their keys.
   const names = (keys: string | undefined) => (keys ?? '').split(', ').map(providerName).join(', ')
   if ((m = detail.match(/^synced from (.+)$/))) return s.synced(names(m[1]))

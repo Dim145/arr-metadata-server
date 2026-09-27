@@ -174,6 +174,28 @@ pub async fn remove_image(db: &Db, media_id: &str, image_id: &str) -> Result<boo
     Ok(result.rows_affected() > 0)
 }
 
+/// The address a work's picture points at.
+pub async fn image_url(db: &Db, media_id: &str, image_id: &str) -> Result<Option<String>> {
+    let url: Option<String> =
+        sqlx::query_scalar(db.sql("SELECT url FROM media_image WHERE id = ? AND media_id = ?"))
+            .bind(image_id)
+            .bind(media_id)
+            .fetch_optional(db.pool())
+            .await?;
+    Ok(url)
+}
+
+/// Take off a work every picture at an address: an upload's, when the upload
+/// goes. How many went.
+pub async fn remove_images_by_url(db: &Db, media_id: &str, url: &str) -> Result<u64> {
+    let result = sqlx::query(db.sql("DELETE FROM media_image WHERE media_id = ? AND url = ?"))
+        .bind(media_id)
+        .bind(url)
+        .execute(db.pool())
+        .await?;
+    Ok(result.rows_affected())
+}
+
 // ─── credits ─────────────────────────────────────────────────────────────────
 
 pub async fn add_credit(db: &Db, media_id: &str, credit: &Credit) -> Result<String> {

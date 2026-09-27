@@ -256,6 +256,7 @@ async fn chart(
         if let Some(language) = language.as_deref() {
             service::language::apply_shallow(&state, work, language);
         }
+        state.media.localize(work);
         service::as_card(work);
     }
     service::redact_for_reader(&identity, &mut works);

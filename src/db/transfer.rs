@@ -51,6 +51,9 @@ const TABLES: &[&str] = &[
     "user_invitation",
     "job_run",
     "audit_log",
+    // The media kept: its rows only — the files stay in the store they
+    // were put in, which both databases can be pointed at.
+    "media_asset",
     "network_rule",
     "network_caller",
     "setting",
@@ -264,6 +267,14 @@ mod tests {
 
             for line in sql.lines() {
                 let lowered = line.trim().to_ascii_lowercase();
+                // A table built again around a new check is made under one
+                // name and renamed: the name it was made under is gone.
+                if let Some(rest) = lowered.strip_prefix("alter table ")
+                    && let Some((old, _)) = rest.split_once(" rename to ")
+                {
+                    in_schema.retain(|name| name != old.trim());
+                    continue;
+                }
                 let Some(rest) = lowered.strip_prefix("create table ") else {
                     continue;
                 };

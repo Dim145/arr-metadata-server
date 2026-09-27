@@ -7,6 +7,7 @@ mod domain;
 mod error;
 mod export;
 mod jobs;
+mod media;
 mod merge;
 mod metrics;
 mod outbound;

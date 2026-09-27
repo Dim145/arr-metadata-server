@@ -90,6 +90,51 @@ pub async fn resolves_internally(url: &str) -> bool {
     }
 }
 
+/// A resolver that never answers with an internal address, for the client
+/// that follows addresses somebody else chose: a picture's, a theme's.
+///
+/// Checked where the connection is made rather than before it, so a name
+/// that answered with a public address a moment ago and with loopback now
+/// gets nowhere, and so does a redirect to such a name — every hop resolves
+/// through here.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct GuardedResolver;
+
+impl reqwest::dns::Resolve for GuardedResolver {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        let host = name.as_str().to_string();
+        Box::pin(async move {
+            let found: Vec<std::net::SocketAddr> = tokio::net::lookup_host((host.as_str(), 0))
+                .await
+                .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?
+                .collect();
+            if found.iter().any(|a| is_internal(a.ip())) {
+                return Err(
+                    format!("{host} resolves to an address only this server can reach").into(),
+                );
+            }
+            Ok(Box::new(found.into_iter()) as reqwest::dns::Addrs)
+        })
+    }
+}
+
+/// The client for fetching what somebody else pointed at: resolving through
+/// [`GuardedResolver`], following a few redirects, and never for long.
+pub fn guarded_client() -> anyhow::Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .user_agent(concat!(
+            "arr-metadata-server/",
+            env!("CARGO_PKG_VERSION"),
+            " (+https://github.com/Dim145/arr-metadata-server)"
+        ))
+        .dns_resolver(std::sync::Arc::new(GuardedResolver))
+        .timeout(std::time::Duration::from_secs(60))
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .build()
+        .map_err(Into::into)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -128,6 +128,18 @@ export function runtime(minutes: number | undefined, locale: string): string | u
     : `${hours}h ${rest}m`
 }
 
+/** `61.1 MB`: a size in the unit a person reads, counted by 1024 as the dashboard does. */
+export function bytes(value: number, locale: string): string {
+  const units = ['B', 'kB', 'MB', 'GB', 'TB']
+  let n = value
+  let unit = 0
+  while (n >= 1024 && unit < units.length - 1) {
+    n /= 1024
+    unit += 1
+  }
+  return `${new Intl.NumberFormat(locale, { maximumFractionDigits: unit === 0 ? 0 : 1 }).format(n)} ${units[unit]}`
+}
+
 /** `TMDB, TheTVDB and TVmaze` / `TMDB, TheTVDB et TVmaze`. */
 export function list(items: string[], locale: string): string {
   return new Intl.ListFormat(locale, { style: 'long', type: 'conjunction' }).format(items)

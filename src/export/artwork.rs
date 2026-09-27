@@ -203,7 +203,11 @@ fn extension(url: &str) -> &str {
 ///
 /// Returns `false` when the file already existed, so a second export costs
 /// nothing rather than refetching a library's worth of artwork.
-pub async fn fetch_one(http: &reqwest::Client, root: &Path, download: &Download) -> Result<bool> {
+pub async fn fetch_one(
+    state: &crate::state::AppState,
+    root: &Path,
+    download: &Download,
+) -> Result<bool> {
     let destination = resolve(root, &download.path)?;
 
     if tokio::fs::metadata(&destination)
@@ -212,6 +216,20 @@ pub async fn fetch_one(http: &reqwest::Client, root: &Path, download: &Download)
     {
         return Ok(false);
     }
+
+    // A copy this server keeps is read from its store, not fetched from
+    // itself over the network.
+    if let (Some(key), Some(store)) = (
+        crate::media::Media::key_in(&download.url),
+        state.media.store(),
+    ) {
+        let bytes = store
+            .read(key)
+            .await?
+            .with_context(|| format!("{key} is not in the media store"))?;
+        return write(&destination, &bytes).await.map(|()| true);
+    }
+    let http = &state.media.http;
 
     // Again here, and not only where the URL was stored: a name that pointed
     // somewhere ordinary when it was accepted can point at loopback by the time
@@ -248,23 +266,28 @@ pub async fn fetch_one(http: &reqwest::Client, root: &Path, download: &Download)
         anyhow::bail!("{} is larger than this export will write", download.url);
     }
 
+    write(&destination, &bytes).await.map(|()| true)
+}
+
+/// Put a picture in its place: written beside the target and renamed, so
+/// a half-written one is never left behind under a name a media server
+/// will read.
+async fn write(destination: &Path, bytes: &[u8]) -> Result<()> {
     if let Some(parent) = destination.parent() {
         tokio::fs::create_dir_all(parent)
             .await
             .with_context(|| format!("could not create {}", parent.display()))?;
     }
 
-    // Written beside the target and renamed, so a half-downloaded picture is
-    // never left behind under a name a media server will read.
     let staged = destination.with_extension("partial");
-    tokio::fs::write(&staged, &bytes)
+    tokio::fs::write(&staged, bytes)
         .await
         .with_context(|| format!("could not write {}", staged.display()))?;
-    tokio::fs::rename(&staged, &destination)
+    tokio::fs::rename(&staged, destination)
         .await
         .with_context(|| format!("could not place {}", destination.display()))?;
 
-    Ok(true)
+    Ok(())
 }
 
 /// Join a planned path onto the root, refusing anything that leaves it.

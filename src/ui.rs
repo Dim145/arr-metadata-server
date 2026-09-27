@@ -35,7 +35,9 @@ struct Assets;
 /// Paths that belong to the API. A request under one of these must 404 rather
 /// than fall through to the UI's index page, or a mistyped endpoint would
 /// answer `200 text/html` and confuse every client.
-const API_PREFIXES: &[&str] = &["/api/", "/v1/", "/3/", "/4/", "/health", "/ready"];
+const API_PREFIXES: &[&str] = &[
+    "/api/", "/v1/", "/3/", "/4/", "/media/", "/health", "/ready",
+];
 
 /// Where the page keeps the lines a preview replaces.
 const PREVIEW_START: &str = "<!-- preview -->";
@@ -252,7 +254,15 @@ async fn work_preview(state: &AppState, id: &str) -> Option<Preview> {
         .iter()
         .filter(|i| i.cover_type == CoverType::Poster && i.season_number.is_none())
         .min_by_key(|i| i.sort_order)
-        .map(|i| i.url.clone())
+        .map(|i| {
+            // A copy kept, addressed by a path: the provider's address does
+            // for a crawler that cannot follow the path.
+            if i.url.starts_with(crate::media::ROUTE) {
+                state.media.unlocalize(&i.url)
+            } else {
+                i.url.clone()
+            }
+        })
         .filter(|url| url.starts_with("https://") || url.starts_with("http://"));
     Some(Preview {
         title,

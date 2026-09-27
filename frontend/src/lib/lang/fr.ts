@@ -924,6 +924,60 @@ export const fr: Dict = {
     jobs: 'Tâches',
     audit: 'Journal',
     sourcesNav: 'Sources',
+    mediaNav: 'Médias',
+    mediaPage: {
+      lead:
+        'Chaque image et chaque musique qu’une fiche référence, récupérée une fois et stockée ici, pour que le catalogue se lise sans ses sources — et continue de se lire quand elles ont disparu.',
+      store: 'Le stockage',
+      backend: {
+        off: 'Rien n’est stocké',
+        filesystem: 'Sur le disque de ce serveur',
+        s3: 'Dans un bucket S3',
+      } as Record<string, string>,
+      offHint:
+        'Définissez AMS_MEDIA_STORAGE à filesystem (avec AMS_MEDIA_DIR) ou s3 (avec AMS_S3_ENDPOINT, AMS_S3_BUCKET, AMS_S3_REGION, AMS_S3_ACCESS_KEY et AMS_S3_SECRET_KEY), puis redémarrez le serveur.',
+      noPublicUrl:
+        'AMS_PUBLIC_URL n’est pas défini : les copies stockées s’affichent ici, mais Sonarr, Radarr et les documents NFO reçoivent les adresses des sources, car seules les pages de ce serveur peuvent suivre un chemin relatif.',
+      counts: { stored: 'Stockés', pending: 'En attente', failed: 'Abandonnés', bytes: 'Taille' } as Record<string, string>,
+      fetching: 'Récupération en cours',
+      sweeping: 'Nettoyage en cours',
+      settings: 'Ce qui est stocké',
+      storeOn: 'Récupérer les médias à mesure que les fiches sont enregistrées',
+      storeOnHint: 'Désactivé, rien de nouveau n’est récupéré ; ce qui est stocké reste, et « Tout stocker » fonctionne toujours.',
+      people: 'Les photos de la distribution',
+      peopleHint: 'Une par personne, et une fiche en nomme des dizaines : la plus grosse part de ce qui est stocké.',
+      audio: 'Les musiques',
+      audioHint: 'La musique de générique d’un Fan-Kai, quelques mégaoctets chacune.',
+      serve: 'Comment servir les médias d’un bucket',
+      serveProxy: 'Par ce serveur',
+      serveRedirect: 'Renvoyé vers l’adresse du bucket',
+      serveHint:
+        'Renvoyé vers le bucket, le lecteur y récupère le fichier directement, par une adresse valable une heure — le bucket doit être joignable de là où il est. Par ce serveur, rien du bucket n’est exposé.',
+      tasks: 'Tâches',
+      storeAll: 'Tout stocker maintenant',
+      sweepNow: 'Nettoyer maintenant',
+      started: 'Lancée. Son exécution est sur la page des tâches.',
+      troubled: 'Récupération impossible',
+      troubledLead:
+        'Ce qui n’a pas pu être récupéré, et pourquoi. Un média remis à plus tard est réessayé tout seul, à quelques heures d’intervalle ; un média abandonné, après cinq essais, attend qu’on le redemande.',
+      none: 'Tout ce qui a été demandé est stocké.',
+      colAddress: 'Adresse',
+      colKind: 'Type',
+      colAttempts: 'Essais',
+      colError: 'Dernière erreur',
+      retry: 'Réessayer',
+      retryAll: 'Tout réessayer',
+      retried: (n: number) => (n <= 1 ? `${n} média remis dans la file.` : `${n} médias remis dans la file.`),
+      kinds: { image: 'Image', audio: 'Son' } as Record<string, string>,
+      loadFailed: 'Le stockage des médias n’a pas pu être lu.',
+      reset: 'Oublier toutes les copies',
+      resetHint: 'Pour un stockage déplacé ailleurs, ou dont les fichiers ont disparu.',
+      openWork: 'Ouvrir la fiche',
+      resetTitle: 'Oublier toutes les copies stockées ?',
+      resetBody:
+        'Chaque fiche pointe à nouveau vers ses sources, et rien n’est effacé : pour un stockage déplacé ailleurs, ou dont les fichiers ont disparu. « Tout stocker » les récupère à nouveau ; le prochain nettoyage efface les fichiers que plus aucune ligne ne nomme.',
+      resetDone: (n: number) => (n <= 1 ? `${n} copie oubliée.` : `${n} copies oubliées.`),
+    },
     sourcesPage: {
       lead:
         'Ce que chaque source apporte à une fiche, et laquelle l’emporte quand plusieurs répondent. Le chiffre est le rang : la première qui a une valeur la donne, les suivantes complètent ce qui manque. Une modification à la main passe avant toutes, et aucune synchronisation n’y touche.',
@@ -1312,6 +1366,21 @@ export const fr: Dict = {
         artwork: 'Images',
         artworkHint:
           'Une image que vous ajoutez passe devant celles des sources : les clients la choisissent en premier.',
+        kept: 'Stockée ici',
+        keptPending: 'En cours de récupération',
+        keptFailed: 'Récupération impossible',
+        forgetCopy: 'Oublier la copie',
+        upload: 'Envoyer une image',
+        uploadFile: 'Fichier',
+        uploadHint: 'JPEG, PNG, WebP, GIF ou AVIF, jusqu’à 25 Mo. Le fichier est reconnu à son contenu, pas à son nom.',
+        uploadSeason: 'Pour une saison',
+        wholeWork: 'L’œuvre elle-même',
+        uploading: 'Envoi…',
+        uploaded: 'Envoyée et stockée.',
+        uploadedBy: (who: string) => (who ? `envoyée par ${who}` : 'envoyée'),
+        themeHint: 'MP3, OGG, FLAC, M4A, WAV ou AAC, jusqu’à 60 Mo. Verrouille la musique de l’œuvre sur ce fichier.',
+        uploadTheme: 'Envoyer une musique',
+        storeOff: 'Aucun stockage de médias n’est configuré : les images sont affichées depuis leurs sources.',
         addImage: 'Ajouter une image',
         imageKind: 'Type',
         url: 'Adresse',
@@ -1432,6 +1501,8 @@ export const fr: Dict = {
         'import.anime': 'Liste des identifiants d’anime',
         'import.imdb': 'Notes IMDb',
         'export.nfo': 'Export NFO',
+        'media.store': 'Stocker les médias',
+        'media.sweep': 'Nettoyer les médias',
         'refresh.item': 'Une fiche actualisée',
       } as Record<string, string>,
       about: {
@@ -1440,6 +1511,8 @@ export const fr: Dict = {
         'import.anime': 'La liste qui relie AniList et MyAnimeList à TheTVDB et TMDB, téléchargée en entier.',
         'import.imdb': 'Le fichier des notes d’IMDb, téléchargé en entier et gardé pour les œuvres présentes ici.',
         'export.nfo': 'Un document .nfo pour chaque œuvre, pour une bibliothèque que lisent Plex, Jellyfin ou Kodi.',
+        'media.store': 'Chaque image et chaque musique que le catalogue référence et qui n’est pas encore stockée, récupérée maintenant, quelques-unes à la fois. Peut être arrêtée ; le reste se récupère au fil de l’eau.',
+        'media.sweep': 'Les médias que plus rien ne référence — une fiche supprimée, une image abandonnée par sa source, un envoi retiré — oubliés et effacés.',
       } as Record<string, string>,
       every: (seconds: number) =>
         seconds >= 604_800 && seconds % 604_800 === 0
@@ -1456,6 +1529,7 @@ export const fr: Dict = {
         not_configured: 'AMS_NFO_EXPORT_PATH n’est pas défini.',
         running: 'En cours.',
         busy: 'En attente : une tâche qui partage son travail est en cours.',
+        media_off: 'Aucun stockage de médias n’est configuré : définissez AMS_MEDIA_STORAGE.',
       } as Record<string, string>,
       last: 'Dernier passage',
       never: 'Jamais lancée',
@@ -1491,6 +1565,13 @@ export const fr: Dict = {
         exported: (works: number, episodes: number, failed: number) =>
           `${works} œuvres, ${episodes} épisodes${failed ? `, ${failed} en échec` : ''}`,
         nothingDue: 'Rien n’était dû',
+        stored: (done: number, failed: number, of: number) => `${done} stockés, ${failed} en échec, sur ${of}`,
+        storedProgress: (at: number, of: number, done: number, failed: number) =>
+          `${at} sur ${of} : ${done} stockés, ${failed} en échec`,
+        storedStopped: (done: number, failed: number, of: number) =>
+          `Arrêté : ${done} stockés, ${failed} en échec, sur ${of}`,
+        swept: (rows: number, files: number) =>
+          `${rows <= 1 ? `${rows} média oublié` : `${rows} médias oubliés`}, ${files <= 1 ? `${files} fichier effacé` : `${files} fichiers effacés`}`,
         synced: (list: string) => `Synchronisée depuis ${list}`,
         noneAnswered: (list: string) => `Aucune réponse de ${list}`,
       },
@@ -1544,6 +1625,8 @@ export const fr: Dict = {
         'item.updated': 'Œuvre modifiée',
         'item.refreshed': 'Rafraîchie depuis ses sources',
         'item.synced': 'Synchronisée depuis certaines de ses sources',
+        'media.uploaded': 'Média envoyé',
+        'media.removed': 'Média retiré',
         'item.deleted': 'Œuvre supprimée',
         'override.set': 'Champ verrouillé',
         'override.removed': 'Champ déverrouillé',
@@ -1659,6 +1742,7 @@ export const fr: Dict = {
   settings: {
     groups: {
       answering: 'Réponses',
+      media: 'Médias',
       providers: 'Autres services de métadonnées',
       refresh: 'Rafraîchissement automatique',
       adult: 'Œuvres pour adultes',
@@ -1895,6 +1979,7 @@ export const fr: Dict = {
       contentRating: 'Classification',
       homepage: 'Site officiel',
       trailerYoutubeId: 'Identifiant YouTube de la bande-annonce',
+      themeMusic: 'Musique de générique',
       genres: 'Genres',
       keywords: 'Mots-clés',
       airDate: 'Date de diffusion',

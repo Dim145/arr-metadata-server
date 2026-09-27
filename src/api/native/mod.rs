@@ -18,6 +18,7 @@ pub mod invitations;
 pub mod items;
 pub mod lists;
 pub mod locks;
+pub mod media;
 pub mod meta;
 pub mod network;
 pub mod oidc;
@@ -64,6 +65,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(oidc::router())
         .merge(tasks::router())
         .merge(rules::router())
+        .merge(media::router())
         .merge(auth::authenticated_router())
         .merge(crate::api::audit::router())
 }

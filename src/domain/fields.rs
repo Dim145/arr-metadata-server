@@ -139,6 +139,7 @@ pub const ITEM_FIELDS: &[FieldDef] = &[
     f("contentRating", Text, "Content rating"),
     f("homepage", Text, "Homepage"),
     f("trailerYoutubeId", Text, "YouTube trailer id"),
+    f("themeMusic", Text, "Theme music URL"),
     f("genres", TextList, "Genres"),
     f("keywords", TextList, "Keywords"),
 ];
