@@ -7,6 +7,8 @@ may change what the API or the configuration means, and says so here.
 
 ## [Unreleased]
 
+## [0.1.1] — 2026-09-28
+
 ### Changed
 
 - The image is built on Debian 13 (trixie) — the Node and Rust build
@@ -99,5 +101,6 @@ and arm64.
 - End-to-end checks against a real Sonarr, against two instances, and a
   Playwright suite over the whole interface.
 
-[Unreleased]: https://github.com/Dim145/arr-metadata-server/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Dim145/arr-metadata-server/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/Dim145/arr-metadata-server/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Dim145/arr-metadata-server/releases/tag/v0.1.0
