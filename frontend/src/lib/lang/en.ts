@@ -1121,11 +1121,13 @@ export const en = {
       lead: 'Search the providers themselves and take the work you meant. What you import is fetched in full and stored exactly as it would have been had a client asked for it — refresh schedule and all.',
       term: 'Title',
       termHint:
-        'A title; an identifier — tvdb:81189, tmdb:1396, imdb:tt0903747, anilist:21, mal:21, fankai:42 — or the address of its page at TMDB, IMDb, TheTVDB, AniList, MyAnimeList or Fankai, which imports it at once',
+        'A title; an identifier — tvdb:81189, tmdb:1396, imdb:tt0903747, anilist:21, mal:21, fankai:42 — or the address of its page at TMDB, IMDb, TheTVDB, AniList or MyAnimeList, which imports it at once',
       source: 'Source',
       inOrder: 'All, in order',
       sourceOff: (name: string) => `${name} (switched off)`,
       sourceHint: 'The usual order stops at the first source that finds something; one chosen here is asked on its own.',
+      fankaiPage:
+        'Fankai’s website numbers its productions otherwise than its metadata service, the one this server reads, so its addresses lead nowhere here: search the production by its title.',
       resultsAt: (n: number, source: string) => `${n === 1 ? '1 result' : `${n} results`} at ${source}`,
       kind: 'Kind',
       bothKinds: 'Both',
@@ -1251,7 +1253,7 @@ export const en = {
         theRelations: 'the related works',
         translations: (n: number) => (n === 1 ? '1 translation' : `${n} translations`),
         ratings: (n: number) => (n === 1 ? '1 rating' : `${n} ratings`),
-        manual: 'entered by hand: nothing to sync from',
+        manualNote: 'Entered by hand, with identifiers: its sources are asked as any work’s are.',
         loadFailed: 'Where the values come from could not be loaded.',
         retry: 'Try again',
         noneAnswered: 'None of the sources asked answered: nothing was changed.',

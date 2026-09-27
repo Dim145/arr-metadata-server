@@ -251,7 +251,11 @@ async fn fankai_from_wiki(state: &AppState, production: &MediaItem) -> Option<An
         }
     }
 
-    if relations.is_empty() {
+    // The production's page on the wiki: the one public page about it whose
+    // address is known. Fankai's website numbers its productions its own way.
+    let homepage = state.fankai_wiki.page_url(&page.title);
+
+    if relations.is_empty() && homepage.is_none() {
         return None;
     }
     for (index, relation) in relations.iter_mut().enumerate() {
@@ -260,6 +264,7 @@ async fn fankai_from_wiki(state: &AppState, production: &MediaItem) -> Option<An
 
     let mut item = MediaItem::empty(MediaKind::Series);
     item.relations = relations;
+    item.homepage = homepage;
 
     Some(Answer {
         provider: names::FANKAI_WIKI,
@@ -421,8 +426,6 @@ pub enum Unavailable {
     Off,
     /// The work carries no identifier it can be asked by.
     NoId,
-    /// The work was entered by hand: no source stands behind it.
-    Manual,
 }
 
 /// A provider that could describe a work, and whether it can be asked now.

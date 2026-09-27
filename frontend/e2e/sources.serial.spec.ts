@@ -175,6 +175,57 @@ test.describe('where values come from', () => {
     expect(await films.json()).toEqual([])
   })
 
+  test('a work entered by hand says so, and asks no source it has no id to be asked by', async ({ page }) => {
+    await signIn(page)
+    // Invented, and removed again: nothing any other test reads.
+    const created = await page.request.post('/api/v1/items', {
+      data: {
+        kind: 'movie',
+        title: `L’Atelier des Ombres ${Date.now()}`,
+        year: 2031,
+        overview: 'Une restauratrice de films muets découvre des plans que personne n’a tournés.',
+      },
+    })
+    expect(created.status()).toBe(201)
+    const { id } = (await created.json()) as { id: string }
+
+    try {
+      await page.goto(`/admin/catalogue/${id}`)
+      const panel = page.locator('#sources')
+      await expect(panel).toContainText(/entered by hand|saisie à la main/i)
+      await expect(panel.getByRole('checkbox')).toHaveCount(0)
+
+      const refused = await page.request.post(`/api/v1/items/${id}/sync`, { data: { sources: ['tmdb'] } })
+      expect(refused.status()).toBe(400)
+    } finally {
+      await page.request.delete(`/api/v1/items/${id}`)
+    }
+  })
+
+  test('a Fan-Kai never leads to another production on Fankai’s site', async ({ page }) => {
+    const works = (await (await page.request.get('/api/v1/items?kind=series&limit=100')).json()) as {
+      items: { id: string; externalIds: { fankai?: number } }[]
+    }
+    const fankai = works.items.find((work) => work.externalIds.fankai)
+    test.skip(!fankai, 'no Fan-Kai in the catalogue')
+
+    await page.goto(`/work/${fankai!.id}`)
+    await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
+    // Its id is the metadata service's, which the site numbers otherwise.
+    await expect(page.locator('a[href*="fankai.fr/productions"]')).toHaveCount(0)
+
+    const detail = (await (await page.request.get(`/api/v1/items/${fankai!.id}`)).json()) as { homepage?: string }
+    if (detail.homepage) expect(detail.homepage).toMatch(/^https:\/\/fan-kai\.fandom\.com\//)
+  })
+
+  test('the import page says why a page of Fankai’s site cannot be taken', async ({ page }) => {
+    await signIn(page)
+    await page.goto('/admin/discover')
+    await page.getByLabel(/^(title|titre)$/i).fill('https://fankai.fr/productions/101')
+    await expect(page.getByRole('alert')).toContainText(/metadata service|service de métadonnées/i)
+    await expect(page.getByRole('button', { name: /search the providers|chercher chez les sources/i })).toBeDisabled()
+  })
+
   test('a sync is refused what it cannot do, and to anyone who may not write', async ({ page }) => {
     await signIn(page)
     const works = (await (await page.request.get('/api/v1/items?kind=series&limit=1')).json()) as {

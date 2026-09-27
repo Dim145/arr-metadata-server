@@ -346,6 +346,12 @@ it as `theme.mp3`, which a work's page also plays on demand. The kaïeur and the
 are its credits; the kind of recut — Kaï, Yabai, Henshū — is a tag rather than
 a genre. One call a second, and the listing is kept and revalidated by its ETag.
 
+Fankai's id is its metadata service's. The website numbers its productions
+otherwise — *Horimiya Kaï* is series 33 of the one and production 101 of the
+other, where 33 is *Black Lagoon* — behind a sign-in, and nothing public says
+which page is which. So the id is shown without a link, and a production's
+homepage is its page on the Fankai wiki below, when that source is on.
+
 **The Fankai wiki says what each Fan-Kai was cut from.** Fankai's service
 leaves a production's ids blank; the community's wiki, at
 [fan-kai.fandom.com](https://fan-kai.fandom.com/fr/), links each one's AniList

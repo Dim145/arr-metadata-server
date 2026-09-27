@@ -99,6 +99,21 @@ impl FankaiWikiClient {
     /// The page for a production, found by its name and, where the wiki keeps
     /// one page per cut, by whoever cut it. Returns the page's text alongside
     /// what was read from it.
+    /// The page's own address, for a reader: beside the API this client asks,
+    /// where MediaWiki lays out its pages.
+    pub fn page_url(&self, title: &str) -> Option<String> {
+        let api = url::Url::parse(&self.api).ok()?;
+        // As the wiki spells titles in its addresses; `?` and `#` would end
+        // the path.
+        let path = title
+            .trim()
+            .replace(' ', "_")
+            .replace('%', "%25")
+            .replace('?', "%3F")
+            .replace('#', "%23");
+        api.join(&format!("wiki/{path}")).ok().map(String::from)
+    }
+
     pub async fn page(&self, title: &str, kaieurs: &[&str]) -> Result<Option<(Value, Page)>> {
         if title.trim().is_empty() {
             return Ok(None);
@@ -717,5 +732,30 @@ mod tests {
             vec!["First", "Second"]
         );
         assert!(results(&json!({ "batchcomplete": true })).is_empty());
+    }
+
+    #[test]
+    fn a_page_is_addressed_beside_the_api_it_was_read_from() {
+        let client = FankaiWikiClient::new(
+            reqwest::Client::new(),
+            &config::FankaiWiki {
+                upstream: "https://fan-kai.fandom.com/fr/api.php".into(),
+                enabled: true,
+            },
+        );
+        assert_eq!(
+            client.page_url("Horimiya Kaï").as_deref(),
+            Some("https://fan-kai.fandom.com/fr/wiki/Horimiya_Ka%C3%AF")
+        );
+        assert_eq!(
+            client
+                .page_url("Naruto Shippuden Yabai (Triggerforce)")
+                .as_deref(),
+            Some("https://fan-kai.fandom.com/fr/wiki/Naruto_Shippuden_Yabai_(Triggerforce)")
+        );
+        assert_eq!(
+            client.page_url("What? #1").as_deref(),
+            Some("https://fan-kai.fandom.com/fr/wiki/What%3F_%231")
+        );
     }
 }

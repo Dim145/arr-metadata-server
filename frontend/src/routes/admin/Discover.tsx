@@ -101,6 +101,8 @@ export function Discover() {
     staleTime: 60_000,
   })
   const on = (id: string) => rules.data?.providers.find((p) => p.id === id)?.on ?? true
+  // A page of Fankai's website: numbered otherwise than the ids here.
+  const fankaiPage = /^\s*https?:\/\/(www\.)?fankai\.fr\/productions\//i.test(term)
   const offered = SEARCHABLE.filter((s) => kind === '' || s.kinds.includes(kind))
 
   const take = useMutation({
@@ -136,6 +138,7 @@ export function Discover() {
           className="grid gap-4 p-5 sm:grid-cols-[9rem_minmax(0,1fr)_7rem]"
           onSubmit={(event) => {
             event.preventDefault()
+            if (fankaiPage) return
             take.reset()
             setAsked({ term: term.trim(), kind, year, source })
           }}
@@ -158,6 +161,12 @@ export function Discover() {
               />
             </div>
             <p className="mt-1 text-xs text-bone-faint">{t.admin.intake.termHint}</p>
+            {fankaiPage ? (
+              <p role="alert" className="mt-2 flex items-start gap-2 text-xs leading-relaxed text-vermillion">
+                <Glyph name="alert" className="mt-0.5 size-3.5 shrink-0" />
+                {t.admin.intake.fankaiPage}
+              </p>
+            ) : null}
           </div>
 
           <div>
@@ -216,7 +225,7 @@ export function Discover() {
           </div>
 
           <div className="flex flex-wrap items-center gap-3 sm:col-span-3">
-            <Button type="submit" variant="primary" disabled={!term.trim() || results.isFetching}>
+            <Button type="submit" variant="primary" disabled={!term.trim() || fankaiPage || results.isFetching}>
               {results.isFetching ? (
                 <Spinner className="size-4" />
               ) : (

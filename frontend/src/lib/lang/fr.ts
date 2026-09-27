@@ -1131,11 +1131,13 @@ export const fr: Dict = {
       lead: 'Cherchez directement chez les sources et prenez l’œuvre que vous visiez. Ce que vous importez est récupéré en entier et stocké exactement comme si un client l’avait demandé — calendrier de rafraîchissement compris.',
       term: 'Titre',
       termHint:
-        'Un titre ; un identifiant — tvdb:81189, tmdb:1396, imdb:tt0903747, anilist:21, mal:21, fankai:42 — ou l’adresse de sa fiche chez TMDB, IMDb, TheTVDB, AniList, MyAnimeList ou Fankai, qui l’importe aussitôt',
+        'Un titre ; un identifiant — tvdb:81189, tmdb:1396, imdb:tt0903747, anilist:21, mal:21, fankai:42 — ou l’adresse de sa fiche chez TMDB, IMDb, TheTVDB, AniList ou MyAnimeList, qui l’importe aussitôt',
       source: 'Source',
       inOrder: 'Toutes, dans l’ordre',
       sourceOff: (name: string) => `${name} (désactivée)`,
       sourceHint: 'L’ordre habituel s’arrête à la première source qui trouve ; celle choisie ici est interrogée seule.',
+      fankaiPage:
+        'Le site de Fankai numérote ses productions autrement que son service de métadonnées, celui que ce serveur lit : ses adresses ne mènent à rien ici. Cherchez la production par son titre.',
       resultsAt: (n: number, source: string) => `${n <= 1 ? `${n} résultat` : `${n} résultats`} chez ${source}`,
       kind: 'Type',
       bothKinds: 'Les deux',
@@ -1263,7 +1265,7 @@ export const fr: Dict = {
         theRelations: 'les œuvres liées',
         translations: (n: number) => (n === 1 ? '1 traduction' : `${n} traductions`),
         ratings: (n: number) => (n === 1 ? '1 note' : `${n} notes`),
-        manual: 'saisie à la main : rien à synchroniser',
+        manualNote: 'Saisie à la main, avec des identifiants : ses sources s’interrogent comme celles de toute fiche.',
         loadFailed: 'L’origine des valeurs n’a pas pu être chargée.',
         retry: 'Réessayer',
         noneAnswered: 'Aucune des sources interrogées n’a répondu : rien n’a changé.',

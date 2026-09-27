@@ -268,6 +268,9 @@ export function SourcesPanel({
     }
   }
   const busy = sync.isPending || refreshing
+  // A work entered by hand has sources only if it was given an id to be
+  // asked by, or has answered for before.
+  const answerable = sources.some((source) => !source.unavailable || source.fetchedAt)
   // Who numbers the list, as the server takes it: whoever is on record, or
   // TheTVDB. A source brought along that is not it fills the episodes in.
   const recorded = provenance?.episodes
@@ -286,7 +289,7 @@ export function SourcesPanel({
       <PanelHead
         title={s.title}
         action={
-          refreshAfter && !isManual ? (
+          refreshAfter ? (
             <span className="label text-right">{s.next(fmt.relative(refreshAfter, locale) ?? '')}</span>
           ) : undefined
         }
@@ -307,27 +310,16 @@ export function SourcesPanel({
         <p className="px-5 py-4 text-sm text-bone-faint">
           <Spinner className="size-4" />
         </p>
-      ) : isManual ? (
-        <>
-          <p className="px-5 py-4 text-sm text-bone-faint">{t.admin.editor.handEntered}</p>
-          {sources.length ? (
-            <ul className="divide-y divide-rule border-t border-rule">
-              {sources.map((source) => (
-                <SourceRow
-                  key={source.provider}
-                  source={source}
-                  fieldNames={fieldNames}
-                  checked={false}
-                  disabled
-                  onChange={() => undefined}
-                  onRaw={() => onRaw(source.provider)}
-                />
-              ))}
-            </ul>
-          ) : null}
-        </>
+      ) : isManual && !answerable ? (
+        <p className="px-5 py-4 text-sm text-bone-faint">{t.admin.editor.handEntered}</p>
       ) : (
         <>
+          {isManual ? (
+            <p className="flex items-start gap-2 border-b border-rule px-5 py-3 text-xs leading-relaxed text-bone-dim">
+              <Glyph name="pencil" className="mt-0.5 size-3.5 shrink-0 text-brass" />
+              {s.manualNote}
+            </p>
+          ) : null}
           <ul className="divide-y divide-rule">
             {sources.map((source) => (
               <SourceRow
@@ -486,7 +478,6 @@ function describe(
 ): string {
   const s = t.admin.editor.sync
   const when = source.fetchedAt ? s.answered(fmt.relative(source.fetchedAt, locale) ?? '') : null
-  if (source.unavailable === 'manual') return when ? `${when} · ${s.manual}` : s.manual
   if (source.unavailable === 'off') return s.off
   if (source.unavailable === 'noId') return s.noId
   if (!when) return s.never

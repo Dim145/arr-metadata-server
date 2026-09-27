@@ -378,7 +378,10 @@ export function WorkEditor() {
           </ul>
         </Panel>
 
-        <div className="space-y-6 lg:sticky lg:top-16">
+        {/* Held in view beside the fields, and scrolled on its own when it is
+            taller than the window: pinned whole, its button sat below the
+            fold until the last field went by. */}
+        <div className="space-y-6 lg:sticky lg:top-16 lg:max-h-[calc(100dvh-5rem)] lg:overflow-y-auto lg:overscroll-contain lg:rounded-panel">
           <SourcesPanel
             itemId={id}
             report={report.data}
@@ -392,7 +395,7 @@ export function WorkEditor() {
             refreshing={refresh.isPending}
             onSynced={invalidate}
           />
-          {work.isManual ? null : <RulesPanel />}
+          <RulesPanel />
         </div>
       </div>
 

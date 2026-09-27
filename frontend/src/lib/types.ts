@@ -593,7 +593,7 @@ export interface SyncSource {
   /** When it last answered for this work, if it ever has. */
   fetchedAt?: string
   /** Why it cannot be asked now. */
-  unavailable?: 'off' | 'noId' | 'manual'
+  unavailable?: 'off' | 'noId'
   /** Asked along with it, because part of what it gives is theirs. */
   brings?: string[]
 }

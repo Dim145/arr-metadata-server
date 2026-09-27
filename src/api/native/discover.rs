@@ -373,9 +373,6 @@ fn from_link(term: &str) -> Option<(String, Option<MediaKind>)> {
         ("myanimelist.net", ["anime", id, ..]) => {
             Some((format!("mal:{}", number(id)?), Some(MediaKind::Series)))
         }
-        ("fankai.fr", ["productions", id, ..]) => {
-            Some((format!("fankai:{}", number(id)?), Some(MediaKind::Series)))
-        }
         // TheTVDB's pages are named by slug; only its older addresses, and the
         // ones it redirects through, carry the number.
         ("thetvdb.com", ["dereferrer", "series", id, ..]) | ("thetvdb.com", ["series", id, ..]) => {
@@ -442,11 +439,6 @@ mod tests {
                 Some(MediaKind::Series),
             ),
             (
-                "https://fankai.fr/productions/42",
-                "fankai:42",
-                Some(MediaKind::Series),
-            ),
-            (
                 "https://thetvdb.com/dereferrer/series/81189",
                 "tvdb:81189",
                 Some(MediaKind::Series),
@@ -468,6 +460,9 @@ mod tests {
             "Breaking Bad",
             "tvdb:81189",
             "https://thetvdb.com/series/breaking-bad",
+            // Fankai's website numbers its productions otherwise than the
+            // metadata service its ids here come from.
+            "https://fankai.fr/productions/101",
             "https://www.imdb.com/title/nm0000123/",
             "https://example.com/tv/1396",
             "ftp://themoviedb.org/tv/1396",

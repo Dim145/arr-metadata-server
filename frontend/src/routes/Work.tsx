@@ -257,7 +257,8 @@ function Plate({ item }: { item: MediaItem }) {
                 {item.themeMusic ? <ThemeMusic key={item.themeMusic} url={item.themeMusic} /> : null}
                 {item.homepage ? (
                   <ExternalLink href={item.homepage} className="min-h-11 px-3 text-sm text-bone-dim">
-                    {t.work.homepage}
+                    {/* A Fan-Kai's is its page on the wiki, and says so. */}
+                    {onFankaiWiki(item.homepage) ? providerName('fankaiwiki') : t.work.homepage}
                   </ExternalLink>
                 ) : null}
                 {/* The work's dates as a subscription a calendar app keeps
@@ -1224,6 +1225,15 @@ function Identifiers({ item }: { item: MediaItem }) {
       </dl>
     </Panel>
   )
+}
+
+/** Whether an address is a page of the Fankai wiki, where a Fan-Kai's homepage leads. */
+function onFankaiWiki(address: string) {
+  try {
+    return new URL(address).hostname === 'fan-kai.fandom.com'
+  } catch {
+    return false
+  }
 }
 
 function IdentifierValues({

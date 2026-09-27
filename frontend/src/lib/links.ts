@@ -41,8 +41,12 @@ export function identifierLink(
       return `https://myanimelist.net/anime/${id}`
     case 'anilist':
       return `https://anilist.co/anime/${id}`
+    // The id is Fankai's metadata service's, which numbers its productions
+    // its own way; the website numbers them another, behind a sign-in, and
+    // nothing says which of its pages a production is. No link beats the
+    // wrong one — the work's homepage is its page on the Fankai wiki.
     case 'fankai':
-      return `https://fankai.fr/productions/${id}`
+      return undefined
     default:
       return undefined
   }

@@ -224,7 +224,7 @@ const LINES: &[Line] = &[
     ),
     line(People, "themeMusic", First, &[FANKAI]),
     line(People, "trailer", First, &[TMDB, RADARR]),
-    line(People, "homepage", First, &[TMDB, RADARR, FANKAI]),
+    line(People, "homepage", First, &[TMDB, RADARR, FANKAI_WIKI]),
     line(People, "relations", Whole, &[ANILIST, FANKAI_WIKI]),
     // Episodes. TVmaze never supplies the list nor its titles: it numbers some
     // series its own way, so it only fills gaps on days with one episode.

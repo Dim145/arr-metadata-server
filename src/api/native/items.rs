@@ -681,33 +681,21 @@ async fn provenance(
     let provenance = repo::item::provenance(&state.db, &id).await?;
     let fetched = repo::snapshot::fetched(&state.db, &id).await?;
 
-    let sources = if stored.is_manual {
-        // Nothing to sync from, but what answered before can still be read.
-        let mut answered: Vec<SyncSource> = fetched
-            .iter()
-            .map(|(provider, at)| SyncSource {
-                provider: provider.clone(),
-                fetched_at: Some(at.clone()),
-                unavailable: Some(service::gather::Unavailable::Manual),
-                brings: Vec::new(),
-            })
-            .collect();
-        answered.sort_by(|a, b| a.provider.cmp(&b.provider));
-        answered
-    } else {
-        service::gather::askable(&state, &stored, provenance.as_ref())
-            .into_iter()
-            .map(|source| SyncSource {
-                provider: source.provider.to_string(),
-                fetched_at: fetched
-                    .iter()
-                    .find(|(provider, _)| provider == source.provider)
-                    .map(|(_, at)| at.clone()),
-                unavailable: source.unavailable,
-                brings: source.brings.iter().map(|p| p.to_string()).collect(),
-            })
-            .collect()
-    };
+    // A work entered by hand is asked like any other when it has an id to be
+    // asked by — it can be a stub that fills in from its providers — and has
+    // nothing to be asked about when it has none.
+    let sources = service::gather::askable(&state, &stored, provenance.as_ref())
+        .into_iter()
+        .map(|source| SyncSource {
+            provider: source.provider.to_string(),
+            fetched_at: fetched
+                .iter()
+                .find(|(provider, _)| provider == source.provider)
+                .map(|(_, at)| at.clone()),
+            unavailable: source.unavailable,
+            brings: source.brings.iter().map(|p| p.to_string()).collect(),
+        })
+        .collect();
 
     Ok(Json(ProvenanceReport {
         provenance,
@@ -748,7 +736,7 @@ pub struct SyncOutcome {
         (status = 400, description = "No sources, or one this work cannot be asked about"),
         (status = 403, description = "The caller may not write"),
         (status = 404, description = "No such work"),
-        (status = 409, description = "Entered by hand, or not refreshed since the server began recording where values come from"),
+        (status = 409, description = "Not refreshed since the server began recording where values come from, or written by something else meanwhile"),
         (status = 502, description = "None of the sources asked answered; nothing was changed"),
     ),
 )]
@@ -767,20 +755,11 @@ async fn sync(
     let mut stored = repo::item::get(&state.db, &id)
         .await?
         .ok_or(AppError::NotFound)?;
-    if stored.is_manual {
-        return Err(AppError::Conflict(
-            "a work entered by hand has no sources to sync from".into(),
-        ));
-    }
-    let Some(provenance) = repo::item::provenance(&state.db, &id).await? else {
-        return Err(AppError::Conflict(
-            "this work has not been refreshed since the server began recording where its values \
-             come from; refresh it in full once"
-                .into(),
-        ));
-    };
+    let recorded = repo::item::provenance(&state.db, &id).await?;
 
-    let askable = service::gather::askable(&state, &stored, Some(&provenance));
+    // What is asked comes first: a source the work cannot be asked by is
+    // refused as such, whatever else is true of it.
+    let askable = service::gather::askable(&state, &stored, recorded.as_ref());
     if request.sources.len() > askable.len() {
         return Err(AppError::BadRequest("name the sources to ask again".into()));
     }
@@ -803,6 +782,14 @@ async fn sync(
             }
         }
     }
+
+    let Some(provenance) = recorded else {
+        return Err(AppError::Conflict(
+            "this work has not been refreshed since the server began recording where its values \
+             come from; refresh it in full once"
+                .into(),
+        ));
+    };
 
     repo::item::load_children(&state.db, &mut stored).await?;
 

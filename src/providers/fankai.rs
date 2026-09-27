@@ -35,9 +35,6 @@ use crate::{
     providers::{PATIENCE, Pacer, alternative_title, names},
 };
 
-/// Where a production's page is, for a reader: Fankai's site, not the service.
-const SITE: &str = "https://fankai.fr";
-
 /// How long the listing is trusted before it is revalidated.
 const CATALOGUE_TTL: Duration = Duration::from_secs(10 * 60);
 
@@ -522,7 +519,9 @@ fn to_item(
             .filter(|s| !s.trim().is_empty())
             .unwrap_or_else(|| "Fan-Kai".to_string()),
     );
-    item.homepage = Some(format!("{SITE}/productions/{}", production.id));
+    // No homepage: the website numbers its productions its own way, behind a
+    // sign-in, and nothing here says which of its pages this one is. The
+    // wiki's page for it is the one given, by that source.
     item.theme_music = production
         .theme_music
         .clone()
@@ -1163,10 +1162,9 @@ mod tests {
         assert_eq!(item.network.as_deref(), Some("Fan-Kai"));
         assert_eq!(item.original_country.as_deref(), Some("JP"));
         assert_eq!(item.original_language.as_deref(), Some("ja"));
-        assert_eq!(
-            item.homepage.as_deref(),
-            Some("https://fankai.fr/productions/12")
-        );
+        // Series 12 here is not production 12 on fankai.fr: no address is
+        // guessed from it.
+        assert_eq!(item.homepage, None);
         assert_eq!(
             item.theme_music.as_deref(),
             Some("https://metadata.fankai.fr/series/12/theme?t=1")
