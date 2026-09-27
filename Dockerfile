@@ -32,6 +32,9 @@ RUN mkdir -p src \
 
 COPY src/ ./src/
 COPY migrations/ ./migrations/
+# Served to the clients as the way to trust the authority; embedded at
+# compile time, so the build needs it beside the sources.
+COPY docker/trust-ca.sh ./docker/trust-ca.sh
 COPY --from=ui /ui/dist/ ./frontend/dist/
 
 # `touch` defeats the stale mtime left by the stub build.
