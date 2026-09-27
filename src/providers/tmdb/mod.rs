@@ -106,7 +106,11 @@ impl TmdbClient {
             .query(params)
             .timeout(Duration::from_secs(20))
             .send()
-            .await;
+            .await
+            // A request error names the address it was sent to, key and
+            // all; the error is logged, so the address is taken off it —
+            // `url` here is the path alone.
+            .map_err(reqwest::Error::without_url);
         crate::metrics::upstream("tmdb", started, response.as_ref().ok().map(|r| r.status()));
         let response = response.with_context(|| format!("TMDB request failed: {url}"))?;
 

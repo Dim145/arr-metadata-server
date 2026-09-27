@@ -189,7 +189,10 @@ pub async fn proxy(State(state): State<AppState>, request: Request) -> AppResult
         }
 
         let started = std::time::Instant::now();
-        let response = upstream.send().await;
+        // The error would name the address it was sent to, this server's own
+        // key in its query; it is logged and answered, so the address is
+        // taken off it.
+        let response = upstream.send().await.map_err(reqwest::Error::without_url);
         crate::metrics::upstream("tmdb", started, response.as_ref().ok().map(|r| r.status()));
         let response = response.map_err(|e| AppError::UpstreamUnavailable(e.into()))?;
 

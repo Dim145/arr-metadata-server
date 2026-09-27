@@ -96,7 +96,9 @@ impl FanartClient {
             .query(&[("api_key", key)])
             .timeout(std::time::Duration::from_secs(20))
             .send()
-            .await;
+            .await
+            // The error would name the address, key and all; it is logged.
+            .map_err(reqwest::Error::without_url);
         crate::metrics::upstream(
             "fanart",
             started,

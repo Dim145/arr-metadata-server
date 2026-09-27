@@ -1,5 +1,10 @@
 import { expect, test, type Page } from '@playwright/test'
 
+/** A string as a regular expression matching it and nothing else. */
+function literally(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
 /**
  * The administration side, signed in.
  *
@@ -334,7 +339,7 @@ test.describe('settings', () => {
 
     // A run that failed partway would otherwise leave the rule behind — named,
     // once it got that far, so it is looked for by its name too.
-    const leftover = rules.locator('li').filter({ hasText: new RegExp(`${address.replace(/\./g, '\\.')}|${name}`) })
+    const leftover = rules.locator('li').filter({ hasText: new RegExp(`${literally(address)}|${literally(name)}`) })
     if (await leftover.count()) {
       await leftover.first().getByRole('button', { name: /stop allowing|retirer/i }).click()
       await page.getByRole('button', { name: /stop allowing|retirer/i }).last().click()

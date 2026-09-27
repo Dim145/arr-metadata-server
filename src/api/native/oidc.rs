@@ -135,9 +135,11 @@ async fn begin(
         // Lax, not Strict: the browser comes back from the provider's site,
         // and must bring this with it.
         .same_site(SameSite::Lax)
-        .secure(secure)
-        .max_age(time::Duration::seconds(oidc::FLOW_TTL.as_secs() as i64))
-        .build();
+        .max_age(time::Duration::seconds(oidc::FLOW_TTL.as_secs() as i64));
+    // Secure wherever the site is reached in TLS; on a home network reached
+    // in plain HTTP the browser would never send a Secure cookie back, and
+    // the sign-in could not complete at all.
+    let cookie = if secure { cookie.secure(true) } else { cookie }.build();
 
     Ok((
         PrivateCookieJar::new(state.cookie_key.clone()).add(cookie),
