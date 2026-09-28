@@ -1,6 +1,6 @@
 [package]
 name = "arr-metadata-server"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2024"
 rust-version = "1.94"
 description = "Self-hosted, provider-agnostic metadata server compatible with the *arr stack, TMDB clients and manual curation."
