@@ -49,7 +49,7 @@ impl TvmazeClient {
     /// for all three.
     pub async fn series(
         &self,
-        tvdb_id: i64,
+        tvdb_id: Option<i64>,
         tvmaze_id: Option<i64>,
     ) -> Result<Option<(Value, MediaItem)>> {
         if let Some(id) = tvmaze_id
@@ -72,11 +72,15 @@ impl TvmazeClient {
 
             // An id stored from another provider's answer is checked against
             // the one this fetch is for; a mismatch is looked up afresh.
-            if parsed.externals.thetvdb.is_none_or(|t| t == tvdb_id) {
+            // Its own TVmaze id is enough; with a TheTVDB id too, both must agree.
+            if tvdb_id.is_none_or(|tvdb| parsed.externals.thetvdb.is_none_or(|t| t == tvdb)) {
                 return Self::parsed(show, parsed, episodes).map(Some);
             }
         }
 
+        let Some(tvdb_id) = tvdb_id else {
+            return Ok(None);
+        };
         let tvdb = tvdb_id.to_string();
         let Some(show) = self
             .fetch(

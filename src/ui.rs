@@ -249,22 +249,25 @@ async fn work_preview(state: &AppState, id: &str) -> Option<Preview> {
         Some(year) => format!("{} ({year})", item.title),
         None => item.title.clone(),
     };
-    let image = item
-        .images
-        .iter()
-        .filter(|i| i.cover_type == CoverType::Poster && i.season_number.is_none())
-        .min_by_key(|i| i.sort_order)
-        .and_then(|i| {
-            // A copy kept, addressed by a path: under the public URL for a
-            // crawler, which cannot follow the path, or the provider's
-            // address when there is none.
-            if i.url.starts_with(crate::media::ROUTE) {
-                state.media.for_elsewhere(&i.url)
-            } else {
-                Some(i.url.clone())
-            }
-        })
-        .filter(|url| url.starts_with("https://") || url.starts_with("http://"));
+    // The poster every client is given: the chosen one, else one added by
+    // hand, else the best the sources offered.
+    let image = crate::domain::lead_images(
+        item.images.iter().filter(|i| i.season_number.is_none()),
+        &item.primary_images,
+    )
+    .into_iter()
+    .find(|i| i.cover_type == CoverType::Poster)
+    .and_then(|i| {
+        // A copy kept, addressed by a path: under the public URL for a
+        // crawler, which cannot follow the path, or the provider's
+        // address when there is none.
+        if i.url.starts_with(crate::media::ROUTE) {
+            state.media.for_elsewhere(&i.url)
+        } else {
+            Some(i.url.clone())
+        }
+    })
+    .filter(|url| url.starts_with("https://") || url.starts_with("http://"));
     Some(Preview {
         title,
         description: item.overview.as_deref().and_then(line),

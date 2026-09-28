@@ -33,6 +33,10 @@ may change what the API or the configuration means, and says so here.
   entry locked by hand first, then the identifier list's, then the one the
   work goes by. They were reached only through TheTVDB for a series, TMDB
   for a film, so a series TheTVDB does not know could not be asked at all.
+- The same for TVmaze: a work's own TVmaze identifier is enough to ask it,
+  where TheTVDB's was required.
+- A page's preview picture follows the poster Sonarr is given: the chosen
+  one, else one added by hand, else the best the sources offered.
 
 ## [0.2.0] — 2026-09-28
 

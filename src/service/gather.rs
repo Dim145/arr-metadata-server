@@ -67,7 +67,7 @@ pub async fn series(
         series_from_tvdb(state, tvdb_id),
         series_from_skyhook(state, tvdb_id),
         series_from_fanart(state, tvdb_id),
-        series_from_tvmaze(state, tvdb_id),
+        series_from_tvmaze(state, tvdb_id, tmdb_id),
     );
 
     let mut answers: Vec<Answer> = [from_tmdb, from_tvdb, from_skyhook, from_fanart, from_tvmaze]
@@ -537,7 +537,7 @@ pub fn askable(
                 one(names::TVDB, tvdb),
                 one(names::SKYHOOK, tvdb),
                 one(names::FANART, tvdb),
-                one(names::TVMAZE, tvdb),
+                one(names::TVMAZE, tvdb || ids.tvmaze.is_some()),
                 one(names::ANILIST, tvdb || !ids.anilist.is_empty()),
                 one(names::MAL, tvdb || !ids.mal.is_empty()),
             ]
@@ -787,7 +787,10 @@ async fn ask_again(state: &AppState, stored: &MediaItem, asking: &[&'static str]
                 when(wants(names::TVDB), series_from_tvdb(state, ids.tvdb)),
                 when(wants(names::SKYHOOK), skyhook_answer(state, ids.tvdb)),
                 when(wants(names::FANART), series_from_fanart(state, ids.tvdb)),
-                when(wants(names::TVMAZE), series_from_tvmaze(state, ids.tvdb)),
+                when(
+                    wants(names::TVMAZE),
+                    series_from_tvmaze(state, ids.tvdb, ids.tmdb)
+                ),
             );
             [tmdb, tvdb, skyhook, fanart, tvmaze]
                 .into_iter()
@@ -961,27 +964,37 @@ async fn series_from_tvdb(state: &AppState, tvdb_id: Option<i64>) -> Option<Answ
 ///
 /// What it says about an episode is only used where its broadcast date agrees
 /// with the spine's — see `merge::apply_broadcast_times`.
-async fn series_from_tvmaze(state: &AppState, tvdb_id: Option<i64>) -> Option<Answer> {
-    let tvdb_id = tvdb_id?;
+async fn series_from_tvmaze(
+    state: &AppState,
+    tvdb_id: Option<i64>,
+    tmdb_id: Option<i64>,
+) -> Option<Answer> {
     if !state.flag("tvmaze.enabled", false) {
         return None;
     }
 
     // A series fetched before has its TVmaze id on file — Skyhook and TheTVDB
-    // both carry it — which turns three requests into one.
-    let known = match repo::item::find_id_by_external(
-        &state.db,
-        ExternalSource::TvdbSeries,
-        &tvdb_id.to_string(),
-    )
-    .await
-    {
-        Ok(Some(id)) => repo::item::load_external_ids(&state.db, &id)
-            .await
-            .ok()
-            .and_then(|ids| ids.tvmaze),
-        _ => None,
-    };
+    // both carry it, or a person set it — which turns three requests into
+    // one, and asks TVmaze about a series TheTVDB does not know at all.
+    let mut known = None;
+    for (source, id) in [
+        (ExternalSource::TvdbSeries, tvdb_id),
+        (ExternalSource::tmdb_for(MediaKind::Series), tmdb_id),
+    ] {
+        let Some(id) = id else { continue };
+        if let Ok(Some(work)) =
+            repo::item::find_id_by_external(&state.db, source, &id.to_string()).await
+        {
+            known = repo::item::load_external_ids(&state.db, &work)
+                .await
+                .ok()
+                .and_then(|ids| ids.tvmaze);
+            break;
+        }
+    }
+    if tvdb_id.is_none() && known.is_none() {
+        return None;
+    }
 
     match state.tvmaze.series(tvdb_id, known).await {
         Ok(Some((raw, item))) => Some(Answer {
