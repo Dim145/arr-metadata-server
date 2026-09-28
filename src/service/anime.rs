@@ -31,6 +31,25 @@ impl Chosen {
     }
 }
 
+/// The entries to ask about, site by site: the one a person set on the work
+/// when they locked its identifiers, then the identifier list's, then the
+/// one the work already goes by — the oldest of several, which is the first
+/// season far more often than not.
+pub fn choose(mapped: Option<Chosen>, pinned: Option<&ExternalIds>, own: &ExternalIds) -> Chosen {
+    let first = |ids: &[i64]| ids.iter().copied().min();
+    let mapped = mapped.unwrap_or_default();
+    Chosen {
+        mal: pinned
+            .and_then(|p| first(&p.mal))
+            .or(mapped.mal)
+            .or_else(|| first(&own.mal)),
+        anilist: pinned
+            .and_then(|p| first(&p.anilist))
+            .or(mapped.anilist)
+            .or_else(|| first(&own.anilist)),
+    }
+}
+
 /// Whether either anime source is switched on, which is also what keeps the
 /// identifier list downloaded.
 pub fn enabled(state: &AppState) -> bool {
@@ -226,5 +245,39 @@ mod tests {
             primary_of_movie(&entries).and_then(|e| e.mal_id),
             Some(32281)
         );
+    }
+
+    /// A person's entry wins, then the list's, then the work's own.
+    #[test]
+    fn the_entry_asked_about_is_the_one_a_person_set_first() {
+        let list = Chosen {
+            mal: Some(10),
+            anilist: Some(20),
+        };
+        let own = ExternalIds {
+            mal: vec![3, 1],
+            anilist: vec![7],
+            ..ExternalIds::default()
+        };
+        let pinned = ExternalIds {
+            anilist: vec![169941],
+            ..ExternalIds::default()
+        };
+        assert_eq!(
+            choose(Some(list), Some(&pinned), &own),
+            Chosen {
+                mal: Some(10),
+                anilist: Some(169941)
+            }
+        );
+        assert_eq!(choose(Some(list), None, &own), list);
+        assert_eq!(
+            choose(None, None, &own),
+            Chosen {
+                mal: Some(1),
+                anilist: Some(7)
+            }
+        );
+        assert!(choose(None, None, &ExternalIds::default()).is_empty());
     }
 }

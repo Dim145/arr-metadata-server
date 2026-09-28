@@ -24,6 +24,16 @@ may change what the API or the configuration means, and says so here.
   last one they were sent was the one they showed. Without a choice, an
   image added by hand leads, then the best the sources offered.
 
+### Fixed
+
+- Marking a work adult by hand failed on PostgreSQL: the flag was written as
+  a boolean where the column holds an integer.
+- A work's own AniList or MyAnimeList identifier now reaches those sources:
+  the sources panel offers them, and a sync or a refresh asks them — the
+  entry locked by hand first, then the identifier list's, then the one the
+  work goes by. They were reached only through TheTVDB for a series, TMDB
+  for a film, so a series TheTVDB does not know could not be asked at all.
+
 ## [0.2.0] — 2026-09-28
 
 ### Added

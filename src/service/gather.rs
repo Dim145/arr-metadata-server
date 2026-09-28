@@ -77,18 +77,22 @@ pub async fn series(
 
     // The anime sites second: which of their entries to ask about comes from
     // the identifier list, or failing that from the ids Skyhook just returned.
-    if let Some(tvdb_id) = tvdb_id
-        && anime::enabled(state)
-        && describes_a_work(&answers)
-    {
+    if anime::enabled(state) && describes_a_work(&answers) {
         let mut known = ExternalIds::default();
         for answer in &answers {
             known.mal.extend(&answer.item.external_ids.mal);
             known.anilist.extend(&answer.item.external_ids.anilist);
         }
 
-        let chosen = anime::for_series(state, tvdb_id, &known).await;
-        answers.extend(from_anime_sites(state, chosen, MediaKind::Series).await);
+        let pinned = pinned_ids(state, MediaKind::Series, tmdb_id, tvdb_id).await;
+        let mapped = match tvdb_id {
+            Some(tvdb_id) => Some(anime::for_series(state, tvdb_id, &known).await),
+            None => None,
+        };
+        let chosen = anime::choose(mapped, pinned.as_ref(), &known);
+        if !chosen.is_empty() {
+            answers.extend(from_anime_sites(state, chosen, MediaKind::Series).await);
+        }
     }
 
     let stored = store(state, answers).await?;
@@ -116,11 +120,20 @@ pub async fn movie(
         .flatten()
         .collect();
 
-    if let Some(tmdb_id) = tmdb_id
-        && anime::enabled(state)
+    let pinned = if anime::enabled(state) && describes_a_work(&answers) {
+        pinned_ids(state, MediaKind::Movie, tmdb_id, None).await
+    } else {
+        None
+    };
+    if anime::enabled(state)
         && describes_a_work(&answers)
+        && (tmdb_id.is_some() || pinned.is_some())
     {
-        let chosen = anime::for_movie(state, tmdb_id).await;
+        let mapped = match tmdb_id {
+            Some(tmdb_id) => Some(anime::for_movie(state, tmdb_id).await),
+            None => None,
+        };
+        let chosen = anime::choose(mapped, pinned.as_ref(), &ExternalIds::default());
         let mut from_sites = from_anime_sites(state, chosen, MediaKind::Movie).await;
 
         // A film keeps no AniList or MyAnimeList id. TheTVDB files films under
@@ -438,6 +451,36 @@ pub struct Askable {
     pub brings: Vec<&'static str>,
 }
 
+/// The identifiers a person locked on the work these ids stand for, when
+/// they did: which AniList and MyAnimeList entries they meant, asked about
+/// before the identifier list's guess.
+async fn pinned_ids(
+    state: &AppState,
+    kind: MediaKind,
+    tmdb: Option<i64>,
+    tvdb: Option<i64>,
+) -> Option<ExternalIds> {
+    let by = [
+        (ExternalSource::tmdb_for(kind), tmdb),
+        (ExternalSource::tvdb_for(kind), tvdb),
+    ];
+    for (source, id) in by {
+        let Some(id) = id else { continue };
+        let Ok(Some(work)) =
+            repo::item::find_id_by_external(&state.db, source, &id.to_string()).await
+        else {
+            continue;
+        };
+        let locks = repo::override_field::list(&state.db, &work).await.ok()?;
+        return locks
+            .into_iter()
+            .find(|o| o.scope == "item" && o.field == "externalIds")
+            .and_then(|o| o.value)
+            .and_then(|value| serde_json::from_value(value).ok());
+    }
+    None
+}
+
 /// Whether a provider is switched on and able to answer, whatever the work.
 pub fn switched_on(state: &AppState, provider: &str) -> bool {
     let anime = anime::enabled(state);
@@ -495,8 +538,8 @@ pub fn askable(
                 one(names::SKYHOOK, tvdb),
                 one(names::FANART, tvdb),
                 one(names::TVMAZE, tvdb),
-                one(names::ANILIST, tvdb),
-                one(names::MAL, tvdb),
+                one(names::ANILIST, tvdb || !ids.anilist.is_empty()),
+                one(names::MAL, tvdb || !ids.mal.is_empty()),
             ]
         }
         MediaKind::Movie => {
@@ -506,8 +549,8 @@ pub fn askable(
                 one(names::TMDB, tmdb),
                 one(names::RADARR, either),
                 one(names::FANART, either),
-                one(names::ANILIST, tmdb),
-                one(names::MAL, tmdb),
+                one(names::ANILIST, tmdb || !ids.anilist.is_empty()),
+                one(names::MAL, tmdb || !ids.mal.is_empty()),
             ]
         }
     };
@@ -766,18 +809,25 @@ async fn ask_again(state: &AppState, stored: &MediaItem, asking: &[&'static str]
     };
 
     if (wants(names::ANILIST) || wants(names::MAL)) && anime::enabled(state) {
-        let chosen = match (stored.kind, ids.tvdb, ids.tmdb) {
+        let own = ExternalIds {
+            mal: ids.mal.clone(),
+            anilist: ids.anilist.clone(),
+            ..ExternalIds::default()
+        };
+        let mapped = match (stored.kind, ids.tvdb, ids.tmdb) {
             (MediaKind::Series, Some(tvdb_id), _) => {
-                let known = ExternalIds {
-                    mal: ids.mal.clone(),
-                    anilist: ids.anilist.clone(),
-                    ..ExternalIds::default()
-                };
-                Some(anime::for_series(state, tvdb_id, &known).await)
+                Some(anime::for_series(state, tvdb_id, &own).await)
             }
             (MediaKind::Movie, _, Some(tmdb_id)) => Some(anime::for_movie(state, tmdb_id).await),
             _ => None,
         };
+        // Identifiers locked by hand name the entry the person meant.
+        let pinned = stored
+            .locked_fields
+            .iter()
+            .any(|f| f == "item/externalIds")
+            .then_some(&own);
+        let chosen = Some(anime::choose(mapped, pinned, &own)).filter(|c| !c.is_empty());
 
         if let Some(chosen) = chosen {
             let (anilist, mal) = tokio::join!(

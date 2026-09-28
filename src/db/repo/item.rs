@@ -2662,7 +2662,8 @@ pub async fn delete(db: &Db, id: &str) -> Result<bool> {
 pub async fn set_adult(db: &Db, id: &str, adult: bool) -> Result<bool> {
     let done =
         sqlx::query(db.sql("UPDATE media_item SET is_adult = ?, updated_at = ? WHERE id = ?"))
-            .bind(adult)
+            // An integer on PostgreSQL, as every flag here.
+            .bind(from_bool(adult))
             .bind(now())
             .bind(id)
             .execute(db.pool())
