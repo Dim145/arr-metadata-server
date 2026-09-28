@@ -28,6 +28,27 @@ where
     Ok(Option::<Vec<T>>::deserialize(deserializer)?.unwrap_or_default())
 }
 
+/// A text the upstream may leave out or write as `null`, read as empty.
+///
+/// The fields read this way are the ones Radarr calls a method on without a
+/// null check: this server always writes them, but must still read a reply
+/// from api.radarr.video that has none.
+fn string_or_null<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
+}
+
+/// ISO 639-2 for "undetermined": the original language of a film whose
+/// language is not known.
+///
+/// Radarr lowercases `OriginalLanguage` without a null check
+/// (`SkyHookProxy.MapMovie`), so leaving it out fails the film's refresh, and
+/// a search whose results include the film. It finds no language for this
+/// code and takes English, as it does for any code it does not know.
+const UNDETERMINED: &str = "und";
+
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "PascalCase")]
 pub struct MovieResource {
@@ -81,8 +102,9 @@ pub struct MovieResource {
     pub status: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub collection: Option<CollectionResource>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub original_language: Option<String>,
+    /// Always written; [`UNDETERMINED`] when the language is not known.
+    #[serde(default, deserialize_with = "string_or_null")]
+    pub original_language: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub homepage: Option<String>,
     #[serde(default, deserialize_with = "list_or_null")]
@@ -149,8 +171,9 @@ fn tmdb_source() -> String {
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "PascalCase")]
 pub struct TranslationResource {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
+    /// Always written; see [`translated_title`].
+    #[serde(default, deserialize_with = "string_or_null")]
+    pub title: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub overview: Option<String>,
     pub language: String,
@@ -293,7 +316,7 @@ pub fn from_item(item: &MediaItem) -> MovieResource {
             .translations
             .iter()
             .map(|t| TranslationResource {
-                title: t.title.clone(),
+                title: translated_title(t, item),
                 overview: t.overview.clone(),
                 language: t.language.clone(),
             })
@@ -313,11 +336,30 @@ pub fn from_item(item: &MediaItem) -> MovieResource {
         },
         status: Some(radarr_status(item.status.as_deref())),
         collection: None,
-        original_language: item.original_language.clone(),
+        original_language: non_empty(item.original_language.as_deref())
+            .unwrap_or_else(|| UNDETERMINED.to_string()),
         homepage: item.homepage.clone(),
         recommendations: Vec::new(),
         popularity: item.popularity,
     }
+}
+
+/// The title a translation is sent with: its own, or else the one the film goes
+/// by in that language, which is its original title.
+///
+/// Radarr cleans every translated title and, when it looks for releases of the
+/// film, calls `Replace` on each of them without a null check
+/// (`ParsingService.TryGetMovieBySearchCriteria`). One translation sent without
+/// a title fails every interactive search of the film, and the release list
+/// with it. api.radarr.video never sends one: where TMDB has a synopsis in a
+/// language but no title, it sends the original title, and so does this.
+fn translated_title(translation: &crate::domain::Translation, item: &MediaItem) -> String {
+    [translation.title.as_deref(), item.original_title.as_deref()]
+        .into_iter()
+        .flatten()
+        .find(|title| !title.trim().is_empty())
+        .unwrap_or(item.title.as_str())
+        .to_string()
 }
 
 /// Radarr writes every credit into a table where `CreditTmdbId` is NOT NULL, so
@@ -432,7 +474,10 @@ pub fn to_item(resource: &MovieResource) -> MediaItem {
     item.original_title = non_empty(resource.original_title.as_deref());
     item.overview = non_empty(resource.overview.as_deref());
     item.homepage = non_empty(resource.homepage.as_deref());
-    item.original_language = non_empty(resource.original_language.as_deref());
+    // The placeholder this server writes for a language it does not know is not
+    // a language to absorb back.
+    item.original_language =
+        non_empty(Some(&resource.original_language)).filter(|l| l != UNDETERMINED);
     item.runtime = resource.runtime.filter(|r| *r > 0);
     item.year = (resource.year > 0).then_some(resource.year);
     item.studio = non_empty(resource.studio.as_deref());
@@ -505,10 +550,10 @@ pub fn to_item(resource: &MovieResource) -> MediaItem {
         .translations
         .iter()
         .take(MAX_TITLES)
-        .filter(|t| t.title.is_some() || t.overview.is_some())
+        .filter(|t| !t.title.trim().is_empty() || t.overview.is_some())
         .map(|t| Translation {
             language: t.language.clone(),
-            title: non_empty(t.title.as_deref()),
+            title: non_empty(Some(&t.title)),
             overview: non_empty(t.overview.as_deref()),
             is_manual: false,
         })
@@ -841,5 +886,94 @@ mod tests {
         assert_eq!(json["InCinema"], "2016-11-11");
         assert_eq!(json["DigitalRelease"], "2017-01-31");
         assert_eq!(json["YoutubeTrailerId"], serde_json::Value::Null);
+    }
+
+    fn translation(language: &str, title: Option<&str>) -> crate::domain::Translation {
+        crate::domain::Translation {
+            language: language.into(),
+            title: title.map(String::from),
+            overview: Some("A linguist is recruited when twelve ships land.".into()),
+            is_manual: false,
+        }
+    }
+
+    #[test]
+    fn every_translation_is_sent_with_a_title() {
+        // Radarr calls `Replace` on every translated title when it looks for
+        // releases. One sent without a title failed every interactive search
+        // of the film: "Object reference not set to an instance of an object"
+        // in `TryGetMovieBySearchCriteria`, then in the release list itself.
+        let mut it = item();
+        // Served in French: the title is the French one, the original is not.
+        it.title = "Premier Contact".into();
+        it.original_title = Some("Arrival".into());
+        it.translations = vec![
+            translation("fra", Some("Premier Contact")),
+            translation("dan", None),
+            translation("nld", Some("  ")),
+        ];
+
+        let resource = from_item(&it);
+        let titles: Vec<&str> = resource
+            .translations
+            .iter()
+            .map(|t| t.title.as_str())
+            .collect();
+        // What api.radarr.video sends where TMDB has no title in a language.
+        assert_eq!(titles, ["Premier Contact", "Arrival", "Arrival"]);
+
+        let json = serde_json::to_value(&resource).unwrap();
+        let sent = json["Translations"].as_array().unwrap();
+        assert!(sent.iter().all(|t| t["Title"].is_string()), "{sent:?}");
+
+        // A work with no original title falls back on the one it is served under.
+        it.original_title = None;
+        assert_eq!(from_item(&it).translations[1].title, "Premier Contact");
+    }
+
+    #[test]
+    fn a_film_of_unknown_language_is_sent_one_radarr_can_read() {
+        // Radarr lowercases this without a null check. Leaving it out failed the
+        // film's refresh, and every search whose results included it.
+        let mut it = item();
+        it.original_language = None;
+
+        let resource = from_item(&it);
+        assert_eq!(resource.original_language, "und");
+        let json = serde_json::to_value(&resource).unwrap();
+        assert_eq!(json["OriginalLanguage"], "und");
+
+        // The placeholder is not read back as a language.
+        assert_eq!(to_item(&resource).original_language, None);
+
+        it.original_language = Some("eng".into());
+        assert_eq!(from_item(&it).original_language, "eng");
+    }
+
+    #[test]
+    fn an_upstream_translation_without_a_title_keeps_its_synopsis() {
+        let body = serde_json::json!({
+            "TmdbId": 603,
+            "Title": "The Matrix",
+            "TitleSlug": "603",
+            "Year": 1999,
+            "OriginalLanguage": null,
+            "Translations": [
+                { "Title": null, "Overview": "Forestil dig…", "Language": "da-DK" },
+                { "Overview": "Tenk deg…", "Language": "no-NO" },
+                { "Title": "Matrix", "Language": "de-DE" }
+            ]
+        });
+
+        let movie: MovieResource = serde_json::from_value(body).expect("reads");
+        let canonical = to_item(&movie);
+
+        assert_eq!(canonical.original_language, None);
+        let read: Vec<(Option<&str>, bool)> = canonical
+            .translations
+            .iter()
+            .map(|t| (t.title.as_deref(), t.overview.is_some()))
+            .collect();
+        assert_eq!(read, [(None, true), (None, true), (Some("Matrix"), false)]);
     }
 }

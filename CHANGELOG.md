@@ -7,6 +7,19 @@ may change what the API or the configuration means, and says so here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Radarr's interactive search failed for a film once its metadata came from
+  this server ("Object reference not set to an instance of an object"). A
+  translation with a synopsis but no title of its own was sent without one,
+  which Radarr's release matching does not survive. Every translation now
+  carries a title: its own, or else the film's original title, as Radarr's
+  own metadata service does. Radarr rewrites the translations it holds when
+  it next refreshes the film.
+- A film whose original language is not known is sent as undetermined
+  (`und`) rather than with none, which Radarr does not survive either: it
+  could not refresh the film, and a search that found it failed whole.
+
 ## [0.3.1] — 2026-09-28
 
 ### Fixed
