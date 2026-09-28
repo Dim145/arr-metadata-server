@@ -59,6 +59,7 @@ import type {
   Episode,
   FieldDef,
   FieldRegistry,
+  ExternalIds,
   MediaItem,
   Override,
   ProvenanceReport,
@@ -246,10 +247,12 @@ export function WorkEditor() {
       {/* Two to a row on a phone: five buttons one under another, then the
           language, were a whole screen before the first field. */}
       <div className="rise mb-8 grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-end" style={{ animationDelay: '40ms' }}>
-        <Button onClick={() => refresh.mutate()} disabled={refresh.isPending}>
-          {refresh.isPending ? <Spinner className="size-4" /> : <Glyph name="refresh" className="size-4" />}
-          {refresh.isPending ? t.admin.editor.refreshing : t.admin.editor.refresh}
-        </Button>
+        {work.isManual ? null : (
+          <Button onClick={() => refresh.mutate()} disabled={refresh.isPending}>
+            {refresh.isPending ? <Spinner className="size-4" /> : <Glyph name="refresh" className="size-4" />}
+            {refresh.isPending ? t.admin.editor.refreshing : t.admin.editor.refresh}
+          </Button>
+        )}
 
         {allLocks > 0 ? (
           <Button variant="danger" onClick={() => setAsking('unlockAll')}>
@@ -346,7 +349,7 @@ export function WorkEditor() {
           { id: 'identifiers', label: t.work.identifiers },
           { id: 'record', label: t.admin.editor.record },
           { id: 'sources', label: t.work.sources },
-          { id: 'suggestions', label: t.admin.editor.suggestions },
+          ...(work.isManual ? [] : [{ id: 'suggestions', label: t.admin.editor.suggestions }]),
         ]}
       />
 
@@ -360,7 +363,7 @@ export function WorkEditor() {
             action={<span className="label hidden sm:inline">{t.admin.editor.fieldsHint}</span>}
           />
           <ul className="divide-y divide-rule">
-            {registry.data.item.map((def) => (
+            {registry.data.item.filter((def) => def.name !== 'externalIds').map((def) => (
               <FieldRow
                 key={def.name}
                 itemId={id}
@@ -418,20 +421,7 @@ export function WorkEditor() {
  className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-3">
         <Panel id="identifiers" className="rise" style={{ animationDelay: '400ms' }}>
           <PanelHead title={t.work.identifiers} />
-          <dl className="divide-y divide-rule">
-            {Object.entries(work.externalIds).map(([source, value]) => (
-              <Field key={source} label={source}>
-                <span className="font-mono text-[0.8125rem] tabular-nums">
-                  {Array.isArray(value) ? value.join(', ') : String(value)}
-                </span>
-              </Field>
-            ))}
-            <Field label="slug">
-              <span className="font-mono text-[0.8125rem] break-all text-bone-dim">
-                {work.slug}
-              </span>
-            </Field>
-          </dl>
+          <IdentifiersEditor work={work} lock={locks.get('externalIds')} onChanged={invalidate} />
         </Panel>
 
         <Panel id="record" className="rise" style={{ animationDelay: '440ms' }}>
@@ -453,7 +443,7 @@ export function WorkEditor() {
           </dl>
         </Panel>
 
-        <Suggestions work={work} />
+        {work.isManual ? null : <Suggestions work={work} />}
       </div>
 
       <RawSnapshot itemId={id} provider={viewing} onClose={() => setViewing(null)} />
@@ -646,6 +636,17 @@ function FieldRow({
                     value={draft}
                     onChange={(event) => setDraft(event.target.value)}
                   />
+                ) : def.fieldType === 'boolean' ? (
+                  <select
+                    id={inputId}
+                    autoFocus
+                    className="field"
+                    value={/^(true|yes|oui|1|on)$/i.test(draft.trim()) ? 'yes' : 'no'}
+                    onChange={(event) => setDraft(event.target.value)}
+                  >
+                    <option value="yes">{t.common.yes}</option>
+                    <option value="no">{t.common.no}</option>
+                  </select>
                 ) : (
                   <Input
                     id={inputId}
@@ -1147,6 +1148,176 @@ function EditorSkeleton() {
  */
 function fieldLabel(def: FieldDef, t: Dict): string {
   return (t.labels.fields as Record<string, string>)[def.name] ?? def.label
+}
+
+/* ── The identifiers, edited ─────────────────────────────────────────────── */
+
+/** The sources a work can be given an identifier for, in the order shown. */
+const ID_SOURCES: { key: keyof ExternalIds; list?: boolean }[] = [
+  { key: 'tmdb' },
+  { key: 'tvdb' },
+  { key: 'imdb' },
+  { key: 'tvmaze' },
+  { key: 'tvrage' },
+  { key: 'trakt' },
+  { key: 'fankai' },
+  { key: 'mal', list: true },
+  { key: 'anilist', list: true },
+]
+
+/** What the boxes say for a set of identifiers. */
+function idDrafts(ids: ExternalIds): Record<string, string> {
+  const drafts: Record<string, string> = {}
+  for (const { key } of ID_SOURCES) {
+    const value = ids[key]
+    drafts[key] = value === undefined ? '' : Array.isArray(value) ? value.join(', ') : String(value)
+  }
+  return drafts
+}
+
+/** The identifiers the boxes hold, in the shape the server locks. */
+function idsOf(drafts: Record<string, string>): { ids: ExternalIds; error?: string } {
+  const ids: ExternalIds = {}
+  for (const { key, list } of ID_SOURCES) {
+    const text = (drafts[key] ?? '').trim()
+    if (!text) continue
+    if (key === 'imdb') {
+      ids.imdb = text
+      continue
+    }
+    const numbers = text.split(',').map((part) => Number.parseInt(part.trim(), 10))
+    if (numbers.some((n) => Number.isNaN(n) || n < 0)) return { ids, error: key }
+    if (list) {
+      ;(ids as Record<string, unknown>)[key] = numbers
+    } else {
+      if (numbers.length !== 1) return { ids, error: key }
+      ;(ids as Record<string, unknown>)[key] = numbers[0]
+    }
+  }
+  return { ids }
+}
+
+function IdentifiersEditor({ work, lock, onChanged }: { work: MediaItem; lock?: Override; onChanged: () => void }) {
+  const { t, locale } = useI18n()
+  const e = t.admin.editor
+  const [editing, setEditing] = useState(false)
+  const [drafts, setDrafts] = useState<Record<string, string>>({})
+  const [invalid, setInvalid] = useState<string | null>(null)
+
+  const save = useMutation({
+    mutationFn: (ids: ExternalIds) => api.put(`/items/${work.id}/overrides`, { scope: 'item', field: 'externalIds', value: ids }),
+    onSuccess: () => {
+      setEditing(false)
+      onChanged()
+    },
+  })
+  const unlock = useMutation({
+    mutationFn: () => api.delete(`/items/${work.id}/overrides/item/externalIds`),
+    onSuccess: onChanged,
+  })
+
+  const held = Object.entries(work.externalIds).filter(([, value]) => value !== undefined && value !== null)
+
+  return (
+    <div className="p-5">
+      {lock ? (
+        <p className="mb-3 flex items-center gap-2 text-xs text-brass">
+          <Glyph name="lock" className="size-3.5" />
+          {e.identifiersLocked(fmt.relative(lock.updatedAt, locale) ?? '')}
+        </p>
+      ) : null}
+      {editing ? (
+        <form
+          className="flex flex-col gap-3"
+          onSubmit={(event) => {
+            event.preventDefault()
+            const { ids, error } = idsOf(drafts)
+            if (error) {
+              setInvalid(error)
+              return
+            }
+            setInvalid(null)
+            save.mutate(ids)
+          }}
+        >
+          {ID_SOURCES.map(({ key, list }) => (
+            <FormField
+              key={key}
+              label={key}
+              htmlFor={`id-${key}`}
+              hint={list ? e.identifiersListHint : undefined}
+              error={invalid === key ? e.identifiersInvalid : undefined}
+            >
+              <Input
+                id={`id-${key}`}
+                value={drafts[key] ?? ''}
+                inputMode={key === 'imdb' ? 'text' : 'numeric'}
+                onChange={(event) => setDrafts((held) => ({ ...held, [key]: event.target.value }))}
+              />
+            </FormField>
+          ))}
+          {save.isError ? (
+            <p role="alert" className="text-sm text-vermillion">
+              {save.error instanceof ApiError ? save.error.message : t.common.actionFailed}
+            </p>
+          ) : null}
+          <div className="flex flex-wrap gap-2">
+            <Button type="submit" variant="primary" size="sm" disabled={save.isPending}>
+              {save.isPending ? <Spinner className="size-4" /> : <Glyph name="lock" className="size-4" />}
+              {e.saveAndLock}
+            </Button>
+            <Button type="button" size="sm" onClick={() => setEditing(false)}>
+              {t.common.cancel}
+            </Button>
+          </div>
+        </form>
+      ) : (
+        <>
+          <dl className="divide-y divide-rule">
+            {held.length ? (
+              held.map(([source, value]) => (
+                <Field key={source} label={source}>
+                  <span className="font-mono text-[0.8125rem] tabular-nums">
+                    {Array.isArray(value) ? value.join(', ') : String(value)}
+                  </span>
+                </Field>
+              ))
+            ) : (
+              <p className="py-2 text-sm text-bone-faint">{e.identifiersNone}</p>
+            )}
+            <Field label="slug">
+              <span className="font-mono text-[0.8125rem] break-all text-bone-dim">{work.slug}</span>
+            </Field>
+          </dl>
+          <p className="mt-3 text-xs leading-relaxed text-bone-faint">{e.identifiersHint}</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              onClick={() => {
+                setDrafts(idDrafts(work.externalIds))
+                setInvalid(null)
+                setEditing(true)
+              }}
+            >
+              <Glyph name="pencil" className="size-4" />
+              {t.common.edit}
+            </Button>
+            {lock ? (
+              <Button size="sm" variant="quiet" disabled={unlock.isPending} onClick={() => unlock.mutate()}>
+                <Glyph name="unlock" className="size-4" />
+                {e.unlock}
+              </Button>
+            ) : null}
+          </div>
+          {unlock.isError ? (
+            <p role="alert" className="mt-2 text-sm text-vermillion">
+              {unlock.error instanceof ApiError ? unlock.error.message : t.common.actionFailed}
+            </p>
+          ) : null}
+        </>
+      )}
+    </div>
+  )
 }
 
 /* ── What TMDB suggests ───────────────────────────────────────────────────── */

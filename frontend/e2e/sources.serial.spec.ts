@@ -195,8 +195,11 @@ test.describe('where values come from', () => {
       await expect(panel).toContainText(/entered by hand|saisie à la main/i)
       await expect(panel.getByRole('checkbox')).toHaveCount(0)
 
+      // A manual entry has no source: refused as such, before the sources named are looked at.
       const refused = await page.request.post(`/api/v1/items/${id}/sync`, { data: { sources: ['tmdb'] } })
-      expect(refused.status()).toBe(400)
+      expect(refused.status()).toBe(409)
+      const noRefresh = await page.request.post(`/api/v1/items/${id}/refresh`)
+      expect(noRefresh.status()).toBe(409)
     } finally {
       await page.request.delete(`/api/v1/items/${id}`)
     }

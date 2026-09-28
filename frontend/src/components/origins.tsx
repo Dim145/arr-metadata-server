@@ -270,7 +270,6 @@ export function SourcesPanel({
   const busy = sync.isPending || refreshing
   // A work entered by hand has sources only if it was given an id to be
   // asked by, or has answered for before.
-  const answerable = sources.some((source) => !source.unavailable || source.fetchedAt)
   // Who numbers the list, as the server takes it: whoever is on record, or
   // TheTVDB. A source brought along that is not it fills the episodes in.
   const recorded = provenance?.episodes
@@ -310,16 +309,11 @@ export function SourcesPanel({
         <p className="px-5 py-4 text-sm text-bone-faint">
           <Spinner className="size-4" />
         </p>
-      ) : isManual && !answerable ? (
+      ) : isManual ? (
+        // Entered by hand: no source is asked about it, identifiers or not.
         <p className="px-5 py-4 text-sm text-bone-faint">{t.admin.editor.handEntered}</p>
       ) : (
         <>
-          {isManual ? (
-            <p className="flex items-start gap-2 border-b border-rule px-5 py-3 text-xs leading-relaxed text-bone-dim">
-              <Glyph name="pencil" className="mt-0.5 size-3.5 shrink-0 text-brass" />
-              {s.manualNote}
-            </p>
-          ) : null}
           <ul className="divide-y divide-rule">
             {sources.map((source) => (
               <SourceRow

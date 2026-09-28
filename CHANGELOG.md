@@ -7,6 +7,21 @@ may change what the API or the configuration means, and says so here.
 
 ## [Unreleased]
 
+### Added
+
+- A work's identity can be set by hand and locked like any other field:
+  whether it is adult, its address (slug), and the identifiers it goes by
+  elsewhere — edited from the work's page, written to the row as well as
+  locked so the lists, the addresses and the clients' lookups follow, kept
+  through every refresh, and refused when another work already goes by the
+  same address or identifier.
+
+### Changed
+
+- A manual entry has no sources: its page no longer offers a refresh, a
+  sync from sources or TMDB's suggestions, and the server refuses to
+  refresh or sync one — the schedules never took them.
+
 ## [0.1.1] — 2026-09-28
 
 ### Changed

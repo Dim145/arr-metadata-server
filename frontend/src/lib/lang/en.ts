@@ -1352,6 +1352,11 @@ export const en = {
 
     editor: {
       suggestions: 'TMDB suggests',
+      identifiersHint: 'What the work goes by elsewhere: what Sonarr, Radarr and the sources are asked with. Edited, they are locked — a refresh keeps them — and one another work goes by is refused.',
+      identifiersListHint: 'Several, comma-separated',
+      identifiersInvalid: 'A number is expected',
+      identifiersNone: 'None: the work is known here alone.',
+      identifiersLocked: (when: string) => `Locked by hand ${when}`,
       suggestionsHint: 'What TMDB recommends beside this work: a click imports one, and one already held opens.',
       suggestionsNone: 'TMDB suggests nothing beside it.',
       suggestionsFailed: 'TMDB’s suggestions could not be loaded.',
@@ -1450,7 +1455,6 @@ export const en = {
         theRelations: 'the related works',
         translations: (n: number) => (n === 1 ? '1 translation' : `${n} translations`),
         ratings: (n: number) => (n === 1 ? '1 rating' : `${n} ratings`),
-        manualNote: 'Entered by hand, with identifiers: its sources are asked as any work’s are.',
         loadFailed: 'Where the values come from could not be loaded.',
         retry: 'Try again',
         noneAnswered: 'None of the sources asked answered: nothing was changed.',
@@ -2102,6 +2106,9 @@ export const en = {
       disabled: 'Disabled',
     },
     fields: {
+      isAdult: 'Adult',
+      slug: 'Address (slug)',
+      externalIds: 'Identifiers',
       title: 'Title',
       sortTitle: 'Sort title',
       originalTitle: 'Original title',
@@ -2141,6 +2148,7 @@ export const en = {
       dateTime: 'Date and time · 2009-03-22T21:00:00Z',
       timeOfDay: 'Time · HH:MM',
       textList: 'List · comma-separated',
+      ids: 'Identifiers by source',
     },
   },
   notFound: {

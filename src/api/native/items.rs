@@ -594,6 +594,12 @@ async fn refresh(
     .inspect_err(|e| tracing::warn!(error = %e, "could not open a job run"))
     .ok();
 
+    if item.is_manual {
+        return Err(AppError::Conflict(
+            "a manual entry has no source to refresh from".into(),
+        ));
+    }
+
     let outcome = crate::jobs::refresh::refresh_one(&state, &item).await;
 
     if let Some(record) = record {
@@ -792,6 +798,15 @@ async fn sync(
     Json(request): Json<SyncRequest>,
 ) -> AppResult<Json<SyncOutcome>> {
     require_write(&identity)?;
+    if service::load(&state, &id)
+        .await?
+        .ok_or(AppError::NotFound)?
+        .is_manual
+    {
+        return Err(AppError::Conflict(
+            "a manual entry has no source to sync from".into(),
+        ));
+    }
     if request.sources.is_empty() {
         return Err(AppError::BadRequest("name the sources to ask again".into()));
     }

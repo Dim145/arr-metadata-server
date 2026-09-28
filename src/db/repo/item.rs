@@ -2656,6 +2656,65 @@ pub async fn delete(db: &Db, id: &str) -> Result<bool> {
     Ok(result.rows_affected() > 0)
 }
 
+/// Mark a work adult, or not, on its row: what every list and every client
+/// lookup reads. Whether the row was there.
+pub async fn set_adult(db: &Db, id: &str, adult: bool) -> Result<bool> {
+    let done =
+        sqlx::query(db.sql("UPDATE media_item SET is_adult = ?, updated_at = ? WHERE id = ?"))
+            .bind(adult)
+            .bind(now())
+            .bind(id)
+            .execute(db.pool())
+            .await?;
+    Ok(done.rows_affected() > 0)
+}
+
+/// Give a work its address. The caller has checked the slug is free among
+/// works of the kind. Whether the row was there.
+pub async fn set_slug(db: &Db, id: &str, slug: &str) -> Result<bool> {
+    let done = sqlx::query(db.sql("UPDATE media_item SET slug = ?, updated_at = ? WHERE id = ?"))
+        .bind(slug)
+        .bind(now())
+        .bind(id)
+        .execute(db.pool())
+        .await?;
+    Ok(done.rows_affected() > 0)
+}
+
+/// Replace every identifier a work goes by elsewhere with these. The caller
+/// has checked none is held by another work.
+pub async fn replace_external_ids(
+    db: &Db,
+    id: &str,
+    kind: MediaKind,
+    ids: &ExternalIds,
+) -> Result<()> {
+    let mut tx = db.begin_write().await?;
+    sqlx::query(db.sql("DELETE FROM media_external_id WHERE media_id = ?"))
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    let at = now();
+    for (source, value) in ids.rows(kind) {
+        sqlx::query(db.sql(
+            "INSERT INTO media_external_id (media_id, source, value, created_at) VALUES (?, ?, ?, ?)",
+        ))
+        .bind(id)
+        .bind(source.as_str())
+        .bind(&value)
+        .bind(&at)
+        .execute(&mut *tx)
+        .await?;
+    }
+    sqlx::query(db.sql("UPDATE media_item SET updated_at = ? WHERE id = ?"))
+        .bind(&at)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
 pub async fn set_enabled(db: &Db, id: &str, enabled: bool) -> Result<bool> {
     let result =
         sqlx::query(db.sql("UPDATE media_item SET is_enabled = ?, updated_at = ? WHERE id = ?"))

@@ -17,7 +17,10 @@ use crate::{
     },
     auth::Identity,
     db::repo::{self, audit::Action},
-    domain::fields::{self, Override, Scope},
+    domain::{
+        ExternalIds, MediaItem,
+        fields::{self, Override, Scope},
+    },
     error::{AppError, AppResult},
     service,
     state::AppState,
@@ -128,6 +131,14 @@ async fn set(
             return Err(AppError::NotFound);
         }
         _ => {}
+    }
+
+    // The work's identity is written to its row as well as locked: the
+    // lists, the addresses and the clients' lookups read the row, not the
+    // lock. Checked before anything is written, so a slug or an identifier
+    // another work holds refuses the whole edit.
+    if scope == Scope::Item && fields::IDENTITY.contains(&request.field.as_str()) {
+        write_identity(&state, &item, &request.field, request.value.as_ref()).await?;
     }
 
     repo::override_field::set(
@@ -272,6 +283,54 @@ async fn clear(
     .await;
 
     Ok(Json(ClearResponse { removed }))
+}
+
+/// Write a locked identity field through to the row: adult, the slug, the
+/// identifiers. A slug is refused while another work of the kind has it,
+/// an identifier while another work goes by it.
+async fn write_identity(
+    state: &AppState,
+    item: &MediaItem,
+    field: &str,
+    value: Option<&Value>,
+) -> AppResult<()> {
+    match (field, value) {
+        ("isAdult", Some(Value::Bool(adult))) => {
+            repo::item::set_adult(&state.db, &item.id, *adult).await?;
+        }
+        ("slug", Some(Value::String(slug))) => {
+            if let Some(owner) = repo::item::find_id_by_slug(&state.db, item.kind, slug).await?
+                && owner != item.id
+            {
+                return Err(AppError::Conflict(format!(
+                    "another {} already has the address {slug:?}",
+                    item.kind.as_str()
+                )));
+            }
+            repo::item::set_slug(&state.db, &item.id, slug).await?;
+        }
+        ("externalIds", Some(value @ Value::Object(_))) => {
+            let ids: ExternalIds = serde_json::from_value(value.clone()).map_err(|e| {
+                AppError::BadRequest(format!("the identifiers cannot be read: {e}"))
+            })?;
+            for (source, id) in ids.rows(item.kind) {
+                let held =
+                    repo::item::held_external_ids(&state.db, source, std::slice::from_ref(&id))
+                        .await?;
+                if let Some(owner) = held.get(&id)
+                    && *owner != item.id
+                {
+                    return Err(AppError::Conflict(format!(
+                        "another work already goes by {} {id}",
+                        source.as_str()
+                    )));
+                }
+            }
+            repo::item::replace_external_ids(&state.db, &item.id, item.kind, &ids).await?;
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 fn require_write(identity: &Identity) -> AppResult<()> {

@@ -38,6 +38,9 @@ pub enum FieldType {
     TimeOfDay,
     /// Array of strings.
     TextList,
+    /// The identifiers a work goes by elsewhere, as one object by source:
+    /// `{"tmdb": 1396, "imdb": "tt0903747", "mal": [1, 2]}`.
+    Ids,
 }
 
 impl FieldType {
@@ -68,6 +71,9 @@ impl FieldType {
             (Self::Float, Value::Number(_)) => true,
             (Self::Boolean, Value::Bool(_)) => true,
             (Self::TextList, Value::Array(items)) => items.iter().all(Value::is_string),
+            (Self::Ids, Value::Object(_)) => {
+                serde_json::from_value::<crate::domain::ExternalIds>(value.clone()).is_ok()
+            }
             _ => false,
         }
     }
@@ -83,6 +89,10 @@ impl FieldType {
             Self::DateTime => "a date-time with its zone, like 2009-03-22T21:00:00Z",
             Self::TimeOfDay => "a time, HH:MM",
             Self::TextList => "an array of strings",
+            Self::Ids => {
+                "an object of identifiers by source: tmdb, tvdb, tvmaze, tvrage, trakt and fankai \
+                 as numbers, imdb as a string, mal and anilist as arrays of numbers"
+            }
         }
     }
 }
@@ -142,7 +152,51 @@ pub const ITEM_FIELDS: &[FieldDef] = &[
     f("themeMusic", Text, "Theme music URL"),
     f("genres", TextList, "Genres"),
     f("keywords", TextList, "Keywords"),
+    // Its identity: written to the row as well as locked, since lists,
+    // addresses and the clients' lookups read the row — see `IDENTITY`.
+    f("isAdult", Boolean, "Adult"),
+    f("slug", Text, "Slug"),
+    f("externalIds", Ids, "External identifiers"),
 ];
+
+/// The fields that are the work's identity: locked like any other, and
+/// written through to the row and its identifier rows, where the catalogue's
+/// lists, its addresses and the clients' lookups read them.
+pub const IDENTITY: &[&str] = &["isAdult", "slug", "externalIds"];
+
+/// Whether a slug is one this server would make: lowercase letters, digits
+/// and single hyphens, as `make_slug` writes them.
+pub fn is_slug(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 200
+        && value.split('-').all(|part| {
+            !part.is_empty()
+                && part
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+        })
+}
+
+/// Put the locked identity — adult, slug, identifiers — onto a work about
+/// to be written, so that a refresh writes the row with what is locked
+/// rather than what a provider said.
+pub fn pin_identity(item: &mut MediaItem, overrides: &[Override]) {
+    for ov in overrides {
+        if ov.scope != "item" {
+            continue;
+        }
+        match (ov.field.as_str(), &ov.value) {
+            ("isAdult", Some(Value::Bool(adult))) => item.is_adult = *adult,
+            ("slug", Some(Value::String(slug))) if is_slug(slug) => item.slug = slug.clone(),
+            ("externalIds", Some(value @ Value::Object(_))) => {
+                if let Ok(ids) = serde_json::from_value(value.clone()) {
+                    item.external_ids = ids;
+                }
+            }
+            _ => {}
+        }
+    }
+}
 
 /// Editable fields on a season.
 pub const SEASON_FIELDS: &[FieldDef] = &[
@@ -257,7 +311,14 @@ pub struct Override {
 /// Fields a work cannot be read without: cleared, they would leave the work
 /// unreadable — not on its own page, not by Sonarr — so a lock on one holds
 /// a value or is not held.
-const NEVER_CLEARED: &[&str] = &["title", "genres", "keywords"];
+const NEVER_CLEARED: &[&str] = &[
+    "title",
+    "genres",
+    "keywords",
+    "isAdult",
+    "slug",
+    "externalIds",
+];
 
 pub fn validate(scope: Scope, field: &str, value: Option<&Value>) -> Result<(), String> {
     let Some(def) = scope.field(field) else {
@@ -266,6 +327,15 @@ pub fn validate(scope: Scope, field: &str, value: Option<&Value>) -> Result<(), 
 
     if value.is_none_or(Value::is_null) && NEVER_CLEARED.contains(&field) {
         return Err(format!("{field:?} cannot be cleared: set it, or unlock it"));
+    }
+
+    if field == "slug"
+        && let Some(Value::String(slug)) = value
+        && !is_slug(slug)
+    {
+        return Err(
+            "a slug is lowercase letters, digits and single hyphens, like breaking-bad-2008".into(),
+        );
     }
 
     match value {
@@ -616,5 +686,87 @@ mod tests {
 
         assert_eq!(it.episodes[0].title, "One");
         assert_eq!(it.episodes[1].title, "Patched");
+    }
+
+    /// The identity fields are locked like any other, never cleared, a slug
+    /// only in the shape this server writes — and pinned onto a work about
+    /// to be written, so a refresh keeps them.
+    #[test]
+    fn the_identity_is_locked_pinned_and_never_cleared() {
+        use serde_json::json;
+        assert!(validate(Scope::Item, "isAdult", Some(&json!(true))).is_ok());
+        assert!(validate(Scope::Item, "isAdult", Some(&json!("yes"))).is_err());
+        assert!(
+            validate(Scope::Item, "isAdult", None).is_err(),
+            "never cleared"
+        );
+        assert!(validate(Scope::Item, "slug", Some(&json!("breaking-bad-2008"))).is_ok());
+        assert!(validate(Scope::Item, "slug", Some(&json!("Breaking Bad"))).is_err());
+        assert!(validate(Scope::Item, "slug", Some(&json!("a--b"))).is_err());
+        assert!(
+            validate(
+                Scope::Item,
+                "externalIds",
+                Some(&json!({"tmdb": 1396, "imdb": "tt0903747", "mal": [1, 2]}))
+            )
+            .is_ok()
+        );
+        assert!(
+            validate(
+                Scope::Item,
+                "externalIds",
+                Some(&json!({"tmdb": "not a number"}))
+            )
+            .is_err()
+        );
+        assert!(
+            validate(Scope::Item, "externalIds", Some(&json!({}))).is_ok(),
+            "none is a set too"
+        );
+
+        let mut item = MediaItem::empty(crate::domain::MediaKind::Series);
+        item.slug = "from-a-provider".into();
+        let locks = vec![
+            Override {
+                scope: "item".into(),
+                field: "isAdult".into(),
+                value: Some(json!(true)),
+                updated_at: String::new(),
+                updated_by: None,
+            },
+            Override {
+                scope: "item".into(),
+                field: "slug".into(),
+                value: Some(json!("by-hand")),
+                updated_at: String::new(),
+                updated_by: None,
+            },
+            Override {
+                scope: "item".into(),
+                field: "externalIds".into(),
+                value: Some(json!({"tvdb": 81189})),
+                updated_at: String::new(),
+                updated_by: None,
+            },
+            Override {
+                scope: "season:1".into(),
+                field: "slug".into(),
+                value: Some(json!("not-a-work")),
+                updated_at: String::new(),
+                updated_by: None,
+            },
+        ];
+        pin_identity(&mut item, &locks);
+        assert!(item.is_adult);
+        assert_eq!(item.slug, "by-hand");
+        assert_eq!(item.external_ids.tvdb, Some(81189));
+        assert_eq!(item.external_ids.tmdb, None, "the lock is the whole set");
+
+        // Read back, the same locks patch the served work the same way.
+        let mut served = MediaItem::empty(crate::domain::MediaKind::Series);
+        apply(&mut served, &locks[..3]).unwrap();
+        assert!(served.is_adult);
+        assert_eq!(served.slug, "by-hand");
+        assert_eq!(served.external_ids.tvdb, Some(81189));
     }
 }

@@ -1362,6 +1362,11 @@ export const fr: Dict = {
 
     editor: {
       suggestions: 'TMDB suggère',
+      identifiersHint: 'Ce par quoi l’œuvre est connue ailleurs : ce avec quoi Sonarr, Radarr et les sources l’interrogent. Modifiés, ils sont verrouillés — un rafraîchissement les garde — et un identifiant déjà porté par une autre œuvre est refusé.',
+      identifiersListHint: 'Plusieurs, séparés par des virgules',
+      identifiersInvalid: 'Un nombre est attendu',
+      identifiersNone: 'Aucun : l’œuvre n’est connue qu’ici.',
+      identifiersLocked: (when: string) => `Verrouillés à la main ${when}`,
       suggestionsHint: 'Ce que TMDB recommande à côté de cette œuvre : un clic en importe une, et une déjà au catalogue s’ouvre.',
       suggestionsNone: 'TMDB ne suggère rien à côté.',
       suggestionsFailed: 'Les suggestions de TMDB n’ont pas pu être chargées.',
@@ -1462,7 +1467,6 @@ export const fr: Dict = {
         theRelations: 'les œuvres liées',
         translations: (n: number) => (n === 1 ? '1 traduction' : `${n} traductions`),
         ratings: (n: number) => (n === 1 ? '1 note' : `${n} notes`),
-        manualNote: 'Saisie à la main, avec des identifiants : ses sources s’interrogent comme celles de toute fiche.',
         loadFailed: 'L’origine des valeurs n’a pas pu être chargée.',
         retry: 'Réessayer',
         noneAnswered: 'Aucune des sources interrogées n’a répondu : rien n’a changé.',
@@ -2110,6 +2114,9 @@ export const fr: Dict = {
       disabled: 'Désactivé',
     },
     fields: {
+      isAdult: 'Adulte',
+      slug: 'Adresse (slug)',
+      externalIds: 'Identifiants',
       title: 'Titre',
       sortTitle: 'Titre de tri',
       originalTitle: 'Titre original',
@@ -2149,6 +2156,7 @@ export const fr: Dict = {
       dateTime: 'Date et heure · 2009-03-22T21:00:00Z',
       timeOfDay: 'Heure · HH:MM',
       textList: 'Liste · séparée par des virgules',
+      ids: 'Identifiants par source',
     },
   },
   notFound: {

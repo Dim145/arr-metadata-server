@@ -194,6 +194,7 @@ export interface MediaItem {
 export type FieldType =
   | 'text'
   | 'longText'
+  | 'ids'
   | 'integer'
   | 'float'
   | 'boolean'

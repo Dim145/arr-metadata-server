@@ -452,6 +452,11 @@ pub async fn persist(
 
         repo::item::load_children(&state.db, &mut existing).await?;
         keep_what_nobody_answered(&mut item, existing);
+
+        // What is locked of its identity is written as locked, not as a
+        // provider said it: the row is what the lists and the lookups read.
+        let locked = repo::override_field::list(&state.db, &item.id).await?;
+        crate::domain::fields::pin_identity(&mut item, &locked);
     }
 
     crate::merge::drop_own_title(&mut item);
