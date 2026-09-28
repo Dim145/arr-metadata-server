@@ -375,7 +375,8 @@ export function WorkEditor() {
                 value={(work as unknown as Record<string, unknown>)[def.name]}
                 lock={locks.get(def.name)}
                 origin={provenance?.fields?.[def.name]}
-                traced={traced}
+                // The slug is made here, from the title and the year.
+                traced={traced && def.name !== 'slug'}
                 onChanged={invalidate}
               />
             ))}
@@ -564,7 +565,9 @@ function FieldRow({
 
   const locked = lock !== undefined
   const display = readable(value, t)
-  const note = traced ? originNote(def.name, origin, { hasValue: display !== '', locked }, t, locale) : null
+  // A flag left false is the default, which no source asserts.
+  const hasValue = def.fieldType === 'boolean' ? value === true : display !== ''
+  const note = traced ? originNote(def.name, origin, { hasValue, locked }, t, locale) : null
   const multiline = def.fieldType === 'longText'
   const inputId = `field-${scope.replace(/\W/g, '-')}-${def.name}`
 
@@ -697,7 +700,7 @@ function FieldRow({
               narrow to share with a chip. */}
           {traced && !locked && !editing ? (
             <div className="mt-2 sm:hidden">
-              <OriginChip source={origin} hasValue={display !== ''} />
+              <OriginChip source={origin} hasValue={hasValue} />
             </div>
           ) : null}
           {note && !editing ? (
@@ -731,7 +734,7 @@ function FieldRow({
               <>
                 {traced ? (
                   <span className="hidden sm:contents">
-                    <OriginChip source={origin} hasValue={display !== ''} />
+                    <OriginChip source={origin} hasValue={hasValue} />
                   </span>
                 ) : null}
                 <Button size="sm" variant="quiet" onClick={begin}>

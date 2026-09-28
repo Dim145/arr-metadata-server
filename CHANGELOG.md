@@ -7,6 +7,16 @@ may change what the API or the configuration means, and says so here.
 
 ## [Unreleased]
 
+### Fixed
+
+- The adult flag said it was kept from an earlier answer, whatever the
+  sources said: it was left out of the record of where each value comes
+  from. It is traced again, so the editor names the source that says a work
+  is adult; a flag left off is the default and names none. A work shows its
+  source from its next refresh.
+- The slug no longer claims to be kept from a source: it is made here, from
+  the title and the year.
+
 ## [0.3.0] — 2026-09-28
 
 ### Added

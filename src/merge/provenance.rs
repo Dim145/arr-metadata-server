@@ -140,6 +140,7 @@ pub struct View {
 #[serde(rename_all = "camelCase")]
 struct Tracked<'a> {
     title: &'a str,
+    is_adult: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     sort_title: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -197,6 +198,7 @@ struct Tracked<'a> {
 fn tracked_json(item: &MediaItem) -> serde_json::Value {
     serde_json::to_value(Tracked {
         title: &item.title,
+        is_adult: item.is_adult,
         sort_title: item.sort_title.as_deref(),
         original_title: item.original_title.as_deref(),
         overview: item.overview.as_deref(),
@@ -235,7 +237,9 @@ fn tracked() -> impl Iterator<Item = &'static str> {
         // The work's identity — adult, slug, identifiers — is locked and
         // written through, not traced to a source.
         .filter(|name| {
-            !crate::domain::fields::IDENTITY.contains(name)
+            // The slug is made here and the identifiers have a panel of
+            // their own; the adult flag comes from the sources.
+            !matches!(*name, "slug" | "externalIds")
                 && !crate::domain::fields::CHOSEN_IMAGES.contains(name)
         })
         .chain(ALSO_TRACKED.iter().copied())
@@ -673,6 +677,9 @@ fn is_empty(value: &serde_json::Value) -> bool {
         serde_json::Value::Null => true,
         serde_json::Value::String(s) => s.trim().is_empty(),
         serde_json::Value::Array(items) => items.is_empty(),
+        // A flag's default: nobody says a work is not adult, they only fail
+        // to say it is.
+        serde_json::Value::Bool(false) => true,
         _ => false,
     }
 }
