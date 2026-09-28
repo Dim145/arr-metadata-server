@@ -7,6 +7,8 @@ may change what the API or the configuration means, and says so here.
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-09-28
+
 ### Added
 
 - A work's identity can be set by hand and locked like any other field:
@@ -116,6 +118,7 @@ and arm64.
 - End-to-end checks against a real Sonarr, against two instances, and a
   Playwright suite over the whole interface.
 
-[Unreleased]: https://github.com/Dim145/arr-metadata-server/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/Dim145/arr-metadata-server/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Dim145/arr-metadata-server/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/Dim145/arr-metadata-server/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Dim145/arr-metadata-server/releases/tag/v0.1.0
