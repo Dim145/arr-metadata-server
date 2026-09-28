@@ -189,6 +189,8 @@ export interface MediaItem {
   translations?: Translation[]
   relations?: Relation[]
   lockedFields?: string[]
+  /** The poster and the background a person chose to lead with, by image id; none by default. */
+  primaryImages?: { poster?: string; fanart?: string }
 }
 
 export type FieldType =

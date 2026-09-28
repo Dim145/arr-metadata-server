@@ -656,3 +656,52 @@ test.describe('a locked genre', () => {
     await expect(page.getByText(/no work matches|aucune œuvre/i)).toBeVisible()
   })
 })
+
+test.describe('the poster and the background to lead with', () => {
+  test.skip(!USERNAME || !PASSWORD, 'needs AMS_E2E_USER and AMS_E2E_PASSWORD')
+
+  test('none by default; the star chooses one, and takes it off again', async ({ page }) => {
+    await signIn(page)
+    // A work of its own, removed again: nothing any other test reads.
+    const created = await page.request.post('/api/v1/items', {
+      data: { kind: 'movie', title: `Deux affiches ${Date.now()}`, year: 2032 },
+    })
+    expect(created.status()).toBe(201)
+    const { id } = (await created.json()) as { id: string }
+
+    try {
+      for (const host of ['one', 'two']) {
+        const added = await page.request.post(`/api/v1/items/${id}/images`, {
+          data: { coverType: 'poster', url: `https://${host}.example.invalid/poster.jpg`, sortOrder: 0 },
+        })
+        expect(added.ok()).toBe(true)
+      }
+      type Work = { primaryImages?: { poster?: string }; images: { id: string; url: string; coverType: string }[] }
+      const read = async () => (await (await page.request.get(`/api/v1/items/${id}`)).json()) as Work
+      expect((await read()).primaryImages, 'none is chosen by default').toBeUndefined()
+
+      await page.goto(`/admin/catalogue/${id}`)
+      const artwork = page.locator('#artwork')
+      const row = (host: string) => artwork.locator('li').filter({ hasText: `${host}.example.invalid` })
+      const star = (host: string) => row(host).getByRole('button', { name: /lead with this one|montrer celle-ci en premier|no longer lead|ne plus la montrer/i })
+
+      await expect(star('two')).toHaveAttribute('aria-pressed', 'false')
+      await star('two').click()
+      await expect(star('two')).toHaveAttribute('aria-pressed', 'true')
+      await expect(row('two').getByText(/^(primary|principale)$/i)).toBeVisible()
+      await expect(star('one')).toHaveAttribute('aria-pressed', 'false')
+
+      // The server leads with it: named, and first among the posters.
+      const chosen = await read()
+      const two = chosen.images.find((image) => image.url.includes('two.example.invalid'))!
+      expect(chosen.primaryImages?.poster).toBe(two.id)
+      expect(chosen.images.filter((image) => image.coverType === 'poster')[0].id).toBe(two.id)
+
+      await star('two').click()
+      await expect(star('two')).toHaveAttribute('aria-pressed', 'false')
+      expect((await read()).primaryImages).toBeUndefined()
+    } finally {
+      await page.request.delete(`/api/v1/items/${id}`)
+    }
+  })
+})

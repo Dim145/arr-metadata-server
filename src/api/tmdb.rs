@@ -496,7 +496,31 @@ async fn patch(state: &AppState, document: &mut Value, target: PatchTarget) -> A
         changed = true;
     }
 
+    // The poster and the background a person chose, when TMDB has them: a
+    // TMDB client builds an image's address from its path, so only TMDB's
+    // own can be named — a kept copy is named by the address it came from.
+    for (key, chosen) in [
+        ("poster_path", item.primary_images.poster.as_deref()),
+        ("backdrop_path", item.primary_images.fanart.as_deref()),
+    ] {
+        let Some(image) = chosen.and_then(|id| item.images.iter().find(|i| i.id == id)) else {
+            continue;
+        };
+        if let Some(path) = tmdb_image_path(&state.media.unlocalize(&image.url)) {
+            map.insert(key.to_string(), Value::String(path));
+            changed = true;
+        }
+    }
+
     Ok(changed)
+}
+
+/// The path TMDB files an image under, from its address: `/abc.jpg` from
+/// `https://image.tmdb.org/t/p/original/abc.jpg`, whatever the size asked.
+fn tmdb_image_path(address: &str) -> Option<String> {
+    let rest = address.strip_prefix("https://image.tmdb.org/t/p/")?;
+    let (_size, file) = rest.split_once('/')?;
+    (!file.is_empty() && !file.contains('/')).then(|| format!("/{file}"))
 }
 
 /// The canonical item's fields, named and shaped as TMDB names and shapes them.
@@ -716,5 +740,26 @@ mod tests {
         assert_eq!(tmdb_series_status("ended"), "Ended");
         assert_eq!(tmdb_series_status("continuing"), "Returning Series");
         assert_eq!(tmdb_series_status("upcoming"), "Planned");
+    }
+
+    #[test]
+    fn a_chosen_image_is_named_by_the_path_tmdb_files_it_under() {
+        assert_eq!(
+            tmdb_image_path("https://image.tmdb.org/t/p/original/abc.jpg").as_deref(),
+            Some("/abc.jpg")
+        );
+        assert_eq!(
+            tmdb_image_path("https://image.tmdb.org/t/p/w500/x_Y-z.png").as_deref(),
+            Some("/x_Y-z.png")
+        );
+        assert_eq!(
+            tmdb_image_path("https://assets.fanart.tv/fanart/tv/1/poster.jpg"),
+            None
+        );
+        assert_eq!(tmdb_image_path("upload:0123"), None);
+        assert_eq!(
+            tmdb_image_path("https://image.tmdb.org/t/p/original/"),
+            None
+        );
     }
 }

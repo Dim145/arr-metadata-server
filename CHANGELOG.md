@@ -7,6 +7,23 @@ may change what the API or the configuration means, and says so here.
 
 ## [Unreleased]
 
+### Added
+
+- A poster and a background can be chosen as the ones a work leads with —
+  the star beside each image in the editor's artwork; none is chosen by
+  default. A choice is a lock: kept through every refresh, carried with the
+  locks, written in the journal. Sonarr and Radarr are given it, this site
+  shows it, and the TMDB relay names it to Jellyseerr when it is one of
+  TMDB's own images. A chosen image its source stops listing is kept for the
+  choice.
+
+### Changed
+
+- Sonarr and Radarr are given one image a kind, as Skyhook and Radarr's own
+  service give them: both write every image of a kind to one file, so the
+  last one they were sent was the one they showed. Without a choice, an
+  image added by hand leads, then the best the sources offered.
+
 ## [0.2.0] — 2026-09-28
 
 ### Added

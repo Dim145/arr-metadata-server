@@ -89,6 +89,7 @@ fn map_item(row: &sqlx::any::AnyRow) -> Result<MediaItem> {
         translations: Vec::new(),
         relations: Vec::new(),
         locked_fields: Vec::new(),
+        primary_images: Default::default(),
     })
 }
 

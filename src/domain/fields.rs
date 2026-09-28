@@ -154,6 +154,10 @@ pub const ITEM_FIELDS: &[FieldDef] = &[
     f("keywords", TextList, "Keywords"),
     // Its identity: written to the row as well as locked, since lists,
     // addresses and the clients' lookups read the row — see `IDENTITY`.
+    // The poster and the background to lead with: an image's address, among
+    // the work's own — see `CHOSEN_IMAGES`.
+    f("primaryPoster", Text, "Primary poster"),
+    f("primaryFanart", Text, "Primary background"),
     f("isAdult", Boolean, "Adult"),
     f("slug", Text, "Slug"),
     f("externalIds", Ids, "External identifiers"),
@@ -163,6 +167,67 @@ pub const ITEM_FIELDS: &[FieldDef] = &[
 /// written through to the row and its identifier rows, where the catalogue's
 /// lists, its addresses and the clients' lookups read them.
 pub const IDENTITY: &[&str] = &["isAdult", "slug", "externalIds"];
+
+/// The images a person chose to lead with, by the address the work's images
+/// go by — a provider's, or an upload's `upload:` origin. Not a field of the
+/// work: applied by putting the image first among its kind and naming it.
+pub const CHOSEN_IMAGES: &[&str] = &["primaryPoster", "primaryFanart"];
+
+/// The kind of image a choice is for.
+fn chosen_kind(field: &str) -> Option<crate::domain::CoverType> {
+    match field {
+        "primaryPoster" => Some(crate::domain::CoverType::Poster),
+        "primaryFanart" => Some(crate::domain::CoverType::Fanart),
+        _ => None,
+    }
+}
+
+/// Put the image a person chose first among the work's own of its kind,
+/// and name it — or, when the sources no longer list it, bring it back, as
+/// long as its address is one a client can follow: an upload that is gone
+/// leaves the work with no choice.
+fn lead_with(item: &mut MediaItem, kind: crate::domain::CoverType, address: &str) {
+    let found = item
+        .images
+        .iter()
+        .position(|i| i.cover_type == kind && i.season_number.is_none() && i.url == address);
+    let mut image = match found {
+        Some(at) => item.images.remove(at),
+        None if address.starts_with("https://") || address.starts_with("http://") => {
+            crate::domain::Image {
+                id: format!("chosen-{}", kind.as_str()),
+                season_number: None,
+                cover_type: kind,
+                url: address.to_string(),
+                language: None,
+                sort_order: 0,
+                source: None,
+                is_manual: true,
+            }
+        }
+        None => return,
+    };
+    // First among its kind, and so for anything that re-sorts them.
+    let lowest = item
+        .images
+        .iter()
+        .filter(|i| i.cover_type == kind)
+        .map(|i| i.sort_order)
+        .min()
+        .unwrap_or(0);
+    image.sort_order = image.sort_order.min(lowest.saturating_sub(1));
+    let at = item
+        .images
+        .iter()
+        .position(|i| i.cover_type.priority() >= kind.priority())
+        .unwrap_or(item.images.len());
+    let id = image.id.clone();
+    item.images.insert(at, image);
+    match kind {
+        crate::domain::CoverType::Poster => item.primary_images.poster = Some(id),
+        _ => item.primary_images.fanart = Some(id),
+    }
+}
 
 /// Whether a slug is one this server would make: lowercase letters, digits
 /// and single hyphens, as `make_slug` writes them.
@@ -318,6 +383,8 @@ const NEVER_CLEARED: &[&str] = &[
     "isAdult",
     "slug",
     "externalIds",
+    "primaryPoster",
+    "primaryFanart",
 ];
 
 pub fn validate(scope: Scope, field: &str, value: Option<&Value>) -> Result<(), String> {
@@ -327,6 +394,17 @@ pub fn validate(scope: Scope, field: &str, value: Option<&Value>) -> Result<(), 
 
     if value.is_none_or(Value::is_null) && NEVER_CLEARED.contains(&field) {
         return Err(format!("{field:?} cannot be cleared: set it, or unlock it"));
+    }
+
+    if CHOSEN_IMAGES.contains(&field)
+        && let Some(Value::String(address)) = value
+        && !(address.starts_with("https://")
+            || address.starts_with("http://")
+            || address.starts_with("upload:"))
+    {
+        return Err(format!(
+            "{field:?} names one of the work's images, by its address"
+        ));
     }
 
     if field == "slug"
@@ -359,6 +437,7 @@ pub fn apply(item: &mut MediaItem, overrides: &[Override]) -> Result<(), serde_j
     let mut season_patches: Vec<(i32, serde_json::Map<String, Value>)> = Vec::new();
     let mut episode_patches: Vec<((i32, i32), serde_json::Map<String, Value>)> = Vec::new();
     let mut locked: Vec<String> = Vec::new();
+    let mut chosen: Vec<(crate::domain::CoverType, String)> = Vec::new();
 
     for ov in overrides {
         let Ok(scope) = ov.scope.parse::<Scope>() else {
@@ -379,6 +458,11 @@ pub fn apply(item: &mut MediaItem, overrides: &[Override]) -> Result<(), serde_j
         locked.push(format!("{scope}/{}", ov.field));
 
         match scope {
+            Scope::Item if CHOSEN_IMAGES.contains(&ov.field.as_str()) => {
+                if let (Some(kind), Value::String(address)) = (chosen_kind(&ov.field), &value) {
+                    chosen.push((kind, address.clone()));
+                }
+            }
             Scope::Item => {
                 item_patch.insert(ov.field.clone(), value);
             }
@@ -393,6 +477,10 @@ pub fn apply(item: &mut MediaItem, overrides: &[Override]) -> Result<(), serde_j
 
     if !item_patch.is_empty() {
         patch_in_place(item, item_patch)?;
+    }
+
+    for (kind, address) in &chosen {
+        lead_with(item, *kind, address);
     }
 
     for (number, patch) in season_patches {
@@ -768,5 +856,77 @@ mod tests {
         assert!(served.is_adult);
         assert_eq!(served.slug, "by-hand");
         assert_eq!(served.external_ids.tvdb, Some(81189));
+    }
+
+    /// A chosen poster leads its kind and is named; one the sources no
+    /// longer list is brought back when a client can follow it, and an
+    /// upload that is gone leaves no choice.
+    #[test]
+    fn a_chosen_image_leads_its_kind_and_is_named() {
+        use crate::domain::{CoverType, Image};
+        use serde_json::json;
+        let image = |id: &str, kind: CoverType, url: &str, order: i32| Image {
+            id: id.into(),
+            season_number: None,
+            cover_type: kind,
+            url: url.into(),
+            language: None,
+            sort_order: order,
+            source: Some("tmdb".into()),
+            is_manual: false,
+        };
+        let lock = |field: &str, value: &str| Override {
+            scope: "item".into(),
+            field: field.into(),
+            value: Some(json!(value)),
+            updated_at: String::new(),
+            updated_by: None,
+        };
+        assert!(
+            validate(
+                Scope::Item,
+                "primaryPoster",
+                Some(&json!("https://p/2.jpg"))
+            )
+            .is_ok()
+        );
+        assert!(validate(Scope::Item, "primaryPoster", Some(&json!("upload:0123"))).is_ok());
+        assert!(validate(Scope::Item, "primaryPoster", Some(&json!("not an address"))).is_err());
+        assert!(
+            validate(Scope::Item, "primaryFanart", None).is_err(),
+            "unlocked, not cleared"
+        );
+
+        let mut item = MediaItem::empty(crate::domain::MediaKind::Series);
+        item.images = vec![
+            image("p1", CoverType::Poster, "https://p/1.jpg", 0),
+            image("p2", CoverType::Poster, "https://p/2.jpg", 1),
+            image("f1", CoverType::Fanart, "https://f/1.jpg", 0),
+        ];
+        apply(
+            &mut item,
+            &[
+                lock("primaryPoster", "https://p/2.jpg"),
+                lock("primaryFanart", "https://f/gone.jpg"),
+            ],
+        )
+        .unwrap();
+        let order: Vec<&str> = item.images.iter().map(|i| i.id.as_str()).collect();
+        assert_eq!(order, ["p2", "p1", "chosen-fanart", "f1"]);
+        assert_eq!(item.primary_images.poster.as_deref(), Some("p2"));
+        assert_eq!(item.primary_images.fanart.as_deref(), Some("chosen-fanart"));
+        assert!(
+            item.locked_fields
+                .contains(&"item/primaryPoster".to_string())
+        );
+
+        let mut gone = MediaItem::empty(crate::domain::MediaKind::Movie);
+        gone.images = vec![image("p1", CoverType::Poster, "https://p/1.jpg", 0)];
+        apply(&mut gone, &[lock("primaryPoster", "upload:0123")]).unwrap();
+        assert_eq!(
+            gone.primary_images.poster, None,
+            "an upload that is gone is no choice"
+        );
+        assert_eq!(gone.images.len(), 1);
     }
 }

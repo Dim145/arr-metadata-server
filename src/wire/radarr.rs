@@ -265,7 +265,14 @@ pub fn from_item(item: &MediaItem) -> MovieResource {
             trakt: item.rating("trakt").map(rating_item),
         }),
         runtime: item.runtime,
-        images: item.images.iter().map(image_resource).collect(),
+        // One a kind: Radarr writes every image of a kind to one file.
+        images: crate::domain::lead_images(
+            item.images.iter().filter(|i| i.season_number.is_none()),
+            &item.primary_images,
+        )
+        .into_iter()
+        .map(image_resource)
+        .collect(),
         genres: item.genres.clone(),
         keywords: item.keywords.clone(),
         year: item.year.unwrap_or(0),

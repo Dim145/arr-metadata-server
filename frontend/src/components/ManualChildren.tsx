@@ -14,7 +14,7 @@ import { api } from '../lib/api'
 import { cn } from '../lib/cn'
 import * as fmt from '../lib/format'
 import { useI18n } from '../lib/i18n'
-import type { MediaItem, Uploaded, WorkMedia, WorkMedium } from '../lib/types'
+import type { Image, MediaItem, Uploaded, WorkMedia, WorkMedium } from '../lib/types'
 import { seasonName } from '../lib/media'
 import { Artwork as Picture } from './media'
 import {
@@ -112,6 +112,13 @@ function useAdd(itemId: string, path: string, onDone: () => void) {
  * "a person put this here" looks the same wherever it appears — and it is never
  * the only signal: the chip beside it says the word.
  */
+/** The lock a work-level poster or background is chosen with; none for the rest. */
+type ChoiceField = 'primaryPoster' | 'primaryFanart'
+function choiceFor(image: Image): ChoiceField | null {
+  if (image.seasonNumber !== undefined && image.seasonNumber !== null) return null
+  return image.coverType === 'poster' ? 'primaryPoster' : image.coverType === 'fanart' ? 'primaryFanart' : null
+}
+
 function ChildRow({
   children,
   manual,
@@ -420,6 +427,17 @@ function Artwork({ item, onDone, onRemove }: PanelProps) {
     onSuccess: done,
   })
 
+  // The poster and the background to lead with: a lock like any edit, set
+  // by the star and taken off by it again. None is chosen by default.
+  const chosen = item.primaryImages ?? {}
+  const choose = useMutation({
+    mutationFn: ({ field, url }: { field: ChoiceField; url: string | null }) =>
+      url === null
+        ? api.delete(`/items/${item.id}/overrides/item/${field}`)
+        : api.put(`/items/${item.id}/overrides`, { scope: 'item', field, value: url }),
+    onSuccess: done,
+  })
+
   const images = item.images ?? []
   const kinds = [
     ['poster', c.poster],
@@ -438,6 +456,10 @@ function Artwork({ item, onDone, onRemove }: PanelProps) {
     <Panel id="artwork" className="rise" style={{ animationDelay: '280ms' }}>
       <PanelHead title={c.artwork} action={<Count>{images.length}</Count>} />
       <p className="px-5 pt-3 text-xs leading-relaxed text-bone-faint">{c.artworkHint}</p>
+      <p className="flex items-start gap-1.5 px-5 pt-1.5 text-xs leading-relaxed text-bone-faint">
+        <Glyph name="star" className="mt-0.5 size-3.5 shrink-0 text-brass" />
+        {c.primaryHint}
+      </p>
 
       {images.length === 0 ? (
         <Empty>{c.none}</Empty>
@@ -451,17 +473,33 @@ function Artwork({ item, onDone, onRemove }: PanelProps) {
         >
           {images.map((image) => {
             const kept = keptOf(image.url)
+            const field = choiceFor(image)
+            const primary = field !== null && (field === 'primaryPoster' ? chosen.poster : chosen.fanart) === image.id
+            // Chosen, and no longer listed by its sources: kept for the choice,
+            // with no row of its own to delete.
+            const keptForChoice = image.id.startsWith('chosen-')
             return (
               <ChildRow
                 key={image.id}
                 manual={image.isManual}
-                onRemove={() => onRemove({ path: `images/${image.id}`, label: image.url })}
+                onRemove={keptForChoice ? undefined : () => onRemove({ path: `images/${image.id}`, label: image.url })}
                 extra={
-                  <Kept
-                    medium={kept}
-                    onForget={forget.mutate}
-                    busy={forget.isPending && forget.variables === kept?.assetId}
-                  />
+                  <>
+                    {field ? (
+                      <IconButton
+                        glyph="star"
+                        pressed={primary}
+                        label={primary ? c.primaryUnset : c.primarySet}
+                        busy={choose.isPending && choose.variables?.field === field}
+                        onClick={() => choose.mutate({ field, url: primary ? null : image.url })}
+                      />
+                    ) : null}
+                    <Kept
+                      medium={kept}
+                      onForget={forget.mutate}
+                      busy={forget.isPending && forget.variables === kept?.assetId}
+                    />
+                  </>
                 }
               >
                 {/* The picture itself, small. Eighty-two lines of URLs said which
@@ -477,14 +515,17 @@ function Artwork({ item, onDone, onRemove }: PanelProps) {
                     <Picture url={image.url} role="headshot" alt="" className="size-full object-cover" />
                   </span>
                   <span className="min-w-0">
-                    <span className="block text-xs text-bone">
+                    <span className="flex items-center gap-2 text-xs text-bone">
                       {coverLabel(image.coverType)}
                       {image.seasonNumber != null ? ` · ${t.work.season(image.seasonNumber)}` : ''}
+                      {primary ? <Chip tone="manual">{c.primary}</Chip> : null}
                     </span>
                     <span className="block truncate font-mono text-[0.6875rem] text-bone-faint" title={kept?.origin ?? image.url}>
-                      {kept?.origin.startsWith('upload:')
-                        ? c.uploadedBy(kept.uploadedBy ?? '')
-                        : hostOf(kept?.origin ?? image.url)}
+                      {keptForChoice
+                        ? c.primaryKept
+                        : kept?.origin.startsWith('upload:')
+                          ? c.uploadedBy(kept.uploadedBy ?? '')
+                          : hostOf(kept?.origin ?? image.url)}
                     </span>
                   </span>
                 </span>
@@ -496,6 +537,11 @@ function Artwork({ item, onDone, onRemove }: PanelProps) {
       {forget.isError ? (
         <p role="alert" className="px-5 py-2 text-xs text-vermillion">
           {forget.error.message || t.common.actionFailed}
+        </p>
+      ) : null}
+      {choose.isError ? (
+        <p role="alert" className="px-5 py-2 text-xs text-vermillion">
+          {choose.error.message || t.common.actionFailed}
         </p>
       ) : null}
 

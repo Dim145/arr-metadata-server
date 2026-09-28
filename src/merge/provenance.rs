@@ -234,7 +234,10 @@ fn tracked() -> impl Iterator<Item = &'static str> {
         .map(|def| def.name)
         // The work's identity — adult, slug, identifiers — is locked and
         // written through, not traced to a source.
-        .filter(|name| !crate::domain::fields::IDENTITY.contains(name))
+        .filter(|name| {
+            !crate::domain::fields::IDENTITY.contains(name)
+                && !crate::domain::fields::CHOSEN_IMAGES.contains(name)
+        })
         .chain(ALSO_TRACKED.iter().copied())
 }
 

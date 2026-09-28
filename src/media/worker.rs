@@ -542,8 +542,10 @@ pub async fn sweep(state: &AppState) -> Result<String> {
 async fn locked_addresses(state: &AppState) -> Result<HashSet<String>> {
     let mut out = HashSet::new();
     for (_, locked) in repo::override_field::all(&state.db).await? {
-        if matches!(locked.field.as_str(), "image" | "themeMusic")
-            && let Some(serde_json::Value::String(url)) = locked.value
+        if matches!(
+            locked.field.as_str(),
+            "image" | "themeMusic" | "primaryPoster" | "primaryFanart"
+        ) && let Some(serde_json::Value::String(url)) = locked.value
         {
             out.insert(state.media.unlocalize(&url));
         }

@@ -103,8 +103,10 @@ async fn set(
     // An address of this server's own — the editor shows the copies kept —
     // is locked as the provider's: what the sweep looks for, and what stays
     // right if the copy is ever forgotten.
-    if matches!(request.field.as_str(), "image" | "themeMusic")
-        && let Some(serde_json::Value::String(url)) = &request.value
+    if matches!(
+        request.field.as_str(),
+        "image" | "themeMusic" | "primaryPoster" | "primaryFanart"
+    ) && let Some(serde_json::Value::String(url)) = &request.value
     {
         request.value = Some(serde_json::Value::String(state.media.unlocalize(url)));
     }

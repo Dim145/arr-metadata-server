@@ -92,6 +92,7 @@ export function IconButton({
   busy,
   disabled,
   tone = 'quiet',
+  pressed,
   className,
 }: {
   glyph: GlyphName
@@ -100,6 +101,8 @@ export function IconButton({
   busy?: boolean
   disabled?: boolean
   tone?: 'quiet' | 'danger'
+  /** A toggle's state: said to assistive technology, and shown in brass. */
+  pressed?: boolean
   className?: string
 }) {
   return (
@@ -108,9 +111,11 @@ export function IconButton({
       onClick={onClick}
       disabled={busy || disabled}
       aria-label={label}
+      aria-pressed={pressed}
       title={label}
       className={cn(
         'grid size-11 shrink-0 cursor-pointer place-items-center rounded-card text-bone-faint',
+        pressed && 'bg-brass/[0.08] text-brass',
         'transition-colors duration-150 hover:bg-ink-high',
         'disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent',
         tone === 'danger' ? 'hover:text-vermillion' : 'hover:text-bone',

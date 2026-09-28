@@ -1513,6 +1513,11 @@ export const fr: Dict = {
         artwork: 'Images',
         artworkHint:
           'Une image que vous ajoutez passe devant celles des sources : les clients la choisissent en premier.',
+        primaryHint: 'L’étoile choisit l’affiche et le fond que Sonarr, Radarr et ce site montrent en premier, quel que soit l’ordre des sources ; aucun n’est choisi tant que vous ne le faites pas. Un choix est verrouillé : les rafraîchissements le gardent.',
+        primarySet: 'Montrer celle-ci en premier',
+        primaryUnset: 'Ne plus la montrer en premier',
+        primary: 'Principale',
+        primaryKept: 'Plus proposée par sa source · gardée parce qu’elle est choisie',
         kept: 'Stockée ici',
         keptPending: 'En cours de récupération',
         keptFailed: 'Récupération impossible',
@@ -2114,6 +2119,8 @@ export const fr: Dict = {
       disabled: 'Désactivé',
     },
     fields: {
+      primaryPoster: 'Affiche principale',
+      primaryFanart: 'Fond principal',
       isAdult: 'Adulte',
       slug: 'Adresse (slug)',
       externalIds: 'Identifiants',

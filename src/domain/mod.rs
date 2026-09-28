@@ -158,6 +158,68 @@ pub struct MediaItem {
     /// renders a lock next to each of these.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub locked_fields: Vec<String>,
+    /// The poster and the background a person chose to lead with, by image
+    /// id: what every client that keeps one image a kind is given. Set from
+    /// the locks when the work is read; none by default.
+    #[serde(default, skip_serializing_if = "PrimaryImages::is_empty")]
+    pub primary_images: PrimaryImages,
+}
+
+/// The images a person chose, by id among the work's own.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PrimaryImages {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub poster: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fanart: Option<String>,
+}
+
+impl PrimaryImages {
+    pub fn is_empty(&self) -> bool {
+        self.poster.is_none() && self.fanart.is_none()
+    }
+
+    /// The image chosen for a kind, when one was.
+    pub fn of(&self, kind: CoverType) -> Option<&str> {
+        match kind {
+            CoverType::Poster => self.poster.as_deref(),
+            CoverType::Fanart => self.fanart.as_deref(),
+            _ => None,
+        }
+    }
+}
+
+/// One image a kind, in the order the kinds come: the one a person chose,
+/// else one added by hand, else the first the sources offered. What a client
+/// that keeps a single poster, a single background, is to be given — Sonarr
+/// and Radarr write every image of a kind to one file, so the last they are
+/// sent is the one they show.
+pub fn lead_images<'a>(
+    images: impl IntoIterator<Item = &'a Image>,
+    chosen: &PrimaryImages,
+) -> Vec<&'a Image> {
+    let mut by_kind: Vec<(CoverType, Vec<&'a Image>)> = Vec::new();
+    for image in images {
+        match by_kind
+            .iter_mut()
+            .find(|(kind, _)| *kind == image.cover_type)
+        {
+            Some((_, of_kind)) => of_kind.push(image),
+            None => by_kind.push((image.cover_type, vec![image])),
+        }
+    }
+    by_kind
+        .into_iter()
+        .filter_map(|(kind, of_kind)| {
+            chosen
+                .of(kind)
+                .and_then(|id| of_kind.iter().find(|i| i.id == id))
+                .or_else(|| of_kind.iter().find(|i| i.is_manual))
+                .or_else(|| of_kind.first())
+                .copied()
+        })
+        .collect()
 }
 
 impl MediaItem {
@@ -212,6 +274,7 @@ impl MediaItem {
             translations: Vec::new(),
             relations: Vec::new(),
             locked_fields: Vec::new(),
+            primary_images: PrimaryImages::default(),
         }
     }
 
@@ -622,6 +685,54 @@ pub fn make_slug(title: &str, year: Option<i32>) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    /// One image a kind: the chosen, else one added by hand, else the first.
+    #[test]
+    fn a_client_is_given_one_image_a_kind() {
+        let image = |id: &str, kind: CoverType, manual: bool| Image {
+            id: id.into(),
+            season_number: None,
+            cover_type: kind,
+            url: format!("https://x/{id}.jpg"),
+            language: None,
+            sort_order: 0,
+            source: None,
+            is_manual: manual,
+        };
+        let images = [
+            image("p1", CoverType::Poster, false),
+            image("p2", CoverType::Poster, true),
+            image("p3", CoverType::Poster, false),
+            image("f1", CoverType::Fanart, false),
+            image("f2", CoverType::Fanart, false),
+            image("b1", CoverType::Banner, false),
+        ];
+        let ids = |chosen: &PrimaryImages| -> Vec<String> {
+            lead_images(&images, chosen)
+                .into_iter()
+                .map(|i| i.id.clone())
+                .collect()
+        };
+        assert_eq!(
+            ids(&PrimaryImages::default()),
+            ["p2", "f1", "b1"],
+            "by hand, then first"
+        );
+        let chosen = PrimaryImages {
+            poster: Some("p3".into()),
+            fanart: Some("f2".into()),
+        };
+        assert_eq!(ids(&chosen), ["p3", "f2", "b1"]);
+        let stale = PrimaryImages {
+            poster: Some("nowhere".into()),
+            fanart: None,
+        };
+        assert_eq!(
+            ids(&stale),
+            ["p2", "f1", "b1"],
+            "a choice that names nothing is no choice"
+        );
+    }
 
     #[test]
     fn a_series_genre_is_listed_as_the_film_genres_it_stands_for() {

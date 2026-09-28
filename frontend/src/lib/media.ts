@@ -195,7 +195,7 @@ const COVER = {
  * first match of a kind is already the best one a provider offered. A manual
  * image outranks it: somebody picked that on purpose.
  */
-export function pick(images: Image[] | undefined, kind: string, season?: number): Image | undefined {
+export function pick(images: Image[] | undefined, kind: string, season?: number, chosen?: string): Image | undefined {
   if (!images?.length) return undefined
 
   const matches = images.filter(
@@ -204,24 +204,25 @@ export function pick(images: Image[] | undefined, kind: string, season?: number)
       (season === undefined ? image.seasonNumber === undefined || image.seasonNumber === null : image.seasonNumber === season),
   )
 
-  return matches.find((image) => image.isManual) ?? matches[0]
+  // The one a person chose to lead with, then one added by hand, then the best offered.
+  return (chosen ? matches.find((image) => image.id === chosen) : undefined) ?? matches.find((image) => image.isManual) ?? matches[0]
 }
 
-export function poster(item: Pick<MediaItem, 'images'>, season?: number) {
-  return pick(item.images, COVER.poster, season)?.url
+export function poster(item: Pick<MediaItem, 'images' | 'primaryImages'>, season?: number) {
+  return pick(item.images, COVER.poster, season, season === undefined ? item.primaryImages?.poster : undefined)?.url
 }
 
 /**
  * A season's own poster, where it has one: providers file it with the season
  * rather than with the work, and the work's own stands in otherwise.
  */
-export function seasonPoster(item: Pick<MediaItem, 'images' | 'seasons'>, season: number) {
+export function seasonPoster(item: Pick<MediaItem, 'images' | 'seasons' | 'primaryImages'>, season: number) {
   const own = item.seasons?.find((s) => s.seasonNumber === season)?.images
   return pick(own, COVER.poster, season)?.url ?? poster(item, season) ?? poster(item)
 }
 
-export function backdrop(item: Pick<MediaItem, 'images'>) {
-  return pick(item.images, COVER.fanart)?.url ?? pick(item.images, COVER.landscape)?.url
+export function backdrop(item: Pick<MediaItem, 'images' | 'primaryImages'>) {
+  return pick(item.images, COVER.fanart, undefined, item.primaryImages?.fanart)?.url ?? pick(item.images, COVER.landscape)?.url
 }
 
 export function logo(item: Pick<MediaItem, 'images'>) {

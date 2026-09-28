@@ -86,6 +86,10 @@ const LANGUAGES = [
   ['ru', 'Русский'],
 ] as const
 
+/** Fields edited in a panel of their own rather than typed in a row: the
+ *  identifiers, and the poster and the background chosen among the artwork. */
+const PANEL_FIELDS = new Set(['externalIds', 'primaryPoster', 'primaryFanart'])
+
 export function WorkEditor() {
   const { id = '' } = useParams()
   const { t, locale } = useI18n()
@@ -363,7 +367,7 @@ export function WorkEditor() {
             action={<span className="label hidden sm:inline">{t.admin.editor.fieldsHint}</span>}
           />
           <ul className="divide-y divide-rule">
-            {registry.data.item.filter((def) => def.name !== 'externalIds').map((def) => (
+            {registry.data.item.filter((def) => !PANEL_FIELDS.has(def.name)).map((def) => (
               <FieldRow
                 key={def.name}
                 itemId={id}

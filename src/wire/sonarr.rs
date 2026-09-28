@@ -211,13 +211,23 @@ pub fn from_item(item: &MediaItem, tvdb_id: i64, language: &str) -> ShowResource
                 image: c.image.clone(),
             })
             .collect(),
-        images: item.images.iter().map(image_resource).collect(),
+        // One a kind: Sonarr writes every image of a kind to one file.
+        images: crate::domain::lead_images(
+            item.images.iter().filter(|i| i.season_number.is_none()),
+            &item.primary_images,
+        )
+        .into_iter()
+        .map(image_resource)
+        .collect(),
         seasons: item
             .seasons
             .iter()
             .map(|s| SeasonResource {
                 season_number: s.season_number,
-                images: s.images.iter().map(image_resource).collect(),
+                images: crate::domain::lead_images(&s.images, &Default::default())
+                    .into_iter()
+                    .map(image_resource)
+                    .collect(),
             })
             .collect(),
         episodes: item
@@ -660,6 +670,42 @@ mod tests {
         assert_eq!(canonical.ratings.len(), 1);
         assert_eq!(canonical.ratings[0].source, "imdb");
         assert_eq!(canonical.ratings[0].votes, Some(2_679_821));
+    }
+
+    /// Sonarr writes every image of a kind to one file: it is given one a
+    /// kind, the chosen one when there is one, and no season's in the show's.
+    #[test]
+    fn sonarr_is_given_one_image_a_kind_the_chosen_first() {
+        let mut it = item();
+        let image = |id: &str, kind: CoverType, season: Option<i32>| Image {
+            id: id.into(),
+            season_number: season,
+            cover_type: kind,
+            url: format!("https://x/{id}.jpg"),
+            language: None,
+            sort_order: 0,
+            source: None,
+            is_manual: false,
+        };
+        it.images = vec![
+            image("p1", CoverType::Poster, None),
+            image("p2", CoverType::Poster, None),
+            image("s1", CoverType::Poster, Some(1)),
+            image("f1", CoverType::Fanart, None),
+        ];
+        it.primary_images.poster = Some("p2".into());
+        let sent = from_item(&it, 1, "en").images;
+        let urls: Vec<(&str, &str)> = sent
+            .iter()
+            .map(|i| (i.cover_type.as_str(), i.url.as_str()))
+            .collect();
+        assert_eq!(
+            urls,
+            [
+                ("Poster", "https://x/p2.jpg"),
+                ("Fanart", "https://x/f1.jpg")
+            ]
+        );
     }
 
     #[test]
