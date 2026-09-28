@@ -177,8 +177,8 @@ pub fn from_item(item: &MediaItem, tvdb_id: i64, language: &str) -> ShowResource
         original_country: item.original_country.clone(),
         original_language: item.original_language.clone(),
         language: Some(language.to_string()),
-        first_aired: item.first_aired.clone(),
-        last_aired: item.last_aired.clone(),
+        first_aired: sonarr_day(item.first_aired.as_deref()),
+        last_aired: sonarr_day(item.last_aired.as_deref()),
         tv_rage_id: item.external_ids.tvrage,
         tv_maze_id: item.external_ids.tvmaze,
         tmdb_id: item.external_ids.tmdb,
@@ -257,7 +257,7 @@ fn episode_resource(episode: &Episode, tvdb_show_id: i64) -> EpisodeResource {
         aired_before_season_number: episode.aired_before_season_number,
         aired_before_episode_number: episode.aired_before_episode_number,
         title: episode.title.clone(),
-        air_date: episode.air_date.clone(),
+        air_date: sonarr_day(episode.air_date.as_deref()),
         // The real moment when a provider knew it (Skyhook, TVmaze); midnight
         // UTC of the broadcast date otherwise, which is what Sonarr needs to
         // consider an episode aired at all — without it, nothing is searched.
@@ -276,6 +276,29 @@ fn episode_resource(episode: &Episode, tvdb_show_id: i64) -> EpisodeResource {
         overview: episode.overview.clone(),
         image: episode.image.clone(),
     }
+}
+
+/// A day as Sonarr reads one: `yyyy-MM-dd`, exactly.
+///
+/// Sonarr parses a series' first and last air dates with
+/// `DateTime.ParseExact(value, "yyyy-MM-dd")` (`SkyHookProxy.MapSeries`), with
+/// nothing around it to catch a failure: the date-time a date field here also
+/// accepts failed the series' refresh there, and every search that found it.
+/// An episode's air date is matched as text against the day a daily release
+/// names, and parsed the same strict way when a daily series is searched.
+///
+/// A date-time gives the day it names in its own zone, the local broadcast
+/// date, which is what Skyhook sends. What is not a day at all is left out.
+fn sonarr_day(value: Option<&str>) -> Option<String> {
+    let value = value?.trim();
+    let day = match chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d") {
+        Ok(day) => day,
+        Err(_) => chrono::DateTime::parse_from_rfc3339(value)
+            .ok()?
+            .date_naive(),
+    };
+
+    Some(day.format("%Y-%m-%d").to_string())
 }
 
 fn rating_resource(rating: &Rating) -> RatingResource {
@@ -723,5 +746,32 @@ mod tests {
         }];
 
         assert_eq!(from_item(&it, 1, "en").images[0].cover_type, "Poster");
+    }
+
+    #[test]
+    fn dates_reach_sonarr_as_days() {
+        // Sonarr parses a series' air dates with ParseExact("yyyy-MM-dd") and
+        // nothing around it: a date-time, which a date field here accepts,
+        // failed the series' refresh there, and every search that found it.
+        let mut it = item();
+        it.first_aired = Some("2008-01-20T21:00:00-05:00".into());
+        it.last_aired = Some("2013-09-29".into());
+        it.episodes = vec![crate::db::repo::child::blank_episode(1, 1)];
+        it.episodes[0].air_date = Some("2008-01-20T21:00:00-05:00".into());
+
+        let show = from_item(&it, 81189, "en");
+        // The day it names in its own zone, as Skyhook sends: not the UTC one.
+        assert_eq!(show.first_aired.as_deref(), Some("2008-01-20"));
+        assert_eq!(show.last_aired.as_deref(), Some("2013-09-29"));
+        assert_eq!(show.episodes[0].air_date.as_deref(), Some("2008-01-20"));
+        // The moment itself still goes where Sonarr reads one.
+        assert_eq!(
+            show.episodes[0].air_date_utc.as_deref(),
+            Some("2008-01-20T21:00:00-05:00")
+        );
+
+        // What is no day at all is left out rather than sent.
+        it.first_aired = Some("2008".into());
+        assert_eq!(from_item(&it, 81189, "en").first_aired, None);
     }
 }

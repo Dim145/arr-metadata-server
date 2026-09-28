@@ -19,6 +19,12 @@ may change what the API or the configuration means, and says so here.
 - A film whose original language is not known is sent as undetermined
   (`und`) rather than with none, which Radarr does not survive either: it
   could not refresh the film, and a search that found it failed whole.
+- A series' first and last air dates, and an episode's air date, reach
+  Sonarr as plain days. A date field here also takes a date-time, and Sonarr
+  reads these three strictly as year-month-day: a date-time failed the
+  series' refresh, and a search that found it failed whole; on an episode,
+  it broke the search of a daily series. A date-time is sent as the day it
+  names in its own zone.
 
 ## [0.3.1] — 2026-09-28
 
