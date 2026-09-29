@@ -7,6 +7,8 @@ may change what the API or the configuration means, and says so here.
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-09-29
+
 ### Added
 
 - Sonarr's alternate titles, from this catalogue. Sonarr never reads the
@@ -214,7 +216,8 @@ and arm64.
 - End-to-end checks against a real Sonarr, against two instances, and a
   Playwright suite over the whole interface.
 
-[Unreleased]: https://github.com/Dim145/arr-metadata-server/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/Dim145/arr-metadata-server/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/Dim145/arr-metadata-server/compare/v0.3.2...v0.4.0
 [0.3.2]: https://github.com/Dim145/arr-metadata-server/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/Dim145/arr-metadata-server/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/Dim145/arr-metadata-server/compare/v0.2.0...v0.3.0
