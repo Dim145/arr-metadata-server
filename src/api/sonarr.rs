@@ -13,8 +13,9 @@ use serde::Deserialize;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::{
+    domain::MediaItem,
     error::{AppError, AppResult},
-    service::{language, series},
+    service::{language, scene, series},
     state::AppState,
     wire::sonarr::{ShowResource, from_item},
 };
@@ -74,6 +75,7 @@ async fn show(
     // protocol it appears. Episode text for a language nobody has asked for yet
     // is fetched here, once, and stored.
     language::apply(&state, &mut item, &language).await?;
+    name_for_sonarr(&state, &mut item, tvdb_id).await;
 
     // Echo back the id the client asked for: Sonarr has already stored it, and
     // a different one in the response would orphan the series.
@@ -111,6 +113,9 @@ async fn search(
     // each of ten search results would turn one search into dozens of calls.
     for item in &mut items {
         language::apply_shallow(&state, item, &language);
+        if let Some(id) = series::client_id(item) {
+            name_for_sonarr(&state, item, id).await;
+        }
         state.media.for_clients(item);
     }
 
@@ -122,4 +127,25 @@ async fn search(
         .collect();
 
     Ok(Json(shows))
+}
+
+/// The title Sonarr is given: told apart from a homonym the way Skyhook tells
+/// it, a locked one as it was locked (see [`series::sonarr_title`]).
+async fn name_for_sonarr(state: &AppState, item: &mut MediaItem, tvdb_id: i64) {
+    let locked = item.locked_fields.iter().any(|f| f == "item/title");
+    let homonym_year = if !locked
+        && item.title_qualifier.is_none()
+        && item.external_ids.tvdb.is_none()
+        && scene::has_homonym(state, tvdb_id, &item.title).await
+    {
+        item.year
+    } else {
+        None
+    };
+    item.title = series::sonarr_title(
+        &item.title,
+        locked,
+        item.title_qualifier.as_deref(),
+        homonym_year,
+    );
 }

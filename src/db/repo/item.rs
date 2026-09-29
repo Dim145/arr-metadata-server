@@ -33,7 +33,8 @@ const ITEM_COLUMNS: &str = "
     id, kind, slug, title, sort_title, original_title, overview, status,
     original_language, original_country, runtime, year, first_aired, last_aired,
     in_cinemas, physical_release, digital_release, air_time, network, studio,
-    content_rating, content_rating_country, homepage, trailer_youtube_id, theme_music, popularity, genres, keywords,
+    content_rating, content_rating_country, homepage, trailer_youtube_id, theme_music, title_qualifier,
+    popularity, genres, keywords,
     collection_tmdb_id, is_manual, is_enabled, is_adult, created_at, updated_at,
     refreshed_at, refresh_after, refresh_error
 ";
@@ -67,6 +68,7 @@ fn map_item(row: &sqlx::any::AnyRow) -> Result<MediaItem> {
         homepage: row.opt_text("homepage")?,
         trailer_youtube_id: row.opt_text("trailer_youtube_id")?,
         theme_music: row.opt_text("theme_music")?,
+        title_qualifier: row.opt_text("title_qualifier")?,
         popularity: row.opt_real("popularity")?,
         collection_tmdb_id: row.opt_big("collection_tmdb_id")?,
         genres: row.text_list("genres")?,
@@ -2200,13 +2202,14 @@ async fn upsert_row(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaItem) ->
             original_language, original_country, runtime, year, first_aired, last_aired,
             in_cinemas, physical_release, digital_release, air_time, network, studio,
             content_rating, content_rating_country, homepage, trailer_youtube_id, theme_music,
+            title_qualifier,
             popularity, genres, keywords, collection_tmdb_id, is_manual, is_enabled, is_adult,
             created_at, updated_at, refreshed_at, refresh_after, refresh_error,
             listed_title, listed_year, listed_genres, listed_keywords, listed_network,
             listed_studio, listed_status, listed_language, listed_release, listed_score
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                   ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (id) DO UPDATE SET
             kind = excluded.kind,
             slug = excluded.slug,
@@ -2232,6 +2235,7 @@ async fn upsert_row(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaItem) ->
             homepage = excluded.homepage,
             trailer_youtube_id = excluded.trailer_youtube_id,
             theme_music = excluded.theme_music,
+            title_qualifier = excluded.title_qualifier,
             popularity = excluded.popularity,
             genres = excluded.genres,
             keywords = excluded.keywords,
@@ -2280,6 +2284,7 @@ async fn upsert_row(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaItem) ->
         .bind(&item.homepage)
         .bind(&item.trailer_youtube_id)
         .bind(&item.theme_music)
+        .bind(&item.title_qualifier)
         .bind(item.popularity)
         .bind(text_list(&item.genres))
         .bind(text_list(&item.keywords))

@@ -363,6 +363,99 @@ fn names_a_part(clean: &str, known: &HashSet<String>) -> bool {
     })
 }
 
+/// The title Sonarr, which always asks in English, is served for a series
+/// before anything tells it from a homonym: a locked title as it is; the
+/// stored one when English is the server's language (`server`); its English
+/// one otherwise, when it has one.
+fn plain_title(s: &repo::scene::SeriesTitles, server: &str) -> String {
+    let english = s
+        .translated
+        .iter()
+        .find(|(code, title)| speaks(code, "en") && !title.trim().is_empty())
+        .map(|(_, title)| title.clone());
+    match english {
+        Some(english) if !s.title_locked && !speaks(server, "en") => english,
+        _ => s.title.clone(),
+    }
+}
+
+/// Which series answer to each cleaned plain title, by the id Sonarr keeps
+/// them under.
+fn homonyms_of(catalogue: &[repo::scene::SeriesTitles], plain: &[String]) -> Homonyms {
+    let mut by_title: HashMap<String, HashSet<i64>> = HashMap::new();
+    for (s, title) in catalogue.iter().zip(plain) {
+        if let Some(id) = series::client_id_of(s.tvdb, s.tmdb, s.fankai) {
+            by_title.entry(clean_title(title)).or_default().insert(id);
+        }
+    }
+    by_title
+}
+
+/// Whether another series than `tvdb_id` is served the plain title `plain`.
+fn shares(homonyms: &Homonyms, tvdb_id: i64, plain: &str) -> bool {
+    homonyms
+        .get(&clean_title(plain))
+        .is_some_and(|ids| ids.iter().any(|id| *id != tvdb_id))
+}
+
+/// The title Sonarr is served for a series: [`series::sonarr_title`].
+fn served_title(
+    s: &repo::scene::SeriesTitles,
+    plain: &str,
+    tvdb_id: i64,
+    homonyms: &Homonyms,
+) -> String {
+    let homonym_year = (s.tvdb.is_none() && shares(homonyms, tvdb_id, plain))
+        .then_some(s.year)
+        .flatten();
+    series::sonarr_title(
+        plain,
+        s.title_locked,
+        s.title_qualifier.as_deref(),
+        homonym_year,
+    )
+}
+
+type Homonyms = HashMap<String, HashSet<i64>>;
+
+/// The catalogue's plain titles, kept a minute: a whole library refreshing
+/// in Sonarr is one reading of them, not one a series.
+type KeptHomonyms = Option<(Instant, Arc<Homonyms>)>;
+
+static HOMONYMS: LazyLock<tokio::sync::Mutex<KeptHomonyms>> = LazyLock::new(Default::default);
+const HOMONYMS_FRESH: Duration = Duration::from_secs(60);
+
+/// Whether another series of the catalogue than `tvdb_id` is served `plain`
+/// in Sonarr — what, for a work TheTVDB has no entry for, calls for its year.
+pub async fn has_homonym(state: &AppState, tvdb_id: i64, plain: &str) -> bool {
+    let mut kept = HOMONYMS.lock().await;
+    let fresh = kept
+        .as_ref()
+        .filter(|(at, _)| at.elapsed() < HOMONYMS_FRESH)
+        .map(|(_, map)| map.clone());
+    let map = match fresh {
+        Some(map) => map,
+        None => match repo::scene::series_titles(&state.db).await {
+            Ok(catalogue) => {
+                let server = state.language(None, None);
+                let plain: Vec<String> =
+                    catalogue.iter().map(|s| plain_title(s, &server)).collect();
+                let map = Arc::new(homonyms_of(&catalogue, &plain));
+                *kept = Some((Instant::now(), map.clone()));
+                map
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = format_args!("{e:#}"),
+                    "could not read the catalogue's titles"
+                );
+                return false;
+            }
+        },
+    };
+    shares(&map, tvdb_id, plain)
+}
+
 /// Whether a stored language code and a tag like `fr-FR` name one language.
 fn speaks(code: &str, tag: &str) -> bool {
     let code = language::normalize(code);
@@ -388,19 +481,14 @@ pub fn held(
     caller: &str,
     search: bool,
 ) -> Vec<Held> {
+    let plain: Vec<String> = catalogue.iter().map(|s| plain_title(s, server)).collect();
+    let homonyms = homonyms_of(&catalogue, &plain);
     catalogue
         .into_iter()
-        .filter_map(|s| {
+        .zip(plain)
+        .filter_map(|(s, plain)| {
             let tvdb_id = series::client_id_of(s.tvdb, s.tmdb, s.fankai)?;
-            let english = s
-                .translated
-                .iter()
-                .find(|(code, title)| speaks(code, "en") && !title.trim().is_empty())
-                .map(|(_, title)| title.clone());
-            let served = match (&english, s.title_locked || speaks(server, "en")) {
-                (Some(english), false) => english.clone(),
-                _ => s.title.clone(),
-            };
+            let served = served_title(&s, &plain, tvdb_id, &homonyms);
 
             let original = s.original_language.clone().unwrap_or_default();
             let wanted = |code: &str| {
@@ -1003,6 +1091,33 @@ mod tests {
             ],
         )];
         assert!(additions(&held, &[]).is_empty());
+    }
+
+    #[test]
+    fn each_homonym_is_known_by_what_tells_it_apart_in_sonarr() {
+        let mut recent = stored("Rurouni Kenshin", false, &[]);
+        recent.tvdb = Some(413578);
+        recent.title_qualifier = Some("2023".into());
+        recent.year = Some(2023);
+        let mut first = stored("Rurouni Kenshin", false, &[]);
+        first.tvdb = Some(70863);
+        first.year = Some(1996);
+        let mut tmdb_only = stored("Rurouni Kenshin", false, &[]);
+        tmdb_only.tvdb = None;
+        tmdb_only.tmdb = Some(99);
+        tmdb_only.year = Some(2010);
+
+        let held = held(vec![recent, first, tmdb_only], "en-US", "en-US", true);
+
+        let served: Vec<&str> = held.iter().map(|h| h.served.as_str()).collect();
+        assert_eq!(
+            served,
+            [
+                "Rurouni Kenshin (2023)",
+                "Rurouni Kenshin",
+                "Rurouni Kenshin (2010)"
+            ]
+        );
     }
 
     #[test]

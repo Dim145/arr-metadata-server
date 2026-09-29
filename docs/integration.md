@@ -399,6 +399,19 @@ Radarr has no language in its protocol at all, and the same applies.
 TMDB clients do send `language=`, and it is forwarded upstream, so those get
 whatever they ask for with your edits patched in.
 
+## Series of the same name
+
+TheTVDB names the second of two homonymous series with what tells it apart
+— *Rurouni Kenshin (2023)*, *The Office (US)* — and Skyhook passes that on,
+so it is the title Sonarr files, names folders after and matches releases
+by. TMDB never does, and its name is usually the title here. The Sonarr
+surface therefore gives back what TheTVDB adds, and only there: the site,
+the native API and the TMDB relay keep the title as TMDB names it, the year
+shown beside it. A work TheTVDB has no entry for is given its year when
+another series of the catalogue is served the same title, since two series
+Sonarr knows by one title make its lookup by title fail. A locked title is
+sent exactly as it was locked.
+
 ## What about Plex?
 
 Plex has no configurable metadata source. Since the legacy agents were removed,

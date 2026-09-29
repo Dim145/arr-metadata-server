@@ -448,6 +448,35 @@ pub fn client_id(item: &MediaItem) -> Option<i64> {
     client_id_of(ids.tvdb, ids.tmdb, ids.fankai)
 }
 
+/// The title Sonarr is given for a series: its own — a locked one exactly as
+/// it was locked — with what tells it from a homonym, as Skyhook names it.
+///
+/// TheTVDB's qualifier when it has one, *Rurouni Kenshin (2023)*; for a work
+/// TheTVDB has no entry for, its year when another series of the catalogue is
+/// given the same title (`homonym_year`). Two series Sonarr knows by one
+/// title are what its title lookup throws on, so a release by that name is
+/// dropped rather than matched.
+pub fn sonarr_title(
+    title: &str,
+    locked: bool,
+    qualifier: Option<&str>,
+    homonym_year: Option<i32>,
+) -> String {
+    if locked {
+        return title.to_string();
+    }
+    let added = match (qualifier, homonym_year) {
+        (Some(qualifier), _) => qualifier.to_string(),
+        (None, Some(year)) if year > 0 => year.to_string(),
+        _ => return title.to_string(),
+    };
+    if title.trim_end().ends_with(&format!("({added})")) {
+        title.to_string()
+    } else {
+        format!("{} ({added})", title.trim_end())
+    }
+}
+
 /// [`client_id`], from the three ids it is chosen among.
 pub fn client_id_of(tvdb: Option<i64>, tmdb: Option<i64>, fankai: Option<i64>) -> Option<i64> {
     tvdb.or_else(|| tmdb.and_then(ids::to_synthetic))
@@ -457,6 +486,41 @@ pub fn client_id_of(tvdb: Option<i64>, tmdb: Option<i64>, fankai: Option<i64>) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sonarr_is_given_the_title_as_skyhook_tells_homonyms_apart() {
+        assert_eq!(
+            sonarr_title("Rurouni Kenshin", false, Some("2023"), None),
+            "Rurouni Kenshin (2023)"
+        );
+        assert_eq!(
+            sonarr_title("Rurouni Kenshin", false, None, None),
+            "Rurouni Kenshin"
+        );
+        assert_eq!(
+            sonarr_title("The Office", false, Some("US"), None),
+            "The Office (US)"
+        );
+        // Said already: not twice.
+        assert_eq!(
+            sonarr_title("Rurouni Kenshin (2023)", false, Some("2023"), None),
+            "Rurouni Kenshin (2023)"
+        );
+        // A locked title goes exactly as it was locked.
+        assert_eq!(
+            sonarr_title("Rurouni Kenshin", true, Some("2023"), Some(2023)),
+            "Rurouni Kenshin"
+        );
+        // No entry on TheTVDB, and a homonym here: its year.
+        assert_eq!(
+            sonarr_title("Rurouni Kenshin", false, None, Some(2010)),
+            "Rurouni Kenshin (2010)"
+        );
+        assert_eq!(
+            sonarr_title("Rurouni Kenshin", false, None, Some(0)),
+            "Rurouni Kenshin"
+        );
+    }
     use crate::domain::ExternalIds;
 
     fn series(tmdb: Option<i64>, tvdb: Option<i64>) -> MediaItem {

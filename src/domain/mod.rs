@@ -105,6 +105,11 @@ pub struct MediaItem {
     /// like an image's. Fankai keeps one for every Fan-Kai.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub theme_music: Option<String>,
+    /// What TheTVDB adds to the series' name to tell it from another of the
+    /// same name — `2023`, `US` — where the title, as TMDB names it, has
+    /// none. The Sonarr surface gives it back, as Skyhook does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_qualifier: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub popularity: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -252,6 +257,7 @@ impl MediaItem {
             homepage: None,
             trailer_youtube_id: None,
             theme_music: None,
+            title_qualifier: None,
             popularity: None,
             collection_tmdb_id: None,
             genres: Vec::new(),

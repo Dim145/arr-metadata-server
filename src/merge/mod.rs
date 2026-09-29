@@ -54,6 +54,9 @@ pub(crate) const DATE_CHECKED: &[&str] = &["tvmaze"];
 /// first three seasons Wit Studio animated.
 pub(crate) const STUDIO_AUTHORITIES: &[&str] = &["anilist", "mal"];
 
+/// The providers whose series names are TheTVDB's: Skyhook passes them on.
+const TVDB_NAMED: &[&str] = &["tvdb", "skyhook"];
+
 /// Fold contributions into one entity, most trusted first.
 ///
 /// `priority` names providers in order; anything not named sorts last, keeping
@@ -132,6 +135,14 @@ pub fn combine(mut contributions: Vec<Contribution>, priority: &[String]) -> Opt
         None => (Vec::new(), Vec::new()),
     };
 
+    // TheTVDB's names for the series, before they are folded away: what they
+    // add to a name the work goes by is how Sonarr tells it from a homonym.
+    let tvdb_names: Vec<String> = contributions
+        .iter()
+        .filter(|c| TVDB_NAMED.contains(&c.provider.as_str()))
+        .map(|c| c.item.title.clone())
+        .collect();
+
     let mut merged = contributions.remove(0).item;
 
     // The most trusted provider loses the numbering to the spine, but not what
@@ -161,7 +172,48 @@ pub fn combine(mut contributions: Vec<Contribution>, priority: &[String]) -> Opt
         .images
         .sort_by_key(|i| (i.cover_type.priority(), i.sort_order));
 
+    merged.title_qualifier = title_qualifier(&merged, &tvdb_names);
+
     Some(merged)
+}
+
+/// What TheTVDB adds to a series' name to tell it from another of the same
+/// name — `2023` in *Rurouni Kenshin (2023)*, `US` in *The Office (US)* — when
+/// the rest of its name is one the work goes by here: its title, its original
+/// title, or one of its translated ones, compared as Sonarr compares titles.
+fn title_qualifier(item: &MediaItem, tvdb_names: &[String]) -> Option<String> {
+    use crate::service::scene::clean_title;
+
+    if item.kind != crate::domain::MediaKind::Series {
+        return None;
+    }
+    let known: Vec<String> = std::iter::once(item.title.as_str())
+        .chain(item.original_title.as_deref())
+        .chain(item.translations.iter().filter_map(|t| t.title.as_deref()))
+        .map(clean_title)
+        .filter(|c| !c.trim().is_empty())
+        .collect();
+    tvdb_names.iter().find_map(|name| {
+        let (base, qualifier) = split_qualifier(name)?;
+        known
+            .contains(&clean_title(base))
+            .then(|| qualifier.to_string())
+    })
+}
+
+/// A name's trailing ` (…)`, when it holds what TheTVDB tells homonyms apart
+/// by: a year, or a country's code.
+pub(crate) fn split_qualifier(name: &str) -> Option<(&str, &str)> {
+    let inner = name.trim().strip_suffix(')')?;
+    let open = inner.rfind(" (")?;
+    let (base, qualifier) = (inner[..open].trim(), &inner[open + 2..]);
+    let year = qualifier.len() == 4
+        && qualifier
+            .parse::<i32>()
+            .is_ok_and(|y| (1900..=2100).contains(&y));
+    let country =
+        (2..=3).contains(&qualifier.len()) && qualifier.chars().all(|c| c.is_ascii_uppercase());
+    (!base.is_empty() && (year || country)).then_some((base, qualifier))
 }
 
 /// Drop the alternative titles that are only the work's own title again.
@@ -539,6 +591,62 @@ mod tests {
         let mut i = crate::db::repo::child::blank_image(kind, url.into());
         i.is_manual = false;
         i
+    }
+
+    #[test]
+    fn what_thetvdb_adds_to_a_homonyms_name_is_kept() {
+        // TMDB names both series "Rurouni Kenshin"; TheTVDB, and Skyhook after
+        // it, the second "Rurouni Kenshin (2023)".
+        let mut tmdb = base("tmdb", "Rurouni Kenshin");
+        tmdb.item.original_title = Some("るろうに剣心 －明治剣客浪漫譚－".into());
+        let merged = combine(
+            vec![
+                tmdb,
+                base("tvdb", "るろうに剣心 －明治剣客浪漫譚－ (2023)"),
+                base("skyhook", "Rurouni Kenshin (2023)"),
+            ],
+            &priority(),
+        )
+        .unwrap();
+        assert_eq!(merged.title, "Rurouni Kenshin");
+        assert_eq!(merged.title_qualifier.as_deref(), Some("2023"));
+
+        // The first of the name has none, as on TheTVDB.
+        let merged = combine(
+            vec![
+                base("tmdb", "Rurouni Kenshin"),
+                base("skyhook", "Rurouni Kenshin"),
+            ],
+            &priority(),
+        )
+        .unwrap();
+        assert_eq!(merged.title_qualifier, None);
+
+        // A country tells them apart too.
+        let merged = combine(
+            vec![base("tmdb", "The Office"), base("tvdb", "The Office (US)")],
+            &priority(),
+        )
+        .unwrap();
+        assert_eq!(merged.title_qualifier.as_deref(), Some("US"));
+    }
+
+    #[test]
+    fn a_title_that_ends_otherwise_is_no_qualifier() {
+        // Part of the name itself, or another name altogether.
+        let merged = combine(
+            vec![
+                base("tmdb", "Kaguya-sama"),
+                base("tvdb", "Kaguya-sama (Love Is War)"),
+                base("skyhook", "Something Else (2020)"),
+            ],
+            &priority(),
+        )
+        .unwrap();
+        assert_eq!(merged.title_qualifier, None);
+        assert_eq!(split_qualifier("Title (1850)"), None);
+        assert_eq!(split_qualifier("Title (us)"), None);
+        assert_eq!(split_qualifier("(2023)"), None);
     }
 
     #[test]

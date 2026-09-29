@@ -7,6 +7,18 @@ may change what the API or the configuration means, and says so here.
 
 ## [Unreleased]
 
+### Fixed
+
+- A series TheTVDB tells apart from a homonym reaches Sonarr under the
+  title Skyhook gives it — *Rurouni Kenshin (2023)*, *The Office (US)* —
+  where TMDB's name, which the title usually is, carries no such mark. A
+  work TheTVDB has no entry for is given its year instead when another
+  series here goes by the same title. Two series Sonarr knows by one title
+  make its lookup by title fail, and the releases by that name were dropped.
+  A locked title still goes as it was locked. A new column holds what
+  TheTVDB adds, filled in as each series is next refreshed; Sonarr takes the
+  title at its own next refresh of the series.
+
 ## [0.4.0] — 2026-09-29
 
 ### Added

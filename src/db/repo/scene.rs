@@ -27,6 +27,10 @@ pub struct SeriesTitles {
     pub original_language: Option<String>,
     /// Whether it is shown at all: a hidden work is on no surface.
     pub enabled: bool,
+    /// What TheTVDB adds to its name to tell it from a homonym.
+    pub title_qualifier: Option<String>,
+    /// The year it first aired.
+    pub year: Option<i32>,
     pub tvdb: Option<i64>,
     pub tmdb: Option<i64>,
     pub fankai: Option<i64>,
@@ -43,7 +47,8 @@ pub async fn series_titles(db: &Db) -> Result<Vec<SeriesTitles>> {
     let mut order = Vec::new();
 
     let rows = sqlx::query(db.sql(
-        "SELECT id, title, original_title, original_language, is_enabled FROM media_item \
+        "SELECT id, title, original_title, original_language, is_enabled, title_qualifier, year \
+         FROM media_item \
          WHERE kind = 'series' ORDER BY id",
     ))
     .fetch_all(db.pool())
@@ -58,6 +63,8 @@ pub async fn series_titles(db: &Db) -> Result<Vec<SeriesTitles>> {
                 original_title: row.opt_text("original_title")?,
                 original_language: row.opt_text("original_language")?,
                 enabled: row.flag("is_enabled")?,
+                title_qualifier: row.opt_text("title_qualifier")?,
+                year: row.opt_int("year")?,
                 ..Default::default()
             },
         );
