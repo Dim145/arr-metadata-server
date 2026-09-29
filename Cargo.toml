@@ -95,6 +95,12 @@ utoipa-swagger-ui = { version = "10.0.0", features = ["axum", "vendored"] }
 dns-lookup = "4.0.1"
 parking_lot = "0.12.5"
 url = "2.5.8"
+# Sonarr's own title cleaning takes accents off through a canonical
+# decomposition; the version sqlx's PostgreSQL driver already brings.
+unicode-normalization = "0.1.25"
+# And tells what a character is — a letter, a mark, a digit — the way .NET's
+# `\w` does; again the version sqlx's PostgreSQL driver brings.
+unicode-properties = { version = "0.1.4", default-features = false, features = ["general-category"] }
 # The media store: one interface over a directory and an S3-compatible bucket.
 object_store = { version = "0.14.2", features = ["aws", "fs"] }
 # What a downloaded or uploaded file is, from its first bytes, and how big a

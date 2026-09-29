@@ -10,6 +10,7 @@ pub mod extract;
 pub mod native;
 pub mod radarr;
 pub mod sonarr;
+pub mod sonarr_services;
 pub mod tmdb;
 
 use axum::{Router, middleware::from_fn_with_state};
@@ -122,7 +123,7 @@ pub fn build(state: AppState) -> (Router<AppState>, utoipa::openapi::OpenApi) {
         .nest("/api/v1", native::public_router())
         .split_for_parts();
 
-    let (arr, arr_api) = sonarr::router().merge(radarr::router()).split_for_parts();
+    let (arr, arr_api) = arr_routers().split_for_parts();
 
     let (tmdb, tmdb_api) = tmdb::router().split_for_parts();
 
@@ -155,11 +156,30 @@ pub fn build(state: AppState) -> (Router<AppState>, utoipa::openapi::OpenApi) {
 /// The surfaces the clients with compiled-in addresses call, for their own
 /// door: the same handlers under the same guards, and nothing else.
 pub fn build_clients(state: AppState) -> Router<AppState> {
-    let (arr, _) = sonarr::router().merge(radarr::router()).split_for_parts();
+    let (arr, _) = arr_routers().split_for_parts();
     let (tmdb, _) = tmdb::router().split_for_parts();
     Router::new()
         .merge(arr_surface(state.clone(), arr))
         .merge(tmdb_surface(state, tmdb))
+}
+
+/// Whatever else Sonarr asks of services.sonarr.tv, relayed under the guards
+/// of Sonarr's surface: what the clients' door hands a path it has no route
+/// for, when it was asked of that name.
+pub fn build_sonarr_services_relay(state: AppState) -> Router {
+    arr_surface(
+        state.clone(),
+        Router::new().fallback(sonarr_services::fallback),
+    )
+    .with_state(state)
+}
+
+/// Sonarr's and Radarr's routes: Skyhook, services.sonarr.tv's scene-mapping
+/// list, and api.radarr.video.
+fn arr_routers() -> OpenApiRouter<AppState> {
+    sonarr::router()
+        .merge(sonarr_services::router())
+        .merge(radarr::router())
 }
 
 fn arr_surface(state: AppState, arr: Router<AppState>) -> Router<AppState> {
@@ -195,7 +215,7 @@ fn openapi_only() -> utoipa::openapi::OpenApi {
         .nest("/api/v1", native::public_router())
         .split_for_parts();
 
-    let (_, arr_api) = sonarr::router().merge(radarr::router()).split_for_parts();
+    let (_, arr_api) = arr_routers().split_for_parts();
     let (_, tmdb_api) = tmdb::router().split_for_parts();
 
     let mut api = ApiDoc::openapi();

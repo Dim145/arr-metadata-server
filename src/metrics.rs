@@ -21,7 +21,7 @@ use axum::{extract::Request, middleware::Next, response::Response};
 pub const SURFACES: [&str; 6] = ["sonarr", "radarr", "tmdb", "native", "probe", "ui"];
 
 /// The providers asked upstream, in the order they are counted.
-pub const PROVIDERS: [&str; 10] = [
+pub const PROVIDERS: [&str; 12] = [
     "tmdb",
     "tvdb",
     "tvmaze",
@@ -32,6 +32,9 @@ pub const PROVIDERS: [&str; 10] = [
     "radarr",
     "fankai",
     "fankaiwiki",
+    // Sonarr's scene-mapping list and TheXEM's names, read to add titles.
+    "sonarr_services",
+    "thexem",
 ];
 
 /// How an upstream call ended: answered (a 404 is an answer), refused by the

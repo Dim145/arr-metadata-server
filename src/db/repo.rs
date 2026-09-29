@@ -16,6 +16,7 @@ pub mod list;
 pub mod network;
 pub mod order;
 pub mod override_field;
+pub mod scene;
 pub mod season;
 pub mod snapshot;
 pub mod translation;

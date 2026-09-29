@@ -256,7 +256,7 @@ fn episode_resource(episode: &Episode, tvdb_show_id: i64) -> EpisodeResource {
         aired_after_season_number: episode.aired_after_season_number,
         aired_before_season_number: episode.aired_before_season_number,
         aired_before_episode_number: episode.aired_before_episode_number,
-        title: episode.title.clone(),
+        title: episode_title(&episode.title),
         air_date: sonarr_day(episode.air_date.as_deref()),
         // The real moment when a provider knew it (Skyhook, TVmaze); midnight
         // UTC of the broadcast date otherwise, which is what Sonarr needs to
@@ -275,6 +275,21 @@ fn episode_resource(episode: &Episode, tvdb_show_id: i64) -> EpisodeResource {
         }),
         overview: episode.overview.clone(),
         image: episode.image.clone(),
+    }
+}
+
+/// What Skyhook calls an episode nobody has named yet.
+pub const UNTITLED: &str = "TBA";
+
+/// An episode's title as Skyhook sends it: `TBA` when there is none.
+///
+/// Sonarr turns a missing title into `TBA` itself, but keeps an empty one as
+/// it is, and lists the episode as a row with nothing in it to click.
+fn episode_title(title: &str) -> String {
+    if title.trim().is_empty() {
+        UNTITLED.to_string()
+    } else {
+        title.to_string()
     }
 }
 
@@ -746,6 +761,25 @@ mod tests {
         }];
 
         assert_eq!(from_item(&it, 1, "en").images[0].cover_type, "Poster");
+    }
+
+    #[test]
+    fn an_episode_nobody_has_named_is_tba_as_on_skyhook() {
+        let mut it = item();
+        it.episodes = vec![
+            crate::db::repo::child::blank_episode(1, 1),
+            crate::db::repo::child::blank_episode(1, 2),
+            crate::db::repo::child::blank_episode(1, 3),
+        ];
+        it.episodes[1].title = "  ".into();
+        it.episodes[2].title = "Pilot".into();
+
+        let titles: Vec<String> = from_item(&it, 81189, "en")
+            .episodes
+            .into_iter()
+            .map(|e| e.title)
+            .collect();
+        assert_eq!(titles, ["TBA", "TBA", "Pilot"]);
     }
 
     #[test]

@@ -254,8 +254,28 @@ fn build_clients_router(state: AppState) -> Router {
         )
         // A router's layers wrap its default fallback too: without a fallback
         // of its own, this door would answer an unknown path with a surface's
-        // refusal rather than "nothing here".
-        .fallback(|| async { StatusCode::NOT_FOUND })
+        // refusal rather than "nothing here". Asked of services.sonarr.tv, a
+        // path is Sonarr's, and relayed.
+        .fallback({
+            let relay = api::build_sonarr_services_relay(state.clone());
+            move |mut request: Request| {
+                let relay = relay.clone();
+                async move {
+                    if api::sonarr_services::is_services_host(request.headers(), request.uri()) {
+                        use tower::ServiceExt as _;
+                        request
+                            .extensions_mut()
+                            .insert(api::sonarr_services::Relayed);
+                        match relay.oneshot(request).await {
+                            Ok(response) => response,
+                            Err(never) => match never {},
+                        }
+                    } else {
+                        StatusCode::NOT_FOUND.into_response()
+                    }
+                }
+            }
+        })
         .with_state(state)
         .layer(axum::middleware::from_fn(
             move |request: Request, next: axum::middleware::Next| {

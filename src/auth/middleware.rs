@@ -78,7 +78,17 @@ async fn authorize(
         &state.config.server.trusted_proxies,
     );
 
-    let api = Api::of(surface, request.uri().path());
+    // What the clients' door relays for services.sonarr.tv is Sonarr's,
+    // whatever its path. A route matched under that name is what its path says.
+    let api = if request
+        .extensions()
+        .get::<crate::api::sonarr_services::Relayed>()
+        .is_some()
+    {
+        Api::Sonarr
+    } else {
+        Api::of(surface, request.uri().path())
+    };
 
     // What the access page counts as a call to an API: everything on Sonarr's,
     // Radarr's and the relay's surfaces, and what came with a key on the

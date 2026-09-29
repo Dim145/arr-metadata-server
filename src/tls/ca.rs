@@ -206,6 +206,97 @@ impl Keep {
             Self::Store { .. } => "the database".to_string(),
         }
     }
+
+    /// Replace the authority kept, when `asked` is its fingerprint, by one
+    /// made for `names`: what is kept afterwards. The one replaced is kept
+    /// beside it, named after its fingerprint, so it can be put back.
+    async fn replace_authority(&self, current: Pair, asked: &str, names: &[Name]) -> Result<Pair> {
+        let parsed = parse(&current.cert).context("the authority's certificate cannot be read")?;
+        let old = parsed.fingerprint;
+        let bare = |fingerprint: &str| {
+            fingerprint
+                .chars()
+                .filter(char::is_ascii_hexdigit)
+                .collect::<String>()
+                .to_ascii_uppercase()
+        };
+        if bare(asked) != bare(&old) {
+            tracing::warn!(
+                asked,
+                kept = %old,
+                "AMS_TLS_REPLACE_AUTHORITY does not name the authority kept, which is left as \
+                 it is; once the authority it named has been replaced, remove the setting"
+            );
+            return Ok(current);
+        }
+        // A key that is not its certificate's is a pair half-restored, or half
+        // replaced: nothing is replaced, and nothing kept aside is written over.
+        if !key_matches(&current.key, &parsed.spki).context("the authority's key cannot be read")? {
+            bail!(
+                "the authority's key in {} is not its certificate's; restore the pair kept \
+                 aside (ca.crt.replaced-… and ca.key.replaced-…) before replacing it",
+                self.describe()
+            );
+        }
+
+        let (key, cert) = create(names)?;
+        let made = Pair { cert, key };
+        let aside = format!("replaced-{}", &bare(&old)[..16]);
+        let kept = match self {
+            Self::Files(dir) => {
+                // Kept aside once: what is already there is the authority
+                // that was replaced first, and the way back.
+                let (key_aside, cert_aside) = (
+                    dir.join(format!("{CA_KEY}.{aside}")),
+                    dir.join(format!("{CA_CERT}.{aside}")),
+                );
+                if !key_aside.exists() && !cert_aside.exists() {
+                    write_private(&key_aside, current.key.as_bytes())?;
+                    write_atomic(&cert_aside, current.cert.as_bytes())?;
+                }
+                write_private(&dir.join(CA_KEY), made.key.as_bytes())?;
+                write_atomic(&dir.join(CA_CERT), made.cert.as_bytes())?;
+                made
+            }
+            Self::Store { db, .. } => {
+                use crate::db::repo::keystore;
+                let name = keystore::names::CA;
+                // Judged again on what is there now, and replaced only over
+                // exactly that: another instance may have replaced it since.
+                let stored = keystore::get(db, name)
+                    .await?
+                    .context("the authority is no longer in the database")?;
+                let there: Pair = serde_json::from_str(&stored)
+                    .with_context(|| format!("{name} in the database cannot be read"))?;
+                if bare(&parse(&there.cert)?.fingerprint) != bare(&old) {
+                    tracing::info!("another instance replaced the authority first; taking its one");
+                    return Ok(there);
+                }
+                keystore::put_if_absent(db, &format!("{name}.{aside}"), &stored).await?;
+                let text = serde_json::to_string(&made)?;
+                if keystore::replace_if(db, name, &stored, &text).await? {
+                    made
+                } else {
+                    tracing::info!("another instance replaced the authority first; taking its one");
+                    return read_pair_store(db, name)
+                        .await?
+                        .context("the authority is no longer in the database");
+                }
+            }
+        };
+
+        let new = parse(&kept.cert)?.fingerprint;
+        tracing::warn!(
+            replaced = %old,
+            by = %new,
+            names = ?names.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            kept_aside_as = %aside,
+            "replaced the authority: every client has to trust the new one (restart the \
+             containers that run trust-ca.sh, update AMS_CA_FINGERPRINT where it is set), and \
+             AMS_TLS_REPLACE_AUTHORITY can be removed"
+        );
+        Ok(kept)
+    }
 }
 
 /// How a certificate issued is written where it is kept.
@@ -317,7 +408,11 @@ impl Authority {
     /// The authority as kept, created for `names` when there is none yet —
     /// or, in the database, taken from the directory an earlier deployment
     /// kept it in, so the clients need not trust a new one.
-    pub async fn open(keep: Keep, names: &[Name]) -> Result<Self> {
+    ///
+    /// With `replace` naming its fingerprint, the authority kept is replaced
+    /// by one made for `names`, and kept beside it for a way back; naming any
+    /// other, it is left as it is.
+    pub async fn open(keep: Keep, names: &[Name], replace: Option<&str>) -> Result<Self> {
         if let Keep::Files(dir) = &keep {
             std::fs::create_dir_all(dir)
                 .with_context(|| format!("could not create {}", dir.display()))?;
@@ -355,6 +450,10 @@ impl Authority {
                 );
                 kept
             }
+        };
+        let pair = match replace {
+            Some(asked) => keep.replace_authority(pair, asked, names).await?,
+            None => pair,
         };
         let Pair {
             cert: cert_pem,
@@ -469,7 +568,7 @@ impl Authority {
             tracing::warn!(
                 %name,
                 "the authority may not certify this name: its constraints were set when it \
-                 was created; remove ca.crt and ca.key to create it anew, and trust it again"
+                 was created; AMS_TLS_REPLACE_AUTHORITY, set to its fingerprint, replaces it with one for every name, which every client then has to trust"
             );
         }
         if allowed.is_empty() {
@@ -847,7 +946,7 @@ mod tests {
     async fn the_authority_is_constrained_to_the_names_it_was_made_for() {
         let dir = scratch();
         let made_for = names(&["skyhook.sonarr.tv", "api.radarr.video", "ams.lan"]);
-        let authority = Authority::open(Keep::Files(dir.clone()), &made_for)
+        let authority = Authority::open(Keep::Files(dir.clone()), &made_for, None)
             .await
             .unwrap();
         assert_eq!(authority.subject, format!("CN={CA_NAME}"));
@@ -871,7 +970,7 @@ mod tests {
         assert!(issued.key_pem.contains("PRIVATE KEY"));
 
         // Opened again: the same authority, and the certificate it issued.
-        let again = Authority::open(Keep::Files(dir.clone()), &names(&["other.example"]))
+        let again = Authority::open(Keep::Files(dir.clone()), &names(&["other.example"]), None)
             .await
             .unwrap();
         assert_eq!(again.fingerprint, authority.fingerprint);
@@ -887,7 +986,7 @@ mod tests {
         // one issued is not its own and is not kept.
         std::fs::remove_file(dir.join(CA_CERT)).unwrap();
         std::fs::remove_file(dir.join(CA_KEY)).unwrap();
-        let renewed = Authority::open(Keep::Files(dir.clone()), &made_for)
+        let renewed = Authority::open(Keep::Files(dir.clone()), &made_for, None)
             .await
             .unwrap();
         assert_ne!(renewed.fingerprint, authority.fingerprint);
@@ -900,7 +999,7 @@ mod tests {
         let stray = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
         std::fs::write(dir.join(CA_KEY), stray.serialize_pem()).unwrap();
         assert!(
-            Authority::open(Keep::Files(dir.clone()), &made_for)
+            Authority::open(Keep::Files(dir.clone()), &made_for, None)
                 .await
                 .is_err()
         );
@@ -950,6 +1049,7 @@ mod tests {
         let authority = Authority::open(
             Keep::Files(dir.clone()),
             &names(&["skyhook.sonarr.tv", "192.168.1.7"]),
+            None,
         )
         .await
         .unwrap();
@@ -984,16 +1084,20 @@ mod tests {
 
         // From before: an authority in files.
         let dir = scratch();
-        let earlier = Authority::open(Keep::Files(dir.clone()), &made_for)
+        let earlier = Authority::open(Keep::Files(dir.clone()), &made_for, None)
             .await
             .unwrap();
         let keep = Keep::Store {
             db: db.clone(),
             from: dir.clone(),
         };
-        let a = Authority::open(keep.clone(), &made_for).await.unwrap();
+        let a = Authority::open(keep.clone(), &made_for, None)
+            .await
+            .unwrap();
         assert_eq!(a.fingerprint, earlier.fingerprint, "taken from the files");
-        let b = Authority::open(keep.clone(), &made_for).await.unwrap();
+        let b = Authority::open(keep.clone(), &made_for, None)
+            .await
+            .unwrap();
         assert_eq!(b.fingerprint, a.fingerprint);
         assert!(a.issued().await.unwrap().is_none());
 
@@ -1049,10 +1153,135 @@ mod tests {
                 from: scratch(),
             },
             &made_for,
+            None,
         )
         .await
         .unwrap();
         assert_ne!(fresh.fingerprint, a.fingerprint);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// An authority's constraints are set when it is made: a name added
+    /// later, `services.sonarr.tv` for one, is covered only by a new one.
+    #[tokio::test]
+    async fn an_authority_is_replaced_only_when_its_fingerprint_is_named() {
+        let dir = scratch();
+        let before = names(&["skyhook.sonarr.tv", "api.radarr.video"]);
+        let after = names(&[
+            "skyhook.sonarr.tv",
+            "api.radarr.video",
+            "services.sonarr.tv",
+        ]);
+        let old = Authority::open(Keep::Files(dir.clone()), &before, None)
+            .await
+            .unwrap();
+        let services = Name::parse("services.sonarr.tv").unwrap();
+        assert!(!old.may_certify(&services));
+
+        // Another fingerprint named: nothing is replaced.
+        let kept = Authority::open(Keep::Files(dir.clone()), &after, Some("AB:CD"))
+            .await
+            .unwrap();
+        assert_eq!(kept.fingerprint, old.fingerprint);
+
+        // Its own, however written: replaced, and the old one kept aside.
+        let written = old.fingerprint.replace(':', "").to_lowercase();
+        let new = Authority::open(Keep::Files(dir.clone()), &after, Some(&written))
+            .await
+            .unwrap();
+        assert_ne!(new.fingerprint, old.fingerprint);
+        assert!(new.may_certify(&services));
+        let aside: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok()?.file_name().into_string().ok())
+            .filter(|n| n.contains(".replaced-"))
+            .collect();
+        assert_eq!(aside.len(), 2, "{aside:?}");
+
+        // Left set on the next start, it names nothing any more.
+        let again = Authority::open(Keep::Files(dir.clone()), &after, Some(&written))
+            .await
+            .unwrap();
+        assert_eq!(again.fingerprint, new.fingerprint);
+
+        // The certificate issued by the old one is issued anew.
+        let issued = again.issue_unless_kept(&after).await.unwrap();
+        assert!(issued.info.covers(&after));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn a_pair_half_restored_is_never_replaced() {
+        // The key of one authority beside the certificate of another: what a
+        // replacement interrupted between its two writes, or a restore of one
+        // file of two, would leave. Nothing is replaced, nothing kept aside.
+        let (dir, other) = (scratch(), scratch());
+        let made_for = names(&["skyhook.sonarr.tv"]);
+        let one = Authority::open(Keep::Files(dir.clone()), &made_for, None)
+            .await
+            .unwrap();
+        Authority::open(Keep::Files(other.clone()), &made_for, None)
+            .await
+            .unwrap();
+        std::fs::copy(other.join(CA_KEY), dir.join(CA_KEY)).unwrap();
+
+        let refused =
+            Authority::open(Keep::Files(dir.clone()), &made_for, Some(&one.fingerprint)).await;
+
+        assert!(refused.is_err());
+        let aside = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok()?.file_name().into_string().ok())
+            .any(|n| n.contains(".replaced-"));
+        assert!(
+            !aside,
+            "nothing is kept aside from a pair that does not hold together"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&other).ok();
+    }
+
+    #[tokio::test]
+    async fn an_authority_in_the_database_is_replaced_as_well() {
+        let db = crate::db::Db::connect(&crate::config::Database {
+            url: "sqlite::memory:".into(),
+            max_connections: 1,
+            acquire_timeout: std::time::Duration::from_secs(5),
+        })
+        .await
+        .unwrap();
+        db.migrate().await.unwrap();
+        let keep = Keep::Store {
+            db: db.clone(),
+            from: scratch(),
+        };
+        let before = names(&["skyhook.sonarr.tv"]);
+        let after = names(&["skyhook.sonarr.tv", "services.sonarr.tv"]);
+        let old = Authority::open(keep.clone(), &before, None).await.unwrap();
+
+        let new = Authority::open(keep.clone(), &after, Some(&old.fingerprint))
+            .await
+            .unwrap();
+        assert_ne!(new.fingerprint, old.fingerprint);
+        assert!(new.may_certify(&Name::parse("services.sonarr.tv").unwrap()));
+
+        // Another instance starting with the same setting takes the new one.
+        let other = Authority::open(keep.clone(), &after, Some(&old.fingerprint))
+            .await
+            .unwrap();
+        assert_eq!(other.fingerprint, new.fingerprint);
+
+        // And the old one is still in the database, for a way back.
+        let name = format!(
+            "{}.replaced-{}",
+            crate::db::repo::keystore::names::CA,
+            &old.fingerprint.replace(':', "")[..16]
+        );
+        assert!(
+            crate::db::repo::keystore::get(&db, &name)
+                .await
+                .unwrap()
+                .is_some()
+        );
     }
 }

@@ -36,10 +36,15 @@ use crate::{
 
 /// The names the clients have compiled in, and so the names every clients'
 /// certificate carries.
-pub const IMPERSONATED: [&str; 3] = [
+///
+/// `services.sonarr.tv` came later, for Sonarr's scene-mapping list: an
+/// authority made before it does not cover it, and is left serving the
+/// others until it is replaced (`AMS_TLS_REPLACE_AUTHORITY`).
+pub const IMPERSONATED: [&str; 4] = [
     "skyhook.sonarr.tv",
     "api.radarr.video",
     "api.themoviedb.org",
+    "services.sonarr.tv",
 ];
 
 /// The script that makes a container trust the authority, served so a
@@ -137,7 +142,8 @@ impl Tls {
                         from: cfg.dir.clone(),
                     },
                 };
-                let authority = ca::Authority::open(keep, &names).await?;
+                let authority =
+                    ca::Authority::open(keep, &names, cfg.replace_authority.as_deref()).await?;
                 let wanted = authority.permitted(&names).0;
                 let issued = match authority.issued().await? {
                     Some(issued) if issued.info.covers(&wanted) && !issued.info.due() => issued,

@@ -444,10 +444,14 @@ fn same_id(a: Option<i64>, b: Option<i64>) -> bool {
 /// TMDB's, or from Fankai's for a Fan-Kai. Returns `None` for a work the client
 /// has no way to address.
 pub fn client_id(item: &MediaItem) -> Option<i64> {
-    item.external_ids
-        .tvdb
-        .or_else(|| item.external_ids.tmdb.and_then(ids::to_synthetic))
-        .or_else(|| item.external_ids.fankai.and_then(ids::to_fankai))
+    let ids = &item.external_ids;
+    client_id_of(ids.tvdb, ids.tmdb, ids.fankai)
+}
+
+/// [`client_id`], from the three ids it is chosen among.
+pub fn client_id_of(tvdb: Option<i64>, tmdb: Option<i64>, fankai: Option<i64>) -> Option<i64> {
+    tvdb.or_else(|| tmdb.and_then(ids::to_synthetic))
+        .or_else(|| fankai.and_then(ids::to_fankai))
 }
 
 #[cfg(test)]

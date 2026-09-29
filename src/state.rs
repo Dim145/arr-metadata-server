@@ -349,6 +349,14 @@ impl AppState {
                 ("tvdb.searchFallback", cfg.tvdb.enabled.to_string()),
                 ("skyhook.fallback", cfg.skyhook.fallback.to_string()),
                 ("skyhook.enrich", cfg.skyhook.enrich.to_string()),
+                (
+                    "sonarr.sceneMappings",
+                    cfg.sonarr_services.scene_mappings.to_string(),
+                ),
+                (
+                    "sonarr.sceneMappingSearch",
+                    cfg.sonarr_services.scene_mapping_search.to_string(),
+                ),
                 ("radarr.fallback", cfg.radarr_metadata.fallback.to_string()),
                 ("radarr.enrich", cfg.radarr_metadata.enrich.to_string()),
                 ("tvmaze.enabled", cfg.tvmaze.enabled.to_string()),

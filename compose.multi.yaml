@@ -115,6 +115,10 @@ services:
         target: /usr/local/etc/haproxy/haproxy.cfg
     networks:
       default:
+        # services.sonarr.tv, for Sonarr's alternate titles, is left out: the
+        # instances resolve these aliases too, and would ask the door for the
+        # real list. Add it with AMS_SONARR_SERVICES_UPSTREAM set to the real
+        # service's address on each instance (docs/integration.md).
         aliases: [skyhook.sonarr.tv, api.radarr.video, api.themoviedb.org]
     depends_on:
       - metadata-a

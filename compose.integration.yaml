@@ -91,6 +91,10 @@ services:
     # Sonarr's metadata URL is compiled in; this is what redirects it.
     extra_hosts:
       - "skyhook.sonarr.tv:172.31.0.10"
+      # Sonarr's alternate titles from this catalogue too: needs an authority
+      # made for this name — a new stack's is; an older one is replaced first
+      # (docs/integration.md, "Upgrading a server that is already running").
+      # - "services.sonarr.tv:172.31.0.10"
 
     ports:
       - "${SONARR_PORT:-8989}:8989"

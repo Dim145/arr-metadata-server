@@ -84,6 +84,7 @@ pub struct Config {
     pub security: Security,
     pub tmdb: Tmdb,
     pub skyhook: Skyhook,
+    pub sonarr_services: SonarrServices,
     pub radarr_metadata: RadarrMetadata,
     pub fanart: Fanart,
     pub tvdb: Tvdb,
@@ -154,6 +155,10 @@ pub struct ClientsDoor {
     pub names: Vec<String>,
     /// Where the authority and the certificate it issues are kept.
     pub dir: PathBuf,
+    /// The fingerprint of an authority to replace with one made for the names
+    /// asked, once: an authority's name constraints are set when it is made,
+    /// so a name added later is covered only by a new one.
+    pub replace_authority: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -229,6 +234,22 @@ pub struct Skyhook {
     /// could answer. Costs one call per refresh and fills gaps TMDB leaves —
     /// air time, TVMaze and AniList ids, and episode ordering hints.
     pub enrich: bool,
+}
+
+/// `services.sonarr.tv`, which this server answers for when it is resolved
+/// here: its scene-mapping list, with this catalogue's titles added, and
+/// everything else passed on.
+#[derive(Clone, Debug)]
+pub struct SonarrServices {
+    pub upstream: String,
+    /// TheXEM, whose names Sonarr downloads beside that list: read so that a
+    /// title added is never one of them for another series.
+    pub xem_upstream: String,
+    /// Whether the list is given this catalogue's titles; off, it is passed
+    /// on as it is.
+    pub scene_mappings: bool,
+    /// Whether a series' title in the caller's language is searched with too.
+    pub scene_mapping_search: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -581,6 +602,19 @@ impl Config {
                 fallback: flag(&["AMS_SKYHOOK_FALLBACK"], true)?,
                 enrich: flag(&["AMS_SKYHOOK_ENRICH"], true)?,
             },
+            sonarr_services: SonarrServices {
+                upstream: var_or(
+                    &["AMS_SONARR_SERVICES_UPSTREAM"],
+                    "https://services.sonarr.tv",
+                )
+                .trim_end_matches('/')
+                .to_string(),
+                xem_upstream: var_or(&["AMS_THEXEM_UPSTREAM"], "https://thexem.info")
+                    .trim_end_matches('/')
+                    .to_string(),
+                scene_mappings: flag(&["AMS_SONARR_SCENE_MAPPINGS"], false)?,
+                scene_mapping_search: flag(&["AMS_SONARR_SCENE_MAPPING_SEARCH"], true)?,
+            },
             radarr_metadata: RadarrMetadata {
                 upstream: var_or(
                     &["AMS_RADARR_METADATA_UPSTREAM"],
@@ -755,6 +789,7 @@ impl Config {
                     },
                     names: list(&["AMS_CLIENTS_NAMES"]),
                     dir: PathBuf::from(var_or(&["AMS_TLS_DIR"], "data/tls")),
+                    replace_authority: opt(&["AMS_TLS_REPLACE_AUTHORITY"]),
                 }),
                 None => None,
             },
@@ -813,7 +848,9 @@ impl Api {
     /// Which API a request to `surface` at `path` is a call to.
     pub fn of(surface: Surface, path: &str) -> Api {
         match surface {
-            Surface::Arr if path.starts_with("/v1/tvdb") => Api::Sonarr,
+            Surface::Arr if path.starts_with("/v1/tvdb") || path == "/v1/scenemapping" => {
+                Api::Sonarr
+            }
             Surface::Arr => Api::Radarr,
             Surface::Tmdb => Api::Tmdb,
             Surface::Native => Api::Native,

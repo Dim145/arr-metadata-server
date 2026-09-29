@@ -127,6 +127,16 @@ pub const REGISTRY: &[Definition] = &[
         scopes: SERVER_ONLY,
     },
     Definition {
+        key: "sonarr.sceneMappings",
+        kind: Kind::Bool,
+        scopes: SERVER_ONLY,
+    },
+    Definition {
+        key: "sonarr.sceneMappingSearch",
+        kind: Kind::Bool,
+        scopes: SERVER_ONLY,
+    },
+    Definition {
         key: "radarr.fallback",
         kind: Kind::Bool,
         scopes: SERVER_ONLY,

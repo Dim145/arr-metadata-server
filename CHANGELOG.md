@@ -7,6 +7,36 @@ may change what the API or the configuration means, and says so here.
 
 ## [Unreleased]
 
+### Added
+
+- Sonarr's alternate titles, from this catalogue. Sonarr never reads the
+  alternative titles of a Skyhook answer: it recognises releases only by a
+  series' own title and the lists it downloads from `services.sonarr.tv` and
+  TheXEM. With `services.sonarr.tv` resolved to this server and
+  `sonarr.sceneMappings` on (`AMS_SONARR_SCENE_MAPPINGS`, off by default), the
+  real list reaches Sonarr with a mapping added for each title of this
+  catalogue in the language of the answers, in English or romanised from the
+  work's own language, written in the Latin alphabet, that Sonarr does not
+  know yet and that no other series answers to — so a release named in French
+  or in romaji is recognised. Only the series' title in the language of the answers is also
+  searched with (`sonarr.sceneMappingSearch`); the others serve to recognise
+  releases. Everything else Sonarr asks of that host is relayed as it is, and
+  when the real list cannot be had Sonarr keeps the one it holds.
+- `AMS_TLS_REPLACE_AUTHORITY`: set to the authority's fingerprint, it replaces
+  the authority once with one made for every name, the old one kept aside, in
+  the files as in the database. It is how a server set up before
+  `services.sonarr.tv` covers it; every client then trusts the new authority.
+  See "Upgrading a server that is already running" in `docs/integration.md`.
+
+### Fixed
+
+- An episode nobody has named yet reaches Sonarr as `TBA`, as Skyhook sends
+  it. An empty title made Sonarr list the episode as a row with nothing in it
+  to click; Sonarr rewrites the titles it holds at its next refresh.
+- A series whose first episode is still to come reaches Sonarr as upcoming,
+  as on Skyhook, where TMDB's "In Production" had it continuing. A work shows
+  it from its next refresh.
+
 ## [0.3.2] — 2026-09-29
 
 ### Fixed

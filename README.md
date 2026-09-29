@@ -37,6 +37,14 @@ Sonarr's metadata service — and does what both did, from one catalogue.
   `?language=`. Translations are fetched the first time a language is asked for
   and kept — from TMDB, then TheTVDB for the many languages TMDB does not carry.
   A locked field stays locked in every language.
+- **Sonarr's alternate titles.** Sonarr recognises releases only by the
+  titles of the list it downloads from `services.sonarr.tv`, never by those of
+  a Skyhook answer. Resolve that name here too and the list reaches it with
+  this catalogue's titles added — in the language of the answers, in English
+  and romanised from the work's own, the ones Sonarr can match without
+  mistaking one series for another — so a release named in French or in
+  romaji is recognised (`sonarr.sceneMappings`). Everything else Sonarr asks
+  of that host is relayed to the real service.
 - **Curated lists.** Selections composed by hand or by a filter, shown on
   the site and served to Sonarr and Radarr as the custom lists their import
   lists read.
@@ -869,7 +877,8 @@ here — see [`docs/integration.md`](docs/integration.md) and the runnable
 
 Sonarr, Radarr and the TMDB clients call `https://skyhook.sonarr.tv`,
 `https://api.radarr.video` and `https://api.themoviedb.org` — compiled in, on
-443, and nothing else. Resolve those names to this server and it answers them
+443, and nothing else; Sonarr also calls `https://services.sonarr.tv`, for its
+alternate titles among other things. Resolve those names to this server and it answers them
 on a **second door**, `AMS_CLIENTS_BIND=0.0.0.0:443`: those surfaces alone,
 always in TLS, with a certificate the server issues itself from an authority it
 makes on first start, constrained to those names, and renews before it runs
@@ -877,7 +886,9 @@ out. The interface's own door, `AMS_BIND_ADDRESS`, is untouched by it — plain,
 in TLS from your files, or behind your reverse proxy, as you decide. Each
 client trusts the authority once (`/ca.crt`, and `/trust-ca.sh` for a
 linuxserver.io container); the administration's **Opening & APIs** page shows
-the door, its certificate and the files. [`docs/integration.md`](docs/integration.md)
+the door, its certificate and the files. An authority made before a name was
+added cannot vouch for it: `AMS_TLS_REPLACE_AUTHORITY`, set to its fingerprint,
+replaces it once with one for every name. [`docs/integration.md`](docs/integration.md)
 walks through it, and [`scripts/e2e-sonarr.sh`](scripts/e2e-sonarr.sh) proves
 it against a real Sonarr.
 

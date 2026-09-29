@@ -34,7 +34,8 @@ pub fn tv_to_item(tv: &models::Tv, seasons: &[models::Season]) -> MediaItem {
     item.original_title = non_empty(tv.original_name.as_deref());
     item.overview = non_empty(tv.overview.as_deref());
     item.homepage = non_empty(tv.homepage.as_deref());
-    item.status = Some(series_status(tv.status.as_deref()).to_string());
+    item.status =
+        Some(series_status(tv.status.as_deref(), tv.first_air_date.as_deref()).to_string());
     item.original_language = tv.original_language.as_deref().map(iso_639_1_to_3);
     item.original_country = tv.origin_country.first().map(|c| iso_3166_2_to_3(c));
     item.first_aired = non_empty(tv.first_air_date.as_deref());
@@ -445,10 +446,18 @@ fn is_past(date: &str) -> bool {
 }
 
 /// TMDB's series statuses mapped to Sonarr's vocabulary.
-fn series_status(status: Option<&str>) -> &'static str {
+///
+/// A series whose first episode is still to come is upcoming, whatever else
+/// TMDB says of it: it calls one being shot "In Production", where TheTVDB —
+/// and so Skyhook, and Sonarr — call it upcoming.
+fn series_status(status: Option<&str>, first_aired: Option<&str>) -> &'static str {
+    let first_aired = first_aired.map(str::trim).filter(|d| !d.is_empty());
+    let yet_to_air = first_aired.is_some_and(|d| !is_past(d));
     match status {
         Some("Ended") | Some("Canceled") | Some("Cancelled") => "ended",
         Some("Planned") | Some("Pilot") => "upcoming",
+        Some("In Production") if first_aired.is_none() || yet_to_air => "upcoming",
+        _ if yet_to_air => "upcoming",
         // "Returning Series", "In Production" and anything unrecognised. Sonarr
         // treats an unknown status as still airing, which is the safe default:
         // it keeps searching for new episodes.
@@ -841,13 +850,31 @@ mod tests {
 
     #[test]
     fn series_statuses_map_to_sonarrs_vocabulary() {
-        assert_eq!(series_status(Some("Returning Series")), "continuing");
-        assert_eq!(series_status(Some("Ended")), "ended");
-        assert_eq!(series_status(Some("Canceled")), "ended");
-        assert_eq!(series_status(Some("Planned")), "upcoming");
+        let aired = Some("2008-01-20");
+        assert_eq!(series_status(Some("Returning Series"), aired), "continuing");
+        assert_eq!(series_status(Some("Ended"), aired), "ended");
+        assert_eq!(series_status(Some("Canceled"), aired), "ended");
+        assert_eq!(series_status(Some("Planned"), None), "upcoming");
         // Unknown means "keep looking for episodes", which is the safe default.
-        assert_eq!(series_status(Some("Something New")), "continuing");
-        assert_eq!(series_status(None), "continuing");
+        assert_eq!(series_status(Some("Something New"), aired), "continuing");
+        assert_eq!(series_status(None, None), "continuing");
+        assert_eq!(series_status(Some("Returning Series"), None), "continuing");
+    }
+
+    #[test]
+    fn a_series_yet_to_air_is_upcoming_as_on_skyhook() {
+        // HBO's Harry Potter, a year before its first episode: TMDB says
+        // "In Production", TheTVDB and Skyhook say upcoming.
+        let later = Some("2999-12-25");
+        assert_eq!(series_status(Some("In Production"), later), "upcoming");
+        assert_eq!(series_status(Some("In Production"), None), "upcoming");
+        assert_eq!(series_status(Some("Returning Series"), later), "upcoming");
+        // Shooting a new season of one that has aired: still on.
+        assert_eq!(
+            series_status(Some("In Production"), Some("2019-06-16")),
+            "continuing"
+        );
+        assert_eq!(series_status(Some("Ended"), later), "ended");
     }
 
     #[test]

@@ -6,6 +6,7 @@ metadata source. The URLs are compiled into the applications:
 | Client | Hostname it calls | Where that is set |
 |---|---|---|
 | Sonarr | `skyhook.sonarr.tv` | `NzbDrone.Common/Cloud/SonarrCloudRequestBuilder.cs` |
+| Sonarr, for its alternate titles (optional) | `services.sonarr.tv` | the same file |
 | Radarr | `api.radarr.video` | `NzbDrone.Common/Cloud/RadarrCloudRequestBuilder.cs` |
 | Jellyseerr / Overseerr | `api.themoviedb.org` | the TMDB SDK it bundles |
 
@@ -36,7 +37,7 @@ On first start the server creates, under `AMS_TLS_DIR` (`data/tls`; `/data/tls`
 in the image):
 
 - `ca.crt` / `ca.key` — its authority, what the clients must trust;
-- `server.crt` / `server.key` — the certificate the door shows, for all three
+- `server.crt` / `server.key` — the certificate the door shows, for all four
   hostnames (and any you add with `AMS_CLIENTS_NAMES=ams.lan,192.168.1.7`),
   good for a year and issued anew when fewer than thirty days remain — loaded
   without a restart, by the daily `tls.renew` task.
@@ -45,8 +46,14 @@ The authority is **constrained to those names** (RFC 5280 name constraints): a
 machine that trusts it trusts this server for `skyhook.sonarr.tv` and its like,
 and for nothing else on the web. `ca.key` is still a key your stack trusts:
 keep it off shared storage. Adding names later that the constraints do not
-cover leaves them out of the certificate, with a warning — remove `ca.crt` and
-`ca.key` to make the authority anew, and trust it again everywhere.
+cover leaves them out of the certificate, with a warning; the Opening & APIs
+page lists them. An authority made before this server answered for
+`services.sonarr.tv` is one such case. To cover them, set
+`AMS_TLS_REPLACE_AUTHORITY` to the authority's fingerprint and restart: a new
+authority is made for every name, once, the old one kept beside it
+(`ca.crt.replaced-…` in the directory, or in the database with several
+instances), and every client has to trust the new one — see
+[Upgrading a server that is already running](#upgrading-a-server-that-is-already-running).
 
 Bringing your own certificate instead — a wildcard, an internal CA of yours —
 is `AMS_CLIENTS_TLS_CERT` / `AMS_CLIENTS_TLS_KEY`; no authority is made then.
@@ -90,6 +97,8 @@ services:
   sonarr:
     extra_hosts:
       - "skyhook.sonarr.tv:172.31.0.10"
+      # Optional: Sonarr's alternate titles from this catalogue, below.
+      - "services.sonarr.tv:172.31.0.10"
 ```
 
 A complete, runnable example is in
@@ -194,6 +203,108 @@ Check before assuming: look for a TMDB API key field in the client's settings.
 
 ---
 
+## Sonarr's alternate titles
+
+Sonarr recognises a release only by the series' own title and the titles of
+two lists it downloads every three hours: its own, from
+`services.sonarr.tv/v1/scenemapping`, and TheXEM's. It never reads the
+alternative titles of a Skyhook answer — neither the real one's nor this
+server's — so a release named in French, or in a romaji spelling nobody put
+in those lists, is an *unknown series* however many titles this catalogue
+holds.
+
+Resolve `services.sonarr.tv` to this server as well, and turn on
+`sonarr.sceneMappings` (**Settings › Other metadata services**, or
+`AMS_SONARR_SCENE_MAPPINGS=true` as its starting value). Sonarr's list is then
+handed on whole, with a mapping added for each title of this catalogue that is:
+
+- in a language releases of that series are named in: the language of the
+  answers, English, or the work's own original language, romanised. The other
+  translations — thirty of them for a popular show — are names that releases of
+  series outside this catalogue go by too, which no list here can tell, and an
+  alternative title its source gave no language to is left out for the same
+  reason;
+- written in the Latin alphabet, as release names are;
+- not already known to Sonarr for that series, compared the way Sonarr
+  compares titles (its `CleanSeriesTitle`, ported and tested against its own
+  cases), nor one of those titles followed by more words — a season, a
+  special, a spin-off like *Breaking Bad: Original Minisodes*, whose releases
+  are not the series' episodes;
+- claimed by no other series in Sonarr's list, in TheXEM's names, or in this
+  catalogue. A title two series answer to makes Sonarr throw for every release
+  by that name, and in an interactive search that one failure empties the whole
+  list, so such a title is left out rather than risked. A work hidden from the
+  catalogue gains no title, and keeps its own from every other series.
+
+Sonarr also searches indexers that cannot be searched by id with every title of
+its list written in Latin-1, one query each. Of the titles added, only the
+series' title in the language of the answers is searched with
+(`sonarr.sceneMappingSearch`, on by default); every other one serves to
+recognise releases and is searched under the series' own title, which Sonarr
+searches anyway. A popular show's thirty translations would otherwise be thirty
+queries an episode.
+
+Everything else Sonarr asks of that host — its updates, the list of daily
+series, the server's notices, the clock and proxy checks, the MyAnimeList
+import's sign-in — is relayed to the real service with the headers that
+describe the request, never a key, a cookie or a proxy's forwarding headers,
+and its answer handed back as it came, a redirect included. A request that
+carries this server's own mark has come round a loop and is refused with a
+`508`: set `AMS_SONARR_SERVICES_UPSTREAM` to the real service's address when
+the instances themselves resolve the name here — a resolver-level redirect, or
+network aliases the instances share, as in `compose.multi.yaml`. With the setting off, the list is relayed as it is too. When the real
+list cannot be had, the answer is a `502` and nothing else: Sonarr keeps the
+list it holds, where this catalogue's titles alone would have replaced it.
+
+Sonarr shows the titles on the series' page, with `arr-metadata-server` beside
+each one it got from here; **System › Tasks › Update Scene Mapping** takes them
+at once, and `/api/v3/parse?title=…` says which series a release name goes to.
+
+### Upgrading a server that is already running
+
+The certificate of a server set up before this name existed does not cover it,
+and cannot: the authority's constraints were fixed when it was made. Nothing
+changes until you choose to, in this order:
+
+1. Deploy the new version. Nothing else moves: `services.sonarr.tv` is listed
+   under **Opening & APIs** as a name the certificate does not carry, and the
+   three others are served as before.
+2. Copy the authority's SHA-256 fingerprint from that page, set
+   `AMS_TLS_REPLACE_AUTHORITY` to it and restart (with several instances,
+   restart them all: the first replaces it, the others take the new one). The
+   log says `replaced the authority`; the old one is kept aside.
+3. Make every client trust the new authority. A container that runs
+   `trust-ca.sh` with `AMS_CA_URL` takes it when it restarts — update
+   `AMS_CA_FINGERPRINT` first where it is set. A mounted `ca.crt`, as for
+   Jellyseerr, is downloaded again; a Windows store imports it again. Until
+   then, those clients refuse the certificate: do this step right after the
+   previous one.
+4. Remove `AMS_TLS_REPLACE_AUTHORITY`. Left set, it does nothing — it names an
+   authority that is no longer there — but it would replace this one too if the
+   old pair were ever restored.
+5. Add `services.sonarr.tv` to Sonarr's `extra_hosts` (or to the resolver) and
+   recreate the container, then turn `sonarr.sceneMappings` on and run
+   **Update Scene Mapping** in Sonarr.
+
+To go back, turn the setting off: the list is relayed untouched, and Sonarr
+replaces the titles it got from here at its next update. Removing the redirect
+does the same. The old authority is kept aside, named after the first sixteen
+digits of its fingerprint, and put back with the server stopped:
+
+- alone, `ca.crt.replaced-…` and `ca.key.replaced-…` in `AMS_TLS_DIR`, both
+  copied back over `ca.crt` and `ca.key`;
+- with several instances, `tls.ca.replaced-…` in the `keystore` table, its
+  value copied over `tls.ca`'s:
+  `UPDATE keystore SET value = (SELECT value FROM keystore WHERE name = 'tls.ca.replaced-…') WHERE name = 'tls.ca'`.
+
+Every client then trusts the old authority again, as it did before step 3.
+
+Episodes nobody has named yet reach Sonarr as `TBA`, as Skyhook sends them,
+rather than as an empty title Sonarr lists as a row with nothing to click;
+Sonarr rewrites the titles it holds at its next refresh of the series.
+
+---
+
 ## Verifying it worked
 
 From inside a client container:
@@ -207,6 +318,9 @@ curl -s https://api.radarr.video/v1/movie/329865 | head -c 200
 
 # A TMDB client
 curl -s "https://api.themoviedb.org/3/tv/1396?api_key=<your ams_ key>" | head -c 200
+
+# Sonarr's alternate titles: the added ones say where they come from
+curl -s https://services.sonarr.tv/v1/scenemapping | grep -c arr-metadata-server
 ```
 
 A TLS error means the CA is not trusted yet — check the container logged
@@ -239,6 +353,14 @@ series, and fetch its episodes and its poster from here. It needs Docker,
 python3, a built binary and a free port 443 — which on Linux a user binds only
 after `setcap cap_net_bind_service=+ep` on the binary.
 
+[`scripts/e2e-sonarr-parity.sh`](../scripts/e2e-sonarr-parity.sh) compares:
+two Sonarrs are given the same real series, one reaching this server for
+`skyhook.sonarr.tv` and `services.sonarr.tv`, the other the real services, and
+what they hold is set side by side — the series, every episode, `TBA` included,
+the alternate titles, and the series each takes a set of release names for.
+A difference is either an addition of this server's, or a failure. It reaches
+the internet, and wants `TMDB_API_KEY` (and `TVDB_API_KEY`) in the environment.
+
 ---
 
 ## If you redirect at the resolver
@@ -255,6 +377,7 @@ the real services by address:
 ```bash
 AMS_SKYHOOK_UPSTREAM=https://<real-skyhook-address>
 AMS_RADARR_METADATA_UPSTREAM=https://<real-api.radarr.video-address>
+AMS_SONARR_SERVICES_UPSTREAM=https://<real-services.sonarr.tv-address>
 ```
 
 or turn enrichment off:
