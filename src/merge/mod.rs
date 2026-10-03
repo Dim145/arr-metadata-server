@@ -17,7 +17,8 @@
 //!   sounds right and is not: providers disagree about where a season ends, so
 //!   unioning One Piece's 1179 TVDB episodes with TMDB's 1181 produced 2352,
 //!   most of them phantoms Sonarr would then hunt for files of. One list, many
-//!   opinions about each entry.
+//!   opinions about each entry — about a special, only from a provider that
+//!   dates it as the list does, since specials are where numberings part most.
 
 pub mod provenance;
 pub mod rules;
@@ -135,6 +136,13 @@ pub fn combine(mut contributions: Vec<Contribution>, priority: &[String]) -> Opt
         None => (Vec::new(), Vec::new()),
     };
 
+    // Skyhook republishes TheTVDB, so either one's specials are numbered as
+    // the other's are. Anyone else's are lined up by date first; see
+    // `align_specials`.
+    let tvdb_spine =
+        spine.is_some_and(|index| TVDB_NUMBERED.contains(&contributions[index].provider.as_str()));
+    let numbered_alike = |provider: &str| tvdb_spine && TVDB_NUMBERED.contains(&provider);
+
     // TheTVDB's names for the series, before they are folded away: what they
     // add to a name the work goes by is how Sonarr tells it from a homonym.
     let tvdb_names: Vec<String> = contributions
@@ -143,17 +151,24 @@ pub fn combine(mut contributions: Vec<Contribution>, priority: &[String]) -> Opt
         .map(|c| c.item.title.clone())
         .collect();
 
-    let mut merged = contributions.remove(0).item;
+    let first = contributions.remove(0);
+    let mut merged = first.item;
 
     // The most trusted provider loses the numbering to the spine, but not what
     // it knows about each episode: TMDB carries overviews and stills that TVDB
     // rarely has. Its own lists fold back in as a field source like any other.
     let displaced_seasons = std::mem::replace(&mut merged.seasons, seasons);
-    let displaced_episodes = std::mem::replace(&mut merged.episodes, episodes);
+    let mut displaced_episodes = std::mem::replace(&mut merged.episodes, episodes);
+    if !numbered_alike(&first.provider) {
+        align_specials(&merged.episodes, &mut displaced_episodes);
+    }
     merge_seasons(&mut merged.seasons, displaced_seasons);
     merge_episodes(&mut merged.episodes, displaced_episodes);
 
-    for contribution in contributions {
+    for mut contribution in contributions {
+        if !numbered_alike(&contribution.provider) {
+            align_specials(&merged.episodes, &mut contribution.item.episodes);
+        }
         fold(&mut merged, contribution.item);
     }
 
@@ -494,6 +509,77 @@ fn merge_seasons(into: &mut [Season], other: Vec<Season>) {
         existing.tvdb_id = existing.tvdb_id.or(season.tvdb_id);
         union_images(&mut existing.images, season.images);
     }
+}
+
+/// Keep only those of another provider's specials that provably are one of the
+/// spine's, each under the spine's number for it.
+///
+/// Season 0 is where numberings part. TheTVDB and TMDB file films, OVAs and
+/// unaired episodes in orders of their own, and a special one of them lacks
+/// moves every number after it. *Rurouni Kenshin*'s first special is a 1997
+/// film on TheTVDB; on TMDB it is the series' last episode, which TheTVDB
+/// counts in season 3. Paired by number, the film took that episode's
+/// synopsis, its still and its TMDB id. The TMDB id kept here is also what
+/// places TMDB's text in another language (`service::language`). The regular
+/// seasons are left to their numbers: there the providers number alike, and
+/// their wording is wanted.
+///
+/// What both sides can be checked against is the day a special came out:
+///
+/// * the only special either side has on a day is the same one, whatever
+///   number each gives it;
+/// * on a day with several, they pair by number, and only when both sides
+///   number that day's specials alike — a shift by one would otherwise hand
+///   each part its neighbour's text, as on TVmaze's double bills
+///   (`apply_broadcast_times`);
+/// * a special with no date, or on a day the spine has none, is nobody's: it
+///   gives nothing, and is not added under a number that is another special's.
+fn align_specials(spine: &[Episode], other: &mut Vec<Episode>) {
+    use std::collections::HashMap;
+
+    fn day(episode: &Episode) -> Option<&str> {
+        episode
+            .air_date
+            .as_deref()
+            .map(str::trim)
+            .filter(|d| !d.is_empty())
+    }
+
+    fn by_day(episodes: &[Episode]) -> HashMap<String, Vec<i32>> {
+        let mut days: HashMap<String, Vec<i32>> = HashMap::new();
+        for e in episodes.iter().filter(|e| e.season_number == 0) {
+            if let Some(date) = day(e) {
+                days.entry(date.to_string())
+                    .or_default()
+                    .push(e.episode_number);
+            }
+        }
+        for numbers in days.values_mut() {
+            numbers.sort_unstable();
+        }
+        days
+    }
+
+    let ours = by_day(spine);
+    let theirs = by_day(other);
+
+    other.retain_mut(|e| {
+        if e.season_number != 0 {
+            return true;
+        }
+        let Some(date) = day(e) else {
+            return false;
+        };
+        let (Some(ours), Some(theirs)) = (ours.get(date), theirs.get(date)) else {
+            return false;
+        };
+        e.episode_number = match (ours.as_slice(), theirs.as_slice()) {
+            ([only], [_]) => *only,
+            _ if ours == theirs => e.episode_number,
+            _ => return false,
+        };
+        true
+    });
 }
 
 /// Merge episodes field by field, keyed by their numbering.
@@ -1296,6 +1382,224 @@ mod tests {
         let merged = combine(vec![tvdb, tvmaze], &priority()).unwrap();
 
         assert_eq!(merged.episodes.len(), 1);
+    }
+
+    /// A special as TheTVDB lists one: a number, the day it came out, a name.
+    fn special(number: i32, date: Option<&str>, title: &str) -> Episode {
+        let mut e = episode(0, number);
+        e.air_date = date.map(String::from);
+        e.title = title.into();
+        e
+    }
+
+    /// One as TMDB lists it, with the synopsis, still and id TheTVDB lacks.
+    fn tmdb_special(number: i32, date: Option<&str>, title: &str, tmdb_id: i64) -> Episode {
+        let mut e = special(number, date, title);
+        e.overview = Some(format!("TMDB's synopsis of {title}."));
+        e.image = Some(format!("https://tmdb/{tmdb_id}.jpg"));
+        e.tmdb_id = Some(tmdb_id);
+        e.runtime = Some(45);
+        e
+    }
+
+    #[test]
+    fn a_special_takes_nothing_from_one_numbered_alike_that_came_out_another_day() {
+        // Rurouni Kenshin: TheTVDB's first special is the 1997 film; TMDB's is
+        // the series' last episode, which TheTVDB counts in season 3. Paired by
+        // number, the film took that episode's synopsis, still and TMDB id —
+        // and its runtime, rating, a date it lacked, a name it lacked.
+        let mut tvdb = base("tvdb", "Rurouni Kenshin");
+        tvdb.item.episodes = vec![special(
+            1,
+            Some("1997-12-20"),
+            "Requiem for the Ishin Patriots",
+        )];
+
+        let mut tmdb = base("tmdb", "Rurouni Kenshin");
+        tmdb.item.episodes = vec![tmdb_special(
+            1,
+            Some("1998-12-02"),
+            "End of Wanderings",
+            1506818,
+        )];
+
+        let merged = combine(vec![tmdb, tvdb], &priority()).unwrap();
+
+        assert_eq!(merged.episodes.len(), 1, "TMDB's special is not added");
+        let film = &merged.episodes[0];
+        assert_eq!(film.title, "Requiem for the Ishin Patriots");
+        assert_eq!(film.air_date.as_deref(), Some("1997-12-20"));
+        assert_eq!(film.overview, None);
+        assert_eq!(film.image, None);
+        assert_eq!(film.tmdb_id, None);
+        assert_eq!(film.runtime, None);
+    }
+
+    #[test]
+    fn a_special_left_unnamed_is_not_given_another_specials_name() {
+        // A language TheTVDB has no name in for a special leaves it blank; the
+        // name TMDB gives its own special of that number belongs to another.
+        // Unnamed, Sonarr shows TBA and takes the name once there is one.
+        let mut tvdb = base("tvdb", "Kenshin le vagabond");
+        tvdb.item.episodes = vec![special(1, Some("1997-12-20"), "")];
+
+        let mut tmdb = base("tmdb", "Kenshin le vagabond");
+        tmdb.item.episodes = vec![tmdb_special(
+            1,
+            Some("1998-12-02"),
+            "Un autre épisode spécial",
+            1506818,
+        )];
+
+        let merged = combine(vec![tmdb, tvdb], &priority()).unwrap();
+        assert_eq!(merged.episodes[0].title, "");
+    }
+
+    #[test]
+    fn a_special_is_filled_from_the_one_another_provider_has_on_the_same_day() {
+        // A special TMDB lacks puts its specials one behind TheTVDB's from
+        // there: its first is TheTVDB's second. The only special either side
+        // has on a day is the same one, whatever number each gives it.
+        let mut tvdb = base("tvdb", "T");
+        tvdb.item.episodes = vec![
+            special(1, Some("1997-12-20"), "The film"),
+            special(2, Some("1999-02-20"), "Act 1"),
+        ];
+
+        let mut tmdb = base("tmdb", "T");
+        tmdb.item.episodes = vec![tmdb_special(1, Some("1999-02-20"), "Act 1", 703204)];
+
+        let merged = combine(vec![tmdb, tvdb], &priority()).unwrap();
+
+        let (film, act) = (&merged.episodes[0], &merged.episodes[1]);
+        assert_eq!(film.tmdb_id, None, "TMDB's first is not the film");
+        assert_eq!(film.overview, None);
+        assert_eq!(act.episode_number, 2, "the spine's number stands");
+        assert_eq!(act.tmdb_id, Some(703204));
+        assert_eq!(act.overview.as_deref(), Some("TMDB's synopsis of Act 1."));
+        assert_eq!(act.image.as_deref(), Some("https://tmdb/703204.jpg"));
+    }
+
+    #[test]
+    fn specials_out_the_same_day_pair_only_when_both_sides_number_them_alike() {
+        // Both parts of Reflection came out on one day. Numbered alike on both
+        // sides, each part is its namesake.
+        let tvdb = || {
+            let mut tvdb = base("tvdb", "T");
+            tvdb.item.episodes = vec![
+                special(6, Some("2001-12-03"), "Part 1"),
+                special(7, Some("2001-12-03"), "Part 2"),
+            ];
+            tvdb
+        };
+
+        let mut tmdb = base("tmdb", "T");
+        tmdb.item.episodes = vec![
+            tmdb_special(6, Some("2001-12-03"), "(1)", 703206),
+            tmdb_special(7, Some("2001-12-03"), "(2)", 703200),
+        ];
+        let merged = combine(vec![tmdb, tvdb()], &priority()).unwrap();
+        let ids: Vec<_> = merged.episodes.iter().map(|e| e.tmdb_id).collect();
+        assert_eq!(ids, [Some(703206), Some(703200)]);
+
+        // One behind, as after a special TMDB lacks, the same number on the
+        // same day is TheTVDB's first part and TMDB's second: the day is left
+        // alone rather than each part given its neighbour's text.
+        let mut shifted = base("tmdb", "T");
+        shifted.item.episodes = vec![
+            tmdb_special(5, Some("2001-12-03"), "(1)", 703206),
+            tmdb_special(6, Some("2001-12-03"), "(2)", 703200),
+        ];
+        let merged = combine(vec![shifted, tvdb()], &priority()).unwrap();
+        assert!(
+            merged
+                .episodes
+                .iter()
+                .all(|e| e.tmdb_id.is_none() && e.overview.is_none())
+        );
+    }
+
+    #[test]
+    fn a_special_without_a_day_to_check_keeps_what_the_spine_gave_it() {
+        // With no date on one side or the other, the number is all there is,
+        // and in season 0 the same number is too often another special.
+        for (ours, theirs) in [
+            (None, None),
+            (Some("2003-03-03"), None),
+            (None, Some("2003-03-03")),
+        ] {
+            let mut tvdb = base("tvdb", "T");
+            tvdb.item.episodes = vec![special(14, ours, "Kengi Taizen")];
+
+            let mut tmdb = base("tmdb", "T");
+            tmdb.item.episodes = vec![tmdb_special(14, theirs, "Another special", 99)];
+
+            let merged = combine(vec![tmdb, tvdb], &priority()).unwrap();
+            let kept = &merged.episodes[0];
+            assert_eq!(kept.title, "Kengi Taizen");
+            assert_eq!(kept.tmdb_id, None, "{ours:?} against {theirs:?}");
+            assert_eq!(kept.overview, None, "{ours:?} against {theirs:?}");
+            assert_eq!(kept.air_date.as_deref(), ours, "no date taken either");
+        }
+    }
+
+    #[test]
+    fn the_regular_seasons_still_pair_by_number_alone() {
+        // There the providers number alike, and a day apart is a time zone
+        // rather than another episode: a Japanese evening is the American
+        // morning before. TMDB's text fills TheTVDB's gaps as it always has.
+        let mut tvdb = base("tvdb", "T");
+        let mut ours = episode(1, 1);
+        ours.air_date = Some("1996-01-10".into());
+        tvdb.item.episodes = vec![ours];
+
+        let mut tmdb = base("tmdb", "T");
+        let mut theirs = episode(1, 1);
+        theirs.air_date = Some("1996-01-09".into());
+        theirs.overview = Some("TMDB's synopsis.".into());
+        theirs.tmdb_id = Some(1);
+        tmdb.item.episodes = vec![theirs];
+
+        let merged = combine(vec![tmdb, tvdb], &priority()).unwrap();
+        assert_eq!(
+            merged.episodes[0].overview.as_deref(),
+            Some("TMDB's synopsis.")
+        );
+        assert_eq!(merged.episodes[0].tmdb_id, Some(1));
+    }
+
+    #[test]
+    fn skyhooks_specials_are_thetvdbs_and_pair_by_number() {
+        // Skyhook republishes TheTVDB, numbering and all: its specials need no
+        // date to be matched with TheTVDB's.
+        let mut tvdb = base("tvdb", "T");
+        tvdb.item.episodes = vec![special(14, None, "Kengi Taizen")];
+
+        let mut skyhook = base("skyhook", "T");
+        let mut same = special(14, None, "Kengi Taizen");
+        same.overview = Some("Skyhook's synopsis.".into());
+        skyhook.item.episodes = vec![same];
+
+        let merged = combine(vec![tvdb, skyhook], &priority()).unwrap();
+        assert_eq!(
+            merged.episodes[0].overview.as_deref(),
+            Some("Skyhook's synopsis.")
+        );
+    }
+
+    #[test]
+    fn a_list_tmdb_numbers_keeps_its_own_specials() {
+        // With nothing from TheTVDB the list is TMDB's, specials included:
+        // there is nothing to line them up with, and nothing is dropped.
+        let mut tmdb = base("tmdb", "T");
+        tmdb.item.episodes = vec![
+            tmdb_special(1, None, "Undated", 1),
+            tmdb_special(2, Some("2001-01-01"), "Dated", 2),
+        ];
+
+        let merged = combine(vec![tmdb, base("fanart", "T")], &priority()).unwrap();
+        assert_eq!(merged.episodes.len(), 2);
+        assert_eq!(merged.episodes[0].tmdb_id, Some(1));
     }
 
     fn alternative(title: &str, language: Option<&str>) -> AlternativeTitle {

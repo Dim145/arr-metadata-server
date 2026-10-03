@@ -8,12 +8,17 @@
 //! Sonarr puts the language in its URL and Radarr does not, which is why this is
 //! applied per request rather than baked into the stored entity.
 
+use std::collections::{HashMap, HashSet};
+
 use anyhow::Result;
 
 use crate::{
     db::repo,
     domain::{MediaItem, MediaKind},
-    providers::lang::{base_language, iso_639_1_to_3},
+    providers::{
+        lang::{base_language, iso_639_1_to_3},
+        tmdb::models::Season,
+    },
     state::AppState,
 };
 
@@ -209,20 +214,65 @@ async fn from_tmdb(
         .tv_seasons_in(tmdb_id, &numbers, &requested)
         .await;
 
+    tmdb_texts(item, &seasons)
+}
+
+/// TMDB's text for the work's episodes, under the work's own numbers.
+///
+/// The regular seasons by number, as the merge pairs them. A special by the
+/// TMDB id the merge gave it, because TMDB numbers its specials its own way:
+/// by number alone, *Rurouni Kenshin*'s first special on TheTVDB — a 1997
+/// film — was named after TMDB's first, the series' last episode. A special
+/// the merge paired with none of TMDB's gets no text from it; TheTVDB is
+/// asked for that one instead.
+fn tmdb_texts(item: &MediaItem, seasons: &[Season]) -> Vec<repo::translation::EpisodeText> {
+    let specials: HashMap<i64, i32> = item
+        .episodes
+        .iter()
+        .filter(|e| e.season_number == 0)
+        .filter_map(|e| Some((e.tmdb_id?, e.episode_number)))
+        .collect();
+
     seasons
         .iter()
         .flat_map(|s| s.episodes.iter())
-        .map(|e| repo::translation::EpisodeText {
-            season_number: e.season_number,
-            episode_number: e.episode_number,
-            title: e
-                .name
-                .clone()
-                .filter(|t| !t.trim().is_empty())
-                .filter(|t| !is_placeholder(t)),
-            overview: e.overview.clone().filter(|o| !o.trim().is_empty()),
+        .filter_map(|e| {
+            let episode_number = if e.season_number == 0 {
+                *specials.get(&e.id?)?
+            } else {
+                e.episode_number
+            };
+            Some(repo::translation::EpisodeText {
+                season_number: e.season_number,
+                episode_number,
+                title: e
+                    .name
+                    .clone()
+                    .filter(|t| !t.trim().is_empty())
+                    .filter(|t| !is_placeholder(t)),
+                overview: e.overview.clone().filter(|o| !o.trim().is_empty()),
+            })
         })
         .collect()
+}
+
+/// Whether one of the work's episodes still has no title or no overview in
+/// `texts`: what TheTVDB is asked to fill.
+///
+/// Counted over the work's episodes, not over what TMDB sent: a special TMDB
+/// has no text for under the work's numbering — one TheTVDB alone lists, or
+/// one TMDB numbers its own way — is missing too, though everything TMDB did
+/// send may be complete.
+fn incomplete(item: &MediaItem, texts: &[repo::translation::EpisodeText]) -> bool {
+    let complete: HashSet<(i32, i32)> = texts
+        .iter()
+        .filter(|t| t.title.is_some() && t.overview.is_some())
+        .map(|t| (t.season_number, t.episode_number))
+        .collect();
+
+    item.episodes
+        .iter()
+        .any(|e| !complete.contains(&(e.season_number, e.episode_number)))
 }
 
 /// Fill what TMDB left empty from TheTVDB.
@@ -241,12 +291,8 @@ async fn fill_from_tvdb(
         return;
     };
 
-    // Nothing to add to, and nothing missing: skip the call.
-    if !texts.is_empty()
-        && texts
-            .iter()
-            .all(|t| t.title.is_some() && t.overview.is_some())
-    {
+    // Nothing missing: skip the call.
+    if !incomplete(item, texts) {
         return;
     }
 
@@ -513,5 +559,98 @@ mod tests {
         assert_eq!(episode.season_number, 1);
         assert_eq!(episode.runtime, Some(58));
         assert_eq!(episode.air_date.as_deref(), Some("2008-01-20"));
+    }
+
+    /// A season as TMDB answers it: each episode its number, its id, a name.
+    fn tmdb_season(number: i32, episodes: &[(i32, i64, &str)]) -> Season {
+        let episodes: Vec<serde_json::Value> = episodes
+            .iter()
+            .map(|(episode, id, name)| {
+                serde_json::json!({
+                    "id": id,
+                    "season_number": number,
+                    "episode_number": episode,
+                    "name": name,
+                    "overview": format!("About {name}."),
+                })
+            })
+            .collect();
+        serde_json::from_value(serde_json::json!({
+            "season_number": number,
+            "episodes": episodes,
+        }))
+        .unwrap()
+    }
+
+    fn stored(season: i32, number: i32, tmdb_id: Option<i64>) -> Episode {
+        let mut e = crate::db::repo::child::blank_episode(season, number);
+        e.tmdb_id = tmdb_id;
+        e
+    }
+
+    #[test]
+    fn tmdbs_text_for_a_special_goes_where_the_merge_put_its_id() {
+        // Rurouni Kenshin: TMDB's first special is the series' last episode,
+        // which TheTVDB counts in season 3, and the 1997 film TheTVDB lists
+        // first is not on TMDB at all. By number, the film was named after
+        // that episode. The merge gave each special the TMDB id of the one it
+        // provably is — none for the film — and the text follows the id.
+        let mut item = MediaItem::empty(MediaKind::Series);
+        item.episodes = vec![
+            stored(0, 1, None),
+            stored(0, 2, Some(703204)),
+            stored(3, 32, None),
+            stored(3, 33, None),
+        ];
+        let seasons = [
+            tmdb_season(
+                0,
+                &[
+                    (1, 1506818, "End of Wanderings"),
+                    (2, 703204, "Trust & Betrayal: Act 1"),
+                ],
+            ),
+            tmdb_season(3, &[(32, 703190, "The Elegy of Wind and Water")]),
+        ];
+
+        let texts = tmdb_texts(&item, &seasons);
+        let placed: Vec<(i32, i32, Option<&str>)> = texts
+            .iter()
+            .map(|t| (t.season_number, t.episode_number, t.title.as_deref()))
+            .collect();
+
+        // The regular seasons go by number, as the merge pairs them.
+        assert_eq!(
+            placed,
+            [
+                (0, 2, Some("Trust & Betrayal: Act 1")),
+                (3, 32, Some("The Elegy of Wind and Water")),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_episode_tmdb_has_no_text_for_is_asked_of_thetvdb() {
+        // Everything TMDB sent is complete, and the film and the last episode
+        // are still without text in the language asked: TMDB lists neither
+        // under TheTVDB's numbers, TheTVDB lists both. Checking only what TMDB
+        // sent left them in the language the work is stored in — the last
+        // episode reached an English Sonarr in French.
+        let mut item = MediaItem::empty(MediaKind::Series);
+        item.episodes = vec![
+            stored(0, 1, None),
+            stored(0, 2, Some(703204)),
+            stored(3, 33, None),
+        ];
+        let text = |season: i32, number: i32| repo::translation::EpisodeText {
+            season_number: season,
+            episode_number: number,
+            title: Some(format!("{season}x{number}")),
+            overview: Some("Complete.".into()),
+        };
+
+        assert!(incomplete(&item, &[text(0, 2)]));
+        assert!(incomplete(&item, &[text(0, 1), text(0, 2)]));
+        assert!(!incomplete(&item, &[text(0, 1), text(0, 2), text(3, 33)]));
     }
 }

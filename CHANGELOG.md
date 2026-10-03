@@ -18,6 +18,19 @@ may change what the API or the configuration means, and says so here.
   A locked title still goes as it was locked. A new column holds what
   TheTVDB adds, filled in as each series is next refreshed; Sonarr takes the
   title at its own next refresh of the series.
+- A special reaches Sonarr with its own name, synopsis and still where TMDB
+  numbers specials differently from TheTVDB. TMDB's were taken by number:
+  *Rurouni Kenshin*'s first special, a 1997 film on TheTVDB, carried the
+  still and TMDB id of TMDB's first, the series' last episode, and, on a
+  server set to another language than Sonarr's, that episode's name.
+  Another provider's special now fills one of TheTVDB's only when both date
+  it the same day: the only special either has that day, or one of several
+  that both sides number alike. One without a date fills nothing, and the
+  regular seasons are matched by number as before. An episode TMDB has no
+  text for in the language asked is now asked of TheTVDB even when
+  everything TMDB sent was complete: that last episode, which TheTVDB counts
+  in season 3, reached an English Sonarr in French. A series shows it from
+  its next refresh; Sonarr takes it at its own next refresh of the series.
 
 ## [0.4.0] — 2026-09-29
 
