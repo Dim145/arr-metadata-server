@@ -7,6 +7,8 @@ may change what the API or the configuration means, and says so here.
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-10-04
+
 ### Changed
 
 - A series near an air date is fetched again sooner. One that has not
@@ -370,7 +372,8 @@ and arm64.
 - End-to-end checks against a real Sonarr, against two instances, and a
   Playwright suite over the whole interface.
 
-[Unreleased]: https://github.com/Dim145/arr-metadata-server/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/Dim145/arr-metadata-server/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/Dim145/arr-metadata-server/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/Dim145/arr-metadata-server/compare/v0.3.2...v0.4.0
 [0.3.2]: https://github.com/Dim145/arr-metadata-server/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/Dim145/arr-metadata-server/compare/v0.3.0...v0.3.1
