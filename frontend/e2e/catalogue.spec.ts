@@ -106,7 +106,10 @@ test.describe('the catalogue', () => {
 
     const box = page.getByRole('combobox').first()
     await box.fill(work!.title.slice(0, 4))
-    const option = page.getByRole('option', { name: new RegExp(work!.title.slice(0, 4), 'i') }).first()
+    // Escaped: a title such as "[Oshi no Ko]" is not a pattern.
+    const option = page
+      .getByRole('option', { name: new RegExp(work!.title.slice(0, 4).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') })
+      .first()
     await expect(option).toBeVisible()
     await expect(page.getByRole('option', { name: /see all|see the|voir le/i })).toBeVisible()
 
