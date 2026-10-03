@@ -47,8 +47,10 @@ may change what the API or the configuration means, and says so here.
   series here goes by the same title. Two series Sonarr knows by one title
   make its lookup by title fail, and the releases by that name were dropped.
   A locked title still goes as it was locked. A new column holds what
-  TheTVDB adds, filled in as each series is next refreshed; Sonarr takes the
-  title at its own next refresh of the series.
+  TheTVDB adds, filled in as each series is next refreshed, and kept through
+  a refresh neither TheTVDB nor Skyhook answers or a sync that asks only
+  other sources; Sonarr takes the title at its own next refresh of the
+  series.
 - A special reaches Sonarr with its own name, synopsis and still where TMDB
   numbers specials differently from TheTVDB. TMDB's were taken by number:
   *Rurouni Kenshin*'s first special, a 1997 film on TheTVDB, carried the

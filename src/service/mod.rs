@@ -429,6 +429,24 @@ fn keep_what_nobody_answered(item: &mut MediaItem, stored: MediaItem) {
     keep(&mut item.relations, stored.relations);
 }
 
+/// Carry over what TheTVDB adds to the series' name when neither TheTVDB nor
+/// Skyhook is among the answers written (`snapshots`).
+///
+/// The merge reads it off their own answers alone, so without them it comes
+/// back empty though nothing said it was gone: a refresh while both were
+/// down, or a sync that asked only the others, sent *Rurouni Kenshin (2023)*
+/// to Sonarr as *Rurouni Kenshin* — the other series' title, the clash it is
+/// kept to prevent — until a refresh they answered. When one of them did
+/// answer, what the merge made of it stands, none included.
+fn keep_title_qualifier(item: &mut MediaItem, stored: &MediaItem, snapshots: &[(String, Value)]) {
+    let named = snapshots
+        .iter()
+        .any(|(provider, _)| crate::merge::TVDB_NAMED.contains(&provider.as_str()));
+    if !named {
+        item.title_qualifier.clone_from(&stored.title_qualifier);
+    }
+}
+
 /// Store a freshly fetched work and its raw provider payload.
 ///
 /// If the work already exists locally, its identity is preserved: the same row
@@ -453,6 +471,7 @@ pub async fn persist(
         item.is_enabled = existing.is_enabled;
 
         repo::item::load_children(&state.db, &mut existing).await?;
+        keep_title_qualifier(&mut item, &existing, snapshots);
         keep_what_nobody_answered(&mut item, existing);
 
         // What is locked of its identity is written as locked, not as a
@@ -529,6 +548,7 @@ pub async fn persist_sync(
     item.is_manual = stored.is_manual;
     item.is_enabled = stored.is_enabled;
     item.external_ids = stored.external_ids.clone();
+    keep_title_qualifier(&mut item, stored, snapshots);
     keep_what_nobody_answered(&mut item, stored.clone());
     crate::merge::drop_own_title(&mut item);
 
@@ -899,6 +919,38 @@ mod keyed_tests {
         answered.relations = vec![related(20)];
         keep_what_nobody_answered(&mut answered, stored);
         assert_eq!(answered.relations[0].external_id, 20);
+    }
+
+    #[test]
+    fn what_thetvdb_adds_to_the_name_stands_until_thetvdb_or_skyhook_answers_again() {
+        let answers = |providers: &[&str]| -> Vec<(String, Value)> {
+            providers
+                .iter()
+                .map(|p| (p.to_string(), Value::Null))
+                .collect()
+        };
+        let mut stored = MediaItem::empty(crate::domain::MediaKind::Series);
+        stored.title = "Rurouni Kenshin".into();
+        stored.title_qualifier = Some("2023".into());
+
+        // TMDB and Fanart answered a refresh, or a sync asked only them: the
+        // merge had no name of TheTVDB's to read it off, so it stands.
+        // Dropped, Sonarr was sent the title of the other series by the name.
+        let mut fresh = MediaItem::empty(crate::domain::MediaKind::Series);
+        keep_title_qualifier(&mut fresh, &stored, &answers(&["tmdb", "fanart"]));
+        assert_eq!(fresh.title_qualifier.as_deref(), Some("2023"));
+
+        // Skyhook answered with the name alone: TheTVDB no longer tells the
+        // series apart, and neither does Sonarr's title.
+        let mut renamed = MediaItem::empty(crate::domain::MediaKind::Series);
+        keep_title_qualifier(&mut renamed, &stored, &answers(&["tmdb", "skyhook"]));
+        assert_eq!(renamed.title_qualifier, None);
+
+        // TheTVDB answered with another: that one.
+        let mut other = MediaItem::empty(crate::domain::MediaKind::Series);
+        other.title_qualifier = Some("JP".into());
+        keep_title_qualifier(&mut other, &stored, &answers(&["tvdb"]));
+        assert_eq!(other.title_qualifier.as_deref(), Some("JP"));
     }
 
     #[tokio::test]

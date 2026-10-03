@@ -56,7 +56,7 @@ pub(crate) const DATE_CHECKED: &[&str] = &["tvmaze"];
 pub(crate) const STUDIO_AUTHORITIES: &[&str] = &["anilist", "mal"];
 
 /// The providers whose series names are TheTVDB's: Skyhook passes them on.
-const TVDB_NAMED: &[&str] = &["tvdb", "skyhook"];
+pub(crate) const TVDB_NAMED: &[&str] = &["tvdb", "skyhook"];
 
 /// Fold contributions into one entity, most trusted first.
 ///
