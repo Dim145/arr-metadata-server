@@ -517,7 +517,7 @@ pub fn held(
             other.extend(
                 s.alternative
                     .into_iter()
-                    .filter(|(code, _)| code.as_deref().is_some_and(&wanted))
+                    .filter(|(code, _)| code.as_deref().is_some_and(wanted))
                     .map(|(_, title)| title),
             );
 
