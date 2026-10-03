@@ -1517,9 +1517,10 @@ export const en = {
       hide: 'Hide',
       maintenance: {
         title: 'Maintenance',
-        served: 'Served to clients',
-        servedHint: 'Sonarr, Radarr and the site read it.',
-        notServed: 'Kept, but served to nobody.',
+        served: 'Enabled',
+        servedHint: 'Shown on the site, and refreshed on its own.',
+        notServed:
+          'Hidden from the site and the native API; Sonarr and Radarr keep the copy held here, no longer refreshed on its own.',
       },
       mast: {
         refreshedWhen: (when: string) => `Refreshed ${when}`,

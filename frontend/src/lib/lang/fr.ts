@@ -1529,9 +1529,10 @@ export const fr: Dict = {
       hide: 'Masquer',
       maintenance: {
         title: 'Maintenance',
-        served: 'Servie aux clients',
-        servedHint: 'Sonarr, Radarr et le site la lisent.',
-        notServed: 'Conservée, mais servie à personne.',
+        served: 'Activée',
+        servedHint: 'Visible sur le site, et rafraîchie d’elle-même.',
+        notServed:
+          'Masquée du site et de l’API native ; Sonarr et Radarr gardent la copie détenue ici, qui n’est plus rafraîchie d’elle-même.',
       },
       mast: {
         refreshedWhen: (when: string) => `Rafraîchie ${when}`,

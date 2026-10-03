@@ -314,7 +314,7 @@ test.describe('the work editor', () => {
       await expect(page.locator('#group-release')).toBeVisible()
       await expect(page.getByRole('tablist', { name: /sections/i }).getByRole('tab')).toHaveCount(4)
 
-      const served = page.getByRole('switch', { name: /served to clients|servie aux clients/i })
+      const served = page.getByRole('switch', { name: /^(enabled|activée)$/i })
       await expect(served).toHaveAttribute('aria-checked', 'true')
       await served.click()
       await page.getByRole('dialog').getByRole('button', { name: /^(disable|désactiver)$/i }).click()
