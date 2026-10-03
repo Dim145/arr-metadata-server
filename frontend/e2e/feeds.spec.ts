@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { escaped, pattern } from './support/regex'
 
 /**
  * The feeds: the schedule as a calendar a phone subscribes to, one work's
@@ -49,7 +50,7 @@ test.describe('feeds', () => {
       expect(response.headers()['content-type'], path).toContain('application/atom+xml')
       const body = await response.text()
       expect(body, path).toMatch(/<feed xmlns="http:\/\/www\.w3\.org\/2005\/Atom"( xml:lang="[A-Za-z-]+")?>/)
-      expect(body, path).toMatch(new RegExp(`<link rel="self" href="https?://[^"]+${path}"/>`))
+      expect(body, path).toMatch(pattern(`<link rel="self" href="https?://[^"]+${escaped(path)}"/>`))
     }
     expect(await (await request.get('/api/v1/feed/added.atom')).text()).toContain('<entry>')
   })

@@ -1,4 +1,5 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
+import { escaped, pattern } from './support/regex'
 
 /**
  * The pages a work leads to, and the ways out of it.
@@ -88,7 +89,7 @@ test.describe('a season', () => {
 
     await page.goto(`/work/${work!.id}`)
     await page.locator(`a[href="/work/${work!.id}/season/${number}"]`).first().click()
-    await expect(page).toHaveURL(new RegExp(`/work/${work!.id}/season/${number}$`))
+    await expect(page).toHaveURL(pattern(`/work/${work!.id}/season/${number}$`))
     await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
 
     // Three levels down, so the way back up is spelled out.
@@ -126,7 +127,7 @@ test.describe('an episode', () => {
 
     await page.goto(`/work/${work!.id}/season/${number}/episode/${first.episodeNumber}`)
     await expect(page.getByRole('heading', { level: 1 })).toHaveText(
-      first.title || new RegExp(`^(Episode|Épisode) ${first.episodeNumber}$`),
+      first.title || pattern(`^(Episode|Épisode) ${first.episodeNumber}$`),
     )
 
     if (first.tvdbId) {
@@ -142,7 +143,7 @@ test.describe('an episode', () => {
 
     await page.locator('a[rel="next"]').click()
     await expect(page).toHaveURL(
-      new RegExp(`/work/${work!.id}/season/${number}/episode/${second.episodeNumber}$`),
+      pattern(`/work/${work!.id}/season/${number}/episode/${second.episodeNumber}$`),
     )
     expect(await scrollsSideways(page)).toBe(false)
   })
@@ -185,7 +186,7 @@ test.describe('a person', () => {
     await page.goto(`/work/${work!.id}`)
     await page.locator(`a[href="/person/${credit!.tmdbPersonId}"]`).first().click()
 
-    await expect(page).toHaveURL(new RegExp(`/person/${credit!.tmdbPersonId}$`))
+    await expect(page).toHaveURL(pattern(`/person/${credit!.tmdbPersonId}$`))
     await expect(page.getByRole('heading', { level: 1 })).toHaveText(credit!.personName)
     await expect(page.locator(`main a[href="/work/${work!.id}"]`)).toBeVisible()
 
@@ -332,7 +333,7 @@ test.describe('the schedule', () => {
     const strip = page.getByRole('list', { name: /days of the week|jours de la semaine/i })
     await expect(strip.locator(`a[href="#day-${day}"]`)).toBeVisible()
     await strip.locator(`a[href="#day-${day}"]`).click()
-    await expect(page).toHaveURL(new RegExp(`#day-${day}$`))
+    await expect(page).toHaveURL(pattern(`#day-${day}$`))
 
     await entry.click()
     await expect(page).toHaveURL(/\/episode\/\d+$/)
@@ -428,7 +429,7 @@ test.describe('a trailer', () => {
     const frame = page.getByRole('dialog').locator('iframe')
     await expect(frame).toHaveAttribute(
       'src',
-      new RegExp(`^https://www\\.youtube-nocookie\\.com/embed/${work!.trailerYoutubeId}\\?`),
+      pattern(`^https://www\\.youtube-nocookie\\.com/embed/${escaped(String(work!.trailerYoutubeId))}\\?`),
     )
 
     // Closed, the player goes with it rather than playing on behind the page.

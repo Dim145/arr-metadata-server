@@ -441,6 +441,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_path_that_would_escape_the_root_is_refused() {
+        // nosemgrep: rust.lang.security.temp-dir.temp-dir — a test's scratch directory, named after a fresh id: nothing security-relevant lives in it
         let root = std::env::temp_dir().join("ams-nfo-test");
 
         for bad in ["../escape.nfo", "series/../../escape.nfo", "series//x.nfo"] {
@@ -453,6 +454,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_ordinary_path_is_written_under_the_root() {
+        // nosemgrep: rust.lang.security.temp-dir.temp-dir — a test's scratch directory, named after a fresh id: nothing security-relevant lives in it
         let root = std::env::temp_dir().join(format!("ams-nfo-{}", crate::db::new_id()));
 
         write_one(&root, "series/a-show-2026/tvshow.nfo", "<tvshow/>")

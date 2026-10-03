@@ -13,10 +13,16 @@ import { Link } from 'react-router'
 import { cn } from '../lib/cn'
 import { useI18n } from '../lib/i18n'
 import { providerName } from '../lib/labels'
-import type { Destination } from '../lib/links'
+import { isWebAddress, type Destination } from '../lib/links'
 import { Glyph } from './ui'
 
-/** A link to another site, opened in a new tab. */
+/**
+ * A link to another site, opened in a new tab.
+ *
+ * Only to a site: an address that is not `http` or `https` — a provider's
+ * slip, or `javascript:` locked into a homepage by somebody who may edit —
+ * is shown as the words alone, with nothing to follow.
+ */
 export function ExternalLink({
   href,
   children,
@@ -27,6 +33,10 @@ export function ExternalLink({
   className?: string
 }) {
   const { t } = useI18n()
+
+  if (!isWebAddress(href)) {
+    return <span className={cn('inline-flex items-center gap-1', className)}>{children}</span>
+  }
 
   return (
     <a

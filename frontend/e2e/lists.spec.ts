@@ -1,4 +1,5 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
+import { pattern } from './support/regex'
 
 /**
  * Curated lists: composed by whoever maintains the catalogue, shown on the
@@ -217,8 +218,8 @@ test.describe('curated lists', () => {
     })
     try {
       await page.goto('/lists')
-      await page.getByRole('link', { name: new RegExp(escapeRegExp(name)) }).click()
-      await expect(page).toHaveURL(new RegExp(`/lists/${escapeRegExp(list.slug)}$`))
+      await page.getByRole('link', { name: pattern(escapeRegExp(name)) }).click()
+      await expect(page).toHaveURL(pattern(`/lists/${escapeRegExp(list.slug)}$`))
       await expect(page.getByRole('heading', { level: 1, name })).toBeVisible()
       await expect(page.getByText(series!.title).first()).toBeVisible()
       // The addresses a client imports from: the series' shape, not the films'.

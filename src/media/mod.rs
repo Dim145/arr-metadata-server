@@ -464,6 +464,7 @@ mod tests {
     fn media(public_url: Option<&str>) -> Media {
         let config = config::Media {
             storage: config::MediaStorage::Filesystem,
+            // nosemgrep: rust.lang.security.temp-dir.temp-dir — a test's scratch directory, named after a fresh id: nothing security-relevant lives in it
             dir: std::env::temp_dir().join(format!("ams-media-test-{}", crate::db::new_id())),
             s3: None,
         };

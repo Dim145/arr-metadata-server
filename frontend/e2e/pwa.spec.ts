@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { pattern } from './support/regex'
 
 /**
  * The page as an app and as a link: installable, with a preview of a work
@@ -45,7 +46,7 @@ test.describe('the page as an app, and as a link', () => {
     expect(html.match(/name="description"/g)?.length).toBe(1)
     const opening = work!.overview?.trim().split(/\s+/).slice(0, 3).join(' ')
     if (opening) {
-      expect(html).toMatch(new RegExp(`<meta property="og:description" content="${escapeRegExp(escapeHtml(opening))}`))
+      expect(html).toMatch(pattern(`<meta property="og:description" content="${escapeRegExp(escapeHtml(opening))}`))
     }
     expect(html).toContain('<meta property="og:site_name" content="Cinémathèque" />')
 

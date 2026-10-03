@@ -463,7 +463,9 @@ function Editor({
                   ? 'time'
                   : def.fieldType === 'integer' || def.fieldType === 'float'
                     ? 'number'
-                    : 'text'
+                    : def.name === 'homepage'
+                      ? 'url'
+                      : 'text'
             }
             step={def.fieldType === 'float' ? 'any' : def.fieldType === 'integer' ? 1 : undefined}
             inputMode={def.fieldType === 'integer' ? 'numeric' : def.fieldType === 'float' ? 'decimal' : undefined}
@@ -520,6 +522,9 @@ export function parse(draft: string, def: FieldDef): unknown {
   // Clearing the box stores an explicit null, which still counts as an edit and
   // still locks the field: "this work has no network" is a decision too.
   if (trimmed === '') return null
+
+  // The form the server keeps a rating's country in, whatever case it was typed in.
+  if (def.name === 'contentRatingCountry') return trimmed.toUpperCase()
 
   switch (def.fieldType) {
     case 'integer': {

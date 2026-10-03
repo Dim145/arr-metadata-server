@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { escaped, pattern } from './support/regex'
 
 /**
  * The command palette: opened from the keyboard anywhere, it finds a place
@@ -27,7 +28,7 @@ test.describe('the command palette', () => {
     test.skip(!work, 'no work in the catalogue')
     await page.keyboard.press('ControlOrMeta+k')
     await box.fill(work!.title.slice(0, 6))
-    await expect(page.getByRole('option', { name: new RegExp(work!.title.slice(0, 6).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') }).first()).toBeVisible()
+    await expect(page.getByRole('option', { name: pattern(escaped(work!.title.slice(0, 6)), 'i') }).first()).toBeVisible()
     await box.press('Escape')
     await expect(box).toBeHidden()
     await expect(page).toHaveURL(/kind=movie/)

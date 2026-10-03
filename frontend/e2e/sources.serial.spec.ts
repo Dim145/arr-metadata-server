@@ -1,4 +1,5 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
+import { pattern } from './support/regex'
 
 /**
  * Where a work's values come from: the rules on the Sources page, the chip
@@ -126,7 +127,7 @@ test.describe('where values come from', () => {
     const before = (await (await page.request.get(`/api/v1/items/${id}`)).json()) as { refreshAfter?: string }
 
     const sources = page.locator('#sources')
-    await sources.getByRole('checkbox', { name: new RegExp(escape(NAMES[source!.provider] ?? source!.provider), 'i') }).check()
+    await sources.getByRole('checkbox', { name: pattern(escape(NAMES[source!.provider] ?? source!.provider), 'i') }).check()
     const asked = page.waitForResponse((r) => r.url().endsWith(`/api/v1/items/${id}/sync`))
     await sources.getByRole('button', { name: /sync from 1 source|synchroniser depuis 1 source/i }).click()
     const answer = await asked

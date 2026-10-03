@@ -1,0 +1,13 @@
+# cargo-audit's settings. An advisory nothing can be done about here is
+# listed with why, so that the scan stays clean and the reasoning is kept
+# where the next person to run it will read it.
+
+[advisories]
+ignore = [
+    # RUSTSEC-2023-0071, the Marvin attack on `rsa`: a timing side channel in
+    # RSA private-key operations. `rsa` comes in through `openidconnect`, which
+    # uses it only to verify an identity provider's signature with the
+    # provider's public key; this server holds no RSA private key, so there is
+    # nothing for the timing to recover. No fixed release of `rsa` exists.
+    "RUSTSEC-2023-0071",
+]

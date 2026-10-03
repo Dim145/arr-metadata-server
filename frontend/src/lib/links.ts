@@ -111,6 +111,21 @@ export function episodeLinks(item: MediaItem, episode: Episode): Destination[] {
   return out
 }
 
+/**
+ * Whether an address is one a browser may be sent to: `http` or `https`,
+ * nothing else. A provider's field and a locked one are both text, and
+ * `javascript:` is text too — rendered as a link, it would run in the page
+ * of whoever clicked it.
+ */
+export function isWebAddress(href: string): boolean {
+  try {
+    const { protocol } = new URL(href)
+    return protocol === 'http:' || protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
 /** Where a related work the catalogue does not hold is found, by where it is filed. */
 export function relationLink(relation: Pick<Relation, 'source' | 'externalId' | 'medium'>): string {
   const id = encodeURIComponent(String(relation.externalId))

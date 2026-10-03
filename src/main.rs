@@ -48,6 +48,7 @@ arr-metadata-server — a metadata server for the *arr stack
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // nosemgrep: rust.lang.security.args.args — the binary's own subcommand, matched against a fixed list below
     let args: Vec<String> = std::env::args().skip(1).collect();
 
     match args.first().map(String::as_str) {

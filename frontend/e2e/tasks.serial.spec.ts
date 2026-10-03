@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
+import { escaped, pattern } from './support/regex'
 
 /**
  * The tasks page: every task on a card, one run started from it, and the
@@ -67,7 +68,7 @@ test.describe('the tasks', () => {
     const run = await (await page.request.get(`/api/v1/jobs?by=person&kind=refresh.sweep&limit=5`)).json()
     const mine = (run as { jobs: { id: string; triggeredBy?: string }[] }).jobs.find((job) => job.id === jobId)
     const name = USERNAME!.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    expect(mine?.triggeredBy).toMatch(new RegExp(`:${name}$`))
+    expect(mine?.triggeredBy).toMatch(pattern(`:${escaped(name)}$`))
     await page.getByLabel(/^(started by|lancée par)$/i).selectOption('person')
     await expect(page.getByRole('table').getByRole('row').nth(1)).toContainText(
       /refresh what is due|actualiser ce qui est dû/i,

@@ -1,4 +1,5 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
+import { escaped, pattern } from './support/regex'
 
 /**
  * The season chart: a calendar quarter of the catalogue, past or to come.
@@ -85,7 +86,7 @@ test.describe('the season chart', () => {
       const now = new Date()
       return [now.getFullYear(), Math.floor(now.getMonth() / 3)]
     })
-    expect(page.url()).toMatch(new RegExp(`/seasons/${year}/${SEASONS[quarter!]}$`))
+    expect(page.url()).toMatch(pattern(`/seasons/${year}/${SEASONS[quarter!]}$`))
     await expect(page.getByRole('heading', { level: 1 })).toContainText(String(year))
 
     // Already there: nothing offers to go back to it.
@@ -120,7 +121,7 @@ test.describe('the season chart', () => {
       const now = new Date()
       return [now.getFullYear(), Math.floor(now.getMonth() / 3)]
     })
-    await expect(page).toHaveURL(new RegExp(`/seasons/${year}/${SEASONS[quarter!]}$`))
+    await expect(page).toHaveURL(pattern(`/seasons/${year}/${SEASONS[quarter!]}$`))
   })
 
   test('lists a series in the quarter it began, and leads to it', async ({ page, request }) => {
@@ -134,7 +135,7 @@ test.describe('the season chart', () => {
 
     const entry = found!.chart.entries[0]!
     await page.locator(`article a[href="${cardHref(entry)}"]`).click()
-    await expect(page).toHaveURL(new RegExp(`${cardHref(entry)}$`))
+    await expect(page).toHaveURL(pattern(`${escaped(cardHref(entry))}$`))
   })
 
   test('keeps its filters in the address, and counts what each would leave', async ({ page, request }) => {

@@ -1,5 +1,6 @@
 import AxeBuilder from '@axe-core/playwright'
 import { expect, test } from '@playwright/test'
+import { escaped, pattern } from './support/regex'
 
 /**
  * The way into the catalogue: one tab, with the shortcuts hanging from it.
@@ -31,7 +32,7 @@ test.describe('the browse tab and its panel', () => {
     await expect(genre).toBeVisible()
     const href = await genre.getAttribute('href')
     await genre.click()
-    await expect(page).toHaveURL(new RegExp(href!.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$'))
+    await expect(page).toHaveURL(pattern(escaped(href!) + '$'))
     // Gone with the page it opened.
     await expect(panel).toHaveCount(0)
 

@@ -50,6 +50,16 @@ may change what the API or the configuration means, and says so here.
   added by hand, a season's synopsis, a credit's photograph, an alternative
   title's kind and language, and an image's language and the season it is for.
 
+### Security
+
+- A homepage, a theme or an episode's still locked by hand is refused unless
+  it is an address a client can follow — `http` or `https`, or an upload's
+  own origin — so a `javascript:` or `data:` scheme locked in by someone who
+  may edit is never served as a link to a visitor or a client. The interface
+  draws any other scheme as words rather than a link, wherever a field is
+  linked. A YouTube trailer id is checked for its shape, and a rating's
+  country for its two capital letters.
+
 ### Fixed
 
 - A series with an episode Skyhook has no name for yet is read whole.

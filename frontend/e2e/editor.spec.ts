@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
+import { pattern } from './support/regex'
 
 /**
  * The work editor: a record in five tabs — the fields, the seasons and their
@@ -143,15 +144,15 @@ test.describe('the work editor', () => {
 
     await page.goto(`/admin/catalogue/${series!.id}?tab=seasons`)
     const rail = page.getByRole('navigation', { name: /^(seasons|saisons)$/i })
-    await rail.getByRole('button', { name: new RegExp(`S${String(target).padStart(2, '0')}`) }).click()
-    await expect(page).toHaveURL(new RegExp(`season=${target}`))
+    await rail.getByRole('button', { name: pattern(`S${String(target).padStart(2, '0')}`) }).click()
+    await expect(page).toHaveURL(pattern(`season=${target}`))
     await expect(page.locator('#season-fields').getByRole('heading', { level: 2 })).toBeVisible()
 
     // The season's own identifiers, editable now; TMDB's and TheTVDB's.
     await expect(page.locator('#season-fields li[data-field="tvdbId"]')).toBeVisible()
     await expect(page.locator('#season-fields li[data-field="tmdbId"]')).toBeVisible()
 
-    const row = page.locator('#episodes').getByRole('button', { name: new RegExp(code(first)) })
+    const row = page.locator('#episodes').getByRole('button', { name: pattern(code(first)) })
     await row.click()
     await expect(row).toHaveAttribute('aria-expanded', 'true')
     const fields = page.locator(`#episode-fields-${target}x${first.episodeNumber}`)
@@ -277,7 +278,7 @@ test.describe('the work editor', () => {
       await page.locator('#id-tvdb').fill(tvdb)
       await panel.getByRole('button', { name: /save and lock|enregistrer et verrouiller/i }).click()
       await expect(panel).toContainText(/locked by hand|verrouillés à la main/i)
-      await expect(panel.getByRole('link', { name: new RegExp(tvdb) })).toBeVisible()
+      await expect(panel.getByRole('link', { name: pattern(tvdb) })).toBeVisible()
 
       const stored = (await (await page.request.get(`/api/v1/items/${id}`)).json()) as { externalIds: { tvdb?: number } }
       expect(stored.externalIds.tvdb).toBe(Number(tvdb))

@@ -236,6 +236,26 @@ fn lead_with(item: &mut MediaItem, kind: crate::domain::CoverType, address: &str
     }
 }
 
+/// The fields that hold an address, and whether an upload's `upload:` origin
+/// may stand in it: refused unless a client can follow it, so that nothing a
+/// browser would run as a script — `javascript:`, a `data:` page — is served
+/// to the public page or a client as a link.
+const ADDRESSES: &[(&str, bool)] = &[("homepage", false), ("themeMusic", true), ("image", true)];
+
+fn is_web_address(value: &str) -> bool {
+    value.starts_with("https://") || value.starts_with("http://")
+}
+
+/// A YouTube video id: the eleven-odd characters after `v=`, nothing of the
+/// address around them, which the interface and the NFO build themselves.
+fn is_youtube_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
 /// Whether a slug is one this server would make: lowercase letters, digits
 /// and single hyphens, as `make_slug` writes them.
 pub fn is_slug(value: &str) -> bool {
@@ -433,6 +453,37 @@ pub fn validate(scope: Scope, field: &str, value: Option<&Value>) -> Result<(), 
         return Err(
             "a slug is lowercase letters, digits and single hyphens, like breaking-bad-2008".into(),
         );
+    }
+
+    if let Some((_, uploads)) = ADDRESSES.iter().find(|(name, _)| *name == field)
+        && let Some(Value::String(address)) = value
+        && !(is_web_address(address) || (*uploads && address.starts_with("upload:")))
+    {
+        return Err(format!(
+            "{field:?} is an address a client can follow: http:// or https://{}",
+            if *uploads {
+                ", or an upload's origin"
+            } else {
+                ""
+            }
+        ));
+    }
+
+    if field == "trailerYoutubeId"
+        && let Some(Value::String(id)) = value
+        && !is_youtube_id(id)
+    {
+        return Err(
+            "a YouTube id is the letters, digits, - and _ after v=, not the address".into(),
+        );
+    }
+
+    // Uppercase alpha-2, the form Radarr matches a rating's country against.
+    if field == "contentRatingCountry"
+        && let Some(Value::String(code)) = value
+        && !(code.len() == 2 && code.bytes().all(|b| b.is_ascii_uppercase()))
+    {
+        return Err("a rating's country is its two-letter code, in capitals: US, FR".into());
     }
 
     match value {
@@ -720,6 +771,62 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    /// An address a client cannot follow is refused at the door: a script
+    /// scheme locked into a homepage would otherwise reach the public page
+    /// as a link, and whoever clicked it.
+    #[test]
+    fn an_address_is_one_a_client_can_follow() {
+        let episode = Scope::Episode {
+            season: 1,
+            episode: 1,
+        };
+        assert!(
+            validate(
+                Scope::Item,
+                "homepage",
+                Some(&"https://example.org/".into())
+            )
+            .is_ok()
+        );
+        assert!(validate(Scope::Item, "homepage", Some(&"http://example.org".into())).is_ok());
+        assert!(validate(Scope::Item, "homepage", Some(&"javascript:alert(1)".into())).is_err());
+        assert!(validate(Scope::Item, "homepage", Some(&"example.org".into())).is_err());
+        assert!(
+            validate(Scope::Item, "homepage", Some(&"upload:0123".into())).is_err(),
+            "a site is not uploaded"
+        );
+        assert!(validate(Scope::Item, "themeMusic", Some(&"upload:0123".into())).is_ok());
+        assert!(validate(Scope::Item, "themeMusic", Some(&"ftp://x/theme.mp3".into())).is_err());
+        assert!(
+            validate(
+                episode,
+                "image",
+                Some(&"http://stills.example/1.jpg".into())
+            )
+            .is_ok()
+        );
+        assert!(validate(episode, "image", Some(&"upload:0123".into())).is_ok());
+        assert!(validate(episode, "image", Some(&"data:text/html,<script>".into())).is_err());
+        assert!(
+            validate(Scope::Item, "homepage", Some(&Value::Null)).is_ok(),
+            "cleared is not an address"
+        );
+
+        assert!(validate(Scope::Item, "trailerYoutubeId", Some(&"dQw4w9WgXcQ".into())).is_ok());
+        assert!(
+            validate(
+                Scope::Item,
+                "trailerYoutubeId",
+                Some(&"https://youtu.be/x".into())
+            )
+            .is_err()
+        );
+
+        assert!(validate(Scope::Item, "contentRatingCountry", Some(&"US".into())).is_ok());
+        assert!(validate(Scope::Item, "contentRatingCountry", Some(&"usa".into())).is_err());
+        assert!(validate(Scope::Item, "contentRatingCountry", Some(&"fr".into())).is_err());
     }
 
     #[test]

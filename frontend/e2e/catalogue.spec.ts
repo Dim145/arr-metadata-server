@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
+import { escaped, pattern } from './support/regex'
 
 /**
  * The public catalogue, as a visitor with no credential sees it.
@@ -107,9 +108,7 @@ test.describe('the catalogue', () => {
     const box = page.getByRole('combobox').first()
     await box.fill(work!.title.slice(0, 4))
     // Escaped: a title such as "[Oshi no Ko]" is not a pattern.
-    const option = page
-      .getByRole('option', { name: new RegExp(work!.title.slice(0, 4).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') })
-      .first()
+    const option = page.getByRole('option', { name: pattern(escaped(work!.title.slice(0, 4)), 'i') }).first()
     await expect(option).toBeVisible()
     await expect(page.getByRole('option', { name: /see all|see the|voir le/i })).toBeVisible()
 
@@ -188,7 +187,7 @@ test.describe('the catalogue', () => {
     // Ten in view, the rest behind one line that says how many.
     await expect(group.locator('button[aria-pressed]:visible')).toHaveCount(10)
     const others = group.locator('summary')
-    await expect(others).toHaveText(new RegExp(`${all - 10}`))
+    await expect(others).toHaveText(pattern(`${all - 10}`))
     await others.click()
     await expect(group.locator('button[aria-pressed]:visible')).toHaveCount(all)
 
@@ -210,7 +209,7 @@ test.describe('the catalogue', () => {
 
     await page.goto('/browse?genre=Drama,Crime')
     await catalogueLoaded(page)
-    await expect(page.getByText(new RegExp(`^${every} (works?|œuvres?)$`))).toBeVisible()
+    await expect(page.getByText(pattern(`^${every} (works?|œuvres?)$`))).toBeVisible()
 
     const panel = await filters(page)
     // The radio is off screen; its label is what a finger presses.
@@ -219,7 +218,7 @@ test.describe('the catalogue', () => {
     await expect(page).toHaveURL(/genreMode=any/)
     await backToResults(page)
     await catalogueLoaded(page)
-    await expect(page.getByText(new RegExp(`^${either} (works?|œuvres?)$`))).toBeVisible()
+    await expect(page.getByText(pattern(`^${either} (works?|œuvres?)$`))).toBeVisible()
   })
 
   test('an order is asked of the server, and kept in the URL', async ({ page }) => {
