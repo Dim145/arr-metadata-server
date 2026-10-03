@@ -52,6 +52,13 @@ pub async fn by_tvdb_id(state: &AppState, tvdb_id: i64) -> Result<Option<MediaIt
     or_held(state, ExternalSource::TvdbSeries, &value, fetched).await
 }
 
+/// A series fetched again by its TVDB id, whatever is held: for a refresh,
+/// which the copy held does not answer. `None` when nothing answered.
+pub async fn refetch_by_tvdb_id(state: &AppState, tvdb_id: i64) -> Result<Option<MediaItem>> {
+    let _fetching = FETCHING.lock(&format!("series:tvdb:{tvdb_id}")).await;
+    fetch_by_tvdb_id(state, tvdb_id).await
+}
+
 /// Ask the providers for a series by its TVDB id, and store what they say.
 async fn fetch_by_tvdb_id(state: &AppState, tvdb_id: i64) -> Result<Option<MediaItem>> {
     // TMDB indexes by its own ids, so ask it which work this TVDB id is before

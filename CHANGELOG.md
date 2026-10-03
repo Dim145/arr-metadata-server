@@ -82,6 +82,11 @@ may change what the API or the configuration means, and says so here.
   the series was not found, and the import list passed it over. It is now
   looked up by the id Sonarr keeps it under, fetched again, and served as
   held when no provider answers.
+- A refresh asked for by hand that no provider answers is recorded as such.
+  When the providers came back with nothing, the series was looked up as
+  Sonarr looks it up, and the copy held — current, or kept for want of an
+  answer — was taken for a fresh one: the run read "refreshed from a
+  provider" with every provider out of reach.
 
 ## [0.4.0] — 2026-09-29
 

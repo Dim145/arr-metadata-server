@@ -59,8 +59,12 @@ async fn refresh_series(state: &AppState, item: &MediaItem) -> Result<Option<Med
         return Ok(Some(refreshed));
     }
 
+    // Fetched again, not looked up: the copy held is no refresh. Through the
+    // lookup Sonarr's requests take, it came back — fresh as it was, or kept
+    // because nobody answered — and a refresh nobody answered was reported
+    // as one from a provider.
     if let Some(tvdb_id) = ids.tvdb {
-        return series::by_tvdb_id(state, tvdb_id).await;
+        return series::refetch_by_tvdb_id(state, tvdb_id).await;
     }
 
     Ok(None)
