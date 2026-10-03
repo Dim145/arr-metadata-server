@@ -164,6 +164,15 @@ export async function startProvider(): Promise<Provider> {
     signInAs: (person) => {
       next = person
     },
-    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+    close: () =>
+      new Promise<void>((resolve) => {
+        server.close(() => resolve())
+        // The server's HTTP client now and then parks a spare connection: one
+        // it opened while another was on its way back to the pool, hyper's own
+        // race, on which it never writes. Node waits for every connection
+        // before `close()` answers, and lets go of one it has heard nothing on
+        // only after `headersTimeout`, a minute — longer than the hook has.
+        server.closeAllConnections()
+      }),
   }
 }
