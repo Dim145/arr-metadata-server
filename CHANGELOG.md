@@ -31,6 +31,17 @@ may change what the API or the configuration means, and says so here.
   everything TMDB sent was complete: that last episode, which TheTVDB counts
   in season 3, reached an English Sonarr in French. A series shows it from
   its next refresh; Sonarr takes it at its own next refresh of the series.
+- An episode TMDB has no name for reaches Sonarr as `TBA`, as Skyhook sends
+  it. TMDB calls such an episode by its number in the language asked —
+  `Épisode 3`, `Folge 3`, `第3話` — and that went to Sonarr as its title:
+  Sonarr named files after it, and its check that an episode is named
+  before it is imported let it through. *Reincarnated as a Sword*'s second
+  season reached a Sonarr from a server set to French as `Épisode 3` to
+  `Épisode 12`. TMDB's stand-in, in any of the forms its languages give it
+  and with the episode's own number, is now no name, in the catalogue as in
+  the text fetched for another language; another provider's title takes its
+  place where there is one. A series shows it from its next refresh; Sonarr
+  takes it at its own next refresh of the series.
 
 ## [0.4.0] — 2026-09-29
 

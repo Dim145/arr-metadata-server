@@ -183,7 +183,9 @@ fn episodes(seasons: &[models::Season]) -> Vec<Episode> {
                 aired_after_season_number: None,
                 aired_before_season_number: None,
                 aired_before_episode_number: None,
-                title: ep.name.clone().unwrap_or_default(),
+                // Not TMDB's "Épisode 3" for one it has no name for: that
+                // would be the title Sonarr names files after.
+                title: ep.title().unwrap_or_default(),
                 overview: non_empty(ep.overview.as_deref()),
                 air_date,
                 air_date_utc,
@@ -1296,6 +1298,47 @@ mod fixtures {
         assert_eq!(resource.rating.as_ref().unwrap().value, "8.9");
         // Every episode must carry the id the client asked for.
         assert!(resource.episodes.iter().all(|e| e.tvdb_show_id == 81189));
+    }
+
+    #[test]
+    fn an_episode_tmdb_only_numbers_reaches_sonarr_as_tba() {
+        // TMDB in French for Reincarnated as a Sword's second season: the
+        // first episode is named, the others are called by their number, in
+        // French. "Épisode 3" reached Sonarr as a title where Skyhook sends
+        // TBA, and Sonarr named the file after it. Left empty, the title is
+        // TheTVDB's if it has one, and TBA otherwise.
+        let episode = |number: i32, name: &str| models::Episode {
+            id: None,
+            season_number: 2,
+            episode_number: number,
+            name: Some(name.into()),
+            overview: None,
+            air_date: None,
+            runtime: None,
+            still_path: None,
+            vote_average: None,
+            vote_count: None,
+            episode_type: None,
+        };
+        let seasons = [models::Season {
+            season_number: 2,
+            episodes: vec![
+                episode(1, "Cette île qui flotte dans le ciel"),
+                episode(2, "Épisode 2"),
+                episode(3, "Épisode 3"),
+            ],
+        }];
+        let item = tv_to_item(&tv(), &seasons);
+
+        let stored: Vec<&str> = item.episodes.iter().map(|e| e.title.as_str()).collect();
+        assert_eq!(stored, ["Cette île qui flotte dans le ciel", "", ""]);
+
+        let sent: Vec<String> = sonarr::from_item(&item, 410378, "en")
+            .episodes
+            .into_iter()
+            .map(|e| e.title)
+            .collect();
+        assert_eq!(sent, ["Cette île qui flotte dans le ciel", "TBA", "TBA"]);
     }
 
     #[test]

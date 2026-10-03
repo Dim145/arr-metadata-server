@@ -245,11 +245,11 @@ fn tmdb_texts(item: &MediaItem, seasons: &[Season]) -> Vec<repo::translation::Ep
             Some(repo::translation::EpisodeText {
                 season_number: e.season_number,
                 episode_number,
-                title: e
-                    .name
-                    .clone()
-                    .filter(|t| !t.trim().is_empty())
-                    .filter(|t| !is_placeholder(t)),
+                // TMDB's "Episode 3" or "Épisode 3", which names an episode by
+                // TMDB's own number, is no text: taken, it replaced a real
+                // title, and dropped in one language only, it let the stand-in
+                // the work is stored with through to Sonarr.
+                title: e.title(),
                 overview: e.overview.clone().filter(|o| !o.trim().is_empty()),
             })
         })
@@ -277,10 +277,11 @@ fn incomplete(item: &MediaItem, texts: &[repo::translation::EpisodeText]) -> boo
 
 /// Fill what TMDB left empty from TheTVDB.
 ///
-/// TMDB serves a handful of languages well and returns an English placeholder
-/// for the rest; TheTVDB holds dozens. Asking it second means a French request
-/// is answered even when TMDB has no French, without displacing TMDB's text
-/// where it exists — the same fill-do-not-replace rule the merge engine uses.
+/// TMDB serves a handful of languages well and, for the rest, has only an
+/// episode's number to give, put in words of the language; TheTVDB holds
+/// dozens. Asking it second means a French request is answered even when TMDB
+/// has no French, without displacing TMDB's text where it exists — the same
+/// fill-do-not-replace rule the merge engine uses.
 async fn fill_from_tvdb(
     state: &AppState,
     item: &MediaItem,
@@ -350,20 +351,6 @@ async fn fetch_episodes(state: &AppState, item: &MediaItem, language: &str) {
     }
 }
 
-/// Whether this is TMDB's stand-in for an episode it has no title for.
-///
-/// Asking for a language TMDB has not translated gets `Episode 1` back rather
-/// than nothing, in English, whatever the language. Storing that would replace a
-/// real title like `Pilot` with something strictly worse.
-fn is_placeholder(title: &str) -> bool {
-    let rest = match title.trim().strip_prefix("Episode ") {
-        Some(rest) => rest,
-        None => return false,
-    };
-
-    !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit())
-}
-
 /// The two-letter code for a three-letter one, for talking to TMDB.
 ///
 /// Only the languages TMDB actually serves need to round-trip; anything else
@@ -411,23 +398,6 @@ mod tests {
     fn an_unknown_code_passes_through_rather_than_being_dropped() {
         assert_eq!(normalize("xx"), "xx");
         assert_eq!(normalize("qqq"), "qqq");
-    }
-
-    #[test]
-    fn tmdbs_untranslated_placeholder_is_recognised() {
-        // Asking for a language TMDB has not translated returns this, in
-        // English, and storing it would lose a real title.
-        assert!(is_placeholder("Episode 1"));
-        assert!(is_placeholder("Episode 42"));
-        assert!(is_placeholder("  Episode 7  "));
-
-        assert!(!is_placeholder("Pilot"));
-        assert!(!is_placeholder("Episode of Rain"));
-        assert!(!is_placeholder("Episode"));
-        assert!(
-            !is_placeholder("Épisode 1"),
-            "a real French title is not a placeholder"
-        );
     }
 
     #[test]
@@ -652,5 +622,55 @@ mod tests {
         assert!(incomplete(&item, &[text(0, 2)]));
         assert!(incomplete(&item, &[text(0, 1), text(0, 2)]));
         assert!(!incomplete(&item, &[text(0, 1), text(0, 2), text(3, 33)]));
+    }
+
+    #[test]
+    fn tmdbs_stand_in_is_no_text_in_the_language_asked() {
+        // Reincarnated as a Sword's second season, asked of TMDB in French:
+        // only the first episode has a French name, the others are called by
+        // their number. Taken as text, "Épisode 2" would replace a title the
+        // work holds, or TheTVDB's; and with only the English stand-in
+        // dropped, the French one a server set to French holds went to an
+        // English Sonarr. TheTVDB is asked for the two instead.
+        let mut item = MediaItem::empty(MediaKind::Series);
+        item.episodes = vec![stored(2, 1, None), stored(2, 2, None), stored(2, 3, None)];
+        let seasons = [tmdb_season(
+            2,
+            &[
+                (1, 4815162, "Cette île qui flotte dans le ciel"),
+                (2, 4815163, "Épisode 2"),
+                (3, 4815164, "Épisode 3"),
+            ],
+        )];
+
+        let texts = tmdb_texts(&item, &seasons);
+        let titles: Vec<Option<&str>> = texts.iter().map(|t| t.title.as_deref()).collect();
+
+        assert_eq!(
+            titles,
+            [Some("Cette île qui flotte dans le ciel"), None, None]
+        );
+        assert!(incomplete(&item, &texts), "TheTVDB is asked for the rest");
+    }
+
+    #[test]
+    fn a_specials_stand_in_is_known_by_tmdbs_own_number() {
+        // A special is placed by the TMDB id the merge gave it, under the
+        // work's number, and TMDB's stand-in names it by TMDB's: TMDB's fifth
+        // special, TheTVDB's first, is "Episode 5". "Episode 1" for TMDB's
+        // sixth is a name somebody gave it, wherever the work counts it.
+        let mut item = MediaItem::empty(MediaKind::Series);
+        item.episodes = vec![stored(0, 1, Some(105)), stored(0, 2, Some(106))];
+        let seasons = [tmdb_season(
+            0,
+            &[(5, 105, "Episode 5"), (6, 106, "Episode 1")],
+        )];
+
+        let placed: Vec<(i32, Option<String>)> = tmdb_texts(&item, &seasons)
+            .into_iter()
+            .map(|t| (t.episode_number, t.title))
+            .collect();
+
+        assert_eq!(placed, [(1, None), (2, Some("Episode 1".into()))]);
     }
 }

@@ -137,6 +137,7 @@ pub struct Episode {
     pub id: Option<i64>,
     pub season_number: i32,
     pub episode_number: i32,
+    /// As TMDB sends it, stand-in included: [`Episode::title`] is the name.
     pub name: Option<String>,
     pub overview: Option<String>,
     pub air_date: Option<String>,
@@ -146,6 +147,86 @@ pub struct Episode {
     pub vote_count: Option<i64>,
     /// `finale`, `mid_season`, … on recent API versions.
     pub episode_type: Option<String>,
+}
+
+impl Episode {
+    /// The episode's name, or none where TMDB only stands one in.
+    ///
+    /// TMDB leaves no episode unnamed: one it has no name for in the language
+    /// asked is called by its number in that language, `Episode 3`, `Épisode 3`,
+    /// `Folge 3`, `第3話`. Taken for a title, that is what Sonarr names files
+    /// after where Skyhook sends `TBA`, and Sonarr's check that an episode is
+    /// named before it is imported waits only on `TBA` or on nothing. Without
+    /// it, another provider's title fills the gap, or the episode goes out as
+    /// `TBA`.
+    pub fn title(&self) -> Option<String> {
+        self.name
+            .as_deref()
+            .filter(|name| !name.trim().is_empty())
+            .filter(|name| !is_placeholder(name, self.episode_number))
+            .map(String::from)
+    }
+}
+
+/// TMDB's stand-ins for an episode's name, `{n}` where its number goes.
+///
+/// What TMDB answered in each of its 144 primary translations for episodes of
+/// three unrelated series that nobody has named (asked on 2026-10-03). A
+/// language with no form of its own gets the English one.
+const PLACEHOLDERS: &[&str] = &[
+    "Episode {n}",      // English, and every language without its own
+    "Épisode {n}",      // French
+    "Folge {n}",        // German
+    "Episodio {n}",     // Spanish, Italian, Galician
+    "Episódio {n}",     // Portuguese
+    "Episodi {n}",      // Catalan
+    "Episodul {n}",     // Romanian
+    "Aflevering {n}",   // Dutch
+    "Afsnit {n}",       // Danish
+    "Avsnitt {n}",      // Swedish
+    "Jakso {n}",        // Finnish
+    "Odcinek {n}",      // Polish
+    "Epizoda {n}",      // Croatian
+    "Epizóda {n}",      // Slovak
+    "Epizodas {n}",     // Lithuanian
+    "Epizodo {n}",      // Esperanto
+    "Epızod {n}",       // Kazakh
+    "Xalqada {n}",      // Somali
+    "{n}. epizoda",     // Czech
+    "{n}. epizód",      // Hungarian
+    "{n}. sērija",      // Latvian
+    "{n}. Bölüm",       // Turkish
+    "{n}. Atala",       // Basque
+    "Επεισόδιο {n}",    // Greek
+    "Эпизод {n}",       // Russian
+    "Епизод {n}",       // Bulgarian
+    "Епизода {n}",      // Serbian
+    "Серія {n}",        // Ukrainian
+    "פרק {n}",          // Hebrew
+    "الحلقة {n}",       // Arabic
+    "\u{202b}قسمت {n}", // Persian, behind a right-to-left embedding mark
+    "에피소드 {n}",     // Korean
+    "第{n}話",          // Japanese
+    "第 {n} 集",        // Chinese
+];
+
+/// Whether `name` is TMDB's stand-in for episode `number`.
+///
+/// Only with the episode's own number, as TMDB numbers it: that is the one
+/// TMDB puts in its stand-in, never an absolute count. A name with another
+/// number was given by somebody: Doraemon's 1082nd is `Episode 925` in
+/// English, and `Épisode 1082` in French.
+fn is_placeholder(name: &str, number: i32) -> bool {
+    let name = name.trim();
+    let number = number.to_string();
+
+    PLACEHOLDERS.iter().any(|form| {
+        form.split_once("{n}").is_some_and(|(before, after)| {
+            name.strip_prefix(before)
+                .and_then(|rest| rest.strip_suffix(after))
+                == Some(number.as_str())
+        })
+    })
 }
 
 // ─── movie ───────────────────────────────────────────────────────────────────
@@ -393,4 +474,97 @@ pub struct ChangesResponse {
 pub struct ChangedId {
     pub id: i64,
     pub adult: Option<bool>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn episode(number: i32, name: Option<&str>) -> Episode {
+        Episode {
+            id: None,
+            season_number: 2,
+            episode_number: number,
+            name: name.map(String::from),
+            overview: None,
+            air_date: None,
+            runtime: None,
+            still_path: None,
+            vote_average: None,
+            vote_count: None,
+            episode_type: None,
+        }
+    }
+
+    #[test]
+    fn tmdbs_stand_in_is_no_name_in_any_of_its_languages() {
+        // What TMDB answers, in some of its languages, for the third episode
+        // of Reincarnated as a Sword's second season, which nobody has named
+        // yet. A server set to French sent Sonarr "Épisode 3" for its title,
+        // where Skyhook sends TBA.
+        for name in [
+            "Episode 3",
+            "Épisode 3",
+            "Folge 3",
+            "Episodio 3",
+            "Episódio 3",
+            "Aflevering 3",
+            "Odcinek 3",
+            "3. epizoda",
+            "第3話",
+            "第 3 集",
+            "\u{202b}قسمت 3",
+        ] {
+            assert_eq!(episode(3, Some(name)).title(), None, "{name:?}");
+        }
+        assert_eq!(episode(3, Some("  Épisode 3 ")).title(), None);
+    }
+
+    #[test]
+    fn a_stand_in_names_the_episode_by_its_own_number() {
+        // TMDB puts the episode's own number in it. Another number is a name
+        // somebody gave it: Doraemon's 1082nd is "Episode 925" in English.
+        assert_eq!(
+            episode(1082, Some("Episode 925")).title().as_deref(),
+            Some("Episode 925")
+        );
+        assert_eq!(episode(1082, Some("Épisode 1082")).title(), None);
+        assert_eq!(
+            episode(3, Some("Épisode 30")).title().as_deref(),
+            Some("Épisode 30")
+        );
+        assert_eq!(
+            episode(30, Some("Épisode 3")).title().as_deref(),
+            Some("Épisode 3")
+        );
+    }
+
+    #[test]
+    fn a_real_name_is_kept_as_it_came() {
+        assert_eq!(
+            episode(1, Some("The Floating Island")).title().as_deref(),
+            Some("The Floating Island")
+        );
+        // Like a stand-in, but somebody's title all the same.
+        for name in [
+            "Episode of Rain",
+            "Episode",
+            "Épisode 3 : le retour",
+            "Episode III",
+        ] {
+            assert_eq!(episode(3, Some(name)).title().as_deref(), Some(name));
+        }
+        // Spelled otherwise than TMDB spells its own.
+        assert_eq!(
+            episode(3, Some("episode 3")).title().as_deref(),
+            Some("episode 3")
+        );
+    }
+
+    #[test]
+    fn a_blank_name_is_none() {
+        assert_eq!(episode(1, None).title(), None);
+        assert_eq!(episode(1, Some("")).title(), None);
+        assert_eq!(episode(1, Some("   ")).title(), None);
+    }
 }
