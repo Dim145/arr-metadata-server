@@ -7,7 +7,7 @@ use crate::{
     db::repo,
     domain::{ExternalSource, MediaItem, MediaKind},
     providers::tmdb::map as tmdb_map,
-    service::{FETCHING, Found, cached_search, gather, ids, load, persist, served_as_held},
+    service::{FETCHING, Found, cached_search, gather, ids, local, or_held, persist},
     state::AppState,
 };
 
@@ -17,8 +17,12 @@ use crate::{
 /// one upstream call per title in a single request.
 const MAX_BULK: usize = 100;
 
+/// A film by its TMDB id: as it is held, or fetched again when it is due —
+/// and as it is held after all when nothing answers (see
+/// [`crate::service::or_held`]).
 pub async fn by_tmdb_id(state: &AppState, tmdb_id: i64) -> Result<Option<MediaItem>> {
-    if let Some(item) = local(state, ExternalSource::TmdbMovie, &tmdb_id.to_string()).await? {
+    let value = tmdb_id.to_string();
+    if let Some(item) = local(state, ExternalSource::TmdbMovie, &value).await? {
         return Ok(Some(item));
     }
 
@@ -26,13 +30,22 @@ pub async fn by_tmdb_id(state: &AppState, tmdb_id: i64) -> Result<Option<MediaIt
     // for a hundred at once, and a request page opening asks for the same film
     // it just listed.
     let _fetching = FETCHING.lock(&format!("movie:tmdb:{tmdb_id}")).await;
-    if let Some(item) = local(state, ExternalSource::TmdbMovie, &tmdb_id.to_string()).await? {
+    if let Some(item) = local(state, ExternalSource::TmdbMovie, &value).await? {
         return Ok(Some(item));
     }
 
-    fetch_from_tmdb(state, tmdb_id).await
+    let fetched = fetch_from_tmdb(state, tmdb_id).await;
+    or_held(
+        state,
+        MediaKind::Movie,
+        ExternalSource::TmdbMovie,
+        &value,
+        fetched,
+    )
+    .await
 }
 
+/// A film by its IMDb id, as [`by_tmdb_id`] has it by TMDB's.
 pub async fn by_imdb_id(state: &AppState, imdb_id: &str) -> Result<Option<MediaItem>> {
     let Some(normalized) = crate::domain::ids::normalize_imdb_id(imdb_id) else {
         return Ok(None);
@@ -51,10 +64,23 @@ pub async fn by_imdb_id(state: &AppState, imdb_id: &str) -> Result<Option<MediaI
         return Ok(Some(item));
     }
 
+    let fetched = fetch_by_imdb_id(state, &normalized).await;
+    or_held(
+        state,
+        MediaKind::Movie,
+        ExternalSource::Imdb,
+        &normalized,
+        fetched,
+    )
+    .await
+}
+
+/// Ask the providers for a film by its IMDb id, and store what they say.
+async fn fetch_by_imdb_id(state: &AppState, imdb_id: &str) -> Result<Option<MediaItem>> {
     let tmdb_id = match state.tmdb.is_configured() {
         true => state
             .tmdb
-            .find("imdb_id", &normalized)
+            .find("imdb_id", imdb_id)
             .await?
             .movie_results
             .first()
@@ -62,11 +88,11 @@ pub async fn by_imdb_id(state: &AppState, imdb_id: &str) -> Result<Option<MediaI
         false => None,
     };
 
-    if let Some(item) = gather::movie(state, tmdb_id, Some(&normalized)).await? {
+    if let Some(item) = gather::movie(state, tmdb_id, Some(imdb_id)).await? {
         return Ok(Some(item));
     }
 
-    from_radarr(state, tmdb_id, Some(&normalized)).await
+    from_radarr(state, tmdb_id, Some(imdb_id)).await
 }
 
 /// Several movies at once, in the order requested.
@@ -274,21 +300,6 @@ fn add_unseen(results: &mut Vec<MediaItem>, candidate: MediaItem) {
     }
 }
 
-/// A locally stored film, if it exists and will do as it is: see
-/// [`served_as_held`]. One switched off is served as it is held, and no
-/// provider is asked for it.
-async fn local(state: &AppState, source: ExternalSource, value: &str) -> Result<Option<MediaItem>> {
-    let Some(id) = repo::item::find_id_by_external(&state.db, source, value).await? else {
-        return Ok(None);
-    };
-
-    let Some(item) = load(state, &id).await? else {
-        return Ok(None);
-    };
-
-    Ok(served_as_held(&item, chrono::Utc::now()).then_some(item))
-}
-
 async fn local_search(state: &AppState, term: &str, year: Option<i32>) -> Result<Vec<MediaItem>> {
     let query = repo::item::Query {
         term: Some(term.to_string()),
@@ -357,5 +368,101 @@ async fn from_radarr(
             );
             Ok(None)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        domain::ExternalIds,
+        service::{
+            served_as_held,
+            testing::{overdue, server},
+        },
+    };
+
+    /// A film fetched a day ago, and due again since an hour ago.
+    async fn due(state: &AppState, title: &str, tmdb: i64, imdb: &str) -> MediaItem {
+        let ids = ExternalIds {
+            tmdb: Some(tmdb),
+            imdb: Some(imdb.into()),
+            ..Default::default()
+        };
+        overdue(&state.db, MediaKind::Movie, title, ids, true).await
+    }
+
+    /// The film as the store holds it now.
+    async fn now_held(state: &AppState, film: &MediaItem) -> MediaItem {
+        repo::item::get(&state.db, &film.id)
+            .await
+            .expect("read")
+            .expect("held")
+    }
+
+    /// What was found, by id.
+    fn ids(films: impl IntoIterator<Item = MediaItem>) -> Vec<String> {
+        films.into_iter().map(|film| film.id).collect()
+    }
+
+    #[tokio::test]
+    async fn a_film_due_again_that_no_provider_answers_for_is_served_as_held() {
+        let (state, nowhere) = server().await;
+        let matrix = due(&state, "The Matrix", 603, "tt0133093").await;
+
+        // Due: the providers are asked again, none answers, and Radarr is
+        // given the copy held rather than a 404.
+        let found = by_tmdb_id(&state, 603).await.expect("answered");
+        assert_eq!(ids(found), [matrix.id.as_str()]);
+        assert!(nowhere.asked() > 0, "the providers were asked");
+
+        // As a failed refresh, tried again later, as a series' is...
+        let held = now_held(&state, &matrix).await;
+        assert_eq!(
+            held.refresh_error.as_deref(),
+            Some("no provider answered; the stored entry was kept")
+        );
+        assert!(served_as_held(&held, chrono::Utc::now()));
+
+        // ...so what Radarr asks next is answered from the store at once.
+        for found in [
+            by_tmdb_id(&state, 603).await.map(ids),
+            by_imdb_id(&state, "tt0133093").await.map(ids),
+            search(&state, "tmdb:603", None).await.map(ids),
+            bulk(&state, &[603]).await.map(ids),
+        ] {
+            assert_eq!(found.expect("answered"), [matrix.id.as_str()]);
+        }
+        assert_eq!(nowhere.asked(), 0, "no provider was asked again");
+    }
+
+    #[tokio::test]
+    async fn so_is_one_asked_for_by_its_imdb_id_or_in_bulk() {
+        let (state, nowhere) = server().await;
+        let matrix = due(&state, "The Matrix", 603, "tt0133093").await;
+        let spirited_away = due(&state, "Spirited Away", 129, "tt0245429").await;
+
+        // By its IMDb id, TMDB is first asked which film it is: that failing
+        // is no 404 either.
+        let found = by_imdb_id(&state, "tt0133093").await.expect("answered");
+        assert_eq!(ids(found), [matrix.id.as_str()]);
+        let failure = now_held(&state, &matrix).await.refresh_error;
+        assert!(
+            failure
+                .as_deref()
+                .is_some_and(|failure| failure.starts_with("TMDB request failed")),
+            "{failure:?}"
+        );
+
+        // Radarr's bulk request keeps it, and leaves out a film nobody holds.
+        let bulked = bulk(&state, &[129, 1]).await.expect("answered");
+        assert_eq!(ids(bulked), [spirited_away.id.as_str()]);
+        assert!(
+            now_held(&state, &spirited_away)
+                .await
+                .refresh_error
+                .is_some()
+        );
+        assert!(nowhere.asked() > 0, "the providers were asked");
     }
 }

@@ -7,10 +7,7 @@ use crate::{
     db::repo,
     domain::{ExternalSource, MediaItem, MediaKind},
     providers::{names, tmdb::map as tmdb_map},
-    service::{
-        FETCHING, Found, cached_search, gather, ids, load, persist, retry_after_failure,
-        served_as_held,
-    },
+    service::{FETCHING, Found, cached_search, gather, held, ids, load, local, or_held, persist},
     state::AppState,
     wire::sonarr,
 };
@@ -49,7 +46,14 @@ pub async fn by_tvdb_id(state: &AppState, tvdb_id: i64) -> Result<Option<MediaIt
     }
 
     let fetched = fetch_by_tvdb_id(state, tvdb_id).await;
-    or_held(state, ExternalSource::TvdbSeries, &value, fetched).await
+    or_held(
+        state,
+        MediaKind::Series,
+        ExternalSource::TvdbSeries,
+        &value,
+        fetched,
+    )
+    .await
 }
 
 /// A series fetched again by its TVDB id, whatever is held: for a refresh,
@@ -115,7 +119,14 @@ pub async fn by_tmdb_id(state: &AppState, tmdb_id: i64) -> Result<Option<MediaIt
     }
 
     let fetched = fetch_from_tmdb(state, tmdb_id).await;
-    or_held(state, ExternalSource::TmdbTv, &tmdb_id.to_string(), fetched).await
+    or_held(
+        state,
+        MediaKind::Series,
+        ExternalSource::TmdbTv,
+        &tmdb_id.to_string(),
+        fetched,
+    )
+    .await
 }
 
 pub async fn by_imdb_id(state: &AppState, imdb_id: &str) -> Result<Option<MediaItem>> {
@@ -126,7 +137,14 @@ pub async fn by_imdb_id(state: &AppState, imdb_id: &str) -> Result<Option<MediaI
     }
 
     let fetched = fetch_by_imdb_id(state, imdb_id).await;
-    or_held(state, ExternalSource::Imdb, imdb_id, fetched).await
+    or_held(
+        state,
+        MediaKind::Series,
+        ExternalSource::Imdb,
+        imdb_id,
+        fetched,
+    )
+    .await
 }
 
 async fn fetch_by_imdb_id(state: &AppState, imdb_id: &str) -> Result<Option<MediaItem>> {
@@ -168,7 +186,14 @@ pub async fn by_fankai_id(state: &AppState, fankai_id: i64) -> Result<Option<Med
     }
 
     let fetched = gather::fankai_series(state, fankai_id).await;
-    or_held(state, ExternalSource::Fankai, &value, fetched).await
+    or_held(
+        state,
+        MediaKind::Series,
+        ExternalSource::Fankai,
+        &value,
+        fetched,
+    )
+    .await
 }
 
 /// A series by one of its MyAnimeList or AniList entries.
@@ -329,85 +354,6 @@ pub async fn search(state: &AppState, term: &str) -> Result<Vec<MediaItem>> {
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
-
-/// A locally stored series, if it exists and will do as it is: see
-/// [`served_as_held`].
-///
-/// Not when it is due: its refresh has come, or a client asking for it now is
-/// to be given a fresh copy (see [`crate::service::due_on_read`]). Returning
-/// `None` then lets the ladder continue to a refetch, and [`or_held`] answers
-/// with this copy after all when that comes to nothing. One switched off is
-/// never due here: it is served as it is held, and no provider is asked.
-async fn local(state: &AppState, source: ExternalSource, value: &str) -> Result<Option<MediaItem>> {
-    let Some(item) = held(state, source, value).await? else {
-        return Ok(None);
-    };
-
-    Ok(served_as_held(&item, chrono::Utc::now()).then_some(item))
-}
-
-/// What a fetch came to, or the stored copy when it came to nothing.
-///
-/// A series held here and due again is fetched before it is served; when no
-/// provider answers, or the fetch fails, the copy held is served as it is —
-/// answering when the providers do not is what keeping one is for — rather
-/// than a 404 Sonarr would act on. The attempt is recorded as a failed
-/// refresh, so the requests that follow are answered from the store at once
-/// instead of each waiting on the same providers to fail again: until the
-/// retry the failure sets ([`retry_after_failure`]), and for a series near
-/// its premiere, for the hour [`due_on_read`] leaves between two attempts.
-async fn or_held(
-    state: &AppState,
-    source: ExternalSource,
-    value: &str,
-    fetched: Result<Option<MediaItem>>,
-) -> Result<Option<MediaItem>> {
-    let failure = match &fetched {
-        Ok(Some(_)) => return fetched,
-        Ok(None) => "no provider answered; the stored entry was kept".to_string(),
-        Err(e) => format!("{e:#}"),
-    };
-
-    let item = match held(state, source, value).await {
-        Ok(Some(item)) if item.kind == MediaKind::Series => item,
-        _ => return fetched,
-    };
-
-    // Refreshed meanwhile — by the sweep, say — or switched off since: the
-    // copy is the one to serve, and no refresh of it failed.
-    if served_as_held(&item, chrono::Utc::now()) {
-        return Ok(Some(item));
-    }
-
-    tracing::warn!(
-        id = %item.id,
-        error = %failure,
-        "the series could not be fetched again; answering with the stored copy"
-    );
-    let next = retry_after_failure(Some(&item));
-    if let Err(e) =
-        repo::item::mark_refreshed(&state.db, &item.id, Some(&next), Some(&failure)).await
-    {
-        tracing::warn!(id = %item.id, error = %e, "could not record the failed refresh");
-    }
-    state.caches.touched(&item.id).await;
-
-    Ok(Some(item))
-}
-
-/// A locally stored series whatever its age, switched off or not: for a
-/// source that is switched off, what it fetched while on is served as it is;
-/// it is what [`local`] weighs; and it is what [`or_held`] answers with when
-/// fetching it again came to nothing. A series switched off in the catalogue
-/// is still Sonarr's — a 404 would have Sonarr take it for deleted — so it is
-/// served from here like any other.
-async fn held(state: &AppState, source: ExternalSource, value: &str) -> Result<Option<MediaItem>> {
-    let Some(id) = repo::item::find_id_by_external(&state.db, source, value).await? else {
-        return Ok(None);
-    };
-
-    load(state, &id).await
-}
 
 async fn local_search(state: &AppState, term: &str) -> Result<Vec<MediaItem>> {
     let query = repo::item::Query {

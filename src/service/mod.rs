@@ -831,6 +831,87 @@ fn is_stale(item: &MediaItem, now: DateTime<Utc>) -> bool {
     }
 }
 
+/// A stored work by an id a client knows it by, whatever its age, switched
+/// off or not: what [`local`] weighs, and what [`or_held`] answers with when
+/// fetching it again came to nothing. For a source that is switched off, what
+/// it fetched while on is served as it is. A work switched off in the
+/// catalogue is still Sonarr's or Radarr's — a 404 would have Sonarr take a
+/// series for deleted — so it is served from here like any other.
+async fn held(state: &AppState, source: ExternalSource, value: &str) -> Result<Option<MediaItem>> {
+    let Some(id) = repo::item::find_id_by_external(&state.db, source, value).await? else {
+        return Ok(None);
+    };
+
+    load(state, &id).await
+}
+
+/// A stored work, if it exists and will do as it is: see [`served_as_held`].
+///
+/// Not when it is due: its refresh has come, or a client asking for a series
+/// now is to be given a fresh copy (see [`due_on_read`]). Returning `None`
+/// then lets the ladder continue to a refetch, and [`or_held`] answers with
+/// this copy after all when that comes to nothing. One switched off is never
+/// due here: it is served as it is held, and no provider is asked.
+async fn local(state: &AppState, source: ExternalSource, value: &str) -> Result<Option<MediaItem>> {
+    let Some(item) = held(state, source, value).await? else {
+        return Ok(None);
+    };
+
+    Ok(served_as_held(&item, Utc::now()).then_some(item))
+}
+
+/// What a fetch came to, or the stored work of that `kind` when it came to
+/// nothing.
+///
+/// A series or a film held here and due again is fetched before it is
+/// served; when no provider answers, or the fetch fails, the copy held is
+/// served as it is — answering when the providers do not is what keeping one
+/// is for — rather than a 404 Sonarr or Radarr would act on. The attempt is
+/// recorded as a failed refresh, so the requests that follow are answered
+/// from the store at once instead of each waiting on the same providers to
+/// fail again: until the retry the failure sets ([`retry_after_failure`]),
+/// and for a series near its premiere, for the hour [`due_on_read`] leaves
+/// between two attempts.
+async fn or_held(
+    state: &AppState,
+    kind: MediaKind,
+    source: ExternalSource,
+    value: &str,
+    fetched: Result<Option<MediaItem>>,
+) -> Result<Option<MediaItem>> {
+    let failure = match &fetched {
+        Ok(Some(_)) => return fetched,
+        Ok(None) => "no provider answered; the stored entry was kept".to_string(),
+        Err(e) => format!("{e:#}"),
+    };
+
+    let item = match held(state, source, value).await {
+        Ok(Some(item)) if item.kind == kind => item,
+        _ => return fetched,
+    };
+
+    // Refreshed meanwhile — by the sweep, say — or switched off since: the
+    // copy is the one to serve, and no refresh of it failed.
+    if served_as_held(&item, Utc::now()) {
+        return Ok(Some(item));
+    }
+
+    tracing::warn!(
+        id = %item.id,
+        error = %failure,
+        "the work could not be fetched again; answering with the stored copy"
+    );
+    let next = retry_after_failure(Some(&item));
+    if let Err(e) =
+        repo::item::mark_refreshed(&state.db, &item.id, Some(&next), Some(&failure)).await
+    {
+        tracing::warn!(id = %item.id, error = %e, "could not record the failed refresh");
+    }
+    state.caches.touched(&item.id).await;
+
+    Ok(Some(item))
+}
+
 /// Serve from cache, or run `fetch` and cache its result.
 /// The key a search is cached under.
 ///
@@ -1451,27 +1532,86 @@ mod schedule_tests {
     }
 }
 
+/// What the tests of a client's request run against: the whole server, on a
+/// database in memory, TMDB and TheTVDB given a key, and every provider at an
+/// address that answers nothing and counts what it is asked.
 #[cfg(test)]
-mod switched_off_tests {
+mod testing {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
     use super::*;
     use crate::{config, db::Db, domain::ExternalIds};
 
-    /// A real database, in memory, with the real migrations applied.
-    async fn db() -> Db {
-        let db = Db::connect(&config::Database {
+    /// Where every provider is: a port that takes each connection, counts it
+    /// and hangs up. Nothing answers, and nothing is asked unseen.
+    pub struct Nowhere(Arc<AtomicUsize>);
+
+    impl Nowhere {
+        /// How many times a provider was asked since the last look.
+        pub fn asked(&self) -> usize {
+            self.0.swap(0, Ordering::SeqCst)
+        }
+    }
+
+    /// The server, with its providers at [`Nowhere`].
+    pub async fn server() -> (AppState, Nowhere) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("a port");
+        let at = format!("http://{}", listener.local_addr().expect("its address"));
+        let asked = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&asked);
+        tokio::spawn(async move {
+            while let Ok((connection, _)) = listener.accept().await {
+                counted.fetch_add(1, Ordering::SeqCst);
+                drop(connection);
+            }
+        });
+
+        let mut config = config::Config::from_env().expect("a configuration");
+        config.mode = config::Mode::Single;
+        config.database = config::Database {
             url: "sqlite::memory:".into(),
             max_connections: 1,
             acquire_timeout: std::time::Duration::from_secs(5),
-        })
-        .await
-        .expect("in-memory database");
+        };
+        config.security.bootstrap_admin = None;
+        config.cache.redis_url = None;
+        config.media.storage = config::MediaStorage::Off;
+        config.clients = None;
+        config.tmdb.api_key = Some("key".into());
+        config.tmdb.language = "en-US".into();
+        config.tvdb.api_key = Some("key".into());
+        config.tvdb.enabled = true;
+        for upstream in [
+            &mut config.tmdb.upstream,
+            &mut config.tvdb.upstream,
+            &mut config.fanart.upstream,
+            &mut config.skyhook.upstream,
+            &mut config.sonarr_services.upstream,
+            &mut config.sonarr_services.xem_upstream,
+            &mut config.radarr_metadata.upstream,
+            &mut config.tvmaze.upstream,
+            &mut config.anilist.upstream,
+            &mut config.mal.upstream,
+            &mut config.mal.jikan_upstream,
+            &mut config.fankai.upstream,
+            &mut config.fankai_wiki.upstream,
+            &mut config.imdb.datasets,
+            &mut config.anime_mapping.url,
+        ] {
+            upstream.clone_from(&at);
+        }
 
-        db.migrate().await.expect("migrations");
-        db
+        let state = AppState::bootstrap(config).await.expect("a server");
+        (state, Nowhere(asked))
     }
 
     /// A work fetched a day ago, and due again since an hour ago.
-    async fn overdue(
+    pub async fn overdue(
         db: &Db,
         kind: MediaKind,
         title: &str,
@@ -1499,6 +1639,26 @@ mod switched_off_tests {
         .await
         .expect("stored");
         item
+    }
+}
+
+#[cfg(test)]
+mod switched_off_tests {
+    use super::{testing::overdue, *};
+    use crate::{config, db::Db, domain::ExternalIds};
+
+    /// A real database, in memory, with the real migrations applied.
+    async fn db() -> Db {
+        let db = Db::connect(&config::Database {
+            url: "sqlite::memory:".into(),
+            max_connections: 1,
+            acquire_timeout: std::time::Duration::from_secs(5),
+        })
+        .await
+        .expect("in-memory database");
+
+        db.migrate().await.expect("migrations");
+        db
     }
 
     #[tokio::test]

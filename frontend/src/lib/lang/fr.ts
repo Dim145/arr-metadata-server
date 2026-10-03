@@ -1276,7 +1276,7 @@ export const fr: Dict = {
         added: (n: number, list: string) => `${n} ajoutée${n > 1 ? 's' : ''} à « ${list} ».`,
         working: 'En cours…',
       },
-      lead: 'Tout ce que ce serveur détient, y compris ce qu’il a cessé de servir.',
+      lead: 'Tout ce que ce serveur détient, fiches désactivées comprises.',
       search: 'Chercher un titre',
       kind: 'Type',
       allKinds: 'Tous les types',
@@ -1307,9 +1307,9 @@ export const fr: Dict = {
       deleteTitle: 'Supprimer cette fiche ?',
       deleteBody: (title: string) =>
         `« ${title} » et tout ce qui y est rattaché, les surcharges comprises, seront supprimés. C’est irréversible.`,
-      disableTitle: 'Cesser de servir cette fiche ?',
+      disableTitle: 'Désactiver cette fiche ?',
       disableBody: (title: string) =>
-        `« ${title} » reste en base et n’est plus servie à aucun client. Vous pourrez la réactiver à tout moment.`,
+        `« ${title} » disparaît du site, du catalogue et de l’API native. Sonarr et Radarr continuent de recevoir la copie conservée ici, qui n’est plus rafraîchie d’elle-même. Vous pourrez la réactiver à tout moment.`,
 
       compose: {
         title: 'Créer une fiche à la main',

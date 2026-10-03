@@ -1267,7 +1267,7 @@ export const en = {
         added: (n: number, list: string) => `${n} added to “${list}”.`,
         working: 'Working…',
       },
-      lead: 'Everything this server holds, including what it has stopped serving.',
+      lead: 'Everything this server holds, disabled entries included.',
       search: 'Search titles',
       kind: 'Kind',
       allKinds: 'All kinds',
@@ -1297,9 +1297,9 @@ export const en = {
       deleteTitle: 'Delete this entry?',
       deleteBody: (title: string) =>
         `“${title}” and everything attached to it, overrides included, will be removed. This cannot be undone.`,
-      disableTitle: 'Stop serving this entry?',
+      disableTitle: 'Disable this entry?',
       disableBody: (title: string) =>
-        `“${title}” stays in the database and stops being served to every client. You can enable it again at any time.`,
+        `“${title}” is hidden from the site, the catalogue and the native API. Sonarr and Radarr keep getting the copy held here, which is no longer refreshed on its own. You can enable it again at any time.`,
 
       compose: {
         title: 'Create an entry by hand',

@@ -44,6 +44,10 @@ fn is_default(state: &AppState, language: &str) -> bool {
 ///
 /// Absent or partial translations leave the original text in place: a client
 /// showing an English title is better than one showing a blank.
+///
+/// Nothing is fetched for a work switched off in the catalogue: like the work
+/// itself (see [`crate::service::served_as_held`]), it is given what is held
+/// in the language, as [`apply_stored`] gives it, and no provider is asked.
 pub async fn apply(state: &AppState, item: &mut MediaItem, requested: &str) -> Result<()> {
     let language = normalize(requested);
 
@@ -56,8 +60,10 @@ pub async fn apply(state: &AppState, item: &mut MediaItem, requested: &str) -> R
     // once, however many requests arrive for it together: a season's worth of
     // calls per work per language is the price, and two French Sonarrs opening
     // the same series should not pay it twice. Checked again once through, for
-    // the same reason as `FETCHING`.
+    // the same reason as `FETCHING`. Never for a series switched off: it is
+    // served as it is held, in every language.
     if item.kind == MediaKind::Series
+        && item.is_enabled
         && !item.episodes.is_empty()
         && !repo::translation::was_fetched(&state.db, &item.id, &language).await?
     {
@@ -672,5 +678,56 @@ mod tests {
             .collect();
 
         assert_eq!(placed, [(1, None), (2, Some("Episode 1".into()))]);
+    }
+
+    /// A series with one episode, whose French title is held here, as a
+    /// request for it reads it.
+    async fn held_in_french(state: &AppState, title: &str, ids: (i64, i64), on: bool) -> MediaItem {
+        use crate::{domain::ExternalIds, service::testing::overdue};
+
+        let (tvdb, tmdb) = ids;
+        let ids = ExternalIds {
+            tvdb: Some(tvdb),
+            tmdb: Some(tmdb),
+            ..Default::default()
+        };
+        let series = overdue(&state.db, MediaKind::Series, title, ids, on).await;
+        repo::child::add_episode(&state.db, &series.id, &stored(1, 1, None))
+            .await
+            .expect("its episode");
+        let french = repo::translation::EpisodeText {
+            season_number: 1,
+            episode_number: 1,
+            title: Some("Chute libre".into()),
+            overview: None,
+        };
+        repo::translation::put_episodes(&state.db, &series.id, "fra", &[french])
+            .await
+            .expect("its French title");
+
+        crate::service::load(state, &series.id)
+            .await
+            .expect("read")
+            .expect("held")
+    }
+
+    #[tokio::test]
+    async fn a_series_switched_off_is_given_what_is_held_in_a_language_and_nothing_is_fetched() {
+        let (state, nowhere) = crate::service::testing::server().await;
+
+        // Asked for in French, whose episode text was never fetched for it.
+        let mut off = held_in_french(&state, "Breaking Bad", (81189, 1396), false).await;
+        apply(&state, &mut off, "fr").await.expect("served");
+        assert_eq!(off.episodes[0].title, "Chute libre", "what is held");
+        assert_eq!(nowhere.asked(), 0, "no provider was asked");
+        let fetched = repo::translation::was_fetched(&state.db, &off.id, "fra").await;
+        assert!(!fetched.expect("read"));
+
+        // Switched on, the same request has its episode text fetched.
+        let mut on = held_in_french(&state, "Better Call Saul", (273181, 60059), true).await;
+        apply(&state, &mut on, "fr").await.expect("served");
+        assert!(nowhere.asked() > 0, "the providers were asked");
+        let fetched = repo::translation::was_fetched(&state.db, &on.id, "fra").await;
+        assert!(fetched.expect("read"));
     }
 }

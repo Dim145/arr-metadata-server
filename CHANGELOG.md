@@ -95,6 +95,21 @@ may change what the API or the configuration means, and says so here.
   Sonarr takes a series for deleted, as a Fan-Kai switched off while the
   Fankai source is off always was. The sweep still passes such a work by,
   and a refresh asked for by hand still fetches it.
+- A film due a refresh that no provider answers for is served to Radarr as
+  it is held, as a series is to Sonarr. Radarr was answered with a 404 by
+  its TMDB id, with nothing by its IMDb id — or an error, when TMDB could
+  not be reached — and its bulk request left the film out. The attempt
+  counts as a failed refresh, so the requests that follow are answered at
+  once instead of each waiting on the providers again.
+- Sonarr's request for a series switched off in the catalogue, in a
+  language its episodes' text was never fetched in, asks no provider
+  either: it is served what is held in that language. That text was still
+  fetched from TMDB and TheTVDB, once for each new language asked for.
+- The dialog that disables a work says what that does now: the work is
+  hidden from the site, the catalogue and the native API, and Sonarr and
+  Radarr keep getting the copy held here, which is no longer refreshed on
+  its own. It said the work stopped being served to every client, as the
+  administration's catalogue said of the works it lists.
 
 ## [0.4.0] — 2026-09-29
 
