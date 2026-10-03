@@ -75,6 +75,13 @@ may change what the API or the configuration means, and says so here.
   the text fetched for another language; another provider's title takes its
   place where there is one. A series shows it from its next refresh; Sonarr
   takes it at its own next refresh of the series.
+- Sonarr's `mal:` and `anilist:` lookups, which its MyAnimeList and AniList
+  import lists search by, find a series only TMDB lists while it is due a
+  refresh. The lookup went through the series' TheTVDB id, which such a
+  series has none of, and the anime identifier list seldom files a new one:
+  the series was not found, and the import list passed it over. It is now
+  looked up by the id Sonarr keeps it under, fetched again, and served as
+  held when no provider answers.
 
 ## [0.4.0] — 2026-09-29
 

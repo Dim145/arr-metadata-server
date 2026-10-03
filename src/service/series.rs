@@ -170,8 +170,10 @@ pub async fn by_fankai_id(state: &AppState, fankai_id: i64) -> Result<Option<Med
 /// each entry on the list is searched for as `mal:{id}` or `anilist:{id}`. It
 /// used to be answered from the store alone, so a series nobody had added yet
 /// — the whole point of an import list — was never found, and neither was one
-/// held here but due a refresh. The TheTVDB id settles both: the stored
-/// series', or the one the anime identifier list files the entry under.
+/// held here but due a refresh. The id Sonarr keeps a series under settles
+/// both: the stored series' — its TheTVDB id, or the one made for a work
+/// TheTVDB does not list (see [`client_id`]) — or the TheTVDB id the anime
+/// identifier list files the entry under.
 async fn by_anime_id(
     state: &AppState,
     source: ExternalSource,
@@ -185,21 +187,25 @@ async fn by_anime_id(
         return Ok(Some(item));
     }
 
+    // Not by its TheTVDB id alone: a series only TMDB lists has none, and the
+    // identifier list seldom files a new one. Due a refresh, or fetched again
+    // on request for having no episodes yet, it was not found at all — when
+    // an import list looks for it most.
     let stored = match repo::item::find_id_by_external(&state.db, source, &value).await? {
         Some(media_id) => load(state, &media_id)
             .await?
             .filter(|item| item.kind == MediaKind::Series)
-            .and_then(|item| item.external_ids.tvdb),
+            .and_then(|item| client_id(&item)),
         None => None,
     };
 
-    let tvdb_id = match stored {
-        Some(tvdb_id) => Some(tvdb_id),
+    let requested_id = match stored {
+        Some(requested_id) => Some(requested_id),
         None => crate::service::anime::series_for(state, source, id).await?,
     };
 
-    match tvdb_id {
-        Some(tvdb_id) => by_tvdb_id(state, tvdb_id).await,
+    match requested_id {
+        Some(requested_id) => by_client_id(state, requested_id).await,
         None => Ok(None),
     }
 }
