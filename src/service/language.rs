@@ -60,18 +60,20 @@ pub async fn apply(state: &AppState, item: &mut MediaItem, requested: &str) -> R
     // once, however many requests arrive for it together: a season's worth of
     // calls per work per language is the price, and two French Sonarrs opening
     // the same series should not pay it twice. Checked again once through, for
-    // the same reason as `FETCHING`. Never for a series switched off: it is
-    // served as it is held, in every language.
+    // the same reason as `FETCHING`. A fetch that came to less than a whole
+    // answer is tried again later, not on the next request: see `store`.
+    // Never for a series switched off: it is served as it is held, in every
+    // language.
     if item.kind == MediaKind::Series
         && item.is_enabled
         && !item.episodes.is_empty()
-        && !repo::translation::was_fetched(&state.db, &item.id, &language).await?
+        && repo::translation::is_due(&state.db, &item.id, &language).await?
     {
         let _fetching = crate::service::FETCHING
             .lock(&format!("episodes:{}:{language}", item.id))
             .await;
 
-        if !repo::translation::was_fetched(&state.db, &item.id, &language).await? {
+        if repo::translation::is_due(&state.db, &item.id, &language).await? {
             fetch_episodes(state, item, &language).await;
         }
     }
@@ -192,17 +194,23 @@ async fn overlay_episodes(state: &AppState, item: &mut MediaItem, language: &str
     Ok(())
 }
 
+/// Episode text fetched in one language, and whether it is the whole answer.
+#[derive(Default)]
+struct Fetched {
+    texts: Vec<repo::translation::EpisodeText>,
+    /// A provider asked did not answer, for a season or at all, or answered
+    /// with what could not be read: `texts` is what the others said, not all
+    /// there is.
+    degraded: bool,
+}
+
 /// TMDB's episode text, one call per season.
-async fn from_tmdb(
-    state: &AppState,
-    item: &MediaItem,
-    language: &str,
-) -> Vec<repo::translation::EpisodeText> {
+async fn from_tmdb(state: &AppState, item: &MediaItem, language: &str) -> Fetched {
     let Some(tmdb_id) = item.external_ids.tmdb else {
-        return Vec::new();
+        return Fetched::default();
     };
     if !state.tmdb.is_configured() {
-        return Vec::new();
+        return Fetched::default();
     }
 
     // TMDB wants the two-letter form it was given.
@@ -215,12 +223,15 @@ async fn from_tmdb(
         n
     };
 
-    let seasons = state
+    let (seasons, unanswered) = state
         .tmdb
         .tv_seasons_in(tmdb_id, &numbers, &requested)
         .await;
 
-    tmdb_texts(item, &seasons)
+    Fetched {
+        texts: tmdb_texts(item, &seasons),
+        degraded: unanswered,
+    }
 }
 
 /// TMDB's text for the work's episodes, under the work's own numbers.
@@ -288,18 +299,13 @@ fn incomplete(item: &MediaItem, texts: &[repo::translation::EpisodeText]) -> boo
 /// dozens. Asking it second means a French request is answered even when TMDB
 /// has no French, without displacing TMDB's text where it exists — the same
 /// fill-do-not-replace rule the merge engine uses.
-async fn fill_from_tvdb(
-    state: &AppState,
-    item: &MediaItem,
-    language: &str,
-    texts: &mut Vec<repo::translation::EpisodeText>,
-) {
+async fn fill_from_tvdb(state: &AppState, item: &MediaItem, language: &str, fetched: &mut Fetched) {
     let Some(tvdb_id) = item.external_ids.tvdb else {
         return;
     };
 
     // Nothing missing: skip the call.
-    if !incomplete(item, texts) {
+    if !incomplete(item, &fetched.texts) {
         return;
     }
 
@@ -307,10 +313,12 @@ async fn fill_from_tvdb(
         Ok(found) => found,
         Err(e) => {
             tracing::debug!(id = %item.id, %language, error = format_args!("{e:#}"), "TheTVDB had no episode text");
+            fetched.degraded = true;
             return;
         }
     };
 
+    let texts = &mut fetched.texts;
     for episode in from_tvdb {
         match texts.iter_mut().find(|t| {
             t.season_number == episode.season_number && t.episode_number == episode.episode_number
@@ -337,22 +345,64 @@ async fn fill_from_tvdb(
 ///
 /// One provider call per season, so this happens once per work per language and
 /// is then answered from the database. A failure is logged and swallowed: the
-/// caller still gets the work, in the language it was stored in.
+/// caller still gets the work, with what is held in the language asked.
 async fn fetch_episodes(state: &AppState, item: &MediaItem, language: &str) {
     tracing::info!(id = %item.id, %language, "fetching episode translations");
 
-    let mut texts = from_tmdb(state, item, language).await;
+    let mut fetched = from_tmdb(state, item, language).await;
 
-    fill_from_tvdb(state, item, language, &mut texts).await;
+    fill_from_tvdb(state, item, language, &mut fetched).await;
 
-    if let Err(e) = repo::translation::put_episodes(&state.db, &item.id, language, &texts).await {
+    store(state, item, language, fetched).await;
+}
+
+/// Store what fetching a language brought, and record how far it got.
+///
+/// The text held in the language is replaced outright only by a whole
+/// answer: every provider asked gave one, with something in it. Any other
+/// replaces only what it says, and a provider that did not answer removes
+/// nothing (see [`repo::translation::put_episodes`]). The language's text was
+/// deleted and the answer written in its place whatever came back: with every
+/// provider out of reach, the first request in a language since the work's
+/// last refresh erased the text held in it — and marked the language
+/// fetched, which kept the work served in its own language until the next
+/// refresh.
+///
+/// Only a whole answer is marked fetched, too. One with nothing in it, or
+/// not all there is, is tried again once the wait a failed refresh sets is
+/// over ([`crate::service::retry_after_failure`]); until then the requests in
+/// the language are served what is held, rather than each waiting on the
+/// providers again.
+async fn store(state: &AppState, item: &MediaItem, language: &str, fetched: Fetched) {
+    let Fetched { texts, degraded } = fetched;
+    let said = texts
+        .iter()
+        .any(|t| t.title.is_some() || t.overview.is_some());
+    let whole = said && !degraded;
+
+    if let Err(e) =
+        repo::translation::put_episodes(&state.db, &item.id, language, &texts, whole).await
+    {
         tracing::warn!(id = %item.id, %language, error = %e, "could not store episode translations");
         return;
     }
 
-    // Recorded even when nothing came back, so a language the provider has
-    // nothing for is not refetched on every request.
-    if let Err(e) = repo::translation::mark_fetched(&state.db, &item.id, language).await {
+    let recorded = if whole {
+        repo::translation::mark_fetched(&state.db, &item.id, language).await
+    } else {
+        let retry = crate::service::retry_after_failure(Some(item));
+        tracing::info!(
+            id = %item.id,
+            %language,
+            degraded,
+            %retry,
+            "episode text came back incomplete or empty; what is held is served until it is \
+             tried again"
+        );
+        repo::translation::mark_unanswered(&state.db, &item.id, language, &retry).await
+    };
+
+    if let Err(e) = recorded {
         tracing::warn!(id = %item.id, %language, error = %e, "could not record the fetch");
     }
 }
@@ -701,7 +751,7 @@ mod tests {
             title: Some("Chute libre".into()),
             overview: None,
         };
-        repo::translation::put_episodes(&state.db, &series.id, "fra", &[french])
+        repo::translation::put_episodes(&state.db, &series.id, "fra", &[french], true)
             .await
             .expect("its French title");
 
@@ -709,6 +759,49 @@ mod tests {
             .await
             .expect("read")
             .expect("held")
+    }
+
+    /// The series, as a request for it in French is given it.
+    async fn in_french(state: &AppState, id: &str) -> MediaItem {
+        let mut item = crate::service::load(state, id)
+            .await
+            .expect("read")
+            .expect("held");
+        apply(state, &mut item, "fr").await.expect("served");
+        item
+    }
+
+    /// The French text held for the series' episodes: each one's numbers,
+    /// title and overview, in order.
+    async fn french(
+        state: &AppState,
+        id: &str,
+    ) -> Vec<((i32, i32), Option<String>, Option<String>)> {
+        let held = repo::translation::for_episodes(&state.db, id, "fra")
+            .await
+            .expect("read");
+        let mut held: Vec<_> = held
+            .into_values()
+            .map(|t| ((t.season_number, t.episode_number), t.title, t.overview))
+            .collect();
+        held.sort();
+        held
+    }
+
+    /// What is recorded of French for the series: nothing, a fetch in full
+    /// (`Some(None)`), or the time it is to be tried again.
+    async fn recorded(state: &AppState, id: &str) -> Option<Option<String>> {
+        use crate::db::RowExt;
+
+        let row = sqlx::query(state.db.sql(
+            "SELECT retry_after FROM media_language_fetch WHERE media_id = ? AND language = 'fra'",
+        ))
+        .bind(id)
+        .fetch_optional(state.db.pool())
+        .await
+        .expect("read")?;
+
+        Some(row.opt_text("retry_after").expect("its wait"))
     }
 
     #[tokio::test]
@@ -720,14 +813,109 @@ mod tests {
         apply(&state, &mut off, "fr").await.expect("served");
         assert_eq!(off.episodes[0].title, "Chute libre", "what is held");
         assert_eq!(nowhere.asked(), 0, "no provider was asked");
-        let fetched = repo::translation::was_fetched(&state.db, &off.id, "fra").await;
-        assert!(!fetched.expect("read"));
+        assert_eq!(recorded(&state, &off.id).await, None, "no attempt");
 
         // Switched on, the same request has its episode text fetched.
         let mut on = held_in_french(&state, "Better Call Saul", (273181, 60059), true).await;
         apply(&state, &mut on, "fr").await.expect("served");
         assert!(nowhere.asked() > 0, "the providers were asked");
-        let fetched = repo::translation::was_fetched(&state.db, &on.id, "fra").await;
-        assert!(fetched.expect("read"));
+        assert!(recorded(&state, &on.id).await.is_some(), "the attempt");
+    }
+
+    #[tokio::test]
+    async fn text_held_in_a_language_outlasts_a_fetch_no_provider_answers() {
+        let (state, nowhere) = crate::service::testing::server().await;
+        let series = held_in_french(&state, "Breaking Bad", (81189, 1396), true).await;
+        let held = [((1, 1), Some("Chute libre".to_string()), None::<String>)];
+
+        // The first request in French since its last refresh, with every
+        // provider out of reach: they are asked, and what is held is served —
+        // and still held.
+        let first = in_french(&state, &series.id).await;
+        assert!(nowhere.asked() > 0, "the providers were asked");
+        assert_eq!(first.episodes[0].title, "Chute libre", "what is held");
+        assert_eq!(french(&state, &series.id).await, held, "still held");
+
+        // Nor is the language taken for fetched: it is to be tried again
+        // later, and the next request is served what is held and waits on
+        // nobody.
+        let retry = recorded(&state, &series.id).await.flatten();
+        assert!(
+            retry.is_some_and(|at| at > crate::db::now()),
+            "a wait, not a fetch"
+        );
+        let next = in_french(&state, &series.id).await;
+        assert_eq!(nowhere.asked(), 0, "nobody was asked again");
+        assert_eq!(next.episodes[0].title, "Chute libre");
+
+        // Once the wait is over, the providers are asked for it again.
+        let over = crate::db::to_rfc3339(chrono::Utc::now() - chrono::TimeDelta::minutes(1));
+        repo::translation::mark_unanswered(&state.db, &series.id, "fra", &over)
+            .await
+            .expect("the wait over");
+        let again = in_french(&state, &series.id).await;
+        assert!(nowhere.asked() > 0, "asked again");
+        assert_eq!(again.episodes[0].title, "Chute libre");
+        assert_eq!(french(&state, &series.id).await, held, "and still held");
+    }
+
+    #[tokio::test]
+    async fn only_a_whole_answer_replaces_what_is_held_in_a_language() {
+        let (state, _) = crate::service::testing::server().await;
+        let series = held_in_french(&state, "Breaking Bad", (81189, 1396), true).await;
+        let text = |number: i32, title: Option<&str>, overview: Option<&str>| {
+            repo::translation::EpisodeText {
+                season_number: 1,
+                episode_number: number,
+                title: title.map(str::to_string),
+                overview: overview.map(str::to_string),
+            }
+        };
+        let some = |s: &str| Some(s.to_string());
+
+        // A provider failed: what the others said is taken, and what they
+        // left out stands — the title held, which this answer lacks. Tried
+        // again later.
+        let partial = Fetched {
+            texts: vec![
+                text(1, None, Some("Walt apprend.")),
+                text(2, Some("Le Chat dans le sac"), None),
+            ],
+            degraded: true,
+        };
+        store(&state, &series, "fra", partial).await;
+        assert_eq!(
+            french(&state, &series.id).await,
+            [
+                ((1, 1), some("Chute libre"), some("Walt apprend.")),
+                ((1, 2), some("Le Chat dans le sac"), None),
+            ]
+        );
+        let retry = recorded(&state, &series.id).await.flatten();
+        assert!(retry.is_some(), "tried again later");
+
+        // Every provider answered, with nothing to say: nothing changes, and
+        // it is tried again later all the same.
+        let empty = Fetched {
+            texts: vec![text(1, None, None)],
+            degraded: false,
+        };
+        store(&state, &series, "fra", empty).await;
+        assert_eq!(french(&state, &series.id).await.len(), 2, "nothing dropped");
+        let retry = recorded(&state, &series.id).await.flatten();
+        assert!(retry.is_some(), "tried again later");
+
+        // A whole answer replaces the language's text outright, and is a
+        // fetch.
+        let whole = Fetched {
+            texts: vec![text(2, Some("Le Chat est dans le sac"), None)],
+            degraded: false,
+        };
+        store(&state, &series, "fra", whole).await;
+        assert_eq!(
+            french(&state, &series.id).await,
+            [((1, 2), some("Le Chat est dans le sac"), None)]
+        );
+        assert_eq!(recorded(&state, &series.id).await, Some(None), "fetched");
     }
 }

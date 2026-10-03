@@ -49,38 +49,55 @@ pub async fn for_episodes(
     Ok(out)
 }
 
-/// Replace the stored episode text for one language.
+/// Store the episode text the providers gave in one language.
+///
+/// An episode they gave text for has it replaced, field by field: a field
+/// they left empty keeps what is held, and an episode they said nothing
+/// about keeps all of it. This deleted the language's text and wrote the
+/// answer in its place, which made providers out of reach the same as
+/// providers with nothing to say: an empty answer erased the language. Only
+/// a `whole` answer — every provider asked gave one — replaces the
+/// language's text outright, dropping what it no longer names; and an answer
+/// with nothing in it changes nothing, whole or not.
 pub async fn put_episodes(
     db: &Db,
     media_id: &str,
     language: &str,
     episodes: &[EpisodeText],
+    whole: bool,
 ) -> Result<()> {
+    // Nothing to say in this language is not worth a row, nor a reason to
+    // drop one.
+    let said: Vec<&EpisodeText> = episodes
+        .iter()
+        .filter(|e| e.title.is_some() || e.overview.is_some())
+        .collect();
+    if said.is_empty() {
+        return Ok(());
+    }
+
     let mut tx = db.begin_write().await?;
 
-    sqlx::query(
-        db.sql("DELETE FROM media_episode_translation WHERE media_id = ? AND language = ?"),
-    )
-    .bind(media_id)
-    .bind(language)
-    .execute(&mut *tx)
-    .await?;
+    if whole {
+        sqlx::query(
+            db.sql("DELETE FROM media_episode_translation WHERE media_id = ? AND language = ?"),
+        )
+        .bind(media_id)
+        .bind(language)
+        .execute(&mut *tx)
+        .await?;
+    }
 
     let at = now();
 
-    for episode in episodes {
-        // Nothing to say in this language is not worth a row.
-        if episode.title.is_none() && episode.overview.is_none() {
-            continue;
-        }
-
+    for episode in said {
         sqlx::query(db.sql(
             "INSERT INTO media_episode_translation
                  (media_id, season_number, episode_number, language, title, overview, fetched_at)
              VALUES (?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT (media_id, season_number, episode_number, language) DO UPDATE SET
-                 title = excluded.title,
-                 overview = excluded.overview,
+                 title = COALESCE(excluded.title, media_episode_translation.title),
+                 overview = COALESCE(excluded.overview, media_episode_translation.overview),
                  fetched_at = excluded.fetched_at",
         ))
         .bind(media_id)
@@ -98,15 +115,17 @@ pub async fn put_episodes(
     Ok(())
 }
 
-/// Record that a language has been fetched for a work.
+/// Record that a language has been fetched in full for a work.
 ///
-/// Without this a language the provider genuinely has nothing for would be
-/// refetched on every single request.
+/// Without this it would be fetched again on every single request. Whatever
+/// wait [`mark_unanswered`] set is over.
 pub async fn mark_fetched(db: &Db, media_id: &str, language: &str) -> Result<()> {
     sqlx::query(db.sql(
-        "INSERT INTO media_language_fetch (media_id, language, fetched_at)
-         VALUES (?, ?, ?)
-         ON CONFLICT (media_id, language) DO UPDATE SET fetched_at = excluded.fetched_at",
+        "INSERT INTO media_language_fetch (media_id, language, fetched_at, retry_after)
+         VALUES (?, ?, ?, NULL)
+         ON CONFLICT (media_id, language) DO UPDATE SET
+             fetched_at = excluded.fetched_at,
+             retry_after = NULL",
     ))
     .bind(media_id)
     .bind(language)
@@ -117,19 +136,56 @@ pub async fn mark_fetched(db: &Db, media_id: &str, language: &str) -> Result<()>
     Ok(())
 }
 
-pub async fn was_fetched(db: &Db, media_id: &str, language: &str) -> Result<bool> {
-    let row = sqlx::query(
-        db.sql("SELECT 1 AS present FROM media_language_fetch WHERE media_id = ? AND language = ?"),
-    )
+/// Record that fetching a language for a work came to less than a whole
+/// answer, and when it is tried again.
+///
+/// Not a fetch: the language is due again at `retry_after`, so what the
+/// providers did not give is asked for once more. Not before, though — a
+/// provider out of reach would otherwise be waited on by every request in
+/// the language.
+pub async fn mark_unanswered(
+    db: &Db,
+    media_id: &str,
+    language: &str,
+    retry_after: &str,
+) -> Result<()> {
+    sqlx::query(db.sql(
+        "INSERT INTO media_language_fetch (media_id, language, fetched_at, retry_after)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT (media_id, language) DO UPDATE SET
+             fetched_at = excluded.fetched_at,
+             retry_after = excluded.retry_after",
+    ))
     .bind(media_id)
     .bind(language)
+    .bind(now())
+    .bind(retry_after)
+    .execute(db.pool())
+    .await?;
+
+    Ok(())
+}
+
+/// Whether a language's episode text is to be fetched for a work now: it has
+/// not been tried since the work's last refresh, or it was to no avail and
+/// the wait [`mark_unanswered`] set is over.
+pub async fn is_due(db: &Db, media_id: &str, language: &str) -> Result<bool> {
+    let row = sqlx::query(db.sql(
+        "SELECT 1 AS present FROM media_language_fetch
+         WHERE media_id = ? AND language = ?
+           AND (retry_after IS NULL OR retry_after > ?)",
+    ))
+    .bind(media_id)
+    .bind(language)
+    .bind(now())
     .fetch_optional(db.pool())
     .await?;
 
-    Ok(row.is_some())
+    Ok(row.is_none())
 }
 
-/// Forget which languages were fetched, so a refresh picks them up again.
+/// Forget which languages were fetched or tried, so a refresh picks them up
+/// again.
 pub async fn clear_fetched(db: &Db, media_id: &str) -> Result<()> {
     sqlx::query(db.sql("DELETE FROM media_language_fetch WHERE media_id = ?"))
         .bind(media_id)

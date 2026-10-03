@@ -110,6 +110,21 @@ may change what the API or the configuration means, and says so here.
   Radarr keep getting the copy held here, which is no longer refreshed on
   its own. It said the work stopped being served to every client, as the
   administration's catalogue said of the works it lists.
+- A series' episode text in a language survives a request in that language
+  that no provider answers. A series asked for in a language for the first
+  time since its last refresh has its episodes' text in it fetched again,
+  and the text held was deleted before the answer was written: with TMDB
+  and TheTVDB out of reach nothing was written back, the language was
+  marked fetched all the same, and Sonarr was given the episodes in the
+  server's own language until the series' next refresh. An episode's text
+  is now replaced only by what a provider gives for it, and the language's
+  text as a whole only by an answer from every provider asked. A fetch that
+  comes to less — a season TMDB did not answer for, TheTVDB out of reach,
+  or nothing at all, as for a language neither has — is tried again when a
+  failed refresh would be, six hours later or sooner near an air date,
+  rather than at the series' next refresh; the requests in between are
+  served what is held without waiting on the providers. A new column holds
+  when.
 
 ## [0.4.0] — 2026-09-29
 

@@ -263,21 +263,26 @@ impl TmdbClient {
             .await
     }
 
-    /// Every season's episodes in one specific language.
+    /// Every season's episodes in one specific language, and whether one of
+    /// them went unanswered.
     ///
     /// Used to fill in a language somebody asked for. Unlike [`Self::tv_seasons`]
     /// this does not fall back to en-US: the caller wants this language or
     /// nothing, and a silent English fallback would look like a translation that
-    /// exists when it does not.
+    /// exists when it does not. A season TMDB does not have is an answer; one
+    /// whose request failed, or whose answer could not be read, is not, and the
+    /// caller is told so rather than left to take the seasons it got for all
+    /// there is.
     pub async fn tv_seasons_in(
         &self,
         id: i64,
         numbers: &[i32],
         language: &str,
-    ) -> Vec<models::Season> {
+    ) -> (Vec<models::Season>, bool) {
         let results = join_all(numbers.iter().map(|&n| self.fetch_season(id, n, language))).await;
 
-        results
+        let mut unanswered = false;
+        let seasons = results
             .into_iter()
             .zip(numbers)
             .filter_map(|(result, number)| match result {
@@ -285,16 +290,20 @@ impl TmdbClient {
                     Ok(season) => Some(season),
                     Err(e) => {
                         tracing::warn!(tmdb_id = id, season = number, error = %e, "season parse failed");
+                        unanswered = true;
                         None
                     }
                 },
                 Ok(None) => None,
                 Err(e) => {
                     tracing::warn!(tmdb_id = id, season = number, %language, error = %e, "season fetch failed");
+                    unanswered = true;
                     None
                 }
             })
-            .collect()
+            .collect();
+
+        (seasons, unanswered)
     }
 
     pub async fn tv_external_ids(&self, id: i64) -> Result<models::ExternalIds> {
