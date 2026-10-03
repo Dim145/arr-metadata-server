@@ -7,8 +7,39 @@ may change what the API or the configuration means, and says so here.
 
 ## [Unreleased]
 
+### Changed
+
+- A series near an air date is fetched again sooner. One that has not
+  started — upcoming, or with no episodes yet — every two hours in the week
+  of its premiere or of its next episode, and every hour in the day of it,
+  after the premiere as before it; any series still running, no later than
+  an hour after its next episode airs, at the instant a provider gave or
+  else at midnight UTC of its day. Every other work keeps its interval.
+  *Magical Explorer*'s episodes reached TheTVDB and TMDB hours after it
+  premiered, and six hours from its last refresh kept them from Sonarr for
+  longer still. A refresh that fails near an air date is tried again on the
+  same cadence rather than six hours later. A series takes it from its next
+  refresh.
+- Sonarr's request for a series with no episodes yet, or one that premieres
+  within two days either side, is answered with a copy fetched there and
+  then when the one held is more than an hour old. Sonarr asks again only
+  every few hours, and kept the copy from before the episodes were listed.
+
 ### Fixed
 
+- A series with an episode Skyhook has no name for yet is read whole.
+  Skyhook leaves `title` out for such an episode, and the whole answer was
+  refused for it, so a new series lost what only Skyhook gives: *Magical
+  Explorer*'s first episode reached Sonarr at midnight UTC of its Japanese
+  day, nine hours after it aired, rather than at the instant Skyhook knows.
+  Whatever else Skyhook leaves out, or a mirror sends as `null`, is read as
+  nothing, and an entry that cannot be read is left out rather than the
+  series. Sonarr is still sent `TBA` for the episode. A series shows it from
+  its next refresh; Sonarr takes it at its own next refresh of the series.
+- A series due a refresh that no provider answers for is served to Sonarr
+  as it is held, rather than as a 404. The attempt counts as a failed
+  refresh, so the requests that follow are answered at once instead of each
+  waiting on the providers again.
 - A series TheTVDB tells apart from a homonym reaches Sonarr under the
   title Skyhook gives it — *Rurouni Kenshin (2023)*, *The Office (US)* —
   where TMDB's name, which the title usually is, carries no such mark. A

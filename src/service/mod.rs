@@ -26,11 +26,12 @@ pub mod webhook;
 use std::sync::Arc;
 
 use anyhow::Result;
+use chrono::{DateTime, TimeDelta, Utc};
 use serde_json::Value;
 
 use crate::{
     db::{repo, to_rfc3339},
-    domain::{ExternalSource, MediaItem, Rating, fields},
+    domain::{ExternalSource, MediaItem, MediaKind, Rating, fields},
     state::AppState,
 };
 
@@ -607,25 +608,177 @@ async fn after_write(
 ///
 /// A running series changes weekly; an ended one effectively never does. Using
 /// one interval for both either hammers providers or serves stale episodes.
+/// A series near an air date comes back sooner: see [`near_air`].
 fn next_refresh(state: &AppState, item: &MediaItem) -> String {
     let cfg = &state.config.refresh;
 
-    let ttl = match item.status.as_deref() {
-        Some("ended") | Some("released") | Some("deleted") => cfg.ended_ttl,
-        _ => cfg.continuing_ttl,
+    let ttl = if has_finished(item) {
+        cfg.ended_ttl
+    } else {
+        cfg.continuing_ttl
     };
 
+    to_rfc3339(refresh_at(item, ttl, Utc::now()))
+}
+
+/// [`next_refresh`], as of `now`.
+fn refresh_at(item: &MediaItem, ttl: std::time::Duration, now: DateTime<Utc>) -> DateTime<Utc> {
     // Both steps can fail on an operator's typo — a TTL of a hundred million
     // years converts fine and then leaves the representable range on the add,
     // which chrono answers with a panic. Six hours is the answer to either.
-    let fallback = chrono::TimeDelta::hours(6);
-    let ttl = chrono::TimeDelta::from_std(ttl).unwrap_or(fallback);
+    let fallback = TimeDelta::hours(6);
+    let ttl = TimeDelta::from_std(ttl).unwrap_or(fallback);
 
-    let due = chrono::Utc::now()
+    let due = now
         .checked_add_signed(ttl)
-        .unwrap_or_else(|| chrono::Utc::now() + fallback);
+        .unwrap_or_else(|| now + fallback);
 
-    to_rfc3339(due)
+    sooner(due, near_air(item, now))
+}
+
+/// Whether a work is done changing: an ended or deleted series, a released
+/// film.
+fn has_finished(item: &MediaItem) -> bool {
+    matches!(
+        item.status.as_deref(),
+        Some("ended" | "released" | "deleted")
+    )
+}
+
+/// The earlier of the two, when there is another.
+fn sooner(due: DateTime<Utc>, other: Option<DateTime<Utc>>) -> DateTime<Utc> {
+    other.map_or(due, |other| due.min(other))
+}
+
+/// When a series near an air date is due again, if it is near one.
+///
+/// Any series still running is fetched again an hour after its next episode
+/// airs, whatever its interval: Sonarr searches for an episode once it has
+/// aired, with what it was last told of it. And one that has not started —
+/// upcoming, or with no episodes yet — every two hours in the week of its
+/// premiere or its next episode, every hour in the day of it, after the
+/// premiere as before it: that is when its episodes reach the providers.
+/// *Magical Explorer*'s reached TheTVDB and TMDB hours after it premiered,
+/// and a six-hour interval kept them from Sonarr for longer still.
+///
+/// Nothing for a film, a series that has ended, or one with no date near:
+/// they keep their interval.
+fn near_air(item: &MediaItem, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
+    if item.kind != MediaKind::Series || has_finished(item) {
+        return None;
+    }
+
+    let next = next_air(item, now);
+    let mut due = next.and_then(|at| at.checked_add_signed(TimeDelta::hours(1)));
+
+    if item.status.as_deref() == Some("upcoming") || item.episodes.is_empty() {
+        let premiere = item.first_aired.as_deref().and_then(instant);
+        let nearest = [premiere, next]
+            .into_iter()
+            .flatten()
+            .map(|at| (at - now).abs())
+            .min();
+        let every = match nearest {
+            Some(gap) if gap <= TimeDelta::days(1) => Some(TimeDelta::hours(1)),
+            Some(gap) if gap <= TimeDelta::days(7) => Some(TimeDelta::hours(2)),
+            _ => None,
+        };
+        if let Some(every) = every {
+            due = Some(sooner(now + every, due));
+        }
+    }
+
+    due
+}
+
+/// When a series next airs, as far as the copy at hand says: its earliest
+/// episode still to come, at the instant a provider gave or else at midnight
+/// UTC of its day — what Sonarr is told (`wire::sonarr`) — or its premiere
+/// when no episode is dated. An airing is still to come until an hour after
+/// it, so that a refresh within that hour does not skip the one after it.
+fn next_air(item: &MediaItem, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
+    let dated: Vec<DateTime<Utc>> = item.episodes.iter().filter_map(airs).collect();
+    let airings = if dated.is_empty() {
+        item.first_aired
+            .as_deref()
+            .and_then(instant)
+            .into_iter()
+            .collect()
+    } else {
+        dated
+    };
+
+    let since = now - TimeDelta::hours(1);
+    airings.into_iter().filter(|at| *at > since).min()
+}
+
+/// When an episode airs: the instant a provider gave, else its day.
+fn airs(episode: &crate::domain::Episode) -> Option<DateTime<Utc>> {
+    episode
+        .air_date_utc
+        .as_deref()
+        .and_then(crate::db::parse_rfc3339)
+        .or_else(|| episode.air_date.as_deref().and_then(instant))
+}
+
+/// A date or a date-time as an instant; a day alone is midnight UTC.
+fn instant(value: &str) -> Option<DateTime<Utc>> {
+    crate::domain::midnight_utc(value)
+        .as_deref()
+        .and_then(crate::db::parse_rfc3339)
+}
+
+/// How long a work whose refresh failed waits before it is tried again.
+///
+/// Without this, an id that has been deleted upstream would be retried on
+/// every scheduler tick forever — and a series a client asks for, on every
+/// request, each one waiting on the same providers to fail.
+const FAILURE_BACKOFF: TimeDelta = TimeDelta::hours(6);
+
+/// When a work whose refresh just failed is next tried: after the backoff,
+/// or sooner for a series near an air date, which keeps its cadence through a
+/// provider's outage. `None` for a work that could not even be read.
+pub fn retry_after_failure(item: Option<&MediaItem>) -> String {
+    to_rfc3339(retry_at(item, Utc::now()))
+}
+
+/// [`retry_after_failure`], as of `now`.
+fn retry_at(item: Option<&MediaItem>, now: DateTime<Utc>) -> DateTime<Utc> {
+    let due = now + FAILURE_BACKOFF;
+    item.map_or(due, |item| sooner(due, near_air(item, now)))
+}
+
+/// Whether a stored series should be fetched again because a client asks for
+/// it now, though its refresh is not due.
+///
+/// When it has no episodes, or it premieres within two days either side: a
+/// new series' episodes reach the providers around its premiere, often only
+/// once it has aired, and Sonarr would otherwise be given the copy from
+/// before, and keep it until it next asks, hours later. Not within the hour
+/// of the last fetch, or of the last attempt — a provider that is down would
+/// otherwise be waited on by every request. Never for an entry made by hand,
+/// nor one never fetched.
+pub fn due_on_read(item: &MediaItem, now: DateTime<Utc>) -> bool {
+    if item.kind != MediaKind::Series || item.is_manual {
+        return false;
+    }
+    let Some(refreshed) = item
+        .refreshed_at
+        .as_deref()
+        .and_then(crate::db::parse_rfc3339)
+    else {
+        return false;
+    };
+    if now - refreshed <= TimeDelta::hours(1) {
+        return false;
+    }
+
+    item.episodes.is_empty()
+        || item
+            .first_aired
+            .as_deref()
+            .and_then(instant)
+            .is_some_and(|premiere| (premiere - now).abs() <= TimeDelta::days(2))
 }
 
 /// Whether a stored work is due a refresh.
@@ -972,5 +1125,221 @@ mod card_tests {
         let urls: Vec<&str> = work.images.iter().map(|i| i.url.as_str()).collect();
         assert_eq!(urls, ["poster-2", "fanart-1", "logo"]);
         assert!(work.keywords.is_empty() && work.translations.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod schedule_tests {
+    use super::*;
+    use crate::domain::Episode;
+
+    /// The interval a running series is given by default.
+    const INTERVAL: std::time::Duration = std::time::Duration::from_secs(6 * 3600);
+
+    fn at(value: &str) -> DateTime<Utc> {
+        crate::db::parse_rfc3339(value).expect("a date-time")
+    }
+
+    /// The evening *Magical Explorer* premiered, five hours after its first
+    /// episode aired in Japan.
+    fn now() -> DateTime<Utc> {
+        at("2026-10-03T20:00:00Z")
+    }
+
+    fn after(minutes: i64) -> DateTime<Utc> {
+        now() + TimeDelta::minutes(minutes)
+    }
+
+    fn series(status: &str, first_aired: Option<&str>) -> MediaItem {
+        let mut item = MediaItem::empty(MediaKind::Series);
+        item.status = Some(status.into());
+        item.first_aired = first_aired.map(Into::into);
+        item
+    }
+
+    fn episode(number: i32, air_date: Option<&str>, air_date_utc: Option<&str>) -> Episode {
+        let mut episode = crate::db::repo::child::blank_episode(1, number);
+        episode.air_date = air_date.map(Into::into);
+        episode.air_date_utc = air_date_utc.map(Into::into);
+        episode
+    }
+
+    fn due(item: &MediaItem) -> DateTime<Utc> {
+        refresh_at(item, INTERVAL, now())
+    }
+
+    #[test]
+    fn a_series_far_from_an_air_date_keeps_its_interval() {
+        let mut running = series("continuing", Some("2026-09-01"));
+        running.episodes = vec![
+            episode(1, Some("2026-09-01"), None),
+            episode(2, None, Some("2026-10-20T15:00:00Z")),
+        ];
+        assert_eq!(due(&running), after(6 * 60));
+
+        // Announced for next month, or for no date at all.
+        assert_eq!(due(&series("upcoming", Some("2026-11-01"))), after(6 * 60));
+        assert_eq!(due(&series("upcoming", None)), after(6 * 60));
+    }
+
+    #[test]
+    fn a_series_that_has_not_started_is_fetched_every_two_hours_in_the_week_of_its_premiere() {
+        // Upcoming, or with no episodes listed yet, whatever its status says.
+        assert_eq!(due(&series("upcoming", Some("2026-10-08"))), after(2 * 60));
+        assert_eq!(
+            due(&series("continuing", Some("2026-10-08"))),
+            after(2 * 60)
+        );
+        // After the premiere too: the episodes are often listed only then.
+        assert_eq!(
+            due(&series("continuing", Some("2026-09-30"))),
+            after(2 * 60)
+        );
+        assert_eq!(
+            due(&series("continuing", Some("2026-09-20"))),
+            after(6 * 60)
+        );
+    }
+
+    #[test]
+    fn and_every_hour_in_the_day_of_it_on_either_side() {
+        assert_eq!(due(&series("upcoming", Some("2026-10-04"))), after(60));
+        assert_eq!(due(&series("continuing", Some("2026-10-03"))), after(60));
+
+        // Its first episode, when that is nearer than the date of the premiere.
+        let mut upcoming = series("upcoming", Some("2026-10-08"));
+        upcoming.episodes = vec![episode(1, None, Some("2026-10-04T10:00:00Z"))];
+        assert_eq!(due(&upcoming), after(60));
+    }
+
+    #[test]
+    fn magical_explorer_on_the_evening_it_premiered_is_fetched_within_the_hour() {
+        // As stored then: TMDB still had it upcoming, its premiere dated by
+        // the Japanese day; the first episode had aired five hours before,
+        // the second airs in a week.
+        let mut item = series("upcoming", Some("2026-10-04"));
+        item.episodes = vec![
+            episode(1, Some("2026-10-04"), Some("2026-10-03T15:00:00Z")),
+            episode(2, Some("2026-10-11"), Some("2026-10-10T15:00:00Z")),
+        ];
+        assert_eq!(due(&item), after(60));
+    }
+
+    #[test]
+    fn a_running_series_is_fetched_an_hour_after_its_next_episode_airs() {
+        let mut item = series("continuing", Some("2026-01-10"));
+        item.episodes = vec![
+            episode(1, None, Some("2026-09-26T21:30:00Z")),
+            episode(2, None, Some("2026-10-03T22:30:00Z")),
+        ];
+        assert_eq!(due(&item), after(3 * 60 + 30));
+
+        // Not later than its interval says, though.
+        item.episodes[1].air_date_utc = Some("2026-10-04T05:00:00Z".into());
+        assert_eq!(due(&item), after(6 * 60));
+    }
+
+    #[test]
+    fn an_episode_known_only_by_its_day_airs_at_midnight_utc_as_sonarr_is_told() {
+        let mut item = series("continuing", Some("2026-01-10"));
+        item.episodes = vec![episode(2, Some("2026-10-04"), None)];
+        assert_eq!(due(&item), after(5 * 60));
+    }
+
+    #[test]
+    fn an_episode_that_aired_within_the_hour_is_still_followed() {
+        // A refresh between its airing and the hour after it must not move
+        // the one after it to the next episode, a week away.
+        let mut item = series("continuing", Some("2026-01-10"));
+        item.episodes = vec![
+            episode(1, None, Some("2026-10-03T19:30:00Z")),
+            episode(2, None, Some("2026-10-10T19:30:00Z")),
+        ];
+        assert_eq!(due(&item), after(30));
+
+        item.episodes[0].air_date_utc = Some("2026-10-03T18:30:00Z".into());
+        assert_eq!(due(&item), after(6 * 60));
+    }
+
+    #[test]
+    fn an_ended_series_and_a_film_keep_their_interval() {
+        let week = std::time::Duration::from_secs(7 * 24 * 3600);
+        let mut ended = series("ended", Some("2026-10-04"));
+        ended.episodes = vec![episode(1, None, Some("2026-10-03T20:30:00Z"))];
+        assert_eq!(refresh_at(&ended, week, now()), after(7 * 24 * 60));
+
+        let mut film = MediaItem::empty(MediaKind::Movie);
+        film.first_aired = Some("2026-10-04".into());
+        assert_eq!(due(&film), after(6 * 60));
+    }
+
+    #[test]
+    fn dates_that_cannot_be_read_change_nothing() {
+        let mut item = series("upcoming", Some("TBA"));
+        item.episodes = vec![
+            episode(1, Some("soon"), Some("not a date")),
+            episode(2, None, None),
+            episode(3, Some("9999-12-31"), None),
+        ];
+        assert_eq!(due(&item), after(6 * 60));
+        assert_eq!(due(&series("upcoming", Some("2026"))), after(6 * 60));
+    }
+
+    #[test]
+    fn a_failed_refresh_waits_six_hours_unless_the_series_is_near_an_air_date() {
+        assert_eq!(retry_at(None, now()), after(6 * 60));
+        assert_eq!(
+            retry_at(Some(&series("continuing", Some("2026-01-10"))), now()),
+            after(6 * 60)
+        );
+        // Not an ended series' week: a failure is not a success.
+        assert_eq!(
+            retry_at(Some(&series("ended", Some("2020-01-10"))), now()),
+            after(6 * 60)
+        );
+        // A provider down on the day of a premiere does not cost the day.
+        assert_eq!(
+            retry_at(Some(&series("upcoming", Some("2026-10-04"))), now()),
+            after(60)
+        );
+    }
+
+    fn refreshed(mut item: MediaItem, minutes_ago: i64) -> MediaItem {
+        item.refreshed_at = Some(to_rfc3339(after(-minutes_ago)));
+        item
+    }
+
+    #[test]
+    fn a_series_with_no_episodes_is_fetched_again_when_asked_for_once_the_hour_is_past() {
+        let empty = series("continuing", Some("2025-04-01"));
+        assert!(due_on_read(&refreshed(empty.clone(), 120), now()));
+        // Within the hour: what the last fetch, or the last failure, left.
+        assert!(!due_on_read(&refreshed(empty, 30), now()));
+    }
+
+    #[test]
+    fn so_is_a_series_premiering_within_two_days_either_side() {
+        let with = |first_aired: &str| {
+            let mut item = series("upcoming", Some(first_aired));
+            item.episodes = vec![episode(1, Some(first_aired), None)];
+            refreshed(item, 120)
+        };
+        assert!(due_on_read(&with("2026-10-04"), now()));
+        assert!(due_on_read(&with("2026-10-02"), now()));
+        assert!(!due_on_read(&with("2026-09-30"), now()));
+        assert!(!due_on_read(&with("2026-10-06"), now()));
+    }
+
+    #[test]
+    fn a_film_an_entry_made_by_hand_or_one_never_fetched_is_not() {
+        let film = refreshed(MediaItem::empty(MediaKind::Movie), 120);
+        assert!(!due_on_read(&film, now()));
+
+        let mut manual = refreshed(series("upcoming", Some("2026-10-04")), 120);
+        manual.is_manual = true;
+        assert!(!due_on_read(&manual, now()));
+
+        let never = series("upcoming", Some("2026-10-04"));
+        assert!(!due_on_read(&never, now()));
     }
 }

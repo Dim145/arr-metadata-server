@@ -22,12 +22,6 @@ use crate::{
     state::AppState,
 };
 
-/// How long to wait after a failure before trying that entry again.
-///
-/// Without this, an id that has been deleted upstream would be retried on every
-/// scheduler tick forever.
-const FAILURE_BACKOFF_HOURS: i64 = 6;
-
 /// Refetch one entry from its provider.
 ///
 /// Returns the refreshed entry, or `None` if there was nothing to refresh from.
@@ -415,7 +409,7 @@ async fn refresh_due(state: &AppState, id: &str) -> bool {
         Ok(None) => return true,
         Err(e) => {
             tracing::warn!(%id, error = format_args!("{e:#}"), "could not read an entry due for refresh");
-            mark_failure(state, id, &format!("could not be read: {e}")).await;
+            mark_failure(state, id, None, &format!("could not be read: {e}")).await;
             return false;
         }
     };
@@ -429,19 +423,31 @@ async fn refresh_due(state: &AppState, id: &str) -> bool {
                 .as_deref()
                 .is_some_and(|at| at <= crate::db::now().as_str()) =>
         {
-            mark_failure(state, id, "no provider answered; the stored entry was kept").await;
+            mark_failure(
+                state,
+                id,
+                Some(&item),
+                "no provider answered; the stored entry was kept",
+            )
+            .await;
             false
         }
         Ok(Some(_)) => true,
         Ok(None) => {
             // Nothing to refresh from. Push the deadline out so this entry
             // does not occupy a slot in every future batch.
-            mark_failure(state, id, "no provider could resolve this entry").await;
+            mark_failure(
+                state,
+                id,
+                Some(&item),
+                "no provider could resolve this entry",
+            )
+            .await;
             false
         }
         Err(e) => {
             tracing::warn!(%id, error = %e, "refresh failed");
-            mark_failure(state, id, &e.to_string()).await;
+            mark_failure(state, id, Some(&item), &e.to_string()).await;
             false
         }
     }
@@ -514,8 +520,11 @@ fn days_ago(days: i64) -> Option<String> {
     chrono::Utc::now().checked_sub_signed(delta).map(to_rfc3339)
 }
 
-async fn mark_failure(state: &AppState, id: &str, error: &str) {
-    let next = to_rfc3339(chrono::Utc::now() + chrono::Duration::hours(FAILURE_BACKOFF_HOURS));
+/// Record a failed refresh, and when to try again: see
+/// [`crate::service::retry_after_failure`]. `item` is the work as it was read,
+/// when it could be.
+async fn mark_failure(state: &AppState, id: &str, item: Option<&MediaItem>, error: &str) {
+    let next = crate::service::retry_after_failure(item);
 
     if let Err(e) = repo::item::mark_refreshed(&state.db, id, Some(&next), Some(error)).await {
         tracing::warn!(%id, error = %e, "could not record the refresh failure");

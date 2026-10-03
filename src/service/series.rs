@@ -7,7 +7,10 @@ use crate::{
     db::repo,
     domain::{ExternalSource, MediaItem, MediaKind},
     providers::{names, tmdb::map as tmdb_map},
-    service::{FETCHING, Found, cached_search, gather, ids, is_stale, load, persist},
+    service::{
+        FETCHING, Found, cached_search, due_on_read, gather, ids, is_stale, load, persist,
+        retry_after_failure,
+    },
     state::AppState,
     wire::sonarr,
 };
@@ -33,17 +36,24 @@ pub async fn by_client_id(state: &AppState, requested_id: i64) -> Result<Option<
 }
 
 pub async fn by_tvdb_id(state: &AppState, tvdb_id: i64) -> Result<Option<MediaItem>> {
-    if let Some(item) = local(state, ExternalSource::TvdbSeries, &tvdb_id.to_string()).await? {
+    let value = tvdb_id.to_string();
+    if let Some(item) = local(state, ExternalSource::TvdbSeries, &value).await? {
         return Ok(Some(item));
     }
 
     // One fetch per work at a time; see `FETCHING`. Checked again after the
     // wait, because whoever held it has usually just stored the answer.
     let _fetching = FETCHING.lock(&format!("series:tvdb:{tvdb_id}")).await;
-    if let Some(item) = local(state, ExternalSource::TvdbSeries, &tvdb_id.to_string()).await? {
+    if let Some(item) = local(state, ExternalSource::TvdbSeries, &value).await? {
         return Ok(Some(item));
     }
 
+    let fetched = fetch_by_tvdb_id(state, tvdb_id).await;
+    or_held(state, ExternalSource::TvdbSeries, &value, fetched).await
+}
+
+/// Ask the providers for a series by its TVDB id, and store what they say.
+async fn fetch_by_tvdb_id(state: &AppState, tvdb_id: i64) -> Result<Option<MediaItem>> {
     // TMDB indexes by its own ids, so ask it which work this TVDB id is before
     // gathering: knowing both lets every provider be asked at once.
     let tmdb_id = if state.tmdb.is_configured() {
@@ -67,6 +77,11 @@ pub async fn by_tvdb_id(state: &AppState, tvdb_id: i64) -> Result<Option<MediaIt
     // answer at twice the cost.
     if state.flag("skyhook.fallback", true) && !state.flag("skyhook.enrich", true) {
         match state.skyhook.show(tvdb_id).await {
+            // Nameless, it would be a row nothing could be listed by; with
+            // other providers, one of them names it (`gather::store`).
+            Ok(Some((_, show))) if show.title.trim().is_empty() => {
+                tracing::warn!(tvdb_id, "Skyhook named nothing; not storing its answer");
+            }
             Ok(Some((raw, show))) => {
                 let item = sonarr::to_item(&show);
                 let provenance = crate::merge::provenance::single(names::SKYHOOK, &item);
@@ -92,7 +107,8 @@ pub async fn by_tmdb_id(state: &AppState, tmdb_id: i64) -> Result<Option<MediaIt
         return Ok(Some(item));
     }
 
-    fetch_from_tmdb(state, tmdb_id).await
+    let fetched = fetch_from_tmdb(state, tmdb_id).await;
+    or_held(state, ExternalSource::TmdbTv, &tmdb_id.to_string(), fetched).await
 }
 
 pub async fn by_imdb_id(state: &AppState, imdb_id: &str) -> Result<Option<MediaItem>> {
@@ -102,6 +118,11 @@ pub async fn by_imdb_id(state: &AppState, imdb_id: &str) -> Result<Option<MediaI
         return Ok(Some(item));
     }
 
+    let fetched = fetch_by_imdb_id(state, imdb_id).await;
+    or_held(state, ExternalSource::Imdb, imdb_id, fetched).await
+}
+
+async fn fetch_by_imdb_id(state: &AppState, imdb_id: &str) -> Result<Option<MediaItem>> {
     if !state.tmdb.is_configured() {
         return Ok(None);
     }
@@ -139,7 +160,8 @@ pub async fn by_fankai_id(state: &AppState, fankai_id: i64) -> Result<Option<Med
         return Ok(Some(item));
     }
 
-    gather::fankai_series(state, fankai_id).await
+    let fetched = gather::fankai_series(state, fankai_id).await;
+    or_held(state, ExternalSource::Fankai, &value, fetched).await
 }
 
 /// A series by one of its MyAnimeList or AniList entries.
@@ -295,10 +317,12 @@ pub async fn search(state: &AppState, term: &str) -> Result<Vec<MediaItem>> {
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
-/// A locally stored series, if it exists and is still fresh.
+/// A locally stored series, if it exists and will do as it is.
 ///
-/// A stale entry is still returned when the provider cannot be reached; the
-/// caller decides. Here, returning `None` lets the ladder continue to a refetch.
+/// Not when it is due: its refresh has come, or a client asking for it now is
+/// to be given a fresh copy (see [`due_on_read`]). Returning `None` then lets
+/// the ladder continue to a refetch, and [`or_held`] answers with this copy
+/// after all when that comes to nothing.
 async fn local(state: &AppState, source: ExternalSource, value: &str) -> Result<Option<MediaItem>> {
     let Some(id) = repo::item::find_id_by_external(&state.db, source, value).await? else {
         return Ok(None);
@@ -313,15 +337,65 @@ async fn local(state: &AppState, source: ExternalSource, value: &str) -> Result<
     }
 
     // A manual entry has no provider behind it, so staleness is meaningless.
-    if item.is_manual || !is_stale(&item) {
+    let due = is_stale(&item) || due_on_read(&item, chrono::Utc::now());
+    if item.is_manual || !due {
         return Ok(Some(item));
     }
 
     Ok(None)
 }
 
-/// A locally stored series whatever its age, for a source that is switched
-/// off: what it fetched while on is served as it is.
+/// What a fetch came to, or the stored copy when it came to nothing.
+///
+/// A series held here and due again is fetched before it is served; when no
+/// provider answers, or the fetch fails, the copy held is served as it is —
+/// answering when the providers do not is what keeping one is for — rather
+/// than a 404 Sonarr would act on. The attempt is recorded as a failed
+/// refresh, so the requests that follow are answered from the store at once
+/// instead of each waiting on the same providers to fail again: until the
+/// retry the failure sets ([`retry_after_failure`]), and for a series near
+/// its premiere, for the hour [`due_on_read`] leaves between two attempts.
+async fn or_held(
+    state: &AppState,
+    source: ExternalSource,
+    value: &str,
+    fetched: Result<Option<MediaItem>>,
+) -> Result<Option<MediaItem>> {
+    let failure = match &fetched {
+        Ok(Some(_)) => return fetched,
+        Ok(None) => "no provider answered; the stored entry was kept".to_string(),
+        Err(e) => format!("{e:#}"),
+    };
+
+    let item = match held(state, source, value).await {
+        Ok(Some(item)) if item.kind == MediaKind::Series => item,
+        _ => return fetched,
+    };
+
+    // Refreshed meanwhile — by the sweep, say: the copy is as fresh as any.
+    if !is_stale(&item) && !due_on_read(&item, chrono::Utc::now()) {
+        return Ok(Some(item));
+    }
+
+    tracing::warn!(
+        id = %item.id,
+        error = %failure,
+        "the series could not be fetched again; answering with the stored copy"
+    );
+    let next = retry_after_failure(Some(&item));
+    if let Err(e) =
+        repo::item::mark_refreshed(&state.db, &item.id, Some(&next), Some(&failure)).await
+    {
+        tracing::warn!(id = %item.id, error = %e, "could not record the failed refresh");
+    }
+    state.caches.touched(&item.id).await;
+
+    Ok(Some(item))
+}
+
+/// A locally stored series whatever its age: for a source that is switched
+/// off, what it fetched while on is served as it is; and it is what
+/// [`or_held`] answers with when fetching it again came to nothing.
 async fn held(state: &AppState, source: ExternalSource, value: &str) -> Result<Option<MediaItem>> {
     let Some(id) = repo::item::find_id_by_external(&state.db, source, value).await? else {
         return Ok(None);

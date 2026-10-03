@@ -19,6 +19,7 @@ use utoipa::ToSchema;
 const MAX_EPISODES: usize = 10_000;
 const MAX_IMAGES: usize = 200;
 
+use super::{readable_entries, readable_or_none, string_or_null};
 use crate::{
     db::{new_id, now},
     domain::{
@@ -27,13 +28,27 @@ use crate::{
     },
 };
 
+/// A series as Skyhook describes one, and as this server answers Sonarr.
+///
+/// Read leniently, written in full. Skyhook leaves out whatever it has nothing
+/// for — an episode nobody has named has no `title` — and a field read as
+/// required that one answer lacked failed the whole series: everything Skyhook
+/// adds to the other providers was lost with it. So a text it leaves out is
+/// read as empty, a list as none, an entry or a value that cannot be read is
+/// left out; only the series' own id is required. What this server sends
+/// Sonarr still carries every field Sonarr reads without a null check.
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ShowResource {
     pub tvdb_id: i64,
+    /// Empty when Skyhook names nothing: another provider names the work then.
+    #[serde(default, deserialize_with = "string_or_null")]
+    #[schema(required = true)]
     pub title: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub overview: Option<String>,
+    #[serde(default, deserialize_with = "string_or_null")]
+    #[schema(required = true)]
     pub slug: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub original_country: Option<String>,
@@ -53,35 +68,48 @@ pub struct ShowResource {
     pub tmdb_id: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub imdb_id: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "readable_entries")]
     pub mal_ids: Vec<i64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "readable_entries")]
     pub ani_list_ids: Vec<i64>,
+    #[serde(default, deserialize_with = "string_or_null")]
+    #[schema(required = true)]
     pub last_updated: String,
+    /// Empty when Skyhook says nothing: no status, rather than one made up.
+    #[serde(default, deserialize_with = "string_or_null")]
+    #[schema(required = true)]
     pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runtime: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "readable_or_none"
+    )]
     pub time_of_day: Option<TimeOfDay>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub original_network: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub network: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "readable_entries")]
     pub genres: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content_rating: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "readable_or_none"
+    )]
     pub rating: Option<RatingResource>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "readable_entries")]
     pub alternative_titles: Vec<AlternativeTitleResource>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "readable_entries")]
     pub actors: Vec<ActorResource>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "readable_entries")]
     pub images: Vec<ImageResource>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "readable_entries")]
     pub seasons: Vec<SeasonResource>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "readable_entries")]
     pub episodes: Vec<EpisodeResource>,
 }
 
@@ -123,13 +151,16 @@ pub struct ImageResource {
 #[serde(rename_all = "camelCase")]
 pub struct SeasonResource {
     pub season_number: i32,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "readable_entries")]
     pub images: Vec<ImageResource>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct EpisodeResource {
+    /// Always written; never read, so not needed from the upstream either.
+    #[serde(default)]
+    #[schema(required = true)]
     pub tvdb_show_id: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tvdb_id: Option<i64>,
@@ -143,6 +174,11 @@ pub struct EpisodeResource {
     pub aired_before_season_number: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub aired_before_episode_number: Option<i32>,
+    /// Always written, `TBA` for an episode nobody has named yet (see
+    /// `episode_title`). Skyhook leaves it out then, and that is read as no
+    /// name: the episode, and the series, are kept.
+    #[serde(default, deserialize_with = "string_or_null")]
+    #[schema(required = true)]
     pub title: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub air_date: Option<String>,
@@ -152,7 +188,11 @@ pub struct EpisodeResource {
     pub runtime: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub finale_type: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "readable_or_none"
+    )]
     pub rating: Option<RatingResource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub overview: Option<String>,
@@ -367,7 +407,9 @@ pub fn to_item(show: &ShowResource) -> MediaItem {
         .first_aired
         .as_deref()
         .and_then(|d| d.get(0..4)?.parse().ok());
-    item.status = Some(show.status.to_ascii_lowercase());
+    item.status = Some(show.status.trim())
+        .filter(|s| !s.is_empty())
+        .map(str::to_ascii_lowercase);
     item.runtime = show.runtime;
     item.network = show
         .network
@@ -807,5 +849,147 @@ mod tests {
         // What is no day at all is left out rather than sent.
         it.first_aired = Some("2008".into());
         assert_eq!(from_item(&it, 81189, "en").first_aired, None);
+    }
+
+    /// What Skyhook answered for *Magical Explorer* on the evening it
+    /// premiered, cut down to two episodes: from the third on, nobody had
+    /// named them yet, and Skyhook leaves `title` out rather than sending one.
+    fn magical_explorer() -> serde_json::Value {
+        serde_json::json!({
+            "tvdbId": 440056,
+            "title": "Magical Explorer",
+            "slug": "magical-explorer",
+            "originalCountry": "jpn",
+            "originalLanguage": "jpn",
+            "language": "eng",
+            "firstAired": "2026-10-04",
+            "lastAired": "2026-12-27",
+            "tvMazeId": 93848,
+            "tmdbId": 335194,
+            "imdbId": "tt41296506",
+            "malIds": [56733],
+            "anidbIds": [18208],
+            "aniListIds": [169581],
+            "lastUpdated": "2026-10-03T17:48:39Z",
+            "status": "Continuing",
+            "runtime": 24,
+            "timeOfDay": { "hours": 0, "minutes": 0 },
+            "originalNetwork": "Tokyo MX",
+            "network": "Tokyo MX",
+            "genres": ["Action", "Anime"],
+            "seasons": [{ "seasonNumber": 1 }],
+            "episodes": [
+                {
+                    "tvdbShowId": 440056,
+                    "tvdbId": 10050355,
+                    "seasonNumber": 1,
+                    "episodeNumber": 1,
+                    "absoluteEpisodeNumber": 1,
+                    "title": "Reincarnated as a Sidekick Character in an Eroge, but I’ll Use My Game Knowledge to Do What I Want",
+                    "airDate": "2026-10-04",
+                    "airDateUtc": "2026-10-03T15:00:00Z",
+                    "runtime": 24
+                },
+                {
+                    "tvdbShowId": 440056,
+                    "tvdbId": 12017080,
+                    "seasonNumber": 1,
+                    "episodeNumber": 3,
+                    "absoluteEpisodeNumber": 3,
+                    "airDate": "2026-10-18",
+                    "airDateUtc": "2026-10-17T15:00:00Z",
+                    "runtime": 24
+                }
+            ]
+        })
+    }
+
+    #[test]
+    fn an_episode_skyhook_has_not_named_costs_nothing_of_the_series() {
+        // Read as required, the missing title failed the whole answer, and
+        // with it what only Skyhook gave: the instant the first episode aired
+        // — midnight UTC of its Japanese day went to Sonarr instead, nine
+        // hours late — and the ids it files the series under elsewhere.
+        let show: ShowResource =
+            serde_json::from_value(magical_explorer()).expect("Skyhook's answer is read");
+        let item = to_item(&show);
+
+        assert_eq!(item.episodes.len(), 2);
+        assert_eq!(
+            item.episodes[0].air_date_utc.as_deref(),
+            Some("2026-10-03T15:00:00Z")
+        );
+        assert_eq!(item.episodes[1].title, "");
+        assert_eq!(item.external_ids.mal, [56733]);
+        assert_eq!(item.external_ids.anilist, [169581]);
+        assert_eq!(item.external_ids.tvmaze, Some(93848));
+        assert_eq!(item.status.as_deref(), Some("continuing"));
+
+        // Sonarr is still sent a name for it, as Skyhook's own answer reads.
+        let sent = serde_json::to_value(from_item(&item, 440056, "en")).unwrap();
+        assert_eq!(sent["episodes"][1]["title"], "TBA");
+        assert_eq!(sent["episodes"][0]["airDateUtc"], "2026-10-03T15:00:00Z");
+    }
+
+    #[test]
+    fn what_the_upstream_leaves_out_or_sends_as_null_is_read_as_nothing() {
+        // Skyhook leaves out what it has nothing for; a mirror an operator
+        // points this server at may write null instead. Neither costs the
+        // series: whatever else the answer says is kept.
+        let show: ShowResource = serde_json::from_value(serde_json::json!({
+            "tvdbId": 440056,
+            "title": null,
+            "status": null,
+            "genres": null,
+            "malIds": null,
+            "rating": null,
+            "timeOfDay": null,
+            "seasons": [{ "seasonNumber": 1, "images": null }],
+            "episodes": [{
+                "tvdbShowId": 440056,
+                "seasonNumber": 1,
+                "episodeNumber": 1,
+                "title": null,
+                "airDateUtc": "2026-10-03T15:00:00Z",
+                "rating": null
+            }]
+        }))
+        .expect("the answer is read");
+        let item = to_item(&show);
+
+        // No title and no status: another provider gives them, and a work
+        // nobody names is not stored.
+        assert_eq!(item.title, "");
+        assert_eq!(item.status, None);
+        assert!(item.genres.is_empty() && item.external_ids.mal.is_empty());
+        assert_eq!(item.seasons.len(), 1);
+        assert_eq!(
+            item.episodes[0].air_date_utc.as_deref(),
+            Some("2026-10-03T15:00:00Z")
+        );
+    }
+
+    #[test]
+    fn an_entry_that_cannot_be_read_is_left_out_not_the_series() {
+        // An episode with no number to file it under, an actor with no name,
+        // a rating with no value: each is left out, and nothing else.
+        let mut answer = magical_explorer();
+        answer["episodes"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({ "tvdbShowId": 440056, "seasonNumber": 1, "title": "?" }));
+        answer["actors"] = serde_json::json!([
+            { "character": "瀧音幸助 / Kosuke Taktoto" },
+            { "name": "Nobunaga Shimazaki" }
+        ]);
+        answer["rating"] = serde_json::json!({ "count": 12 });
+
+        let item = to_item(&serde_json::from_value(answer).expect("the answer is read"));
+
+        assert_eq!(item.episodes.len(), 2);
+        assert_eq!(item.credits.len(), 1);
+        assert_eq!(item.credits[0].person_name, "Nobunaga Shimazaki");
+        assert!(item.ratings.is_empty());
+        assert_eq!(item.external_ids.anilist, [169581]);
     }
 }

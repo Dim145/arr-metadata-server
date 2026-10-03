@@ -62,8 +62,13 @@ impl SkyhookClient {
         };
 
         // A single 404-ish payload or an unexpected shape is an empty result,
-        // not an error: the caller has already tried everything else.
-        Ok(serde_json::from_value(value).unwrap_or_default())
+        // not an error: the caller has already tried everything else. A show
+        // it names nothing would be a result with nothing to pick it by.
+        let shows: Vec<ShowResource> = serde_json::from_value(value).unwrap_or_default();
+        Ok(shows
+            .into_iter()
+            .filter(|show| !show.title.trim().is_empty())
+            .collect())
     }
 
     async fn fetch(&self, url: &str, query: &[(&str, &str)]) -> Result<Option<Value>> {

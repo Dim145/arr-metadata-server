@@ -13,6 +13,7 @@ use utoipa::ToSchema;
 const MAX_IMAGES: usize = 200;
 const MAX_TITLES: usize = 500;
 
+use super::string_or_null;
 use crate::domain::{Credit, CreditType, Image, MediaItem, Rating};
 
 /// A list that the upstream sometimes writes as `null`.
@@ -26,18 +27,6 @@ where
     T: serde::Deserialize<'de>,
 {
     Ok(Option::<Vec<T>>::deserialize(deserializer)?.unwrap_or_default())
-}
-
-/// A text the upstream may leave out or write as `null`, read as empty.
-///
-/// The fields read this way are the ones Radarr calls a method on without a
-/// null check: this server always writes them, but must still read a reply
-/// from api.radarr.video that has none.
-fn string_or_null<'de, D>(deserializer: D) -> Result<String, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 /// ISO 639-2 for "undetermined": the original language of a film whose
