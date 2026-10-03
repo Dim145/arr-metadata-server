@@ -125,7 +125,7 @@ export function RecordTab({
     empty: registry.item.filter((def) => !PANEL_FIELDS.has(def.name) && !hasValue(def, record[def.name])).length,
   }
 
-  const rows = (defs: FieldDef[]) =>
+  const rows = (defs: FieldDef[], labelled = true) =>
     defs.filter(matches).map((def) => (
       <FieldRow
         key={def.name}
@@ -136,11 +136,16 @@ export function RecordTab({
         origin={provenance?.fields?.[def.name]}
         // The slug is made here, from the title and the year.
         traced={traced && def.name !== 'slug'}
+        labelled={labelled}
         onChanged={onChanged}
       />
     ))
 
-  const shownGroups = groups.map((group) => ({ ...group, rows: rows(group.defs) })).filter((group) => group.rows.length)
+  // A panel of one field — the synopsis — names it in its head: the row
+  // need not say it again.
+  const shownGroups = groups
+    .map((group) => ({ ...group, rows: rows(group.defs, group.defs.length > 1) }))
+    .filter((group) => group.rows.length)
   const otherRows = rows(other)
   const nothing = shownGroups.length === 0 && otherRows.length === 0
 
@@ -255,8 +260,14 @@ export function RecordTab({
             <dl className="divide-y divide-rule">
               <Field label={e.created}>{fmt.dateTime(work.createdAt, locale) ?? '—'}</Field>
               <Field label={e.updated}>{fmt.dateTime(work.updatedAt, locale) ?? '—'}</Field>
-              <Field label={e.refreshed}>{fmt.relative(work.refreshedAt, locale) ?? '—'}</Field>
-              <Field label={e.nextRefresh}>{fmt.relative(work.refreshAfter, locale) ?? '—'}</Field>
+              {/* No refresh ever touches a work entered by hand: two dashes
+                  would only say so less clearly than the masthead does. */}
+              {work.isManual ? null : (
+                <>
+                  <Field label={e.refreshed}>{fmt.relative(work.refreshedAt, locale) ?? '—'}</Field>
+                  <Field label={e.nextRefresh}>{fmt.relative(work.refreshAfter, locale) ?? '—'}</Field>
+                </>
+              )}
               {work.seasons?.length ? (
                 <Field label={e.content}>{e.contentValue(work.seasons.length, work.episodes?.length ?? 0)}</Field>
               ) : null}

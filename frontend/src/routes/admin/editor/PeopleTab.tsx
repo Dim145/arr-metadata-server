@@ -13,7 +13,7 @@ import { useState } from 'react'
 import { Link } from 'react-router'
 
 import { Artwork } from '../../../components/media'
-import { FormField, Glyph, Input, Panel, PanelHead, Segmented, Select } from '../../../components/ui'
+import { Button, FormField, Glyph, Input, Panel, PanelHead, Segmented, Select } from '../../../components/ui'
 import { api } from '../../../lib/api'
 import { cn } from '../../../lib/cn'
 import { useI18n } from '../../../lib/i18n'
@@ -82,8 +82,24 @@ function Credits({ work, onChanged, onRemove }: PanelProps) {
     ['guest', c.guest],
   ] as const
 
+  const castFilter = (
+    <Segmented<CastFilter>
+      label={e.filter.label}
+      value={filter}
+      onChange={setFilter}
+      options={[
+        { value: 'all', label: e.filter.all },
+        { value: 'cast', label: e.filter.cast },
+        { value: 'crew', label: e.filter.crew },
+        { value: 'yours', label: e.filter.yours },
+      ]}
+    />
+  )
+
   return (
     <Panel id="credits" label={c.credits} className="scroll-mt-28 lg:scroll-mt-16">
+      {/* The filter beside the head where there is room, and under it on a
+          phone, where the two shared one line badly. */}
       <PanelHead
         title={
           <span className="flex items-center gap-2">
@@ -91,25 +107,12 @@ function Credits({ work, onChanged, onRemove }: PanelProps) {
             <Count>{credits.length}</Count>
           </span>
         }
-        action={
-          credits.length ? (
-            <Segmented<CastFilter>
-              label={e.filter.label}
-              value={filter}
-              onChange={setFilter}
-              options={[
-                { value: 'all', label: e.filter.all },
-                { value: 'cast', label: e.filter.cast },
-                { value: 'crew', label: e.filter.crew },
-                { value: 'yours', label: e.filter.yours },
-              ]}
-            />
-          ) : undefined
-        }
+        action={credits.length ? <div className="hidden sm:block">{castFilter}</div> : undefined}
       />
+      {credits.length ? <div className="border-b border-rule px-5 py-2 sm:hidden">{castFilter}</div> : null}
 
       {shown.length === 0 ? (
-        <Empty>{credits.length ? e.filter.none : c.none}</Empty>
+        <Empty>{credits.length ? e.filter.none : e.peopleTab.noCredits}</Empty>
       ) : (
         <ul className="divide-y divide-rule">
           {shown.map((credit) => {
@@ -206,6 +209,9 @@ function AlternativeTitles({ work, onChanged, onRemove }: PanelProps) {
   const [title, setTitle] = useState('')
   const [type, setType] = useState('')
   const [language, setLanguage] = useState('')
+  // A dozen first: a work TMDB names in forty languages is a column of
+  // forty rows, most of them never looked at.
+  const [all, setAll] = useState(false)
 
   const add = useMutation({
     mutationFn: (body: unknown) => api.post<{ id: string }>(`/items/${work.id}/alternative-titles`, body),
@@ -216,6 +222,9 @@ function AlternativeTitles({ work, onChanged, onRemove }: PanelProps) {
   })
 
   const titles = work.alternativeTitles ?? []
+  // The hand-added ones first, so one just added is seen whatever the count.
+  const ordered = [...titles].sort((x, y) => Number(y.isManual) - Number(x.isManual))
+  const shown = all ? ordered : ordered.slice(0, 12)
 
   return (
     <Panel id="titles" label={c.titles} className="scroll-mt-28 lg:scroll-mt-16">
@@ -230,10 +239,10 @@ function AlternativeTitles({ work, onChanged, onRemove }: PanelProps) {
       <p className="px-5 pt-3 text-xs leading-relaxed text-bone-faint">{c.titlesHint}</p>
 
       {titles.length === 0 ? (
-        <Empty>{c.none}</Empty>
+        <Empty>{p.noTitles}</Empty>
       ) : (
         <ul className="mt-2 divide-y divide-rule border-t border-rule">
-          {titles.map((alt) => {
+          {shown.map((alt) => {
             const kind = alt.titleType?.toLowerCase()
             const fromRadarr = kind !== undefined && RADARR_SOURCES.has(kind)
             const named = kind === undefined || fromRadarr ? undefined : ((t.work.titleTypes as Record<string, string>)[kind] ?? alt.titleType)
@@ -261,6 +270,13 @@ function AlternativeTitles({ work, onChanged, onRemove }: PanelProps) {
           })}
         </ul>
       )}
+      {titles.length > shown.length ? (
+        <div className="border-t border-rule px-5 py-3">
+          <Button size="sm" variant="quiet" onClick={() => setAll(true)}>
+            {t.work.allTitles(titles.length)}
+          </Button>
+        </div>
+      ) : null}
 
       <AddForm
         label={c.addTitle}
@@ -306,7 +322,7 @@ function Translations({ work, report }: { work: MediaItem; report?: ProvenanceRe
             <Count>{translations.length}</Count>
           </span>
         }
-        action={<span className="label hidden sm:inline">{p.translationCount(translations.length)}</span>}
+        action={translations.length ? <span className="label hidden sm:inline">{p.translationCount(translations.length)}</span> : undefined}
       />
       {translations.length === 0 ? (
         <Empty>{p.noTranslations}</Empty>

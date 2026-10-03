@@ -1546,6 +1546,7 @@ export const fr: Dict = {
         removeEpisode: 'Retirer cet épisode',
         noSeasonRow:
           'Aucune ligne propre à cette saison : ce sont les épisodes qui la nomment, et eux seuls peuvent être verrouillés. Ajoutez la saison à la main pour lui donner un titre ou un synopsis.',
+        noSeasons: 'Aucune saison pour l’instant. Ajoutez-en une, puis ses épisodes ; une source qui les liste remplit ceci à l’actualisation.',
         noEpisodes: 'Aucun épisode dans cette saison pour l’instant.',
         addEpisodeTo: (season: string) => `Ajouter un épisode à ${season}`,
         nextCode: (code: string) => `suivant : ${code}`,
@@ -1566,8 +1567,11 @@ export const fr: Dict = {
         languageHint: 'Un code, quand l’image porte du texte : fr, en…',
         byAddress: 'Ajouter par adresse',
         noneOfKind: 'Aucune image de ce type.',
+        none: 'Aucune image pour l’instant : les sources apportent les leurs à l’actualisation, ou ajoutez-en une ci-dessous.',
       },
       peopleTab: {
+        noCredits: 'Personne au générique pour l’instant.',
+        noTitles: 'Aucun autre titre pour l’instant.',
         photo: 'Photo (adresse)',
         titleType: 'Type de titre',
         titleTypeHint: 'Texte libre : de travail, traduit, abréviation…',

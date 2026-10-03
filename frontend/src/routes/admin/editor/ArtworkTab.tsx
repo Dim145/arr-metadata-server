@@ -46,6 +46,9 @@ export function ArtworkTab({ work, onChanged }: { work: MediaItem; onChanged: ()
   const a = t.admin.editor.artworkTab
   const queryClient = useQueryClient()
   const [kind, setKind] = useState<string>('all')
+  // The kinds laid out whole in the table of everything: a dozen of each
+  // are drawn, and a work with sixty posters asks before drawing the rest.
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const { ask, dialog } = useRemove(work, onChanged)
 
   // What is kept of each address the work points at: shown beside the
@@ -145,17 +148,17 @@ export function ArtworkTab({ work, onChanged }: { work: MediaItem; onChanged: ()
 
   return (
     <section id="artwork" aria-label={c.artwork} className="scroll-mt-28 lg:scroll-mt-16">
-      <div className="mb-3 flex flex-wrap items-center gap-2" role="group" aria-label={t.gallery.kinds}>
-        <KindChip on={kind === 'all'} onClick={() => setKind('all')} label={a.all} n={own.length} />
-        {kinds.map((k) => (
-          <KindChip key={k} on={kind === k} onClick={() => setKind(k)} label={kindLabel(k)} n={own.filter((image) => image.coverType === k).length} />
-        ))}
-      </div>
+      {own.length ? (
+        <div className="mb-3 flex flex-wrap items-center gap-2" role="group" aria-label={t.gallery.kinds}>
+          <KindChip on={kind === 'all'} onClick={() => setKind('all')} label={a.all} n={own.length} />
+          {kinds.map((k) => (
+            <KindChip key={k} on={kind === k} onClick={() => setKind(k)} label={kindLabel(k)} n={own.filter((image) => image.coverType === k).length} />
+          ))}
+        </div>
+      ) : null}
       <p className="flex items-start gap-1.5 text-xs leading-relaxed text-bone-faint">
         <Glyph name="star" className="mt-0.5 size-3.5 shrink-0 text-brass" />
-        <span>
-          {c.primaryHint} {c.artworkHint}
-        </span>
+        <span>{c.primaryHint}</span>
       </p>
       {forget.isError || choose.isError ? (
         <p role="alert" className="mt-3 text-xs text-vermillion">
@@ -163,14 +166,16 @@ export function ArtworkTab({ work, onChanged }: { work: MediaItem; onChanged: ()
         </p>
       ) : null}
 
-      {own.length === 0 ? (
+      {own.length === 0 && seasons.length === 0 ? (
         <Panel className="mt-5">
-          <Empty>{c.none}</Empty>
+          <Empty>{a.none}</Empty>
         </Panel>
       ) : null}
 
       {shownKinds.map((k) => {
         const images = own.filter((image) => image.coverType === k)
+        const whole = kind === k || expanded.has(k) || images.length <= 12
+        const shown = whole ? images : images.slice(0, 12)
         return (
           <section key={k} aria-label={kindLabel(k)} className="mt-6">
             <h3 className="mb-3 flex items-baseline gap-2 font-display text-lg font-medium text-bone">
@@ -178,9 +183,18 @@ export function ArtworkTab({ work, onChanged }: { work: MediaItem; onChanged: ()
               <Count>{images.length}</Count>
             </h3>
             {images.length ? (
-              <ul className={cn('grid gap-3', isWide(k) ? 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3' : 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6')}>
-                {images.map((image) => card(image))}
-              </ul>
+              <>
+                <ul className={cn('grid items-start gap-3', isWide(k) ? 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3' : 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6')}>
+                  {shown.map((image) => card(image))}
+                </ul>
+                {whole ? null : (
+                  <div className="mt-3 flex justify-center">
+                    <Button size="sm" onClick={() => setExpanded((held) => new Set(held).add(k))}>
+                      {t.gallery.showAll(images.length)}
+                    </Button>
+                  </div>
+                )}
+              </>
             ) : (
               <Empty className="px-0">{a.noneOfKind}</Empty>
             )}
@@ -196,13 +210,23 @@ export function ArtworkTab({ work, onChanged }: { work: MediaItem; onChanged: ()
             {seasons.map((n) => {
               const images = bySeason.get(n)!.filter((image) => kind === 'all' || image.coverType === kind)
               if (!images.length) return null
+              const key = `season:${n}`
+              const whole = kind !== 'all' || expanded.has(key) || images.length <= 12
+              const shown = whole ? images : images.slice(0, 12)
               return (
                 <div key={n}>
                   <h4 className="mb-2 flex items-baseline gap-2 text-sm font-medium text-bone">
                     {seasonName(work.seasons?.find((season) => season.seasonNumber === n)?.title, n, t.work.season)}
                     <Count>{images.length}</Count>
                   </h4>
-                  <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6">{images.map((image) => card(image, true))}</ul>
+                  <ul className="grid grid-cols-2 items-start gap-3 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6">{shown.map((image) => card(image, true))}</ul>
+                  {whole ? null : (
+                    <div className="mt-3 flex justify-center">
+                      <Button size="sm" onClick={() => setExpanded((held) => new Set(held).add(key))}>
+                        {t.gallery.showAll(images.length)}
+                      </Button>
+                    </div>
+                  )}
                 </div>
               )
             })}
@@ -212,6 +236,7 @@ export function ArtworkTab({ work, onChanged }: { work: MediaItem; onChanged: ()
 
       <Panel className="mt-8">
         <PanelHead title={c.addImage} />
+        <p className="px-5 pt-3 pb-1 text-xs leading-relaxed text-bone-faint">{c.artworkHint}</p>
         <AddByAddress work={work} onDone={done} />
         {storeOn ? (
           <>

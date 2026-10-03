@@ -64,6 +64,7 @@ export function FieldRow({
   lock,
   origin,
   traced = false,
+  labelled = true,
   onChanged,
 }: {
   itemId: string
@@ -76,6 +77,8 @@ export function FieldRow({
   origin?: ValueSource
   /** Whether the work's provenance is known at all: without it, a row says nothing of where its value came from. */
   traced?: boolean
+  /** Whether the name is shown: a panel that is one field already says it in its head. */
+  labelled?: boolean
   onChanged: () => void
 }) {
   const { t, locale } = useI18n()
@@ -89,7 +92,9 @@ export function FieldRow({
   const locked = lock !== undefined
   const given = hasValue(def, value)
   const note = traced ? originNote(def.name, origin, { hasValue: given, locked }, t, locale) : null
-  const wide = def.fieldType === 'longText'
+  // A long text, or a row whose panel names it: the value runs the width,
+  // under the name's line rather than beside a column the width of a date.
+  const wide = def.fieldType === 'longText' || !labelled
   const hint = HINTED.has(def.fieldType) ? ((t.labels.fieldTypes as Record<string, string>)[def.fieldType] ?? def.fieldType) : null
 
   return (
@@ -112,12 +117,13 @@ export function FieldRow({
           wide ? '' : 'sm:grid-cols-[11rem_minmax(0,1fr)_auto] sm:items-start sm:gap-4',
         )}
       >
-        <div className="min-w-0 sm:pt-1">
+        <div className={cn('min-w-0 sm:pt-1', !labelled && !locked && 'sr-only', !labelled && locked && !editing && 'col-span-2 sm:col-span-1')}>
           <span className="flex items-center gap-1.5">
             {locked ? <Glyph name="lock" className="size-3.5 shrink-0 text-brass" /> : null}
-            <Label className={locked ? 'text-brass' : undefined}>{fieldLabel(def, t)}</Label>
+            <Label className={cn(locked && 'text-brass', !labelled && 'sr-only')}>{fieldLabel(def, t)}</Label>
+            {!labelled && locked ? <span className="label text-brass">{t.admin.editor.locked}</span> : null}
           </span>
-          {hint && !editing ? (
+          {hint && !editing && labelled ? (
             <span className="mt-0.5 block font-mono text-[0.6875rem] text-bone-faint">{hint}</span>
           ) : null}
         </div>
@@ -290,12 +296,7 @@ function Shown({ def, value, locked }: { def: FieldDef; value: unknown; locked: 
     case 'slug':
       return <p className={cn('font-mono text-[0.8125rem] break-all', tone)}>{String(value)}</p>
     case 'runtime':
-      return (
-        <p className={text}>
-          {fmt.runtime(Number(value), locale) ?? String(value)}
-          <Code>{String(value)}</Code>
-        </p>
-      )
+      return <p className={text}>{fmt.runtime(Number(value), locale) ?? String(value)}</p>
     default:
       break
   }
@@ -439,7 +440,9 @@ function Editor({
         }
       }}
     >
-      <FormField label={fieldLabel(def, t)} htmlFor={inputId} hint={hint} error={save.isError ? save.error.message : undefined}>
+      {/* The row already shows the field's name beside the box; the form's
+          own label is kept for the box's accessible name alone. */}
+      <FormField label={<span className="sr-only">{fieldLabel(def, t)}</span>} htmlFor={inputId} hint={hint} error={save.isError ? save.error.message : undefined}>
         {multiline ? (
           <Textarea id={inputId} autoFocus rows={5} value={draft} onChange={(event) => setDraft(event.target.value)} />
         ) : def.fieldType === 'boolean' ? (
@@ -499,7 +502,7 @@ function Editor({
         <Button type="button" size="sm" onClick={onCancel}>
           {t.common.cancel}
         </Button>
-        {multiline ? <span className="font-mono text-[0.6875rem] text-bone-faint">⌘↵ · Esc</span> : null}
+        {multiline ? <span className="font-mono text-[0.6875rem] text-bone-faint">Ctrl/⌘ ↵ · Esc</span> : null}
       </div>
     </form>
   )

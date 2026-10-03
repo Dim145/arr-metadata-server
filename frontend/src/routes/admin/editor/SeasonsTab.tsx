@@ -27,12 +27,15 @@ import { episodeLinks } from '../../../lib/links'
 import { airTime, airValue, episodeCode, episodesOf, seasonName, seasonNumbers, seasonPoster } from '../../../lib/media'
 import type { Episode, FieldRegistry, MediaItem, Override, ProvenanceReport } from '../../../lib/types'
 
-import { FieldRow } from './FieldRow'
+import { FieldRow, hasValue } from './FieldRow'
 import { AddForm, Count, Empty, Facts, LockBadge, useRemove } from './shared'
 
 type Filter = 'all' | 'locked' | 'yours'
 
 const scopeOf = (episode: Pick<Episode, 'seasonNumber' | 'episodeNumber'>) => `episode:${episode.seasonNumber}x${episode.episodeNumber}`
+
+/** Where a special belongs: a question only a special is asked, unless an answer is already held. */
+const PLACEMENT = new Set(['airedAfterSeasonNumber', 'airedBeforeSeasonNumber', 'airedBeforeEpisodeNumber'])
 
 export function SeasonsTab({
   work,
@@ -114,10 +117,40 @@ export function SeasonsTab({
   const spine = report?.provenance?.episodes
   const otherOrders = orders.data?.orders ?? []
 
+  const episodeFilter = (
+    <Segmented<Filter>
+      label={e.filter.label}
+      value={filter}
+      onChange={setFilter}
+      options={[
+        { value: 'all', label: e.filter.all },
+        {
+          value: 'locked',
+          label: (
+            <span className="inline-flex items-center gap-1.5">
+              {e.filter.locked}
+              <Count>{counts.locked}</Count>
+            </span>
+          ),
+        },
+        {
+          value: 'yours',
+          label: (
+            <span className="inline-flex items-center gap-1.5">
+              {e.filter.yours}
+              <Count>{counts.yours}</Count>
+            </span>
+          ),
+        },
+      ]}
+    />
+  )
+
   return (
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-[16rem_minmax(0,1fr)] lg:items-start">
       {/* ── The seasons ────────────────────────────────────────────── */}
       <nav aria-label={c.seasons} id="seasons" className="scroll-mt-28 lg:sticky lg:top-16 lg:scroll-mt-16">
+        {numbers.length ? (
         <ol
           className={cn(
             '-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 [scrollbar-width:none] sm:-mx-6 sm:px-6',
@@ -165,13 +198,20 @@ export function SeasonsTab({
             )
           })}
         </ol>
-        <div className="mt-2 rounded-panel border border-rule bg-ink-raised">
+        ) : null}
+        <div className={cn('rounded-panel border border-rule bg-ink-raised', numbers.length && 'mt-2')}>
           <AddSeason work={work} numbers={numbers} onChanged={onChanged} onAdded={choose} />
         </div>
       </nav>
 
       {/* ── The season chosen ─────────────────────────────────────── */}
       <div className="min-w-0 space-y-6">
+        {numbers.length === 0 ? (
+          <Panel className="rise">
+            <Empty>{s.noSeasons}</Empty>
+          </Panel>
+        ) : (
+          <>
         <Panel id="season-fields" label={name} className="rise">
           <div className="grid grid-cols-[5rem_minmax(0,1fr)] gap-5 p-5 sm:grid-cols-[6rem_minmax(0,1fr)]">
             <div className="aspect-2/3 overflow-hidden rounded-card border border-rule-bright bg-ink-high shadow-[var(--shadow-lift)]">
@@ -241,6 +281,8 @@ export function SeasonsTab({
         </Panel>
 
         <Panel id="episodes" label={c.episodes} className="rise" style={{ animationDelay: '40ms' }}>
+          {/* The filter beside the head where there is room, and under it on
+              a phone, where the two shared one line badly. */}
           <PanelHead
             title={
               <span className="flex items-center gap-2">
@@ -248,37 +290,9 @@ export function SeasonsTab({
                 <Count>{episodes.length}</Count>
               </span>
             }
-            action={
-              episodes.length ? (
-                <Segmented<Filter>
-                  label={e.filter.label}
-                  value={filter}
-                  onChange={setFilter}
-                  options={[
-                    { value: 'all', label: e.filter.all },
-                    {
-                      value: 'locked',
-                      label: (
-                        <span className="inline-flex items-center gap-1.5">
-                          {e.filter.locked}
-                          <Count>{counts.locked}</Count>
-                        </span>
-                      ),
-                    },
-                    {
-                      value: 'yours',
-                      label: (
-                        <span className="inline-flex items-center gap-1.5">
-                          {e.filter.yours}
-                          <Count>{counts.yours}</Count>
-                        </span>
-                      ),
-                    },
-                  ]}
-                />
-              ) : undefined
-            }
+            action={episodes.length ? <div className="hidden sm:block">{episodeFilter}</div> : undefined}
           />
+          {episodes.length ? <div className="border-b border-rule px-5 py-2 sm:hidden">{episodeFilter}</div> : null}
 
           {shown.length ? (
             <ol className="divide-y divide-rule">
@@ -304,17 +318,25 @@ export function SeasonsTab({
                     }
                   >
                     <ul className="divide-y divide-rule">
-                      {registry.episode.map((def) => (
-                        <FieldRow
-                          key={`${scope}:${def.name}`}
-                          itemId={work.id}
-                          scope={scope}
-                          def={def}
-                          value={(episode as unknown as Record<string, unknown>)[def.name]}
-                          lock={lockOf(scope, def.name)}
-                          onChanged={onChanged}
-                        />
-                      ))}
+                      {registry.episode
+                        .filter(
+                          (def) =>
+                            !PLACEMENT.has(def.name) ||
+                            episode.seasonNumber === 0 ||
+                            hasValue(def, (episode as unknown as Record<string, unknown>)[def.name]) ||
+                            lockOf(scope, def.name) !== undefined,
+                        )
+                        .map((def) => (
+                          <FieldRow
+                            key={`${scope}:${def.name}`}
+                            itemId={work.id}
+                            scope={scope}
+                            def={def}
+                            value={(episode as unknown as Record<string, unknown>)[def.name]}
+                            lock={lockOf(scope, def.name)}
+                            onChanged={onChanged}
+                          />
+                        ))}
                     </ul>
                   </EpisodeRow>
                 )
@@ -343,6 +365,8 @@ export function SeasonsTab({
             </span>
           </p>
         </Panel>
+          </>
+        )}
       </div>
 
       {dialog}
@@ -524,7 +548,9 @@ function AddSeason({
         })
       }
     >
-      <div className="grid gap-4 sm:grid-cols-2">
+      {/* Two abreast on a phone, where the rail is the width of the screen;
+          one under the other on a desktop, where the rail is a narrow column. */}
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-1">
         <FormField label={c.seasonNumber} htmlFor="season-number">
           <Input id="season-number" required inputMode="numeric" value={number} onChange={(event) => setNumber(event.target.value.replace(/\D/g, ''))} />
         </FormField>
@@ -607,7 +633,7 @@ function AddEpisode({
         })
       }
     >
-      <div className="grid gap-4 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         <FormField label={c.episodeNumber} htmlFor="episode-number">
           <Input id="episode-number" required inputMode="numeric" value={number} onChange={(event) => setNumber(event.target.value.replace(/\D/g, ''))} />
         </FormField>

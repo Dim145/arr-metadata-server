@@ -158,15 +158,25 @@ test.describe('the work editor', () => {
     const fields = page.locator(`#episode-fields-${target}x${first.episodeNumber}`)
     await expect(fields.locator('li[data-field="title"]')).toBeVisible()
     await expect(fields.locator('li[data-field="airDateUtc"]')).toBeVisible()
-    // Where a special belongs, and the episode's own identifiers: new here.
-    await expect(fields.locator('li[data-field="airedAfterSeasonNumber"]')).toBeVisible()
+    // The episode's own identifiers: new here. Where a special belongs is a
+    // question a regular episode is not asked.
     await expect(fields.locator('li[data-field="tvdbId"]')).toBeVisible()
+    await expect(fields.locator('li[data-field="airedAfterSeasonNumber"]')).toHaveCount(0)
     await expect(fields.getByRole('link', { name: /episode page|page de l’épisode/i })).toBeVisible()
 
     // Closed again on a second press.
     await row.click()
     await expect(row).toHaveAttribute('aria-expanded', 'false')
     await expect(fields).toHaveCount(0)
+
+    // A special is asked it, in its own season.
+    const special = series!.episodes.filter((e) => e.seasonNumber === 0).sort((a, b) => a.episodeNumber - b.episodeNumber)[0]
+    if (special) {
+      await rail.getByRole('button', { name: /S00/ }).click()
+      const specialRow = page.locator('#episodes').getByRole('button', { name: pattern(code(special)) })
+      await specialRow.click()
+      await expect(page.locator(`#episode-fields-0x${special.episodeNumber} li[data-field="airedAfterSeasonNumber"]`)).toBeVisible()
+    }
   })
 
   test('a work made by hand is built up from the tabs, with every field the server takes', async ({ page }, info) => {

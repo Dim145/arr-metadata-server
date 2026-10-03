@@ -1534,6 +1534,7 @@ export const en = {
         removeEpisode: 'Remove this episode',
         noSeasonRow:
           'No row of its own for this season: the episodes name it, and only they can be locked. Add the season by hand to give it a title or a synopsis.',
+        noSeasons: 'No season yet. Add one, then its episodes; a source that lists them fills this in at a refresh.',
         noEpisodes: 'No episode in this season yet.',
         addEpisodeTo: (season: string) => `Add an episode to ${season}`,
         nextCode: (code: string) => `next: ${code}`,
@@ -1554,8 +1555,11 @@ export const en = {
         languageHint: 'A code, where the picture has text on it: fr, en…',
         byAddress: 'Add by address',
         noneOfKind: 'No image of this kind.',
+        none: 'No picture yet: the sources bring theirs at a refresh, or add one below.',
       },
       peopleTab: {
+        noCredits: 'Nobody is credited yet.',
+        noTitles: 'No other title yet.',
         photo: 'Photograph (address)',
         titleType: 'Kind of title',
         titleTypeHint: 'Free text: working, translated, abbreviation…',

@@ -177,22 +177,28 @@ export function WorkEditor() {
     document.getElementById(`tab-${tabs[next]}`)?.focus()
   }
 
+  // A figure beside each tab's name where there is one to give: "0 · 0" on
+  // a work entered by hand said nothing a blank does not.
+  const seasonsCount = (work.seasons?.length ?? 0) + (work.episodes?.length ?? 0)
+  const peopleCount = (work.credits?.length ?? 0) + (work.alternativeTitles?.length ?? 0)
   const counts: Record<Tab, React.ReactNode> = {
     record: <LockBadge n={ownLocks} />,
     seasons: (
       <>
-        <Count>
-          {work.seasons?.length ?? 0} · {work.episodes?.length ?? 0}
-        </Count>
+        {seasonsCount ? (
+          <Count>
+            {work.seasons?.length ?? 0} · {work.episodes?.length ?? 0}
+          </Count>
+        ) : null}
         <LockBadge n={deeperLocks} />
       </>
     ),
     artwork: images ? <Count>{images}</Count> : null,
-    people: (
+    people: peopleCount ? (
       <Count>
         {work.credits?.length ?? 0} · {work.alternativeTitles?.length ?? 0}
       </Count>
-    ),
+    ) : null,
     elsewhere: identifiers ? <Count>{identifiers}</Count> : null,
   }
 
@@ -253,10 +259,23 @@ export function WorkEditor() {
               ) : null}
             </div>
 
+            {/* Title and year at one size, told apart by weight; a space
+                between them in the text too, or a screen reader runs them
+                together as one word. */}
             <h1 className="mt-2.5 font-display text-3xl leading-[1.08] font-medium text-bone sm:text-4xl">
               {work.title}
-              {work.year ? <span className="ml-3 font-normal text-bone-dim opacity-80">{work.year}</span> : null}
-              {work.titleQualifier ? <span className="ml-2 font-normal text-bone-faint opacity-80">({work.titleQualifier})</span> : null}
+              {work.year ? (
+                <>
+                  {' '}
+                  <span className="ml-1 font-normal text-bone-dim opacity-80">{work.year}</span>
+                </>
+              ) : null}
+              {work.titleQualifier ? (
+                <>
+                  {' '}
+                  <span className="ml-1 font-normal text-bone-faint opacity-80">({work.titleQualifier})</span>
+                </>
+              ) : null}
             </h1>
             {work.originalTitle && work.originalTitle !== work.title ? (
               <p className="mt-1 text-sm text-bone-faint italic">{work.originalTitle}</p>
@@ -326,7 +345,7 @@ export function WorkEditor() {
               <Glyph name="reel" className="size-4" />
               {e.publicPage}
             </Link>
-            <ButtonLink href={`/api/v1/items/${id}/nfo`} target="_blank" rel="noreferrer" title={e.nfoHint} className={work.isManual ? 'col-span-2 sm:col-span-1' : undefined}>
+            <ButtonLink href={`/api/v1/items/${id}/nfo`} target="_blank" rel="noreferrer" title={e.nfoHint}>
               <Glyph name="download" className="size-4" />
               <span className="sm:hidden">.nfo</span>
               <span className="hidden sm:inline">{e.nfo}</span>
@@ -351,7 +370,10 @@ export function WorkEditor() {
                 tabIndex={selected ? 0 : -1}
                 onClick={() => choose(one)}
                 className={cn(
-                  'relative inline-flex min-h-12 shrink-0 cursor-pointer items-center gap-2 px-3.5 text-sm whitespace-nowrap transition-colors duration-150',
+                  'relative inline-flex min-h-12 shrink-0 cursor-pointer items-center gap-2 rounded-card px-3.5 text-sm whitespace-nowrap transition-colors duration-150',
+                  // The ring drawn inside the tab: the row scrolls sideways,
+                  // which clips anything drawn past its top and bottom edges.
+                  'focus-visible:outline-offset-[-3px]',
                   selected ? 'text-bone' : 'text-bone-dim hover:text-bone',
                 )}
               >

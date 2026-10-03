@@ -347,7 +347,7 @@ function Orders({ work }: { work: MediaItem }) {
                 <span className="min-w-0 flex-1">
                   <span className="block text-sm font-medium text-bone">{t.season.order[order.kind] ?? order.kind}</span>
                   <span className="block font-mono text-[0.6875rem] text-bone-faint tabular-nums">
-                    {t.work.episodeCount(order.episodes.length)} · {seasons.size} {t.admin.editor.children.seasons.toLowerCase()}
+                    {t.admin.editor.contentValue(seasons.size, order.episodes.length)}
                   </span>
                 </span>
                 {target !== undefined ? (

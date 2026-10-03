@@ -86,11 +86,21 @@ export function Facts({ items, className }: { items: (ReactNode | undefined | nu
   const shown = items.filter(Boolean)
   if (!shown.length) return null
   return (
-    <ul className={cn('flex flex-wrap gap-x-4 gap-y-1 font-mono text-[0.6875rem] tracking-[0.1em] text-bone-faint uppercase tabular-nums', className)}>
+    <p className={cn('font-mono text-[0.6875rem] leading-relaxed tracking-[0.1em] text-bone-faint uppercase tabular-nums', className)}>
       {shown.map((item, index) => (
-        <li key={index}>{item}</li>
+        <span key={index}>
+          {/* One mark between facts, tied to the fact before it with a
+              no-break space: a line then ends on the mark rather than
+              beginning with one. */}
+          {index > 0 ? (
+            <span aria-hidden className="text-bone-faint/60">
+              {' ·'}{' '}
+            </span>
+          ) : null}
+          <span className="inline-block">{item}</span>
+        </span>
       ))}
-    </ul>
+    </p>
   )
 }
 
