@@ -801,14 +801,30 @@ pub fn due_on_read(item: &MediaItem, now: DateTime<Utc>) -> bool {
             .is_some_and(|premiere| (premiere - now).abs() <= TimeDelta::days(2))
 }
 
-/// Whether a stored work is due a refresh.
-pub fn is_stale(item: &MediaItem) -> bool {
+/// Whether a client asking for a stored work at `now` is answered with the
+/// copy held, rather than with one fetched again first.
+///
+/// When it is not due: its refresh has not come, and a series has no reason
+/// to be fetched for the client asking ([`due_on_read`]). Always for an entry
+/// made by hand, which has no provider behind it. And always for one switched
+/// off in the catalogue: Sonarr and Radarr are still answered with it — a 404
+/// is what Sonarr takes a series for deleted on — but from the store, however
+/// old the copy. Taken for absent, it was fetched again from every provider
+/// on each of their requests and served all the same. The sweep passes it by
+/// too ([`repo::item::due_for_refresh`]); a refresh asked for by hand is what
+/// fetches it again.
+pub fn served_as_held(item: &MediaItem, now: DateTime<Utc>) -> bool {
+    !item.is_enabled || item.is_manual || !(is_stale(item, now) || due_on_read(item, now))
+}
+
+/// Whether a stored work is due a refresh, as of `now`.
+fn is_stale(item: &MediaItem, now: DateTime<Utc>) -> bool {
     match item
         .refresh_after
         .as_deref()
         .and_then(crate::db::parse_rfc3339)
     {
-        Some(due) => due <= chrono::Utc::now(),
+        Some(due) => due <= now,
         // Never scheduled: manual entries, or something written before the
         // scheduler existed. Not stale — there may be nothing to refresh from.
         None => false,
@@ -1393,5 +1409,184 @@ mod schedule_tests {
 
         let never = series("upcoming", Some("2026-10-04"));
         assert!(!due_on_read(&never, now()));
+    }
+
+    #[test]
+    fn a_work_is_served_as_held_until_it_is_due() {
+        let mut held = refreshed(series("continuing", Some("2025-04-01")), 120);
+        held.episodes = vec![episode(1, Some("2025-04-01"), None)];
+        held.refresh_after = Some(to_rfc3339(after(30)));
+        assert!(served_as_held(&held, now()));
+
+        // Its refresh has come.
+        let mut stale = held.clone();
+        stale.refresh_after = Some(to_rfc3339(after(-30)));
+        assert!(!served_as_held(&stale, now()));
+
+        // Or the client asking is to be given a fresh copy: no episodes yet.
+        let mut empty = held;
+        empty.episodes.clear();
+        assert!(!served_as_held(&empty, now()));
+
+        // Made by hand: there is nothing to fetch it from.
+        stale.is_manual = true;
+        assert!(served_as_held(&stale, now()));
+    }
+
+    #[test]
+    fn a_work_switched_off_is_served_as_held_however_due() {
+        // Due by its schedule, and for the client asking: it premieres
+        // tomorrow, with no episodes listed, and was fetched two hours ago.
+        let mut upcoming = refreshed(series("upcoming", Some("2026-10-04")), 120);
+        upcoming.refresh_after = Some(to_rfc3339(after(-30)));
+        assert!(!served_as_held(&upcoming, now()));
+        upcoming.is_enabled = false;
+        assert!(served_as_held(&upcoming, now()));
+
+        let mut film = refreshed(MediaItem::empty(MediaKind::Movie), 120);
+        film.refresh_after = Some(to_rfc3339(after(-30)));
+        assert!(!served_as_held(&film, now()));
+        film.is_enabled = false;
+        assert!(served_as_held(&film, now()));
+    }
+}
+
+#[cfg(test)]
+mod switched_off_tests {
+    use super::*;
+    use crate::{config, db::Db, domain::ExternalIds};
+
+    /// A real database, in memory, with the real migrations applied.
+    async fn db() -> Db {
+        let db = Db::connect(&config::Database {
+            url: "sqlite::memory:".into(),
+            max_connections: 1,
+            acquire_timeout: std::time::Duration::from_secs(5),
+        })
+        .await
+        .expect("in-memory database");
+
+        db.migrate().await.expect("migrations");
+        db
+    }
+
+    /// A work fetched a day ago, and due again since an hour ago.
+    async fn overdue(
+        db: &Db,
+        kind: MediaKind,
+        title: &str,
+        external_ids: ExternalIds,
+        enabled: bool,
+    ) -> MediaItem {
+        let mut item = MediaItem::empty(kind);
+        item.id = crate::db::new_id();
+        item.title = title.into();
+        item.slug = crate::domain::make_slug(title, None);
+        item.created_at = crate::db::now();
+        item.updated_at = crate::db::now();
+        item.external_ids = external_ids;
+        item.is_enabled = enabled;
+        item.refreshed_at = Some(to_rfc3339(Utc::now() - TimeDelta::days(1)));
+        item.refresh_after = Some(to_rfc3339(Utc::now() - TimeDelta::hours(1)));
+
+        repo::item::upsert(
+            db,
+            repo::item::ItemWrite {
+                item: &item,
+                replace_children: true,
+            },
+        )
+        .await
+        .expect("stored");
+        item
+    }
+
+    #[tokio::test]
+    async fn a_work_switched_off_is_answered_from_the_store_and_never_fetched() {
+        let db = db().await;
+        let series = overdue(
+            &db,
+            MediaKind::Series,
+            "Attack on Titan",
+            ExternalIds {
+                tvdb: Some(267440),
+                tmdb: Some(1429),
+                imdb: Some("tt2560140".into()),
+                mal: vec![16498],
+                anilist: vec![16498],
+                ..Default::default()
+            },
+            false,
+        )
+        .await;
+        let film = overdue(
+            &db,
+            MediaKind::Movie,
+            "The Matrix",
+            ExternalIds {
+                tmdb: Some(603),
+                imdb: Some("tt0133093".into()),
+                ..Default::default()
+            },
+            false,
+        )
+        .await;
+        let switched_on = overdue(
+            &db,
+            MediaKind::Series,
+            "Breaking Bad",
+            ExternalIds {
+                tvdb: Some(81189),
+                ..Default::default()
+            },
+            true,
+        )
+        .await;
+
+        // Found by every id Sonarr and Radarr ask for it by, switched off as
+        // it is: the store answers, not a provider.
+        for (source, value, work) in [
+            (ExternalSource::TvdbSeries, "267440", &series),
+            (ExternalSource::TmdbTv, "1429", &series),
+            (ExternalSource::Imdb, "tt2560140", &series),
+            (ExternalSource::Mal, "16498", &series),
+            (ExternalSource::AniList, "16498", &series),
+            (ExternalSource::TmdbMovie, "603", &film),
+            (ExternalSource::Imdb, "tt0133093", &film),
+        ] {
+            let found = repo::item::find_id_by_external(&db, source, value)
+                .await
+                .expect("looked up");
+            assert_eq!(
+                found.as_deref(),
+                Some(work.id.as_str()),
+                "{source:?} {value}"
+            );
+        }
+
+        // And served as it is held, overdue as it is, where a work switched on
+        // would be fetched again first: the lookup stops at the store.
+        for work in [&series, &film, &switched_on] {
+            let held = repo::item::get(&db, &work.id)
+                .await
+                .expect("read")
+                .expect("held");
+            assert!(is_stale(&held, Utc::now()), "{}", held.title);
+            assert_eq!(
+                served_as_held(&held, Utc::now()),
+                !held.is_enabled,
+                "{}",
+                held.title
+            );
+        }
+
+        // Nor does the sweep fetch it, or a refresh of everything: only the
+        // work switched on is due.
+        let due = repo::item::due_for_refresh(&db, 10).await.expect("listed");
+        assert_eq!(due, [(switched_on.id.clone(), MediaKind::Series)]);
+        let everything = repo::item::refresh_candidates(&db, None, 10)
+            .await
+            .expect("listed");
+        assert_eq!(everything, due);
     }
 }

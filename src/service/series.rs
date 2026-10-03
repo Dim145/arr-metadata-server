@@ -8,8 +8,8 @@ use crate::{
     domain::{ExternalSource, MediaItem, MediaKind},
     providers::{names, tmdb::map as tmdb_map},
     service::{
-        FETCHING, Found, cached_search, due_on_read, gather, ids, is_stale, load, persist,
-        retry_after_failure,
+        FETCHING, Found, cached_search, gather, ids, load, persist, retry_after_failure,
+        served_as_held,
     },
     state::AppState,
     wire::sonarr,
@@ -330,32 +330,20 @@ pub async fn search(state: &AppState, term: &str) -> Result<Vec<MediaItem>> {
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
-/// A locally stored series, if it exists and will do as it is.
+/// A locally stored series, if it exists and will do as it is: see
+/// [`served_as_held`].
 ///
 /// Not when it is due: its refresh has come, or a client asking for it now is
-/// to be given a fresh copy (see [`due_on_read`]). Returning `None` then lets
-/// the ladder continue to a refetch, and [`or_held`] answers with this copy
-/// after all when that comes to nothing.
+/// to be given a fresh copy (see [`crate::service::due_on_read`]). Returning
+/// `None` then lets the ladder continue to a refetch, and [`or_held`] answers
+/// with this copy after all when that comes to nothing. One switched off is
+/// never due here: it is served as it is held, and no provider is asked.
 async fn local(state: &AppState, source: ExternalSource, value: &str) -> Result<Option<MediaItem>> {
-    let Some(id) = repo::item::find_id_by_external(&state.db, source, value).await? else {
+    let Some(item) = held(state, source, value).await? else {
         return Ok(None);
     };
 
-    let Some(item) = load(state, &id).await? else {
-        return Ok(None);
-    };
-
-    if !item.is_enabled {
-        return Ok(None);
-    }
-
-    // A manual entry has no provider behind it, so staleness is meaningless.
-    let due = is_stale(&item) || due_on_read(&item, chrono::Utc::now());
-    if item.is_manual || !due {
-        return Ok(Some(item));
-    }
-
-    Ok(None)
+    Ok(served_as_held(&item, chrono::Utc::now()).then_some(item))
 }
 
 /// What a fetch came to, or the stored copy when it came to nothing.
@@ -385,8 +373,9 @@ async fn or_held(
         _ => return fetched,
     };
 
-    // Refreshed meanwhile — by the sweep, say: the copy is as fresh as any.
-    if !is_stale(&item) && !due_on_read(&item, chrono::Utc::now()) {
+    // Refreshed meanwhile — by the sweep, say — or switched off since: the
+    // copy is the one to serve, and no refresh of it failed.
+    if served_as_held(&item, chrono::Utc::now()) {
         return Ok(Some(item));
     }
 
@@ -406,15 +395,18 @@ async fn or_held(
     Ok(Some(item))
 }
 
-/// A locally stored series whatever its age: for a source that is switched
-/// off, what it fetched while on is served as it is; and it is what
-/// [`or_held`] answers with when fetching it again came to nothing.
+/// A locally stored series whatever its age, switched off or not: for a
+/// source that is switched off, what it fetched while on is served as it is;
+/// it is what [`local`] weighs; and it is what [`or_held`] answers with when
+/// fetching it again came to nothing. A series switched off in the catalogue
+/// is still Sonarr's — a 404 would have Sonarr take it for deleted — so it is
+/// served from here like any other.
 async fn held(state: &AppState, source: ExternalSource, value: &str) -> Result<Option<MediaItem>> {
     let Some(id) = repo::item::find_id_by_external(&state.db, source, value).await? else {
         return Ok(None);
     };
 
-    Ok(load(state, &id).await?.filter(|item| item.is_enabled))
+    load(state, &id).await
 }
 
 async fn local_search(state: &AppState, term: &str) -> Result<Vec<MediaItem>> {

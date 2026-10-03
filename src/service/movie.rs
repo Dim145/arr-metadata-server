@@ -7,7 +7,7 @@ use crate::{
     db::repo,
     domain::{ExternalSource, MediaItem, MediaKind},
     providers::tmdb::map as tmdb_map,
-    service::{FETCHING, Found, cached_search, gather, ids, is_stale, load, persist},
+    service::{FETCHING, Found, cached_search, gather, ids, load, persist, served_as_held},
     state::AppState,
 };
 
@@ -274,6 +274,9 @@ fn add_unseen(results: &mut Vec<MediaItem>, candidate: MediaItem) {
     }
 }
 
+/// A locally stored film, if it exists and will do as it is: see
+/// [`served_as_held`]. One switched off is served as it is held, and no
+/// provider is asked for it.
 async fn local(state: &AppState, source: ExternalSource, value: &str) -> Result<Option<MediaItem>> {
     let Some(id) = repo::item::find_id_by_external(&state.db, source, value).await? else {
         return Ok(None);
@@ -283,15 +286,7 @@ async fn local(state: &AppState, source: ExternalSource, value: &str) -> Result<
         return Ok(None);
     };
 
-    if !item.is_enabled {
-        return Ok(None);
-    }
-
-    if item.is_manual || !is_stale(&item) {
-        return Ok(Some(item));
-    }
-
-    Ok(None)
+    Ok(served_as_held(&item, chrono::Utc::now()).then_some(item))
 }
 
 async fn local_search(state: &AppState, term: &str, year: Option<i32>) -> Result<Vec<MediaItem>> {

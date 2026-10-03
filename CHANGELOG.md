@@ -87,6 +87,14 @@ may change what the API or the configuration means, and says so here.
   Sonarr looks it up, and the copy held — current, or kept for want of an
   answer — was taken for a fresh one: the run read "refreshed from a
   provider" with every provider out of reach.
+- A work switched off in the catalogue is served to Sonarr and Radarr from
+  the store, as it is held, and no provider is asked for it on their
+  requests. It was taken for one the store did not hold: each request for
+  it fetched it again from every provider and was answered with the copy
+  written all the same — or with a 404 when no provider answered, on which
+  Sonarr takes a series for deleted, as a Fan-Kai switched off while the
+  Fankai source is off always was. The sweep still passes such a work by,
+  and a refresh asked for by hand still fetches it.
 
 ## [0.4.0] — 2026-09-29
 
