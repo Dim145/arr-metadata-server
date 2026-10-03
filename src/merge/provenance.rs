@@ -28,13 +28,7 @@ use super::{Contribution, DATE_CHECKED, TVDB_NUMBERED};
 /// What the merge takes from the first provider that has one, beyond the
 /// fields a person may edit. Never shown beside a field, but needed to hand a
 /// provider back what it gave when another is synced alone.
-const ALSO_TRACKED: &[&str] = &[
-    "contentRatingCountry",
-    "popularity",
-    "collectionTmdbId",
-    "credits",
-    "relations",
-];
+const ALSO_TRACKED: &[&str] = &["popularity", "credits", "relations"];
 
 /// The work as stored, beneath every provider in a sync from chosen sources:
 /// whatever nobody gave anew stays as it was. Never a provider of record.
@@ -184,6 +178,8 @@ struct Tracked<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     theme_music: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    title_qualifier: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     popularity: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     collection_tmdb_id: Option<i64>,
@@ -220,6 +216,7 @@ fn tracked_json(item: &MediaItem) -> serde_json::Value {
         homepage: item.homepage.as_deref(),
         trailer_youtube_id: item.trailer_youtube_id.as_deref(),
         theme_music: item.theme_music.as_deref(),
+        title_qualifier: item.title_qualifier.as_deref(),
         popularity: item.popularity,
         collection_tmdb_id: item.collection_tmdb_id,
         genres: &item.genres,
@@ -1171,6 +1168,7 @@ mod tests {
             ("homepage", "https://h"),
             ("trailerYoutubeId", "yt"),
             ("themeMusic", "https://m"),
+            ("titleQualifier", "US"),
         ] {
             let mut json = serde_json::to_value(&item).unwrap();
             json[name] = serde_json::Value::String(value.into());

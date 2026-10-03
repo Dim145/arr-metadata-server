@@ -24,6 +24,31 @@ may change what the API or the configuration means, and says so here.
   within two days either side, is answered with a copy fetched there and
   then when the one held is more than an hour old. Sonarr asks again only
   every few hours, and kept the copy from before the episodes were listed.
+- The work editor is a record in five tabs — *Record*, *Seasons &
+  episodes*, *Artwork*, *People & titles*, *Elsewhere* — in place of one
+  page of a dozen panels. The fields are grouped as a card groups them
+  (identity, synopsis, broadcast or release, classification, links), can be
+  narrowed to the locked or the empty ones, and are shown as what they are:
+  a date as a date, a genre in its colour, an address as a link, a still as
+  the picture, with the stored form beside it. The seasons stand in a rail
+  beside the one chosen, each episode opening onto every field of its own;
+  the artwork is a light table by kind, the seasons' own below; the
+  identifiers, every rating a source gave, the related works, TheTVDB's other
+  numberings and TMDB's suggestions have a tab of their own, and the
+  translations held are listed beside the credits. The address carries the
+  tab (`?tab=`), and the anchors the public pages link with still land on
+  it. Enabling the record, unlocking everything and deleting it sit beside
+  the sources rather than across the top.
+
+### Added
+
+- Editable, and locked like any field: a work's TheTVDB qualifier, the
+  country of its rating and its TMDB collection; a season's TMDB and TheTVDB
+  ids; an episode's TMDB and TheTVDB ids, and where a special belongs — after
+  a season, or before an episode. The editor also offers what the API always
+  took: an episode's synopsis, runtime, still and absolute number when it is
+  added by hand, a season's synopsis, a credit's photograph, an alternative
+  title's kind and language, and an image's language and the season it is for.
 
 ### Fixed
 

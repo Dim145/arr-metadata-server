@@ -148,6 +148,19 @@
   --color-stock-8: #7f3d5e;
 }
 
+/* A strip of film stood on end: perforations down both edges. The rail of
+   seasons beside the episodes, where it has the height to read as one. A
+   utility rather than a component class so it can wait for a breakpoint. */
+@utility film-strip-y {
+  --perforation: color-mix(in srgb, var(--color-bone) 8%, transparent);
+  background:
+    repeating-linear-gradient(180deg, transparent 0 5px, var(--perforation) 5px 11px, transparent 11px 16px)
+      left 4px top 0 / 5px 100% no-repeat,
+    repeating-linear-gradient(180deg, transparent 0 5px, var(--perforation) 5px 11px, transparent 11px 16px)
+      right 4px top 0 / 5px 100% no-repeat,
+    var(--color-ink-raised);
+}
+
 @layer base {
   html {
     color-scheme: dark;

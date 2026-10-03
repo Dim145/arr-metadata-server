@@ -147,9 +147,16 @@ pub const ITEM_FIELDS: &[FieldDef] = &[
     f("network", Text, "Network"),
     f("studio", Text, "Studio"),
     f("contentRating", Text, "Content rating"),
+    // The country the rating is of, as Radarr matches it: `US`, `FR`.
+    f("contentRatingCountry", Text, "Content rating country"),
     f("homepage", Text, "Homepage"),
     f("trailerYoutubeId", Text, "YouTube trailer id"),
     f("themeMusic", Text, "Theme music URL"),
+    // What TheTVDB adds to a homonym's name — `2023`, `US` — and the Sonarr
+    // surface gives back beside the title.
+    f("titleQualifier", Text, "Title qualifier"),
+    // The TMDB collection a film belongs to.
+    f("collectionTmdbId", Integer, "TMDB collection id"),
     f("genres", TextList, "Genres"),
     f("keywords", TextList, "Keywords"),
     // Its identity: written to the row as well as locked, since lists,
@@ -268,6 +275,10 @@ pub const SEASON_FIELDS: &[FieldDef] = &[
     f("title", Text, "Title"),
     f("overview", LongText, "Overview"),
     f("airDate", Date, "Air date"),
+    // The season as its providers number it: what a link to its page there
+    // is built from, and what a hand-made season has none of.
+    f("tmdbId", Integer, "TMDB id"),
+    f("tvdbId", Integer, "TheTVDB id"),
 ];
 
 /// Editable fields on an episode.
@@ -280,6 +291,14 @@ pub const EPISODE_FIELDS: &[FieldDef] = &[
     f("finaleType", Text, "Finale type"),
     f("image", Text, "Still image URL"),
     f("absoluteEpisodeNumber", Integer, "Absolute episode number"),
+    // Where a special belongs among the regular episodes, as TheTVDB files
+    // it and Sonarr slots it: after a season, or before one episode.
+    f("airedAfterSeasonNumber", Integer, "Aired after season"),
+    f("airedBeforeSeasonNumber", Integer, "Aired before season"),
+    f("airedBeforeEpisodeNumber", Integer, "Aired before episode"),
+    // The episode as its providers number it.
+    f("tvdbId", Integer, "TheTVDB id"),
+    f("tmdbId", Integer, "TMDB id"),
 ];
 
 // ─── scopes ──────────────────────────────────────────────────────────────────

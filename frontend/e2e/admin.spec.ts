@@ -680,7 +680,8 @@ test.describe('the poster and the background to lead with', () => {
       const read = async () => (await (await page.request.get(`/api/v1/items/${id}`)).json()) as Work
       expect((await read()).primaryImages, 'none is chosen by default').toBeUndefined()
 
-      await page.goto(`/admin/catalogue/${id}`)
+      // The pictures are a tab of the record now; the anchor opens it.
+      await page.goto(`/admin/catalogue/${id}#artwork`)
       const artwork = page.locator('#artwork')
       const row = (host: string) => artwork.locator('li').filter({ hasText: `${host}.example.invalid` })
       const star = (host: string) => row(host).getByRole('button', { name: /lead with this one|montrer celle-ci en premier|no longer lead|ne plus la montrer/i })

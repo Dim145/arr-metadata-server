@@ -163,10 +163,14 @@ export interface MediaItem {
   network?: string
   studio?: string
   contentRating?: string
+  /** ISO 3166-1 alpha-2, uppercase: the country the rating is of, as Radarr matches it. */
+  contentRatingCountry?: string
   homepage?: string
   trailerYoutubeId?: string
   /** Where the work's theme music is: Fankai keeps one for every Fan-Kai. */
   themeMusic?: string
+  /** What TheTVDB adds to a homonym's name — `2023`, `US` — and Sonarr is given back. */
+  titleQualifier?: string
   popularity?: number
   collectionTmdbId?: number
   isAdult?: boolean

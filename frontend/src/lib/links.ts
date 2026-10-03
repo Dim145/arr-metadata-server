@@ -10,7 +10,7 @@
  * are addressed by a slug this server never learns.
  */
 
-import type { Episode, MediaItem, MediaKind, Season } from './types'
+import type { Episode, MediaItem, MediaKind, Relation, Season } from './types'
 
 export interface Destination {
   /** The source's key: `tmdb`, `tvdb`, `imdb`… */
@@ -109,6 +109,20 @@ export function episodeLinks(item: MediaItem, episode: Episode): Destination[] {
   }
 
   return out
+}
+
+/** Where a related work the catalogue does not hold is found, by where it is filed. */
+export function relationLink(relation: Pick<Relation, 'source' | 'externalId' | 'medium'>): string {
+  const id = encodeURIComponent(String(relation.externalId))
+  const medium = relation.medium === 'manga' ? 'manga' : 'anime'
+  switch (relation.source) {
+    case 'fankai':
+      return `https://fankai.fr/productions/${id}`
+    case 'mal':
+      return `https://myanimelist.net/${medium}/${id}`
+    default:
+      return `https://anilist.co/${medium}/${id}`
+  }
 }
 
 /** A person's page on TMDB. */

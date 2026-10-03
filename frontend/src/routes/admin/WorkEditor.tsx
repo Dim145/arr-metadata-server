@@ -1,104 +1,61 @@
 /**
  * One entry, and everything a person may claim of it.
  *
- * The lock is the product, so it is the loudest thing on the page: a brass edge
- * down the row, a padlock beside the field's name and the word itself in a
- * chip. Anyone who cannot tell brass from slate can still read which values a
- * person decided and which a provider did, because none of it is said in colour
- * alone.
+ * The record is a card in five sections, each a tab: the fields and the
+ * sources behind them, the seasons and their episodes, the artwork, the
+ * people and the other titles, and the work as the rest of the world files
+ * it. The address carries which is open, so a season's own page, the back
+ * button and a bookmark all land where they meant to.
  *
- * Saving is what locks. That is the server's model — an override row is written
- * into a table the refresh path never touches — and the interface refuses to
- * invent a friendlier one, because an operator who thinks a field is locked
- * when it is not will lose their edit to the next sweep.
+ * The lock is the product, so it is the loudest thing on every row: a brass
+ * edge, a padlock beside the field's name and the word itself in a chip.
+ * Saving is what locks — that is the server's model, and the interface
+ * refuses to invent a friendlier one, because an operator who thinks a field
+ * is locked when it is not will lose their edit to the next sweep.
  */
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
+import { useEffect, useRef, useState } from 'react'
+import { Link, useLocation, useParams, useSearchParams } from 'react-router'
 
 import { useAdminTitle } from '../../components/AdminShell'
-import { ManualChildren } from '../../components/ManualChildren'
 import { Artwork } from '../../components/media'
-import {
-  OriginChip,
-  OriginLegend,
-  RulesPanel,
-  SourcesPanel,
-  SummaryRow,
-  imagesSummary,
-  originNote,
-  witnesses,
-} from '../../components/origins'
-import {
-  Button,
-  ButtonLink,
-  Chip,
-  Dialog,
-  Field,
-  FormField,
-  Glyph,
-  Input,
-  Label,
-  OnThisPage,
-  Panel,
-  PanelHead,
-  Provenance,
-  Select,
-  Skeleton,
-  Spinner,
-  Textarea,
-} from '../../components/ui'
-import { ApiError, api, query } from '../../lib/api'
+import { Button, ButtonLink, Chip, Glyph, Provenance, Skeleton, Spinner } from '../../components/ui'
+import { api, query } from '../../lib/api'
 import { cn } from '../../lib/cn'
 import * as fmt from '../../lib/format'
-import { providerName, statusLabel } from '../../lib/labels'
-import { useI18n, type Dict } from '../../lib/i18n'
-import { episodeCode, episodesOf, poster, seasonName, seasonNumbers } from '../../lib/media'
-import type {
-  Episode,
-  FieldDef,
-  FieldRegistry,
-  ExternalIds,
-  MediaItem,
-  Override,
-  ProvenanceReport,
-  Snapshot,
-  Suggestion,
-  Suggestions as SuggestionsResponse,
-  SyncSource,
-  ValueSource,
-  WorkProvenance,
-} from '../../lib/types'
+import { useI18n } from '../../lib/i18n'
+import { statusLabel } from '../../lib/labels'
+import { backdrop, poster } from '../../lib/media'
+import type { FieldRegistry, MediaItem, Override, ProvenanceReport } from '../../lib/types'
 
-/** Worth offering without asking the server which translations it holds. */
-const LANGUAGES = [
-  ['en', 'English'],
-  ['fr', 'Français'],
-  ['de', 'Deutsch'],
-  ['es', 'Español'],
-  ['it', 'Italiano'],
-  ['pt', 'Português'],
-  ['nl', 'Nederlands'],
-  ['ja', '日本語'],
-  ['ko', '한국어'],
-  ['zh', '中文'],
-  ['ru', 'Русский'],
-] as const
+import { ArtworkTab } from './editor/ArtworkTab'
+import { ElsewhereTab } from './editor/ElsewhereTab'
+import { PeopleTab } from './editor/PeopleTab'
+import { RecordTab } from './editor/RecordTab'
+import { SeasonsTab } from './editor/SeasonsTab'
+import { Count, Facts, LockBadge, TABS, isTab, tabOfAnchor, type Tab } from './editor/shared'
 
-/** Fields edited in a panel of their own rather than typed in a row: the
- *  identifiers, and the poster and the background chosen among the artwork. */
-const PANEL_FIELDS = new Set(['externalIds', 'primaryPoster', 'primaryFanart'])
+/** The tab an address asks for: its anchor first, then `?tab=`, then a season named. */
+function askedTab(params: URLSearchParams, hash: string): Tab {
+  const fromAnchor = tabOfAnchor(hash)
+  if (fromAnchor) return fromAnchor
+  const named = params.get('tab')
+  if (isTab(named)) return named
+  return params.has('season') ? 'seasons' : 'record'
+}
 
 export function WorkEditor() {
   const { id = '' } = useParams()
   const { t, locale } = useI18n()
-  const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const [params, setParams] = useSearchParams()
+  const location = useLocation()
 
   const [language, setLanguage] = useState('')
-  const [asking, setAsking] = useState<'unlockAll' | 'disable' | 'delete' | null>(null)
-  const [viewing, setViewing] = useState<string | null>(null)
+  const [tab, setTab] = useState<Tab>(() => askedTab(params, location.hash))
+  // An anchor to bring into view once the tab that holds it is on the page.
+  const anchor = useRef<string | null>(location.hash ? location.hash.slice(1) : null)
 
   const item = useQuery({
     queryKey: ['item', id, language],
@@ -121,6 +78,32 @@ export function WorkEditor() {
 
   useAdminTitle(item.data?.title ?? null)
 
+  // The back button and a `?tab=` typed in: the address leads.
+  useEffect(() => {
+    const named = params.get('tab')
+    if (isTab(named)) setTab(named)
+  }, [params])
+
+  // An anchor arriving later — the record's own "view" links, a public page
+  // — opens the tab that holds it. After the one above, so the anchor wins
+  // on first load when both are in the address.
+  useEffect(() => {
+    const target = tabOfAnchor(location.hash)
+    if (!target) return
+    setTab(target)
+    anchor.current = location.hash.slice(1)
+  }, [location.hash])
+
+  useEffect(() => {
+    if (!anchor.current || !item.data) return
+    const target = anchor.current
+    const frame = requestAnimationFrame(() => {
+      document.getElementById(target)?.scrollIntoView({ block: 'start' })
+      anchor.current = null
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [tab, item.data])
+
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ['item', id] })
     // The catalogue's own pages read the same work under another key.
@@ -133,35 +116,6 @@ export function WorkEditor() {
   const refresh = useMutation({
     mutationFn: () => api.post<MediaItem>(`/items/${id}/refresh`),
     onSuccess: invalidate,
-  })
-
-  const unlockAll = useMutation({
-    mutationFn: () => api.delete<{ removed: number }>(`/items/${id}/overrides`),
-    onSuccess: () => {
-      setAsking(null)
-      invalidate()
-    },
-  })
-
-  const setEnabled = useMutation({
-    mutationFn: (enabled: boolean) => api.patch(`/items/${id}`, { isEnabled: enabled }),
-    onSuccess: () => {
-      setAsking(null)
-      invalidate()
-    },
-  })
-
-  const remove = useMutation({
-    mutationFn: () => api.delete(`/items/${id}`),
-    onSuccess: () => {
-      setAsking(null)
-      // Only the lists: this entry's own queries are deliberately left alone,
-      // because either invalidating or dropping them makes the observer that is
-      // still mounted ask the server for a work it has just deleted.
-      void queryClient.invalidateQueries({ queryKey: ['items'] })
-      void queryClient.invalidateQueries({ queryKey: ['stats'] })
-      navigate('/admin/catalogue', { replace: true })
-    },
   })
 
   // The registry too, and not only the work: it is asked for once and cached
@@ -182,21 +136,68 @@ export function WorkEditor() {
   }
 
   const work = item.data
-  const locks = new Map(
-    (overrides.data ?? []).filter((o) => o.scope === 'item').map((o) => [o.field, o]),
-  )
-  // Every lock, the seasons' and episodes' too: unlocking everything lifts
-  // them all, and counting only the work's own let one confirmation undo
-  // thirty episode edits it never mentioned.
-  const allLocks = overrides.data?.length ?? 0
-  const deeperLocks = allLocks - locks.size
+  const e = t.admin.editor
+  const locks = overrides.data ?? []
+  const ownLocks = locks.filter((o) => o.scope === 'item').length
+  const deeperLocks = locks.length - ownLocks
+  const tabs = work.kind === 'series' ? TABS : TABS.filter((one) => one !== 'seasons')
+  const shown: Tab = tabs.includes(tab) ? tab : 'record'
   const sheet = poster(work)
-  const provenance = report.data?.provenance
-  const traced = provenance !== undefined
-  const fieldNames = new Set(registry.data.item.map((def) => def.name))
+  const art = backdrop(work)
+  const images = (work.images?.length ?? 0) + (work.seasons ?? []).reduce((sum, season) => sum + (season.images?.length ?? 0), 0)
+  const identifiers = Object.values(work.externalIds).filter((value) => value !== undefined && value !== null && !(Array.isArray(value) && !value.length)).length
+
+  const choose = (next: Tab) => {
+    setTab(next)
+    anchor.current = null
+    setParams(
+      (prev) => {
+        prev.set('tab', next)
+        return prev
+      },
+      { replace: true },
+    )
+  }
+
+  const onTabKey = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const at = tabs.indexOf(shown)
+    const next =
+      event.key === 'ArrowRight'
+        ? (at + 1) % tabs.length
+        : event.key === 'ArrowLeft'
+          ? (at - 1 + tabs.length) % tabs.length
+          : event.key === 'Home'
+            ? 0
+            : event.key === 'End'
+              ? tabs.length - 1
+              : undefined
+    if (next === undefined) return
+    event.preventDefault()
+    choose(tabs[next]!)
+    document.getElementById(`tab-${tabs[next]}`)?.focus()
+  }
+
+  const counts: Record<Tab, React.ReactNode> = {
+    record: <LockBadge n={ownLocks} />,
+    seasons: (
+      <>
+        <Count>
+          {work.seasons?.length ?? 0} · {work.episodes?.length ?? 0}
+        </Count>
+        <LockBadge n={deeperLocks} />
+      </>
+    ),
+    artwork: images ? <Count>{images}</Count> : null,
+    people: (
+      <Count>
+        {work.credits?.length ?? 0} · {work.alternativeTitles?.length ?? 0}
+      </Count>
+    ),
+    elsewhere: identifiers ? <Count>{identifiers}</Count> : null,
+  }
 
   return (
-    <div className="mx-auto max-w-6xl">
+    <div className="mx-auto max-w-7xl">
       <Link
         to="/admin/catalogue"
         className="label hidden min-h-11 items-center gap-2 transition-colors duration-150 hover:text-vermillion lg:inline-flex"
@@ -205,1226 +206,206 @@ export function WorkEditor() {
         {t.admin.catalogue}
       </Link>
 
-      <header className="rise mb-8 flex gap-5">
-        {sheet ? (
-          <Artwork
-            url={sheet}
-            role="card"
-            alt={t.a11y.poster(work.title)}
-            className="hidden h-42 w-28 shrink-0 rounded-card border border-rule object-cover sm:block"
-          />
+      {/* ── The masthead ───────────────────────────────────────────── */}
+      <header className="rise relative mb-2">
+        {/* The work's own backdrop, quietly, behind the card: the room is for
+            working in, so the wash is a sixth of the public page's and fades
+            out before the tabs. */}
+        {art ? (
+          <div
+            aria-hidden
+            className="pointer-events-none absolute -inset-x-4 -top-6 bottom-0 overflow-hidden [mask-image:linear-gradient(to_bottom,black,rgba(0,0,0,0.55)_55%,transparent)] sm:-inset-x-6 lg:-inset-x-10 lg:-top-10"
+          >
+            <Artwork url={art} role="backdrop" alt="" className="size-full object-cover object-[center_20%] opacity-[0.16] saturate-[0.75]" />
+          </div>
         ) : null}
 
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-1.5">
-            <Chip tone="accent">
-              <Glyph name={work.kind === 'series' ? 'tv' : 'film'} className="size-3" />
-              {work.kind === 'series' ? t.nav.series : t.nav.films}
-            </Chip>
-            {work.isManual ? <Provenance manual label={t.work.manualEntry} /> : null}
-            {work.status ? <Chip tone="provider">{statusLabel(work.status, t)}</Chip> : null}
-            {work.isEnabled ? null : <Chip tone="accent">{t.admin.works.disabled}</Chip>}
-            {allLocks > 0 ? (
-              <Chip tone="manual">
-                <Glyph name="lock" className="size-3" />
-                {t.admin.editor.lockCount(allLocks)}
+        <div className="relative grid grid-cols-1 gap-5 pt-4 pb-6 sm:grid-cols-[7.5rem_minmax(0,1fr)] sm:items-end xl:grid-cols-[7.5rem_minmax(0,1fr)_auto]">
+          <div className="hidden aspect-2/3 w-30 overflow-hidden rounded-card border border-rule-bright bg-ink-high shadow-[var(--shadow-plate)] sm:block">
+            {sheet ? (
+              <Artwork url={sheet} role="poster" eager alt={t.a11y.poster(work.title)} className="size-full object-cover" />
+            ) : (
+              <div className="grid size-full place-items-center">
+                <Glyph name={work.kind === 'series' ? 'tv' : 'film'} className="size-7 text-bone-faint" />
+              </div>
+            )}
+          </div>
+
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <Chip tone="accent">
+                <Glyph name={work.kind === 'series' ? 'tv' : 'film'} className="size-3" />
+                {work.kind === 'series' ? t.nav.series : t.nav.films}
               </Chip>
+              {work.status ? <Chip tone="provider">{statusLabel(work.status, t)}</Chip> : null}
+              {work.isManual ? <Provenance manual label={t.work.manualEntry} /> : null}
+              {work.isEnabled ? null : (
+                <Chip tone="accent">
+                  <Glyph name="power" className="size-3" />
+                  {t.admin.works.disabled}
+                </Chip>
+              )}
+              {locks.length > 0 ? (
+                <Chip tone="manual">
+                  <Glyph name="lock" className="size-3" />
+                  {e.lockCount(locks.length)}
+                </Chip>
+              ) : null}
+            </div>
+
+            <h1 className="mt-2.5 font-display text-3xl leading-[1.08] font-medium text-bone sm:text-4xl">
+              {work.title}
+              {work.year ? <span className="ml-3 font-normal text-bone-dim opacity-80">{work.year}</span> : null}
+              {work.titleQualifier ? <span className="ml-2 font-normal text-bone-faint opacity-80">({work.titleQualifier})</span> : null}
+            </h1>
+            {work.originalTitle && work.originalTitle !== work.title ? (
+              <p className="mt-1 text-sm text-bone-faint italic">{work.originalTitle}</p>
+            ) : null}
+
+            <Facts
+              className="mt-3"
+              items={[
+                work.network ?? work.studio ? <b className="font-medium text-bone-dim">{work.network ?? work.studio}</b> : undefined,
+                fmt.runtime(work.runtime, locale),
+                work.kind === 'series' && (work.seasons?.length || work.episodes?.length)
+                  ? e.contentValue(work.seasons?.length ?? 0, work.episodes?.length ?? 0)
+                  : undefined,
+                work.contentRating ? `${work.contentRating}${work.contentRatingCountry ? ` · ${work.contentRatingCountry}` : ''}` : undefined,
+                work.externalIds.tmdb ? `TMDB ${work.externalIds.tmdb}` : undefined,
+                work.externalIds.tvdb ? `TheTVDB ${work.externalIds.tvdb}` : undefined,
+              ]}
+            />
+
+            <p className="mt-2.5 flex items-start gap-2 text-[0.8125rem] text-bone-dim">
+              {work.isManual ? (
+                <>
+                  <Glyph name="lock" className="mt-0.5 size-3.5 shrink-0 text-brass" />
+                  {e.mast.manual}
+                </>
+              ) : work.refreshError ? (
+                <>
+                  <Glyph name="alert" className="mt-0.5 size-3.5 shrink-0 text-vermillion" />
+                  <span>
+                    {e.refreshFailed}
+                    <span className="mt-0.5 block font-mono text-xs break-words text-vermillion">{work.refreshError}</span>
+                  </span>
+                </>
+              ) : (
+                <>
+                  <span aria-hidden className="mt-1.5 size-2 shrink-0 rounded-full bg-moss shadow-[0_0_0_3px_color-mix(in_oklab,var(--color-moss)_18%,transparent)]" />
+                  <span>
+                    {work.refreshedAt ? e.mast.refreshedWhen(fmt.relative(work.refreshedAt, locale) ?? '') : e.mast.never}
+                    {work.refreshAfter ? ` · ${e.mast.nextWhen(fmt.relative(work.refreshAfter, locale) ?? '')}` : ''}
+                  </span>
+                </>
+              )}
+            </p>
+            {refresh.isError ? (
+              <p role="alert" className="mt-2 flex items-center gap-2 text-sm text-vermillion">
+                <Glyph name="alert" className="size-4 shrink-0" />
+                {refresh.error.message}
+              </p>
             ) : null}
           </div>
 
-          <h1 className="mt-3 font-display text-3xl font-medium text-bone sm:text-4xl">
-            {work.title}
-          </h1>
-
-          {work.overview ? (
-            <p className="mt-3 max-w-prose text-sm leading-relaxed text-bone-dim">
-              {work.overview}
-            </p>
-          ) : null}
-
-          {language ? (
-            <p className="mt-2 text-xs text-bone-faint">{t.admin.editor.translationNote}</p>
-          ) : null}
+          {/* Two to a row on a phone, a row of their own at the widest. */}
+          <div className="grid grid-cols-2 gap-2 sm:col-span-2 sm:flex sm:flex-wrap xl:col-span-1 xl:justify-end xl:self-end xl:pb-1">
+            {work.isManual ? null : (
+              <Button onClick={() => refresh.mutate()} disabled={refresh.isPending}>
+                {refresh.isPending ? <Spinner className="size-4" /> : <Glyph name="refresh" className="size-4" />}
+                {/* The whole phrase where there is room; the verb alone on a
+                    phone, where three lines of button were half the masthead. */}
+                <span className="sm:hidden">{refresh.isPending ? e.refreshing : t.common.refresh}</span>
+                <span className="hidden sm:inline">{refresh.isPending ? e.refreshing : e.refresh}</span>
+              </Button>
+            )}
+            <Link
+              to={`/work/${id}`}
+              className="inline-flex min-h-11 items-center justify-center gap-2 rounded-full border border-rule-bright px-5 text-sm font-medium text-bone transition-colors duration-200 hover:border-bone-faint hover:bg-ink-high"
+            >
+              <Glyph name="reel" className="size-4" />
+              {e.publicPage}
+            </Link>
+            <ButtonLink href={`/api/v1/items/${id}/nfo`} target="_blank" rel="noreferrer" title={e.nfoHint} className={work.isManual ? 'col-span-2 sm:col-span-1' : undefined}>
+              <Glyph name="download" className="size-4" />
+              <span className="sm:hidden">.nfo</span>
+              <span className="hidden sm:inline">{e.nfo}</span>
+            </ButtonLink>
+          </div>
         </div>
       </header>
 
-      {/* Two to a row on a phone: five buttons one under another, then the
-          language, were a whole screen before the first field. */}
-      <div className="rise mb-8 grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-end" style={{ animationDelay: '40ms' }}>
-        {work.isManual ? null : (
-          <Button onClick={() => refresh.mutate()} disabled={refresh.isPending}>
-            {refresh.isPending ? <Spinner className="size-4" /> : <Glyph name="refresh" className="size-4" />}
-            {refresh.isPending ? t.admin.editor.refreshing : t.admin.editor.refresh}
-          </Button>
-        )}
-
-        {allLocks > 0 ? (
-          <Button variant="danger" onClick={() => setAsking('unlockAll')}>
-            <Glyph name="unlock" className="size-4" />
-            {t.admin.editor.unlockAll}
-          </Button>
-        ) : null}
-
-        <Link
-          to={`/work/${id}`}
-          className="inline-flex min-h-11 items-center gap-2 rounded-full border border-rule-bright px-5 text-sm font-medium text-bone transition-colors duration-200 hover:border-bone-faint hover:bg-ink-high"
-        >
-          <Glyph name="reel" className="size-4" />
-          {t.admin.editor.publicPage}
-        </Link>
-
-        <ButtonLink
-          href={`/api/v1/items/${id}/nfo`}
-          target="_blank"
-          rel="noreferrer"
-          title={t.admin.editor.nfoHint}
-        >
-          <Glyph name="download" className="size-4" />
-          {t.admin.editor.nfo}
-        </ButtonLink>
-
-        <Button
-          onClick={() => (work.isEnabled ? setAsking('disable') : setEnabled.mutate(true))}
-          disabled={setEnabled.isPending}
-        >
-          <Glyph name="power" className="size-4" />
-          {work.isEnabled ? t.admin.works.disable : t.admin.works.enable}
-        </Button>
-
-        <Button variant="danger" onClick={() => setAsking('delete')}>
-          <Glyph name="trash" className="size-4" />
-          {t.common.delete}
-        </Button>
-
-        <div className="col-span-2 w-full min-w-40 sm:ml-auto sm:w-auto">
-          <label htmlFor="editor-language" className="label mb-1.5 block">
-            {t.admin.editor.showIn}
-          </label>
-          <Select
-            id="editor-language"
-            value={language}
-            onChange={(event) => setLanguage(event.target.value)}
-          >
-            <option value="">{t.admin.editor.asStored}</option>
-            {LANGUAGES.map(([code, label]) => (
-              <option key={code} value={code}>
-                {label}
-              </option>
-            ))}
-          </Select>
+      {/* ── The tabs ───────────────────────────────────────────────── */}
+      <nav className="sticky top-14 z-20 -mx-4 mb-6 border-b border-rule bg-ink/95 px-4 backdrop-blur sm:-mx-6 sm:px-6 lg:top-0 lg:mx-0 lg:px-0">
+        <div role="tablist" aria-label={e.tabs.label} onKeyDown={onTabKey} className="flex gap-1 overflow-x-auto [scrollbar-width:none]">
+          {tabs.map((one) => {
+            const selected = one === shown
+            return (
+              <button
+                key={one}
+                id={`tab-${one}`}
+                type="button"
+                role="tab"
+                aria-selected={selected}
+                aria-controls={`panel-${one}`}
+                tabIndex={selected ? 0 : -1}
+                onClick={() => choose(one)}
+                className={cn(
+                  'relative inline-flex min-h-12 shrink-0 cursor-pointer items-center gap-2 px-3.5 text-sm whitespace-nowrap transition-colors duration-150',
+                  selected ? 'text-bone' : 'text-bone-dim hover:text-bone',
+                )}
+              >
+                {e.tabs[one]}
+                {counts[one]}
+                {selected ? <span aria-hidden className="absolute inset-x-3 -bottom-px h-0.5 rounded-full bg-vermillion" /> : null}
+              </button>
+            )
+          })}
         </div>
-      </div>
+      </nav>
 
-      {refresh.isError ? (
-        <p role="alert" className="mb-6 flex items-center gap-2 text-sm text-vermillion">
-          <Glyph name="alert" className="size-4 shrink-0" />
-          {refresh.error.message}
-        </p>
-      ) : null}
-
-      {work.refreshError ? (
-        <p className="mb-6 flex items-start gap-2 rounded-card border border-rule bg-ink-raised px-4 py-3 text-sm text-bone-dim">
-          <Glyph name="alert" className="mt-0.5 size-4 shrink-0 text-vermillion" />
-          <span>
-            {t.admin.editor.refreshFailed}
-            <span className="mt-0.5 block font-mono text-xs break-words text-vermillion">
-              {work.refreshError}
-            </span>
-          </span>
-        </p>
-      ) : null}
-
-      {traced ? <OriginLegend /> : null}
-
-      <OnThisPage
-        label={t.admin.inPage}
-        entries={[
-          { id: 'fields', label: t.admin.editor.fields },
-          { id: 'credits', label: t.admin.editor.children.credits },
-          { id: 'titles', label: t.admin.editor.children.titles },
-          { id: 'artwork', label: t.admin.editor.children.artwork },
-          ...(work.kind === 'series'
-            ? [
-                { id: 'seasons', label: t.admin.editor.children.seasons },
-                { id: 'episodes', label: t.admin.editor.children.episodes },
-                ...(seasonNumbers(work).length ? [{ id: 'season-fields', label: t.admin.editor.seasons }] : []),
-              ]
-            : []),
-          { id: 'identifiers', label: t.work.identifiers },
-          { id: 'record', label: t.admin.editor.record },
-          { id: 'sources', label: t.work.sources },
-          ...(work.isManual ? [] : [{ id: 'suggestions', label: t.admin.editor.suggestions }]),
-        ]}
-      />
-
-      {/* The fields, and beside them who gave each: the sources stay in view
-          while the list scrolls, so ticking one to sync is never a trip to
-          the bottom of the page. */}
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_20rem] lg:items-start">
-        <Panel id="fields" className="rise" style={{ animationDelay: '80ms' }}>
-          <PanelHead
-            title={t.admin.editor.fields}
-            action={<span className="label hidden sm:inline">{t.admin.editor.fieldsHint}</span>}
-          />
-          <ul className="divide-y divide-rule">
-            {registry.data.item.filter((def) => !PANEL_FIELDS.has(def.name)).map((def) => (
-              <FieldRow
-                key={def.name}
-                itemId={id}
-                def={def}
-                value={(work as unknown as Record<string, unknown>)[def.name]}
-                lock={locks.get(def.name)}
-                origin={provenance?.fields?.[def.name]}
-                // The slug is made here, from the title and the year.
-                traced={traced && def.name !== 'slug'}
-                onChanged={invalidate}
-              />
-            ))}
-            {provenance ? (
-              <Summaries work={work} provenance={provenance} sources={report.data?.sources ?? []} />
-            ) : null}
-          </ul>
-        </Panel>
-
-        {/* Held in view beside the fields, and scrolled on its own when it is
-            taller than the window: pinned whole, its button sat below the
-            fold until the last field went by. */}
-        <div className="space-y-6 lg:sticky lg:top-16 lg:max-h-[calc(100dvh-5rem)] lg:overflow-y-auto lg:overscroll-contain lg:rounded-panel">
-          <SourcesPanel
-            itemId={id}
-            report={report.data}
-            failed={report.isError}
-            onRetry={() => void report.refetch()}
-            isManual={work.isManual}
-            refreshAfter={work.refreshAfter}
-            fieldNames={fieldNames}
-            onRaw={setViewing}
-            onRefresh={() => refresh.mutate()}
-            refreshing={refresh.isPending}
-            onSynced={invalidate}
-          />
-          <RulesPanel />
-        </div>
-      </div>
-
-      <div className="mt-6">
-        <ManualChildren item={work} onChanged={invalidate} />
-      </div>
-
-      {work.kind === 'series' && seasonNumbers(work).length ? (
-        <div className="mt-6">
-          <SeasonsEditor
+      <div key={shown} id={`panel-${shown}`} role="tabpanel" aria-labelledby={`tab-${shown}`} className="rise" style={{ animationDelay: '40ms' }}>
+        {shown === 'record' ? (
+          <RecordTab
             work={work}
             registry={registry.data}
-            overrides={overrides.data ?? []}
+            overrides={locks}
+            report={report.data}
+            reportFailed={report.isError}
+            onRetryReport={() => void report.refetch()}
+            language={language}
+            onLanguage={setLanguage}
+            refreshing={refresh.isPending}
+            onRefresh={() => refresh.mutate()}
             onChanged={invalidate}
           />
-        </div>
-      ) : null}
-
-      <div
- className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <Panel id="identifiers" className="rise" style={{ animationDelay: '400ms' }}>
-          <PanelHead title={t.work.identifiers} />
-          <IdentifiersEditor work={work} lock={locks.get('externalIds')} onChanged={invalidate} />
-        </Panel>
-
-        <Panel id="record" className="rise" style={{ animationDelay: '440ms' }}>
-          <PanelHead title={t.admin.editor.record} />
-          <dl className="divide-y divide-rule">
-            <Field label={t.admin.editor.created}>{fmt.dateTime(work.createdAt, locale) ?? '—'}</Field>
-            <Field label={t.admin.editor.updated}>{fmt.dateTime(work.updatedAt, locale) ?? '—'}</Field>
-            <Field label={t.admin.editor.refreshed}>
-              {fmt.relative(work.refreshedAt, locale) ?? '—'}
-            </Field>
-            <Field label={t.admin.editor.nextRefresh}>
-              {fmt.relative(work.refreshAfter, locale) ?? '—'}
-            </Field>
-            {work.seasons?.length ? (
-              <Field label={t.admin.editor.content}>
-                {t.admin.editor.contentValue(work.seasons.length, work.episodes?.length ?? 0)}
-              </Field>
-            ) : null}
-          </dl>
-        </Panel>
-
-        {work.isManual ? null : <Suggestions work={work} />}
-      </div>
-
-      <RawSnapshot itemId={id} provider={viewing} onClose={() => setViewing(null)} />
-
-      <Dialog
-        open={asking === 'unlockAll'}
-        title={t.admin.editor.unlockAllTitle}
-        onClose={() => setAsking(null)}
-        footer={
-          <>
-            <Button onClick={() => setAsking(null)}>{t.common.cancel}</Button>
-            <Button variant="danger" disabled={unlockAll.isPending} onClick={() => unlockAll.mutate()}>
-              <Glyph name="unlock" className="size-4" />
-              {t.admin.editor.unlockAll}
-            </Button>
-          </>
-        }
-      >
-        {t.admin.editor.unlockAllBody}
-        {deeperLocks > 0 ? (
-          <p className="mt-3 text-sm text-brass">{t.admin.editor.unlockAllDeeper(deeperLocks)}</p>
-        ) : null}
-        {/* Without this the dialog stays open with a re-enabled button and no
-            reason, which reads as "press it again". */}
-        {unlockAll.isError ? (
-          <p role="alert" className="mt-3 text-sm text-vermillion">
-            {unlockAll.error.message || t.common.actionFailed}
-          </p>
-        ) : null}
-      </Dialog>
-
-      <Dialog
-        open={asking === 'disable'}
-        title={t.admin.works.disableTitle}
-        onClose={() => setAsking(null)}
-        footer={
-          <>
-            <Button onClick={() => setAsking(null)}>{t.common.cancel}</Button>
-            <Button
-              variant="danger"
-              disabled={setEnabled.isPending}
-              onClick={() => setEnabled.mutate(false)}
-            >
-              {t.admin.works.disable}
-            </Button>
-          </>
-        }
-      >
-        {t.admin.works.disableBody(work.title)}
-      </Dialog>
-
-      <Dialog
-        open={asking === 'delete'}
-        title={t.admin.works.deleteTitle}
-        onClose={() => setAsking(null)}
-        footer={
-          <>
-            <Button onClick={() => setAsking(null)}>{t.common.cancel}</Button>
-            <Button variant="danger" disabled={remove.isPending} onClick={() => remove.mutate()}>
-              <Glyph name="trash" className="size-4" />
-              {t.common.delete}
-            </Button>
-          </>
-        }
-      >
-        {t.admin.works.deleteBody(work.title)}
-      </Dialog>
-    </div>
-  )
-}
-
-/* ── One field ────────────────────────────────────────────────────────────── */
-
-function FieldRow({
-  itemId,
-  scope = 'item',
-  def,
-  value,
-  lock,
-  origin,
-  traced = false,
-  onChanged,
-}: {
-  itemId: string
-  /** `item`, `season:3` or `episode:3x7` — what the override addresses. */
-  scope?: string
-  def: FieldDef
-  value: unknown
-  lock?: Override
-  /** Who gave the value, when the last merge said. */
-  origin?: ValueSource
-  /** Whether the work's provenance is known at all: without it, a row says nothing of where its value came from. */
-  traced?: boolean
-  onChanged: () => void
-}) {
-  const { t, locale } = useI18n()
-  const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState('')
-
-  const save = useMutation({
-    mutationFn: (parsed: unknown) =>
-      api.put(`/items/${itemId}/overrides`, { scope, field: def.name, value: parsed }),
-    onSuccess: () => {
-      setEditing(false)
-      onChanged()
-    },
-  })
-
-  const unlock = useMutation({
-    mutationFn: () =>
-      api.delete(`/items/${itemId}/overrides/${encodeURIComponent(scope)}/${def.name}`),
-    onSuccess: onChanged,
-  })
-
-  const locked = lock !== undefined
-  const display = readable(value, t)
-  // A flag left false is the default, which no source asserts.
-  const hasValue = def.fieldType === 'boolean' ? value === true : display !== ''
-  const note = traced ? originNote(def.name, origin, { hasValue, locked }, t, locale) : null
-  const multiline = def.fieldType === 'longText'
-  const inputId = `field-${scope.replace(/\W/g, '-')}-${def.name}`
-
-  const begin = () => {
-    setDraft(readable(value, t))
-    setEditing(true)
-  }
-
-  return (
-    <li
-      // Names the row after the field it edits: useful when reading the DOM to
-      // work out why a lock did not take, and stable for tests to hold on to.
-      data-field={def.name}
-      className={cn(
-        'px-5 py-3 transition-colors duration-150',
-        locked ? 'border-l-2 border-brass bg-brass/[0.05] pl-[calc(1.25rem-2px)]' : '',
-        editing ? '' : 'hover:bg-ink-high',
-      )}
-    >
-      {/* On a phone the buttons sit on the label's line, and the value runs
-          the width under both: a row was four lines tall, and twenty-eight of
-          them made a page nobody could scan. */}
-      <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-2 sm:flex sm:items-start sm:gap-4">
-        <div className="min-w-0 sm:w-44 sm:shrink-0 sm:pt-1">
-          <span className="flex items-center gap-1.5">
-            {locked ? <Glyph name="lock" className="size-3.5 text-brass" /> : null}
-            <Label className={locked ? 'text-brass' : undefined}>{fieldLabel(def, t)}</Label>
-          </span>
-          {/* What shape the value takes, in words — "Date · AAAA-MM-JJ" tells
-              somebody what to type, where "date" and "timeOfDay" were the
-              names of an enum. */}
-          <span className="mt-0.5 block font-mono text-[0.6875rem] text-bone-faint">
-            {(t.labels.fieldTypes as Record<string, string>)[def.fieldType] ?? def.fieldType}
-          </span>
-        </div>
-
-        <div className="col-span-2 min-w-0 sm:col-span-1 sm:flex-1">
-          {/* A lock that did not lift, with nothing said, is this screen's own
-              failure mode running backwards: somebody believing a field is one
-              thing while the server holds another. The save path already
-              reports itself, inside the form below. */}
-          {unlock.isError ? (
-            <p role="alert" className="mb-2 text-xs text-vermillion">
-              {unlock.error.message || t.common.actionFailed}
-            </p>
-          ) : null}
-
-          {editing ? (
-            <form
-              className="flex flex-col gap-3"
-              onSubmit={(event) => {
-                event.preventDefault()
-                save.mutate(parse(draft, def))
-              }}
-            >
-              <FormField
-                label={fieldLabel(def, t)}
-                htmlFor={inputId}
-                hint={
-                  def.fieldType === 'textList'
-                    ? t.admin.editor.listHint
-                    : def.fieldType === 'dateTime'
-                      ? t.admin.editor.dateTimeHint
-                      : undefined
-                }
-                error={save.isError ? save.error.message : undefined}
-              >
-                {multiline ? (
-                  <Textarea
-                    id={inputId}
-                    autoFocus
-                    rows={4}
-                    value={draft}
-                    onChange={(event) => setDraft(event.target.value)}
-                  />
-                ) : def.fieldType === 'boolean' ? (
-                  <select
-                    id={inputId}
-                    autoFocus
-                    className="field"
-                    value={/^(true|yes|oui|1|on)$/i.test(draft.trim()) ? 'yes' : 'no'}
-                    onChange={(event) => setDraft(event.target.value)}
-                  >
-                    <option value="yes">{t.common.yes}</option>
-                    <option value="no">{t.common.no}</option>
-                  </select>
-                ) : (
-                  <Input
-                    id={inputId}
-                    autoFocus
-                    value={draft}
-                    onChange={(event) => setDraft(event.target.value)}
-                  />
-                )}
-              </FormField>
-
-              <div className="flex flex-wrap gap-2">
-                <Button type="submit" variant="primary" size="sm" disabled={save.isPending}>
-                  {save.isPending ? <Spinner className="size-4" /> : <Glyph name="lock" className="size-4" />}
-                  {t.admin.editor.saveAndLock}
-                </Button>
-                <Button type="button" size="sm" onClick={() => setEditing(false)}>
-                  {t.common.cancel}
-                </Button>
-              </div>
-            </form>
-          ) : (
-            <p
-              className={cn(
-                'text-sm leading-relaxed break-words',
-                display ? (locked ? 'text-bone' : 'text-bone-dim') : 'text-bone-faint italic',
-              )}
-            >
-              {/* A picture's address is the picture, with the address kept
-                  for whoever needs it: a hundred-character URL said nothing
-                  a thumbnail does not. */}
-              {display && def.name === 'image' && /^https?:\/\//.test(display) ? (
-                <span className="flex items-center gap-3">
-                  <Artwork url={display} role="still" alt="" className="h-14 w-24 shrink-0 rounded-card border border-rule object-cover" />
-                  <span className="min-w-0 truncate font-mono text-xs" title={display}>
-                    {display}
-                  </span>
-                </span>
-              ) : (
-                display || t.common.notSet
-              )}
-            </p>
-          )}
-          {/* Under the value on a phone, where the name's column is too
-              narrow to share with a chip. */}
-          {traced && !locked && !editing ? (
-            <div className="mt-2 sm:hidden">
-              <OriginChip source={origin} hasValue={hasValue} />
-            </div>
-          ) : null}
-          {note && !editing ? (
-            <p className="mt-1 text-xs leading-relaxed text-bone-faint">{note}</p>
-          ) : null}
-        </div>
-
-        {editing ? null : (
-          <div className="col-start-2 row-start-1 flex shrink-0 flex-wrap items-center justify-end gap-2 sm:col-start-auto sm:row-start-auto">
-            {locked ? (
-              <>
-                <Provenance
-                  manual
-                  label={
-                    lock?.updatedAt
-                      ? t.admin.editor.lockedOn(fmt.relative(lock.updatedAt, locale) ?? '')
-                      : t.admin.editor.locked
-                  }
-                />
-                <Button
-                  size="sm"
-                  onClick={() => unlock.mutate()}
-                  disabled={unlock.isPending}
-                  title={lock?.updatedBy ? t.admin.editor.lockedBy(lock.updatedBy) : undefined}
-                >
-                  <Glyph name="unlock" className="size-4" />
-                  {t.admin.editor.unlock}
-                </Button>
-              </>
-            ) : (
-              <>
-                {traced ? (
-                  <span className="hidden sm:contents">
-                    <OriginChip source={origin} hasValue={hasValue} />
-                  </span>
-                ) : null}
-                <Button size="sm" variant="quiet" onClick={begin}>
-                  <Glyph name="pencil" className="size-4" />
-                  {t.common.edit}
-                </Button>
-              </>
-            )}
-          </div>
+        ) : shown === 'seasons' ? (
+          <SeasonsTab work={work} registry={registry.data} overrides={locks} report={report.data} onChanged={invalidate} />
+        ) : shown === 'artwork' ? (
+          <ArtworkTab work={work} onChanged={invalidate} />
+        ) : shown === 'people' ? (
+          <PeopleTab work={work} report={report.data} onChanged={invalidate} />
+        ) : (
+          <ElsewhereTab work={work} overrides={locks} onChanged={invalidate} />
         )}
       </div>
-    </li>
+    </div>
   )
-}
-
-/* ── Seasons and episodes ─────────────────────────────────────────────────── */
-
-/**
- * The fields of one season and of each of its episodes, locked the same way
- * the work's own are.
- *
- * One season at a time, and one episode open at a time: a series of a
- * thousand episodes drawn as a thousand forms is not a page anybody can use.
- * Arriving from a season or an episode's public page opens straight onto it.
- */
-function SeasonsEditor({
-  work,
-  registry,
-  overrides,
-  onChanged,
-}: {
-  work: MediaItem
-  registry: FieldRegistry
-  overrides: Override[]
-  onChanged: () => void
-}) {
-  const { t, locale } = useI18n()
-  const [params] = useSearchParams()
-  const numbers = seasonNumbers(work)
-
-  // Absent is not zero: `Number(null)` opened every series with specials on
-  // its specials.
-  const asked = params.has('season') ? Number(params.get('season')) : Number.NaN
-  const [season, setSeason] = useState<number>(
-    numbers.includes(asked) ? asked : (numbers.find((n) => n > 0) ?? numbers[0] ?? 1),
-  )
-  const [open, setOpen] = useState<number | null>(
-    numbers.includes(asked) && params.get('episode') ? Number(params.get('episode')) : null,
-  )
-
-  const episodes = episodesOf(work, season)
-  const meta = work.seasons?.find((s) => s.seasonNumber === season)
-  const lockOf = (scope: string, field: string) =>
-    overrides.find((o) => o.scope === scope && o.field === field)
-  const lockCount = (scope: string) => overrides.filter((o) => o.scope === scope).length
-
-  return (
-    <Panel id="season-fields" className="rise" style={{ animationDelay: '120ms' }}>
-      <PanelHead
-        title={t.admin.editor.seasons}
-        action={
-          <div className="flex items-center gap-2">
-            {/* Out of sight on a phone, where the select says which season it
-                is on its own — but still its name for a screen reader. */}
-            <label htmlFor="editor-season" className="label sr-only sm:not-sr-only">
-              {t.admin.editor.season}
-            </label>
-            <Select
-              id="editor-season"
-              value={String(season)}
-              onChange={(event) => {
-                setSeason(Number(event.target.value))
-                setOpen(null)
-              }}
-              className="w-auto min-w-36"
-            >
-              {numbers.map((n) => (
-                <option key={n} value={n}>
-                  {seasonName(work.seasons?.find((s) => s.seasonNumber === n)?.title, n, t.work.season)}
-                </option>
-              ))}
-            </Select>
-          </div>
-        }
-      />
-
-      {meta ? (
-        <ul className="divide-y divide-rule border-b border-rule">
-          {registry.season.map((def) => (
-            <FieldRow
-              key={`season:${season}:${def.name}`}
-              itemId={work.id}
-              scope={`season:${season}`}
-              def={def}
-              value={(meta as unknown as Record<string, unknown>)[def.name]}
-              lock={lockOf(`season:${season}`, def.name)}
-              onChanged={onChanged}
-            />
-          ))}
-        </ul>
-      ) : null}
-
-      <ol className="divide-y divide-rule">
-        {episodes.map((episode) => {
-          const scope = `episode:${episode.seasonNumber}x${episode.episodeNumber}`
-          const locks = lockCount(scope)
-          const expanded = open === episode.episodeNumber
-
-          return (
-            <EpisodeFields
-              key={episode.id}
-              episode={episode}
-              expanded={expanded}
-              locks={locks}
-              onToggle={() => setOpen(expanded ? null : episode.episodeNumber)}
-              locale={locale}
-            >
-              <ul className="divide-y divide-rule border-t border-rule bg-ink/40">
-                {registry.episode.map((def) => (
-                  <FieldRow
-                    key={`${scope}:${def.name}`}
-                    itemId={work.id}
-                    scope={scope}
-                    def={def}
-                    value={(episode as unknown as Record<string, unknown>)[def.name]}
-                    lock={lockOf(scope, def.name)}
-                    onChanged={onChanged}
-                  />
-                ))}
-              </ul>
-            </EpisodeFields>
-          )
-        })}
-      </ol>
-    </Panel>
-  )
-}
-
-function EpisodeFields({
-  episode,
-  expanded,
-  locks,
-  onToggle,
-  locale,
-  children,
-}: {
-  episode: Episode
-  expanded: boolean
-  locks: number
-  onToggle: () => void
-  locale: string
-  children: React.ReactNode
-}) {
-  const { t } = useI18n()
-  const ref = useRef<HTMLLIElement>(null)
-
-  // Opened from an episode's public page: bring it into view once.
-  useEffect(() => {
-    if (expanded) ref.current?.scrollIntoView({ block: 'nearest' })
-    // Only on first open; later toggles are the reader's own doing.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  const panel = `episode-fields-${episode.seasonNumber}x${episode.episodeNumber}`
-
-  return (
-    <li ref={ref}>
-      <button
-        type="button"
-        aria-expanded={expanded}
-        aria-controls={panel}
-        onClick={onToggle}
-        className="flex w-full cursor-pointer items-center gap-3 px-5 py-3 text-left transition-colors duration-150 hover:bg-ink-high"
-      >
-        <Glyph name={expanded ? 'chevronDown' : 'chevronRight'} className="size-3.5 text-bone-faint" />
-        <span className="font-mono text-xs text-bone-faint tabular-nums">{episodeCode(episode)}</span>
-        <span className="min-w-0 flex-1 truncate text-sm text-bone">{episode.title || '—'}</span>
-        <span className="hidden font-mono text-[0.6875rem] text-bone-faint tabular-nums sm:inline">
-          {fmt.shortDate(episode.airDate, locale) ?? ''}
-        </span>
-        {locks ? (
-          <Chip tone="manual">
-            <Glyph name="lock" className="size-3" />
-            {locks}
-            <span className="sr-only"> {t.admin.editor.lockCount(locks)}</span>
-          </Chip>
-        ) : null}
-      </button>
-      {expanded ? <div id={panel}>{children}</div> : null}
-    </li>
-  )
-}
-
-/* ── What is not one field ────────────────────────────────────────────────── */
-
-/**
- * The lists at the end of the fields: the pictures, gathered from every
- * source; the cast, one source's whole; the episodes, one source's list with
- * the others filling it in.
- */
-function Summaries({
-  work,
-  provenance,
-  sources,
-}: {
-  work: MediaItem
-  provenance: WorkProvenance
-  sources: SyncSource[]
-}) {
-  const { t, locale } = useI18n()
-  const o = t.admin.editor.origin
-  const images = imagesSummary(provenance, t, locale)
-  const spine = provenance.episodes
-  // The seasons' own beside the work's, as the tally beneath counts them.
-  const pictures =
-    (work.images?.length ?? 0) + (work.seasons ?? []).reduce((sum, season) => sum + (season.images?.length ?? 0), 0)
-
-  // Who else describes episodes, of those that have answered for this work,
-  // fills the list in where it is blank.
-  const answered = new Set(sources.filter((source) => source.fetchedAt).map((source) => source.provider))
-  const fillers = witnesses(['tmdb', 'tvdb', 'skyhook'].filter((p) => p !== spine && answered.has(p)))
-
-  return (
-    <>
-      {pictures ? (
-        <SummaryRow
-          label={o.images}
-          value={o.imageCount(pictures)}
-          chip={images.chip}
-          note={images.note}
-          to="artwork"
-        />
-      ) : null}
-      {work.credits?.length ? (
-        <SummaryRow
-          label={o.credits}
-          value={o.creditCount(work.credits.length)}
-          chip={<OriginChip source={provenance.fields?.credits} hasValue />}
-          note={o.creditsFrom}
-          to="credits"
-        />
-      ) : null}
-      {work.kind === 'series' && work.episodes?.length ? (
-        <SummaryRow
-          label={o.episodes}
-          value={t.admin.editor.contentValue(work.seasons?.length ?? 0, work.episodes.length)}
-          chip={spine ? <Provenance manual={false} label={providerName(spine)} /> : null}
-          note={
-            spine
-              ? [
-                  o.episodesFrom(providerName(spine)),
-                  answered.has('tvmaze') && spine !== 'tvmaze' ? o.episodesTimes : null,
-                  fillers.length ? o.episodesFill(fmt.list(fillers.map(providerName), locale)) : null,
-                ]
-                  .filter(Boolean)
-                  .join(' ')
-              : null
-          }
-          to={seasonNumbers(work).length ? 'season-fields' : 'episodes'}
-        />
-      ) : null}
-    </>
-  )
-}
-
-/**
- * What one provider actually answered, verbatim.
- *
- * For the question the merged record cannot answer: did the provider say
- * this, or did this server get it wrong? Fetched only when asked for — a long
- * series' documents run to megabytes.
- */
-function RawSnapshot({
-  itemId,
-  provider,
-  onClose,
-}: {
-  itemId: string
-  provider: string | null
-  onClose: () => void
-}) {
-  const { t } = useI18n()
-  const [copied, setCopied] = useState<'no' | 'yes' | 'failed'>('no')
-
-  const raw = useQuery({
-    queryKey: ['item', itemId, 'snapshot', provider],
-    queryFn: () => api.get<Snapshot[]>(`/items/${itemId}/snapshots${query({ provider: provider ?? '' })}`),
-    enabled: provider !== null,
-    staleTime: 60_000,
-  })
-
-  // A provider's answer can run to megabytes: laid out once, not on every
-  // render the copy button's state causes.
-  const payload = raw.data?.[0]?.payload
-  const text = useMemo(() => (payload === undefined ? '' : JSON.stringify(payload, null, 2)), [payload])
-
-  const copy = async () => {
-    try {
-      // Absent altogether over plain HTTP, which is how a server on a home
-      // network is usually reached: that is a refusal like any other.
-      await navigator.clipboard.writeText(text)
-      setCopied('yes')
-    } catch {
-      setCopied('failed')
-    }
-  }
-
-  return (
-    <Dialog
-      open={provider !== null}
-      title={provider ? t.admin.editor.rawOf(providerName(provider)) : ''}
-      onClose={() => {
-        setCopied('no')
-        onClose()
-      }}
-      footer={
-        <>
-          <span role="status" className="mr-auto text-xs text-bone-faint">
-            {copied === 'failed' ? t.admin.editor.copyFailed : ''}
-          </span>
-          <Button disabled={!text} onClick={() => void copy()}>
-            <Glyph name={copied === 'yes' ? 'check' : 'copy'} className="size-4" />
-            {copied === 'yes' ? t.admin.editor.copied : t.admin.editor.copy}
-          </Button>
-          <Button onClick={onClose}>{t.nav.close}</Button>
-        </>
-      }
-    >
-      {raw.isPending ? (
-        <Skeleton className="h-64 w-full" />
-      ) : raw.isError ? (
-        <p role="alert" className="text-sm text-vermillion">
-          {t.admin.editor.rawFailed}
-        </p>
-      ) : (
-        // A tab stop and a name: it always scrolls, and a keyboard had no way
-        // into it otherwise.
-        <pre
-          tabIndex={0}
-          role="region"
-          aria-label={provider ? t.admin.editor.rawOf(providerName(provider)) : undefined}
-          className="max-h-[60dvh] overflow-auto rounded-card border border-rule bg-ink p-3 font-mono text-[0.6875rem] leading-relaxed text-bone-dim"
-        >
-          {text}
-        </pre>
-      )}
-    </Dialog>
-  )
-}
-
-/* ── Values ───────────────────────────────────────────────────────────────── */
-
-/** What a stored value looks like in a box a person types into. */
-function readable(value: unknown, t: Dict): string {
-  if (value === null || value === undefined) return ''
-  if (Array.isArray(value)) return value.join(', ')
-  if (typeof value === 'boolean') return value ? t.common.yes : t.common.no
-  return String(value)
-}
-
-/** Turn what was typed into the JSON shape the field expects. */
-function parse(draft: string, def: FieldDef): unknown {
-  const trimmed = draft.trim()
-
-  // Clearing the box stores an explicit null, which still counts as an edit and
-  // still locks the field: "this work has no network" is a decision too.
-  if (trimmed === '') return null
-
-  switch (def.fieldType) {
-    case 'integer': {
-      const parsed = Number.parseInt(trimmed, 10)
-      return Number.isNaN(parsed) ? trimmed : parsed
-    }
-    case 'float': {
-      const parsed = Number.parseFloat(trimmed)
-      return Number.isNaN(parsed) ? trimmed : parsed
-    }
-    case 'boolean':
-      return /^(true|yes|oui|1|on)$/i.test(trimmed)
-    case 'textList':
-      return trimmed
-        .split(',')
-        .map((part) => part.trim())
-        .filter(Boolean)
-    case 'dateTime': {
-      // Typed by hand, in UTC: the seconds and the zone filled in, so that
-      // "2009-03-22T21:00" is the instant the server expects.
-      const partial = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2})(:\d{2})?$/.exec(trimmed)
-      return partial ? `${partial[1]}${partial[2] ?? ':00'}Z` : trimmed
-    }
-    default:
-      return trimmed
-  }
 }
 
 function EditorSkeleton() {
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
+    <div className="mx-auto max-w-7xl space-y-6">
       <div className="flex gap-5">
-        <Skeleton className="hidden h-42 w-28 sm:block" />
+        <Skeleton className="hidden h-45 w-30 sm:block" />
         <div className="flex-1 space-y-3">
           <Skeleton className="h-5 w-40" />
           <Skeleton className="h-10 w-2/3" />
-          <Skeleton className="h-16 w-full" />
+          <Skeleton className="h-4 w-1/2" />
         </div>
       </div>
+      <Skeleton className="h-12 w-full" />
       <Skeleton className="h-96 w-full" />
     </div>
-  )
-}
-
-/**
- * A field's name in the reader's language.
- *
- * The registry comes from the server, in English, so a French editor listed
- * "SORT TITLE" and "RUNTIME (MINUTES)". Its own label is kept as the fallback
- * for a field added to the server before it is added here.
- */
-function fieldLabel(def: FieldDef, t: Dict): string {
-  return (t.labels.fields as Record<string, string>)[def.name] ?? def.label
-}
-
-/* ── The identifiers, edited ─────────────────────────────────────────────── */
-
-/** The sources a work can be given an identifier for, in the order shown. */
-const ID_SOURCES: { key: keyof ExternalIds; list?: boolean }[] = [
-  { key: 'tmdb' },
-  { key: 'tvdb' },
-  { key: 'imdb' },
-  { key: 'tvmaze' },
-  { key: 'tvrage' },
-  { key: 'trakt' },
-  { key: 'fankai' },
-  { key: 'mal', list: true },
-  { key: 'anilist', list: true },
-]
-
-/** What the boxes say for a set of identifiers. */
-function idDrafts(ids: ExternalIds): Record<string, string> {
-  const drafts: Record<string, string> = {}
-  for (const { key } of ID_SOURCES) {
-    const value = ids[key]
-    drafts[key] = value === undefined ? '' : Array.isArray(value) ? value.join(', ') : String(value)
-  }
-  return drafts
-}
-
-/** The identifiers the boxes hold, in the shape the server locks. */
-function idsOf(drafts: Record<string, string>): { ids: ExternalIds; error?: string } {
-  const ids: ExternalIds = {}
-  for (const { key, list } of ID_SOURCES) {
-    const text = (drafts[key] ?? '').trim()
-    if (!text) continue
-    if (key === 'imdb') {
-      ids.imdb = text
-      continue
-    }
-    const numbers = text.split(',').map((part) => Number.parseInt(part.trim(), 10))
-    if (numbers.some((n) => Number.isNaN(n) || n < 0)) return { ids, error: key }
-    if (list) {
-      ;(ids as Record<string, unknown>)[key] = numbers
-    } else {
-      if (numbers.length !== 1) return { ids, error: key }
-      ;(ids as Record<string, unknown>)[key] = numbers[0]
-    }
-  }
-  return { ids }
-}
-
-function IdentifiersEditor({ work, lock, onChanged }: { work: MediaItem; lock?: Override; onChanged: () => void }) {
-  const { t, locale } = useI18n()
-  const e = t.admin.editor
-  const [editing, setEditing] = useState(false)
-  const [drafts, setDrafts] = useState<Record<string, string>>({})
-  const [invalid, setInvalid] = useState<string | null>(null)
-
-  const save = useMutation({
-    mutationFn: (ids: ExternalIds) => api.put(`/items/${work.id}/overrides`, { scope: 'item', field: 'externalIds', value: ids }),
-    onSuccess: () => {
-      setEditing(false)
-      onChanged()
-    },
-  })
-  const unlock = useMutation({
-    mutationFn: () => api.delete(`/items/${work.id}/overrides/item/externalIds`),
-    onSuccess: onChanged,
-  })
-
-  const held = Object.entries(work.externalIds).filter(([, value]) => value !== undefined && value !== null)
-
-  return (
-    <div className="p-5">
-      {lock ? (
-        <p className="mb-3 flex items-center gap-2 text-xs text-brass">
-          <Glyph name="lock" className="size-3.5" />
-          {e.identifiersLocked(fmt.relative(lock.updatedAt, locale) ?? '')}
-        </p>
-      ) : null}
-      {editing ? (
-        <form
-          className="flex flex-col gap-3"
-          onSubmit={(event) => {
-            event.preventDefault()
-            const { ids, error } = idsOf(drafts)
-            if (error) {
-              setInvalid(error)
-              return
-            }
-            setInvalid(null)
-            save.mutate(ids)
-          }}
-        >
-          {ID_SOURCES.map(({ key, list }) => (
-            <FormField
-              key={key}
-              label={key}
-              htmlFor={`id-${key}`}
-              hint={list ? e.identifiersListHint : undefined}
-              error={invalid === key ? e.identifiersInvalid : undefined}
-            >
-              <Input
-                id={`id-${key}`}
-                value={drafts[key] ?? ''}
-                inputMode={key === 'imdb' ? 'text' : 'numeric'}
-                onChange={(event) => setDrafts((held) => ({ ...held, [key]: event.target.value }))}
-              />
-            </FormField>
-          ))}
-          {save.isError ? (
-            <p role="alert" className="text-sm text-vermillion">
-              {save.error instanceof ApiError ? save.error.message : t.common.actionFailed}
-            </p>
-          ) : null}
-          <div className="flex flex-wrap gap-2">
-            <Button type="submit" variant="primary" size="sm" disabled={save.isPending}>
-              {save.isPending ? <Spinner className="size-4" /> : <Glyph name="lock" className="size-4" />}
-              {e.saveAndLock}
-            </Button>
-            <Button type="button" size="sm" onClick={() => setEditing(false)}>
-              {t.common.cancel}
-            </Button>
-          </div>
-        </form>
-      ) : (
-        <>
-          <dl className="divide-y divide-rule">
-            {held.length ? (
-              held.map(([source, value]) => (
-                <Field key={source} label={source}>
-                  <span className="font-mono text-[0.8125rem] tabular-nums">
-                    {Array.isArray(value) ? value.join(', ') : String(value)}
-                  </span>
-                </Field>
-              ))
-            ) : (
-              <p className="py-2 text-sm text-bone-faint">{e.identifiersNone}</p>
-            )}
-            <Field label="slug">
-              <span className="font-mono text-[0.8125rem] break-all text-bone-dim">{work.slug}</span>
-            </Field>
-          </dl>
-          <p className="mt-3 text-xs leading-relaxed text-bone-faint">{e.identifiersHint}</p>
-          <div className="mt-3 flex flex-wrap gap-2">
-            <Button
-              size="sm"
-              onClick={() => {
-                setDrafts(idDrafts(work.externalIds))
-                setInvalid(null)
-                setEditing(true)
-              }}
-            >
-              <Glyph name="pencil" className="size-4" />
-              {t.common.edit}
-            </Button>
-            {lock ? (
-              <Button size="sm" variant="quiet" disabled={unlock.isPending} onClick={() => unlock.mutate()}>
-                <Glyph name="unlock" className="size-4" />
-                {e.unlock}
-              </Button>
-            ) : null}
-          </div>
-          {unlock.isError ? (
-            <p role="alert" className="mt-2 text-sm text-vermillion">
-              {unlock.error instanceof ApiError ? unlock.error.message : t.common.actionFailed}
-            </p>
-          ) : null}
-        </>
-      )}
-    </div>
-  )
-}
-
-/* ── What TMDB suggests ───────────────────────────────────────────────────── */
-
-/**
- * What TMDB recommends beside the work: a click imports one, and one the
- * catalogue already holds opens instead. Absent where no TMDB key lets it
- * be asked.
- */
-function Suggestions({ work }: { work: MediaItem }) {
-  const { t } = useI18n()
-  const queryClient = useQueryClient()
-  const [imported, setImported] = useState<Record<number, string>>({})
-
-  const suggestions = useQuery({
-    queryKey: ['suggestions', work.id],
-    queryFn: () => api.get<SuggestionsResponse>(`/items/${work.id}/suggestions`),
-    retry: false,
-    staleTime: 60 * 60_000,
-  })
-
-  const take = useMutation({
-    mutationFn: (suggestion: Suggestion) =>
-      api.post<MediaItem>('/discover/import', { kind: suggestion.kind, tmdbId: suggestion.tmdbId }),
-    onSuccess: (item, suggestion) => {
-      setImported((held) => ({ ...held, [suggestion.tmdbId]: item.id }))
-      void queryClient.invalidateQueries({ queryKey: ['items'] })
-      void queryClient.invalidateQueries({ queryKey: ['stats'] })
-    },
-  })
-
-  if (suggestions.isError && suggestions.error instanceof ApiError && suggestions.error.status === 503) {
-    return null
-  }
-  const list = suggestions.data?.suggestions ?? []
-
-  return (
-    <Panel id="suggestions" className="rise" style={{ animationDelay: '520ms' }}>
-      <PanelHead title={t.admin.editor.suggestions} />
-      <div className="p-5">
-        <p className="max-w-prose text-sm leading-relaxed text-bone-dim">{t.admin.editor.suggestionsHint}</p>
-        {suggestions.isPending ? (
-          <Skeleton className="mt-4 h-24 w-full" />
-        ) : suggestions.isError ? (
-          <p role="alert" className="mt-4 text-sm text-vermillion">
-            {t.admin.editor.suggestionsFailed}
-          </p>
-        ) : list.length === 0 ? (
-          <p className="mt-4 text-sm text-bone-faint">{t.admin.editor.suggestionsNone}</p>
-        ) : (
-          <ul className="mt-4 divide-y divide-rule">
-            {list.map((suggestion) => {
-              const held = suggestion.held ?? imported[suggestion.tmdbId]
-              const busy = take.isPending && take.variables?.tmdbId === suggestion.tmdbId
-              return (
-                <li key={suggestion.tmdbId} className="flex items-center gap-3 py-2">
-                  {suggestion.poster ? (
-                    <img
-                      src={suggestion.poster}
-                      alt=""
-                      width={32}
-                      height={48}
-                      loading="lazy"
-                      className="h-12 w-8 shrink-0 rounded-sm object-cover"
-                    />
-                  ) : (
-                    <span className="h-12 w-8 shrink-0 rounded-sm bg-ink-high" />
-                  )}
-                  <span className="min-w-0 flex-1">
-                    <span className="block text-sm break-words text-bone">
-                      {suggestion.title}
-                      {suggestion.year ? <span className="text-bone-faint"> · {suggestion.year}</span> : null}
-                    </span>
-                    {suggestion.score ? (
-                      <span className="font-mono text-xs text-bone-faint tabular-nums">{suggestion.score.toFixed(1)}</span>
-                    ) : null}
-                  </span>
-                  {held ? (
-                    <Link
-                      to={`/admin/catalogue/${held}`}
-                      className="text-sm text-vermillion underline-offset-4 hover:underline"
-                    >
-                      {t.admin.editor.suggestionsHeld}
-                    </Link>
-                  ) : (
-                    <Button size="sm" disabled={busy} onClick={() => take.mutate(suggestion)}>
-                      {busy ? t.admin.editor.suggestionsImporting : t.admin.editor.suggestionsImport}
-                    </Button>
-                  )}
-                </li>
-              )
-            })}
-          </ul>
-        )}
-        {take.isError ? (
-          <p role="alert" className="mt-3 text-sm text-vermillion">
-            {take.error.message}
-          </p>
-        ) : null}
-      </div>
-    </Panel>
   )
 }

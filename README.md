@@ -135,9 +135,12 @@ Sonarr's metadata service — and does what both did, from one catalogue.
   address. For whoever maintains the catalogue, the most popular of what TMDB
   lists for the same quarter that the catalogue lacks follows, each a button
   away from being imported.
-- **Maintenance where the problem is.** Season and episode fields are locked
-  one by one from the editor, which opens on the episode a public page came
-  from; each provider's last answer can be read as it arrived; the works whose
+- **Maintenance where the problem is.** The editor is a record in five tabs
+  — the fields, the seasons and their episodes, the artwork, the people and
+  titles, the work elsewhere — and the address carries which is open. Season
+  and episode fields are locked one by one from it, and it opens on the
+  episode a public page came from; each provider's last answer can be read
+  as it arrived; the works whose
   last refresh failed are one filter away, and flagged on the dashboard.
 
 ## Requirements

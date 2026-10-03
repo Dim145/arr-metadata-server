@@ -236,7 +236,15 @@ test.describe('the administration side', () => {
         const index = now.getFullYear() * 4 + Math.floor(now.getMonth() / 3) + 1
         return `/seasons/${Math.floor(index / 4)}/${['winter', 'spring', 'summer', 'autumn'][index % 4]}`
       }),
-      ...(id ? [`/admin/catalogue/${id}`] : []),
+      // The work editor, tab by tab.
+      ...(id
+        ? [
+            `/admin/catalogue/${id}`,
+            `/admin/catalogue/${id}?tab=artwork`,
+            `/admin/catalogue/${id}?tab=people`,
+            `/admin/catalogue/${id}?tab=elsewhere`,
+          ]
+        : []),
       // An episode's fields, opened from its public page.
       ...(found
         ? [
