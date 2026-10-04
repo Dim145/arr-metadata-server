@@ -68,7 +68,8 @@ pub struct ListQuery {
     pub year_to: Option<i32>,
     /// `continuing`, `ended`, `upcoming`, `released`… as stored.
     pub status: Option<String>,
-    /// The language a work was made in, as stored: `ja`, `en`, `fra`…
+    /// The language a work was made in, as stored: `ja`, `en`, `fra`… Several,
+    /// comma-separated (`ja,jpn`), list the works made in any of them.
     pub original_language: Option<String>,
     /// A network or a studio, by name, whatever its case.
     pub network: Option<String>,

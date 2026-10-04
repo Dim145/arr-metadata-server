@@ -1582,10 +1582,27 @@ fn narrow(
             .map_err(|e| anyhow::anyhow!("{e}"))?;
     }
 
-    if let Some(language) = q.original_language.as_deref().filter(|l| !l.is_empty()) {
-        sql.push_str(" AND listed_language = ?");
-        args.add(language.to_string())
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+    // One language, or several the catalogue spells differently for the same
+    // tongue — `ja` from TMDB, `jpn` from TheTVDB — asked for together.
+    let languages: Vec<&str> = q
+        .original_language
+        .as_deref()
+        .unwrap_or("")
+        .split(',')
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    if !languages.is_empty() {
+        sql.push_str(" AND listed_language IN (");
+        for (i, language) in languages.iter().enumerate() {
+            if i > 0 {
+                sql.push_str(", ");
+            }
+            sql.push('?');
+            args.add(language.to_string())
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+        }
+        sql.push(')');
     }
 
     // Both engines fold with their own `LOWER`, on both sides. They agree for
@@ -4028,6 +4045,49 @@ mod tests {
         assert!(facets.genres.iter().all(|g| g.value != "Hentai"));
         assert_eq!(facets.networks.len(), 2);
         assert_eq!((facets.year_min, facets.year_max), (Some(2008), Some(2013)));
+    }
+
+    #[tokio::test]
+    async fn a_language_spelt_two_ways_is_asked_for_by_both() {
+        let db = db().await;
+        stored(&db, |i| {
+            i.title = "Short".into();
+            i.original_language = Some("ja".into());
+        })
+        .await;
+        stored(&db, |i| {
+            i.title = "Long".into();
+            i.original_language = Some("jpn".into());
+        })
+        .await;
+        stored(&db, |i| {
+            i.title = "Other".into();
+            i.original_language = Some("en".into());
+        })
+        .await;
+
+        let mut both = titles(
+            &db,
+            Query {
+                original_language: Some("ja, jpn".into()),
+                ..Default::default()
+            },
+        )
+        .await;
+        both.sort_unstable();
+        assert_eq!(both, ["Long", "Short"], "either spelling lists the work");
+
+        assert_eq!(
+            titles(
+                &db,
+                Query {
+                    original_language: Some("jpn".into()),
+                    ..Default::default()
+                }
+            )
+            .await,
+            ["Long"]
+        );
     }
 
     #[tokio::test]
