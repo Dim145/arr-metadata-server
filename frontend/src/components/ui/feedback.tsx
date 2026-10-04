@@ -27,12 +27,15 @@ export function Dialog({
   onClose,
   children,
   footer,
+  size = 'md',
 }: {
   open: boolean
   title: ReactNode
   onClose: () => void
   children: ReactNode
   footer: ReactNode
+  /** A question fits a column; a choice among pictures wants the room. */
+  size?: 'md' | 'lg'
 }) {
   const ref = useRef<HTMLDialogElement>(null)
 
@@ -49,7 +52,8 @@ export function Dialog({
       ref={ref}
       onClose={onClose}
       className={cn(
-        'm-auto max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-md overflow-hidden',
+        'm-auto max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] overflow-hidden',
+        size === 'lg' ? 'max-w-3xl' : 'max-w-md',
         'rounded-panel border border-rule bg-ink-raised p-0 text-bone backdrop:bg-ink/80',
       )}
     >

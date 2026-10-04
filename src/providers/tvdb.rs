@@ -947,6 +947,7 @@ fn seasons(series: &SeriesExtended) -> Vec<Season> {
                 tvdb_id: s.id,
                 is_manual: false,
                 images: Vec::new(),
+                primary_images: Default::default(),
             })
         })
         .collect();

@@ -24,11 +24,18 @@ import { useOrders } from '../../../lib/hooks'
 import { useI18n } from '../../../lib/i18n'
 import { providerName } from '../../../lib/labels'
 import { episodeLinks } from '../../../lib/links'
-import { airTime, airValue, episodeCode, episodesOf, seasonName, seasonNumbers, seasonPoster } from '../../../lib/media'
-import type { Episode, FieldRegistry, MediaItem, Override, ProvenanceReport } from '../../../lib/types'
+import { airTime, airValue, episodeCode, episodesOf, seasonImages, seasonName, seasonNumbers, seasonPoster } from '../../../lib/media'
+import type { Episode, FieldRegistry, Image, MediaItem, Override, ProvenanceReport, Uploaded } from '../../../lib/types'
 
 import { FieldRow, hasValue } from './FieldRow'
+import { ImagePicker, type Candidate } from './ImagePicker'
 import { AddForm, Count, Empty, Facts, LockBadge, useRemove } from './shared'
+
+/** The kinds of picture an episode's still is cut from: the wide ones. */
+const WIDE = new Set(['landscape', 'fanart', 'screenshot'])
+
+/** What is being chosen: the season's poster, or an episode's still. */
+type Picking = { for: 'season' } | { for: 'episode'; episode: Episode }
 
 type Filter = 'all' | 'locked' | 'yours'
 
@@ -68,8 +75,58 @@ export function SeasonsTab({
     numbers.includes(asked) && params.get('episode') ? Number(params.get('episode')) : null,
   )
   const [filter, setFilter] = useState<Filter>('all')
+  const [picking, setPicking] = useState<Picking | null>(null)
   const orders = useOrders(work.id)
   const { ask, dialog } = useRemove(work, onChanged)
+  const p = e.picker
+
+  // A season's poster is a choice among pictures, locked like any edit:
+  // `season:N / primaryPoster`, as the work's own choice is made.
+  const choosePoster = (n: number, address: string) =>
+    api.put(`/items/${work.id}/overrides`, { scope: `season:${n}`, field: 'primaryPoster', value: address }).then(onChanged)
+  const unlockPoster = useMutation({
+    mutationFn: (n: number) => api.delete(`/items/${work.id}/overrides/${encodeURIComponent(`season:${n}`)}/primaryPoster`),
+    onSuccess: onChanged,
+  })
+  // An episode's still is the `image` field, locked as the row would lock it.
+  const chooseStill = (episode: Episode, address: string) =>
+    api
+      .put(`/items/${work.id}/overrides`, { scope: scopeOf(episode), field: 'image', value: address })
+      .then(onChanged)
+
+  /** The posters on offer for a season: its own, the work's, the other seasons'. */
+  const posterCandidates = (n: number): Candidate[] => [
+    ...seasonImages(work, n)
+      .filter((image) => image.coverType === 'poster')
+      .map((image) => ({ image, group: 'season' as const })),
+    ...(work.images ?? [])
+      .filter((image) => image.coverType === 'poster' && (image.seasonNumber === undefined || image.seasonNumber === null))
+      .map((image) => ({ image, group: 'work' as const })),
+    ...numbers
+      .filter((m) => m !== n)
+      .flatMap((m) =>
+        seasonImages(work, m)
+          .filter((image) => image.coverType === 'poster')
+          .map((image) => ({ image, group: 'seasons' as const, groupLabel: seasonName(work.seasons?.find((x) => x.seasonNumber === m)?.title, m, t.work.season) })),
+      ),
+  ]
+  /** The wide pictures on offer for a still: the season's, the work's, the other seasons'. */
+  const stillCandidates = (n: number): Candidate[] => {
+    const wide = (image: Image) => WIDE.has(image.coverType)
+    return [
+      ...seasonImages(work, n).filter(wide).map((image) => ({ image, group: 'season' as const })),
+      ...(work.images ?? [])
+        .filter((image) => wide(image) && (image.seasonNumber === undefined || image.seasonNumber === null))
+        .map((image) => ({ image, group: 'work' as const })),
+      ...numbers
+        .filter((m) => m !== n)
+        .flatMap((m) =>
+          seasonImages(work, m)
+            .filter(wide)
+            .map((image) => ({ image, group: 'seasons' as const, groupLabel: seasonName(work.seasons?.find((x) => x.seasonNumber === m)?.title, m, t.work.season) })),
+        ),
+    ]
+  }
 
   const choose = (n: number) => {
     setSeason(n)
@@ -221,14 +278,34 @@ export function SeasonsTab({
           <>
         <Panel id="season-fields" label={name} className="rise">
           <div className="grid grid-cols-[5rem_minmax(0,1fr)] gap-5 p-5 sm:grid-cols-[6rem_minmax(0,1fr)]">
-            <div className="aspect-2/3 overflow-hidden rounded-card border border-rule-bright bg-ink-high shadow-[var(--shadow-lift)]">
-              {sheet ? (
-                <Artwork url={sheet} role="thumb" alt="" className="size-full object-cover" />
-              ) : (
-                <div className="grid size-full place-items-center">
-                  <Glyph name="tv" className="size-5 text-bone-faint" />
-                </div>
-              )}
+            {/* The poster, and the way to choose it: decided where it is seen. */}
+            <div>
+              <div className="aspect-2/3 overflow-hidden rounded-card border border-rule-bright bg-ink-high shadow-[var(--shadow-lift)]">
+                {sheet ? (
+                  <Artwork url={sheet} role="thumb" alt="" className="size-full object-cover" />
+                ) : (
+                  <div className="grid size-full place-items-center">
+                    <Glyph name="tv" className="size-5 text-bone-faint" />
+                  </div>
+                )}
+              </div>
+              {meta ? (
+                <>
+                  <Button size="sm" className="mt-2 w-full px-2" onClick={() => setPicking({ for: 'season' })} aria-label={p.changePoster}>
+                    <Glyph name="image" className="size-3.5" />
+                    {p.change}
+                  </Button>
+                  {lockOf(`season:${season}`, 'primaryPoster') ? (
+                    <div className="mt-2 flex flex-col items-start gap-1" data-field="primaryPoster">
+                      <Provenance manual label={p.chosenPoster} />
+                      <Button size="sm" variant="quiet" className="px-2" onClick={() => unlockPoster.mutate(season)} disabled={unlockPoster.isPending}>
+                        <Glyph name="unlock" className="size-3.5" />
+                        {e.unlock}
+                      </Button>
+                    </div>
+                  ) : null}
+                </>
+              ) : null}
             </div>
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-1.5">
@@ -270,7 +347,8 @@ export function SeasonsTab({
 
           {meta ? (
             <ul className="divide-y divide-rule border-t border-rule">
-              {registry.season.map((def) => (
+              {/* The poster's choice is made from the poster above, not a row. */}
+              {registry.season.filter((def) => def.name !== 'primaryPoster').map((def) => (
                 <FieldRow
                   key={`season:${season}:${def.name}`}
                   itemId={work.id}
@@ -341,6 +419,8 @@ export function SeasonsTab({
                             def={def}
                             value={(episode as unknown as Record<string, unknown>)[def.name]}
                             lock={lockOf(scope, def.name)}
+                            // The still is a picture: chosen as one, not typed.
+                            onEdit={def.name === 'image' ? () => setPicking({ for: 'episode', episode }) : undefined}
                             onChanged={onChanged}
                           />
                         ))}
@@ -377,6 +457,40 @@ export function SeasonsTab({
       </div>
 
       {dialog}
+
+      {/* One picker for the tab: the season's poster or an episode's still,
+          whichever was asked for last. */}
+      {picking?.for === 'episode' ? (
+        <ImagePicker
+          open
+          onClose={() => setPicking(null)}
+          title={p.titleStill}
+          subtitle={`${work.title} · ${episodeCode(picking.episode)} ${picking.episode.title}`.trim()}
+          work={work}
+          shape="wide"
+          candidates={stillCandidates(picking.episode.seasonNumber)}
+          current={picking.episode.image}
+          uploadFields={{ episode: `${picking.episode.seasonNumber}x${picking.episode.episodeNumber}` }}
+          onChoose={(address) => chooseStill(picking.episode, address)}
+          // A still sent as a file locks the field as it lands: nothing more to claim.
+          onUploaded={async () => onChanged()}
+        />
+      ) : (
+        <ImagePicker
+          open={picking?.for === 'season'}
+          onClose={() => setPicking(null)}
+          title={p.titlePoster}
+          subtitle={`${work.title} · ${name}`}
+          work={work}
+          shape="poster"
+          candidates={posterCandidates(season)}
+          current={sheet}
+          uploadFields={{ coverType: 'poster', seasonNumber: String(season) }}
+          onChoose={(address) => choosePoster(season, address)}
+          // A poster sent as a file is one of the season's; it is then chosen.
+          onUploaded={(kept: Uploaded) => choosePoster(season, kept.origin)}
+        />
+      )}
     </div>
   )
 }

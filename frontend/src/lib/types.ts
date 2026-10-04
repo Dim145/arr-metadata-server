@@ -27,6 +27,8 @@ export interface Image {
   seasonNumber?: number
   coverType: string
   url: string
+  /** The language of any text the picture carries: a titled poster, a logo. */
+  language?: string
   sortOrder: number
   source?: string
   isManual: boolean
@@ -110,6 +112,8 @@ export interface Season {
   tvdbId?: number
   isManual: boolean
   images?: Image[]
+  /** The poster a person chose to lead the season with, by image id; none by default. */
+  primaryImages?: { poster?: string }
 }
 
 export interface Episode {

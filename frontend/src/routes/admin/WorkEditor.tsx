@@ -27,10 +27,11 @@ import * as fmt from '../../lib/format'
 import { useI18n } from '../../lib/i18n'
 import { statusLabel } from '../../lib/labels'
 import { backdrop, hasSources, poster } from '../../lib/media'
-import type { FieldRegistry, MediaItem, Override, ProvenanceReport } from '../../lib/types'
+import type { FieldRegistry, MediaItem, Override, ProvenanceReport, Uploaded } from '../../lib/types'
 
 import { ArtworkTab } from './editor/ArtworkTab'
 import { ElsewhereTab } from './editor/ElsewhereTab'
+import { ImagePicker, type Candidate } from './editor/ImagePicker'
 import { PeopleTab } from './editor/PeopleTab'
 import { RecordTab } from './editor/RecordTab'
 import { SeasonsTab } from './editor/SeasonsTab'
@@ -117,6 +118,15 @@ export function WorkEditor() {
     mutationFn: () => api.post<MediaItem>(`/items/${id}/refresh`),
     onSuccess: invalidate,
   })
+
+  // The poster and the background the work leads with, chosen from the
+  // masthead: the same lock the artwork tab's star sets, reached from where
+  // the pictures are seen.
+  const [choosing, setChoosing] = useState<'poster' | 'fanart' | null>(null)
+  const lead = (kind: 'poster' | 'fanart', address: string) =>
+    api
+      .put(`/items/${id}/overrides`, { scope: 'item', field: kind === 'poster' ? 'primaryPoster' : 'primaryFanart', value: address })
+      .then(invalidate)
 
   // The registry too, and not only the work: it is asked for once and cached
   // forever, so a failure there never retries. Without this the page waits on
@@ -330,6 +340,19 @@ export function WorkEditor() {
                 {refresh.error.message}
               </p>
             ) : null}
+
+            {/* The pictures the work leads with, chosen from where they are
+                seen — quietly, under the facts, not among the actions. */}
+            <div className="-ml-2 mt-2 flex flex-wrap items-center gap-1">
+              <Button size="sm" variant="quiet" onClick={() => setChoosing('poster')}>
+                <Glyph name="image" className="size-3.5" />
+                {e.picker.changePoster}
+              </Button>
+              <Button size="sm" variant="quiet" onClick={() => setChoosing('fanart')}>
+                <Glyph name="image" className="size-3.5" />
+                {e.picker.changeBackdrop}
+              </Button>
+            </div>
           </div>
 
           {/* Two to a row on a phone, a row of their own at the widest. */}
@@ -358,6 +381,25 @@ export function WorkEditor() {
           </div>
         </div>
       </header>
+
+      {choosing ? (
+        <ImagePicker
+          open
+          onClose={() => setChoosing(null)}
+          title={choosing === 'poster' ? e.picker.titlePoster : e.picker.titleBackdrop}
+          subtitle={work.title}
+          work={work}
+          shape={choosing === 'poster' ? 'poster' : 'wide'}
+          candidates={(work.images ?? [])
+            .filter((image) => image.coverType === choosing && (image.seasonNumber === undefined || image.seasonNumber === null))
+            .map((image): Candidate => ({ image, group: 'work' }))}
+          current={choosing === 'poster' ? sheet : art}
+          uploadFields={{ coverType: choosing }}
+          onChoose={(address) => lead(choosing, address)}
+          // A picture sent as a file is one of the work's; it is then chosen.
+          onUploaded={(kept: Uploaded) => lead(choosing, kept.origin)}
+        />
+      ) : null}
 
       {/* ── The tabs ───────────────────────────────────────────────── */}
       <nav className="sticky top-14 z-20 -mx-4 mb-6 border-b border-rule bg-ink/95 px-4 backdrop-blur sm:-mx-6 sm:px-6 lg:top-0 lg:mx-0 lg:px-0">

@@ -217,8 +217,17 @@ export function poster(item: Pick<MediaItem, 'images' | 'primaryImages'>, season
  * rather than with the work, and the work's own stands in otherwise.
  */
 export function seasonPoster(item: Pick<MediaItem, 'images' | 'seasons' | 'primaryImages'>, season: number) {
-  const own = item.seasons?.find((s) => s.seasonNumber === season)?.images
-  return pick(own, COVER.poster, season)?.url ?? poster(item, season) ?? poster(item)
+  const own = item.seasons?.find((s) => s.seasonNumber === season)
+  return pick(own?.images, COVER.poster, season, own?.primaryImages?.poster)?.url ?? poster(item, season) ?? poster(item)
+}
+
+/** A season's pictures: filed with the season, or with the work under its number. */
+export function seasonImages(item: Pick<MediaItem, 'images' | 'seasons'>, season: number): Image[] {
+  const filed = [
+    ...(item.seasons?.find((s) => s.seasonNumber === season)?.images ?? []),
+    ...(item.images ?? []).filter((image) => image.seasonNumber === season),
+  ]
+  return filed.filter((image, index) => filed.findIndex((other) => other.id === image.id) === index)
 }
 
 export function backdrop(item: Pick<MediaItem, 'images' | 'primaryImages'>) {

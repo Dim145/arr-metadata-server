@@ -1088,6 +1088,7 @@ mod tests {
                 tvdb_id: Some(7),
                 is_manual: false,
                 images: Vec::new(),
+                primary_images: Default::default(),
             },
             Season {
                 id: "s".into(),
@@ -1099,6 +1100,7 @@ mod tests {
                 tvdb_id: None,
                 is_manual: false,
                 images: Vec::new(),
+                primary_images: Default::default(),
             },
         ];
 
@@ -1113,6 +1115,7 @@ mod tests {
             tvdb_id: None,
             is_manual: false,
             images: Vec::new(),
+            primary_images: Default::default(),
         }];
 
         let merged = combine(vec![a, b], &priority()).unwrap();

@@ -335,6 +335,7 @@ async fn load_seasons(db: &Db, media_id: &str) -> Result<Vec<Season>> {
                 tvdb_id: row.opt_big("tvdb_id")?,
                 is_manual: row.flag("is_manual")?,
                 images: Vec::new(),
+                primary_images: Default::default(),
             })
         })
         .collect()

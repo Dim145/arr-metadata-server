@@ -72,10 +72,13 @@ test.describe('the media kept', () => {
     const id = works.items[0]?.id
     test.skip(!id, 'the catalogue is empty')
 
-    // Uploaded, and pointed at from the work.
+    // Uploaded, and pointed at from the work. A height of this run's own:
+    // the store files a picture by its content, and a run that failed
+    // before taking its picture away would otherwise share the file.
+    const tall = 900 + (Date.now() % 89)
     const uploaded = await page.request.post(`/api/v1/items/${id}/media`, {
       multipart: {
-        file: { name: 'poster.png', mimeType: 'image/png', buffer: png(600, 900) },
+        file: { name: 'poster.png', mimeType: 'image/png', buffer: png(600, tall) },
         coverType: 'banner',
       },
     })
@@ -124,9 +127,26 @@ test.describe('the media kept', () => {
     await page.goto(`/admin/catalogue/${id}#artwork`)
     const panel = page.locator('#artwork')
     await expect(panel.getByText(/kept here|stockée ici/i).first()).toBeVisible()
-    await expect(panel.getByRole('button', { name: /upload a picture|envoyer une image/i })).toBeVisible()
 
-    // Taken away: the file with it.
+    // One more, sent through the picker's own file tab: kept the same way.
+    const before = new Set(media.map((m) => m.origin))
+    await panel.getByRole('button', { name: /add an image|ajouter une image/i }).click()
+    const picker = page.getByRole('dialog')
+    await page.locator('#image-kind').selectOption('banner')
+    await picker.getByRole('tab', { name: /a file|un fichier/i }).click()
+    await picker.locator('input[type="file"]').setInputFiles({ name: 'bandeau.png', mimeType: 'image/png', buffer: png(758, 140 + (Date.now() % 89)) })
+    await expect(picker.getByText('bandeau.png')).toBeVisible()
+    await picker.getByRole('button', { name: /^(add|ajouter)$/i }).click()
+    await expect(picker).toBeHidden()
+    const now = (await (await page.request.get(`/api/v1/items/${id}/media`)).json()) as {
+      media: { origin: string; status: string; assetId?: string }[]
+    }
+    const sent = now.media.find((m) => m.origin.startsWith('upload:') && !before.has(m.origin))
+    expect(sent, 'the picture sent from the picker is kept').toBeDefined()
+    expect(sent!.assetId).toBeDefined()
+
+    // Taken away: the files with them.
+    expect((await page.request.delete(`/api/v1/items/${id}/media/${sent!.assetId}`)).status()).toBe(204)
     expect((await page.request.delete(`/api/v1/items/${id}/media/${assetId}`)).status()).toBe(204)
     expect((await page.request.get(url)).status()).toBe(404)
     const after = (await (await page.request.get(`/api/v1/items/${id}`)).json()) as {

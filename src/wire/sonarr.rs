@@ -264,7 +264,8 @@ pub fn from_item(item: &MediaItem, tvdb_id: i64, language: &str) -> ShowResource
             .iter()
             .map(|s| SeasonResource {
                 season_number: s.season_number,
-                images: crate::domain::lead_images(&s.images, &Default::default())
+                // The poster a person chose for the season, as for the work.
+                images: crate::domain::lead_images(&s.images, &s.primary_images)
                     .into_iter()
                     .map(image_resource)
                     .collect(),
@@ -516,6 +517,7 @@ pub fn to_item(show: &ShowResource) -> MediaItem {
                 .enumerate()
                 .map(|(i, img)| to_image(img, Some(s.season_number), i as i32))
                 .collect(),
+            primary_images: Default::default(),
         })
         .collect();
 
@@ -786,6 +788,31 @@ mod tests {
                 ("Fanart", "https://x/f1.jpg")
             ]
         );
+    }
+
+    /// A season's chosen poster is the one Sonarr is given for the season,
+    /// whatever the order its sources listed them in.
+    #[test]
+    fn a_seasons_chosen_poster_is_the_one_sent() {
+        let mut it = item();
+        let image = |id: &str, order: i32| Image {
+            id: id.into(),
+            season_number: Some(1),
+            cover_type: CoverType::Poster,
+            url: format!("https://x/{id}.jpg"),
+            language: None,
+            sort_order: order,
+            source: None,
+            is_manual: false,
+        };
+        let mut season = crate::db::repo::child::blank_season(1);
+        season.is_manual = false;
+        season.images = vec![image("s1", 0), image("s2", 1)];
+        season.primary_images.poster = Some("s2".into());
+        it.seasons = vec![season];
+        let sent = from_item(&it, 1, "en").seasons;
+        let urls: Vec<&str> = sent[0].images.iter().map(|i| i.url.as_str()).collect();
+        assert_eq!(urls, ["https://x/s2.jpg"]);
     }
 
     #[test]

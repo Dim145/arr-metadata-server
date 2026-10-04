@@ -25,15 +25,27 @@ async function signIn(page: Page) {
 type Episode = { seasonNumber: number; episodeNumber: number; title: string }
 type Series = { id: string; title: string; seasons: { seasonNumber: number }[]; episodes: Episode[] }
 
-/** A series the providers filled: two seasons at least, and a few episodes. */
-async function aSeries(page: Page): Promise<Series | undefined> {
+/**
+ * A series the providers filled: two seasons at least, and a few episodes.
+ * `skip` passes over the first such series: the two projects run at once
+ * against one server, and a test that locks something on a work must not
+ * share it with the same test on the other project.
+ */
+async function aSeries(page: Page, skip = 0): Promise<Series | undefined> {
   const { items } = await (await page.request.get('/api/v1/items?kind=series&limit=20')).json()
+  let passed = 0
   for (const work of items as { id: string }[]) {
     const full = (await (await page.request.get(`/api/v1/items/${work.id}`)).json()) as Series
-    if ((full.seasons?.length ?? 0) >= 2 && (full.episodes?.length ?? 0) >= 3) return full
+    if ((full.seasons?.length ?? 0) >= 2 && (full.episodes?.length ?? 0) >= 3) {
+      if (passed === skip) return full
+      passed += 1
+    }
   }
   return undefined
 }
+
+/** Which series a locking test takes: the first for one project, the next for the other. */
+const ownSeries = (project: string) => (project === 'mobile' ? 1 : 0)
 
 const code = (episode: Pick<Episode, 'seasonNumber' | 'episodeNumber'>) =>
   `S${String(episode.seasonNumber).padStart(2, '0')}E${String(episode.episodeNumber).padStart(2, '0')}`
@@ -240,33 +252,160 @@ test.describe('the work editor', () => {
       await expect(title).toBeVisible()
       await expect(title).toContainText(/france/i)
 
-      // ── A season poster by address, filed with the season and in a language.
-      await page.goto(`/admin/catalogue/${id}?tab=artwork`)
-      await page.getByRole('button', { name: /add by address|ajouter par adresse/i }).click()
-      await page.locator('#image-kind').selectOption('poster')
-      await page.locator('#image-season').selectOption('1')
-      await page.locator('#image-language').fill('fr')
-      await page.locator('#image-url').fill('https://two.example.invalid/saison-1.jpg')
-      await page.locator('form', { has: page.locator('#image-url') }).getByRole('button', { name: /^(add|ajouter)$/i }).click()
-      const seasonArt = page.locator('#artwork section', { hasText: /season artwork|images de saison/i })
-      await expect(seasonArt.locator('li', { hasText: 'two.example.invalid' })).toBeVisible()
+      // ── The season's poster, by address, from the season's own panel: a
+      //    choice that locks, and a picture filed with the season.
+      await page.goto(`/admin/catalogue/${id}?tab=seasons&season=1`)
+      await page.locator('#season-fields').getByRole('button', { name: /change the poster|changer l’affiche/i }).click()
+      const picker = page.getByRole('dialog')
+      await picker.getByRole('tab', { name: /an address|une adresse/i }).click()
+      await picker.getByLabel(/picture’s address|adresse de l’image/i).fill('https://two.example.invalid/saison-1.jpg')
+      await picker.getByRole('button', { name: /choose and lock|choisir et verrouiller/i }).click()
+      await expect(picker).toBeHidden()
+      // Shown as the season's poster at once. No lock is said on a work no
+      // source could overrule — the editor's rule for every edit of it.
+      await expect(page.locator('#season-fields img[src*="saison-1.jpg"]')).toBeAttached()
 
-      // Filed with the season, as the server keeps a season's own pictures.
+      // The artwork tab keeps to the work's own pictures, and leads to the season's.
+      await page.goto(`/admin/catalogue/${id}?tab=artwork`)
+      await expect(page.locator('#artwork [data-season-images]')).toBeVisible()
+      await expect(page.locator('#artwork section', { hasText: /season artwork|images de saison/i })).toHaveCount(0)
+      await page.locator('#artwork').getByRole('link', { name: /open the seasons|ouvrir les saisons/i }).click()
+      await expect(page).toHaveURL(/tab=seasons/)
+
+      // A picture added to the work itself, by address, in a language.
+      await page.goto(`/admin/catalogue/${id}?tab=artwork`)
+      await page.locator('#artwork').getByRole('button', { name: /add an image|ajouter une image/i }).click()
+      await page.locator('#image-kind').selectOption('poster')
+      await page.locator('#image-language').fill('fr')
+      await picker.getByRole('tab', { name: /an address|une adresse/i }).click()
+      await picker.getByLabel(/picture’s address|adresse de l’image/i).fill('https://two.example.invalid/affiche-fr.jpg')
+      await picker.getByRole('button', { name: /^(add|ajouter)$/i }).click()
+      await expect(picker).toBeHidden()
+      await expect(page.locator('#artwork li', { hasText: 'two.example.invalid' })).toBeVisible()
+
+      // Filed with the season, as the server keeps a season's own pictures,
+      // and named as its choice.
       type Picture = { url: string; seasonNumber?: number; isManual: boolean }
       const work = (await (await page.request.get(`/api/v1/items/${id}`)).json()) as {
         images?: Picture[]
-        seasons: { seasonNumber: number; images?: Picture[] }[]
+        seasons: { seasonNumber: number; images?: Picture[]; primaryImages?: { poster?: string } }[]
         alternativeTitles: { title: string; titleType?: string; language?: string }[]
       }
       const season = work.seasons.find((one) => one.seasonNumber === 1)
-      const poster = [...(season?.images ?? []), ...(work.images ?? [])].find((image) => image.url.includes('two.example.invalid'))
+      const poster = season?.images?.find((image) => image.url.includes('saison-1.jpg'))
       expect(poster, 'the poster is filed with season 1').toBeDefined()
       expect(poster?.isManual).toBe(true)
+      expect(season?.primaryImages?.poster, 'and is the one chosen').toBeDefined()
+      expect(work.images?.some((image) => image.url.includes('affiche-fr.jpg'))).toBe(true)
       const alt = work.alternativeTitles.find((one) => one.title === 'Editeur.E2E.FRENCH')
       expect(alt?.titleType).toBe('release')
       expect(alt?.language).toBe('fr')
     } finally {
       await page.request.delete(`/api/v1/items/${id}`)
+    }
+  })
+
+  test('a season’s poster is chosen among the pictures on offer, locks, and is unlocked again', async ({ page }, info) => {
+    await signIn(page)
+    const series = await aSeries(page, ownSeries(info.project.name))
+    test.skip(!series, 'the catalogue holds no series with seasons')
+    const target = series!.seasons.map((s) => s.seasonNumber).filter((n) => n > 0).sort((a, b) => a - b)[0]!
+    const scope = `season:${target}`
+
+    try {
+      await page.goto(`/admin/catalogue/${series!.id}?tab=seasons&season=${target}`)
+      const head = page.locator('#season-fields')
+      await head.getByRole('button', { name: /change the poster|changer l’affiche/i }).click()
+      const picker = page.getByRole('dialog')
+      await expect(picker.getByRole('heading', { name: /choose the poster|choisir l’affiche/i })).toBeVisible()
+
+      // One of the pictures on offer where there are any — the last, which is
+      // not the one in place — else an address.
+      const offered = picker.getByRole('radio')
+      if ((await offered.count()) > 1) {
+        // The radio itself is hidden under its picture: the label is what is pressed.
+        await offered.last().locator('xpath=..').click()
+        await expect(offered.last()).toBeChecked()
+      } else {
+        await picker.getByRole('tab', { name: /an address|une adresse/i }).click()
+        await picker.getByLabel(/picture’s address|adresse de l’image/i).fill('https://season.example.invalid/poster.jpg')
+      }
+      await picker.getByRole('button', { name: /choose and lock|choisir et verrouiller/i }).click()
+      await expect(picker).toBeHidden()
+
+      const chosen = head.locator('[data-field="primaryPoster"]')
+      await expect(chosen).toContainText(/chosen poster|affiche choisie/i)
+      const locks = (await (await page.request.get(`/api/v1/items/${series!.id}/overrides`)).json()) as { scope: string; field: string }[]
+      expect(locks.some((lock) => lock.scope === scope && lock.field === 'primaryPoster')).toBe(true)
+      const work = (await (await page.request.get(`/api/v1/items/${series!.id}`)).json()) as {
+        seasons: { seasonNumber: number; images?: { id: string }[]; primaryImages?: { poster?: string } }[]
+      }
+      const season = work.seasons.find((s) => s.seasonNumber === target)!
+      expect(season.primaryImages?.poster).toBeDefined()
+      expect(season.images?.[0]?.id, 'the chosen poster leads the season’s own').toBe(season.primaryImages?.poster)
+
+      // Taken off again from the same place.
+      await chosen.getByRole('button', { name: /^(unlock|déverrouiller)$/i }).click()
+      await expect(chosen).toHaveCount(0)
+      const after = (await (await page.request.get(`/api/v1/items/${series!.id}/overrides`)).json()) as { scope: string; field: string }[]
+      expect(after.some((lock) => lock.scope === scope && lock.field === 'primaryPoster')).toBe(false)
+    } finally {
+      await page.request.delete(`/api/v1/items/${series!.id}/overrides/${encodeURIComponent(scope)}/primaryPoster`)
+    }
+  })
+
+  test('an episode’s picture is chosen through the picker, and locks its field', async ({ page }, info) => {
+    await signIn(page)
+    const series = await aSeries(page, ownSeries(info.project.name))
+    test.skip(!series, 'the catalogue holds no series with seasons')
+    const first = series!.episodes.filter((e) => e.seasonNumber > 0).sort((a, b) => a.seasonNumber - b.seasonNumber || a.episodeNumber - b.episodeNumber)[0]!
+    const scope = `episode:${first.seasonNumber}x${first.episodeNumber}`
+
+    try {
+      await page.goto(`/admin/catalogue/${series!.id}?tab=seasons&season=${first.seasonNumber}&episode=${first.episodeNumber}`)
+      const fields = page.locator(`#episode-fields-${first.seasonNumber}x${first.episodeNumber}`)
+      const row = fields.locator('li[data-field="image"]')
+      await expect(row).toBeVisible()
+      await row.getByRole('button', { name: /^(edit|modifier)$/i }).click()
+
+      const picker = page.getByRole('dialog')
+      await expect(picker.getByRole('heading', { name: /episode’s picture|image de l’épisode/i })).toBeVisible()
+      await picker.getByRole('tab', { name: /an address|une adresse/i }).click()
+      await picker.getByLabel(/picture’s address|adresse de l’image/i).fill('https://stills.example.invalid/pilot.jpg')
+      await picker.getByRole('button', { name: /choose and lock|choisir et verrouiller/i }).click()
+      await expect(picker).toBeHidden()
+
+      await expect(row).toContainText('stills.example.invalid')
+      await expect(row.getByRole('button', { name: /^(unlock|déverrouiller)$/i })).toBeVisible()
+      await row.getByRole('button', { name: /^(unlock|déverrouiller)$/i }).click()
+      await expect(row.getByRole('button', { name: /^(edit|modifier)$/i })).toBeVisible()
+    } finally {
+      await page.request.delete(`/api/v1/items/${series!.id}/overrides/${encodeURIComponent(scope)}/image`)
+    }
+  })
+
+  test('the masthead changes the work’s own poster through the same picker', async ({ page }, info) => {
+    await signIn(page)
+    const series = await aSeries(page, ownSeries(info.project.name))
+    test.skip(!series, 'the catalogue holds no series with seasons')
+
+    try {
+      await page.goto(`/admin/catalogue/${series!.id}`)
+      await page.getByRole('button', { name: /change the poster|changer l’affiche/i }).click()
+      const picker = page.getByRole('dialog')
+      await picker.getByRole('tab', { name: /an address|une adresse/i }).click()
+      await picker.getByLabel(/picture’s address|adresse de l’image/i).fill('https://poster.example.invalid/lead.jpg')
+      await picker.getByRole('button', { name: /choose and lock|choisir et verrouiller/i }).click()
+      await expect(picker).toBeHidden()
+
+      const work = (await (await page.request.get(`/api/v1/items/${series!.id}`)).json()) as {
+        images?: { id: string; url: string }[]
+        primaryImages?: { poster?: string }
+      }
+      expect(work.primaryImages?.poster).toBeDefined()
+      expect(work.images?.find((image) => image.id === work.primaryImages?.poster)?.url).toBe('https://poster.example.invalid/lead.jpg')
+    } finally {
+      await page.request.delete(`/api/v1/items/${series!.id}/overrides/item/primaryPoster`)
     }
   })
 

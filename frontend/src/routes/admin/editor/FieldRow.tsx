@@ -65,6 +65,7 @@ export function FieldRow({
   origin,
   traced = false,
   labelled = true,
+  onEdit,
   onChanged,
 }: {
   itemId: string
@@ -79,6 +80,8 @@ export function FieldRow({
   traced?: boolean
   /** Whether the name is shown: a panel that is one field already says it in its head. */
   labelled?: boolean
+  /** Opens something of the caller's in place of the row's own editor: a picture's picker. */
+  onEdit?: () => void
   onChanged: () => void
 }) {
   const { t, locale } = useI18n()
@@ -186,7 +189,7 @@ export function FieldRow({
                     <OriginChip source={origin} hasValue={given} />
                   </span>
                 ) : null}
-                <Button size="sm" variant="quiet" onClick={() => setEditing(true)}>
+                <Button size="sm" variant="quiet" onClick={() => (onEdit ? onEdit() : setEditing(true))}>
                   <Glyph name="pencil" className="size-4" />
                   {t.common.edit}
                 </Button>

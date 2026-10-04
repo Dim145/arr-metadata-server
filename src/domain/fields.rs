@@ -236,6 +236,52 @@ fn lead_with(item: &mut MediaItem, kind: crate::domain::CoverType, address: &str
     }
 }
 
+/// The same for a season: the poster a person chose leads the season's own
+/// posters and is named on the season — or is brought back under it when the
+/// sources no longer list it, as long as a client can follow its address.
+fn lead_season_with(item: &mut MediaItem, number: i32, address: &str) {
+    let kind = crate::domain::CoverType::Poster;
+    let Some(season) = item.seasons.iter_mut().find(|s| s.season_number == number) else {
+        return;
+    };
+    let found = season
+        .images
+        .iter()
+        .position(|i| i.cover_type == kind && i.url == address);
+    let mut image = match found {
+        Some(at) => season.images.remove(at),
+        None if address.starts_with("https://") || address.starts_with("http://") => {
+            crate::domain::Image {
+                id: format!("chosen-season-{number}-{}", kind.as_str()),
+                season_number: Some(number),
+                cover_type: kind,
+                url: address.to_string(),
+                language: None,
+                sort_order: 0,
+                source: None,
+                is_manual: true,
+            }
+        }
+        None => return,
+    };
+    let lowest = season
+        .images
+        .iter()
+        .filter(|i| i.cover_type == kind)
+        .map(|i| i.sort_order)
+        .min()
+        .unwrap_or(0);
+    image.sort_order = image.sort_order.min(lowest.saturating_sub(1));
+    let at = season
+        .images
+        .iter()
+        .position(|i| i.cover_type.priority() >= kind.priority())
+        .unwrap_or(season.images.len());
+    let id = image.id.clone();
+    season.images.insert(at, image);
+    season.primary_images.poster = Some(id);
+}
+
 /// The fields that hold an address, and whether an upload's `upload:` origin
 /// may stand in it: refused unless a client can follow it, so that nothing a
 /// browser would run as a script — `javascript:`, a `data:` page — is served
@@ -299,6 +345,9 @@ pub const SEASON_FIELDS: &[FieldDef] = &[
     // is built from, and what a hand-made season has none of.
     f("tmdbId", Integer, "TMDB id"),
     f("tvdbId", Integer, "TheTVDB id"),
+    // The poster to lead the season with, by address, as the work's own
+    // choice is made: not a field of the season but a choice among its images.
+    f("primaryPoster", Text, "Primary poster"),
 ];
 
 /// Editable fields on an episode.
@@ -508,6 +557,7 @@ pub fn apply(item: &mut MediaItem, overrides: &[Override]) -> Result<(), serde_j
     let mut episode_patches: Vec<((i32, i32), serde_json::Map<String, Value>)> = Vec::new();
     let mut locked: Vec<String> = Vec::new();
     let mut chosen: Vec<(crate::domain::CoverType, String)> = Vec::new();
+    let mut chosen_for_seasons: Vec<(i32, String)> = Vec::new();
 
     for ov in overrides {
         let Ok(scope) = ov.scope.parse::<Scope>() else {
@@ -536,6 +586,11 @@ pub fn apply(item: &mut MediaItem, overrides: &[Override]) -> Result<(), serde_j
             Scope::Item => {
                 item_patch.insert(ov.field.clone(), value);
             }
+            Scope::Season(n) if ov.field == "primaryPoster" => {
+                if let Value::String(address) = &value {
+                    chosen_for_seasons.push((n, address.clone()));
+                }
+            }
             Scope::Season(n) => {
                 entry(&mut season_patches, n).insert(ov.field.clone(), value);
             }
@@ -557,6 +612,10 @@ pub fn apply(item: &mut MediaItem, overrides: &[Override]) -> Result<(), serde_j
         if let Some(season) = item.seasons.iter_mut().find(|s| s.season_number == number) {
             patch_in_place::<Season>(season, patch)?;
         }
+    }
+
+    for (number, address) in &chosen_for_seasons {
+        lead_season_with(item, *number, address);
     }
 
     for ((season, episode), patch) in episode_patches {
@@ -982,6 +1041,110 @@ mod tests {
         assert!(served.is_adult);
         assert_eq!(served.slug, "by-hand");
         assert_eq!(served.external_ids.tvdb, Some(81189));
+    }
+
+    /// A season's chosen poster leads the season's own and is named on it;
+    /// one the sources no longer list is brought back under the season, and
+    /// the season's other fields are patched as before.
+    #[test]
+    fn a_seasons_chosen_poster_leads_its_season() {
+        use crate::domain::{CoverType, Image};
+        use serde_json::json;
+        let image = |id: &str, season: i32, url: &str, order: i32| Image {
+            id: id.into(),
+            season_number: Some(season),
+            cover_type: CoverType::Poster,
+            url: url.into(),
+            language: None,
+            sort_order: order,
+            source: Some("tmdb".into()),
+            is_manual: false,
+        };
+        let lock = |scope: &str, field: &str, value: serde_json::Value| Override {
+            scope: scope.into(),
+            field: field.into(),
+            value: Some(value),
+            updated_at: String::new(),
+            updated_by: None,
+        };
+        assert!(
+            validate(
+                Scope::Season(2),
+                "primaryPoster",
+                Some(&json!("https://s/2b.jpg"))
+            )
+            .is_ok()
+        );
+        assert!(
+            validate(
+                Scope::Season(2),
+                "primaryPoster",
+                Some(&json!("upload:0123"))
+            )
+            .is_ok()
+        );
+        assert!(
+            validate(
+                Scope::Season(2),
+                "primaryPoster",
+                Some(&json!("not an address"))
+            )
+            .is_err()
+        );
+        assert!(
+            validate(Scope::Season(2), "primaryPoster", None).is_err(),
+            "unlocked, not cleared"
+        );
+
+        let mut item = MediaItem::empty(crate::domain::MediaKind::Series);
+        let mut one = crate::db::repo::child::blank_season(1);
+        one.is_manual = false;
+        one.images = vec![image("s1a", 1, "https://s/1a.jpg", 0)];
+        let mut two = crate::db::repo::child::blank_season(2);
+        two.is_manual = false;
+        two.images = vec![
+            image("s2a", 2, "https://s/2a.jpg", 0),
+            image("s2b", 2, "https://s/2b.jpg", 1),
+        ];
+        item.seasons = vec![one, two];
+        apply(
+            &mut item,
+            &[
+                lock("season:2", "primaryPoster", json!("https://s/2b.jpg")),
+                lock("season:2", "title", json!("The second")),
+                lock("season:1", "primaryPoster", json!("https://s/gone.jpg")),
+            ],
+        )
+        .unwrap();
+
+        let two = &item.seasons[1];
+        let order: Vec<&str> = two.images.iter().map(|i| i.id.as_str()).collect();
+        assert_eq!(order, ["s2b", "s2a"], "the chosen poster leads the season");
+        assert_eq!(two.primary_images.poster.as_deref(), Some("s2b"));
+        assert_eq!(
+            two.title.as_deref(),
+            Some("The second"),
+            "the other fields still patch"
+        );
+        let one = &item.seasons[0];
+        assert_eq!(
+            one.images[0].url, "https://s/gone.jpg",
+            "brought back under the season"
+        );
+        assert!(one.images[0].is_manual);
+        assert_eq!(
+            one.primary_images.poster.as_deref(),
+            Some("chosen-season-1-poster")
+        );
+        assert!(
+            item.locked_fields
+                .iter()
+                .any(|f| f == "season:2/primaryPoster")
+        );
+        assert!(
+            item.primary_images.is_empty(),
+            "a season's choice is not the work's"
+        );
     }
 
     /// A chosen poster leads its kind and is named; one the sources no

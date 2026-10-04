@@ -1,9 +1,12 @@
 /**
  * Every picture the work carries, laid out as a light table rather than a
  * list of addresses: a poster is recognised by looking at it, never by its
- * URL. Grouped by kind, with the seasons' own below, and beside each the
- * marks that matter here — the one chosen to lead with, the ones a person
- * added, and what this server keeps a copy of.
+ * URL. Grouped by kind, and beside each the marks that matter here — the one
+ * chosen to lead with, the ones a person added, and what this server keeps a
+ * copy of.
+ *
+ * The work's own pictures only: a season's are decided where the season is,
+ * on its own panel, and a line here says how many there are and leads there.
  *
  * A manual image survives every refresh; a provider's cannot be removed here
  * at all, because it would simply come back and read as the delete having
@@ -12,6 +15,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useRef, useState } from 'react'
+import { Link } from 'react-router'
 
 import { Artwork as Picture } from '../../../components/media'
 import { Button, Chip, FormField, Glyph, IconButton, Input, Panel, PanelHead, Select } from '../../../components/ui'
@@ -19,10 +23,11 @@ import { api } from '../../../lib/api'
 import { cn } from '../../../lib/cn'
 import { useI18n } from '../../../lib/i18n'
 import { providerName } from '../../../lib/labels'
-import { seasonName } from '../../../lib/media'
+import { seasonImages } from '../../../lib/media'
 import type { Image, MediaItem, Uploaded, WorkMedia, WorkMedium } from '../../../lib/types'
 
-import { AddForm, Count, Empty, hostOf, useRemove } from './shared'
+import { ImagePicker } from './ImagePicker'
+import { Count, Empty, hostOf, useRemove } from './shared'
 
 /** The kinds in the order the table shows them; anything else follows. */
 const KINDS = ['poster', 'fanart', 'landscape', 'banner', 'clearlogo', 'clearart', 'characterart']
@@ -44,6 +49,7 @@ export function ArtworkTab({ work, onChanged }: { work: MediaItem; onChanged: ()
   const { t } = useI18n()
   const c = t.admin.editor.children
   const a = t.admin.editor.artworkTab
+  const p = t.admin.editor.picker
   const queryClient = useQueryClient()
   const [kind, setKind] = useState<string>('all')
   // The kinds laid out whole in the table of everything: a dozen of each
@@ -80,13 +86,15 @@ export function ArtworkTab({ work, onChanged }: { work: MediaItem; onChanged: ()
     onSuccess: done,
   })
 
-  const all = work.images ?? []
-  const own = all.filter((image) => image.seasonNumber === undefined || image.seasonNumber === null)
-  // A season's pictures: filed with the work under its number, or with the season itself.
-  const seasonal = [
-    ...all.filter((image) => image.seasonNumber !== undefined && image.seasonNumber !== null),
-    ...(work.seasons ?? []).flatMap((season) => season.images ?? []),
-  ].filter((image, index, list) => list.findIndex((other) => other.id === image.id) === index)
+  // Adding one by hand: a kind, maybe a language, and the picture from a
+  // file or an address — the one picker every picture is chosen with.
+  const [adding, setAdding] = useState(false)
+  const [addKind, setAddKind] = useState<string>('poster')
+  const [addLanguage, setAddLanguage] = useState('')
+
+  const own = (work.images ?? []).filter((image) => image.seasonNumber === undefined || image.seasonNumber === null)
+  // The seasons' pictures are counted, not shown: their panels are where they are decided.
+  const seasonal = (work.seasons ?? []).reduce((n, season) => n + seasonImages(work, season.seasonNumber).length, 0)
   const kinds = [...KINDS.filter((k) => own.some((image) => image.coverType === k)), ...[...new Set(own.map((image) => image.coverType))].filter((k) => !KINDS.includes(k))]
   const kindLabel = (value: string) => (t.gallery.kind as Record<string, string>)[value] ?? value
   const coverLabel = (value: string) =>
@@ -94,8 +102,8 @@ export function ArtworkTab({ work, onChanged }: { work: MediaItem; onChanged: ()
     value
 
   // Under a heading that already names the kind, the caption says only
-  // where the picture is from; a season's pictures, of several kinds, say it.
-  const card = (image: Image, named = false) => {
+  // where the picture is from.
+  const card = (image: Image) => {
     const kept = keptOf(image.url)
     const field = choiceFor(image)
     const primary = field !== null && (field === 'primaryPoster' ? chosen.poster : chosen.fanart) === image.id
@@ -108,18 +116,15 @@ export function ArtworkTab({ work, onChanged }: { work: MediaItem; onChanged: ()
         image={image}
         kept={kept}
         primary={primary}
-        caption={[
-          named ? coverLabel(image.coverType) : undefined,
+        caption={
           keptForChoice
             ? c.primaryKept
             : kept?.origin.startsWith('upload:')
               ? c.uploadedBy(kept.uploadedBy ?? '')
               : image.source && image.source !== 'manual' && image.source !== 'unknown'
                 ? `${providerName(image.source)} · ${hostOf(image.url)}`
-                : hostOf(image.url),
-        ]
-          .filter(Boolean)
-          .join(' · ')}
+                : hostOf(image.url)
+        }
         star={
           field ? (
             <IconButton
@@ -139,12 +144,6 @@ export function ArtworkTab({ work, onChanged }: { work: MediaItem; onChanged: ()
   }
 
   const shownKinds = kind === 'all' ? kinds : kinds.filter((k) => k === kind)
-  const bySeason = new Map<number, Image[]>()
-  for (const image of seasonal) {
-    const n = image.seasonNumber ?? 0
-    bySeason.set(n, [...(bySeason.get(n) ?? []), image])
-  }
-  const seasons = [...bySeason.keys()].sort((x, y) => (x === 0 ? 1 : y === 0 ? -1 : x - y))
 
   return (
     <section id="artwork" aria-label={c.artwork} className="scroll-mt-28 lg:scroll-mt-16">
@@ -166,7 +165,7 @@ export function ArtworkTab({ work, onChanged }: { work: MediaItem; onChanged: ()
         </p>
       ) : null}
 
-      {own.length === 0 && seasons.length === 0 ? (
+      {own.length === 0 ? (
         <Panel className="mt-5">
           <Empty>{a.none}</Empty>
         </Panel>
@@ -202,51 +201,74 @@ export function ArtworkTab({ work, onChanged }: { work: MediaItem; onChanged: ()
         )
       })}
 
-      {seasons.length && (kind === 'all' || kind === 'poster' || kind === 'banner') ? (
-        <section aria-label={a.seasonArt} className="mt-8 border-t border-rule pt-6">
-          <h3 className="font-display text-lg font-medium text-bone">{a.seasonArt}</h3>
-          <p className="mt-1 mb-4 text-xs text-bone-faint">{a.seasonArtHint}</p>
-          <div className="space-y-6">
-            {seasons.map((n) => {
-              const images = bySeason.get(n)!.filter((image) => kind === 'all' || image.coverType === kind)
-              if (!images.length) return null
-              const key = `season:${n}`
-              const whole = kind !== 'all' || expanded.has(key) || images.length <= 12
-              const shown = whole ? images : images.slice(0, 12)
-              return (
-                <div key={n}>
-                  <h4 className="mb-2 flex items-baseline gap-2 text-sm font-medium text-bone">
-                    {seasonName(work.seasons?.find((season) => season.seasonNumber === n)?.title, n, t.work.season)}
-                    <Count>{images.length}</Count>
-                  </h4>
-                  <ul className="grid grid-cols-2 items-start gap-3 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6">{shown.map((image) => card(image, true))}</ul>
-                  {whole ? null : (
-                    <div className="mt-3 flex justify-center">
-                      <Button size="sm" onClick={() => setExpanded((held) => new Set(held).add(key))}>
-                        {t.gallery.showAll(images.length)}
-                      </Button>
-                    </div>
-                  )}
-                </div>
-              )
-            })}
-          </div>
-        </section>
+      {seasonal ? (
+        <p className="mt-8 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-rule pt-5 text-sm text-bone-dim" data-season-images={seasonal}>
+          <Glyph name="tv" className="size-4 shrink-0 text-bone-faint" />
+          <span>{p.seasonImages(seasonal)}</span>
+          <Link
+            to={`/admin/catalogue/${work.id}?tab=seasons`}
+            className="inline-flex min-h-9 items-center gap-1 text-vermillion underline-offset-4 hover:underline"
+          >
+            {p.openSeasons}
+            <Glyph name="chevronRight" className="size-3" />
+          </Link>
+        </p>
       ) : null}
 
       <Panel className="mt-8">
         <PanelHead title={c.addImage} />
         <p className="px-5 pt-3 pb-1 text-xs leading-relaxed text-bone-faint">{c.artworkHint}</p>
-        <AddByAddress work={work} onDone={done} />
+        <div className="flex flex-wrap items-center gap-3 px-5 py-3">
+          <Button size="sm" onClick={() => setAdding(true)}>
+            <Glyph name="plus" className="size-4" />
+            {c.addImage}
+          </Button>
+        </div>
         {storeOn ? (
-          <>
-            <UploadForm item={work} kind="image" onDone={done} />
-            <UploadForm item={work} kind="theme" onDone={done} />
-          </>
+          <UploadTheme item={work} onDone={done} />
         ) : media.data ? (
           <p className="border-t border-rule px-5 py-3 text-xs leading-relaxed text-bone-faint">{c.storeOff}</p>
         ) : null}
       </Panel>
+
+      <ImagePicker
+        open={adding}
+        onClose={() => setAdding(false)}
+        title={p.titleAdd}
+        subtitle={work.title}
+        work={work}
+        shape={addKind === 'poster' ? 'poster' : 'wide'}
+        uploadFields={{ coverType: addKind }}
+        onChoose={(url) =>
+          api
+            .post<{ id: string }>(`/items/${work.id}/images`, {
+              coverType: addKind,
+              url,
+              sortOrder: 0,
+              language: addLanguage.trim() || undefined,
+            })
+            .then(done)
+        }
+        onUploaded={async () => done()}
+        confirm={{ file: p.add, address: p.add }}
+        hints={{ file: p.addHint, address: p.addHint }}
+        extra={
+          <div className="grid gap-4 sm:grid-cols-2">
+            <FormField label={c.imageKind} htmlFor="image-kind">
+              <Select id="image-kind" value={addKind} onChange={(event) => setAddKind(event.target.value)}>
+                {ADDABLE.map((value) => (
+                  <option key={value} value={value}>
+                    {coverLabel(value)}
+                  </option>
+                ))}
+              </Select>
+            </FormField>
+            <FormField label={a.language} htmlFor="image-language" hint={a.languageHint}>
+              <Input id="image-language" value={addLanguage} placeholder="fr" maxLength={5} onChange={(event) => setAddLanguage(event.target.value)} />
+            </FormField>
+          </div>
+        }
+      />
 
       {dialog}
     </section>
@@ -369,89 +391,16 @@ function Kept({ medium }: { medium: WorkMedium | undefined }) {
   )
 }
 
-/* ── Adding by hand ───────────────────────────────────────────────────────── */
-
-function AddByAddress({ work, onDone }: { work: MediaItem; onDone: () => void }) {
-  const { t } = useI18n()
-  const c = t.admin.editor.children
-  const a = t.admin.editor.artworkTab
-  const [url, setUrl] = useState('')
-  const [coverType, setCoverType] = useState<string>('poster')
-  const [season, setSeason] = useState('')
-  const [language, setLanguage] = useState('')
-
-  const add = useMutation({
-    mutationFn: (body: unknown) => api.post<{ id: string }>(`/items/${work.id}/images`, body),
-    onSuccess: () => {
-      setUrl('')
-      onDone()
-    },
-  })
-
-  const coverLabel = (value: string) =>
-    ({ poster: c.poster, fanart: c.fanart, banner: c.banner, clearlogo: c.clearlogo, landscape: c.landscape, clearart: c.clearart } as Record<string, string>)[value] ??
-    value
-
-  return (
-    <AddForm
-      label={a.byAddress}
-      glyph="link"
-      pending={add.isPending}
-      error={add.error}
-      className="border-t-0"
-      onSubmit={() =>
-        add.mutate({
-          coverType,
-          url,
-          sortOrder: 0,
-          seasonNumber: season ? Number(season) : undefined,
-          language: language.trim() || undefined,
-        })
-      }
-    >
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <FormField label={c.imageKind} htmlFor="image-kind">
-          <Select id="image-kind" value={coverType} onChange={(event) => setCoverType(event.target.value)}>
-            {ADDABLE.map((value) => (
-              <option key={value} value={value}>
-                {coverLabel(value)}
-              </option>
-            ))}
-          </Select>
-        </FormField>
-        {work.seasons?.length ? (
-          <FormField label={a.forWhat} htmlFor="image-season">
-            <Select id="image-season" value={season} onChange={(event) => setSeason(event.target.value)}>
-              <option value="">{c.wholeWork}</option>
-              {work.seasons.map((s) => (
-                <option key={s.seasonNumber} value={String(s.seasonNumber)}>
-                  {seasonName(s.title, s.seasonNumber, t.work.season)}
-                </option>
-              ))}
-            </Select>
-          </FormField>
-        ) : null}
-        <FormField label={a.language} htmlFor="image-language" hint={a.languageHint}>
-          <Input id="image-language" value={language} placeholder="fr" maxLength={5} onChange={(event) => setLanguage(event.target.value)} />
-        </FormField>
-        <FormField label={c.url} htmlFor="image-url">
-          <Input id="image-url" required type="url" placeholder="https://…" value={url} onChange={(event) => setUrl(event.target.value)} />
-        </FormField>
-      </div>
-    </AddForm>
-  )
-}
+/* ── The theme, from a file ───────────────────────────────────────────────── */
 
 /**
- * A file put on the work: a picture, for a kind and maybe a season, or its
- * theme. The file goes to the server as it is; the server reads what it is.
+ * The work's theme music, put on it from a file. The file goes to the server
+ * as it is; the server reads what it is, and locks the field on it.
  */
-function UploadForm({ item, kind, onDone }: { item: MediaItem; kind: 'image' | 'theme'; onDone: () => void }) {
+function UploadTheme({ item, onDone }: { item: MediaItem; onDone: () => void }) {
   const { t } = useI18n()
   const c = t.admin.editor.children
   const [open, setOpen] = useState(false)
-  const [coverType, setCoverType] = useState<string>('poster')
-  const [season, setSeason] = useState('')
   const [file, setFile] = useState<File | null>(null)
   const input = useRef<HTMLInputElement>(null)
   // The button the form replaces: focus comes back to it on cancel.
@@ -466,17 +415,12 @@ function UploadForm({ item, kind, onDone }: { item: MediaItem; kind: 'image' | '
     },
   })
 
-  const coverLabel = (value: string) =>
-    ({ poster: c.poster, fanart: c.fanart, banner: c.banner, clearlogo: c.clearlogo, landscape: c.landscape, clearart: c.clearart } as Record<string, string>)[value] ??
-    value
-
-  const ids = `upload-${kind}`
   if (!open) {
     return (
       <div className="flex flex-wrap items-center gap-3 border-t border-rule px-5 py-3">
         <Button ref={trigger} size="sm" onClick={() => setOpen(true)}>
-          <Glyph name={kind === 'image' ? 'image' : 'play'} className="size-4" />
-          {kind === 'image' ? c.upload : c.uploadTheme}
+          <Glyph name="play" className="size-4" />
+          {c.uploadTheme}
         </Button>
         {upload.isSuccess ? (
           <span role="status" className="text-xs text-moss">
@@ -495,54 +439,23 @@ function UploadForm({ item, kind, onDone }: { item: MediaItem; kind: 'image' | '
         if (!file) return
         const form = new FormData()
         form.set('file', file)
-        form.set('kind', kind)
-        if (kind === 'image') {
-          form.set('coverType', coverType)
-          if (season) form.set('seasonNumber', season)
-        }
+        form.set('kind', 'theme')
         upload.mutate(form)
       }}
     >
-      <p className="mb-3 text-sm font-medium text-bone">{kind === 'image' ? c.upload : c.uploadTheme}</p>
-      <div className="grid gap-3 sm:grid-cols-2">
-        <FormField label={c.uploadFile} htmlFor={`${ids}-file`} hint={kind === 'image' ? c.uploadHint : c.themeHint}>
-          <input
-            ref={input}
-            id={`${ids}-file`}
-            type="file"
-            required
-            autoFocus
-            accept={kind === 'image' ? 'image/jpeg,image/png,image/webp,image/gif,image/avif' : 'audio/*'}
-            className="block w-full text-sm text-bone-dim file:mr-3 file:rounded-full file:border file:border-rule-bright file:bg-transparent file:px-3 file:py-1.5 file:text-sm file:text-bone"
-            onChange={(event) => setFile(event.target.files?.[0] ?? null)}
-          />
-        </FormField>
-        {kind === 'image' ? (
-          <>
-            <FormField label={c.imageKind} htmlFor={`${ids}-kind`}>
-              <Select id={`${ids}-kind`} value={coverType} onChange={(event) => setCoverType(event.target.value)}>
-                {ADDABLE.map((value) => (
-                  <option key={value} value={value}>
-                    {coverLabel(value)}
-                  </option>
-                ))}
-              </Select>
-            </FormField>
-            {item.seasons?.length ? (
-              <FormField label={c.uploadSeason} htmlFor={`${ids}-season`}>
-                <Select id={`${ids}-season`} value={season} onChange={(event) => setSeason(event.target.value)}>
-                  <option value="">{c.wholeWork}</option>
-                  {item.seasons.map((s) => (
-                    <option key={s.seasonNumber} value={String(s.seasonNumber)}>
-                      {seasonName(s.title, s.seasonNumber, t.work.season)}
-                    </option>
-                  ))}
-                </Select>
-              </FormField>
-            ) : null}
-          </>
-        ) : null}
-      </div>
+      <p className="mb-3 text-sm font-medium text-bone">{c.uploadTheme}</p>
+      <FormField label={c.uploadFile} htmlFor="upload-theme-file" hint={c.themeHint}>
+        <input
+          ref={input}
+          id="upload-theme-file"
+          type="file"
+          required
+          autoFocus
+          accept="audio/*"
+          className="block w-full text-sm text-bone-dim file:mr-3 file:rounded-full file:border file:border-rule-bright file:bg-transparent file:px-3 file:py-1.5 file:text-sm file:text-bone"
+          onChange={(event) => setFile(event.target.files?.[0] ?? null)}
+        />
+      </FormField>
       {upload.isError ? (
         <p role="alert" className="mt-3 text-xs text-vermillion">
           {upload.error.message || t.common.actionFailed}
@@ -551,7 +464,7 @@ function UploadForm({ item, kind, onDone }: { item: MediaItem; kind: 'image' | '
       <div className="mt-3 flex flex-wrap gap-2">
         <Button type="submit" variant="primary" size="sm" disabled={!file || upload.isPending}>
           {upload.isPending ? <Glyph name="clock" className="size-4" /> : <Glyph name="download" className="size-4" />}
-          {upload.isPending ? c.uploading : kind === 'image' ? c.upload : c.uploadTheme}
+          {upload.isPending ? c.uploading : c.uploadTheme}
         </Button>
         <Button
           type="button"

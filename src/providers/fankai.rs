@@ -627,6 +627,7 @@ fn to_item(
                         .map(|u| image(cover, u, Some(season.season_number), slot as i32))
                 })
                 .collect(),
+            primary_images: Default::default(),
         });
 
         for film in films {

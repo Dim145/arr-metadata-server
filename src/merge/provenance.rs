@@ -863,6 +863,7 @@ mod tests {
                 tvdb_id: None,
                 is_manual: false,
                 images,
+                primary_images: Default::default(),
             }
         }
         fn with_episode(mut item: MediaItem) -> MediaItem {

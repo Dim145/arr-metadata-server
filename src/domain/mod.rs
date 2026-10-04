@@ -329,6 +329,10 @@ pub struct Season {
     pub is_manual: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<Image>,
+    /// The poster a person chose to lead the season with, by id among its
+    /// own images: a lock (`season:N/primaryPoster`), as the work's is.
+    #[serde(default, skip_serializing_if = "PrimaryImages::is_empty")]
+    pub primary_images: PrimaryImages,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]

@@ -114,6 +114,7 @@ pub fn tv_to_item(tv: &models::Tv, seasons: &[models::Season]) -> MediaItem {
                     )]
                 })
                 .unwrap_or_default(),
+            primary_images: Default::default(),
         })
         .collect();
 

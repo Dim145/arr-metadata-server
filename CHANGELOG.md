@@ -34,6 +34,16 @@ may change what the API or the configuration means, and says so here.
   icon: the catalogue, the schedule, the season chart.
 - `original_language` on `/api/v1/items` and `/api/v1/facets` takes several
   codes, comma-separated (`ja,jpn`): the works made in any of them.
+- A season's poster is chosen: `season:N / primaryPoster`, a lock like the
+  work's own, by the address of one of the season's pictures — or of any
+  picture, brought back under the season when its sources no longer list
+  it. The season's page, the season chart and Sonarr lead with it. Set from
+  the season's own panel in the editor, through the one picker every picture
+  is now chosen with: the work's own pictures at the shape wanted, filed by
+  this season, the work and the other seasons; a file, dropped, pasted or
+  picked, kept by this server; or an address, previewed first. The same
+  picker sets an episode's picture, the work's poster and background from
+  the editor's masthead, and adds a picture to the work.
 
 ### Changed
 
@@ -50,6 +60,17 @@ may change what the API or the configuration means, and says so here.
   it lists.
 - The lock on a public card shows only where a source could be overruled, as
   the administration already had it; captions under posters are set at 12px.
+- The editor's artwork tab keeps to the work's own pictures: a season's are
+  decided on the season's panel, and one line counts them and leads there.
+  The forms that added a picture by address or by file give way to the
+  picker.
+
+### Fixed
+
+- A work read while an edit was being put on it from another request could
+  be kept in the cache a moment too old, and be answered without the edit
+  until the cache let it go. What is read across a write is now answered
+  but not kept.
 
 ## [0.6.0] — 2026-10-04
 

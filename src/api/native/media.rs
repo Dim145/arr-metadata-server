@@ -681,9 +681,13 @@ async fn forget(
     let uploaded = asset.origin.starts_with("upload:");
     if uploaded {
         repo::child::remove_images_by_url(&state.db, &id, &asset.origin).await?;
+        // A field that held the upload — a still, a theme, the poster the
+        // work or a season was to lead with — holds nothing now.
         for locked in repo::override_field::list(&state.db, &id).await? {
-            if matches!(locked.field.as_str(), "image" | "themeMusic")
-                && locked.value.as_ref().and_then(|v| v.as_str()) == Some(asset.origin.as_str())
+            if matches!(
+                locked.field.as_str(),
+                "image" | "themeMusic" | "primaryPoster" | "primaryFanart"
+            ) && locked.value.as_ref().and_then(|v| v.as_str()) == Some(asset.origin.as_str())
                 && let Ok(scope) = locked.scope.parse::<Scope>()
             {
                 repo::override_field::unset(&state.db, &id, scope, &locked.field).await?;

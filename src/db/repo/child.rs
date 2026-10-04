@@ -292,6 +292,7 @@ pub fn blank_season(season_number: i32) -> Season {
         tvdb_id: None,
         is_manual: true,
         images: Vec::new(),
+        primary_images: Default::default(),
     }
 }
 
@@ -381,6 +382,7 @@ mod tests {
             tvdb_id: None,
             is_manual: false,
             images: Vec::new(),
+            primary_images: Default::default(),
         }];
         item.episodes = vec![blank_episode(1, 1)];
         item.episodes[0].is_manual = false;
