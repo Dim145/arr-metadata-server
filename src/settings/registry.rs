@@ -225,6 +225,16 @@ pub const REGISTRY: &[Definition] = &[
         kind: Kind::Bool,
         scopes: SERVER_ONLY,
     },
+    Definition {
+        key: "api.tvdb",
+        kind: Kind::Bool,
+        scopes: SERVER_ONLY,
+    },
+    Definition {
+        key: "api.anilist",
+        kind: Kind::Bool,
+        scopes: SERVER_ONLY,
+    },
     // ── Signing in through an identity provider ──────────────────────────────
     Definition {
         key: "oidc.enabled",

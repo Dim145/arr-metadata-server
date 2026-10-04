@@ -37,14 +37,18 @@ use crate::{
 /// The names the clients have compiled in, and so the names every clients'
 /// certificate carries.
 ///
-/// `services.sonarr.tv` came later, for Sonarr's scene-mapping list: an
-/// authority made before it does not cover it, and is left serving the
-/// others until it is replaced (`AMS_TLS_REPLACE_AUTHORITY`).
-pub const IMPERSONATED: [&str; 4] = [
+/// The last three came later — `services.sonarr.tv` for Sonarr's
+/// scene-mapping list, then TheTVDB's and AniList's for the clients that
+/// call those services directly, Yamtrack among them: an authority made
+/// before a name does not cover it, and is left serving the others until it
+/// is replaced (`AMS_TLS_REPLACE_AUTHORITY`).
+pub const IMPERSONATED: [&str; 6] = [
     "skyhook.sonarr.tv",
     "api.radarr.video",
     "api.themoviedb.org",
     "services.sonarr.tv",
+    "api4.thetvdb.com",
+    "graphql.anilist.co",
 ];
 
 /// The script that makes a container trust the authority, served so a

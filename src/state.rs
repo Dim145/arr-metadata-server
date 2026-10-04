@@ -37,9 +37,9 @@ pub enum Registration {
 /// seconds, so the page shows what every instance answered.
 #[derive(Default)]
 pub struct Calls {
-    counts: [[std::sync::atomic::AtomicU64; 2]; 4],
+    counts: [[std::sync::atomic::AtomicU64; 2]; crate::config::Api::ALL.len()],
     /// How much of each count has been told to the server.
-    told: [[std::sync::atomic::AtomicU64; 2]; 4],
+    told: [[std::sync::atomic::AtomicU64; 2]; crate::config::Api::ALL.len()],
 }
 
 impl Calls {
@@ -231,9 +231,14 @@ impl AppState {
         let radarr_metadata =
             RadarrMetadataClient::new(http.clone(), &config.radarr_metadata, instance.clone());
         let fanart = FanartClient::new(http.clone(), &config.fanart, &config.tmdb.language);
-        let tvdb = TvdbClient::new(http.clone(), &config.tvdb, &config.tmdb.language);
+        let tvdb = TvdbClient::new(
+            http.clone(),
+            &config.tvdb,
+            &config.tmdb.language,
+            instance.clone(),
+        );
         let tvmaze = TvmazeClient::new(http.clone(), &config.tvmaze);
-        let anilist = AnilistClient::new(http.clone(), &config.anilist);
+        let anilist = AnilistClient::new(http.clone(), &config.anilist, instance.clone());
         let mal = MalClient::new(http.clone(), &config.mal);
         let fankai = FankaiClient::new(http.clone(), &config.fankai, &config.tmdb.language);
         let fankai_wiki = FankaiWikiClient::new(http.clone(), &config.fankai_wiki);
@@ -394,7 +399,9 @@ impl AppState {
                 ("api.radarr", "true".to_string()),
                 ("api.tmdb", "true".to_string()),
                 ("api.native", "true".to_string()),
-                // Off: the relay spends the operator's TMDB quota, and with
+                ("api.tvdb", "true".to_string()),
+                ("api.anilist", "true".to_string()),
+                // Off: the relays spend the operator's quotas, and with
                 // sign-ups open a member is anybody.
                 ("api.tmdbMembers", "false".to_string()),
                 ("oidc.enabled", "false".to_string()),

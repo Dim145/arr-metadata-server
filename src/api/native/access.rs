@@ -46,7 +46,8 @@ pub struct Access {
     pub site: &'static str,
     /// AMS_PUBLIC_BROWSE=false keeps the site private whatever is chosen here.
     pub site_locked: bool,
-    /// Whether members may use the TMDB relay with their keys.
+    /// Whether members may use the relays — TMDB's, TheTVDB's, AniList's —
+    /// with their keys.
     pub relay_for_members: bool,
     pub registration: Registration,
     /// The role of an account opened without an invitation.
@@ -99,6 +100,8 @@ async fn access(
         let surface = match api {
             Api::Sonarr | Api::Radarr => Surface::Arr,
             Api::Tmdb => Surface::Tmdb,
+            Api::Tvdb => Surface::Tvdb,
+            Api::Anilist => Surface::Anilist,
             Api::Native => Surface::Native,
         };
         let (served, refused) = match &shared {

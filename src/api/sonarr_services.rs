@@ -9,21 +9,18 @@
 //! checks, the MyAnimeList import's sign-in — is relayed to the real service
 //! as it was asked, and its answer handed back as it came.
 
-use std::{
-    sync::LazyLock,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 use axum::{
     Extension, Json,
     body::Body,
     extract::{Request, State},
-    http::{HeaderMap, HeaderName, HeaderValue, StatusCode, Uri, header},
+    http::{HeaderMap, StatusCode, Uri},
     response::{IntoResponse, Response},
 };
 use utoipa_axum::{router::OpenApiRouter, routes};
 
-use crate::{auth::Identity, service::scene, state::AppState};
+use crate::{api::relay, auth::Identity, service::scene, state::AppState};
 
 /// The names Sonarr calls this service by.
 pub const HOSTS: &[&str] = &["services.sonarr.tv"];
@@ -46,55 +43,18 @@ const ASKED_WITH: &[&str] = &[
     "if-modified-since",
 ];
 
-/// Query parameters that carry a key for this server, never the real one's.
-const OUR_PARAMS: &[&str] = &["apikey", "api_key"];
-
-/// Hop-by-hop headers (RFC 9110 §7.6.1), and those the HTTP stack sets itself:
-/// the body is read decoded, so its encoding and length are the stack's to say.
-const HOP_HEADERS: &[&str] = &[
-    "connection",
-    "content-length",
-    "content-encoding",
-    "accept-encoding",
-    "host",
-    "keep-alive",
-    "proxy-authenticate",
-    "proxy-authorization",
-    "te",
-    "trailer",
-    "transfer-encoding",
-    "upgrade",
-    crate::providers::radarr::LOOP_HEADER,
-];
-
 /// Marks a request the clients' door relays for `services.sonarr.tv`: Sonarr's,
 /// whatever its path, for the guards and the counts.
 #[derive(Clone, Copy, Debug)]
 pub struct Relayed;
 
-/// The client the relay asks with: following no redirect — a redirect is
-/// handed back to Sonarr as it came.
-static RELAY: LazyLock<reqwest::Client> = LazyLock::new(|| {
-    reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(10))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .unwrap_or_default()
-});
-
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new().routes(routes!(scene_mapping))
 }
 
-/// Whether a request was sent by an instance of this server: Sonarr never
-/// sends the header, so one that carries it — whosever — has come round a
-/// loop, through a resolver or a door several instances share.
-fn looped(headers: &HeaderMap) -> bool {
-    headers.contains_key(crate::providers::radarr::LOOP_HEADER)
-}
-
 fn loop_refused() -> Response {
-    tracing::error!(
+    // A warning, not an error: anybody past the guard can send the header.
+    tracing::warn!(
         "services.sonarr.tv was asked by an instance of this server: it resolves back here; \
          set AMS_SONARR_SERVICES_UPSTREAM to the real service's address"
     );
@@ -103,20 +63,7 @@ fn loop_refused() -> Response {
 
 /// Whether a request was addressed to `services.sonarr.tv`.
 pub fn is_services_host(headers: &HeaderMap, uri: &Uri) -> bool {
-    // HTTP/2 names it in the address, HTTP/1.1 in `Host`, with its port. The
-    // names are hostnames, so everything from a colon on is the port — and an
-    // address in brackets is never one of them.
-    let named = uri.host().map(str::to_string).or_else(|| {
-        headers
-            .get(header::HOST)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|host| host.split(':').next())
-            .map(str::to_string)
-    });
-    named.is_some_and(|name| {
-        let name = name.trim_end_matches('.').to_ascii_lowercase();
-        HOSTS.contains(&name.as_str())
-    })
+    relay::addressed_to(headers, uri, HOSTS)
 }
 
 /// Sonarr's scene-mapping list, with this catalogue's titles added.
@@ -138,11 +85,11 @@ async fn scene_mapping(
     Extension(identity): Extension<Identity>,
     request: Request,
 ) -> Response {
-    if looped(request.headers()) {
+    if relay::looped(request.headers()) {
         return loop_refused();
     }
     if !state.flag("sonarr.sceneMappings", false) {
-        return relay(&state, request).await;
+        return relayed(&state, request).await;
     }
     let language = state.language(identity.client_id(), identity.peer_id());
     match scene::answer(&state, &language).await {
@@ -167,28 +114,28 @@ pub async fn fallback(State(state): State<AppState>, request: Request) -> Respon
     if !is_services_host(request.headers(), request.uri()) {
         return StatusCode::NOT_FOUND.into_response();
     }
-    relay(&state, request).await
+    relayed(&state, request).await
 }
 
 /// A request to `services.sonarr.tv`, asked of the real one, and its answer.
-async fn relay(state: &AppState, request: Request) -> Response {
-    if looped(request.headers()) {
+async fn relayed(state: &AppState, request: Request) -> Response {
+    if relay::looped(request.headers()) {
         return loop_refused();
     }
     let (parts, body) = request.into_parts();
     let url = format!(
         "{}{}",
         state.config.sonarr_services.upstream,
-        without_our_params(&parts.uri)
+        relay::without_our_params(&parts.uri)
     );
 
     let Ok(body) = axum::body::to_bytes(body, REQUEST_LIMIT).await else {
         return StatusCode::PAYLOAD_TOO_LARGE.into_response();
     };
 
-    let mut outbound = RELAY
+    let mut outbound = relay::CLIENT
         .request(parts.method.clone(), &url)
-        .headers(asked_with(&parts.headers))
+        .headers(relay::asked_with(&parts.headers, ASKED_WITH))
         // This name is one this server answers on: a resolver sending it back
         // here would otherwise have it call itself.
         .header(crate::providers::radarr::LOOP_HEADER, &state.instance)
@@ -227,7 +174,7 @@ async fn relay(state: &AppState, request: Request) -> Response {
              the real service's address"
         );
     }
-    let headers = kept(answer.headers());
+    let headers = relay::kept(answer.headers());
     let body = match crate::providers::read_body(answer, ANSWER_LIMIT).await {
         Ok(body) => body,
         Err(e) => {
@@ -249,63 +196,10 @@ async fn relay(state: &AppState, request: Request) -> Response {
     response
 }
 
-/// The path and query asked, less a key for this server.
-fn without_our_params(uri: &Uri) -> String {
-    let path = uri.path();
-    let Some(query) = uri.query() else {
-        return path.to_string();
-    };
-    let kept: Vec<&str> = query
-        .split('&')
-        .filter(|pair| {
-            let name = pair.split('=').next().unwrap_or_default();
-            !OUR_PARAMS
-                .iter()
-                .any(|ours| name.eq_ignore_ascii_case(ours))
-        })
-        .collect();
-    if kept.is_empty() {
-        path.to_string()
-    } else {
-        format!("{path}?{}", kept.join("&"))
-    }
-}
-
-/// The caller's headers the real service is asked with.
-fn asked_with(headers: &HeaderMap) -> HeaderMap {
-    let mut out = HeaderMap::new();
-    for (name, value) in headers {
-        if ASKED_WITH.contains(&name.as_str()) {
-            out.append(name.clone(), value.clone());
-        }
-    }
-    out
-}
-
-/// The headers an answer keeps: all but the hop-by-hop ones, and a cookie,
-/// which would be set against this server.
-fn kept(headers: &HeaderMap) -> HeaderMap {
-    let mut out = HeaderMap::new();
-    for (name, value) in headers {
-        if HOP_HEADERS.contains(&name.as_str())
-            || name == header::SET_COOKIE
-            || name == header::COOKIE
-        {
-            continue;
-        }
-        if let (Ok(name), Ok(value)) = (
-            HeaderName::from_bytes(name.as_str().as_bytes()),
-            HeaderValue::from_bytes(value.as_bytes()),
-        ) {
-            out.append(name, value);
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::http::{HeaderValue, header};
 
     fn host(value: &str) -> HeaderMap {
         let mut headers = HeaderMap::new();
@@ -320,6 +214,7 @@ mod tests {
         assert!(is_services_host(&host("Services.Sonarr.TV:443"), &path));
         assert!(is_services_host(&host("services.sonarr.tv."), &path));
         assert!(!is_services_host(&host("skyhook.sonarr.tv"), &path));
+        assert!(!is_services_host(&host("graphql.anilist.co"), &path));
         assert!(!is_services_host(&host("services.sonarr.tv.evil"), &path));
         assert!(!is_services_host(&HeaderMap::new(), &path));
 
@@ -349,51 +244,10 @@ mod tests {
         headers.insert("x-api-key", HeaderValue::from_static("ams_key"));
         headers.insert("x-forwarded-for", HeaderValue::from_static("192.168.1.20"));
 
-        let asked = asked_with(&headers);
+        let asked = relay::asked_with(&headers, ASKED_WITH);
 
         assert_eq!(asked.get(header::USER_AGENT).unwrap(), "Sonarr/4.0.20");
         assert_eq!(asked.get(header::ACCEPT).unwrap(), "application/json");
         assert_eq!(asked.len(), 2, "{asked:?}");
-    }
-
-    #[test]
-    fn a_key_for_this_server_is_not_relayed_in_the_address() {
-        let uri: Uri = "/v1/update/main/changes?version=4.0&apikey=ams_x&os=linux&API_KEY=y"
-            .parse()
-            .unwrap();
-        assert_eq!(
-            without_our_params(&uri),
-            "/v1/update/main/changes?version=4.0&os=linux"
-        );
-        let bare: Uri = "/v1/time?apikey=ams_x".parse().unwrap();
-        assert_eq!(without_our_params(&bare), "/v1/time");
-    }
-
-    #[test]
-    fn an_answer_keeps_its_headers_but_not_the_hops_or_a_cookie() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static("application/json"),
-        );
-        headers.insert(header::CONNECTION, HeaderValue::from_static("keep-alive"));
-        headers.insert(header::SET_COOKIE, HeaderValue::from_static("a=b"));
-
-        let kept = kept(&headers);
-
-        assert_eq!(kept.get(header::CONTENT_TYPE).unwrap(), "application/json");
-        assert!(kept.get(header::CONNECTION).is_none());
-        assert!(kept.get(header::SET_COOKIE).is_none());
-    }
-
-    #[test]
-    fn a_request_one_of_our_instances_sent_is_a_loop() {
-        let mut headers = HeaderMap::new();
-        assert!(!looped(&headers));
-        headers.insert(
-            crate::providers::radarr::LOOP_HEADER,
-            HeaderValue::from_static("another-instance"),
-        );
-        assert!(looped(&headers));
     }
 }

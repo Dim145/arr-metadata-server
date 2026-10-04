@@ -198,6 +198,12 @@ pub struct Security {
     pub force_password_login: bool,
     pub native_policy: SurfacePolicy,
     pub tmdb_policy: SurfacePolicy,
+    /// The TheTVDB relay's. A TheTVDB client signs in with a key, so a key
+    /// issued here can stand in that field, as with TMDB.
+    pub tvdb_policy: SurfacePolicy,
+    /// The AniList relay's. AniList has no key at all, so nothing a client
+    /// sends can be one of this server's: by address, like Sonarr's.
+    pub anilist_policy: SurfacePolicy,
     pub arr_policy: SurfacePolicy,
     /// Peers allowed to reach any surface whose policy is
     /// [`SurfacePolicy::Allowlist`].
@@ -260,6 +266,10 @@ pub struct Tvdb {
     /// Only a subscriber key needs one; a project key must not send it.
     pub pin: Option<String>,
     pub enabled: bool,
+    /// Whether `/v4/*` is relayed to TheTVDB for the clients that call it
+    /// there — Yamtrack, Jellyfin's plugin, Kodi's scraper — with this
+    /// catalogue's locked fields written into the answers.
+    pub passthrough: bool,
 }
 
 /// TVmaze: exact broadcast times, for series. No key.
@@ -292,6 +302,9 @@ pub struct FankaiWiki {
 pub struct Anilist {
     pub upstream: String,
     pub enabled: bool,
+    /// Whether `graphql.anilist.co` is relayed for the clients that call it
+    /// there, with this catalogue's locked fields written into the answers.
+    pub passthrough: bool,
 }
 
 /// MyAnimeList: its official API when a client id is set, Jikan otherwise.
@@ -557,6 +570,8 @@ impl Config {
                 force_password_login: flag(&["AMS_FORCE_PASSWORD_LOGIN"], false)?,
                 native_policy: policy(&["AMS_NATIVE_AUTH"], SurfacePolicy::ApiKey)?,
                 tmdb_policy: policy(&["AMS_TMDB_AUTH"], SurfacePolicy::ApiKey)?,
+                tvdb_policy: policy(&["AMS_TVDB_AUTH"], SurfacePolicy::ApiKey)?,
+                anilist_policy: policy(&["AMS_ANILIST_AUTH"], SurfacePolicy::Allowlist)?,
                 arr_policy: policy(&["AMS_ARR_AUTH"], SurfacePolicy::Allowlist)?,
                 allowlist: nets(
                     &["AMS_ALLOWLIST", "AMS_ARR_ALLOWLIST"],
@@ -639,6 +654,7 @@ impl Config {
                 api_key: opt(&["AMS_TVDB_API_KEY", "TVDB_API_KEY"]),
                 pin: opt(&["AMS_TVDB_PIN"]),
                 enabled: flag(&["AMS_TVDB_ENABLED"], true)?,
+                passthrough: flag(&["AMS_TVDB_PASSTHROUGH"], true)?,
             },
             // The sources below are off until somebody turns them on: each is a
             // new party this server talks to, and that is the operator's call.
@@ -666,6 +682,7 @@ impl Config {
                     .trim_end_matches('/')
                     .to_string(),
                 enabled: flag(&["AMS_ANILIST_ENABLED"], false)?,
+                passthrough: flag(&["AMS_ANILIST_PASSTHROUGH"], true)?,
             },
             mal: Mal {
                 upstream: var_or(&["AMS_MAL_UPSTREAM"], "https://api.myanimelist.net/v2")
@@ -811,6 +828,8 @@ impl Config {
         match surface {
             Surface::Native => self.security.native_policy,
             Surface::Tmdb => self.security.tmdb_policy,
+            Surface::Tvdb => self.security.tvdb_policy,
+            Surface::Anilist => self.security.anilist_policy,
             Surface::Arr => self.security.arr_policy,
         }
     }
@@ -830,10 +849,24 @@ pub enum Api {
     /// `/api/v1/*` called with a key. The interface's session is not an API
     /// call, and is never switched off.
     Native,
+    /// `/v4/*`, the TheTVDB relay, in api4.thetvdb.com's place.
+    Tvdb,
+    /// `graphql.anilist.co`, the AniList relay.
+    Anilist,
 }
 
 impl Api {
-    pub const ALL: [Api; 4] = [Api::Sonarr, Api::Radarr, Api::Tmdb, Api::Native];
+    /// Every API, in the order the access page lists them: the stand-ins,
+    /// the relays, this server's own. The counts are filed by discriminant
+    /// (`index`), not by this order.
+    pub const ALL: [Api; 6] = [
+        Api::Sonarr,
+        Api::Radarr,
+        Api::Tmdb,
+        Api::Tvdb,
+        Api::Anilist,
+        Api::Native,
+    ];
 
     /// The setting that switches it.
     pub fn setting(self) -> &'static str {
@@ -842,6 +875,8 @@ impl Api {
             Api::Radarr => "api.radarr",
             Api::Tmdb => "api.tmdb",
             Api::Native => "api.native",
+            Api::Tvdb => "api.tvdb",
+            Api::Anilist => "api.anilist",
         }
     }
 
@@ -853,8 +888,17 @@ impl Api {
             }
             Surface::Arr => Api::Radarr,
             Surface::Tmdb => Api::Tmdb,
+            Surface::Tvdb => Api::Tvdb,
+            Surface::Anilist => Api::Anilist,
             Surface::Native => Api::Native,
         }
+    }
+
+    /// Whether it relays a service's own API, with this catalogue's edits
+    /// written in: what a member's key may be kept from, since a relay
+    /// spends the operator's quota there.
+    pub fn is_relay(self) -> bool {
+        matches!(self, Api::Tmdb | Api::Tvdb | Api::Anilist)
     }
 
     pub fn index(self) -> usize {
@@ -868,8 +912,19 @@ pub enum Surface {
     Native,
     /// `/3/*` — TMDB-compatible surface.
     Tmdb,
+    /// `/v4/*` — the TheTVDB relay.
+    Tvdb,
+    /// `graphql.anilist.co`, on the clients' door — the AniList relay.
+    Anilist,
     /// `/v1/tvdb/*` and `/v1/movie/*` — Sonarr and Radarr compatibility.
     Arr,
+}
+
+impl Surface {
+    /// Whether the surface relays a service's own API.
+    pub fn is_relay(self) -> bool {
+        matches!(self, Surface::Tmdb | Surface::Tvdb | Surface::Anilist)
+    }
 }
 
 // ─── env helpers ─────────────────────────────────────────────────────────────

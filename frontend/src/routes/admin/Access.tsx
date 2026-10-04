@@ -34,6 +34,9 @@ import type { AccessReport, AccountRole, ApiName, Registration } from '../../lib
 
 const REGISTRATIONS: Registration[] = ['closed', 'invite', 'approval', 'open']
 
+/** The APIs that relay a service's own, and spend the operator's quotas there. */
+const RELAYS: ApiName[] = ['tmdb', 'tvdb', 'anilist']
+
 export function Access() {
   const { t, locale } = useI18n()
   const queryClient = useQueryClient()
@@ -80,6 +83,9 @@ export function Access() {
   const access = report.data
   const set = (key: string, value: string) => write.mutate({ key, value })
   const answering = access.apis.filter((x) => x.enabled).map((x) => a.apis[x.api])
+  // The relays, which one switch opens to members: nothing to open while
+  // none of them answers.
+  const relaysOn = access.apis.some((x) => x.enabled && RELAYS.includes(x.api))
   const nativePolicy = access.apis.find((x) => x.api === 'native')?.policy ?? 'apikey'
   // Since the start alone; among several instances, since the shared tally
   // was first written, which outlives any one of them.
@@ -238,25 +244,24 @@ export function Access() {
                     disabled={write.isPending}
                   />
                 </span>
-                {x.api === 'tmdb' ? (
-                  // Who beyond the editors: the relay spends the operator's
-                  // quota, and with sign-ups open a member is anybody.
-                  <div className="col-span-full flex items-center justify-between gap-4 rounded-card border border-rule bg-ink px-4 py-1.5">
-                    <div className="min-w-0">
-                      <span className="block text-sm text-bone">{a.membersRelay}</span>
-                      <span className="block text-xs leading-relaxed text-bone-faint">{a.membersRelayHint}</span>
-                    </div>
-                    <Toggle
-                      checked={access.relayForMembers}
-                      label={a.membersRelayToggle}
-                      onChange={(next) => set('api.tmdbMembers', String(next))}
-                      disabled={write.isPending || !x.enabled}
-                    />
-                  </div>
-                ) : null}
               </li>
             ))}
           </ul>
+          {/* Who beyond the editors: the relays spend the operator's quotas,
+              and with sign-ups open a member is anybody. One switch for the
+              three relays, under the list that names them. */}
+          <div className="mx-5 my-4 flex items-center justify-between gap-4 rounded-card border border-rule bg-ink px-4 py-1.5">
+            <div className="min-w-0">
+              <span className="block text-sm text-bone">{a.membersRelay}</span>
+              <span className="block text-xs leading-relaxed text-bone-faint">{a.membersRelayHint}</span>
+            </div>
+            <Toggle
+              checked={access.relayForMembers}
+              label={a.membersRelayToggle}
+              onChange={(next) => set('api.tmdbMembers', String(next))}
+              disabled={write.isPending || !relaysOn}
+            />
+          </div>
           <div className="space-y-2 border-t border-rule px-5 py-4 text-xs leading-relaxed text-bone-faint">
             <p>{a.offNote}</p>
             <p>
@@ -269,7 +274,7 @@ export function Access() {
           </div>
         </Question>
 
-        {/* The clients' door: where Sonarr and Radarr come in, in TLS. */}
+        {/* The clients' door: where Sonarr, Radarr and the relays' clients come in, in TLS. */}
         <ListenersPanel delay={180} />
 
         {/* 4 · the identity provider */}

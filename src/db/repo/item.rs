@@ -134,6 +134,21 @@ pub async fn load_external_ids(db: &Db, media_id: &str) -> Result<ExternalIds> {
     Ok(ids)
 }
 
+/// The series one of whose episodes TheTVDB numbers `tvdb_id`: what the
+/// TheTVDB relay patches a single episode's document for.
+pub async fn find_id_by_episode_tvdb(db: &Db, tvdb_id: i64) -> Result<Option<String>> {
+    let row = sqlx::query(
+        db.sql("SELECT media_id FROM media_episode WHERE tvdb_id = ? ORDER BY media_id LIMIT 1"),
+    )
+    .bind(tvdb_id)
+    .fetch_optional(db.pool())
+    .await?;
+    Ok(match row {
+        Some(row) => Some(row.text("media_id")?),
+        None => None,
+    })
+}
+
 /// Resolve a work by one of its external identifiers.
 pub async fn find_id_by_external(
     db: &Db,

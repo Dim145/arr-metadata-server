@@ -259,7 +259,9 @@ async fn keys(
         keys: repo::client::list(&state.db, repo::client::Owner::User(&me.id)).await?,
         limit: limit_for(&state, me),
         scopes: me.role.scopes().iter().map(|s| s.to_string()).collect(),
-        relay: state.api_on(crate::config::Api::Tmdb)
+        relay: crate::config::Api::ALL
+            .into_iter()
+            .any(|api| api.is_relay() && state.api_on(api))
             && (me.role != Role::Member || state.relay_for_members()),
     }))
 }

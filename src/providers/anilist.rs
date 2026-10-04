@@ -71,15 +71,20 @@ pub struct AnilistClient {
     http: reqwest::Client,
     endpoint: String,
     pacer: Pacer,
+    /// This process, named on every call: `graphql.anilist.co` is a name
+    /// this server answers on too, and a resolver that sends it here would
+    /// have it ask itself. See [`crate::providers::radarr::LOOP_HEADER`].
+    instance: String,
 }
 
 impl AnilistClient {
-    pub fn new(http: reqwest::Client, cfg: &config::Anilist) -> Self {
+    pub fn new(http: reqwest::Client, cfg: &config::Anilist, instance: String) -> Self {
         Self {
             http,
             endpoint: cfg.upstream.clone(),
             // Thirty a minute, AniList's current ceiling.
             pacer: Pacer::new(std::time::Duration::from_millis(2_100)),
+            instance,
         }
     }
 
@@ -122,6 +127,7 @@ impl AnilistClient {
             .http
             .post(&self.endpoint)
             .header(reqwest::header::ACCEPT, "application/json")
+            .header(crate::providers::radarr::LOOP_HEADER, &self.instance)
             .json(&json!({ "query": query, "variables": { "id": id } }))
             .timeout(std::time::Duration::from_secs(20))
             .send()

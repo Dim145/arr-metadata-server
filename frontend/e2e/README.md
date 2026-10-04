@@ -55,6 +55,11 @@ at a time; each puts back what it changed. Run them alone with
 `--project server-wide --no-deps`. They do not run at all when a test of the
 other two projects failed: fix that one first.
 
+`relays.serial.spec.ts` covers what the TheTVDB and AniList relays answer
+without a service behind them — their switches, a TheTVDB client's sign-in
+with a key issued here, a member kept out — and `scripts/e2e-relays.sh` the
+relaying itself, against a stand-in for both services.
+
 `accessibility.spec.ts` scans every screen against WCAG 2.1 AA with axe-core, at
 both widths. An automated scan catches perhaps a third of what a person with a
 screen reader would, but it catches it every time — contrast, names, roles,

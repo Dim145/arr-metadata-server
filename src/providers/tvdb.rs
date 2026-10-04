@@ -99,6 +99,10 @@ const ARTWORK_BASE: &str = "https://artworks.thetvdb.com";
 /// edge of that.
 const TOKEN_MAX_AGE_HOURS: i64 = 24;
 
+/// How often, at most, a refused token is forgotten for a fresh one: TheTVDB
+/// rate-limits sign-ins, and a refusal is not always the token's end.
+const RENEW_AT_MOST_EVERY_SECS: u64 = 60;
+
 /// How many of each artwork kind to keep — TVDB lists hundreds.
 const PER_KIND: usize = 5;
 
@@ -111,6 +115,12 @@ pub struct TvdbClient {
     /// The language the canonical entity is stored in, as TVDB spells it.
     language: String,
     token: Arc<Mutex<Option<Token>>>,
+    /// When a refused token was last forgotten for the relay's sake.
+    forgotten: parking_lot::Mutex<Option<std::time::Instant>>,
+    /// This process, named on every call: `api4.thetvdb.com` is a name this
+    /// server answers on too, and a resolver that sends it here would have
+    /// it ask itself. See [`crate::providers::radarr::LOOP_HEADER`].
+    instance: String,
 }
 
 struct Token {
@@ -119,7 +129,12 @@ struct Token {
 }
 
 impl TvdbClient {
-    pub fn new(http: reqwest::Client, cfg: &config::Tvdb, language: &str) -> Self {
+    pub fn new(
+        http: reqwest::Client,
+        cfg: &config::Tvdb,
+        language: &str,
+        instance: String,
+    ) -> Self {
         Self {
             http,
             base: cfg.upstream.clone(),
@@ -130,11 +145,46 @@ impl TvdbClient {
                 crate::providers::lang::base_language(language),
             ),
             token: Arc::new(Mutex::new(None)),
+            forgotten: parking_lot::Mutex::new(None),
+            instance,
         }
     }
 
     pub fn is_configured(&self) -> bool {
         self.api_key.is_some()
+    }
+
+    /// The operator's token, signed in for when there is none or it is old:
+    /// what the relay asks TheTVDB with in a client's place.
+    pub async fn bearer(&self) -> Result<String> {
+        self.token().await
+    }
+
+    /// TheTVDB refused `token`. Whether asking again is worth it: the token
+    /// held is already another — somebody signed in meanwhile — or it is the
+    /// one refused, which is then forgotten so that the next call signs in
+    /// anew. Once a minute at most: a second refusal within the minute was
+    /// for another reason than the token's end — a path the operator's key
+    /// may not read — and a caller repeating that request would otherwise
+    /// sign the operator in on every call.
+    pub async fn refused(&self, token: &str) -> bool {
+        let mut held = self.token.lock().await;
+        match held.as_ref() {
+            None => true,
+            Some(current) if current.value != token => true,
+            Some(_) => {
+                let mut forgotten = self.forgotten.lock();
+                let lately = forgotten.is_some_and(|at| {
+                    at.elapsed() < std::time::Duration::from_secs(RENEW_AT_MOST_EVERY_SECS)
+                });
+                if lately {
+                    return false;
+                }
+                *forgotten = Some(std::time::Instant::now());
+                held.take();
+                true
+            }
+        }
     }
 
     pub fn is_enabled(&self) -> bool {
@@ -396,6 +446,7 @@ impl TvdbClient {
             .http
             .get(&url)
             .bearer_auth(token)
+            .header(crate::providers::radarr::LOOP_HEADER, &self.instance)
             .timeout(std::time::Duration::from_secs(20))
             .send()
             .await;
@@ -444,6 +495,7 @@ impl TvdbClient {
             .http
             .post(format!("{}/login", self.base))
             .json(&body)
+            .header(crate::providers::radarr::LOOP_HEADER, &self.instance)
             .timeout(std::time::Duration::from_secs(20))
             .send()
             .await;

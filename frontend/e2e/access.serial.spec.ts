@@ -184,7 +184,12 @@ test.describe('the way in', () => {
 
   test('the clients’ door is read back, and its authority and script are served', async ({ page }) => {
     await page.goto('/admin/access')
-    const panel = page.getByRole('region', { name: /clients’ door|porte des clients/i }).or(page.locator('section', { hasText: /clients’ door|porte des clients/i }))
+    // By its own name, whole: the APIs' panel speaks of the clients' door too,
+    // since the AniList relay answers there, and a section that merely
+    // mentions it would be found first.
+    const panel = page
+      .getByRole('region', { name: /^(the clients’ door|la porte des clients)$/i })
+      .or(page.locator('section', { has: page.getByRole('heading', { name: /^(the clients’ door|la porte des clients)$/i }) }))
     await expect(panel.first()).toBeVisible()
 
     const status = (await (await page.request.get('/api/v1/admin/tls')).json()) as {

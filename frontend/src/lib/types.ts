@@ -412,7 +412,7 @@ export interface IssuedInvitation {
   link?: string
 }
 
-export type ApiName = 'sonarr' | 'radarr' | 'tmdb' | 'native'
+export type ApiName = 'sonarr' | 'radarr' | 'tmdb' | 'native' | 'tvdb' | 'anilist'
 export type SurfacePolicyName = 'apikey' | 'allowlist' | 'open'
 
 export interface ApiState {
@@ -541,6 +541,8 @@ export interface Settings {
   publicBrowse: boolean
   nativePolicy: string
   tmdbPolicy: string
+  tvdbPolicy: string
+  anilistPolicy: string
   arrPolicy: string
   furtherSources: FurtherSources
 }

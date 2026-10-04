@@ -52,13 +52,43 @@ const LISTS_CAPACITY: u64 = 64 * 1024 * 1024;
 /// TMDB documents of a few kilobytes.
 const RELAY_CAPACITY: u64 = 32 * 1024 * 1024;
 
-/// How long the relay keeps a TMDB document, by what it is. Far under the
-/// six months TMDB's terms allow, and short where the answer moves.
+/// How long a relay keeps a document, by what it is. Far under the six
+/// months TMDB's terms allow, and short where the answer moves: a search,
+/// a chart, what changed lately, a user's own favourites — those last not at
+/// all. TheTVDB's paths are the ones under `/v4`; an AniList query is filed
+/// under [`ANILIST_QUERY`].
 pub fn relay_ttl(path: &str) -> Duration {
     const MINUTE: u64 = 60;
     const HOUR: u64 = 60 * MINUTE;
     let secs = if path.starts_with("/3/configuration") {
         24 * HOUR
+    } else if path == ANILIST_QUERY {
+        // Scores and popularity move daily; a lock shows at once whatever
+        // is held, since the patch is applied on each serve.
+        HOUR
+    } else if let Some(rest) = path.strip_prefix("/v4/") {
+        if rest.starts_with("search") || rest.starts_with("updates") {
+            15 * MINUTE
+        } else if rest.starts_with("languages")
+            || rest.starts_with("countries")
+            || rest.starts_with("genres")
+            || rest.starts_with("content/ratings")
+            || rest.starts_with("artwork/types")
+            || rest.starts_with("artwork/statuses")
+            || rest.starts_with("companies/types")
+            || rest.starts_with("entities")
+            || rest.starts_with("inspiration/types")
+            || rest.starts_with("sources/types")
+            || rest.starts_with("seasons/types")
+            || rest.starts_with("series/statuses")
+            || rest.starts_with("movies/statuses")
+            || rest.starts_with("people/types")
+            || rest.starts_with("genders")
+        {
+            24 * HOUR
+        } else {
+            6 * HOUR
+        }
     } else if path.starts_with("/3/search/")
         || path.starts_with("/3/trending/")
         || path.starts_with("/3/discover/")
@@ -80,11 +110,17 @@ pub fn relay_ttl(path: &str) -> Duration {
     Duration::from_secs(secs)
 }
 
+/// The path an AniList query is filed under for its time to keep: the
+/// service has one address, so a query is told from another by its text,
+/// not by a path.
+pub const ANILIST_QUERY: &str = "/graphql.anilist.co";
+
 /// Every space, by the name the settings and the page use.
 pub const SPACES: [&str; 5] = ["items", "searches", "lists", "relay", "sessions"];
 
-/// A document the relay answered with, as it came from TMDB: its status,
-/// its type and its bytes, patched with the local overrides on each serve.
+/// A document a relay answered with, as it came from the service: its
+/// status, its type and its bytes, patched with the local overrides on each
+/// serve.
 #[derive(Clone, Debug)]
 pub struct Relayed {
     pub status: u16,
@@ -642,5 +678,18 @@ mod tests {
         assert_eq!(relay_ttl("/3/movie/238"), Duration::from_secs(6 * 3600));
         assert_eq!(relay_ttl("/3/person/287"), Duration::from_secs(86_400));
         assert_eq!(relay_ttl("/4/list/8136"), Duration::from_secs(3600));
+        // TheTVDB's documents, and AniList's one address.
+        assert_eq!(
+            relay_ttl("/v4/series/81189/extended"),
+            Duration::from_secs(6 * 3600)
+        );
+        assert_eq!(relay_ttl("/v4/search"), Duration::from_secs(900));
+        assert_eq!(relay_ttl("/v4/updates"), Duration::from_secs(900));
+        assert_eq!(relay_ttl("/v4/languages"), Duration::from_secs(86_400));
+        assert_eq!(
+            relay_ttl("/v4/content/ratings"),
+            Duration::from_secs(86_400)
+        );
+        assert_eq!(relay_ttl(ANILIST_QUERY), Duration::from_secs(3600));
     }
 }

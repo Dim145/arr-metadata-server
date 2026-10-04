@@ -9,6 +9,8 @@ metadata source. The URLs are compiled into the applications:
 | Sonarr, for its alternate titles (optional) | `services.sonarr.tv` | the same file |
 | Radarr | `api.radarr.video` | `NzbDrone.Common/Cloud/RadarrCloudRequestBuilder.cs` |
 | Jellyseerr / Overseerr | `api.themoviedb.org` | the TMDB SDK it bundles |
+| Yamtrack, Jellyfin's TheTVDB plugin, Kodi's scraper | `api4.thetvdb.com` | the TheTVDB client each bundles |
+| Yamtrack's imports, the anime trackers | `graphql.anilist.co` | the AniList client each bundles |
 
 So substituting this server is done at the network layer: resolve those
 hostnames to it, and make the client trust the certificate it presents. That is
@@ -20,10 +22,10 @@ The server has **two doors**, and they are independent:
   from your own files (`AMS_TLS_CERT` / `AMS_TLS_KEY`), or behind whatever
   reverse proxy you already run. Nothing below touches it.
 - `AMS_CLIENTS_BIND` (unset by default; `0.0.0.0:443` opens it) — Sonarr's,
-  Radarr's and the TMDB relay's surfaces, and nothing else, always in TLS,
-  under the names above. Its certificate is issued by the server itself, from
-  an authority it makes on first start, and renewed before it runs out. No
-  reverse proxy, no certificate tooling.
+  Radarr's and the relays' surfaces (TMDB, TheTVDB, AniList), and nothing
+  else, always in TLS, under the names above. Its certificate is issued by
+  the server itself, from an authority it makes on first start, and renewed
+  before it runs out. No reverse proxy, no certificate tooling.
 
 ---
 
@@ -37,7 +39,7 @@ On first start the server creates, under `AMS_TLS_DIR` (`data/tls`; `/data/tls`
 in the image):
 
 - `ca.crt` / `ca.key` — its authority, what the clients must trust;
-- `server.crt` / `server.key` — the certificate the door shows, for all four
+- `server.crt` / `server.key` — the certificate the door shows, for all six
   hostnames (and any you add with `AMS_CLIENTS_NAMES=ams.lan,192.168.1.7`),
   good for a year and issued anew when fewer than thirty days remain — loaded
   without a restart, by the daily `tls.renew` task.
@@ -48,7 +50,8 @@ and for nothing else on the web. `ca.key` is still a key your stack trusts:
 keep it off shared storage. Adding names later that the constraints do not
 cover leaves them out of the certificate, with a warning; the Opening & APIs
 page lists them. An authority made before this server answered for
-`services.sonarr.tv` is one such case. To cover them, set
+`services.sonarr.tv`, or before it answered for TheTVDB's and AniList's
+names, is one such case. To cover them, set
 `AMS_TLS_REPLACE_AUTHORITY` to the authority's fingerprint and restart: a new
 authority is made for every name, once, the old one kept beside it
 (`ca.crt.replaced-…` in the directory, or in the database with several
@@ -99,6 +102,12 @@ services:
       - "skyhook.sonarr.tv:172.31.0.10"
       # Optional: Sonarr's alternate titles from this catalogue, below.
       - "services.sonarr.tv:172.31.0.10"
+
+  yamtrack:
+    extra_hosts:
+      - "api.themoviedb.org:172.31.0.10"
+      - "api4.thetvdb.com:172.31.0.10"
+      - "graphql.anilist.co:172.31.0.10"
 ```
 
 A complete, runnable example is in
@@ -157,6 +166,33 @@ volumes:
   - ./arr-metadata-ca.crt:/etc/arr-metadata-ca.crt:ro
 ```
 
+**Yamtrack, and other Python clients.** `requests` verifies against its own
+bundle and ignores the system store, and `REQUESTS_CA_BUNDLE` *replaces* that
+bundle rather than adding to it — set to `ca.crt` alone, every other call the
+application makes (MyAnimeList, IGDB, its identity provider) fails. Make a
+bundle of the roots the image carries and the authority, and mount that:
+
+```bash
+curl -o arr-metadata-ca.crt http://172.31.0.10:8080/ca.crt
+docker run --rm --entrypoint python ghcr.io/fuzzygrim/yamtrack:latest \
+  -c 'import certifi, sys; sys.stdout.write(open(certifi.where()).read())' > yamtrack-ca-bundle.crt
+cat arr-metadata-ca.crt >> yamtrack-ca-bundle.crt
+```
+
+```yaml
+environment:
+  REQUESTS_CA_BUNDLE: /etc/yamtrack-ca-bundle.crt
+  # A key issued on Opening & APIs › Keys, in place of its TheTVDB key and
+  # of its TMDB key: this server signs it in, and stands in with its own.
+  # Every name redirected to this server wants the key — a redirected
+  # api.themoviedb.org with Yamtrack's own TMDB key still in place is a 401
+  # on every TMDB call.
+  TVDB_API: ams_…
+  TMDB_API: ams_…
+volumes:
+  - ./yamtrack-ca-bundle.crt:/etc/yamtrack-ca-bundle.crt:ro
+```
+
 **Windows, or a client outside Docker.** Download `ca.crt` from the
 administration page and import it into the trusted root store (`certmgr`, or
 `Import-Certificate -CertStoreLocation Cert:\LocalMachine\Root`); on Linux, drop
@@ -200,6 +236,61 @@ you can use that depends on the client:
   ```
 
 Check before assuming: look for a TMDB API key field in the client's settings.
+
+### TheTVDB and AniList clients
+
+Some clients ask TheTVDB and AniList themselves, whatever they get from TMDB:
+Yamtrack asks TheTVDB to place a Jellyfin or Plex episode it knows only by its
+TheTVDB id, and AniList to import somebody's lists. Resolve `api4.thetvdb.com`
+and `graphql.anilist.co` to this server as well, and those calls come through
+it: each is handed on to the real service, and its answer handed back with the
+fields a person **locked** here written in — a series' or a film's title and
+overview, its year, dates, status, runtime and chosen poster, an episode's
+title, overview, date, runtime and still; for AniList, the title, description,
+genres and pictures of each entry the answer carries. Nothing unlocked is
+touched: the services' own data reaches the client as it is, in the language
+it asked for.
+
+**TheTVDB** clients sign in first, `POST /v4/login` with a key, for a token
+they carry on every call after. Two ways in:
+
+- **A key issued here as the client's TheTVDB key** (`TVDB_API` in Yamtrack),
+  with `AMS_TVDB_AUTH=apikey`, the default. The sign-in is answered with that
+  same key as the token, so every call after carries a credential this server
+  knows; TheTVDB is asked with this server's own key (`AMS_TVDB_API_KEY`, the
+  one its TheTVDB source uses) in the client's place, and the client's copy
+  never reaches it. Without a key of its own, the relay answers those clients
+  `503`. The documents answered with that key are the same for every caller,
+  and are kept a while, as the TMDB relay keeps TMDB's; the operator's own
+  account — `user`, its favourites — is nobody else's, and refused with it.
+- **The client's own TheTVDB key**, with `AMS_TVDB_AUTH=allowlist`: the sign-in
+  is relayed to TheTVDB as it came, and the token TheTVDB answers travels on
+  every call after, as the client's own. Nothing of a client's own token is
+  kept. A key issued here still stands in under this policy, and is judged as
+  under the other: a key revoked, run out or a member's is refused. Under the
+  key policy, a client that brings its own TheTVDB token sends this server's
+  key in `X-Api-Key`, since `Authorization` is the token's.
+
+Reads only: TheTVDB's one write, a user's favourites, is refused whoever asks.
+
+**AniList** has no key at all, so nothing a client sends can be one of this
+server's: `AMS_ANILIST_AUTH=allowlist` is the default, and a key issued here
+would only serve a script of your own. A client reading somebody's private
+lists carries that person's own AniList token, which travels with the query as
+it came; an answer to a query that carried one, to a mutation, or about
+somebody's lists or account, is never kept — a public list is still
+somebody's, read for its latest state. An entry is recognised by AniList's
+id or by MyAnimeList's, whichever the client asked for: Yamtrack's import
+asks only the latter. AniList's rate limit — ninety queries a minute, thirty while it runs
+degraded — is handed back as AniList answers it, `429` with `Retry-After`, and
+counts this server's own calls to AniList among them.
+
+Both relays are switches on **Opening & APIs** (`api.tvdb`, `api.anilist`),
+listed with the others; a member's key is kept off every relay until *Members
+too* is on there. Each is also a start-up flag, `AMS_TVDB_PASSTHROUGH` and
+`AMS_ANILIST_PASSTHROUGH`, on by default. This server calls both services as
+sources of its own, by the same names: see
+[If you redirect at the resolver](#if-you-redirect-at-the-resolver).
 
 ---
 
@@ -262,13 +353,14 @@ at once, and `/api/v3/parse?title=…` says which series a release name goes to.
 
 ### Upgrading a server that is already running
 
-The certificate of a server set up before this name existed does not cover it,
-and cannot: the authority's constraints were fixed when it was made. Nothing
-changes until you choose to, in this order:
+The certificate of a server set up before a name existed — `services.sonarr.tv`
+since 0.4.0, `api4.thetvdb.com` and `graphql.anilist.co` after 0.5.0 — does
+not cover it, and cannot: the authority's constraints were fixed when it was
+made. Nothing changes until you choose to, in this order:
 
-1. Deploy the new version. Nothing else moves: `services.sonarr.tv` is listed
-   under **Opening & APIs** as a name the certificate does not carry, and the
-   three others are served as before.
+1. Deploy the new version. Nothing else moves: the names added are listed
+   under **Opening & APIs** as names the certificate does not carry, and the
+   others are served as before.
 2. Copy the authority's SHA-256 fingerprint from that page, set
    `AMS_TLS_REPLACE_AUTHORITY` to it and restart (with several instances,
    restart them all: the first replaces it, the others take the new one). The
@@ -284,7 +376,9 @@ changes until you choose to, in this order:
    old pair were ever restored.
 5. Add `services.sonarr.tv` to Sonarr's `extra_hosts` (or to the resolver) and
    recreate the container, then turn `sonarr.sceneMappings` on and run
-   **Update Scene Mapping** in Sonarr.
+   **Update Scene Mapping** in Sonarr. For the TheTVDB and AniList relays,
+   add `api4.thetvdb.com` and `graphql.anilist.co` to the client's
+   `extra_hosts` the same way, with its trust bundle in place (step 3).
 
 To go back, turn the setting off: the list is relayed untouched, and Sonarr
 replaces the titles it got from here at its next update. Removing the redirect
@@ -321,6 +415,15 @@ curl -s "https://api.themoviedb.org/3/tv/1396?api_key=<your ams_ key>" | head -c
 
 # Sonarr's alternate titles: the added ones say where they come from
 curl -s https://services.sonarr.tv/v1/scenemapping | grep -c arr-metadata-server
+
+# A TheTVDB client: signed in with a key issued here, the token is that key
+curl -s https://api4.thetvdb.com/v4/login -H 'content-type: application/json' \
+  -d '{"apikey":"<your ams_ key>"}'
+curl -s https://api4.thetvdb.com/v4/series/81189 -H 'Authorization: Bearer <your ams_ key>' | head -c 200
+
+# An AniList client
+curl -s https://graphql.anilist.co -H 'content-type: application/json' \
+  -d '{"query":"{ Media(id: 16498) { id title { english } } }"}'
 ```
 
 A TLS error means the CA is not trusted yet — check the container logged
@@ -341,6 +444,7 @@ recorded responses:
 | Sonarr | 4.x (linuxserver) | lookup, add, 71 episodes imported, refresh picking up a locked title, network and episode title |
 | Radarr | 6.4 | lookup, add, 26 credits stored, certification, refresh picking up a locked title, studio and runtime |
 | Jellyseerr | latest | `/3/movie`, `/3/tv`, `/3/search/movie` and `/3/configuration` relayed, with local overrides applied |
+| Yamtrack | latest | signed in to TheTVDB with a key issued here through its own provider, read a series and an episode with the titles locked here written in, placed the series by its TMDB id, queried AniList through its request helper with the locked title written in — all by the services' names, in TLS, trusting the authority |
 
 That run turned up several things this document had wrong, and several the
 server had wrong — see the commit history.
@@ -361,23 +465,45 @@ the alternate titles, and the series each takes a set of release names for.
 A difference is either an addition of this server's, or a failure. It reaches
 the internet, and wants `TMDB_API_KEY` (and `TVDB_API_KEY`) in the environment.
 
+[`scripts/e2e-relays.sh`](../scripts/e2e-relays.sh) exercises the TheTVDB and
+AniList relays against a stand-in for both services
+([`scripts/e2e-relays-upstream.py`](../scripts/e2e-relays-upstream.py)) that
+records what reaches it: the sign-in with a key issued here and with a
+client's own, which token travels and which never does, the locks written
+into a series, its translation, its episodes and an AniList entry, the cache,
+AniList's rate limit handed back, a loop refused, a relay switched off — under
+the default policies and with them swapped. It reaches nothing outside this
+host, and needs a built binary and python3.
+
+[`scripts/e2e-yamtrack.sh`](../scripts/e2e-yamtrack.sh) repeats the Yamtrack
+row of the table above on demand: it starts the server with both doors and
+the real services behind the relays, starts a Yamtrack container that resolves
+`api4.thetvdb.com` and `graphql.anilist.co` to this host with the authority
+appended to its trust bundle, and runs Yamtrack's own TheTVDB provider and
+request helper inside it. It needs Docker, a built binary, a free port 443,
+the internet, and this server's TheTVDB and TMDB keys in the environment.
+
 ---
 
 ## If you redirect at the resolver
 
 Everything above redirects per container, with `extra_hosts`. If instead you add
 the records to your local DNS resolver, **this server resolves them too** — and
-it calls `skyhook.sonarr.tv` and `api.radarr.video` itself, because they are
-providers as well as protocols it speaks.
+it calls `skyhook.sonarr.tv`, `api.radarr.video`, `api4.thetvdb.com` and
+`graphql.anilist.co` itself, because they are providers as well as protocols
+it speaks.
 
 It recognises the loop and answers `508 Loop Detected` rather than recursing, so
-nothing hangs. But the enrichment is then dead. Either point the upstreams at
+nothing hangs. But the enrichment is then dead — and so are the TheTVDB and
+AniList relays, which ask the real services. Either point the upstreams at
 the real services by address:
 
 ```bash
 AMS_SKYHOOK_UPSTREAM=https://<real-skyhook-address>
 AMS_RADARR_METADATA_UPSTREAM=https://<real-api.radarr.video-address>
 AMS_SONARR_SERVICES_UPSTREAM=https://<real-services.sonarr.tv-address>
+AMS_TVDB_UPSTREAM=https://<real-api4.thetvdb.com-address>/v4
+AMS_ANILIST_UPSTREAM=https://<real-graphql.anilist.co-address>
 ```
 
 or turn enrichment off:

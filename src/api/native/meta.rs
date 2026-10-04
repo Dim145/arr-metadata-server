@@ -169,6 +169,8 @@ pub struct Settings {
     pub public_browse: bool,
     pub native_policy: &'static str,
     pub tmdb_policy: &'static str,
+    pub tvdb_policy: &'static str,
+    pub anilist_policy: &'static str,
     pub arr_policy: &'static str,
     pub further_sources: FurtherSources,
 }
@@ -225,6 +227,8 @@ async fn settings(
         public_browse: state.public_site(),
         native_policy: policy_name(state.config.policy_for(Surface::Native)),
         tmdb_policy: policy_name(state.config.policy_for(Surface::Tmdb)),
+        tvdb_policy: policy_name(state.config.policy_for(Surface::Tvdb)),
+        anilist_policy: policy_name(state.config.policy_for(Surface::Anilist)),
         arr_policy: policy_name(state.config.policy_for(Surface::Arr)),
         further_sources,
     }))

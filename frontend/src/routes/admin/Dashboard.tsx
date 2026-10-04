@@ -269,6 +269,8 @@ function Surfaces({ settings }: { settings?: Settings }) {
     ['/v1/tvdb/*', 'Sonarr', settings?.arrPolicy],
     ['/v1/movie/*', 'Radarr', settings?.arrPolicy],
     ['/3/*', t.admin.overview.tmdbClients, settings?.tmdbPolicy],
+    ['/v4/*', t.admin.overview.tvdbClients, settings?.tvdbPolicy],
+    ['graphql.anilist.co', t.admin.overview.anilistClients, settings?.anilistPolicy],
     ['/api/v1/*', t.admin.overview.thisUi, settings?.nativePolicy],
   ]
 

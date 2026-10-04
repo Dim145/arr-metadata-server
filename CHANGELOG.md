@@ -7,6 +7,49 @@ may change what the API or the configuration means, and says so here.
 
 ## [Unreleased]
 
+### Added
+
+- TheTVDB's v4 API is relayed under `/v4/*`, in `api4.thetvdb.com`'s place,
+  for the clients that ask TheTVDB themselves — Yamtrack, Jellyfin's plugin,
+  Kodi's scraper. A request is handed on to TheTVDB and its answer handed
+  back with the fields locked here written in: a series' or a film's name,
+  overview, year, dates, status, runtime and chosen poster on its record,
+  its name and overview on its translations, an episode's title, overview,
+  date, runtime and still in the aired order and on its own. A client signs
+  in with a key issued here (`POST /v4/login`) and is answered that key as
+  its token; TheTVDB is then asked with this server's own key in its place,
+  and the client's copy never leaves. With `AMS_TVDB_AUTH=allowlist`, a
+  client's own TheTVDB key is signed in with as it came, and its token
+  travels on. Reads only, and nothing of the operator's own account; what is
+  answered with this server's key is kept a while, as the TMDB relay keeps
+  TMDB's. `AMS_TVDB_PASSTHROUGH=false` turns it off; `api.tvdb` switches it
+  on the access page.
+- AniList's GraphQL is relayed in `graphql.anilist.co`'s place, on the
+  clients' door, for the clients that import or track through it. A query is
+  handed on and its answer handed back with the title, description, genres
+  and pictures locked here written into every entry it carries — found by
+  AniList's id or by MyAnimeList's, whichever was asked. Somebody's own
+  AniList token travels with the query; a key of this server never does; an
+  answer to a signed query, to a mutation, or about somebody's lists is
+  never kept. AniList's rate limit is handed back as it answers it. By
+  address (`AMS_ANILIST_AUTH=allowlist`), since AniList has no key a client
+  could present; `AMS_ANILIST_PASSTHROUGH=false` and `api.anilist` as above.
+- The clients' certificate carries `api4.thetvdb.com` and
+  `graphql.anilist.co`. An authority made before does not cover them, and
+  is left serving the others until it is replaced
+  (`AMS_TLS_REPLACE_AUTHORITY`; docs/integration.md, *Upgrading a server
+  that is already running*).
+
+### Changed
+
+- *Members too*, on the access page, lets members' keys onto every relay —
+  TMDB's, TheTVDB's, AniList's — rather than TMDB's alone; the setting keeps
+  its key, `api.tmdbMembers`. The *Relays* cache space holds what every
+  relay answered.
+- This server's own calls to TheTVDB and AniList carry its mark, so a
+  resolver that sends those names here is met with a `508` rather than a
+  loop.
+
 ## [0.5.0] — 2026-10-04
 
 ### Changed

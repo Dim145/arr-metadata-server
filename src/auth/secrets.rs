@@ -27,6 +27,13 @@ const KEY_BYTES: usize = 32;
 /// How much of the key is stored in the clear for display.
 const DISPLAY_PREFIX_LEN: usize = KEY_PREFIX.len() + 8;
 
+/// Whether a credential is shaped like a key issued here: what a relay goes
+/// by to tell this server's key, which it stands in for, from a client's own
+/// token for the service relayed, which it hands on.
+pub fn is_issued_here(credential: &str) -> bool {
+    credential.starts_with(KEY_PREFIX)
+}
+
 /// A freshly minted key. `plaintext` is shown to the user exactly once.
 pub struct GeneratedKey {
     pub plaintext: String,

@@ -159,6 +159,27 @@ services:
       - "${JELLYSEERR_PORT:-5055}:5055"
     networks: [stack]
 
+  # A client that asks TheTVDB and AniList itself, Yamtrack for one, is
+  # redirected the same way for those names — a new stack's authority covers
+  # them; an older one is replaced first (docs/integration.md, "Upgrading a
+  # server that is already running"). Python's `requests` ignores the system
+  # store, and REQUESTS_CA_BUNDLE replaces its bundle rather than adding to
+  # it, so the file mounted must carry the public roots as well as the
+  # authority (docs/integration.md, "Trust the CA"):
+  #
+  #   yamtrack:
+  #     image: ghcr.io/fuzzygrim/yamtrack:latest
+  #     environment:
+  #       REQUESTS_CA_BUNDLE: /etc/yamtrack-ca-bundle.crt
+  #       TVDB_API: ams_…          # a key issued on Opening & APIs › Keys
+  #       TMDB_API: ams_…          # the same key: api.themoviedb.org is redirected too
+  #     volumes:
+  #       - ./yamtrack-ca-bundle.crt:/etc/yamtrack-ca-bundle.crt:ro
+  #     extra_hosts:
+  #       - "api.themoviedb.org:172.31.0.10"
+  #       - "api4.thetvdb.com:172.31.0.10"
+  #       - "graphql.anilist.co:172.31.0.10"
+
 networks:
   stack:
     driver: bridge

@@ -149,6 +149,8 @@ export function Settings() {
               [
                 ['/api/v1/*', config.nativePolicy],
                 ['/3/*', config.tmdbPolicy],
+                ['/v4/*', config.tvdbPolicy],
+                ['graphql.anilist.co', config.anilistPolicy],
                 ['/v1/*', config.arrPolicy],
               ] as const
             ).map(([path, policy]) => (

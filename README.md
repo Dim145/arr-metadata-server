@@ -45,6 +45,12 @@ Sonarr's metadata service — and does what both did, from one catalogue.
   mistaking one series for another — so a release named in French or in
   romaji is recognised (`sonarr.sceneMappings`). Everything else Sonarr asks
   of that host is relayed to the real service.
+- **TheTVDB and AniList relayed too.** The clients that ask those services
+  themselves — Yamtrack, Jellyfin's TheTVDB plugin, the anime trackers — reach
+  them through this server once `api4.thetvdb.com` and `graphql.anilist.co`
+  resolve here: each request is handed on and its answer handed back with the
+  fields locked in this catalogue written in. A TheTVDB client signs in with
+  a key issued here, and this server stands in with its own.
 - **Curated lists.** Selections composed by hand or by a filter, shown on
   the site and served to Sonarr and Radarr as the custom lists their import
   lists read.
@@ -605,6 +611,8 @@ what they can send:
 | Native API and web UI | `/api/v1/*` | API key (header or query) |
 | Public browsing | a fixed subset of `/api/v1/*` | **off**, chosen on *Opening & APIs* |
 | TMDB-compatible | `/3/*`, and the public lists of `/4/list/*` | API key (`api_key` query parameter) |
+| TheTVDB-compatible | `/v4/*` | API key (a key issued here, as the client's TheTVDB key) |
+| AniList-compatible | `graphql.anilist.co`, on the clients' door | IP allowlist |
 | Sonarr / Radarr compatible | `/v1/*`, including the IMDb lists Radarr imports from | IP allowlist |
 
 ### Letting anyone browse

@@ -36,7 +36,7 @@ struct Assets;
 /// than fall through to the UI's index page, or a mistyped endpoint would
 /// answer `200 text/html` and confuse every client.
 const API_PREFIXES: &[&str] = &[
-    "/api/", "/v1/", "/3/", "/4/", "/media/", "/health", "/ready",
+    "/api/", "/v1/", "/3/", "/4/", "/v4/", "/media/", "/health", "/ready",
 ];
 
 /// Where the page keeps the lines a preview replaces.

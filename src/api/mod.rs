@@ -5,15 +5,24 @@
 //! [`crate::config::Surface`] — and they are documented together, because an
 //! operator wants one page describing everything the server answers.
 
+pub mod anilist;
 pub mod audit;
 pub mod extract;
 pub mod native;
 pub mod radarr;
+pub mod relay;
 pub mod sonarr;
 pub mod sonarr_services;
+pub mod thetvdb;
 pub mod tmdb;
 
-use axum::{Router, middleware::from_fn_with_state};
+use axum::{
+    Router,
+    extract::Request,
+    http::StatusCode,
+    middleware::from_fn_with_state,
+    response::{IntoResponse, Response},
+};
 use utoipa::{
     Modify, OpenApi,
     openapi::security::{ApiKey, ApiKeyValue, HttpAuthScheme, HttpBuilder, SecurityScheme},
@@ -33,7 +42,8 @@ A self-hosted metadata server for the *arr stack.
 
 It answers three client protocols from one store — Sonarr's Skyhook API, \
 Radarr's metadata API, and the TMDB v3 API — alongside its own API, documented \
-here in full.
+here in full. TheTVDB's v4 API and AniList's are relayed to the real services, \
+with the fields locked here written into their answers.
 
 **Locks.** Any field a person edits is recorded separately from provider data \
 and is never overwritten by a refresh. That is what the `/items/{id}/overrides` \
@@ -46,9 +56,9 @@ requirement are those; they are not open.",
         version = env!("CARGO_PKG_VERSION"),
         license(name = "MIT"),
     ),
-    // The TMDB relay is registered with an axum wildcard, which `routes!` cannot
-    // collect; name it here so it still reaches the spec.
-    paths(tmdb::proxy, tmdb::proxy_v4),
+    // The relays are registered with an axum wildcard, which `routes!` cannot
+    // collect; name them here so they still reach the spec.
+    paths(tmdb::proxy, tmdb::proxy_v4, thetvdb::relay, anilist::relay),
     modifiers(&SecurityAddon),
     security(("apiKey" = []), ("apiKeyQuery" = []), ("session" = [])),
     tags(
@@ -61,6 +71,8 @@ requirement are those; they are not open.",
         (name = "Sonarr compatibility", description = "Skyhook-shaped responses"),
         (name = "Radarr compatibility", description = "api.radarr.video-shaped responses"),
         (name = "TMDB compatibility", description = "TMDB v3, relayed and patched"),
+        (name = "TheTVDB compatibility", description = "TheTVDB v4, relayed and patched, in api4.thetvdb.com's place"),
+        (name = "AniList compatibility", description = "AniList's GraphQL, relayed and patched, in graphql.anilist.co's place"),
     ),
 )]
 pub struct ApiDoc;
@@ -127,8 +139,10 @@ pub fn build(state: AppState) -> (Router<AppState>, utoipa::openapi::OpenApi) {
 
     let (tmdb, tmdb_api) = tmdb::router().split_for_parts();
 
+    let (thetvdb, thetvdb_api) = thetvdb::router().split_for_parts();
+
     let mut api = ApiDoc::openapi();
-    for part in [native_api, public_api, arr_api, tmdb_api] {
+    for part in [native_api, public_api, arr_api, tmdb_api, thetvdb_api] {
         api.merge(part);
     }
 
@@ -148,7 +162,8 @@ pub fn build(state: AppState) -> (Router<AppState>, utoipa::openapi::OpenApi) {
             crate::auth::ratelimit::limit,
         )))
         .merge(arr_surface(state.clone(), arr))
-        .merge(tmdb_surface(state, tmdb));
+        .merge(tmdb_surface(state.clone(), tmdb))
+        .merge(thetvdb_surface(state, thetvdb));
 
     (router, api)
 }
@@ -158,20 +173,51 @@ pub fn build(state: AppState) -> (Router<AppState>, utoipa::openapi::OpenApi) {
 pub fn build_clients(state: AppState) -> Router<AppState> {
     let (arr, _) = arr_routers().split_for_parts();
     let (tmdb, _) = tmdb::router().split_for_parts();
+    let (thetvdb, _) = thetvdb::router().split_for_parts();
     Router::new()
         .merge(arr_surface(state.clone(), arr))
-        .merge(tmdb_surface(state, tmdb))
+        .merge(tmdb_surface(state.clone(), tmdb))
+        .merge(thetvdb_surface(state, thetvdb))
 }
 
-/// Whatever else Sonarr asks of services.sonarr.tv, relayed under the guards
-/// of Sonarr's surface: what the clients' door hands a path it has no route
-/// for, when it was asked of that name.
-pub fn build_sonarr_services_relay(state: AppState) -> Router {
-    arr_surface(
-        state.clone(),
-        Router::new().fallback(sonarr_services::fallback),
-    )
-    .with_state(state)
+/// What the clients' door answers for a path none of its routes has, by the
+/// name the request was addressed to: whatever else Sonarr asks of
+/// services.sonarr.tv, relayed under the guards of Sonarr's surface; a query
+/// to graphql.anilist.co, relayed under the AniList relay's own. Nothing,
+/// for any other name.
+pub struct HostRelays {
+    sonarr_services: Router,
+    anilist: Router,
+}
+
+impl HostRelays {
+    pub fn new(state: AppState) -> Self {
+        let (anilist, _) = anilist::router().split_for_parts();
+        Self {
+            sonarr_services: arr_surface(
+                state.clone(),
+                Router::new().fallback(sonarr_services::fallback),
+            )
+            .with_state(state.clone()),
+            anilist: anilist_surface(state.clone(), anilist).with_state(state),
+        }
+    }
+
+    pub async fn answer(&self, mut request: Request) -> Response {
+        use tower::ServiceExt as _;
+        let relay = if sonarr_services::is_services_host(request.headers(), request.uri()) {
+            request.extensions_mut().insert(sonarr_services::Relayed);
+            &self.sonarr_services
+        } else if anilist::is_anilist_host(request.headers(), request.uri()) {
+            &self.anilist
+        } else {
+            return StatusCode::NOT_FOUND.into_response();
+        };
+        match relay.clone().oneshot(request).await {
+            Ok(response) => response,
+            Err(never) => match never {},
+        }
+    }
 }
 
 /// Sonarr's and Radarr's routes: Skyhook, services.sonarr.tv's scene-mapping
@@ -200,6 +246,23 @@ fn tmdb_surface(state: AppState, tmdb: Router<AppState>) -> Router<AppState> {
         .layer(from_fn_with_state(state, crate::auth::ratelimit::limit))
 }
 
+/// The TheTVDB relay's surface. Its name is one this server calls as a
+/// provider too, so a request that came round a loop is caught first.
+fn thetvdb_surface(state: AppState, thetvdb: Router<AppState>) -> Router<AppState> {
+    thetvdb
+        .layer(from_fn_with_state(state.clone(), guards::guard_tvdb))
+        .layer(from_fn_with_state(state.clone(), guards::reject_self_calls))
+        .layer(from_fn_with_state(state, crate::auth::ratelimit::limit))
+}
+
+/// The AniList relay's surface, reached by its name alone.
+fn anilist_surface(state: AppState, anilist: Router<AppState>) -> Router<AppState> {
+    anilist
+        .layer(from_fn_with_state(state.clone(), guards::guard_anilist))
+        .layer(from_fn_with_state(state.clone(), guards::reject_self_calls))
+        .layer(from_fn_with_state(state, crate::auth::ratelimit::limit))
+}
+
 /// Assemble the spec alone, without the state a running server needs.
 ///
 /// [`build`] cannot be called from a test — it wants an `AppState`, and that
@@ -217,9 +280,10 @@ fn openapi_only() -> utoipa::openapi::OpenApi {
 
     let (_, arr_api) = arr_routers().split_for_parts();
     let (_, tmdb_api) = tmdb::router().split_for_parts();
+    let (_, thetvdb_api) = thetvdb::router().split_for_parts();
 
     let mut api = ApiDoc::openapi();
-    for part in [native_api, public_api, arr_api, tmdb_api] {
+    for part in [native_api, public_api, arr_api, tmdb_api, thetvdb_api] {
         api.merge(part);
     }
     api
@@ -277,6 +341,9 @@ mod tests {
             "/v1/list/imdb/{id}",
             "/3/{path}",
             "/4/{path}",
+            "/v4/login",
+            "/v4/{path}",
+            "/",
         ] {
             assert!(paths.contains_key(expected), "{expected} is not documented");
         }
@@ -306,6 +373,20 @@ mod tests {
             .as_object()
             .expect("properties");
         assert!(items.contains_key("items"));
+
+        // Two sign-ins, each its own: the interface's, and a TheTVDB client's.
+        assert!(
+            schemas["LoginRequest"]["properties"]
+                .as_object()
+                .is_some_and(|props| props.contains_key("username")),
+            "the interface's sign-in lost its fields"
+        );
+        assert!(
+            schemas["TvdbLoginRequest"]["properties"]
+                .as_object()
+                .is_some_and(|props| props.contains_key("apikey")),
+            "the TheTVDB sign-in lost its fields"
+        );
     }
 
     /// A schema nothing points at is either dead weight or a sign that a `$ref`

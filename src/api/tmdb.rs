@@ -21,6 +21,7 @@ use serde_json::{Value, json};
 use utoipa_axum::router::OpenApiRouter;
 
 use crate::{
+    api::relay::climbs,
     cache,
     db::repo,
     domain::{ExternalSource, MediaItem, MediaKind},
@@ -361,26 +362,6 @@ pub async fn proxy_v4(state: State<AppState>, request: Request) -> AppResult<Res
 /// The v4 paths relayed: the public lists, and nothing of an account.
 fn v4_allowed(path: &str) -> bool {
     path.starts_with("/4/list/") && path.len() > "/4/list/".len()
-}
-
-/// Whether any segment of `path` could be read as leaving its place: a dot
-/// segment, encoded or not, or a separator hidden inside a segment.
-///
-/// Percent-decoded first, because `%2e%2e` and `..` mean the same thing to the
-/// URL parser that builds the outgoing request and different things to a naive
-/// comparison. To that parser a backslash is a slash, so `list/..\account`
-/// is `account`; and `%2F` survives it, but what TMDB's own edge makes of
-/// `..%2F` is not this server's to find out. An un-decodable escape is
-/// treated as suspicious rather than harmless — nothing TMDB addresses needs
-/// one.
-fn climbs(path: &str) -> bool {
-    path.split('/').any(|segment| {
-        match urlencoding::decode(segment) {
-            Ok(decoded) => matches!(decoded.as_ref(), "." | "..") || decoded.contains(['/', '\\']),
-            // Not valid UTF-8 once decoded: not a TMDB path either.
-            Err(_) => true,
-        }
-    })
 }
 
 /// The caller's headers as TMDB is asked with them. For a document this

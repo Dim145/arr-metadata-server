@@ -61,6 +61,31 @@ pub async fn guard_arr(
     authorize(state, Surface::Arr, request, next).await
 }
 
+pub async fn guard_tvdb(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> AppResult<Response> {
+    authorize(state, Surface::Tvdb, request, next).await
+}
+
+pub async fn guard_anilist(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> AppResult<Response> {
+    authorize(state, Surface::Anilist, request, next).await
+}
+
+/// Whether a request is a TheTVDB client signing in: `POST /v4/login`, its
+/// key in the body and nothing in the headers. The relay reads the key there
+/// and judges it — see `api::thetvdb::login` — so the guard asks nothing of
+/// it but what the surface's policy asks of every caller by address.
+pub fn tvdb_login(request: &Request) -> bool {
+    request.method() == axum::http::Method::POST
+        && request.uri().path().trim_end_matches('/') == crate::api::thetvdb::LOGIN_PATH
+}
+
 async fn authorize(
     state: AppState,
     surface: Surface,
@@ -91,10 +116,12 @@ async fn authorize(
     };
 
     // What the access page counts as a call to an API: everything on Sonarr's,
-    // Radarr's and the relay's surfaces, and what came with a key on the
-    // native one. The interface's own requests are not API calls.
-    let counted = surface != Surface::Native
-        || extract_key(request.headers(), request.uri().query()).is_some();
+    // Radarr's and the relays' surfaces, and what came with a key on the
+    // native one. The interface's own requests are not API calls; a TheTVDB
+    // client's sign-in is counted by the relay, which judges it.
+    let counted = (surface != Surface::Native
+        || extract_key(request.headers(), request.uri().query()).is_some())
+        && !(surface == Surface::Tvdb && tvdb_login(&request));
 
     let identity = match identify(&state, surface, api, client_ip, &mut request).await {
         Ok(identity) => {
@@ -195,6 +222,15 @@ async fn identify(
             Identity::Network(matched.map(str::to_string))
         }
 
+        // A TheTVDB client's sign-in carries its key in the body, where the
+        // relay reads it: a key issued here is taken there, any other is
+        // refused there under this policy. Until then the caller is nobody
+        // in particular — a visitor, who may do nothing here, rather than
+        // the anonymous identity of a surface with its guard switched off.
+        SurfacePolicy::ApiKey if surface == Surface::Tvdb && tvdb_login(request) => {
+            Identity::Visitor
+        }
+
         SurfacePolicy::ApiKey => {
             let presented = extract_key(request.headers(), request.uri().query());
 
@@ -227,18 +263,15 @@ async fn identify(
     // closed to members until it is listed, as it is to visitors.
     //
     // The other surfaces are the operator's: Sonarr's and Radarr's stand in
-    // for services that store what they are asked about, and the relay spends
-    // the operator's TMDB quota — with sign-ups open, a member is anybody.
+    // for services that store what they are asked about, and the relays spend
+    // the operator's quotas — with sign-ups open, a member is anybody.
     if identity.is_member() {
         match surface {
             Surface::Native if !member_may(request.method(), request.uri().path()) => {
                 return Err(AppError::Forbidden);
             }
-            Surface::Tmdb if !state.relay_for_members() => {
-                return Err(AppError::Refused {
-                    code: "relay_not_for_members",
-                    message: "members may not use the TMDB relay on this server".into(),
-                });
+            relay if relay.is_relay() && !state.relay_for_members() => {
+                return Err(members_kept_out());
             }
             Surface::Arr => return Err(AppError::Forbidden),
             _ => {}
@@ -246,6 +279,14 @@ async fn identify(
     }
 
     Ok(identity)
+}
+
+/// The refusal a member meets on a relay the operator keeps for the editors.
+pub fn members_kept_out() -> AppError {
+    AppError::Refused {
+        code: "relay_not_for_members",
+        message: "members may not use the relays on this server".into(),
+    }
 }
 
 fn switched_off(api: Api) -> AppError {
@@ -258,6 +299,8 @@ fn switched_off(api: Api) -> AppError {
                 Api::Radarr => "Radarr",
                 Api::Tmdb => "TMDB",
                 Api::Native => "native",
+                Api::Tvdb => "TheTVDB",
+                Api::Anilist => "AniList",
             }
         ),
     }
@@ -527,7 +570,10 @@ fn extract_key(headers: &HeaderMap, query: Option<&str>) -> Option<String> {
     None
 }
 
-async fn resolve_key(
+/// The key's holder, or why the key is refused: unknown, disabled, run out,
+/// or its owner's account closed. What the guard does with a key presented,
+/// and what the TheTVDB relay does with the one in a sign-in's body.
+pub(crate) async fn resolve_key(
     state: &AppState,
     presented: &str,
     client_ip: Option<std::net::IpAddr>,
