@@ -581,13 +581,6 @@ async fn refresh(
         .await?
         .ok_or(AppError::NotFound)?;
 
-    // Before a run is opened for it: one refused here would stay open.
-    if item.is_manual {
-        return Err(AppError::Conflict(
-            "a manual entry has no source to refresh from".into(),
-        ));
-    }
-
     // Someone is waiting on this one, so it earns a row of its own rather than
     // being folded into a sweep summary.
     let by = identity.label();
@@ -600,6 +593,28 @@ async fn refresh(
     .await
     .inspect_err(|e| tracing::warn!(error = %e, "could not open a job run"))
     .ok();
+
+    // A work made by hand has nothing to refresh from. Its run is closed as
+    // the refusal it is — not left open, as it was, for the schedule to find
+    // among the runs a crash abandoned.
+    if item.is_manual {
+        const WHY: &str = "a manual entry has no source to refresh from";
+        if let Some(record) = &record {
+            crate::jobs::refresh::Recorder::for_run(Some(record))
+                .note(
+                    &state.db,
+                    &id,
+                    Some(&item),
+                    repo::job::Outcome::Skipped,
+                    WHY,
+                )
+                .await;
+            if let Err(e) = repo::job::finish(&state.db, record, None, Some(WHY)).await {
+                tracing::warn!(error = %e, "could not close the job run");
+            }
+        }
+        return Err(AppError::Conflict(WHY.into()));
+    }
 
     let outcome = crate::jobs::refresh::refresh_one(&state, &item).await;
 

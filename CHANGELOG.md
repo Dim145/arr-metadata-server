@@ -64,6 +64,12 @@ may change what the API or the configuration means, and says so here.
   resolver that sends those names here is met with a `508` rather than a
   loop.
 
+### Fixed
+
+- A refresh asked for a work made by hand left its run open in the
+  history, as if still running, until a restart closed it with the runs a
+  crash abandons. It is closed at once, as the refusal it is, and says why.
+
 ## [0.5.0] — 2026-10-04
 
 ### Changed
