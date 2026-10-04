@@ -12,18 +12,15 @@ import { Link, useParams } from 'react-router'
 import { PosterCard, PosterGrid } from '../components/media'
 import { Button, Chip, EmptyState, Glyph, Label, SectionTitle, Skeleton } from '../components/ui'
 import { ApiError, api, query } from '../lib/api'
-import { useTitle } from '../lib/hooks'
+import { useCuratedLists, useTitle } from '../lib/hooks'
 import { useI18n } from '../lib/i18n'
-import type { CollectionPage, Collections, CuratedList, CuratedListPage, CuratedLists } from '../lib/types'
+import type { CollectionPage, Collections, CuratedList, CuratedListPage } from '../lib/types'
 
 export function Lists() {
   const { t } = useI18n()
   useTitle(t.lists.label)
 
-  const lists = useQuery({
-    queryKey: ['lists'],
-    queryFn: () => api.get<CuratedLists>('/lists'),
-  })
+  const lists = useCuratedLists()
 
   return (
     <div className="pt-10 pb-12">

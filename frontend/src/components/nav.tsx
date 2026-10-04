@@ -19,6 +19,7 @@ import { Link, useLocation } from 'react-router'
 
 import { api, query } from '../lib/api'
 import { cn } from '../lib/cn'
+import { useHasLists } from '../lib/hooks'
 import { useI18n } from '../lib/i18n'
 import { genreLabel } from '../lib/labels'
 import type { Facets } from '../lib/types'
@@ -102,6 +103,7 @@ function useKindFacets(kind: Kind, enabled: boolean) {
 /** The catalogue's tab, with the panel of shortcuts hanging from it. */
 export function BrowseTab() {
   const { t } = useI18n()
+  const hasLists = useHasLists()
   const location = useLocation()
   const id = useId()
   const [open, setOpen] = useState(false)
@@ -231,9 +233,11 @@ export function BrowseTab() {
                 <Row to="/collections" glyph="reel">
                   {t.collections.label}
                 </Row>
-                <Row to="/lists" glyph="list">
-                  {t.nav.lists}
-                </Row>
+                {hasLists ? (
+                  <Row to="/lists" glyph="list">
+                    {t.nav.lists}
+                  </Row>
+                ) : null}
                 <Row to="/stats" glyph="gauge">
                   {t.nav.figures}
                 </Row>

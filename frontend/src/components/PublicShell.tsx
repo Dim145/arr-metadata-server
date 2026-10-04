@@ -14,7 +14,7 @@ import { Link, Outlet, useLocation, useNavigate, useSearchParams } from 'react-r
 import { api, query } from '../lib/api'
 import { useSettled } from '../lib/debounce'
 import { feeds, webcal } from '../lib/feeds'
-import { useMe, useNavigationReset } from '../lib/hooks'
+import { useHasLists, useMe, useNavigationReset } from '../lib/hooks'
 import { cn } from '../lib/cn'
 import { LANGS, LANGUAGES, useI18n } from '../lib/i18n'
 import { ThemeToggle } from './ThemeToggle'
@@ -28,6 +28,8 @@ import { Glyph, Input } from './ui'
 
 export function PublicShell({ me }: { me?: Me }) {
   const { t } = useI18n()
+  // The selections are offered only while there is one to show.
+  const hasLists = useHasLists()
   const [open, setOpen] = useState(false)
   const [searching, setSearching] = useState(false)
   const location = useLocation()
@@ -89,11 +91,13 @@ export function PublicShell({ me }: { me?: Me }) {
             </Tab>
             {/* A sixth tab is one too many between a tablet's width and a
                 laptop's; there the selections are a footer link away. */}
-            <div className="hidden lg:contents">
-              <Tab to="/lists" section>
-                {t.nav.lists}
-              </Tab>
-            </div>
+            {hasLists ? (
+              <div className="hidden lg:contents">
+                <Tab to="/lists" section>
+                  {t.nav.lists}
+                </Tab>
+              </div>
+            ) : null}
           </nav>
 
           <div className="ml-auto flex items-center gap-2">
@@ -179,9 +183,11 @@ export function PublicShell({ me }: { me?: Me }) {
               <Tab to="/calendar" block>
                 {t.nav.calendar}
               </Tab>
-              <Tab to="/lists" block section>
-                {t.nav.lists}
-              </Tab>
+              {hasLists ? (
+                <Tab to="/lists" block section>
+                  {t.nav.lists}
+                </Tab>
+              ) : null}
               <Tab to="/seasons" block section>
                 {t.nav.seasons}
               </Tab>
@@ -491,6 +497,7 @@ function AdminLink({ me, labelled = false }: { me?: Me; labelled?: boolean }) {
 
 function Footer() {
   const { t, lang } = useI18n()
+  const hasLists = useHasLists()
   const me = useMe()
 
   const sources = useQuery({
@@ -507,15 +514,20 @@ function Footer() {
         <div className="flex flex-col gap-1">
           <span className="font-display text-base text-bone-dim">{t.brand.name}</span>
           <span className="text-xs text-bone-faint">{t.brand.tagline}</span>
-          <Link
-            to="/lists"
-            className="mt-1 inline-flex min-h-11 items-center text-xs text-bone-dim transition-colors duration-150 hover:text-bone"
-          >
-            {t.nav.lists}
-          </Link>
+          {hasLists ? (
+            <Link
+              to="/lists"
+              className="mt-1 inline-flex min-h-11 items-center text-xs text-bone-dim transition-colors duration-150 hover:text-bone"
+            >
+              {t.nav.lists}
+            </Link>
+          ) : null}
           <Link
             to="/stats"
-            className="inline-flex min-h-11 items-center text-xs text-bone-dim transition-colors duration-150 hover:text-bone"
+            className={cn(
+              'inline-flex min-h-11 items-center text-xs text-bone-dim transition-colors duration-150 hover:text-bone',
+              hasLists ? '' : 'mt-1',
+            )}
           >
             {t.nav.figures}
           </Link>

@@ -11,6 +11,7 @@ import { useNavigate } from 'react-router'
 import { api, query } from '../lib/api'
 import { cn } from '../lib/cn'
 import { useSettled } from '../lib/debounce'
+import { useHasLists } from '../lib/hooks'
 import { useI18n } from '../lib/i18n'
 import type { ItemPage } from '../lib/types'
 import { Glyph } from './ui'
@@ -46,6 +47,7 @@ interface Option {
 
 export function CommandPalette({ admin }: { admin: boolean }) {
   const { t, lang } = useI18n()
+  const hasLists = useHasLists()
   const navigate = useNavigate()
   const [open, setOpen] = useState(false)
   const [term, setTerm] = useState('')
@@ -100,7 +102,7 @@ export function CommandPalette({ admin }: { admin: boolean }) {
       { key: 'films', label: t.nav.films, to: '/browse?kind=movie' },
       { key: 'calendar', label: t.nav.calendar, to: '/calendar' },
       { key: 'seasons', label: t.nav.seasons, to: '/seasons' },
-      { key: 'lists', label: t.nav.lists, to: '/lists' },
+      ...(hasLists ? [{ key: 'lists', label: t.nav.lists, to: '/lists' }] : []),
       ...(admin
         ? [
             { key: 'admin', label: t.admin.dashboard, to: '/admin', admin: true },
@@ -117,7 +119,7 @@ export function CommandPalette({ admin }: { admin: boolean }) {
           ]
         : []),
     ],
-    [t, admin],
+    [t, admin, hasLists],
   )
 
   const needle = term.trim().toLowerCase()

@@ -7,6 +7,12 @@ may change what the API or the configuration means, and says so here.
 
 ## [Unreleased]
 
+### Changed
+
+- The site's navigation offers *Selections* — in the bar, the catalogue's
+  panel, the phone's menu, the footer and the command palette — only while
+  there is a selection to show. A way to an empty page was no way.
+
 ## [0.6.0] — 2026-10-04
 
 ### Added

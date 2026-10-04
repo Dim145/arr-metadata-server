@@ -65,6 +65,43 @@ test.describe('curated lists', () => {
     'set AMS_E2E_USER and AMS_E2E_PASSWORD to an administrator to run the list tests',
   )
 
+  test('the way to the selections is offered only while there is one to show', async ({ page }, info) => {
+    // The bar's tabs are a laptop's; a phone keeps them behind its menu.
+    test.skip(info.project.name !== 'desktop', 'the bar is read at a laptop’s width')
+    await signIn(page)
+    const { lists } = (await (await page.request.get('/api/v1/lists')).json()) as { lists: unknown[] }
+    const tab = () => page.getByRole('navigation', { name: /^(browse|parcourir)$/i }).getByRole('link', { name: /^(selections|sélections)$/i })
+
+    await page.goto('/')
+    if (lists.length === 0) {
+      await expect(tab()).toHaveCount(0)
+      // Nor in the footer, nor among the palette's places.
+      await expect(page.getByRole('contentinfo').getByRole('link', { name: /^(selections|sélections)$/i })).toHaveCount(0)
+    } else {
+      await expect(tab()).toBeVisible()
+    }
+
+    const { series } = await picks(page.request)
+    const list = await createList(page.request, {
+      name: `E2E nav ${Date.now()}`,
+      kind: 'mixed',
+      mode: 'manual',
+      isPublic: true,
+      items: series ? [series.id] : [],
+    })
+    try {
+      await page.reload()
+      await expect(tab()).toBeVisible()
+      await expect(page.getByRole('contentinfo').getByRole('link', { name: /^(selections|sélections)$/i })).toBeVisible()
+    } finally {
+      await deleteList(page.request, list.id)
+    }
+    if (lists.length === 0) {
+      await page.reload()
+      await expect(tab()).toHaveCount(0)
+    }
+  })
+
   test('a list composed by hand is served in the shapes the clients import', async ({ page }) => {
     await signIn(page)
     const { series, movie } = await picks(page.request)

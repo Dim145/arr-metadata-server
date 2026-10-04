@@ -12,7 +12,26 @@ import { useLocation, useNavigationType } from 'react-router'
 
 import { api, query } from './api'
 import { useI18n } from './i18n'
-import type { AuthOptions, MediaItem, Me, Orders } from './types'
+import type { AuthOptions, CuratedLists, MediaItem, Me, Orders } from './types'
+
+/**
+ * The selections a reader may see: what the lists page shows, and what
+ * decides whether the navigation offers it at all — a way to an empty page
+ * is no way. Read once a visit; the page that composes a list announces it.
+ */
+export function useCuratedLists() {
+  return useQuery({
+    queryKey: ['lists'],
+    queryFn: () => api.get<CuratedLists>('/lists'),
+    staleTime: 5 * 60_000,
+  })
+}
+
+/** Whether there is a selection to show, so far as is known: none while asking. */
+export function useHasLists(): boolean {
+  const lists = useCuratedLists()
+  return (lists.data?.lists.length ?? 0) > 0
+}
 
 export function useWork(id: string) {
   const { lang } = useI18n()
