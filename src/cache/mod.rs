@@ -477,8 +477,11 @@ impl Caches {
     /// A work was written: its own entry is forgotten and every list moves
     /// on, here and on every instance.
     pub async fn touched(&self, id: &str) {
-        self.items.invalidate(&format!("item:{id}")).await;
+        // The epoch first: a read of the work under way finishes either
+        // before it moved, and its copy is dropped by the invalidation that
+        // follows, or after, and sees it moved and keeps nothing.
         self.bump_epoch().await;
+        self.items.invalidate(&format!("item:{id}")).await;
     }
 
     // ── Told by another instance ────────────────────────────────────────

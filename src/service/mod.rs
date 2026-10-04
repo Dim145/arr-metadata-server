@@ -51,6 +51,13 @@ pub async fn load(state: &AppState, id: &str) -> Result<Option<MediaItem>> {
         state.caches.items.invalidate(&cache_key).await;
     }
 
+    // The caches' epoch as the read begins. A write that lands while the
+    // work is being read — a lock put on it from another request — bumps
+    // it, and what was read is then a moment too old to keep: answered, but
+    // not cached, so the next read starts afresh rather than finding the
+    // stale copy that an insert after the write's invalidation would leave.
+    let epoch = state.caches.epoch();
+
     let Some(mut item) = repo::item::get(&state.db, id).await? else {
         return Ok(None);
     };
@@ -75,7 +82,9 @@ pub async fn load(state: &AppState, id: &str) -> Result<Option<MediaItem>> {
     // address too, and may be kept.
     state.media.localize(&mut item);
 
-    if let Ok(encoded) = serde_json::to_string(&item) {
+    if state.caches.epoch() == epoch
+        && let Ok(encoded) = serde_json::to_string(&item)
+    {
         state.caches.items.insert(cache_key, encoded).await;
     }
 
