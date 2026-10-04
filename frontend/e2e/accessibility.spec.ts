@@ -207,59 +207,58 @@ test.describe('the catalogue, to a visitor', () => {
 test.describe('the administration side', () => {
   test.skip(!USERNAME || !PASSWORD, 'needs a credential; see admin.spec.ts')
 
-  test('every screen meets WCAG 2.1 AA', async ({ page }) => {
-    // Eleven screens, each loaded to rest and scanned whole: some thirty
-    // seconds on its own, more beside the rest of the suite.
-    test.slow()
-
+  async function signedIn(page: Page) {
     await page.goto('/login')
     await page.getByLabel(/username|identifiant/i).fill(USERNAME!)
     await page.getByLabel(/password|mot de passe/i).fill(PASSWORD!)
     await page.getByRole('button', { name: /sign in|se connecter/i }).click()
     await page.waitForURL('**/admin')
+  }
 
-    const id = await firstWork(page, 'series')
-    const found = await aSeriesWithEpisodes(page)
-    const screens = [
-      '/admin',
-      '/admin/catalogue',
-      '/admin/catalogue?refreshFailed=1',
-      '/admin/discover',
-      '/admin/clients',
-      '/admin/jobs',
-      '/admin/sources',
-      '/admin/media',
-  '/admin/cache',
-      '/admin/audit',
-      '/admin/settings',
-      // A season to come, with what TMDB lists for it to import.
-      await page.evaluate(() => {
-        const now = new Date()
-        const index = now.getFullYear() * 4 + Math.floor(now.getMonth() / 3) + 1
-        return `/seasons/${Math.floor(index / 4)}/${['winter', 'spring', 'summer', 'autumn'][index % 4]}`
-      }),
-      // The work editor, tab by tab.
-      ...(id
-        ? [
-            `/admin/catalogue/${id}`,
-            `/admin/catalogue/${id}?tab=artwork`,
-            `/admin/catalogue/${id}?tab=people`,
-            `/admin/catalogue/${id}?tab=elsewhere`,
-          ]
-        : []),
-      // An episode's fields, opened from its public page.
-      ...(found
-        ? [
-            `/admin/catalogue/${found.work.id}?season=${found.episode.seasonNumber}&episode=${found.episode.episodeNumber}`,
-          ]
-        : []),
-    ]
-
+  async function scanned(page: Page, screens: string[]) {
     for (const path of screens) {
       await page.goto(path)
       await page.waitForLoadState('networkidle')
       await scan(page, path)
     }
+  }
+
+  // Seventeen screens, each loaded to rest and scanned whole, in three
+  // sittings rather than one: as one test they took some thirty seconds on
+  // a quiet machine and ran past their ninety beside the rest of the suite.
+  test('the catalogue’s pages meet WCAG 2.1 AA', async ({ page }) => {
+    test.slow()
+    await signedIn(page)
+    await scanned(page, ['/admin', '/admin/catalogue', '/admin/catalogue?refreshFailed=1', '/admin/discover', '/admin/clients', '/admin/jobs'])
+  })
+
+  test('the system’s pages meet WCAG 2.1 AA', async ({ page }) => {
+    test.slow()
+    await signedIn(page)
+    // A season to come, with what TMDB lists for it to import.
+    const season = await page.evaluate(() => {
+      const now = new Date()
+      const index = now.getFullYear() * 4 + Math.floor(now.getMonth() / 3) + 1
+      return `/seasons/${Math.floor(index / 4)}/${['winter', 'spring', 'summer', 'autumn'][index % 4]}`
+    })
+    await scanned(page, ['/admin/sources', '/admin/media', '/admin/cache', '/admin/audit', '/admin/settings', season])
+  })
+
+  test('the work editor meets WCAG 2.1 AA', async ({ page }) => {
+    test.slow()
+    await signedIn(page)
+    const id = await firstWork(page, 'series')
+    const found = await aSeriesWithEpisodes(page)
+    test.skip(!id, 'the catalogue holds no series')
+    await scanned(page, [
+      // Tab by tab.
+      `/admin/catalogue/${id}`,
+      `/admin/catalogue/${id}?tab=artwork`,
+      `/admin/catalogue/${id}?tab=people`,
+      `/admin/catalogue/${id}?tab=elsewhere`,
+      // An episode's fields, opened from its public page.
+      ...(found ? [`/admin/catalogue/${found.work.id}?season=${found.episode.seasonNumber}&episode=${found.episode.episodeNumber}`] : []),
+    ])
   })
 })
 

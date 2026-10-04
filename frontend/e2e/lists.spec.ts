@@ -97,8 +97,11 @@ test.describe('curated lists', () => {
       await deleteList(page.request, list.id)
     }
     if (lists.length === 0) {
+      // As the server stands now: another test may have composed a list
+      // meanwhile, and the bar is right to show it then.
       await page.reload()
-      await expect(tab()).toHaveCount(0)
+      const { lists: now } = (await (await page.request.get('/api/v1/lists')).json()) as { lists: unknown[] }
+      await expect(tab()).toHaveCount(now.length ? 1 : 0)
     }
   })
 
