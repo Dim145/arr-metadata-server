@@ -354,7 +354,7 @@ at once, and `/api/v3/parse?title=…` says which series a release name goes to.
 ### Upgrading a server that is already running
 
 The certificate of a server set up before a name existed — `services.sonarr.tv`
-since 0.4.0, `api4.thetvdb.com` and `graphql.anilist.co` after 0.5.0 — does
+since 0.4.0, `api4.thetvdb.com` and `graphql.anilist.co` since 0.6.0 — does
 not cover it, and cannot: the authority's constraints were fixed when it was
 made. Nothing changes until you choose to, in this order:
 
