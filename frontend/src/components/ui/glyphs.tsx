@@ -187,6 +187,17 @@ const PATHS = {
       <path d="M9.6 4.2 12 6.6" />
     </>
   ),
+  share: (
+    <>
+      <circle cx="12" cy="3.5" r="1.8" />
+      <circle cx="4" cy="8" r="1.8" />
+      <circle cx="12" cy="12.5" r="1.8" />
+      <path d="M5.6 7.1 10.4 4.4M5.6 8.9l4.8 2.7" />
+    </>
+  ),
+  shuffle: (
+    <path d="M2.5 4.5h2.1c.9 0 1.7.4 2.3 1.1l4.2 4.8c.6.7 1.4 1.1 2.3 1.1h.1M2.5 11.5h2.1c.9 0 1.7-.4 2.3-1.1l.7-.8M8.4 6.4l.7-.8c.6-.7 1.4-1.1 2.3-1.1h.1M11.5 2.5l2 2-2 2M11.5 9.5l2 2-2 2" />
+  ),
 } as const
 
 export type GlyphName = keyof typeof PATHS

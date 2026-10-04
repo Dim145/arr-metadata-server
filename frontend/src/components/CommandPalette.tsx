@@ -1,7 +1,8 @@
 /**
  * The command palette: ⌘K or Ctrl+K anywhere, then a title or a place to go.
- * One field and one list — the places first, then the works that match —
- * moved through with the arrows and opened with Enter, as a combobox is.
+ * One field and one list — what was opened lately while the field is empty,
+ * the places, then the works that match — moved through with the arrows and
+ * opened with Enter, as a combobox is.
  */
 
 import { useQuery } from '@tanstack/react-query'
@@ -11,8 +12,10 @@ import { useNavigate } from 'react-router'
 import { api, query } from '../lib/api'
 import { cn } from '../lib/cn'
 import { useSettled } from '../lib/debounce'
+import { drawWork } from '../lib/draw'
 import { useHasLists } from '../lib/hooks'
 import { useI18n } from '../lib/i18n'
+import { useRecent } from '../lib/recent'
 import type { ItemPage } from '../lib/types'
 import { Glyph } from './ui'
 
@@ -35,6 +38,8 @@ interface Place {
   label: string
   to: string
   admin?: boolean
+  /** Something to do rather than somewhere to go. */
+  run?: () => void | Promise<void>
 }
 
 interface Option {
@@ -42,12 +47,14 @@ interface Option {
   label: string
   note?: string
   to: string
-  kind: 'place' | 'work'
+  kind: 'recent' | 'place' | 'work'
+  run?: () => void | Promise<void>
 }
 
 export function CommandPalette({ admin }: { admin: boolean }) {
   const { t, lang } = useI18n()
   const hasLists = useHasLists()
+  const recent = useRecent()
   const navigate = useNavigate()
   const [open, setOpen] = useState(false)
   const [term, setTerm] = useState('')
@@ -96,6 +103,17 @@ export function CommandPalette({ admin }: { admin: boolean }) {
 
   const places: Place[] = useMemo(
     () => [
+      {
+        key: 'random',
+        label: t.palette.random,
+        to: '',
+        // Drawn from the whole catalogue; the browse page's own button draws
+        // under its filters.
+        run: async () => {
+          const work = await drawWork({ language: lang })
+          if (work) navigate(`/work/${work.id}`)
+        },
+      },
       { key: 'home', label: t.brand.name, to: '/' },
       { key: 'browse', label: t.nav.browse, to: '/browse' },
       { key: 'series', label: t.nav.series, to: '/browse?kind=series' },
@@ -119,7 +137,7 @@ export function CommandPalette({ admin }: { admin: boolean }) {
           ]
         : []),
     ],
-    [t, admin, hasLists],
+    [t, lang, admin, hasLists, navigate],
   )
 
   const needle = term.trim().toLowerCase()
@@ -133,18 +151,32 @@ export function CommandPalette({ admin }: { admin: boolean }) {
   })
   const found = settled.trim().length >= 2 ? (works.data?.items ?? []) : []
 
+  const kindOf = (kind: 'series' | 'movie') => (kind === 'series' ? t.nav.series : t.nav.films)
+
   const options: Option[] = [
+    // What was opened lately, while nothing is typed: the likeliest thing to
+    // want back. A word typed is a search, and the list is the search's.
+    ...(needle
+      ? []
+      : recent.map((work) => ({
+          id: `recent:${work.id}`,
+          label: work.title,
+          note: [work.year, kindOf(work.kind)].filter(Boolean).join(' · '),
+          to: `/work/${work.id}`,
+          kind: 'recent' as const,
+        }))),
     ...matchingPlaces.map((place) => ({
       id: `place:${place.key}`,
       label: place.label,
       note: place.admin ? t.admin.title : undefined,
       to: place.to,
       kind: 'place' as const,
+      run: place.run,
     })),
     ...found.map((work) => ({
       id: `work:${work.id}`,
       label: work.title,
-      note: [work.year, work.kind === 'series' ? t.nav.series : t.nav.films].filter(Boolean).join(' · '),
+      note: [work.year, kindOf(work.kind)].filter(Boolean).join(' · '),
       to: `/work/${work.id}`,
       kind: 'work' as const,
     })),
@@ -156,8 +188,11 @@ export function CommandPalette({ admin }: { admin: boolean }) {
 
   const go = (option: Option) => {
     setOpen(false)
-    navigate(option.to)
+    if (option.run) void option.run()
+    else navigate(option.to)
   }
+
+  const headings = { recent: t.palette.recent, place: t.palette.goTo, work: t.palette.works }
 
   if (!open) return null
 
@@ -229,7 +264,8 @@ export function CommandPalette({ admin }: { admin: boolean }) {
                     index === active ? 'bg-ink-high text-bone' : 'text-bone-dim',
                   )}
                 >
-                  <span className="label w-16 shrink-0">{heads ? (option.kind === 'place' ? t.palette.goTo : t.palette.works) : ''}</span>
+                  <span className="label w-16 shrink-0">{heads ? headings[option.kind] : ''}</span>
+                  {option.run ? <Glyph name="shuffle" className="size-4 shrink-0 text-bone-faint" /> : null}
                   <span className="min-w-0 flex-1 truncate">{option.label}</span>
                   {option.note ? <span className="shrink-0 font-mono text-xs text-bone-faint">{option.note}</span> : null}
                 </li>

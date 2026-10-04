@@ -33,12 +33,19 @@ export function useHasLists(): boolean {
   return (lists.data?.lists.length ?? 0) > 0
 }
 
+/** The read of one work, as its page asks it and as a card asks it ahead. */
+export function workQuery(id: string, lang: string) {
+  return {
+    queryKey: ['work', id, lang] as const,
+    queryFn: () => api.get<MediaItem>(`/items/${id}${query({ language: lang })}`),
+  }
+}
+
 export function useWork(id: string) {
   const { lang } = useI18n()
 
   return useQuery({
-    queryKey: ['work', id, lang],
-    queryFn: () => api.get<MediaItem>(`/items/${id}${query({ language: lang })}`),
+    ...workQuery(id, lang),
     enabled: Boolean(id),
   })
 }

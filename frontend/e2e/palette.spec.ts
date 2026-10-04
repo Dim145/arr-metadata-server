@@ -37,4 +37,33 @@ test.describe('the command palette', () => {
     await page.getByRole('button', { name: /command palette|palette de commandes/i }).click()
     await expect(box).toBeVisible()
   })
+
+  test('offers what was opened lately before anything is typed, and a work at random', async ({ page, isMobile }) => {
+    test.skip(isMobile, 'a keyboard shortcut is a desktop thing')
+    const { items } = await (await page.request.get('/api/v1/items?limit=1')).json()
+    const work = items[0] as { id: string; title: string } | undefined
+    test.skip(!work, 'no work in the catalogue')
+
+    await page.goto(`/work/${work!.id}`)
+    await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
+
+    await page.goto('/')
+    await page.keyboard.press('ControlOrMeta+k')
+    const box = page.getByRole('combobox', { name: /command palette|palette de commandes/i })
+    await expect(box).toBeVisible()
+
+    // The work just opened, listed before any place, with nothing typed.
+    const options = page.getByRole('option')
+    await expect(options.first()).toContainText(work!.title)
+
+    // A word typed is a search: the recent give way to it.
+    await box.fill('zzz')
+    await expect(options.filter({ hasText: work!.title })).toHaveCount(0)
+    await box.fill('')
+
+    // And a draw from the whole catalogue lands on a work.
+    await page.getByRole('option', { name: /at random|au hasard/i }).click()
+    await page.waitForURL(/\/work\/[^/]+$/)
+    await expect(box).toBeHidden()
+  })
 })

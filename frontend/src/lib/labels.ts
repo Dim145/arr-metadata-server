@@ -148,16 +148,46 @@ export function languageName(code: string | undefined, locale: string): string |
   if (!code) {
     return undefined
   }
+  // Several codes for one tongue (`ja,jpn`) are named by the first.
+  const first = code.split(',')[0]?.trim() ?? code
 
   try {
-    const name = new Intl.DisplayNames([locale], { type: 'language' }).of(code)
-    if (!name || name === code) {
-      return code.toUpperCase()
+    const name = new Intl.DisplayNames([locale], { type: 'language' }).of(first)
+    if (!name || name === first) {
+      return first.toUpperCase()
     }
     return name.charAt(0).toLocaleUpperCase(locale) + name.slice(1)
   } catch {
-    return code.toUpperCase()
+    return first.toUpperCase()
   }
+}
+
+/**
+ * Languages the catalogue spells more than one way, said once.
+ *
+ * TMDB stores `ja` and TheTVDB `jpn` for the same tongue; counted apart they
+ * made two bars of "Japanese" and two choices in a filter. Grouped by the
+ * name each code is given, in the callers' order — the first code's place —
+ * with every code kept, so a filter can ask for all of them at once.
+ */
+export function languageGroups<T>(
+  items: T[],
+  code: (item: T) => string,
+  count: (item: T) => number,
+  locale: string,
+): { codes: string[]; label: string; count: number }[] {
+  const groups = new Map<string, { codes: string[]; label: string; count: number }>()
+  for (const item of items) {
+    const label = languageName(code(item), locale) ?? code(item)
+    const group = groups.get(label)
+    if (group) {
+      group.codes.push(code(item))
+      group.count += count(item)
+    } else {
+      groups.set(label, { codes: [code(item)], label, count: count(item) })
+    }
+  }
+  return [...groups.values()]
 }
 
 /**

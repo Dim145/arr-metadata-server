@@ -76,7 +76,9 @@ export function PublicShell({ me }: { me?: Me }) {
         {t.nav.skipToContent}
       </a>
 
-      <header className="sticky top-0 z-30 border-b border-rule bg-ink">
+      {/* Named for the view transitions: the bar holds still while the page
+          beneath it crosses over. */}
+      <header className="sticky top-0 z-30 border-b border-rule bg-ink" style={{ viewTransitionName: 'bar' }}>
         <div className="mx-auto flex h-16 max-w-7xl items-center gap-3 px-4 sm:px-6 lg:gap-4">
           <Wordmark />
 

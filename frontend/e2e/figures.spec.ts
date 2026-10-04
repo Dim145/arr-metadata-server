@@ -27,6 +27,19 @@ test.describe('the numbers and the health', () => {
     await page.goto('/stats')
     await expect(page.getByRole('heading', { level: 1, name: /in numbers|en chiffres/i })).toBeVisible()
     await expect(page.getByRole('heading', { name: /by decade|par décennie/i })).toBeVisible()
+
+    // A tongue the providers spell two ways is one bar.
+    const languages = page.getByRole('heading', { name: /by original language|par langue originale/i }).locator('xpath=ancestor::section[1]')
+    const names = (await languages.getByRole('link').allTextContents()).map((text) => text.replace(/\s*[\d   ]+$/, '').trim())
+    expect(new Set(names).size).toBe(names.length)
+
+    // And every bar is a way into the catalogue it counts.
+    const genres = page.getByRole('heading', { name: /by genre|par genre/i }).locator('xpath=ancestor::section[1]')
+    const bar = genres.getByRole('link').first()
+    test.skip((await bar.count()) === 0, 'no genre to count')
+    await bar.click()
+    await expect(page).toHaveURL(/\/browse\?genre=/)
+    await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
   })
 
   test('the health is the administrator’s alone', async ({ request }) => {

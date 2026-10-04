@@ -93,6 +93,74 @@ test.describe('the catalogue', () => {
     }
   })
 
+  test('a poster whose picture fails gives way to a drawn stand-in, never a broken image', async ({ page }) => {
+    // Every picture refused, as a dead provider address or a moved media
+    // store would refuse it: the card has to say what it is all the same.
+    await page.route('**/*', (route) => (route.request().resourceType() === 'image' ? route.abort() : route.continue()))
+    await page.goto('/browse')
+    await catalogueLoaded(page)
+
+    // The first card, which is on screen: the ones below the fold are lazy,
+    // and a picture never asked for never fails.
+    const card = page.locator('a[href^="/work/"]').first()
+    const standIn = card.locator('[data-placeholder]')
+    await expect(standIn).toBeVisible()
+    await expect(card.locator('img')).toHaveCount(0)
+    // The initial of the title, in the stand-in.
+    const title = (await card.locator('h3').textContent())?.trim() ?? ''
+    expect(title).not.toBe('')
+    expect((await standIn.textContent()) ?? '').toContain([...title][0]!.toLocaleUpperCase())
+  })
+
+  test('draws a work at random under the filters, and lands on it', async ({ page, request }) => {
+    await page.goto('/browse?kind=series')
+    await catalogueLoaded(page)
+
+    await page.getByRole('button', { name: /^(at random|au hasard)$/i }).click()
+    await page.waitForURL(/\/work\/[^/]+$/)
+    await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
+
+    // Under the filter it was drawn from: a series.
+    const id = new URL(page.url()).pathname.split('/').pop()!
+    const work = await (await request.get(`/api/v1/items/${id}`)).json()
+    expect(work.kind).toBe('series')
+  })
+
+  test('names each original language once, however many ways it is spelt', async ({ page }) => {
+    await page.goto('/browse')
+    await catalogueLoaded(page)
+    const panel = await filters(page)
+    const select = panel.getByLabel(/original language|langue originale/i)
+    test.skip((await select.count()) === 0, 'no language to choose from')
+
+    const names = (await select.locator('option').allTextContents())
+      .slice(1) // "any language"
+      .map((text) => text.replace(/\s*\(\d+\)\s*$/, '').trim())
+    expect(new Set(names).size).toBe(names.length)
+  })
+
+  test('remembers on the front page what was opened here, and forgets on request', async ({ page, request }) => {
+    const { items } = await (await request.get('/api/v1/items?limit=1')).json()
+    const work = items[0] as { id: string; title: string } | undefined
+    test.skip(!work, 'no work in the catalogue')
+
+    // Nothing opened yet in this browser: no shelf.
+    await page.goto('/')
+    await catalogueLoaded(page)
+    const heading = page.getByRole('heading', { name: /^(recently viewed|vus récemment)$/i })
+    await expect(heading).toHaveCount(0)
+
+    await page.goto(`/work/${work!.id}`)
+    await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
+    await page.goto('/')
+    await expect(heading).toBeVisible()
+    const shelf = page.getByRole('list', { name: /^(recently viewed|vus récemment)$/i })
+    await expect(shelf.locator(`a[href="/work/${work!.id}"]`)).toBeVisible()
+
+    await page.getByRole('button', { name: /clear the recent|effacer les récents/i }).click()
+    await expect(heading).toHaveCount(0)
+  })
+
   test('offers what it finds as the search is typed, and opens one with the keys', async ({
     page,
     request,
@@ -278,6 +346,23 @@ test.describe('a work', () => {
     await expect(page.getByText(/^(Identifiers|Identifiants)$/i).first()).toBeVisible()
 
     expect(await scrollsSideways(page)).toBe(false)
+  })
+
+  test('hands its address on, and says when it has been copied', async ({ page, context, request }) => {
+    const { items } = await (await request.get('/api/v1/items?limit=1')).json()
+    const work = items[0] as { id: string } | undefined
+    test.skip(!work, 'no work in the catalogue')
+
+    await context.grantPermissions(['clipboard-read', 'clipboard-write'])
+    // No share sheet on this machine: the address is copied instead.
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, 'share', { value: undefined, configurable: true })
+    })
+
+    await page.goto(`/work/${work!.id}`)
+    await page.getByRole('button', { name: /^(share|partager)$/i }).click()
+    await expect(page.getByRole('status').filter({ hasText: /link copied|lien copié/i })).toBeVisible()
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(page.url())
   })
 
   test('scrolls its seasons inside their own shelf, not the page', async ({ page, request }) => {

@@ -353,6 +353,46 @@ test.describe('the schedule', () => {
     await expect(page).not.toHaveURL(/week=/)
     expect(await scrollsSideways(page)).toBe(false)
   })
+
+  test('shows the month at a glance, and leads back to the week', async ({ page, request, isMobile }) => {
+    await page.goto('/calendar?view=month')
+
+    const views = page.getByRole('group', { name: /^(view|affichage)$/i })
+    await expect(views.getByRole('link', { name: /^(month|mois)$/i })).toHaveAttribute('aria-current', 'true')
+
+    // Whole weeks, Monday to Sunday, around the month — once the listing has
+    // arrived and the grid with it.
+    const grid = page.getByRole('list', { name: /days of the month|jours du mois/i })
+    await expect(grid.locator('li').first()).toBeVisible()
+    const days = await grid.locator('li').count()
+    expect(days % 7).toBe(0)
+    expect(days).toBeGreaterThanOrEqual(28)
+    expect(days).toBeLessThanOrEqual(42)
+    await expect(grid.locator('[aria-current="date"]')).toHaveCount(1)
+
+    // What the server lists for the month is in the grid, on a screen wide
+    // enough to list it; a phone marks the days and leads to the week.
+    const now = new Date()
+    const from = new Date(now.getFullYear(), now.getMonth(), 1).toISOString()
+    const to = new Date(now.getFullYear(), now.getMonth() + 1, 1).toISOString()
+    const month = await (await request.get(`/api/v1/calendar?from=${from}&to=${to}`)).json()
+    if (!isMobile && month.episodes.length) {
+      expect(await grid.locator('a[href*="/episode/"]').count()).toBeGreaterThan(0)
+    }
+
+    const thisMonth = page.getByRole('button', { name: /^(this month|ce mois-ci)$/i })
+    await expect(thisMonth).toBeDisabled()
+    await page.getByRole('button', { name: /next month|mois suivant/i }).click()
+    await expect(page).toHaveURL(/[?&]month=\d{4}-\d{2}/)
+    await expect(thisMonth).toBeEnabled()
+    await thisMonth.click()
+    await expect(page).not.toHaveURL(/month=/)
+
+    await views.getByRole('link', { name: /^(week|semaine)$/i }).click()
+    await expect(page).toHaveURL(/\/calendar$/)
+    await expect(page.getByRole('button', { name: /^(this week|cette semaine)$/i })).toBeVisible()
+    expect(await scrollsSideways(page)).toBe(false)
+  })
 })
 
 test.describe('the artwork', () => {

@@ -2,7 +2,7 @@
  * The fact table: one register for every history the administration shows.
  */
 
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type HTMLAttributes, type ReactNode } from 'react'
 import { cn } from '../../lib/cn'
 
 /**
@@ -102,10 +102,18 @@ export function Td({
   )
 }
 
-/** A body row: 45px of it, and a colour change on hover. Nothing moves. */
-export function Tr({ children, className }: { children: ReactNode; className?: string }) {
+/**
+ * A body row: 45px of it, and a colour change on hover. Nothing moves. Any
+ * other attribute — a `data-` handle on what the row is about — goes through.
+ */
+export function Tr({
+  children,
+  className,
+  ...rest
+}: { children: ReactNode; className?: string } & Omit<HTMLAttributes<HTMLTableRowElement>, 'className' | 'children'>) {
   return (
     <tr
+      {...rest}
       className={cn(
         // Positioned so a row's primary link can stretch a pseudo-element over
         // the whole row: a title is 20px tall and a row is not, and the gap is

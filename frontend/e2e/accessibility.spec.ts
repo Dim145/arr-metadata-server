@@ -91,6 +91,8 @@ test.describe('the catalogue, to a visitor', () => {
     ['an empty result', '/browse?q=zzzqqq'],
     ['a narrowed and ordered list', '/browse?kind=series&genre=Drama&yearFrom=2000&order=rated'],
     ['the schedule', '/calendar'],
+    ['the schedule, a month at a glance', '/calendar?view=month'],
+    ['the figures', '/stats'],
     ['a season the catalogue holds nothing of', '/seasons/1890/winter'],
     ['sign-in', '/login'],
   ] as const) {

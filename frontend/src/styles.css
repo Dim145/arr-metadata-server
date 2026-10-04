@@ -412,6 +412,37 @@
     animation: sweep 1.4s infinite;
   }
 
+  /* ── An image that is not there ───────────────────────────────────────────
+     A fine hatch behind an initial: a placeholder that says it is one, rather
+     than passing for a dark poster. */
+  .hatch {
+    background-image:
+      repeating-linear-gradient(
+        135deg,
+        transparent 0 7px,
+        color-mix(in srgb, var(--color-bone) 2.5%, transparent) 7px 8px
+      ),
+      radial-gradient(ellipse at 50% 35%, color-mix(in srgb, var(--color-bone) 5%, transparent), transparent 65%);
+  }
+
+  /* ── From one page to the next ────────────────────────────────────────────
+     A poster opened becomes the plate's: the browser draws the one into the
+     other, and the rest of the page crosses over in the same beat. The names
+     are given from the components — see lib/transitions.ts. */
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation-duration: 220ms;
+    animation-timing-function: var(--ease-out-soft);
+  }
+  ::view-transition-group(poster) {
+    animation-duration: 340ms;
+    animation-timing-function: var(--ease-out-soft);
+  }
+  ::view-transition-old(poster),
+  ::view-transition-new(poster) {
+    animation-duration: 340ms;
+  }
+
   /* ── Motion, refused ──────────────────────────────────────────────────────
      Someone who has asked their system for less movement has asked this
      interface too. Everything still arrives; it simply arrives already there. */
@@ -423,6 +454,11 @@
       animation-iteration-count: 1 !important;
       transition-duration: 0.01ms !important;
       scroll-behavior: auto !important;
+    }
+    ::view-transition-group(*),
+    ::view-transition-old(*),
+    ::view-transition-new(*) {
+      animation: none !important;
     }
   }
 }

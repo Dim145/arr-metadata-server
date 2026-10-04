@@ -10,13 +10,14 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router'
 
-import { Artwork, PosterCard, PosterShelf, Score } from '../components/media'
+import { Artwork, Placeholder, PosterCard, PosterShelf, Score } from '../components/media'
 import { EmptyState, Genre, Glyph, Label, SectionTitle, Skeleton } from '../components/ui'
 import { useMe } from '../lib/hooks'
 import { api, query } from '../lib/api'
 import * as fmt from '../lib/format'
 import { useI18n } from '../lib/i18n'
 import { airTime, backdrop, episodeCode, headlineRating, logo, poster } from '../lib/media'
+import { forget, useRecent } from '../lib/recent'
 import { chartQuery, formatDay, seasonOf, seasonPath } from '../lib/seasons'
 import type { Airing, Calendar, ItemPage, MediaItem } from '../lib/types'
 
@@ -72,6 +73,8 @@ export function Home() {
 
       <div className="mt-16 space-y-16">
         <ThisWeek />
+
+        <RecentlyViewed />
 
         <ThisSeason />
 
@@ -156,6 +159,14 @@ function Featured({ item }: { item: MediaItem }) {
                 eager
                 alt={t.a11y.poster(item.title)}
                 className="strike hidden w-28 rounded-plate border border-rule-bright shadow-[var(--shadow-plate)] sm:block lg:w-36"
+                fallback={
+                  <Placeholder
+                    title={item.title}
+                    kind={item.kind}
+                    label={t.a11y.poster(item.title)}
+                    className="hidden aspect-2/3 w-28 rounded-plate border border-rule-bright shadow-[var(--shadow-plate)] sm:grid lg:w-36"
+                  />
+                }
               />
             ) : null}
 
@@ -327,6 +338,62 @@ function ThisWeek() {
           <Upcoming key={`${airing.workId}-${airing.episode.id}`} airing={airing} work={works.get(airing.workId)} locale={locale} />
         ))}
       </div>
+    </section>
+  )
+}
+
+/**
+ * What was opened lately, from this browser's own memory: the way back to
+ * the work left half-read, before the rows of everything else. Nothing when
+ * there is nothing — a shelf that says "nothing yet" is a shelf for its own
+ * sake.
+ */
+function RecentlyViewed() {
+  const { t } = useI18n()
+  const recent = useRecent()
+
+  if (!recent.length) return null
+
+  return (
+    <section>
+      <SectionTitle
+        action={
+          <button
+            type="button"
+            onClick={forget}
+            title={t.home.recentHint}
+            className="flex min-h-11 cursor-pointer items-center gap-1.5 text-sm text-bone-dim transition-colors duration-200 hover:text-vermillion"
+          >
+            <Glyph name="close" className="size-3.5" />
+            {t.home.recentClear}
+          </button>
+        }
+      >
+        {t.home.recent}
+      </SectionTitle>
+
+      <PosterShelf label={t.home.recent}>
+        {recent.map((work) => (
+          <PosterCard
+            key={work.id}
+            to={`/work/${work.id}`}
+            kind
+            // As much of the work as the shelf kept: enough for a card.
+            item={{
+              id: work.id,
+              title: work.title,
+              kind: work.kind,
+              year: work.year,
+              images: work.poster
+                ? [{ id: `recent-${work.id}`, coverType: 'poster', url: work.poster, sortOrder: 0, isManual: false }]
+                : [],
+              ratings: work.rating ? [work.rating] : [],
+              isManual: false,
+              externalIds: {},
+            }}
+          />
+        ))}
+      </PosterShelf>
     </section>
   )
 }

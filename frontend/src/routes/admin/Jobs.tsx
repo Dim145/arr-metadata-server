@@ -431,7 +431,7 @@ export function JobTable({ jobs }: { jobs: Job[] }) {
         that scrolls sideways hides most of what it holds. */}
     <ul className="divide-y divide-rule md:hidden">
       {jobs.map((job) => (
-        <li key={job.id} className="px-4 py-3">
+        <li key={job.id} data-job={job.id} className="px-4 py-3">
           <div className="space-y-1.5">
             <div className="flex items-center justify-between gap-3">
               {opener(job, `job-${job.id}-detail-narrow`)}
@@ -481,7 +481,7 @@ export function JobTable({ jobs }: { jobs: Job[] }) {
             const expanded = open === job.id
             return (
               <Fragment key={job.id}>
-              <Tr className={expanded ? 'bg-ink-high' : undefined}>
+              <Tr data-job={job.id} className={expanded ? 'bg-ink-high' : undefined}>
                 <Td className="whitespace-nowrap">
                   <span className="font-mono text-xs text-bone-faint tabular-nums" title={fmt.dateTime(job.createdAt, locale)}>
                     {fmt.relative(job.createdAt, locale)}

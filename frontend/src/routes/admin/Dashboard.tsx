@@ -501,44 +501,28 @@ function HealthPanel() {
             {t.admin.overview.healthFailed}
           </p>
         ) : (
-          <>
-            <dl className="mt-4 grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
-              {(
-                [
-                  [t.admin.overview.version, health.data.version],
-                  [t.admin.overview.uptime, uptime(health.data.uptimeSeconds)],
-                  [t.admin.overview.database, health.data.database],
-                  [t.admin.overview.instances, health.data.mode === 'multi' ? t.admin.overview.instancesLine(health.data.instances, health.data.leader ?? null) : t.admin.overview.single],
-                  [t.admin.overview.refreshFailed, fmt.count(health.data.refreshFailed, locale)],
-                  [t.admin.overview.cacheOf('items'), t.admin.overview.cacheLine(health.data.itemsCache.entries, bytes(health.data.itemsCache.bytes))],
-                  [t.admin.overview.cacheOf('searches'), t.admin.overview.cacheLine(health.data.searchesCache.entries, bytes(health.data.searchesCache.bytes))],
-                  [t.admin.overview.cacheOf('lists'), t.admin.overview.cacheLine(health.data.listsCache.entries, bytes(health.data.listsCache.bytes))],
-                  [t.admin.overview.sources, health.data.sources.filter((s) => s.on).map((s) => providerName(s.name)).join(' · ') || '—'],
-                ] as [string, string][]
-              ).map(([label, value]) => (
-                <div key={label}>
-                  <dt className="label">{label}</dt>
-                  <dd className="mt-0.5 font-mono text-[0.8125rem] text-bone tabular-nums">{value}</dd>
-                </div>
-              ))}
-            </dl>
-            {health.data.jobs.length ? (
-              <div className="mt-5">
-                <span className="label">{t.admin.overview.lastJobs}</span>
-                <ul className="mt-2 divide-y divide-rule text-sm">
-                  {health.data.jobs.slice(0, 5).map((job) => (
-                    <li key={job.id} className="flex items-center gap-3 py-1.5">
-                      <RunStatus status={job.status} />
-                      <span className="min-w-0 flex-1 truncate text-bone">{job.kind}</span>
-                      <span className="font-mono text-xs text-bone-faint tabular-nums">
-                        {fmt.relative(job.finishedAt ?? job.startedAt ?? job.createdAt, locale)}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
+          // The last runs are the panel above's, with its way to all of them;
+          // said twice on one page they were twice as long to read.
+          <dl className="mt-4 grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
+            {(
+              [
+                [t.admin.overview.version, health.data.version],
+                [t.admin.overview.uptime, uptime(health.data.uptimeSeconds)],
+                [t.admin.overview.database, health.data.database],
+                [t.admin.overview.instances, health.data.mode === 'multi' ? t.admin.overview.instancesLine(health.data.instances, health.data.leader ?? null) : t.admin.overview.single],
+                [t.admin.overview.refreshFailed, fmt.count(health.data.refreshFailed, locale)],
+                [t.admin.overview.cacheOf('items'), t.admin.overview.cacheLine(health.data.itemsCache.entries, bytes(health.data.itemsCache.bytes))],
+                [t.admin.overview.cacheOf('searches'), t.admin.overview.cacheLine(health.data.searchesCache.entries, bytes(health.data.searchesCache.bytes))],
+                [t.admin.overview.cacheOf('lists'), t.admin.overview.cacheLine(health.data.listsCache.entries, bytes(health.data.listsCache.bytes))],
+                [t.admin.overview.sources, health.data.sources.filter((s) => s.on).map((s) => providerName(s.name)).join(' · ') || '—'],
+              ] as [string, string][]
+            ).map(([label, value]) => (
+              <div key={label}>
+                <dt className="label">{label}</dt>
+                <dd className="mt-0.5 font-mono text-[0.8125rem] text-bone tabular-nums">{value}</dd>
               </div>
-            ) : null}
-          </>
+            ))}
+          </dl>
         )}
       </div>
     </Panel>

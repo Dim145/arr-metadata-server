@@ -16,13 +16,24 @@ test.describe('the page as an app, and as a link', () => {
     const manifest = await request.get('/manifest.webmanifest')
     expect(manifest.status()).toBe(200)
     expect(manifest.headers()['content-type']).toMatch(/manifest|json/)
-    const body = (await manifest.json()) as { name: string; icons: { src: string; type: string }[] }
+    const body = (await manifest.json()) as {
+      name: string
+      icons: { src: string; type: string }[]
+      shortcuts: { name: string; url: string; icons: { src: string }[] }[]
+    }
     expect(body.name).toBe('Cinémathèque')
     expect(body.icons.length).toBeGreaterThanOrEqual(3)
     for (const icon of body.icons) {
       const response = await request.get(icon.src)
       expect(response.status(), icon.src).toBe(200)
       expect(response.headers()['content-type'], icon.src).toContain(icon.type)
+    }
+    // The ways in an installed app offers from its icon, each a page that answers.
+    expect(body.shortcuts.length).toBeGreaterThanOrEqual(3)
+    for (const shortcut of body.shortcuts) {
+      expect(shortcut.url, shortcut.name).toMatch(/^\//)
+      expect((await request.get(shortcut.url)).status(), shortcut.url).toBe(200)
+      expect(shortcut.icons.length, shortcut.name).toBeGreaterThan(0)
     }
     const html = await (await request.get('/')).text()
     expect(html).toContain('<link rel="manifest" href="/manifest.webmanifest" />')

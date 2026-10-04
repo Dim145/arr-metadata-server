@@ -15,17 +15,18 @@
 
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
-import { useSearchParams } from 'react-router'
+import { useNavigate, useSearchParams } from 'react-router'
 
 import { PosterCard, PosterGrid } from '../components/media'
 import { Button, Dialog, EmptyState, Glyph, Input, Label, Select, Skeleton } from '../components/ui'
 import { api, query } from '../lib/api'
 import { cn } from '../lib/cn'
+import { drawWork } from '../lib/draw'
 import * as fmt from '../lib/format'
 import { useTitle } from '../lib/hooks'
 import { useI18n } from '../lib/i18n'
 import { GenreFilter } from '../components/GenreFilter'
-import { genreLabel, languageName, listedGenres, statusLabel } from '../lib/labels'
+import { genreLabel, languageGroups, languageName, listedGenres, statusLabel } from '../lib/labels'
 import type { Facet, Facets, ItemPage } from '../lib/types'
 
 const PAGE = 36
@@ -181,6 +182,25 @@ export function Browse() {
   const items = results.data?.items ?? []
   const total = results.data?.total ?? 0
 
+  // One of these, at random: the question a catalogue is opened with in the
+  // evening. Drawn under the filters as they stand, from the count the list
+  // already holds.
+  const navigate = useNavigate()
+  const [drawing, setDrawing] = useState(false)
+  const [drawFailed, setDrawFailed] = useState(false)
+  const draw = async () => {
+    setDrawing(true)
+    setDrawFailed(false)
+    try {
+      const work = await drawWork({ ...narrowing, sort, order, language: lang }, total)
+      if (work) navigate(`/work/${work.id}`)
+    } catch {
+      setDrawFailed(true)
+    } finally {
+      setDrawing(false)
+    }
+  }
+
   const heading = f.term
     ? t.browse.quoted(f.term)
     : f.kind === 'series'
@@ -202,7 +222,10 @@ export function Browse() {
           ) : null}
         </div>
 
-        <div className="flex items-end gap-2">
+        {/* On a phone the order takes a line of its own under the two
+            buttons: beside them it had room for "Most popu". Its own width,
+            all on one line, from a tablet up. */}
+        <div className="flex w-full flex-wrap items-end gap-2 sm:w-auto sm:flex-nowrap">
           <Button className="lg:hidden" onClick={() => setSheet(true)}>
             <Glyph name="sliders" className="size-4" />
             {t.browse.filters}
@@ -213,7 +236,24 @@ export function Browse() {
             ) : null}
           </Button>
 
-          <div>
+          {/* Beside the order, away from the filters: the filters say what,
+              the order and the draw say in which order it comes. */}
+          <Button
+            onClick={() => void draw()}
+            disabled={drawing || !total}
+            aria-label={t.browse.random}
+            title={t.browse.randomHint}
+          >
+            <Glyph name="shuffle" className="size-4" />
+            <span className="hidden sm:inline">{drawing ? t.browse.drawing : t.browse.random}</span>
+          </Button>
+          {drawFailed ? (
+            <span role="alert" className="self-center text-sm text-vermillion">
+              {t.common.actionFailed}
+            </span>
+          ) : null}
+
+          <div className="min-w-0 basis-full sm:basis-auto">
             <label htmlFor="browse-order" className="label mb-1.5 block">
               {t.browse.sort}
             </label>
@@ -420,6 +460,33 @@ function activeFilters(
 }
 
 /**
+ * The languages on offer, one choice per tongue however many ways the
+ * catalogue spells it, each choice asking for every spelling at once. The
+ * value the URL holds is kept as it is — an older link's single code is
+ * still the group's choice — and offered on its own where nothing counts it.
+ */
+function languageChoices(
+  facets: Facet[],
+  current: string,
+  locale: string,
+): { value: string; label: string; count?: number }[] {
+  const choices: { value: string; label: string; count?: number }[] = languageGroups(
+    facets,
+    (facet) => facet.value,
+    (facet) => facet.count,
+    locale,
+  ).map((group) => ({
+    value: group.codes.includes(current) ? current : group.codes.join(','),
+    label: group.label,
+    count: group.count,
+  }))
+  if (current && !choices.some((choice) => choice.value === current)) {
+    choices.push({ value: current, label: languageName(current, locale) ?? current })
+  }
+  return choices
+}
+
+/**
  * Every filter, as one panel. The same component stands in the rail and in
  * the phone's sheet, so the two can never offer different things.
  */
@@ -535,9 +602,9 @@ function FilterPanel({
           </label>
           <Select id={id('language')} value={f.language} onChange={(e) => update('language', e.target.value)}>
             <option value="">{t.browse.anyLanguage}</option>
-            {withCurrent(facets?.languages ?? [], f.language).map((language) => (
+            {languageChoices(facets?.languages ?? [], f.language, locale).map((language) => (
               <option key={language.value} value={language.value}>
-                {languageName(language.value, locale)}
+                {language.label}
                 {language.count !== undefined ? ` (${language.count})` : ''}
               </option>
             ))}

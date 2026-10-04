@@ -11,7 +11,8 @@ import { useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router'
 
 import { ExternalLink } from '../components/elsewhere'
-import { Artwork, PosterCard, PosterGrid, Score, PosterShelf } from '../components/media'
+import { Artwork, Placeholder, PosterCard, PosterGrid, Score, PosterShelf } from '../components/media'
+import { ShareButton } from '../components/Share'
 import { Lightbox, Trailer, useLightbox } from '../components/Theatre'
 import {
   Button,
@@ -30,6 +31,8 @@ import { ApiError, api, query } from '../lib/api'
 import { feeds, webcal } from '../lib/feeds'
 import { useMe, useTitle, useWork } from '../lib/hooks'
 import { identifierLink } from '../lib/links'
+import { remember } from '../lib/recent'
+import { POSTER } from '../lib/transitions'
 import { cn } from '../lib/cn'
 import * as fmt from '../lib/format'
 import { jobLabel, languageName, providerName, statusLabel, titleOrigin } from '../lib/labels'
@@ -61,6 +64,11 @@ export function Work() {
   const { id = '' } = useParams()
   const work = useWork(id)
   useTitle(work.data?.title)
+
+  // Noted as opened, for the shelf of recent works and the palette's list.
+  useEffect(() => {
+    if (work.data) remember(work.data)
+  }, [work.data])
 
   // What is on screen stays through a refetch that failed; only a read that
   // never came back decides between "gone" and "try again".
@@ -158,19 +166,33 @@ function Plate({ item }: { item: MediaItem }) {
 
       <div className="mx-auto max-w-7xl px-4 sm:px-6">
         <div className="-mt-24 flex flex-col gap-6 sm:-mt-28 sm:flex-row sm:items-end">
-          <div className="strike w-32 shrink-0 sm:w-40 lg:w-48">
+          {/* Named for the view transition: the card that was opened travels
+              onto this box. No entrance of its own, then — an arrival drawn
+              twice is drawn wrong. */}
+          <div className="w-32 shrink-0 sm:w-40 lg:w-48" data-travels={POSTER} style={{ viewTransitionName: POSTER }}>
             {sheet ? (
               <Artwork
                 url={sheet}
                 role="poster"
                 eager
                 alt={t.a11y.poster(item.title)}
-                className="w-full rounded-plate border border-rule-bright shadow-[var(--shadow-plate)]"
+                className="aspect-2/3 w-full rounded-plate border border-rule-bright object-cover shadow-[var(--shadow-plate)]"
+                fallback={
+                  <Placeholder
+                    title={item.title}
+                    kind={item.kind}
+                    label={t.a11y.poster(item.title)}
+                    className="aspect-2/3 w-full rounded-plate border border-rule-bright shadow-[var(--shadow-plate)]"
+                  />
+                }
               />
             ) : (
-              <div className="grid aspect-2/3 w-full place-items-center rounded-plate border border-rule bg-ink-high">
-                <Glyph name={item.kind === 'series' ? 'tv' : 'film'} className="size-8 text-bone-faint" />
-              </div>
+              <Placeholder
+                title={item.title}
+                kind={item.kind}
+                label={t.a11y.poster(item.title)}
+                className="aspect-2/3 w-full rounded-plate border border-rule"
+              />
             )}
           </div>
 
@@ -246,8 +268,7 @@ function Plate({ item }: { item: MediaItem }) {
               </div>
             </div>
 
-            {item.trailerYoutubeId || item.themeMusic || item.homepage || subscribable || me.data?.canWrite ? (
-              <div className="mt-5 flex flex-wrap items-center gap-2">
+            <div className="mt-5 flex flex-wrap items-center gap-2">
                 {item.trailerYoutubeId ? (
                   <Button onClick={() => setTrailer(true)}>
                     <Glyph name="play" className="size-4" />
@@ -255,6 +276,12 @@ function Plate({ item }: { item: MediaItem }) {
                   </Button>
                 ) : null}
                 {item.themeMusic ? <ThemeMusic key={item.themeMusic} url={item.themeMusic} /> : null}
+                {/* The address, handed on: the server's own preview of the
+                    work travels with it wherever it lands. */}
+                <ShareButton
+                  title={item.title}
+                  text={[item.year, item.kind === 'series' ? t.nav.series : t.nav.films].filter(Boolean).join(' · ')}
+                />
                 {item.homepage ? (
                   <ExternalLink href={item.homepage} className="min-h-11 px-3 text-sm text-bone-dim">
                     {/* A Fan-Kai's is its page on the wiki, and says so. */}
@@ -283,7 +310,6 @@ function Plate({ item }: { item: MediaItem }) {
                   </Link>
                 ) : null}
               </div>
-            ) : null}
 
             {inLists.data?.lists.length ? (
               <div className="mt-4 flex flex-wrap items-center gap-2">
@@ -1285,7 +1311,11 @@ function WorkSkeleton() {
         <Skeleton className="size-full rounded-none" />
       </div>
       <div className="-mt-24 flex gap-6 sm:-mt-28">
-        <Skeleton className="aspect-2/3 w-32 sm:w-40 lg:w-48" />
+        {/* Where the plate's poster will be, named as it: a card opened before
+            the page is read travels here, and the poster then fades in. */}
+        <div className="w-32 shrink-0 sm:w-40 lg:w-48" data-travels={POSTER} style={{ viewTransitionName: POSTER }}>
+          <Skeleton className="aspect-2/3 w-full rounded-plate" />
+        </div>
         <div className="flex-1 space-y-3 pt-24 sm:pt-28">
           <Skeleton className="h-10 w-2/3" />
           <Skeleton className="h-4 w-1/3" />

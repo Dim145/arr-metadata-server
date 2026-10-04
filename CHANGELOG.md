@@ -7,11 +7,49 @@ may change what the API or the configuration means, and says so here.
 
 ## [Unreleased]
 
+### Added
+
+- The schedule has a month view (`/calendar?view=month`): a grid of the
+  month's days, Monday first, each with what airs on it — three at most, the
+  rest a step into the week — and today marked. On a phone the days carry a
+  mark an episode and a tap opens the week at that day. The week stays the
+  default; a switch in the heading goes between the two.
+- A work at random. The browse page draws one under the filters as they
+  stand, from the count it already holds; the command palette offers one from
+  the whole catalogue.
+- Recently viewed. The front page keeps a shelf of the works opened lately,
+  and the command palette lists them before anything is typed — kept in the
+  browser alone, sent nowhere, cleared with one button.
+- A work's page offers to share its address: the system's share sheet where
+  there is one and a finger, the clipboard elsewhere, with the copying said.
+- A poster that cannot be shown — no picture, or one whose address no longer
+  answers — gives way to a drawn stand-in: the title's initial in the display
+  face, the kind, the title. Wherever a poster can be missing, at every size.
+- Opening a work from its card is drawn, where the browser draws view
+  transitions: the poster travels onto the page's plate and the rest crosses
+  over. A reader who asked for less motion, or a browser without the API,
+  arrives as before. A card asks for its work as soon as a pointer rests on
+  it, so the page is there by the time it is opened.
+- The web app manifest names three shortcuts an installed app offers from its
+  icon: the catalogue, the schedule, the season chart.
+- `original_language` on `/api/v1/items` and `/api/v1/facets` takes several
+  codes, comma-separated (`ja,jpn`): the works made in any of them.
+
 ### Changed
 
 - The site's navigation offers *Selections* — in the bar, the catalogue's
   panel, the phone's menu, the footer and the command palette — only while
   there is a selection to show. A way to an empty page was no way.
+- The figures page says genres in the reader's language, counts a language
+  once however many ways its providers spell it (`ja` from TMDB, `jpn` from
+  TheTVDB were two bars of *Japanese*), and every bar leads into the
+  catalogue narrowed to what it counts.
+- The browse page's language filter offers each language once too, asking for
+  every spelling at once.
+- The dashboard's health card no longer repeats the last runs the panel above
+  it lists.
+- The lock on a public card shows only where a source could be overruled, as
+  the administration already had it; captions under posters are set at 12px.
 
 ## [0.6.0] — 2026-10-04
 

@@ -109,19 +109,24 @@ test.describe('the tasks', () => {
 
     await page.goto('/admin/jobs')
     // The run's name is the button that opens it — and says "hide" once it
-    // has, so the button is found by its row, not by its words.
+    // has, so the button is found by its row, which carries the run's id:
+    // the schedule may have started another run since the list was read,
+    // and the first row would then be that one's.
     const opener = page
-      .getByRole('table')
-      .getByRole('row')
-      .nth(1)
+      .locator(`[data-job="${run.id}"]:visible`)
       .getByRole('button', { name: /^(show|hide) what|^(afficher|masquer) ce qu/i })
+    await expect(opener).toBeVisible()
     await opener.click()
     await expect(opener).toHaveAttribute('aria-expanded', 'true')
     const panel = page.locator(`#${await opener.getAttribute('aria-controls')}`)
     await expect(panel).toBeVisible()
     await expect(panel.getByText(/^(started|début)$/i)).toBeVisible()
     if (detail.entriesTotal === 0) {
-      await expect(panel.getByText(/nothing is written down|rien n’est consigné/i)).toBeVisible()
+      // Nothing to list, said one way or the other: a run that kept no
+      // detail, or a sweep that found nothing due.
+      await expect(
+        panel.getByText(/nothing is written down|rien n’est consigné|no work was due|aucune fiche n’était due/i),
+      ).toBeVisible()
     } else {
       await expect(panel.getByRole('listitem')).toHaveCount(detail.entries.length)
     }
