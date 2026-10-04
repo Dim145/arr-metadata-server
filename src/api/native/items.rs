@@ -581,6 +581,13 @@ async fn refresh(
         .await?
         .ok_or(AppError::NotFound)?;
 
+    // Before a run is opened for it: one refused here would stay open.
+    if item.is_manual {
+        return Err(AppError::Conflict(
+            "a manual entry has no source to refresh from".into(),
+        ));
+    }
+
     // Someone is waiting on this one, so it earns a row of its own rather than
     // being folded into a sweep summary.
     let by = identity.label();
@@ -594,20 +601,34 @@ async fn refresh(
     .inspect_err(|e| tracing::warn!(error = %e, "could not open a job run"))
     .ok();
 
-    if item.is_manual {
-        return Err(AppError::Conflict(
-            "a manual entry has no source to refresh from".into(),
-        ));
-    }
-
     let outcome = crate::jobs::refresh::refresh_one(&state, &item).await;
 
     if let Some(record) = record {
+        use crate::jobs::refresh::{Recorder, notes};
+        let recorder = Recorder::for_run(Some(&record));
         let closed = match &outcome {
             Ok(Some(_)) => {
-                repo::job::finish(&state.db, &record, Some("refreshed from a provider"), None).await
+                recorder
+                    .note(
+                        &state.db,
+                        &id,
+                        Some(&item),
+                        repo::job::Outcome::Ok,
+                        notes::REFRESHED,
+                    )
+                    .await;
+                repo::job::finish(&state.db, &record, Some(notes::REFRESHED), None).await
             }
             Ok(None) => {
+                recorder
+                    .note(
+                        &state.db,
+                        &id,
+                        Some(&item),
+                        repo::job::Outcome::Skipped,
+                        "no provider could resolve it",
+                    )
+                    .await;
                 repo::job::finish(
                     &state.db,
                     &record,
@@ -616,7 +637,18 @@ async fn refresh(
                 )
                 .await
             }
-            Err(e) => repo::job::finish(&state.db, &record, None, Some(&e.to_string())).await,
+            Err(e) => {
+                recorder
+                    .note(
+                        &state.db,
+                        &id,
+                        Some(&item),
+                        repo::job::Outcome::Failed,
+                        &e.to_string(),
+                    )
+                    .await;
+                repo::job::finish(&state.db, &record, None, Some(&e.to_string())).await
+            }
         };
 
         if let Err(e) = closed {

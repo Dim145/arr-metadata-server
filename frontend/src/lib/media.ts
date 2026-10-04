@@ -416,6 +416,17 @@ export function imagesOf(item: Pick<MediaItem, 'images'>, kind: string): Image[]
     .sort((a, b) => Number(b.isManual) - Number(a.isManual) || a.sortOrder - b.sortOrder)
 }
 
+/**
+ * Whether a work has a source elsewhere — an identifier a refresh asks a
+ * provider by. Without one, nothing ever overwrites a field, so a lock keeps
+ * it from nothing: the interface shows none on such a work.
+ */
+export function hasSources(item: Pick<MediaItem, 'externalIds'>): boolean {
+  return Object.values(item.externalIds ?? {}).some((value) =>
+    Array.isArray(value) ? value.length > 0 : value !== undefined && value !== null && value !== '',
+  )
+}
+
 /** Whether a person has claimed this field, so the interface can say so. */
 export function isLocked(item: Pick<MediaItem, 'lockedFields'>, path: string): boolean {
   return (item.lockedFields ?? []).includes(path)

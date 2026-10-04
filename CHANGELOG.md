@@ -40,8 +40,20 @@ may change what the API or the configuration means, and says so here.
   (`AMS_TLS_REPLACE_AUTHORITY`; docs/integration.md, *Upgrading a server
   that is already running*).
 
+- A run in the tasks' history opens onto what it did: each work a refresh
+  took, in order, with how it went — refreshed, failed and why, gone
+  meanwhile — and a link to its record. The run's whole summary, its start
+  and end, and the instance that ran it are read there too. Written down as
+  the run goes (`job_entry`), kept and pruned with the runs; a run older
+  than this says so.
+
 ### Changed
 
+- A work with no identifier elsewhere — one made by hand, that no refresh
+  ever touches — shows none of its edits as locks: not on its record, its
+  seasons and episodes, nor in the catalogue's list. Nothing is locked
+  against nothing. The server files the edits as it did, which is what
+  keeps them the day a source is given.
 - *Members too*, on the access page, lets members' keys onto every relay —
   TMDB's, TheTVDB's, AniList's — rather than TMDB's alone; the setting keeps
   its key, `api.tmdbMembers`. The *Relays* cache space holds what every

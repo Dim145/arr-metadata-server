@@ -27,7 +27,77 @@ pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list))
         .routes(routes!(run))
+        .routes(routes!(detail))
         .routes(routes!(cancel))
+}
+
+/// How many of a run's works the detail hands back at once: a refresh of
+/// everything over a large catalogue runs to thousands, and a page that long
+/// says less than its count.
+const MOST_ENTRIES: i64 = 500;
+
+/// One run, with what it did to each work.
+#[derive(Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct JobDetail {
+    pub job: repo::job::Job,
+    /// The works taken, in order — the first five hundred of them.
+    pub entries: Vec<repo::job::Entry>,
+    /// How many there were in all.
+    pub entries_total: i64,
+}
+
+/// One run of the history, and the detail behind its summary: which works it
+/// took, and how each went. A run older than the detail, or of a task that
+/// keeps none, has an empty list.
+#[utoipa::path(
+    get, path = "/jobs/{id}", tag = TAG,
+    params(("id" = String, Path)),
+    responses(
+        (status = 200, body = JobDetail),
+        (status = 403, description = "The caller is not an administrator"),
+        (status = 404, description = "No such run"),
+    ),
+)]
+async fn detail(
+    State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
+    Path(id): Path<String>,
+) -> AppResult<Json<JobDetail>> {
+    identity.require_admin()?;
+
+    let mut job = repo::job::get(&state.db, &id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    // A refresh names its work by id; the page names it by its title.
+    if let Some(target) = job.target.clone() {
+        job.work = repo::item::titles(&state.db, &[target])
+            .await?
+            .into_values()
+            .next();
+    }
+    let mut entries = repo::job::entries(&state.db, &id, MOST_ENTRIES).await?;
+    let entries_total = repo::job::count_entries(&state.db, &id).await?;
+
+    // A work gone since the run is named by its title alone: an id that
+    // leads nowhere is no link.
+    let ids: Vec<String> = entries.iter().filter_map(|e| e.media_id.clone()).collect();
+    let held = repo::item::titles(&state.db, &ids).await?;
+    for entry in &mut entries {
+        if entry
+            .media_id
+            .as_deref()
+            .is_some_and(|media_id| !held.contains_key(media_id))
+        {
+            entry.media_id = None;
+        }
+    }
+
+    Ok(Json(JobDetail {
+        job,
+        entries,
+        entries_total,
+    }))
 }
 
 /// Every background task: when it runs, how it last went, when it runs next.

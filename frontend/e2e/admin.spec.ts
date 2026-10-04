@@ -624,7 +624,12 @@ test.describe('a locked genre', () => {
     // else in the suite reads their genres, and a film's editor has a single
     // genres field, with no seasons below it.
     const { items } = await (await page.request.get('/api/v1/items?kind=movie&limit=50')).json()
-    const work = (items as { id: string }[]).at(info.project.name === 'mobile' ? -2 : -1)
+    // Films with a source: a work made by hand shows none of its edits as
+    // locks, since nothing ever refreshes it.
+    const sourced = (items as { id: string; externalIds?: Record<string, unknown> }[]).filter((item) =>
+      Object.values(item.externalIds ?? {}).some((value) => (Array.isArray(value) ? value.length > 0 : value !== undefined && value !== null)),
+    )
+    const work = sourced.at(info.project.name === 'mobile' ? -2 : -1)
     test.skip(!work, 'the catalogue holds too few films')
 
     const genre = `Zzz e2e genre ${info.project.name}`

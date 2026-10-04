@@ -71,6 +71,7 @@ export function RecordTab({
   work,
   registry,
   overrides,
+  lockable = true,
   report,
   reportFailed,
   onRetryReport,
@@ -83,6 +84,8 @@ export function RecordTab({
   work: MediaItem
   registry: FieldRegistry
   overrides: Override[]
+  /** Whether a lock means anything here: not on a work no refresh ever touches. */
+  lockable?: boolean
   report?: ProvenanceReport
   reportFailed: boolean
   onRetryReport: () => void
@@ -158,7 +161,7 @@ export function RecordTab({
           onChange={setFilter}
           options={[
             { value: 'all', label: <Choice label={e.filter.all} n={counts.all} /> },
-            { value: 'locked', label: <Choice label={e.filter.locked} n={counts.locked} /> },
+            ...(lockable ? [{ value: 'locked' as const, label: <Choice label={e.filter.locked} n={counts.locked} /> }] : []),
             { value: 'empty', label: <Choice label={e.filter.empty} n={counts.empty} /> },
           ]}
         />

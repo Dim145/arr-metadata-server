@@ -510,6 +510,27 @@ export interface JobsResponse {
   total: number
 }
 
+/** What a run did to one work: the detail behind its summary. */
+export interface JobEntry {
+  id: string
+  /** The work's id, which may name nothing any more. */
+  mediaId?: string
+  /** Its title and kind when the run took it. */
+  title?: string
+  kind?: MediaKind
+  outcome: 'ok' | 'failed' | 'skipped'
+  /** One of the fixed notes the interface knows, or the error as the provider said it. */
+  note?: string
+  createdAt: string
+}
+
+/** One run, with what it did to each work — the first five hundred of them. */
+export interface JobDetail {
+  job: Job
+  entries: JobEntry[]
+  entriesTotal: number
+}
+
 /** An export under way, written in the background and recorded as a job. */
 export interface ExportStarted {
   root: string

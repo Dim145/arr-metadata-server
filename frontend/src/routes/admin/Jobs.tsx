@@ -10,7 +10,7 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
 import { Link } from 'react-router'
 
 import {
@@ -32,11 +32,12 @@ import {
   Tr,
 } from '../../components/ui'
 import { ApiError, api, query } from '../../lib/api'
+import { cn } from '../../lib/cn'
 import * as fmt from '../../lib/format'
 import { useI18n } from '../../lib/i18n'
 import { describeIdentity, providerName } from '../../lib/labels'
 import type { Dict } from '../../lib/i18n'
-import type { Job, JobsResponse, Task, TaskId } from '../../lib/types'
+import type { Job, JobDetail, JobEntry, JobsResponse, Task, TaskId } from '../../lib/types'
 
 const TASKS: TaskId[] = [
   'refresh.sweep',
@@ -378,6 +379,31 @@ export function JobTable({ jobs }: { jobs: Job[] }) {
   const { t, locale } = useI18n()
   const k = t.admin.tasks
   const queryClient = useQueryClient()
+  // The run whose detail is open, under its row: one at a time.
+  const [open, setOpen] = useState<string | null>(null)
+  const toggle = (id: string) => setOpen((current) => (current === id ? null : id))
+  const nameOf = (job: Job) => k.names[job.kind] ?? job.kind
+
+  /** The run's name, as the button that opens what it did. */
+  const opener = (job: Job, controls: string) => {
+    const expanded = open === job.id
+    return (
+      <button
+        type="button"
+        aria-expanded={expanded}
+        aria-controls={expanded ? controls : undefined}
+        aria-label={expanded ? k.hideDetail(nameOf(job)) : k.showDetail(nameOf(job))}
+        onClick={() => toggle(job.id)}
+        className="inline-flex min-h-8 items-center gap-1.5 text-left text-sm text-bone transition-colors duration-150 hover:text-vermillion"
+      >
+        <Glyph
+          name="chevronRight"
+          className={cn('size-3.5 shrink-0 text-bone-faint transition-transform duration-200', expanded && 'rotate-90 text-vermillion')}
+        />
+        <span className="whitespace-nowrap">{nameOf(job)}</span>
+      </button>
+    )
+  }
 
   const again = useMutation({
     mutationFn: (job: Job) =>
@@ -405,22 +431,29 @@ export function JobTable({ jobs }: { jobs: Job[] }) {
         that scrolls sideways hides most of what it holds. */}
     <ul className="divide-y divide-rule md:hidden">
       {jobs.map((job) => (
-        <li key={job.id} className="space-y-1.5 px-4 py-3">
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-sm text-bone">{k.names[job.kind] ?? job.kind}</span>
-            <RunStatus status={job.status} />
+        <li key={job.id} className="px-4 py-3">
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between gap-3">
+              {opener(job, `job-${job.id}-detail-narrow`)}
+              <RunStatus status={job.status} />
+            </div>
+            {job.work ? (
+              <Link to={`/admin/catalogue/${job.work.id}`} className="block truncate text-sm text-bone underline decoration-rule-bright underline-offset-2">
+                {job.work.title}
+              </Link>
+            ) : null}
+            <p className={job.error ? 'text-xs break-words text-vermillion' : 'text-xs text-bone-dim'}>
+              {describeDetail(job.error ?? job.detail, t)}
+            </p>
+            <p className="font-mono text-[0.6875rem] text-bone-faint tabular-nums">
+              {fmt.relative(job.createdAt, locale)} · {who(job)} · {took(job, locale)}
+            </p>
           </div>
-          {job.work ? (
-            <Link to={`/admin/catalogue/${job.work.id}`} className="block truncate text-sm text-bone underline decoration-rule-bright underline-offset-2">
-              {job.work.title}
-            </Link>
+          {open === job.id ? (
+            <div id={`job-${job.id}-detail-narrow`} className="mt-3 border-t border-rule pt-3">
+              <JobDetailPanel job={job} />
+            </div>
           ) : null}
-          <p className={job.error ? 'text-xs break-words text-vermillion' : 'text-xs text-bone-dim'}>
-            {describeDetail(job.error ?? job.detail, t)}
-          </p>
-          <p className="font-mono text-[0.6875rem] text-bone-faint tabular-nums">
-            {fmt.relative(job.createdAt, locale)} · {who(job)} · {took(job, locale)}
-          </p>
         </li>
       ))}
     </ul>
@@ -445,8 +478,10 @@ export function JobTable({ jobs }: { jobs: Job[] }) {
             // Anything but a refresh of everything, which asks for a confirmation
             // of its own, from its card.
             const rerunnable = job.status !== 'running' && job.kind !== 'refresh.all'
+            const expanded = open === job.id
             return (
-              <Tr key={job.id}>
+              <Fragment key={job.id}>
+              <Tr className={expanded ? 'bg-ink-high' : undefined}>
                 <Td className="whitespace-nowrap">
                   <span className="font-mono text-xs text-bone-faint tabular-nums" title={fmt.dateTime(job.createdAt, locale)}>
                     {fmt.relative(job.createdAt, locale)}
@@ -455,9 +490,7 @@ export function JobTable({ jobs }: { jobs: Job[] }) {
                 <Td>
                   <RunStatus status={job.status} />
                 </Td>
-                <Td>
-                  <span className="text-sm whitespace-nowrap text-bone">{k.names[job.kind] ?? job.kind}</span>
-                </Td>
+                <Td>{opener(job, `job-${job.id}-detail`)}</Td>
                 <Td className="w-full max-w-0">
                   {/* Which work, for a run that had one: "refreshed from a
                       provider" three times over said nothing of what. */}
@@ -497,6 +530,14 @@ export function JobTable({ jobs }: { jobs: Job[] }) {
                   ) : null}
                 </Td>
               </Tr>
+              {expanded ? (
+                <tr id={`job-${job.id}-detail`}>
+                  <td colSpan={7} className="border-b border-rule bg-ink px-5 py-4">
+                    <JobDetailPanel job={job} />
+                  </td>
+                </tr>
+              ) : null}
+              </Fragment>
             )
           })}
         </tbody>
@@ -504,6 +545,134 @@ export function JobTable({ jobs }: { jobs: Job[] }) {
     </TableScroll>
     </div>
     </>
+  )
+}
+
+/**
+ * What a run did, under its row: its whole summary where the row cut it
+ * short, when it began and ended, and each work it took with how it went.
+ */
+function JobDetailPanel({ job }: { job: Job }) {
+  const { t, locale } = useI18n()
+  const k = t.admin.tasks
+
+  const detail = useQuery({
+    queryKey: ['job', job.id],
+    queryFn: () => api.get<JobDetail>(`/jobs/${encodeURIComponent(job.id)}`),
+    // A run under way writes as it goes.
+    refetchInterval: job.status === 'running' ? 3_000 : false,
+  })
+
+  if (detail.isPending) return <Skeleton className="h-16 w-full" />
+  if (detail.isError) {
+    return (
+      <p role="alert" className="flex items-center gap-2 text-sm text-vermillion">
+        <Glyph name="alert" className="size-4 shrink-0" />
+        {t.admin.runs.loadFailed}
+      </p>
+    )
+  }
+
+  const { job: run, entries, entriesTotal } = detail.data
+  const note = (text?: string) => (text ? (t.admin.runs.notes[text] ?? text) : '')
+
+  return (
+    <div className="grid gap-5 lg:grid-cols-[minmax(0,20rem)_minmax(0,1fr)]">
+      <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 text-sm">
+        <dt className="label pt-0.5">{t.admin.runs.colDetail}</dt>
+        <dd className={cn('break-words', run.error ? 'text-vermillion' : 'text-bone')}>
+          {run.error ? describeDetail(run.error, t) : describeDetail(run.detail, t) || '—'}
+        </dd>
+        <dt className="label pt-0.5">{k.startedAt}</dt>
+        <dd className="font-mono text-xs text-bone-dim tabular-nums">{run.startedAt ? fmt.dateTime(run.startedAt, locale) : '—'}</dd>
+        <dt className="label pt-0.5">{k.finishedAt}</dt>
+        <dd className="font-mono text-xs text-bone-dim tabular-nums">
+          {run.finishedAt ? fmt.dateTime(run.finishedAt, locale) : t.admin.runs.running}
+        </dd>
+        {run.instance ? (
+          <>
+            <dt className="label pt-0.5">{k.instance}</dt>
+            <dd className="font-mono text-xs break-all text-bone-dim">{run.instance}</dd>
+          </>
+        ) : null}
+      </dl>
+
+      <div className="min-w-0">
+        <p className="label mb-2">{k.entries(entriesTotal)}</p>
+        {entriesTotal === 0 ? (
+          // A sweep that found nothing due took no work: said as such, not
+          // as a run that kept no detail.
+          <p className="text-sm leading-relaxed text-bone-faint italic">{run.detail === 'nothing was due' ? k.noneDue : k.noEntries}</p>
+        ) : (
+          <ol className="divide-y divide-rule overflow-hidden rounded-card border border-rule">
+            {entries.map((entry) => (
+              <li key={entry.id} className="grid grid-cols-[auto_minmax(0,1fr)] items-start gap-x-3 gap-y-1 px-3 py-2 sm:grid-cols-[7.5rem_minmax(0,1fr)]">
+                <span className="pt-0.5">
+                  <EntryOutcome outcome={entry.outcome} />
+                </span>
+                <span className="min-w-0">
+                  <span className="flex items-center gap-2">
+                    {entry.kind ? (
+                      <Glyph
+                        name={entry.kind === 'series' ? 'tv' : 'film'}
+                        className="size-3.5 shrink-0 text-bone-faint"
+                        title={entry.kind === 'series' ? t.nav.series : t.nav.films}
+                      />
+                    ) : null}
+                    {entry.mediaId && entry.title ? (
+                      <Link
+                        to={`/admin/catalogue/${entry.mediaId}`}
+                        className="truncate text-sm text-bone underline decoration-rule-bright underline-offset-2 transition-colors duration-150 hover:text-vermillion hover:decoration-vermillion"
+                      >
+                        {entry.title}
+                      </Link>
+                    ) : (
+                      <span className="truncate text-sm text-bone-dim" title={entry.title ? undefined : entry.mediaId}>
+                        {entry.title ?? k.goneWork}
+                      </span>
+                    )}
+                  </span>
+                  {entry.note ? (
+                    <span className={cn('block text-xs break-words', entry.outcome === 'failed' ? 'text-vermillion' : 'text-bone-faint')}>
+                      {note(entry.note)}
+                    </span>
+                  ) : null}
+                </span>
+              </li>
+            ))}
+          </ol>
+        )}
+        {entriesTotal > entries.length ? <p className="mt-2 text-xs text-bone-faint">{k.moreEntries(entriesTotal - entries.length)}</p> : null}
+      </div>
+    </div>
+  )
+}
+
+/** How a run's work on one entry ended, as a glyph and a word. */
+function EntryOutcome({ outcome }: { outcome: JobEntry['outcome'] }) {
+  const { t } = useI18n()
+  const word = t.admin.tasks.outcomes[outcome] ?? outcome
+  if (outcome === 'failed') {
+    return (
+      <Chip tone="accent">
+        <Glyph name="alert" className="size-3" />
+        {word}
+      </Chip>
+    )
+  }
+  if (outcome === 'skipped') {
+    return (
+      <Chip>
+        <Glyph name="close" className="size-3" />
+        {word}
+      </Chip>
+    )
+  }
+  return (
+    <Chip>
+      <Glyph name="check" className="size-3" />
+      {word}
+    </Chip>
   )
 }
 

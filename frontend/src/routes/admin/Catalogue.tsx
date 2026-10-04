@@ -41,6 +41,7 @@ import { cn } from '../../lib/cn'
 import * as fmt from '../../lib/format'
 import { useSettled } from '../../lib/debounce'
 import { useI18n } from '../../lib/i18n'
+import { hasSources } from '../../lib/media'
 import type { ItemPage, MediaItem, MediaKind, CuratedListPage, CuratedLists } from '../../lib/types'
 
 /** What an operator is being asked to confirm, and about which entry. */
@@ -538,7 +539,9 @@ function Row({
 }) {
   const { t } = useI18n()
 
-  const locks = item.lockedFields?.length ?? 0
+  // A work with no source elsewhere has nothing a lock keeps a field from:
+  // its edits are its record, and are not shown as locks.
+  const locks = hasSources(item) ? (item.lockedFields?.length ?? 0) : 0
   const ids = item.externalIds
 
   return (

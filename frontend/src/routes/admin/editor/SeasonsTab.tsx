@@ -41,12 +41,15 @@ export function SeasonsTab({
   work,
   registry,
   overrides,
+  lockable = true,
   report,
   onChanged,
 }: {
   work: MediaItem
   registry: FieldRegistry
   overrides: Override[]
+  /** Whether a lock means anything here: not on a work no refresh ever touches. */
+  lockable?: boolean
   report?: ProvenanceReport
   onChanged: () => void
 }) {
@@ -124,15 +127,19 @@ export function SeasonsTab({
       onChange={setFilter}
       options={[
         { value: 'all', label: e.filter.all },
-        {
-          value: 'locked',
-          label: (
-            <span className="inline-flex items-center gap-1.5">
-              {e.filter.locked}
-              <Count>{counts.locked}</Count>
-            </span>
-          ),
-        },
+        ...(lockable
+          ? [
+              {
+                value: 'locked' as const,
+                label: (
+                  <span className="inline-flex items-center gap-1.5">
+                    {e.filter.locked}
+                    <Count>{counts.locked}</Count>
+                  </span>
+                ),
+              },
+            ]
+          : []),
         {
           value: 'yours',
           label: (

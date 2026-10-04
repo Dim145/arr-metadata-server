@@ -89,6 +89,51 @@ async fn refresh_movie(state: &AppState, item: &MediaItem) -> Result<Option<Medi
     crate::service::gather::movie(state, ids.tmdb, ids.imdb.as_deref()).await
 }
 
+/// Writes down what a run did to each work, in the order it took them: the
+/// detail the history opens under a run's one-line summary. Without a run —
+/// one whose row could not be opened — nothing is written, and the work goes
+/// on regardless.
+pub struct Recorder {
+    run: Option<String>,
+    position: std::sync::atomic::AtomicI64,
+}
+
+impl Recorder {
+    pub fn for_run(run: Option<&str>) -> Self {
+        Self {
+            run: run.map(str::to_string),
+            position: std::sync::atomic::AtomicI64::new(0),
+        }
+    }
+
+    /// One work's outcome, with the work as it was read when it could be.
+    /// Losing the note must not stop the work: it is logged, not raised.
+    pub async fn note(
+        &self,
+        db: &crate::db::Db,
+        id: &str,
+        work: Option<&MediaItem>,
+        outcome: job::Outcome,
+        note: &str,
+    ) {
+        let Some(run) = &self.run else { return };
+        let position = self
+            .position
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let touched = job::Touched {
+            id,
+            title: work.map(|w| w.title.as_str()),
+            kind: work.map(|w| match w.kind {
+                MediaKind::Series => "series",
+                MediaKind::Movie => "movie",
+            }),
+        };
+        if let Err(e) = job::add_entry(db, run, position, touched, outcome, Some(note)).await {
+            tracing::debug!(%id, error = %e, "could not write down what the run did to a work");
+        }
+    }
+}
+
 /// Held by whatever is refreshing works in bulk — a sweep, the schedule's or
 /// one asked for by hand, or a refresh of everything — so that two never run
 /// at once and ask the providers the same thing twice.
@@ -121,7 +166,13 @@ pub async fn sweep_now(state: &AppState, by: &str) -> crate::error::AppResult<Op
     tokio::spawn(async move {
         let _held = held;
         let _shared = shared;
-        close(&state, record, sweep(&state, batch(&state)).await).await;
+        let recorder = Recorder::for_run(record.as_deref());
+        close(
+            &state,
+            record,
+            sweep(&state, batch(&state), &recorder).await,
+        )
+        .await;
     });
 
     Ok(id)
@@ -182,6 +233,7 @@ async fn everything(
 ) -> Result<Pass> {
     let (mut done, mut failed) = (0i64, 0i64);
     let mut after: Option<String> = None;
+    let recorder = Recorder::for_run(Some(record));
 
     loop {
         let batch = repo::item::refresh_candidates(&state.db, after.as_deref(), 25).await?;
@@ -197,7 +249,7 @@ async fn everything(
                 )));
             }
 
-            if refresh_due(state, &id).await {
+            if refresh_due(state, &id, &recorder).await {
                 done += 1;
             } else {
                 failed += 1;
@@ -356,7 +408,8 @@ async fn run_sweep(state: &AppState, batch: i64) {
         }
     };
 
-    let outcome = sweep(state, batch).await;
+    let recorder = Recorder::for_run(record.as_deref());
+    let outcome = sweep(state, batch, &recorder).await;
 
     let Some(record) = record else { return };
 
@@ -374,8 +427,9 @@ async fn run_sweep(state: &AppState, batch: i64) {
     }
 }
 
-/// Refresh what is due, returning a one-line summary of what happened.
-async fn sweep(state: &AppState, batch: i64) -> Result<String> {
+/// Refresh what is due, returning a one-line summary of what happened; each
+/// work taken is written down for the run.
+async fn sweep(state: &AppState, batch: i64, recorder: &Recorder) -> Result<String> {
     let due = repo::item::due_for_refresh(&state.db, batch).await?;
 
     if due.is_empty() {
@@ -388,7 +442,7 @@ async fn sweep(state: &AppState, batch: i64) -> Result<String> {
     let mut failed = 0usize;
 
     for (id, _kind) in due {
-        if refresh_due(state, &id).await {
+        if refresh_due(state, &id, recorder).await {
             succeeded += 1;
         } else {
             failed += 1;
@@ -399,26 +453,44 @@ async fn sweep(state: &AppState, batch: i64) -> Result<String> {
     Ok(format!("{succeeded} refreshed, {failed} failed"))
 }
 
-/// Refresh one work that is due; whether it came back from a provider.
+/// The fixed notes a run leaves on a work, which the interface puts in words.
+pub mod notes {
+    pub const REFRESHED: &str = "refreshed from a provider";
+    pub const KEPT: &str = "no provider answered; the stored entry was kept";
+    pub const UNRESOLVED: &str = "no provider could resolve this entry";
+    pub const GONE: &str = "gone since it was listed";
+}
+
+/// Refresh one work that is due; whether it came back from a provider. What
+/// happened to it is written down for the run.
 ///
 /// Never `?`: a work that cannot be read — a bad override, a corrupt row —
 /// would otherwise end the sweep before the rest of the batch was touched,
 /// and never have its own deadline pushed out: it sorts first by
 /// `refresh_after`, so it would be the first work of every sweep from then
 /// on, and nothing in the library would be refreshed again.
-async fn refresh_due(state: &AppState, id: &str) -> bool {
+async fn refresh_due(state: &AppState, id: &str, recorder: &Recorder) -> bool {
     let item = match crate::service::load(state, id).await {
         Ok(Some(item)) => item,
         // Gone since it was listed.
-        Ok(None) => return true,
+        Ok(None) => {
+            recorder
+                .note(&state.db, id, None, job::Outcome::Skipped, notes::GONE)
+                .await;
+            return true;
+        }
         Err(e) => {
             tracing::warn!(%id, error = format_args!("{e:#}"), "could not read an entry due for refresh");
-            mark_failure(state, id, None, &format!("could not be read: {e}")).await;
+            let why = format!("could not be read: {e}");
+            mark_failure(state, id, None, &why).await;
+            recorder
+                .note(&state.db, id, None, job::Outcome::Failed, &why)
+                .await;
             return false;
         }
     };
 
-    match refresh_one(state, &item).await {
+    let (came_back, outcome, note) = match refresh_one(state, &item).await {
         // Answered with what was stored — no provider had it — and still due:
         // pushed out, or it would take the first slot of every sweep.
         Ok(Some(fresh))
@@ -427,34 +499,27 @@ async fn refresh_due(state: &AppState, id: &str) -> bool {
                 .as_deref()
                 .is_some_and(|at| at <= crate::db::now().as_str()) =>
         {
-            mark_failure(
-                state,
-                id,
-                Some(&item),
-                "no provider answered; the stored entry was kept",
-            )
-            .await;
-            false
+            mark_failure(state, id, Some(&item), notes::KEPT).await;
+            (false, job::Outcome::Failed, notes::KEPT.to_string())
         }
-        Ok(Some(_)) => true,
+        Ok(Some(_)) => (true, job::Outcome::Ok, notes::REFRESHED.to_string()),
         Ok(None) => {
             // Nothing to refresh from. Push the deadline out so this entry
             // does not occupy a slot in every future batch.
-            mark_failure(
-                state,
-                id,
-                Some(&item),
-                "no provider could resolve this entry",
-            )
-            .await;
-            false
+            mark_failure(state, id, Some(&item), notes::UNRESOLVED).await;
+            (false, job::Outcome::Failed, notes::UNRESOLVED.to_string())
         }
         Err(e) => {
             tracing::warn!(%id, error = %e, "refresh failed");
-            mark_failure(state, id, Some(&item), &e.to_string()).await;
-            false
+            let why = e.to_string();
+            mark_failure(state, id, Some(&item), &why).await;
+            (false, job::Outcome::Failed, why)
         }
-    }
+    };
+    recorder
+        .note(&state.db, id, Some(&item), outcome, &note)
+        .await;
+    came_back
 }
 
 /// Drop job runs past the retention window, which shares the audit setting.

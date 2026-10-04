@@ -318,14 +318,237 @@ pub async fn count(db: &Db) -> Result<i64> {
     Ok(row.big("n")?)
 }
 
-/// Drop runs older than `cutoff` (RFC 3339).
+/// Drop runs older than `cutoff` (RFC 3339), and what they wrote down.
 pub async fn prune(db: &Db, cutoff: &str) -> Result<u64> {
+    sqlx::query(db.sql(
+        "DELETE FROM job_entry WHERE job_id IN (SELECT id FROM job_run WHERE created_at < ?)",
+    ))
+    .bind(cutoff)
+    .execute(db.pool())
+    .await?;
+
     let result = sqlx::query(db.sql("DELETE FROM job_run WHERE created_at < ?"))
         .bind(cutoff)
         .execute(db.pool())
         .await?;
 
     Ok(result.rows_affected())
+}
+
+// ── What a run did to each work ─────────────────────────────────────────
+
+/// How a run's work on one entry ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Outcome {
+    /// Done: refreshed from a provider.
+    Ok,
+    Failed,
+    /// Nothing to do: gone meanwhile, or nothing to refresh from.
+    Skipped,
+}
+
+impl Outcome {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ok => "ok",
+            Self::Failed => "failed",
+            Self::Skipped => "skipped",
+        }
+    }
+}
+
+/// A work as a run names it: its id, and its title and kind as they stood,
+/// kept so the run reads the same once the work is gone.
+pub struct Touched<'a> {
+    pub id: &'a str,
+    pub title: Option<&'a str>,
+    pub kind: Option<&'a str>,
+}
+
+/// What a run did to one work: the detail behind its summary, one row a
+/// work, in the order they were taken.
+#[derive(Clone, Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Entry {
+    pub id: String,
+    /// The work's id — which may name nothing any more.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub media_id: Option<String>,
+    /// Its title and kind when the run took it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// `ok`, `failed` or `skipped`.
+    pub outcome: String,
+    /// What happened: one of the fixed notes the interface knows, or the
+    /// error as the provider said it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    pub created_at: String,
+}
+
+/// The most of a note that is kept: an error is worth its first lines.
+const NOTE_LIMIT: usize = 500;
+
+/// Write down what a run did to one work.
+pub async fn add_entry(
+    db: &Db,
+    job_id: &str,
+    position: i64,
+    work: Touched<'_>,
+    outcome: Outcome,
+    note: Option<&str>,
+) -> Result<()> {
+    let note = note.map(|note| {
+        if note.chars().count() > NOTE_LIMIT {
+            let mut cut: String = note.chars().take(NOTE_LIMIT).collect();
+            cut.push('…');
+            cut
+        } else {
+            note.to_string()
+        }
+    });
+    sqlx::query(db.sql(
+        "INSERT INTO job_entry (id, job_id, position, media_id, title, kind, outcome, note, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    ))
+    .bind(new_id())
+    .bind(job_id)
+    .bind(position)
+    .bind(work.id)
+    .bind(work.title)
+    .bind(work.kind)
+    .bind(outcome.as_str())
+    .bind(note)
+    .bind(now())
+    .execute(db.pool())
+    .await?;
+    Ok(())
+}
+
+/// What a run did, in the order it did it — the first `limit` works.
+pub async fn entries(db: &Db, job_id: &str, limit: i64) -> Result<Vec<Entry>> {
+    let rows = sqlx::query(db.sql(
+        "SELECT id, media_id, title, kind, outcome, note, created_at
+         FROM job_entry WHERE job_id = ? ORDER BY position ASC LIMIT ?",
+    ))
+    .bind(job_id)
+    .bind(limit.clamp(1, 5_000))
+    .fetch_all(db.pool())
+    .await?;
+
+    rows.iter()
+        .map(|row| {
+            Ok(Entry {
+                id: row.text("id")?,
+                media_id: row.opt_text("media_id")?,
+                title: row.opt_text("title")?,
+                kind: row.opt_text("kind")?,
+                outcome: row.text("outcome")?,
+                note: row.opt_text("note")?,
+                created_at: row.text("created_at")?,
+            })
+        })
+        .collect()
+}
+
+/// How many works a run wrote down.
+pub async fn count_entries(db: &Db, job_id: &str) -> Result<i64> {
+    let row = sqlx::query(db.sql("SELECT COUNT(*) AS n FROM job_entry WHERE job_id = ?"))
+        .bind(job_id)
+        .fetch_one(db.pool())
+        .await?;
+    Ok(row.big("n")?)
+}
+
+#[cfg(test)]
+mod entry_tests {
+    use super::*;
+    use crate::config;
+
+    async fn db() -> Db {
+        let db = Db::connect(&config::Database {
+            url: "sqlite::memory:".into(),
+            max_connections: 1,
+            acquire_timeout: std::time::Duration::from_secs(5),
+        })
+        .await
+        .unwrap();
+        db.migrate().await.unwrap();
+        db
+    }
+
+    #[tokio::test]
+    async fn a_run_writes_down_each_work_in_order_and_is_pruned_with_them() {
+        let db = db().await;
+        let run = start(&db, kinds::REFRESH_SWEEP, None).await.unwrap();
+
+        let touched = |id: &'static str, title: &'static str| Touched {
+            id,
+            title: Some(title),
+            kind: Some("series"),
+        };
+        add_entry(
+            &db,
+            &run,
+            0,
+            touched("a", "First"),
+            Outcome::Ok,
+            Some("refreshed from a provider"),
+        )
+        .await
+        .unwrap();
+        let long = "x".repeat(2_000);
+        add_entry(
+            &db,
+            &run,
+            1,
+            touched("b", "Second"),
+            Outcome::Failed,
+            Some(&long),
+        )
+        .await
+        .unwrap();
+        add_entry(
+            &db,
+            &run,
+            2,
+            Touched {
+                id: "c",
+                title: None,
+                kind: None,
+            },
+            Outcome::Skipped,
+            None,
+        )
+        .await
+        .unwrap();
+        finish(&db, &run, Some("1 refreshed, 1 failed"), None)
+            .await
+            .unwrap();
+
+        let listed = entries(&db, &run, 10).await.unwrap();
+        assert_eq!(count_entries(&db, &run).await.unwrap(), 3);
+        assert_eq!(listed.len(), 3);
+        assert_eq!(listed[0].title.as_deref(), Some("First"));
+        assert_eq!(listed[0].outcome, "ok");
+        assert_eq!(listed[1].outcome, "failed");
+        // A long error is kept to its first lines, and marked as cut.
+        let note = listed[1].note.as_deref().unwrap();
+        assert_eq!(note.chars().count(), NOTE_LIMIT + 1);
+        assert!(note.ends_with('…'));
+        assert_eq!(listed[2].media_id.as_deref(), Some("c"));
+        assert!(listed[2].title.is_none());
+        // The first two only, when asked for two.
+        assert_eq!(entries(&db, &run, 2).await.unwrap().len(), 2);
+
+        // Pruned with the run: nothing of it is left behind.
+        let far_future = "2999-01-01T00:00:00Z";
+        assert_eq!(prune(&db, far_future).await.unwrap(), 1);
+        assert_eq!(count_entries(&db, &run).await.unwrap(), 0);
+        assert!(get(&db, &run).await.unwrap().is_none());
+    }
 }
 
 /// Close any run still marked running: every one of them, alone — a job

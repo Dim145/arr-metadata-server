@@ -26,7 +26,7 @@ import { cn } from '../../lib/cn'
 import * as fmt from '../../lib/format'
 import { useI18n } from '../../lib/i18n'
 import { statusLabel } from '../../lib/labels'
-import { backdrop, poster } from '../../lib/media'
+import { backdrop, hasSources, poster } from '../../lib/media'
 import type { FieldRegistry, MediaItem, Override, ProvenanceReport } from '../../lib/types'
 
 import { ArtworkTab } from './editor/ArtworkTab'
@@ -137,7 +137,12 @@ export function WorkEditor() {
 
   const work = item.data
   const e = t.admin.editor
-  const locks = overrides.data ?? []
+  // A work with no source elsewhere is never refreshed, so nothing keeps a
+  // field from anything: its edits are its record, and none is shown as a
+  // lock. The server still files them as overrides, which is what makes
+  // them stick the day a source is given.
+  const synced = hasSources(work)
+  const locks = synced ? (overrides.data ?? []) : []
   const ownLocks = locks.filter((o) => o.scope === 'item').length
   const deeperLocks = locks.length - ownLocks
   const tabs = work.kind === 'series' ? TABS : TABS.filter((one) => one !== 'seasons')
@@ -392,6 +397,7 @@ export function WorkEditor() {
             work={work}
             registry={registry.data}
             overrides={locks}
+            lockable={synced}
             report={report.data}
             reportFailed={report.isError}
             onRetryReport={() => void report.refetch()}
@@ -402,7 +408,7 @@ export function WorkEditor() {
             onChanged={invalidate}
           />
         ) : shown === 'seasons' ? (
-          <SeasonsTab work={work} registry={registry.data} overrides={locks} report={report.data} onChanged={invalidate} />
+          <SeasonsTab work={work} registry={registry.data} overrides={locks} lockable={synced} report={report.data} onChanged={invalidate} />
         ) : shown === 'artwork' ? (
           <ArtworkTab work={work} onChanged={invalidate} />
         ) : shown === 'people' ? (

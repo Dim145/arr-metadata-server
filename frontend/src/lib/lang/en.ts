@@ -1817,6 +1817,20 @@ export const en = {
       colTook: 'Took',
       schedule: 'the schedule',
       again: 'Run again',
+      showDetail: (name: string) => `Show what ${name} did`,
+      hideDetail: (name: string) => `Hide what ${name} did`,
+      entries: (n: number) => (n === 1 ? 'One work taken' : `${n.toLocaleString('en')} works taken`),
+      moreEntries: (n: number) => `and ${n.toLocaleString('en')} more, not listed here`,
+      noEntries: 'Nothing is written down for this run: it predates the detail, or its task keeps none — only a refresh does.',
+      noneDue: 'No work was due, so none was taken.',
+      colWork: 'Work',
+      colOutcome: 'Outcome',
+      colNote: 'What happened',
+      outcomes: { ok: 'Refreshed', failed: 'Failed', skipped: 'Skipped' } as Record<string, string>,
+      startedAt: 'Started',
+      finishedAt: 'Finished',
+      instance: 'Instance',
+      goneWork: 'A work since removed',
       summaries: {
         refreshed: (done: number, failed: number, of?: number) =>
           `${done} refreshed, ${failed} failed${of === undefined ? '' : `, of ${of}`}`,
@@ -1857,6 +1871,8 @@ export const en = {
       /** The fixed notes the server leaves on a run or an entry, in words. */
       notes: {
         'refreshed from a provider': 'Refreshed from a provider',
+        'gone since it was listed': 'Removed since it was listed',
+        'no provider answered; the stored entry was kept': 'No provider answered; the stored entry was kept',
         'changed while syncing; nothing written': 'Written by something else during the sync; nothing changed',
         'deleted while syncing': 'Deleted during the sync',
         'no provider could resolve it': 'No provider could find it',

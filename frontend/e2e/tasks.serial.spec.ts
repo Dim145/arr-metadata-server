@@ -86,4 +86,53 @@ test.describe('the tasks', () => {
     expect((await stranger.request.get('/api/v1/tasks')).status()).toBe(401)
     await stranger.close()
   })
+
+  test('a run opens onto what it did, work by work', async ({ page }) => {
+    await signIn(page)
+
+    // The newest run, whatever it is: the sweep the test above started, or
+    // the schedule's. Its detail by the API first, then as the page shows it.
+    const listed = await page.request.get('/api/v1/jobs?limit=1')
+    const { jobs } = (await listed.json()) as { jobs: { id: string; kind: string }[] }
+    test.skip(jobs.length === 0, 'nothing has run yet')
+    const run = jobs[0]!
+    const answer = await page.request.get(`/api/v1/jobs/${run.id}`)
+    expect(answer.status()).toBe(200)
+    const detail = (await answer.json()) as {
+      job: { id: string; kind: string }
+      entries: { outcome: string; title?: string }[]
+      entriesTotal: number
+    }
+    expect(detail.job.id).toBe(run.id)
+    expect(detail.entries.length).toBe(Math.min(detail.entriesTotal, 500))
+    for (const entry of detail.entries) expect(['ok', 'failed', 'skipped']).toContain(entry.outcome)
+
+    await page.goto('/admin/jobs')
+    // The run's name is the button that opens it — and says "hide" once it
+    // has, so the button is found by its row, not by its words.
+    const opener = page
+      .getByRole('table')
+      .getByRole('row')
+      .nth(1)
+      .getByRole('button', { name: /^(show|hide) what|^(afficher|masquer) ce qu/i })
+    await opener.click()
+    await expect(opener).toHaveAttribute('aria-expanded', 'true')
+    const panel = page.locator(`#${await opener.getAttribute('aria-controls')}`)
+    await expect(panel).toBeVisible()
+    await expect(panel.getByText(/^(started|début)$/i)).toBeVisible()
+    if (detail.entriesTotal === 0) {
+      await expect(panel.getByText(/nothing is written down|rien n’est consigné/i)).toBeVisible()
+    } else {
+      await expect(panel.getByRole('listitem')).toHaveCount(detail.entries.length)
+    }
+    // Opened and closed again, from the same button.
+    await opener.click()
+    await expect(opener).toHaveAttribute('aria-expanded', 'false')
+    await expect(panel).toHaveCount(0)
+
+    // A stranger reads nothing of it.
+    const stranger = await page.context().browser()!.newContext()
+    expect((await stranger.request.get(`/api/v1/jobs/${run.id}`)).status()).toBe(401)
+    await stranger.close()
+  })
 })

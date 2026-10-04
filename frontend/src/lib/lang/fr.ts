@@ -1830,6 +1830,20 @@ export const fr: Dict = {
       colTook: 'Durée',
       schedule: 'le programme',
       again: 'Relancer',
+      showDetail: (name: string) => `Afficher ce qu’a fait ${name}`,
+      hideDetail: (name: string) => `Masquer ce qu’a fait ${name}`,
+      entries: (n: number) => (n === 1 ? 'Une fiche traitée' : `${n.toLocaleString('fr')} fiches traitées`),
+      moreEntries: (n: number) => `et ${n.toLocaleString('fr')} de plus, non listées ici`,
+      noEntries: 'Rien n’est consigné pour cette exécution : elle précède le détail, ou sa tâche n’en tient pas — seule une actualisation en tient.',
+      noneDue: 'Aucune fiche n’était due : aucune n’a été traitée.',
+      colWork: 'Fiche',
+      colOutcome: 'Résultat',
+      colNote: 'Ce qui s’est passé',
+      outcomes: { ok: 'Actualisée', failed: 'En échec', skipped: 'Passée' } as Record<string, string>,
+      startedAt: 'Début',
+      finishedAt: 'Fin',
+      instance: 'Instance',
+      goneWork: 'Une fiche supprimée depuis',
       summaries: {
         refreshed: (done: number, failed: number, of?: number) =>
           `${done} actualisée${done > 1 ? 's' : ''}, ${failed} en échec${of === undefined ? '' : `, sur ${of}`}`,
@@ -1870,6 +1884,8 @@ export const fr: Dict = {
       /** The fixed notes the server leaves on a run or an entry, in words. */
       notes: {
         'refreshed from a provider': 'Rafraîchie depuis une source',
+        'gone since it was listed': 'Supprimée depuis qu’elle a été listée',
+        'no provider answered; the stored entry was kept': 'Aucune source n’a répondu ; la fiche conservée a été gardée',
         'changed while syncing; nothing written': 'Écrite par autre chose pendant la synchronisation : rien n’a changé',
         'deleted while syncing': 'Supprimée pendant la synchronisation',
         'no provider could resolve it': 'Aucune source ne l’a trouvée',

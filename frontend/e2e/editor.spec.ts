@@ -270,6 +270,44 @@ test.describe('the work editor', () => {
     }
   })
 
+  test('a work made by hand shows none of its edits as locks, until it is given a source', async ({ page }, info) => {
+    await signIn(page)
+    const created = await page.request.post('/api/v1/items', {
+      data: { kind: 'series', title: `Sans source e2e ${info.project.name} ${Date.now()}`, year: 2035 },
+    })
+    expect(created.status()).toBe(201)
+    const { id } = (await created.json()) as { id: string }
+
+    try {
+      // An edit, which the server files as an override all the same.
+      const edited = await page.request.put(`/api/v1/items/${id}/overrides`, {
+        data: { field: 'overview', value: 'Écrit à la main.' },
+      })
+      expect(edited.ok()).toBe(true)
+
+      await page.goto(`/admin/catalogue/${id}`)
+      const row = page.locator('li[data-field="overview"]')
+      await expect(row).toContainText('Écrit à la main.')
+      // Nothing refreshes a work with no source, so nothing is locked
+      // against anything: no padlock, no unlock, no filter for them.
+      await expect(row.getByRole('button', { name: /^(unlock|déverrouiller)$/i })).toHaveCount(0)
+      await expect(page.getByRole('radio', { name: /^(locked|verrouillés)/i })).toHaveCount(0)
+
+      // Given a source, the same edit is a lock again — it keeps the
+      // overview from what that source says. An identifier is one work's:
+      // each project gives its own.
+      const sourced = await page.request.put(`/api/v1/items/${id}/overrides`, {
+        data: { field: 'externalIds', value: { tvdb: info.project.name === 'desktop' ? 998877 : 998878 } },
+      })
+      expect(sourced.ok()).toBe(true)
+      await page.reload()
+      await expect(row.getByRole('button', { name: /^(unlock|déverrouiller)$/i })).toBeVisible()
+      await expect(page.getByRole('radio', { name: /^(locked|verrouillés)/i })).toBeVisible()
+    } finally {
+      await page.request.delete(`/api/v1/items/${id}`)
+    }
+  })
+
   test('the identifiers are edited, locked and unlocked from the Elsewhere tab', async ({ page }, info) => {
     await signIn(page)
     const created = await page.request.post('/api/v1/items', {

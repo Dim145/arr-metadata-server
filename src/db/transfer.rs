@@ -50,6 +50,8 @@ const TABLES: &[&str] = &[
     // After the accounts, whose administrators made them.
     "user_invitation",
     "job_run",
+    // What each run did to each work, after the runs.
+    "job_entry",
     "audit_log",
     // The media kept: its rows only — the files stay in the store they
     // were put in, which both databases can be pointed at.
