@@ -33,6 +33,11 @@ const SCAN_BATCH: usize = 500;
 /// of keys does not turn a count into a stall.
 const SCAN_LIMIT: u64 = 2_000_000;
 
+/// The longest message read off the channel: past what any instance sends —
+/// a medium's origin and key are the longest — and short of anything that
+/// would cost to look at.
+const MOST_MESSAGE_BYTES: usize = 64 * 1024;
+
 /// Push a key's end back, if the key is still the caller's: what a lease
 /// is renewed with, so a lease that ran out and went to another instance
 /// is not taken back from them.
@@ -649,7 +654,14 @@ impl Redis {
                     } else {
                         let mut stream = pubsub.on_message();
                         while let Some(message) = stream.next().await {
-                            if let Ok(text) = message.get_payload::<String>() {
+                            // Anyone who can publish here can say anything:
+                            // what no instance of this server says — a
+                            // message longer than any it sends — is dropped
+                            // unread. What is read is checked by whoever acts
+                            // on it.
+                            if let Ok(text) = message.get_payload::<String>()
+                                && text.len() <= MOST_MESSAGE_BYTES
+                            {
                                 apply(text);
                             }
                         }

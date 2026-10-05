@@ -64,8 +64,11 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(unlink))
 }
 
-fn secure(state: &AppState) -> bool {
-    !auth::secure_flag(state).is_empty()
+/// Whether the flow's cookies may be `Secure` (and its own, `__Host-`): the
+/// rule the session cookie follows. The start and the return reach this
+/// server the same way, so both name the flow's cookie alike.
+fn secure(state: &AppState, headers: &HeaderMap, peer: &auth::Peer) -> bool {
+    auth::served_securely(state, headers, peer)
 }
 
 // ─── the flow ────────────────────────────────────────────────────────────────
@@ -91,10 +94,11 @@ pub struct StartQuery {
 )]
 async fn start(
     State(state): State<AppState>,
+    peer: auth::Peer,
     headers: HeaderMap,
     Query(query): Query<StartQuery>,
 ) -> Response {
-    match begin(&state, &headers, query).await {
+    match begin(&state, &headers, &peer, query).await {
         Ok((jar, url)) => (StatusCode::SEE_OTHER, jar, [(header::LOCATION, url)]).into_response(),
         Err(failure) => {
             tracing::info!(reason = failure.code(), detail = %failure, "a sign-in through the identity provider could not start");
@@ -106,6 +110,7 @@ async fn start(
 async fn begin(
     state: &AppState,
     headers: &HeaderMap,
+    peer: &auth::Peer,
     query: StartQuery,
 ) -> Result<(PrivateCookieJar, String), Failure> {
     let provider = state.oidc_provider().ok_or(Failure::Unavailable)?;
@@ -127,7 +132,7 @@ async fn begin(
         .await
         .map_err(|e| Failure::Provider(format!("{e:#}")))?;
 
-    let secure = secure(state);
+    let secure = secure(state, headers, peer);
     let value = serde_json::to_string(&started.flow).map_err(internal)?;
     let cookie = Cookie::build((oidc::cookie_name(&started.state, secure), value))
         .path(if secure { "/" } else { FLOW_PATH })
@@ -172,10 +177,11 @@ pub struct CallbackQuery {
 async fn callback(
     State(state): State<AppState>,
     ip: ClientIp,
+    peer: auth::Peer,
     headers: HeaderMap,
     Query(query): Query<CallbackQuery>,
 ) -> Response {
-    let secure = secure(&state);
+    let secure = secure(&state, &headers, &peer);
     let jar = PrivateCookieJar::from_headers(&headers, state.cookie_key.clone());
 
     // The flow this return belongs to, by the state it carries; spent
@@ -193,7 +199,7 @@ async fn callback(
         None => jar,
     };
 
-    match complete(&state, &ip, &headers, query, flow).await {
+    match complete(&state, &ip, &headers, secure, query, flow).await {
         Ok((session, next)) => (
             jar,
             [
@@ -298,6 +304,7 @@ async fn complete(
     state: &AppState,
     ip: &ClientIp,
     headers: &HeaderMap,
+    secure: bool,
     query: CallbackQuery,
     flow: Option<Flow>,
 ) -> Result<(String, String), Failure> {
@@ -335,7 +342,7 @@ async fn complete(
         vouched.next.clone()
     };
 
-    let (session, _) = auth::open_session(state, user, headers, ip)
+    let (session, _) = auth::open_session(state, user, headers, ip, secure)
         .await
         .map_err(internal)?;
 
@@ -810,19 +817,18 @@ async fn configure(
         }
     }
 
+    // A value refused is the caller's (400); a database that failed is the
+    // server's (500), logged rather than handed back.
     for (key, value) in &changes {
         match value {
-            Some(value) => state
-                .settings
-                .set(Scope::Server, "", key, value, Some(&identity.label()))
-                .await
-                .map_err(|e| AppError::BadRequest(e.to_string()))?,
-            None => {
+            Some(value) => {
                 state
                     .settings
-                    .clear(Scope::Server, "", key)
-                    .await
-                    .map_err(|e| AppError::BadRequest(e.to_string()))?;
+                    .set(Scope::Server, "", key, value, Some(&identity.label()))
+                    .await?;
+            }
+            None => {
+                state.settings.clear(Scope::Server, "", key).await?;
             }
         }
     }

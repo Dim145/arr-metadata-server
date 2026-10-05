@@ -32,7 +32,12 @@ pub struct FanartClient {
     api_key: Option<String>,
     enabled: bool,
     language: String,
+    gate: crate::providers::Gate,
 }
+
+/// How many requests to Fanart.tv are in flight at once: a Radarr bulk
+/// refresh of a hundred films asks for all of them at the same moment.
+const AT_ONCE: usize = 8;
 
 impl FanartClient {
     pub fn new(http: reqwest::Client, cfg: &config::Fanart, language: &str) -> Self {
@@ -42,6 +47,7 @@ impl FanartClient {
             api_key: cfg.api_key.clone(),
             enabled: cfg.enabled,
             language: base_language(language).to_string(),
+            gate: crate::providers::Gate::new("fanart", "Fanart.tv", AT_ONCE),
         }
     }
 
@@ -68,7 +74,8 @@ impl FanartClient {
 
     /// Artwork for a movie, by TMDB or IMDb id — it accepts either.
     pub async fn movie(&self, id: &str) -> Result<Option<(Value, MediaItem)>> {
-        let Some(raw) = self.fetch(&format!("movies/{id}")).await? else {
+        let path = format!("movies/{}", crate::providers::segment(id));
+        let Some(raw) = self.fetch(&path).await? else {
             return Ok(None);
         };
 
@@ -89,28 +96,18 @@ impl FanartClient {
 
         let url = format!("{}/{path}", self.base);
 
-        let started = std::time::Instant::now();
-        let response = self
-            .http
-            .get(&url)
-            .query(&[("api_key", key)])
-            .timeout(std::time::Duration::from_secs(20))
-            .send()
+        // The error would name the address, key and all, and it is logged:
+        // the gate keeps its kind and what lay under it instead.
+        let (response, _permit) = self
+            .gate
+            .send(|| {
+                self.http
+                    .get(&url)
+                    .query(&[("api_key", key)])
+                    .timeout(std::time::Duration::from_secs(20))
+            })
             .await
-            // The error would name the address, key and all, and it is
-            // logged: its kind and what lay under it are kept instead.
-            .map_err(|e| {
-                anyhow::anyhow!(
-                    "Fanart.tv request failed: {url}: {}",
-                    crate::providers::describe_request_error(&e)
-                )
-            });
-        crate::metrics::upstream(
-            "fanart",
-            started,
-            response.as_ref().ok().map(|r| r.status()),
-        );
-        let response = response?;
+            .map_err(|e| anyhow::anyhow!("Fanart.tv request failed: {url}: {e}"))?;
 
         // Fanart.tv answers 404 for anything it has no artwork for, which is
         // most of the long tail rather than an error.
@@ -120,7 +117,8 @@ impl FanartClient {
 
         let status = response.status();
         if !status.is_success() {
-            anyhow::bail!("Fanart.tv returned {status} for {url}");
+            let reason = crate::providers::error_text(response).await;
+            anyhow::bail!("Fanart.tv returned {status} for {url}: {reason}");
         }
 
         crate::providers::read_json(response)

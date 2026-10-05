@@ -516,13 +516,18 @@ impl Message {
         format!("{kind}@{sender}:{payload}")
     }
 
-    /// The message and who sent it; `None` for what is not one.
+    /// The message and who sent it; `None` for what is not one — and for
+    /// what has the shape of none an instance sends: a sender that is not an
+    /// instance's id, a run to stop that is not a run's.
     fn decode(text: &str) -> Option<(Self, String)> {
         let (kind, rest) = text.split_once('@')?;
         if kind.contains(':') {
             return None;
         }
         let (sender, payload) = rest.split_once(':')?;
+        if !is_id(sender) {
+            return None;
+        }
         let message = match kind {
             "settings" => Self::Settings,
             "allowlist" => Self::Allowlist,
@@ -538,18 +543,33 @@ impl Message {
             "media-" => Self::MediaForgotten(payload.to_string()),
             "wake" => Self::MediaWake,
             "tls" => Self::TlsReload,
-            "stop" => Self::Stop(payload.to_string()),
+            "stop" if is_id(payload) => Self::Stop(payload.to_string()),
             _ => return None,
         };
         Some((message, sender.to_string()))
     }
 }
 
+/// Whether a text has the shape of the ids this server makes — an instance's,
+/// a run's: a UUID, or something as short and as plain.
+fn is_id(text: &str) -> bool {
+    !text.is_empty()
+        && text.len() <= 64
+        && text
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+/// How many rounds between two readings of what the channel may have
+/// missed: a minute.
+const RECONCILE_ROUNDS: u32 = 12;
+
 /// Keep the lease, the announcement and the counters current for as long
 /// as the process runs — the lease on a task of its own, since it must be
 /// kept on time whatever else takes long; the leader also closes the runs
 /// of instances that are gone, and every instance reads the media index
-/// again now and then. Nothing to do alone.
+/// again now and then, and every minute what the channel may have missed
+/// (see [`reconcile`]). Nothing to do alone.
 pub async fn run(state: AppState) {
     if !state.coord.is_multi() {
         return;
@@ -570,6 +590,9 @@ pub async fn run(state: AppState) {
         if rounds.is_multiple_of(12) && state.coord.leads() {
             close_orphans(&state).await;
         }
+        if rounds.is_multiple_of(RECONCILE_ROUNDS) {
+            reconcile(&state).await;
+        }
         // A word of a medium kept or forgotten is lost while the cache
         // server is away: the index is read from the database again every
         // ten minutes, so what was missed is known within that.
@@ -584,6 +607,54 @@ pub async fn run(state: AppState) {
         }
         tokio::time::sleep(TICK).await;
     }
+}
+
+/// Read again what the channel may not have said: the settings, the network
+/// rules, the generation and the epoch.
+///
+/// Pub/Sub tells at most once. A message published while this instance
+/// re-subscribes — the cache server restarted, the network blinked — or one
+/// whose publish ran past its deadline, is lost for good: an instance that
+/// missed `settings` or `allowlist` held the old policy until it restarted —
+/// the site still public, an address range still let in, adult titles still
+/// shown — while the interface, answered by another, showed the new one. A
+/// minute is now the most it can be behind.
+async fn reconcile(state: &AppState) {
+    let before = settings_digest(state);
+    match state.settings.reload().await {
+        Ok(()) if settings_digest(state) != before => {
+            tracing::info!(
+                "the settings changed without this instance being told; taking them now"
+            );
+            state.adopt_settings().await;
+            crate::auth::oidc::forget().await;
+        }
+        Ok(()) => {}
+        Err(e) => tracing::warn!(error = %e, "could not read the settings again"),
+    }
+    if let Err(e) = state.reload_allowlist_quietly().await {
+        tracing::warn!(error = %e, "could not read the network rules again");
+    }
+    // What a lost `gen:` or `epoch:` left behind: the server's numbers.
+    state.caches.load_generation().await;
+}
+
+/// The server's settings as they stand, as one number: what tells a reload
+/// that changed something from one that did not, without keeping a copy of
+/// a value anywhere else.
+fn settings_digest(state: &AppState) -> u64 {
+    use std::hash::{Hash as _, Hasher as _};
+
+    let scope = crate::settings::Scope::Server;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for effective in state.settings.effective(scope, "") {
+        effective.key.hash(&mut hasher);
+        state
+            .settings
+            .at(scope, "", &effective.key)
+            .hash(&mut hasher);
+    }
+    hasher.finish()
 }
 
 /// Runs still marked running by an instance nobody has heard of for a
@@ -709,6 +780,22 @@ mod tests {
         assert_eq!(Message::decode("drop:items:item:a@b"), None);
         assert_eq!(Message::decode("gen:4"), None);
         assert_eq!(Message::decode("nonsense@x:y"), None);
+    }
+
+    #[test]
+    fn a_message_with_the_shape_of_none_an_instance_sends_is_not_one() {
+        assert_eq!(Message::decode("stop@i-1:run/../../x"), None);
+        assert_eq!(Message::decode("stop@i-1:"), None);
+        assert_eq!(Message::decode("settings@:"), None);
+        assert_eq!(Message::decode("settings@a b:"), None);
+        let long = format!("settings@{}:", "a".repeat(65));
+        assert_eq!(Message::decode(&long), None);
+        assert!(
+            Message::decode(
+                "stop@01a0db23-e8a0-7000-8000-000000000000:01a0db23-e8a0-7001-8000-000000000001"
+            )
+            .is_some()
+        );
     }
 
     /// Among several, the lead is only ever believed for as long as the

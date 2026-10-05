@@ -241,8 +241,13 @@ fn arr_surface(state: AppState, arr: Router<AppState>) -> Router<AppState> {
         .layer(from_fn_with_state(state, crate::auth::ratelimit::limit))
 }
 
+/// The TMDB relay's surface. Its name is one this server calls as a
+/// provider too, and the relay asks it in turn, so a request that came round
+/// a loop is caught first — before the allowlist could take our own address
+/// for a client's and ask again.
 fn tmdb_surface(state: AppState, tmdb: Router<AppState>) -> Router<AppState> {
     tmdb.layer(from_fn_with_state(state.clone(), guards::guard_tmdb))
+        .layer(from_fn_with_state(state.clone(), guards::reject_self_calls))
         .layer(from_fn_with_state(state, crate::auth::ratelimit::limit))
 }
 

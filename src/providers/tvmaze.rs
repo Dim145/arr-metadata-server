@@ -28,6 +28,7 @@ pub struct TvmazeClient {
     http: reqwest::Client,
     base: String,
     pacer: Pacer,
+    gate: crate::providers::Gate,
 }
 
 impl TvmazeClient {
@@ -37,6 +38,8 @@ impl TvmazeClient {
             base: cfg.upstream.clone(),
             // Twenty calls in ten seconds, spaced rather than bunched.
             pacer: Pacer::new(std::time::Duration::from_millis(500)),
+            // Spaced already; this is for its `Retry-After`.
+            gate: crate::providers::Gate::new("tvmaze", "TVmaze", 4),
         }
     }
 
@@ -123,20 +126,16 @@ impl TvmazeClient {
             anyhow::bail!("TVmaze's queue is full; this fetch goes without it");
         }
 
-        let started = std::time::Instant::now();
-        let response = self
-            .http
-            .get(url)
-            .query(query)
-            .timeout(std::time::Duration::from_secs(20))
-            .send()
-            .await;
-        crate::metrics::upstream(
-            "tvmaze",
-            started,
-            response.as_ref().ok().map(|r| r.status()),
-        );
-        let response = response.with_context(|| format!("TVmaze request failed: {url}"))?;
+        let (response, _permit) = self
+            .gate
+            .send(|| {
+                self.http
+                    .get(url)
+                    .query(query)
+                    .timeout(std::time::Duration::from_secs(20))
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("TVmaze request failed: {url}: {e}"))?;
 
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
@@ -148,7 +147,8 @@ impl TvmazeClient {
 
         let status = response.status();
         if !status.is_success() {
-            anyhow::bail!("TVmaze returned {status} for {url}");
+            let reason = crate::providers::error_text(response).await;
+            anyhow::bail!("TVmaze returned {status} for {url}: {reason}");
         }
 
         crate::providers::read_json(response)

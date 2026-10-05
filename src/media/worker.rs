@@ -19,7 +19,7 @@ use bytes::Bytes;
 use crate::{
     db::repo::{
         self,
-        asset::{Asset, Kind, Stored, Thumb},
+        asset::{Asset, Claim, Kind, Stored, Thumb},
         job,
     },
     error::{AppError, AppResult},
@@ -27,7 +27,7 @@ use crate::{
     state::AppState,
 };
 
-use super::file;
+use super::{file, store::Store};
 
 /// How many fetches at once: enough to be quick, few enough that a provider
 /// sees a reader, not a crawler.
@@ -50,6 +50,12 @@ static STORING: LazyLock<Arc<tokio::sync::Mutex<()>>> =
     LazyLock::new(|| Arc::new(tokio::sync::Mutex::new(())));
 static SWEEPING: LazyLock<Arc<tokio::sync::Mutex<()>>> =
     LazyLock::new(|| Arc::new(tokio::sync::Mutex::new(())));
+/// Thumbnails are made one at a time, whoever asks — the worker's fetches,
+/// an upload, a run of "store everything": decoding a large picture takes a
+/// few hundred megabytes, and four at once took more than a small server
+/// has.
+static THUMBNAILING: LazyLock<Arc<tokio::sync::Semaphore>> =
+    LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(1)));
 
 pub fn is_storing() -> bool {
     STORING.try_lock().is_err()
@@ -57,6 +63,24 @@ pub fn is_storing() -> bool {
 
 pub fn is_sweeping() -> bool {
     SWEEPING.try_lock().is_err()
+}
+
+/// Fetching held off for as long as what this returns is kept: no batch
+/// starts on this instance, and no other instance runs "store everything".
+/// Refused while either is under way — what a reset needs, so that nothing
+/// it forgets is stored again behind it.
+pub async fn hold_off_fetching(
+    state: &AppState,
+) -> AppResult<(tokio::sync::OwnedMutexGuard<()>, crate::coord::Held)> {
+    let held = STORING
+        .clone()
+        .try_lock_owned()
+        .map_err(|_| busy("media are being fetched"))?;
+    let shared = state
+        .coord
+        .hold_for(job::kinds::MEDIA_STORE, "media are being fetched")
+        .await?;
+    Ok((held, shared))
 }
 
 /// The worker: from the start, for as long as the server runs.
@@ -101,8 +125,10 @@ async fn batch(state: &AppState) -> Result<usize> {
         return Ok(0);
     }
     let taken = due.len();
-    let _ = fetch_all(state, due, None).await;
-    Ok(taken)
+    let (stored, failed) = fetch_all(state, due, None).await;
+    // None of them taken — another instance's, or a claim that could not be
+    // made: the line is looked at again on the next ring, not at once.
+    Ok(if stored + failed == 0 { 0 } else { taken })
 }
 
 /// Fetch these, a few at a time — each claimed first, so that among
@@ -120,10 +146,29 @@ async fn fetch_all(
             if flag.is_some_and(|f| f.stopped()) {
                 return Some(false);
             }
-            match repo::asset::claim(&state.db, &asset.id, &state.coord.instance.name).await {
-                Ok(true) => Some(fetch_one(state, &asset).await),
+            // This try, counted as it is taken, and the next put off as a
+            // failure would put it off: one that never comes back is not
+            // taken again at once.
+            let tries = asset.attempts + 1;
+            match repo::asset::claim(
+                &state.db,
+                &asset.id,
+                &state.coord.instance.name,
+                MAX_ATTEMPTS,
+                &retry_after(tries),
+            )
+            .await
+            {
+                Ok(Claim::Taken) => Some(fetch_one(state, &asset, tries).await),
+                Ok(Claim::GivenUp) => {
+                    tracing::warn!(
+                        origin = %asset.origin,
+                        "a medium was given up on: every fetch of it was cut short"
+                    );
+                    Some(false)
+                }
                 // Another instance got there first, or it was forgotten.
-                Ok(false) => None,
+                Ok(Claim::Lost) => None,
                 Err(e) => {
                     tracing::warn!(error = %e, "could not claim a medium in line");
                     None
@@ -143,8 +188,16 @@ async fn fetch_all(
     (stored, outcomes.len() - stored)
 }
 
+/// When a try that failed — or never came back — is made again: an hour
+/// after the first, then two, four, eight; a day at most.
+fn retry_after(tries: i32) -> String {
+    let hours = 2i64.pow(u32::try_from(tries - 1).unwrap_or(0)).min(24);
+    crate::db::to_rfc3339(chrono::Utc::now() + chrono::Duration::hours(hours))
+}
+
 /// Fetch one, store it, note it — or note why not. Whether it was stored.
-async fn fetch_one(state: &AppState, asset: &Asset) -> bool {
+/// `tries` counts this one.
+async fn fetch_one(state: &AppState, asset: &Asset, tries: i32) -> bool {
     match store_one(state, asset).await {
         Ok(()) => {
             if let Some(work) = &asset.wanted_by {
@@ -156,25 +209,18 @@ async fn fetch_one(state: &AppState, asset: &Asset) -> bool {
             // An address that answers with the wrong thing is given up on at
             // once, and filed past every try, so "try everything again"
             // passes it by: asking again would get the same answer.
-            let attempts = match e {
-                Trouble::Unfit(_) => repo::asset::UNFIT,
-                Trouble::Passing(_) => asset.attempts + 1,
-            };
-            let next = (attempts < MAX_ATTEMPTS).then(|| {
-                let hours = 2i64.pow(u32::try_from(attempts - 1).unwrap_or(0)).min(24);
-                crate::db::to_rfc3339(chrono::Utc::now() + chrono::Duration::hours(hours))
-            });
+            let unfit = matches!(e, Trouble::Unfit(_));
+            let next = (!unfit && tries < MAX_ATTEMPTS).then(|| retry_after(tries));
             tracing::info!(
                 origin = %asset.origin,
-                attempts,
+                attempts = if unfit { repo::asset::UNFIT } else { tries },
                 error = %e,
                 "a medium could not be fetched"
             );
             let error = e.to_string();
             let error = truncated(&error, 300);
             if let Err(e) =
-                repo::asset::mark_failed(&state.db, &asset.id, attempts, error, next.as_deref())
-                    .await
+                repo::asset::mark_failed(&state.db, &asset.id, error, next.as_deref(), unfit).await
             {
                 tracing::warn!(error = %e, "could not note the failure");
             }
@@ -219,16 +265,21 @@ async fn store_one(state: &AppState, asset: &Asset) -> Result<(), Trouble> {
             super::fetch::Failure::Unfit(why) => Trouble::Unfit(why),
             super::fetch::Failure::Passing(e) => Trouble::Passing(e),
         })?;
-    let stored = keep(state, store, fetched.bytes, &fetched.inspected).await?;
-    // Forgotten meanwhile — a reset, a sweep — it is not remembered either:
-    // the bytes are the next sweep's to remove.
-    if repo::asset::mark_stored(&state.db, &asset.id, &stored.as_row()).await? {
-        state.media.remember(
-            &asset.origin,
-            &stored.key,
-            stored.thumb,
-            fetched.inspected.content_type,
-        );
+    let (key, sha256) = file::key_for(&fetched.bytes, fetched.inspected.ext);
+    // The row names the bytes before they are put: nothing that deletes a
+    // file nobody names takes them meanwhile. Forgotten already — a reset,
+    // a sweep — there is nothing to keep them for.
+    if !repo::asset::reserve_key(&state.db, &asset.id, &key).await? {
+        return Ok(());
+    }
+    let kept = keep(store, key, sha256, fetched.bytes, &fetched.inspected).await?;
+    // Forgotten meanwhile, it is not remembered either: the bytes are the
+    // next sweep's to remove.
+    if repo::asset::mark_stored(&state.db, &asset.id, &kept.as_row()).await? {
+        settle(store, &kept).await;
+        state
+            .media
+            .remember(&asset.origin, &kept.key, kept.thumb, kept.content_type);
     }
     Ok(())
 }
@@ -242,6 +293,10 @@ pub struct Kept {
     pub width: Option<i32>,
     pub height: Option<i32>,
     pub thumb: Thumb,
+    /// The bytes put, and their thumbnail's, held until the row naming
+    /// them is written: see [`settle`].
+    data: Bytes,
+    small: Option<Bytes>,
 }
 
 impl Kept {
@@ -258,48 +313,36 @@ impl Kept {
     }
 }
 
-/// Put bytes in the store under their key, and a thumbnail beside a
-/// picture's. Bytes already there — the same picture from two providers —
-/// are not put again.
+/// Put bytes in the store under their key — `file::key_for`'s — and a
+/// thumbnail beside a picture's. Put every time, though the same picture
+/// from two providers may be there already: the same key is the same bytes,
+/// and a put is what tells a sweep that looked a moment ago that they are
+/// wanted.
 pub async fn keep(
-    state: &AppState,
-    store: &super::store::Store,
+    store: &Store,
+    key: String,
+    sha256: String,
     bytes: Bytes,
     inspected: &file::Inspected,
 ) -> Result<Kept> {
-    let (key, sha256) = file::key_for(&bytes, inspected.ext);
     let size = i64::try_from(bytes.len()).unwrap_or(i64::MAX);
+    store
+        .put(&key, bytes.clone(), inspected.content_type)
+        .await?;
 
-    let already = repo::asset::thumb_of_key(&state.db, &key).await?;
-    let thumb = match already {
-        Some(thumb) if store.exists(&key).await? => thumb,
-        _ => {
-            store
-                .put(&key, bytes.clone(), inspected.content_type)
-                .await?;
-            match inspected.kind {
-                Kind::Image => {
-                    // A thumbnail that cannot be made is no thumbnail: the
-                    // picture is kept and served whole.
-                    let made = tokio::task::spawn_blocking(move || file::thumbnail(&bytes))
-                        .await
-                        .context("the thumbnail task was cancelled")?;
-                    match made {
-                        Some((small, kind)) => {
-                            let (thumb_key, content_type) = file::thumb_key(&key, kind)
-                                .zip(kind.content_type())
-                                .expect("a thumbnail made has a kind");
-                            store
-                                .put(&thumb_key, Bytes::from(small), content_type)
-                                .await?;
-                            kind
-                        }
-                        None => Thumb::None,
-                    }
-                }
-                Kind::Audio => Thumb::None,
-            }
+    let made = match inspected.kind {
+        Kind::Image => thumbnail(bytes.clone()).await,
+        Kind::Audio => None,
+    };
+    let (thumb, small) = match made {
+        Some((small, kind)) => {
+            let (thumb_key, content_type) = file::thumb_key(&key, kind)
+                .zip(kind.content_type())
+                .expect("a thumbnail made has a kind");
+            store.put(&thumb_key, small.clone(), content_type).await?;
+            (kind, Some(small))
         }
+        None => (Thumb::None, None),
     };
 
     Ok(Kept {
@@ -310,7 +353,94 @@ pub async fn keep(
         width: inspected.width.and_then(|w| i32::try_from(w).ok()),
         height: inspected.height.and_then(|h| i32::try_from(h).ok()),
         thumb,
+        data: bytes,
+        small,
     })
+}
+
+/// A picture's thumbnail: made one at a time, off the server's own threads.
+/// None for one too large to be worth decoding, one the decoders here
+/// cannot read — or one they panic on, which is caught there: the picture
+/// is kept and served whole.
+async fn thumbnail(bytes: Bytes) -> Option<(Bytes, Thumb)> {
+    // Held by the decoding itself, so a request given up on meanwhile does
+    // not let another start beside it.
+    let permit = THUMBNAILING.clone().acquire_owned().await.ok()?;
+    let made = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        file::thumbnail(&bytes)
+    })
+    .await;
+    match made {
+        Ok(made) => made.map(|(small, kind)| (Bytes::from(small), kind)),
+        Err(e) => {
+            tracing::warn!(error = %e, "no thumbnail: the decoder gave up on the picture");
+            None
+        }
+    }
+}
+
+/// Once the row naming them is written: the files are in the store, or are
+/// put back. A removal or a sweep that looked before the row was written
+/// may have taken them in between; after it, none will. Quiet — the files
+/// were put a moment ago, and a store that cannot be asked now is said so
+/// in the log.
+pub async fn settle(store: &Store, kept: &Kept) {
+    if let Err(e) = settle_files(store, kept).await {
+        tracing::warn!(
+            key = %kept.key,
+            error = format_args!("{e:#}"),
+            "could not make sure a medium kept is in the store"
+        );
+    }
+}
+
+async fn settle_files(store: &Store, kept: &Kept) -> Result<()> {
+    if !store.exists(&kept.key).await? {
+        tracing::info!(key = %kept.key, "a medium was taken from under its row; put back");
+        store
+            .put(&kept.key, kept.data.clone(), kept.content_type)
+            .await?;
+    }
+    if let (Some(small), Some((thumb_key, content_type))) = (
+        &kept.small,
+        file::thumb_key(&kept.key, kept.thumb).zip(kept.thumb.content_type()),
+    ) && !store.exists(&thumb_key).await?
+    {
+        store.put(&thumb_key, small.clone(), content_type).await?;
+    }
+    Ok(())
+}
+
+/// Delete a key's files — the bytes and their thumbnail — unless a row
+/// still names the key: another holding the same bytes, or one in line for
+/// them whose fetch is under way. Called once the row they were kept for is
+/// gone. Best effort: what could not be deleted is said in the log and left
+/// to the sweep's pass over the store. How many went.
+pub async fn delete_files(state: &AppState, store: &Store, key: &str, thumb: Thumb) -> usize {
+    match repo::asset::key_named(&state.db, key).await {
+        Ok(false) => {}
+        Ok(true) => return 0,
+        Err(e) => {
+            tracing::warn!(key, error = %e, "could not tell whether a medium's file is still named");
+            return 0;
+        }
+    }
+    let mut gone = 0;
+    for key in file::thumb_key(key, thumb)
+        .into_iter()
+        .chain(std::iter::once(key.to_string()))
+    {
+        match store.delete(&key).await {
+            Ok(()) => gone += 1,
+            Err(e) => tracing::warn!(
+                key,
+                error = format_args!("{e:#}"),
+                "could not delete a medium's file; the sweep will"
+            ),
+        }
+    }
+    gone
 }
 
 fn busy(what: &str) -> AppError {
@@ -367,7 +497,7 @@ async fn everything(state: &AppState, record: &str, flag: &cancel::Registered) -
         .iter()
         // Not what would fail at once: an SVG logo, an address of this
         // server's own.
-        .filter(|(origin, _)| super::fetch::fetchable(origin))
+        .filter(|(origin, _)| super::fetch::fetchable(origin, state.media.guard))
         .map(|(origin, kind)| repo::asset::Wanted {
             origin,
             kind: *kind,
@@ -395,6 +525,11 @@ async fn everything(state: &AppState, record: &str, flag: &cancel::Registered) -
         let (ok, ko) = fetch_all(state, due, Some(flag)).await;
         stored += ok;
         failed += ko;
+        // Every one of them taken by another instance, or not to be taken:
+        // asking again at once would be asked the same.
+        if ok + ko == 0 {
+            break;
+        }
 
         if let Err(e) = job::progress(
             &state.db,
@@ -497,43 +632,96 @@ pub async fn run_sweeps(state: AppState) {
 
 /// Forget what nobody points at any more, and delete what nobody names.
 ///
-/// A row goes when no work's rows hold its address and no locked value does;
-/// its file goes with it unless another row holds the same bytes. Then the
-/// store is listed, and a file no row names — one whose row was lost
-/// between the put and the write, say — goes too, once it has had its
-/// hour.
+/// A row goes when no work's rows hold its address and no locked value does
+/// — asked again as it is deleted, since something may have come to name it
+/// since the list was read — once it has had its hour: an upload's row is
+/// written a moment before what points at it. Its file goes with it unless
+/// another row holds the same bytes. Then the store is listed, and a file
+/// no row names — one whose row was lost between the put and the write,
+/// say — goes too, once it has had its hour: asked again just before it
+/// goes, of the rows and of the store, as a row may have been written for
+/// it, or the file put again, since the list was read. One that cannot be
+/// deleted is counted and passed by; the rest are still swept.
 pub async fn sweep(state: &AppState) -> Result<String> {
     let store = state.media.store().context("no media store")?;
+    let cutoff = chrono::Utc::now() - ORPHAN_GRACE;
 
     let locked = locked_addresses(state).await?;
-    let lost = repo::asset::unreferenced(&state.db, &locked).await?;
-    let (mut rows, mut files) = (0usize, 0usize);
+    let lost =
+        repo::asset::unreferenced(&state.db, &locked, &crate::db::to_rfc3339(cutoff)).await?;
+    let (mut rows, mut files, mut troubles) = (0usize, 0usize, 0usize);
     for asset in &lost {
-        if let Some(key) = &asset.key
-            && !repo::asset::key_shared(&state.db, key, &asset.id).await?
-        {
-            store.delete(key).await?;
-            files += 1;
-            if let Some(thumb) = file::thumb_key(key, asset.thumb) {
-                store.delete(&thumb).await?;
-                files += 1;
+        match repo::asset::delete_unless_referenced(&state.db, asset).await {
+            Ok(true) => {
+                state.media.forget(&asset.origin);
+                rows += 1;
+                if let Some(key) = &asset.key {
+                    files += delete_files(state, store, key, asset.thumb).await;
+                }
+            }
+            // Named again since the list was read.
+            Ok(false) => {}
+            Err(e) => {
+                tracing::warn!(origin = %asset.origin, error = %e, "the sweep could not forget a medium");
+                troubles += 1;
             }
         }
-        repo::asset::delete(&state.db, &asset.id).await?;
-        state.media.forget(&asset.origin);
-        rows += 1;
     }
 
-    let named = repo::asset::all_keys(&state.db).await?;
-    let cutoff = chrono::Utc::now() - ORPHAN_GRACE;
-    for (key, modified) in store.list().await? {
-        if !named.contains(&key) && modified < cutoff {
-            store.delete(&key).await?;
-            files += 1;
+    let held = repo::asset::held_stems(&state.db).await?;
+    let listed = match store.list().await {
+        Ok(listed) => listed,
+        Err(e) => {
+            tracing::warn!(
+                error = format_args!("{e:#}"),
+                "the sweep could not list the store"
+            );
+            troubles += 1;
+            Vec::new()
+        }
+    };
+    for (key, modified) in listed {
+        if modified >= cutoff || held.contains(file::stem_of(&key)) {
+            continue;
+        }
+        let outcome = match orphaned(state, store, &key, cutoff).await {
+            Ok(true) => store.delete(&key).await.map(|()| true),
+            other => other,
+        };
+        match outcome {
+            Ok(true) => files += 1,
+            Ok(false) => {}
+            Err(e) => {
+                tracing::warn!(
+                    key,
+                    error = format_args!("{e:#}"),
+                    "the sweep could not remove a file"
+                );
+                troubles += 1;
+            }
         }
     }
 
-    Ok(format!("{rows} forgotten, {files} files removed"))
+    let mut summary = format!("{rows} forgotten, {files} files removed");
+    if troubles > 0 {
+        summary.push_str(&format!(", {troubles} could not be (see the log)"));
+    }
+    Ok(summary)
+}
+
+/// Whether a file the store listed is still nobody's, asked just before it
+/// goes: no row names its bytes, and nothing has put it there again since
+/// `cutoff`.
+async fn orphaned(
+    state: &AppState,
+    store: &Store,
+    key: &str,
+    cutoff: chrono::DateTime<chrono::Utc>,
+) -> Result<bool> {
+    if repo::asset::stem_named(&state.db, file::stem_of(key)).await? {
+        return Ok(false);
+    }
+    Ok(store.modified(key).await?.is_some_and(|at| at < cutoff))
 }
 
 /// The addresses locked values hold: a still put on an episode by hand,
@@ -542,10 +730,8 @@ pub async fn sweep(state: &AppState) -> Result<String> {
 async fn locked_addresses(state: &AppState) -> Result<HashSet<String>> {
     let mut out = HashSet::new();
     for (_, locked) in repo::override_field::all(&state.db).await? {
-        if matches!(
-            locked.field.as_str(),
-            "image" | "themeMusic" | "primaryPoster" | "primaryFanart"
-        ) && let Some(serde_json::Value::String(url)) = locked.value
+        if super::ADDRESS_FIELDS.contains(&locked.field.as_str())
+            && let Some(serde_json::Value::String(url)) = locked.value
         {
             out.insert(state.media.unlocalize(&url));
         }

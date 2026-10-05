@@ -17,12 +17,23 @@ use crate::db::{Db, RowExt, new_id, now};
 /// start. Before that, runs are opened with no instance — the tests', say.
 static INSTANCE: OnceLock<String> = OnceLock::new();
 
+/// When this process started, as runs are dated: set with its name, before
+/// it opens any. What tells a run a previous life left open from one this
+/// process opened and is still running.
+static STARTED: OnceLock<String> = OnceLock::new();
+
 pub fn name_instance(name: &str) {
     let _ = INSTANCE.set(name.to_string());
+    let _ = STARTED.set(now());
 }
 
 fn instance() -> Option<&'static str> {
     INSTANCE.get().map(String::as_str)
+}
+
+/// When this process started, once it is named.
+pub fn process_started() -> Option<&'static str> {
+    STARTED.get().map(String::as_str)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -551,38 +562,42 @@ mod entry_tests {
     }
 }
 
-/// Close any run still marked running: every one of them, alone — a job
-/// row is only ever closed by the task that opened it, so a process killed
-/// mid-sweep leaves one behind, and without this they accumulate as
-/// permanently-running phantoms in the UI. Among several instances, only
-/// what this instance's previous life opened, or what no instance claims:
-/// another instance's runs are its own — alive, it is running them; gone,
-/// the leader closes them.
-pub async fn fail_orphaned(db: &Db, own_only: bool) -> Result<u64> {
-    let result = if own_only {
-        sqlx::query(db.sql(
-            "UPDATE job_run
-             SET status = 'failed', finished_at = ?,
-                 error = 'the server stopped while this was running'
-             WHERE status = 'running' AND (instance IS NULL OR instance = ?)",
-        ))
-        .bind(now())
-        .bind(instance())
-        .execute(db.pool())
-        .await?
-    } else {
-        sqlx::query(db.sql(
-            "UPDATE job_run
-             SET status = 'failed', finished_at = ?,
-                 error = 'the server stopped while this was running'
-             WHERE status = 'running'",
-        ))
-        .bind(now())
-        .execute(db.pool())
-        .await?
-    };
+/// Close any run still marked running that a previous life of this process
+/// left open: every one of them, alone — a job row is only ever closed by
+/// the task that opened it, so a process killed mid-sweep leaves one behind,
+/// and without this they accumulate as permanently-running phantoms in the
+/// UI. Among several instances, only what this instance's previous life
+/// opened, or what no instance claims: another instance's runs are its own —
+/// alive, it is running them; gone, the leader closes them.
+///
+/// Only runs opened before `started` — when this process started, see
+/// [`process_started`] — when it is given: the cleanup runs a little after
+/// the start, and the runs this process opened meanwhile — the anime list's
+/// import, a refresh asked for at once — are alive. Closed as failed, the
+/// history showed a failure and then, from the same run, a success.
+pub async fn fail_orphaned(db: &Db, own_only: bool, started: Option<&str>) -> Result<u64> {
+    let mut sql = String::from(
+        "UPDATE job_run
+         SET status = 'failed', finished_at = ?,
+             error = 'the server stopped while this was running'
+         WHERE status = 'running'",
+    );
+    if own_only {
+        sql.push_str(" AND (instance IS NULL OR instance = ?)");
+    }
+    if started.is_some() {
+        sql.push_str(" AND started_at < ?");
+    }
 
-    Ok(result.rows_affected())
+    let mut query = sqlx::query(db.sql(&sql)).bind(now());
+    if own_only {
+        query = query.bind(instance());
+    }
+    if let Some(started) = started {
+        query = query.bind(started);
+    }
+
+    Ok(query.execute(db.pool()).await?.rows_affected())
 }
 
 /// The runs still marked running by instances other than `except`.
@@ -741,7 +756,7 @@ mod tests {
         let db = db().await;
         start(&db, kinds::REFRESH_SWEEP, None).await.unwrap();
 
-        assert_eq!(fail_orphaned(&db, false).await.unwrap(), 1);
+        assert_eq!(fail_orphaned(&db, false, None).await.unwrap(), 1);
 
         let jobs = list(
             &db,
@@ -756,7 +771,30 @@ mod tests {
         assert!(jobs[0].error.as_deref().unwrap().contains("stopped"));
 
         // Running it again must not touch the row it already closed.
-        assert_eq!(fail_orphaned(&db, false).await.unwrap(), 0);
+        assert_eq!(fail_orphaned(&db, false, None).await.unwrap(), 0);
+    }
+
+    /// The cleanup closes what a previous life left open, not what this one
+    /// opened before it ran: the anime list's import at twenty seconds was
+    /// marked failed at thirty, and then succeeded.
+    #[tokio::test]
+    async fn a_run_this_process_opened_is_not_taken_for_one_a_crash_left() {
+        let db = db().await;
+        let left = start(&db, kinds::REFRESH_SWEEP, None).await.unwrap();
+        sqlx::query(db.sql("UPDATE job_run SET started_at = ? WHERE id = ?"))
+            .bind("2000-01-01T00:00:00Z")
+            .bind(&left)
+            .execute(db.pool())
+            .await
+            .unwrap();
+        let alive = start(&db, kinds::IMPORT_ANIME, None).await.unwrap();
+
+        // This process started between the two.
+        let started = "2001-01-01T00:00:00Z";
+        assert_eq!(fail_orphaned(&db, false, Some(started)).await.unwrap(), 1);
+        assert_eq!(fail_orphaned(&db, true, Some(started)).await.unwrap(), 0);
+        assert_eq!(get(&db, &left).await.unwrap().unwrap().status, "failed");
+        assert_eq!(get(&db, &alive).await.unwrap().unwrap().status, "running");
     }
 
     /// Another instance's run is its own: alone every run is closed at the
@@ -772,7 +810,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            fail_orphaned(&db, true).await.unwrap(),
+            fail_orphaned(&db, true, None).await.unwrap(),
             0,
             "b's, not this instance's"
         );

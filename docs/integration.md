@@ -83,6 +83,17 @@ give every instance the three names as network aliases, as
 `compose.multi.yaml` does, so Docker's DNS hands a client either address.
 `/ca.crt` is the same on each.
 
+The instances tell each other what changed over the cache server's channel,
+which delivers at most once: a word published while one of them
+re-subscribes is lost. So each also reads the settings, the network rules
+and the caches' numbers again every minute — a change made on one instance
+reaches the others within a minute at worst, never only at their restart.
+What is on that server is trusted by every instance — the cached works and
+answers, what the channel says — so give the instances an account of their
+own that reaches their prefix and their channel and nothing else
+(`ACL SETUSER ams on >… ~ams:* &ams:events +@all`), over TLS (`rediss://`)
+when the server is not on the same host.
+
 ## 3. Redirect each client
 
 ### Docker Compose
@@ -139,6 +150,7 @@ could read:
 ```yaml
 environment:
   AMS_CA_URL: http://172.31.0.10:8080/ca.crt
+  AMS_CA_FINGERPRINT: 04:05:2E:B0:…   # the SHA-256 Opening & APIs shows
 volumes:
   - ./docker/trust-ca.sh:/custom-cont-init.d/10-trust-arr-metadata-ca:ro
 depends_on:
@@ -146,9 +158,15 @@ depends_on:
     condition: service_healthy
 ```
 
-That fetch is plain HTTP on the stack's own network. Once the authority exists,
-its SHA-256 is on the Opening & APIs page: set `AMS_CA_FINGERPRINT` to it and
-the script refuses anything else.
+That fetch is plain HTTP on the stack's own network, and what it installs is a
+root the container then trusts for everything — so over `http://` the script
+refuses to install anything it cannot check: set `AMS_CA_FINGERPRINT` to the
+SHA-256 shown on the Opening & APIs page, and anything else is refused. A
+stack's very first start has no fingerprint to copy yet; `AMS_CA_INSECURE=1`
+accepts the fetch unpinned, with a warning in the container's log, on a
+network you control — `compose.integration.yaml` sets it until a fingerprint
+is given in `.env`. An `https://` address is checked by the container's own
+trust store, as any other.
 
 Deploying from the image alone, without this repository? The script is what the
 server serves at `/trust-ca.sh`: `curl -o trust-ca.sh
@@ -205,19 +223,47 @@ before the application starts.
 ## 5. Allow the clients through
 
 Sonarr and Radarr cannot attach an API key — there is nowhere in the protocol to
-put one. Those surfaces are guarded by address instead:
+put one. Those surfaces are guarded by address instead, by the list on the
+**Access** page. Before the first start, the environment may give that list its
+first value:
 
 ```bash
-AMS_ALLOWLIST=172.31.0.0/24
+AMS_ALLOWLIST=172.31.0.20,172.31.0.21
 ```
 
-Set this to the network your stack runs on. It defaults to loopback plus the
-RFC 1918 ranges, which is right for a single Docker host and too permissive for
-a shared network.
+It is read once, against an empty table, and not again: from then on the list
+is edited on the Access page, where a change applies at once. A server started
+with the variable still set, and different from the list, says so in its log.
+Unset, the list starts as loopback and the private ranges, which is right for a
+single Docker host and too wide for a shared network.
 
-If this server sits behind a reverse proxy, the allowlist is only as good as the
-address resolution behind it — set `AMS_TRUSTED_PROXIES` to the proxy's network,
-or `X-Forwarded-For` is ignored and every client looks like the proxy.
+Name the clients' own addresses rather than the network they are on — give them
+fixed ones (`ipv4_address`), as `compose.integration.yaml` does. A network's
+first address is its gateway, Docker's, and whatever reaches the host's
+published ports through Docker's own proxy arrives from it: allowing
+`172.31.0.0/24` allows that too.
+
+If this server sits behind a reverse proxy, the allowlist is only as good as
+the address resolution behind it — set `AMS_TRUSTED_PROXIES` to the proxy's
+address, or every client looks like the proxy. A request forwarded by a proxy
+that is not in that list — it carries `X-Forwarded-For`, `Forwarded` or
+`X-Real-IP` — is therefore refused on these surfaces, with a warning naming the
+proxy; Sonarr and Radarr calling directly never send one. From a trusted proxy
+every `X-Forwarded-For` line is read, in order, right to left past the other
+trusted hops; a hop that is no address leaves the client unknown, and an unknown
+client is refused by every allowlist rather than taken for the proxy.
+
+### Changes need this server's own pages
+
+A request that changes something and rides on what a browser sends by itself —
+the session cookie, or, on the native API under `allowlist` or `open`, the
+address it calls from — must come from this server's own pages. The browser's
+`Sec-Fetch-Site` says so (`same-origin`, or `none` for an address typed in);
+an older browser's `Origin` must be the name the request was addressed to (or a
+trusted proxy's `X-Forwarded-Host`), `AMS_PUBLIC_URL`, or one of
+`AMS_CORS_ORIGINS`. Anything else is refused with `403 cross_site_request`.
+Clients that send neither header — Sonarr, Radarr, scripts, `curl` — and
+anything authenticated by a key are not concerned.
 
 ### TMDB clients
 
@@ -236,6 +282,27 @@ you can use that depends on the client:
   ```
 
 Check before assuming: look for a TMDB API key field in the client's settings.
+
+What the relay writes into a title's document (`/3/movie/{id}`, `/3/tv/{id}`)
+is what a person **locked** here, and nothing else: the title, the original
+title, the overview, the homepage, the genres, the dates, the status, the
+runtime, a chosen poster or background. A field nobody locked is TMDB's own.
+The text — the title, the overview, the homepage, the genres' names — is
+written only for a client that asks in the language the catalogue is kept in
+(`AMS_TMDB_LANGUAGE`, by its language whatever the region: `fr` and `fr-CA`
+are French; a client that asks none is answered TMDB's `en-US`). A client
+asking in another language gets TMDB's text in it. Genres keep TMDB's ids:
+when one of the genres locked is not among TMDB's for that title, TMDB's are
+left as they are rather than sent without an id.
+
+TMDB's answers are kept a while and shared by every client — a search a
+quarter of an hour, a title six hours, the configuration a day — and only
+whole documents (`200`): a refusal, an error or a fragment is asked again.
+TMDB is asked with the client's `User-Agent`, `Accept` and `Accept-Language`
+and nothing else it sent: no cookie, no key of this server's, no `Range`, no
+validator for an answer that is kept or patched. What mints or reads a TMDB
+session — `/3/authentication/…`, `/3/guest_session/…`, `/3/account/…`,
+anything asked with a `session_id` — is relayed but never kept.
 
 ### TheTVDB and AniList clients
 
@@ -272,6 +339,10 @@ they carry on every call after. Two ways in:
   key in `X-Api-Key`, since `Authorization` is the token's.
 
 Reads only: TheTVDB's one write, a user's favourites, is refused whoever asks.
+When TheTVDB refuses to sign this server in — a wrong or rotated key, a
+missing PIN, TheTVDB down — the calls made with its key are answered `503` for
+a minute rather than each signing in again, then two, up to ten while it
+keeps refusing; the first refusal is in the log.
 
 **AniList** has no key at all, so nothing a client sends can be one of this
 server's: `AMS_ANILIST_AUTH=allowlist` is the default, and a key issued here
@@ -281,9 +352,14 @@ it came; an answer to a query that carried one, to a mutation, or about
 somebody's lists or account, is never kept — a public list is still
 somebody's, read for its latest state. An entry is recognised by AniList's
 id or by MyAnimeList's, whichever the client asked for: Yamtrack's import
-asks only the latter. AniList's rate limit — ninety queries a minute, thirty while it runs
-degraded — is handed back as AniList answers it, `429` with `Retry-After`, and
-counts this server's own calls to AniList among them.
+asks only the latter. MyAnimeList numbers anime and manga apart, in numbers
+that overlap, so an entry is matched by MyAnimeList's id only when it says it
+is an anime — its `type`, its `format`, or a count of episodes, a season or a
+duration; Yamtrack's manga list, and an anime still airing with no count of
+episodes yet, are left as AniList answered them. AniList's rate limit —
+ninety queries a minute, thirty while it runs degraded — is handed back as
+AniList answers it, `429` with `Retry-After`, and counts this server's own
+calls to AniList among them.
 
 Both relays are switches on **Opening & APIs** (`api.tvdb`, `api.anilist`),
 listed with the others; a member's key is kept off every relay until *Members
@@ -429,7 +505,9 @@ curl -s https://graphql.anilist.co -H 'content-type: application/json' \
 A TLS error means the CA is not trusted yet — check the container logged
 `[trust-ca] authority installed`. A connection refused means the hostname override did
 not take; check `getent hosts skyhook.sonarr.tv` inside the client. A `403` means
-the client's address is not in `AMS_ALLOWLIST`, and a `401` means the surface
+the client's address is not on the allowlist — the **Access** page lists every
+address that was turned away, with a button that allows it — or that it came
+through a proxy missing from `AMS_TRUSTED_PROXIES`. A `401` means the surface
 wants a key the client did not send.
 
 The server's own logs name which of those it was.
@@ -489,19 +567,20 @@ the internet, and this server's TheTVDB and TMDB keys in the environment.
 
 Everything above redirects per container, with `extra_hosts`. If instead you add
 the records to your local DNS resolver, **this server resolves them too** — and
-it calls `skyhook.sonarr.tv`, `api.radarr.video`, `api4.thetvdb.com` and
-`graphql.anilist.co` itself, because they are providers as well as protocols
-it speaks.
+it calls `skyhook.sonarr.tv`, `api.radarr.video`, `api.themoviedb.org`,
+`api4.thetvdb.com` and `graphql.anilist.co` itself, because they are
+providers as well as protocols it speaks.
 
 It recognises the loop and answers `508 Loop Detected` rather than recursing, so
-nothing hangs. But the enrichment is then dead — and so are the TheTVDB and
-AniList relays, which ask the real services. Either point the upstreams at
+nothing hangs. But the enrichment is then dead — and so are the TMDB, TheTVDB
+and AniList relays, which ask the real services. Either point the upstreams at
 the real services by address:
 
 ```bash
 AMS_SKYHOOK_UPSTREAM=https://<real-skyhook-address>
 AMS_RADARR_METADATA_UPSTREAM=https://<real-api.radarr.video-address>
 AMS_SONARR_SERVICES_UPSTREAM=https://<real-services.sonarr.tv-address>
+AMS_TMDB_UPSTREAM=https://<real-api.themoviedb.org-address>
 AMS_TVDB_UPSTREAM=https://<real-api4.thetvdb.com-address>/v4
 AMS_ANILIST_UPSTREAM=https://<real-graphql.anilist.co-address>
 ```
@@ -513,6 +592,33 @@ AMS_SKYHOOK_ENRICH=false
 AMS_RADARR_METADATA_ENRICH=false
 ```
 
+An upstream named this way may be anywhere — a mirror on the same machine
+or the same network included: it is yours. Where it *redirects* is not: a
+hop to an address that only means something from where this server stands
+(loopback, link-local, a cloud's metadata service), written as an address
+or as a name that resolves there, is refused, and MyAnimeList's client id is
+never carried to another host than the one first asked.
+
+## When a provider does not answer
+
+A provider that fails during a refresh — an error, a timeout, a rate limit,
+a queue that is full — does not make the work lose what it gave before. Its
+values, pictures, translations and ratings are put back from what the work
+holds; the episode list keeps TheTVDB's numbering when TheTVDB (or Skyhook)
+is the one that failed; a season TMDB could not give keeps its stored
+episodes, so Sonarr is never told they are gone; and the adult flag stands
+when AniList or MyAnimeList, which often alone set it, did not answer. The
+work is then marked as refreshed in part: its refresh error, which editors
+see, names the providers that failed, and it is tried again within six
+hours, or sooner near an air date, rather than a full interval later.
+
+A provider that answers `429` — or `503` with a `Retry-After` — is left
+alone for as long as it asks, a minute at most, by every request at once;
+one that asks for longer is gone without until then. TMDB is asked at most
+sixteen requests at a time, TheTVDB, Skyhook, Radarr's service and
+Fanart.tv eight, the sources spaced by a queue four or fewer. A TheTVDB key
+that is refused is not tried again for a minute.
+
 ## A note on languages
 
 Sonarr's request builder pins the language segment to `en` and nothing in Sonarr
@@ -523,7 +629,10 @@ language and every client gets it.
 Radarr has no language in its protocol at all, and the same applies.
 
 TMDB clients do send `language=`, and it is forwarded upstream, so those get
-whatever they ask for with your edits patched in.
+whatever they ask for. Your locked text — a title, an overview — is written
+into what they asked for only when they asked in `AMS_TMDB_LANGUAGE`'s
+language, which it was written in; a lock that is no text, a date or a chosen
+poster, is written in every language.
 
 ## Series of the same name
 
@@ -568,6 +677,15 @@ a `.nfo` that only carries image *URLs* leaves the fetching to the consumer, and
 Plex often will not. Copy or link this tree next to your media. Re-running the
 export rewrites the documents and leaves existing pictures alone, so it is cheap
 to repeat. Set `AMS_NFO_EXPORT_ARTWORK=false` for documents only.
+
+The pictures are fetched as the media store fetches them, since the addresses
+are whatever someone who may edit put on a work: never from this machine, a
+cloud's metadata service or another address only the server can reach, every
+redirect judged on its way, never through `HTTP_PROXY`, and a file written only
+when it is the picture or the sound it should be. A picture mirror on your own
+network is reached; `AMS_MEDIA_PRIVATE_NETWORKS=false` keeps the export and the
+media store out of private networks (`10/8`, `172.16/12`, `192.168/16`,
+`100.64/10`, and IPv6's unique-local `fc00::/7`) too.
 
 The call answers at once, `202` with the job it started, and the export is
 written in the background: a library's artwork is thousands of downloads,

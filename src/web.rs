@@ -1,12 +1,15 @@
 //! HTTP server: router assembly, middleware stack, TLS, graceful shutdown.
 
 mod etag;
+mod listen;
+
+use std::net::SocketAddr;
 
 use anyhow::{Context, Result};
 use axum::{
-    Json, Router, ServiceExt,
-    extract::{Request, State},
-    http::{HeaderValue, StatusCode, header},
+    Json, Router,
+    extract::{ConnectInfo, Request, State},
+    http::{HeaderName, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
     routing::get,
 };
@@ -29,6 +32,10 @@ const MAX_BODY_BYTES: usize = 1024 * 1024;
 
 pub async fn serve(state: AppState) -> Result<()> {
     let bind = state.config.server.bind;
+    let limits = listen::Limits {
+        connections: state.config.server.max_connections,
+        head: state.config.server.header_read_timeout,
+    };
 
     // Always started: whether it sweeps is a setting it re-reads, so turning
     // refresh on no longer needs a restart.
@@ -57,10 +64,14 @@ pub async fn serve(state: AppState) -> Result<()> {
     // the one address neither step rewrites, and a real redirect to it (not a
     // rewrite) is what makes the page's relative asset URLs resolve under
     // `/api/docs/`. It reveals nothing: the index itself is still guarded.
-    let router = Router::new()
-        .route("/api/docs", get(docs_entry))
-        .route("/api/docs/", get(docs_entry))
-        .fallback_service(normalized);
+    // Every layer the door has wraps these two as well as the rest.
+    let router = protect(
+        &state,
+        Router::new()
+            .route("/api/docs", get(docs_entry))
+            .route("/api/docs/", get(docs_entry))
+            .fallback_service(normalized),
+    );
 
     // The clients' door, when there is one: bound first, so a port that is
     // taken stops the start rather than being found out later.
@@ -71,24 +82,27 @@ pub async fn serve(state: AppState) -> Result<()> {
             listener
                 .set_nonblocking(true)
                 .context("could not set the clients' listener non-blocking")?;
-            let handle = axum_server::Handle::new();
-            let clients_router = NormalizePathLayer::trim_trailing_slash()
-                .layer(build_clients_router(state.clone()));
+            let listener = tokio::net::TcpListener::from_std(listener)
+                .context("could not take the clients' listener over")?;
+            let handle = axum_server::Handle::<listen::Peer>::new();
+            let clients_router = Router::new().fallback_service(
+                NormalizePathLayer::trim_trailing_slash()
+                    .layer(build_clients_router(state.clone())),
+            );
             tracing::info!(
                 bind = %clients.bind,
                 names = ?clients.names.iter().map(ToString::to_string).collect::<Vec<_>>(),
                 "listening for the clients (TLS)"
             );
-            let server = axum_server::from_tcp_rustls(listener, clients.rustls.clone())
-                .context("could not take the clients' listener over")?
-                .handle(handle.clone())
-                .serve(
-                    ServiceExt::<Request>::into_make_service_with_connect_info::<
-                        std::net::SocketAddr,
-                    >(clients_router),
-                );
+            let served = listen::serve(
+                listen::Door::new(listener, limits.connections),
+                Some(clients.rustls.clone()),
+                clients_router,
+                handle.clone(),
+                limits,
+            );
             let task = tokio::spawn(async move {
-                if let Err(e) = server.await {
+                if let Err(e) = served.await {
                     tracing::error!(error = %e, "the clients' listener failed");
                 }
             });
@@ -98,9 +112,12 @@ pub async fn serve(state: AppState) -> Result<()> {
         None => None,
     };
 
-    match state.config.server.tls.clone() {
-        Some(tls) => {
-            let config = axum_server::tls_rustls::RustlsConfig::from_pem_file(&tls.cert, &tls.key)
+    let listener = tokio::net::TcpListener::bind(bind)
+        .await
+        .with_context(|| format!("cannot bind {bind}"))?;
+    let tls = match state.config.server.tls.clone() {
+        Some(tls) => Some(
+            axum_server::tls_rustls::RustlsConfig::from_pem_file(&tls.cert, &tls.key)
                 .await
                 .with_context(|| {
                     format!(
@@ -108,66 +125,156 @@ pub async fn serve(state: AppState) -> Result<()> {
                         tls.cert.display(),
                         tls.key.display()
                     )
-                })?;
-
-            tracing::info!(%bind, "listening (TLS)");
-
-            // Drained on a signal like the plain listener is.
-            let handle = axum_server::Handle::new();
-            tokio::spawn({
-                let handle = handle.clone();
-                async move {
-                    shutdown_signal().await;
-                    handle.graceful_shutdown(Some(DRAIN));
-                }
-            });
-            axum_server::bind_rustls(bind, config)
-                .handle(handle)
-                .serve(
-                    ServiceExt::<Request>::into_make_service_with_connect_info::<
-                        std::net::SocketAddr,
-                    >(router),
-                )
-                .await
-                .context("server error")?;
-        }
-        None => {
-            tracing::info!(%bind, "listening");
-
-            let listener = tokio::net::TcpListener::bind(bind)
-                .await
-                .with_context(|| format!("cannot bind {bind}"))?;
-
-            axum::serve(
-                listener,
-                ServiceExt::<Request>::into_make_service_with_connect_info::<std::net::SocketAddr>(
-                    router,
-                ),
-            )
-            .with_graceful_shutdown(shutdown_signal())
-            .await
-            .context("server error")?;
-        }
+                })?,
+        ),
+        None => None,
+    };
+    match tls {
+        Some(_) => tracing::info!(%bind, "listening (TLS)"),
+        None => tracing::info!(%bind, "listening"),
     }
 
-    // The clients' door drains too, and is waited for: a Sonarr mid-fetch
-    // gets its answer before the database goes.
-    if let Some((handle, task)) = clients_door {
-        handle.graceful_shutdown(Some(DRAIN));
-        if let Err(e) = task.await {
-            tracing::warn!(error = %e, "the clients' listener did not end cleanly");
+    // One signal stops every door at once — the clients' too, which used to
+    // go on accepting until the interface's had drained — and each is given
+    // `DRAIN` before what is still open is closed.
+    let handle = axum_server::Handle::<listen::Peer>::new();
+    tokio::spawn({
+        let doors: Vec<_> = std::iter::once(handle.clone())
+            .chain(clients_door.as_ref().map(|(door, _)| door.clone()))
+            .collect();
+        async move {
+            shutdown_signal().await;
+            for door in doors {
+                door.graceful_shutdown(Some(DRAIN));
+            }
         }
+    });
+
+    listen::serve(
+        listen::Door::new(listener, limits.connections),
+        tls,
+        router,
+        handle,
+        limits,
+    )
+    .await
+    .context("server error")?;
+
+    // The clients' door is waited for: a Sonarr mid-fetch gets its answer
+    // before the database goes.
+    if let Some((_, task)) = clients_door
+        && let Err(e) = task.await
+    {
+        tracing::warn!(error = %e, "the clients' listener did not end cleanly");
     }
-    state.db.close().await;
+
+    // Given the drain's time to have its connections handed back: a job
+    // holding one must not keep the process up until it is killed.
+    if tokio::time::timeout(DRAIN, state.db.close()).await.is_err() {
+        tracing::warn!("the database's connections were not all handed back in time");
+    }
     Ok(())
 }
 
 /// How long in-flight requests are given to finish once a stop is asked.
 const DRAIN: std::time::Duration = std::time::Duration::from_secs(5);
 
-fn build_router(state: AppState) -> Router {
-    let timeout = state.config.server.request_timeout;
+/// What every answer of the interface's door goes through, inside out: the
+/// name it was addressed to, CORS, the body limit, compression, the timeout,
+/// a panic turned into a 500 — and only then the security headers, so that
+/// a 504 or a 500 made by those carries them too — the trace and the count.
+fn protect(state: &AppState, router: Router) -> Router {
+    router
+        // Before any guard: a request for a name this server does not answer
+        // to should not reach one, let alone a handler.
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            check_host,
+        ))
+        .layer(cors(state))
+        .layer(axum::extract::DefaultBodyLimit::max(MAX_BODY_BYTES))
+        // Not the sounds: a song is already as small as it gets, and a range
+        // of one must arrive as the bytes asked for.
+        .layer(CompressionLayer::new().compress_when({
+            use tower_http::compression::Predicate as _;
+            tower_http::compression::DefaultPredicate::new().and(
+                tower_http::compression::predicate::NotForContentType::new("audio/"),
+            )
+        }))
+        .layer(TimeoutLayer::with_status_code(
+            StatusCode::GATEWAY_TIMEOUT,
+            state.config.server.request_timeout,
+        ))
+        .layer(CatchPanicLayer::new())
+        .layer(SetResponseHeaderLayer::overriding(
+            header::CONTENT_SECURITY_POLICY,
+            content_security_policy(state),
+        ))
+        .layer(header_layer(header::REFERRER_POLICY, "no-referrer"))
+        .layer(header_layer(header::X_CONTENT_TYPE_OPTIONS, "nosniff"))
+        .layer(header_layer(PERMISSIONS_POLICY, PERMISSIONS))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            transport_headers,
+        ))
+        .layer(TraceLayer::new_for_http().make_span_with(crate::telemetry::RequestSpan))
+        // Counted last of all, so what is counted is what was answered.
+        .layer(axum::middleware::from_fn(crate::metrics::observe))
+}
 
+/// What no page here asks for: the camera, the microphone, where somebody
+/// is, a payment. Denied to the page and to whatever it frames.
+const PERMISSIONS_POLICY: HeaderName = HeaderName::from_static("permissions-policy");
+const PERMISSIONS: &str = "camera=(), microphone=(), geolocation=(), payment=()";
+
+/// A year, without the subdomains — other services under the same name may
+/// well be plain HTTP on a home network — and without asking browsers to
+/// ship it preloaded.
+const HSTS: &str = "max-age=31536000";
+
+/// The headers that depend on how the request came and on what it is
+/// answered with: HSTS where it came in TLS — this server's own, or a
+/// trusted proxy's word — and, on a page, the opener policy that keeps a
+/// window this page opens, or that opened it, from reaching into it.
+async fn transport_headers(
+    State(state): State<AppState>,
+    request: Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let server = &state.config.server;
+    let peer = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|ci| ci.0);
+    let https = crate::auth::ip::scheme(
+        peer,
+        request.headers(),
+        &server.trusted_proxies,
+        server.tls.is_some(),
+    ) == Some("https");
+
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    if https {
+        headers.insert(
+            header::STRICT_TRANSPORT_SECURITY,
+            HeaderValue::from_static(HSTS),
+        );
+    }
+    let page = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|kind| kind.starts_with("text/html"));
+    if page {
+        headers.insert(
+            HeaderName::from_static("cross-origin-opener-policy"),
+            HeaderValue::from_static("same-origin"),
+        );
+    }
+    response
+}
+
+fn build_router(state: AppState) -> Router {
     // Each surface carries its own authentication policy, applied inside; the
     // spec is collected from the same handlers, so it cannot drift from them.
     let (surfaces, openapi) = api::build(state.clone());
@@ -198,37 +305,7 @@ fn build_router(state: AppState) -> Router {
         )
         // The UI's fallback must be last: it answers every path the API did not.
         .merge(crate::ui::router())
-        .with_state(state.clone())
-        // Outside everything, because a request for a name this server does not
-        // answer to should not reach a guard, let alone a handler.
-        .layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            check_host,
-        ))
-        .layer(cors(&state))
-        .layer(SetResponseHeaderLayer::overriding(
-            header::CONTENT_SECURITY_POLICY,
-            content_security_policy(&state),
-        ))
-        .layer(header_layer(header::REFERRER_POLICY, "no-referrer"))
-        .layer(header_layer(header::X_CONTENT_TYPE_OPTIONS, "nosniff"))
-        .layer(axum::extract::DefaultBodyLimit::max(MAX_BODY_BYTES))
-        // Not the sounds: a song is already as small as it gets, and a range
-        // of one must arrive as the bytes asked for.
-        .layer(CompressionLayer::new().compress_when({
-            use tower_http::compression::Predicate as _;
-            tower_http::compression::DefaultPredicate::new().and(
-                tower_http::compression::predicate::NotForContentType::new("audio/"),
-            )
-        }))
-        .layer(TimeoutLayer::with_status_code(
-            StatusCode::GATEWAY_TIMEOUT,
-            timeout,
-        ))
-        .layer(CatchPanicLayer::new())
-        .layer(TraceLayer::new_for_http())
-        // Counted last of all, so what is counted is what was answered.
-        .layer(axum::middleware::from_fn(crate::metrics::observe))
+        .with_state(state)
 }
 
 /// The clients' door: Sonarr's, Radarr's and the TMDB relay's surfaces and
@@ -271,7 +348,6 @@ fn build_clients_router(state: AppState) -> Router {
                 async move { answer_to(&names, request, next).await }
             },
         ))
-        .layer(header_layer(header::X_CONTENT_TYPE_OPTIONS, "nosniff"))
         .layer(axum::extract::DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(CompressionLayer::new())
         .layer(TimeoutLayer::with_status_code(
@@ -279,8 +355,17 @@ fn build_clients_router(state: AppState) -> Router {
             timeout,
         ))
         .layer(CatchPanicLayer::new())
-        .layer(TraceLayer::new_for_http())
-        .layer(axum::middleware::from_fn(crate::metrics::observe))
+        // Outside the timeout and the panic, as on the interface's door.
+        // Nothing this door answers is a page to render: what it relays
+        // under the services' names is given no right to run anything.
+        .layer(header_layer(header::X_CONTENT_TYPE_OPTIONS, "nosniff"))
+        .layer(header_layer(
+            header::CONTENT_SECURITY_POLICY,
+            "default-src 'none'; frame-ancestors 'none'; sandbox",
+        ))
+        .layer(header_layer(header::REFERRER_POLICY, "no-referrer"))
+        .layer(TraceLayer::new_for_http().make_span_with(crate::telemetry::RequestSpan))
+        .layer(axum::middleware::from_fn(crate::metrics::observe_door))
 }
 
 /// Refuse a request addressed to a name the clients' door does not answer
@@ -307,6 +392,11 @@ async fn answer_to(names: &[String], request: Request, next: axum::middleware::N
 /// Off unless `AMS_ALLOWED_HOSTS` names something, because there is no safe
 /// guess — this is reached by container name, LAN address, and whatever the
 /// router calls it.
+///
+/// The probes and the authority's files are answered whatever the name:
+/// the container's own health check asks `127.0.0.1`, a client's trust
+/// script and a proxy's health check ask by address, and none of them
+/// reveals anything to a page that rebinds a name to this server.
 async fn check_host(
     State(state): State<AppState>,
     request: Request,
@@ -314,7 +404,7 @@ async fn check_host(
 ) -> Response {
     let allowed = &state.config.server.allowed_hosts;
 
-    if allowed.is_empty() {
+    if allowed.is_empty() || ANY_NAME.contains(&request.uri().path()) {
         return next.run(request).await;
     }
 
@@ -327,6 +417,9 @@ async fn check_host(
     tracing::warn!(%host, "refused a request addressed to a name this server does not answer to");
     (StatusCode::MISDIRECTED_REQUEST, "unknown host").into_response()
 }
+
+/// What is answered under any name. See [`check_host`].
+const ANY_NAME: [&str; 4] = ["/health", "/ready", "/ca.crt", "/trust-ca.sh"];
 
 /// The name a request was addressed to, without its port: the `Host` header
 /// over HTTP/1, the `:authority` hyper files in the URI over HTTP/2. An
@@ -363,7 +456,8 @@ fn strip_port(host: &str) -> &str {
 /// code, so everything is `'self'`. Two exceptions, both forced:
 ///
 /// * **images** come from wherever a provider filed them — TMDB, TheTVDB,
-///   Fanart.tv and whatever host a manual entry names;
+///   Fanart.tv and whatever host a manual entry names — and, as `blob:`, from
+///   the file an editor has just picked, previewed before it is uploaded;
 /// * **inline styles** are how React writes a `style` attribute, and the
 ///   interface uses them for per-card animation delays and accent colours.
 ///
@@ -378,7 +472,7 @@ fn strip_port(host: &str) -> &str {
 /// borrowing an administrator's clicks. `base-uri` and `form-action` close the
 /// two ways a stray tag could redirect a relative URL or a form off-origin.
 const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; \
-     img-src 'self' data: https:; \
+     img-src 'self' data: blob: https:; \
      media-src 'self' https:; \
      style-src 'self' 'unsafe-inline'; \
      script-src 'self'; \
@@ -407,8 +501,8 @@ fn content_security_policy(state: &AppState) -> HeaderValue {
     let bucket = bucket.join(" ");
     let policy = CONTENT_SECURITY_POLICY
         .replace(
-            "img-src 'self' data: https:;",
-            &format!("img-src 'self' data: https: {bucket};"),
+            "img-src 'self' data: blob: https:;",
+            &format!("img-src 'self' data: blob: https: {bucket};"),
         )
         .replace(
             "media-src 'self' https:;",
@@ -616,12 +710,12 @@ mod policy_tests {
     /// The directives the bucket is added to are there to be added to.
     #[test]
     fn the_policy_names_the_directives_a_bucket_joins() {
-        assert!(CONTENT_SECURITY_POLICY.contains("img-src 'self' data: https:;"));
+        assert!(CONTENT_SECURITY_POLICY.contains("img-src 'self' data: blob: https:;"));
         assert!(CONTENT_SECURITY_POLICY.contains("media-src 'self' https:;"));
         let policy = CONTENT_SECURITY_POLICY
             .replace(
-                "img-src 'self' data: https:;",
-                "img-src 'self' data: https: http://127.0.0.1:3900;",
+                "img-src 'self' data: blob: https:;",
+                "img-src 'self' data: blob: https: http://127.0.0.1:3900;",
             )
             .replace(
                 "media-src 'self' https:;",
@@ -629,5 +723,32 @@ mod policy_tests {
             );
         assert!(HeaderValue::from_str(&policy).is_ok());
         assert_eq!(policy.matches("http://127.0.0.1:3900").count(), 2);
+    }
+
+    /// The rest of the policy is what it was: scripts from this origin only,
+    /// nothing framing this one, no plugin, no base or form elsewhere.
+    #[test]
+    fn the_policy_keeps_its_closed_doors() {
+        for directive in [
+            "default-src 'self'",
+            "script-src 'self'",
+            "object-src 'none'",
+            "base-uri 'self'",
+            "form-action 'self'",
+            "frame-ancestors 'none'",
+        ] {
+            assert!(CONTENT_SECURITY_POLICY.contains(directive), "{directive}");
+        }
+        assert!(HeaderValue::from_str(PERMISSIONS).is_ok());
+        assert!(HeaderValue::from_str(HSTS).is_ok());
+        assert!(!HSTS.contains("preload"));
+    }
+
+    #[test]
+    fn the_probes_and_the_authority_answer_under_any_name() {
+        for path in ["/health", "/ready", "/ca.crt", "/trust-ca.sh"] {
+            assert!(ANY_NAME.contains(&path), "{path}");
+        }
+        assert!(!ANY_NAME.contains(&"/api/v1/items"));
     }
 }

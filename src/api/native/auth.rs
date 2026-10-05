@@ -1,8 +1,10 @@
 //! Signing in and out, for every account.
 
+use std::net::SocketAddr;
+
 use axum::{
     Extension, Json,
-    extract::State,
+    extract::{ConnectInfo, State},
     http::{HeaderMap, StatusCode, header},
     response::IntoResponse,
 };
@@ -15,11 +17,19 @@ use crate::{
         audit::{self, Event},
         extract::ClientIp,
     },
-    auth::{Identity, middleware::SESSION_COOKIE, secrets},
+    auth::{
+        Identity, ip,
+        middleware::{self, SESSION_COOKIE},
+        secrets,
+    },
     db::repo::{self, audit::Action},
     error::{AppError, AppResult},
     state::AppState,
 };
+
+/// The socket a request came from, when the listener said: what a trusted
+/// proxy's word about the scheme is believed by.
+pub(crate) type Peer = Option<Extension<ConnectInfo<SocketAddr>>>;
 
 /// How long a session lasts. Long enough not to interrupt a curation session,
 /// short enough that a forgotten browser tab stops working.
@@ -81,6 +91,7 @@ pub struct LoginResponse {
 async fn login(
     State(state): State<AppState>,
     ip: ClientIp,
+    peer: Peer,
     headers: HeaderMap,
     Json(request): Json<LoginRequest>,
 ) -> AppResult<impl IntoResponse> {
@@ -92,48 +103,67 @@ async fn login(
         return Err(AppError::Unauthorized);
     }
 
+    // An account that has failed too often lately is not checked at all, from
+    // wherever the attempt comes: guessing one person's password from many
+    // addresses runs out as surely as from one. Asked before anything is
+    // hashed, so a refused attempt costs nothing.
+    if !state.limiter.sign_in_allowed(&request.username).await {
+        tracing::warn!(
+            username = ?request.username,
+            "sign-in refused: too many failed attempts on this account lately"
+        );
+        return Err(AppError::RateLimited);
+    }
+
     // Passwords switched off: the identity provider signs people in, and only
     // the account the environment names keeps a door — the way back in when
     // the provider is down, and only while it is an active administrator.
     // Every refusal then reads the same, a wrong password on that door
-    // included, so nobody learns which name it is.
+    // included, so nobody learns which name it is — and takes as long: the
+    // password is checked against the dummy, as the door's would be.
     let passwords_off = !state.password_login();
     let refused = || AppError::Refused {
         code: "password_login_off",
         message: "this server signs people in through its identity provider".into(),
     };
     if passwords_off && !state.is_break_glass_name(&request.username) {
+        secrets::verify_password_async(request.password.clone(), DUMMY_HASH.to_string()).await?;
+        state.limiter.sign_in_failed(&request.username).await;
         return Err(refused());
     }
 
     let found = repo::user::find_by_username(&state.db, request.username.trim()).await?;
 
     // Verify even when the user does not exist, so a wrong username and a wrong
-    // password take the same time and cannot be told apart.
+    // password take the same time and cannot be told apart. A burst that keeps
+    // every hashing slot busy is told to come back (429) before anything is
+    // recorded: nothing was checked.
     let (user, ok) = match found {
         // An account an identity provider made has no password: checked
         // against the dummy all the same, so it takes as long as any other.
         Some(creds) if creds.password_hash == repo::user::NO_PASSWORD => {
-            let _ =
-                secrets::verify_password_async(request.password.clone(), DUMMY_HASH.to_string())
-                    .await;
+            secrets::verify_password_async(request.password.clone(), DUMMY_HASH.to_string())
+                .await?;
             (Some(creds.user), false)
         }
         Some(creds) => {
-            let ok =
-                secrets::verify_password_async(request.password.clone(), creds.password_hash).await;
+            let ok = secrets::verify_password_async(request.password.clone(), creds.password_hash)
+                .await?;
             (Some(creds.user), ok)
         }
         None => {
-            let _ =
-                secrets::verify_password_async(request.password.clone(), DUMMY_HASH.to_string())
-                    .await;
+            secrets::verify_password_async(request.password.clone(), DUMMY_HASH.to_string())
+                .await?;
             (None, false)
         }
     };
 
     let (Some(user), true) = (user, ok) else {
-        tracing::warn!(username = %request.username, "failed sign-in attempt");
+        state.limiter.sign_in_failed(&request.username).await;
+        // Debug-formatted: quoted, its line breaks and control characters
+        // escaped, so a name typed into the form cannot write a line of its
+        // own into the log.
+        tracing::warn!(username = ?request.username, "failed sign-in attempt");
 
         // Recorded deliberately: a run of these is the one thing in this log
         // worth alerting on. The attempted username is kept; the password is not.
@@ -155,6 +185,8 @@ async fn login(
             AppError::Unauthorized
         });
     };
+
+    state.limiter.sign_in_succeeded(&request.username).await;
 
     if passwords_off
         && !(user.role == repo::user::Role::Admin && user.status == repo::user::Status::Active)
@@ -180,19 +212,22 @@ async fn login(
         }
     }
 
-    let (cookie, answer) = open_session(&state, user, &headers, &ip).await?;
+    let secure = served_securely(&state, &headers, &peer);
+    let (cookie, answer) = open_session(&state, user, &headers, &ip, secure).await?;
 
     Ok((StatusCode::OK, [(header::SET_COOKIE, cookie)], Json(answer)))
 }
 
 /// Open a session for someone who has shown who they are — by their password,
 /// by signing up, or through the identity provider — and say so in the
-/// journal. Returns the cookie to set and what the interface is told.
+/// journal. Returns the cookie to set and what the interface is told;
+/// `secure` is [`served_securely`]'s answer for the request.
 pub(crate) async fn open_session(
     state: &AppState,
     user: repo::user::User,
     headers: &HeaderMap,
     ip: &ClientIp,
+    secure: bool,
 ) -> AppResult<(String, LoginResponse)> {
     let (token, token_hash) = secrets::generate_session_token()?;
 
@@ -225,7 +260,7 @@ pub(crate) async fn open_session(
 
     let cookie = format!(
         "{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict{}; Max-Age={}",
-        secure_flag(state),
+        if secure { "; Secure" } else { "" },
         SESSION_TTL_HOURS * 3600
     );
 
@@ -240,27 +275,25 @@ pub(crate) async fn open_session(
     ))
 }
 
-/// `; Secure` when this session can only have arrived over TLS.
+/// Whether this request can only have arrived over TLS, and so whether a
+/// cookie set in answer may be `Secure`.
 ///
 /// Not unconditional: plenty of these run as plain HTTP on a home network, and
 /// a `Secure` cookie there is a cookie the browser never sends back — an admin
 /// who can sign in and is then immediately signed out again, with nothing to
 /// explain it. Set where it can be honoured: this server terminating TLS
-/// itself, or a public URL that says `https` because something in front of it
-/// does.
-pub(crate) fn secure_flag(state: &AppState) -> &'static str {
-    let terminates_tls = state.config.server.tls.is_some();
-    let published_over_tls = state
-        .config
-        .server
+/// itself, a public URL that says `https` because something in front of it
+/// does, or a trusted proxy saying the request reached it in `https`.
+pub(crate) fn served_securely(state: &AppState, headers: &HeaderMap, peer: &Peer) -> bool {
+    let server = &state.config.server;
+    let published_over_tls = server
         .public_url
         .as_deref()
         .is_some_and(|url| url.starts_with("https://"));
+    let peer = peer.as_ref().map(|Extension(ConnectInfo(addr))| *addr);
 
-    match terminates_tls || published_over_tls {
-        true => "; Secure",
-        false => "",
-    }
+    published_over_tls
+        || ip::scheme(peer, headers, &server.trusted_proxies, server.tls.is_some()) == Some("https")
 }
 
 /// An argon2id hash of a value nobody knows, used to equalise timing on the
@@ -279,15 +312,8 @@ async fn logout(
     ip: ClientIp,
     headers: HeaderMap,
 ) -> AppResult<impl IntoResponse> {
-    if let Some(token) = headers
-        .get_all(header::COOKIE)
-        .iter()
-        .filter_map(|v| v.to_str().ok())
-        .flat_map(|raw| raw.split(';'))
-        .filter_map(|pair| pair.trim().split_once('='))
-        .find(|(name, _)| *name == SESSION_COOKIE)
-        .map(|(_, value)| value.trim().to_string())
-    {
+    // The session the guard let this request in by, read the way it read it.
+    if let Some(token) = middleware::session_token(&headers) {
         state.caches.forget_sessions();
         repo::user::delete_session(&state.db, &secrets::hash_api_key(&token)).await?;
         state.caches.forget_sessions();
@@ -417,21 +443,22 @@ async fn change_password(
         return Err(AppError::BadRequest("that password is too long".into()));
     }
 
-    if !secrets::verify_password_async(request.current_password.clone(), creds.password_hash).await
+    if !secrets::verify_password_async(request.current_password.clone(), creds.password_hash)
+        .await?
     {
         return Err(AppError::Unauthorized);
     }
 
-    let hash = secrets::hash_password_async(request.new_password.clone())
-        .await
-        .map_err(|e| AppError::BadRequest(e.to_string()))?;
+    let hash = secrets::hash_password_async(request.new_password.clone()).await?;
 
+    // Every existing session was authorised under the old password. Both
+    // written before the sessions remembered are forgotten for the last
+    // time: a request read in between would otherwise put a session back
+    // into the cache after its row was gone, for the cache's lifetime.
     state.caches.forget_sessions();
     repo::user::set_password(&state.db, &user.id, &hash).await?;
-    state.caches.forget_sessions();
-
-    // Every existing session was authorised under the old password.
     repo::user::delete_sessions_for_user(&state.db, &user.id).await?;
+    state.caches.forget_sessions();
 
     audit::record(
         &state,

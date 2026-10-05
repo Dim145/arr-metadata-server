@@ -33,6 +33,33 @@ pub struct Effective {
 /// `(scope, scope_id, key)` — what a setting is filed under.
 type Address = (String, String, String);
 
+/// Why a setting was not written.
+#[derive(Debug, thiserror::Error)]
+pub enum WriteError {
+    /// What was asked cannot be: no such setting, a scope it is not set at,
+    /// a value it cannot hold. The caller is told, as a 400.
+    #[error("{0}")]
+    Invalid(String),
+    /// The database failed. Nothing the caller asked was wrong: a 500, and
+    /// an error in the log, rather than a raw driver message sent back.
+    #[error(transparent)]
+    Storage(#[from] anyhow::Error),
+}
+
+impl From<WriteError> for crate::error::AppError {
+    fn from(e: WriteError) -> Self {
+        match e {
+            WriteError::Invalid(why) => Self::BadRequest(why),
+            WriteError::Storage(cause) => Self::from(cause),
+        }
+    }
+}
+
+/// The settings whose values are secrets wherever they turn up in a log:
+/// the identity provider's client secret, and the address webhooks are
+/// posted to, which for most services carries its token in its path.
+const LOGGED_SECRETS: [&str; 2] = ["oidc.clientSecret", "webhooks.url"];
+
 #[derive(Clone)]
 pub struct Store {
     db: Db,
@@ -74,6 +101,12 @@ impl Store {
                 (row.text("scope")?, row.text("scope_id")?, row.text("key")?),
                 row.text("value")?,
             );
+        }
+
+        for ((_, _, key), value) in &fresh {
+            if LOGGED_SECRETS.contains(&key.as_str()) {
+                hide_from_logs(value);
+            }
         }
 
         *self.values.write() = fresh;
@@ -171,16 +204,19 @@ impl Store {
         key: &str,
         value: &str,
         actor: Option<&str>,
-    ) -> Result<()> {
-        let def = registry::find(key).with_context(|| format!("no setting called {key:?}"))?;
+    ) -> Result<(), WriteError> {
+        let def = registry::find(key)
+            .ok_or_else(|| WriteError::Invalid(format!("no setting called {key:?}")))?;
 
-        anyhow::ensure!(
-            def.scopes.contains(&scope),
-            "{key} cannot be set at the {} scope",
-            scope.as_str(),
-        );
+        if !def.scopes.contains(&scope) {
+            return Err(WriteError::Invalid(format!(
+                "{key} cannot be set at the {} scope",
+                scope.as_str(),
+            )));
+        }
 
-        registry::validate(def, value).map_err(|why| anyhow::anyhow!("{key} {why}"))?;
+        registry::validate(def, value)
+            .map_err(|why| WriteError::Invalid(format!("{key} {why}")))?;
 
         let _writing = self.writes.lock().await;
 
@@ -202,7 +238,7 @@ impl Store {
         .await
         .with_context(|| format!("failed to store {key}"))?;
 
-        self.reload().await
+        Ok(self.reload().await?)
     }
 
     /// Stop overriding a setting at a scope, so it inherits again.
@@ -259,5 +295,54 @@ impl Store {
         }
 
         Ok(written)
+    }
+}
+
+/// A setting's value kept out of the log: the whole of it, and — for an
+/// address — its path and query too, which is where a webhook's token is.
+fn hide_from_logs(value: &str) {
+    crate::telemetry::redact_also(value);
+    if let Ok(url) = url::Url::parse(value.trim()) {
+        let mut rest = url.path().to_string();
+        if let Some(query) = url.query() {
+            rest.push('?');
+            rest.push_str(query);
+        }
+        // `/` alone, or a short path, is no secret: the redaction leaves
+        // values too short to be told from ordinary text alone.
+        if rest.len() > 1 {
+            crate::telemetry::redact_also(&rest);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_refused_value_is_the_callers_and_a_failed_store_is_the_servers() {
+        use crate::error::AppError;
+
+        let refused = AppError::from(WriteError::Invalid("adult.mode must be one of".into()));
+        assert!(matches!(refused, AppError::BadRequest(_)));
+
+        let failed = AppError::from(WriteError::Storage(anyhow::anyhow!(
+            "pool timed out while waiting for an open connection"
+        )));
+        assert!(matches!(failed, AppError::Internal(_)));
+    }
+
+    #[test]
+    fn a_webhooks_token_is_kept_out_of_the_log() {
+        hide_from_logs("https://discord.example/api/webhooks/42/hookTokenValue99");
+        let logged = crate::telemetry::redact(
+            "could not post to https://discord.example/api/webhooks/42/hookTokenValue99: 404",
+        );
+        assert!(!logged.contains("hookTokenValue99"), "{logged}");
+        // Reprinted by a client that normalised the address, the path is
+        // still caught on its own.
+        let logged = crate::telemetry::redact("POST /api/webhooks/42/hookTokenValue99 failed");
+        assert!(!logged.contains("hookTokenValue99"), "{logged}");
     }
 }

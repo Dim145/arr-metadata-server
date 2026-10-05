@@ -26,6 +26,13 @@ use crate::{
 /// The tag every route here is filed under in the documentation.
 pub const TAG: &str = "Catalogue";
 
+/// The longest a filter's text may be — a term, a genre, a network — as a
+/// curated list's filter has it.
+const FILTER_TEXT: usize = 200;
+
+/// The most genres, or languages, one filter names.
+const FILTER_VALUES: usize = 20;
+
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list, create))
@@ -151,6 +158,50 @@ pub(super) fn to_query(
         ));
     }
 
+    // Short, every one of them, and few: a term the size of a book is not a
+    // search, and each genre or language is one more value bound into the
+    // statement — tens of thousands of them failed it on the engine's limit.
+    for (what, text) in [
+        ("term", &query.term),
+        ("keyword", &query.keyword),
+        ("status", &query.status),
+        ("network", &query.network),
+    ] {
+        if text
+            .as_deref()
+            .is_some_and(|t| t.trim().chars().count() > FILTER_TEXT)
+        {
+            return Err(AppError::BadRequest(format!(
+                "{what} is at most {FILTER_TEXT} characters"
+            )));
+        }
+    }
+    let genres: Vec<String> = query
+        .genre
+        .as_deref()
+        .map(|g| g.split(',').map(|s| s.trim().to_string()).collect())
+        .unwrap_or_default();
+    for (what, values) in [
+        (
+            "genre",
+            genres.iter().map(String::as_str).collect::<Vec<_>>(),
+        ),
+        (
+            "originalLanguage",
+            query
+                .original_language
+                .as_deref()
+                .map(|l| l.split(',').map(str::trim).collect())
+                .unwrap_or_default(),
+        ),
+    ] {
+        if values.len() > FILTER_VALUES || values.iter().any(|v| v.chars().count() > FILTER_TEXT) {
+            return Err(AppError::BadRequest(format!(
+                "{what} takes at most {FILTER_VALUES} values of at most {FILTER_TEXT} characters"
+            )));
+        }
+    }
+
     // Which works are switched off, and which failed their last refresh, is for
     // whoever maintains the catalogue — the editors' screens ask for both — and
     // not for a visitor, who is answered as if the flags had not been sent.
@@ -167,11 +218,7 @@ pub(super) fn to_query(
             identity.peer_id(),
             query.include_adult,
         ),
-        genres: query
-            .genre
-            .as_deref()
-            .map(|g| g.split(',').map(|s| s.trim().to_string()).collect())
-            .unwrap_or_default(),
+        genres,
         genre_any: query.genre_mode.as_deref() == Some("any"),
         keyword: query.keyword,
         year_from: query.year_from,
@@ -206,20 +253,21 @@ async fn list(
     Extension(identity): Extension<Identity>,
     Query(query): Query<ListQuery>,
 ) -> AppResult<Response> {
-    let language = query.language.clone();
+    let language = crate::api::extract::language(query.language.as_deref())?;
     let query_for_count = to_query(&state, &identity, query)?;
 
     // The same page asked again — reloaded, paged back to — is answered as
     // it was: under the stamp every write and every settings change moves
     // on, and by reader, since what a visitor may see is not what an editor
-    // may. The filters are part of the key, checked and complete.
+    // may. The filters are part of the key, checked and complete; the
+    // language as it is filed, so `fr` and `fr-FR` are one page.
     let cache_key = {
         use sha2::{Digest as _, Sha256};
-        let filters: String =
-            Sha256::digest(format!("{language:?}:{query_for_count:?}").as_bytes())
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect();
+        let shelf = language.as_deref().map(service::language::normalize);
+        let filters: String = Sha256::digest(format!("{shelf:?}:{query_for_count:?}").as_bytes())
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
         format!(
             "list:{}:{}:{filters}",
             state.caches.stamp(),
@@ -252,7 +300,7 @@ async fn list(
 
     // Shallow, not the full overlay: a grid shows titles, and fetching every
     // work's episode text to draw fifty posters would be absurd.
-    if let Some(language) = language.as_deref().filter(|l| !l.is_empty()) {
+    if let Some(language) = language.as_deref() {
         for item in &mut items {
             crate::service::language::apply_shallow(&state, item, language);
         }
@@ -331,8 +379,8 @@ async fn detail(
         service::hide_adult_relations(std::slice::from_mut(&mut item));
     }
 
-    if let Some(language) = query.language.as_deref().filter(|l| !l.is_empty()) {
-        crate::service::language::apply(&state, &mut item, language).await?;
+    if let Some(language) = crate::api::extract::language(query.language.as_deref())? {
+        crate::service::language::apply(&state, &mut item, &language).await?;
     }
 
     service::redact_for_reader(&identity, std::slice::from_mut(&mut item));
@@ -396,6 +444,7 @@ async fn create(
     if title.is_empty() {
         return Err(AppError::BadRequest("title must not be empty".into()));
     }
+    checked_by_hand(&request)?;
 
     let mut item = MediaItem::empty(kind);
     item.title = title.to_string();
@@ -412,26 +461,17 @@ async fn create(
     item.is_manual = true;
     item.slug = unique_slug(&state, kind, title, request.year).await?;
 
-    for (source, value) in item.external_ids.rows(kind) {
-        if repo::item::find_id_by_external(&state.db, source, &value)
-            .await?
-            .is_some()
-        {
-            return Err(AppError::Conflict(format!(
-                "another entry already claims {source}={value}"
-            )));
-        }
+    // An identifier another work goes by is refused where it is written, in
+    // the work's own transaction: checked beforehand, two entries made at once
+    // with the same id both passed, and the second took it from the first.
+    if let Err((source, value)) = repo::item::insert_manual(&state.db, &item).await? {
+        return Err(AppError::Conflict(format!(
+            "another entry already claims {source}={value}"
+        )));
     }
-
-    repo::item::upsert(
-        &state.db,
-        repo::item::ItemWrite {
-            item: &item,
-            replace_children: false,
-        },
-    )
-    .await?;
     service::listing::after_write(&state, &item.id).await;
+    // A list drawn before it was made is of the past.
+    state.caches.touched(&item.id).await;
 
     tracing::info!(id = %item.id, actor = %identity.label(), "created a manual entry");
 
@@ -975,16 +1015,24 @@ async fn sync(
 /// The raw provider documents behind an entry.
 ///
 /// Useful for diagnosing a mapping that produced the wrong canonical value.
+/// Of a work this caller may see, as its own page decides it.
 #[utoipa::path(
     get, path = "/items/{id}/snapshots", tag = TAG,
     params(("id" = String, Path, description = "The work's identifier"), SnapshotQuery),
-    responses((status = 200, body = Vec<SnapshotSummary>)),
+    responses(
+        (status = 200, body = Vec<SnapshotSummary>),
+        (status = 404, description = "No such work, or none this caller may see"),
+    ),
 )]
 async fn snapshots(
     State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
     Path(id): Path<String>,
     Query(query): Query<SnapshotQuery>,
 ) -> AppResult<Json<Vec<SnapshotSummary>>> {
+    // Switched off, or kept from this caller by the adult policy: its raw
+    // documents are kept from them as the work is.
+    super::visible_work(&state, &identity, &id).await?;
     let snapshots = repo::snapshot::list(&state.db, &id).await?;
 
     let wanted = query
@@ -1008,6 +1056,57 @@ async fn snapshots(
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
+
+/// The most genres, and the most AniList or MyAnimeList entries, a work is
+/// entered by hand with.
+const MOST_BY_HAND: usize = 50;
+
+/// What a work entered by hand says, checked as the same fields are when
+/// they are locked by hand: a day as a day — one typed in as "TBA" was
+/// stored, served, and failed in Sonarr — a runtime that is not negative,
+/// and lists of a sane length. Thousands of AniList ids were one bound value
+/// each in the statement that looks for a work's Fan-Kai cut, which failed
+/// past the engine's limit and left the work without its links.
+fn checked_by_hand(request: &CreateRequest) -> AppResult<()> {
+    use crate::domain::fields::{self, Scope};
+
+    let check = |field: &str, value: Option<&String>| -> AppResult<()> {
+        match value {
+            Some(text) => fields::validate(
+                Scope::Item,
+                field,
+                Some(&serde_json::Value::String(text.clone())),
+            )
+            .map_err(AppError::BadRequest),
+            None => Ok(()),
+        }
+    };
+    check("firstAired", request.first_aired.as_ref())?;
+    check("inCinemas", request.in_cinemas.as_ref())?;
+
+    if request.runtime.is_some_and(|r| r < 0) {
+        return Err(AppError::BadRequest(
+            "a runtime is a number of minutes, not negative".into(),
+        ));
+    }
+    if request.genres.len() > MOST_BY_HAND
+        || request
+            .genres
+            .iter()
+            .any(|g| g.trim().is_empty() || g.chars().count() > FILTER_TEXT)
+    {
+        return Err(AppError::BadRequest(format!(
+            "at most {MOST_BY_HAND} genres, each of one to {FILTER_TEXT} characters"
+        )));
+    }
+    let ids = &request.external_ids;
+    if ids.mal.len() > MOST_BY_HAND || ids.anilist.len() > MOST_BY_HAND {
+        return Err(AppError::BadRequest(format!(
+            "at most {MOST_BY_HAND} MyAnimeList and {MOST_BY_HAND} AniList entries"
+        )));
+    }
+    Ok(())
+}
 
 fn require_write(identity: &Identity) -> AppResult<()> {
     identity

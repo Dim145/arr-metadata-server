@@ -269,23 +269,98 @@ pub async fn due(db: &Db, limit: i64) -> Result<Vec<Asset>> {
     rows.iter().map(map).collect()
 }
 
+/// What a fetch that never came back is noted as, when its claim is taken
+/// over: the server stopped — was stopped — in the middle of it.
+pub const CUT_SHORT: &str = "the last fetch was cut short";
+/// What one is given up on with, once every try it had was cut short.
+pub const GIVEN_UP: &str = "every fetch of it was cut short";
+
+/// What came of asking for one in line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Claim {
+    /// This worker's to fetch, and counted as a try.
+    Taken,
+    /// Another's, or no longer in line.
+    Lost,
+    /// Every try it had was taken and none came back — the server died
+    /// fetching it, each time: given up on, and filed past every try.
+    GivenUp,
+}
+
 /// Take one in line to fetch it: whether it was this worker's to take —
 /// still in line, and not claimed lately by another. One statement, so two
 /// workers asking at once are answered yes once.
-pub async fn claim(db: &Db, id: &str, by: &str) -> Result<bool> {
-    let done = sqlx::query(db.sql(
-        "UPDATE media_asset SET claimed_by = ?, claimed_at = ?
-         WHERE id = ? AND status = 'pending'
+///
+/// The try is counted here, before a byte is fetched, and the next one put
+/// off until `retry_at`: a picture that brings the server down as it is
+/// decoded would otherwise be taken again at every start, its count never
+/// moving. One whose `max_attempts` tries were all taken and never came back
+/// is given up on instead.
+pub async fn claim(
+    db: &Db,
+    id: &str,
+    by: &str,
+    max_attempts: i32,
+    retry_at: &str,
+) -> Result<Claim> {
+    let given_up = sqlx::query(db.sql(
+        "UPDATE media_asset
+         SET status = 'failed', attempts = ?, error = ?, next_attempt_at = NULL,
+             claimed_by = NULL, claimed_at = NULL
+         WHERE id = ? AND status = 'pending' AND attempts >= ?
+           AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+           AND (claimed_at IS NULL OR claimed_at < ?)",
+    ))
+    .bind(UNFIT)
+    .bind(GIVEN_UP)
+    .bind(id)
+    .bind(max_attempts)
+    .bind(now())
+    .bind(claim_cutoff())
+    .execute(db.pool())
+    .await?;
+    if given_up.rows_affected() > 0 {
+        return Ok(Claim::GivenUp);
+    }
+
+    // A claim still standing is a fetch that never came back: said so on
+    // the row, where the administration lists what went wrong.
+    let taken = sqlx::query(db.sql(
+        "UPDATE media_asset
+         SET claimed_by = ?, claimed_at = ?, attempts = attempts + 1, next_attempt_at = ?,
+             error = CASE WHEN claimed_at IS NULL THEN error ELSE ? END
+         WHERE id = ? AND status = 'pending' AND attempts < ?
            AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
            AND (claimed_at IS NULL OR claimed_at < ?)",
     ))
     .bind(by)
     .bind(now())
+    .bind(retry_at)
+    .bind(CUT_SHORT)
     .bind(id)
+    .bind(max_attempts)
     .bind(now())
     .bind(claim_cutoff())
     .execute(db.pool())
     .await?;
+    Ok(if taken.rows_affected() > 0 {
+        Claim::Taken
+    } else {
+        Claim::Lost
+    })
+}
+
+/// File the key a fetch's bytes will be kept under on its row, before they
+/// are put: from then on the row names them, and nothing that deletes a
+/// file nobody names — another row's removal, the sweep — takes them while
+/// they are being written. Whether the row was still in line to take it.
+pub async fn reserve_key(db: &Db, id: &str, key: &str) -> Result<bool> {
+    let done =
+        sqlx::query(db.sql("UPDATE media_asset SET key = ? WHERE id = ? AND status = 'pending'"))
+            .bind(key)
+            .bind(id)
+            .execute(db.pool())
+            .await?;
     Ok(done.rows_affected() > 0)
 }
 
@@ -333,42 +408,40 @@ pub async fn mark_stored(db: &Db, id: &str, stored: &Stored<'_>) -> Result<bool>
 }
 
 /// A fetch that failed: tried again at `next_attempt_at`, or given up on
-/// when there is no next time.
+/// when there is no next time — or, `unfit`, filed past every try, since
+/// asking again would get the same answer. The try itself was counted when
+/// it was claimed. The key it may have reserved goes: nothing was kept
+/// under it.
 pub async fn mark_failed(
     db: &Db,
     id: &str,
-    attempts: i32,
     error: &str,
     next_attempt_at: Option<&str>,
+    unfit: bool,
 ) -> Result<()> {
-    let status = if next_attempt_at.is_some() {
-        "pending"
-    } else {
-        "failed"
-    };
-    if attempts >= UNFIT {
-        // Filed past every try, whatever the count.
+    if unfit {
         sqlx::query(db.sql(
             "UPDATE media_asset
-             SET status = ?, attempts = ?, error = ?, next_attempt_at = ?,
+             SET status = 'failed', attempts = ?, error = ?, next_attempt_at = NULL, key = NULL,
                  claimed_by = NULL, claimed_at = NULL
-             WHERE id = ?",
+             WHERE id = ? AND status = 'pending'",
         ))
-        .bind(status)
-        .bind(attempts)
+        .bind(UNFIT)
         .bind(error)
-        .bind(next_attempt_at)
         .bind(id)
         .execute(db.pool())
         .await?;
     } else {
-        // One more try, counted on the row itself rather than from what
-        // the worker read — which may be a try behind, on another instance.
+        let status = if next_attempt_at.is_some() {
+            "pending"
+        } else {
+            "failed"
+        };
         sqlx::query(db.sql(
             "UPDATE media_asset
-             SET status = ?, attempts = attempts + 1, error = ?, next_attempt_at = ?,
+             SET status = ?, error = ?, next_attempt_at = ?, key = NULL,
                  claimed_by = NULL, claimed_at = NULL
-             WHERE id = ?",
+             WHERE id = ? AND status = 'pending'",
         ))
         .bind(status)
         .bind(error)
@@ -398,12 +471,13 @@ pub async fn retry(db: &Db, id: &str) -> Result<bool> {
 }
 
 /// Ask again, now, for everything given up on or put off after a failure —
-/// but not for what answered with the wrong thing, which would again.
+/// but not for what answered with the wrong thing, which would again, nor
+/// for what brought the server down each time it was fetched.
 pub async fn retry_troubled(db: &Db) -> Result<u64> {
     let done = sqlx::query(db.sql(
         "UPDATE media_asset
          SET status = 'pending', attempts = 0, error = NULL, next_attempt_at = NULL
-         WHERE (status = 'failed' OR (status = 'pending' AND attempts > 0)) AND attempts < ?",
+         WHERE (status = 'failed' OR (status = 'pending' AND error IS NOT NULL)) AND attempts < ?",
     ))
     .bind(UNFIT)
     .execute(db.pool())
@@ -485,11 +559,11 @@ pub async fn by_origins(db: &Db, origins: &[String]) -> Result<Vec<Asset>> {
     Ok(out)
 }
 
-/// Everything stored, for the index kept in memory: origin, key, the
-/// thumbnail made, and the content type.
-pub async fn stored_index(db: &Db) -> Result<Vec<(String, String, Thumb, String)>> {
+/// Everything stored, for the index kept in memory: origin, key, and the
+/// thumbnail made. The content type is the key's own.
+pub async fn stored_index(db: &Db) -> Result<Vec<(String, String, Thumb)>> {
     let rows = sqlx::query(db.sql(
-        "SELECT origin, key, has_thumb, content_type FROM media_asset
+        "SELECT origin, key, has_thumb FROM media_asset
          WHERE status = 'stored' AND key IS NOT NULL",
     ))
     .fetch_all(db.pool())
@@ -500,38 +574,33 @@ pub async fn stored_index(db: &Db) -> Result<Vec<(String, String, Thumb, String)
                 row.text("origin")?,
                 row.text("key")?,
                 Thumb::from_i64(row.big("has_thumb")?),
-                row.opt_text("content_type")?
-                    .unwrap_or_else(|| "application/octet-stream".into()),
             ))
         })
         .collect()
 }
 
-/// Whether these bytes are held by any row already, and the thumbnail made
-/// of them: the same picture from two providers is put once.
-pub async fn thumb_of_key(db: &Db, key: &str) -> Result<Option<Thumb>> {
-    let row = sqlx::query(
-        db.sql("SELECT has_thumb FROM media_asset WHERE key = ? AND status = 'stored' LIMIT 1"),
-    )
-    .bind(key)
-    .fetch_optional(db.pool())
-    .await?;
-    Ok(row
-        .map(|row| row.big("has_thumb"))
-        .transpose()?
-        .map(Thumb::from_i64))
+/// Whether any row holds these bytes — stored, or in line with the key
+/// reserved: the file is theirs, and stays.
+pub async fn key_named(db: &Db, key: &str) -> Result<bool> {
+    let row = sqlx::query(db.sql("SELECT 1 AS hit FROM media_asset WHERE key = ? LIMIT 1"))
+        .bind(key)
+        .fetch_optional(db.pool())
+        .await?;
+    Ok(row.is_some())
 }
 
-/// Whether another row than `except` holds these bytes: the file is theirs
-/// too, and stays.
-pub async fn key_shared(db: &Db, key: &str, except: &str) -> Result<bool> {
-    let row =
-        sqlx::query(db.sql("SELECT COUNT(*) AS n FROM media_asset WHERE key = ? AND id <> ?"))
-            .bind(key)
-            .bind(except)
-            .fetch_one(db.pool())
-            .await?;
-    Ok(row.big("n")? > 0)
+/// Whether any row holds bytes of this hash, whatever their kind: their
+/// file and its thumbnail stay.
+pub async fn stem_named(db: &Db, stem: &str) -> Result<bool> {
+    let keys = crate::media::file::keys_of_stem(stem);
+    let marks = vec!["?"; keys.len()].join(", ");
+    let mut query = sqlx::query(db.sql(&format!(
+        "SELECT 1 AS hit FROM media_asset WHERE key IN ({marks}) LIMIT 1"
+    )));
+    for key in keys {
+        query = query.bind(key);
+    }
+    Ok(query.fetch_optional(db.pool()).await?.is_some())
 }
 
 pub async fn delete(db: &Db, id: &str) -> Result<()> {
@@ -552,34 +621,89 @@ pub async fn delete_fetched(db: &Db) -> Result<u64> {
     Ok(done.rows_affected())
 }
 
-/// Every key any row holds: what the store should hold, and no more.
-pub async fn all_keys(db: &Db) -> Result<HashSet<String>> {
-    let rows = sqlx::query(db.sql("SELECT key, has_thumb FROM media_asset WHERE key IS NOT NULL"))
+/// The hash of every key any row holds, stored or reserved: what the store
+/// should hold — those files and their thumbnails — and no more.
+pub async fn held_stems(db: &Db) -> Result<HashSet<String>> {
+    let rows = sqlx::query(db.sql("SELECT key FROM media_asset WHERE key IS NOT NULL"))
         .fetch_all(db.pool())
         .await?;
-    let mut keys = HashSet::with_capacity(rows.len() * 2);
+    let mut stems = HashSet::with_capacity(rows.len());
     for row in &rows {
-        let key = row.text("key")?;
-        if let Some(thumb) = crate::media::thumb_key(&key, Thumb::from_i64(row.big("has_thumb")?)) {
-            keys.insert(thumb);
-        }
-        keys.insert(key);
+        stems.insert(crate::media::file::stem_of(&row.text("key")?).to_string());
     }
-    Ok(keys)
+    Ok(stems)
 }
 
-/// The rows no work points at any more: every column an address can sit in
-/// is looked through, and the locked values a caller passes — those are
+/// Every place an address is named from: a work's pictures and its
+/// seasons', an episode's still, a cast's photographs, a relation's poster,
+/// a work's theme — and any locked value, on any work, that is the address
+/// itself, or with `by_path`, one that is the path of its bytes here: a
+/// lock can name a picture another work holds, and one written before locks
+/// were filed by their origin names it by its path.
+fn naming(by_path: bool) -> String {
+    let mut sql = String::from(
+        "EXISTS (SELECT 1 FROM media_image i WHERE i.url = ?)
+         OR EXISTS (SELECT 1 FROM media_episode e WHERE e.image = ?)
+         OR EXISTS (SELECT 1 FROM media_credit c WHERE c.image = ?)
+         OR EXISTS (SELECT 1 FROM media_relation r WHERE r.image = ?)
+         OR EXISTS (SELECT 1 FROM media_item m WHERE m.theme_music = ?)
+         OR EXISTS (SELECT 1 FROM media_override o WHERE o.value = ?)",
+    );
+    if by_path {
+        sql.push_str("\n         OR EXISTS (SELECT 1 FROM media_override o WHERE o.value LIKE ?)");
+    }
+    sql
+}
+
+/// What [`naming`] is asked with: the address, five times; as a locked
+/// value holds it, in JSON; and the path of its bytes, when it has any.
+fn naming_binds(origin: &str, key: Option<&str>) -> Result<Vec<String>> {
+    let mut binds = vec![origin.to_string(); 5];
+    binds.push(serde_json::to_string(origin)?);
+    if let Some(key) = key {
+        let stem = crate::media::file::stem_of(key);
+        binds.push(format!("%{}{stem}%", crate::media::ROUTE));
+    }
+    Ok(binds)
+}
+
+/// Delete a row unless anything still names its address — the one check
+/// made before an upload, or anything the sweep takes, is deleted: in the
+/// same statement, so nothing slips in between the asking and the deleting.
+/// Its key, when it has one, finds the locks that name it by the path of
+/// its bytes. Whether it went.
+pub async fn delete_unless_referenced(db: &Db, asset: &Asset) -> Result<bool> {
+    let mut query = sqlx::query(db.sql(&format!(
+        "DELETE FROM media_asset WHERE id = ? AND NOT ({})",
+        naming(asset.key.is_some())
+    )))
+    .bind(asset.id.clone());
+    for bind in naming_binds(&asset.origin, asset.key.as_deref())? {
+        query = query.bind(bind);
+    }
+    Ok(query.execute(db.pool()).await?.rows_affected() > 0)
+}
+
+/// The rows no work points at any more, among those older than
+/// `created_before` — an upload's row is written a moment before the
+/// picture or the lock that points at it: every column an address can sit
+/// in is looked through, and the locked values a caller passes — those are
 /// JSON, and read in Rust.
-pub async fn unreferenced(db: &Db, locked: &HashSet<String>) -> Result<Vec<Asset>> {
+pub async fn unreferenced(
+    db: &Db,
+    locked: &HashSet<String>,
+    created_before: &str,
+) -> Result<Vec<Asset>> {
     let rows = sqlx::query(db.sql(&format!(
         "SELECT {COLUMNS} FROM media_asset a
-         WHERE NOT EXISTS (SELECT 1 FROM media_image i WHERE i.url = a.origin)
+         WHERE a.created_at < ?
+           AND NOT EXISTS (SELECT 1 FROM media_image i WHERE i.url = a.origin)
            AND NOT EXISTS (SELECT 1 FROM media_episode e WHERE e.image = a.origin)
            AND NOT EXISTS (SELECT 1 FROM media_credit c WHERE c.image = a.origin)
            AND NOT EXISTS (SELECT 1 FROM media_relation r WHERE r.image = a.origin)
            AND NOT EXISTS (SELECT 1 FROM media_item m WHERE m.theme_music = a.origin)"
     )))
+    .bind(created_before)
     .fetch_all(db.pool())
     .await?;
     let mut out = Vec::new();
@@ -628,12 +752,13 @@ pub async fn counts(db: &Db) -> Result<Counts> {
     Ok(counts)
 }
 
-/// Those given up on, and those put off after a failure, newest failure
-/// first: what the media page lists to be looked at.
+/// Those given up on, and those put off after a failure or a fetch cut
+/// short, newest failure first: what the media page lists to be looked at.
+/// Not one being fetched for the first time, though its try is counted.
 pub async fn troubled(db: &Db, limit: i64) -> Result<Vec<Asset>> {
     let rows = sqlx::query(db.sql(&format!(
         "SELECT {COLUMNS} FROM media_asset
-         WHERE status = 'failed' OR (status = 'pending' AND attempts > 0)
+         WHERE status = 'failed' OR (status = 'pending' AND error IS NOT NULL)
          ORDER BY attempts DESC, created_at DESC
          LIMIT ?"
     )))
@@ -657,6 +782,62 @@ mod tests {
         .unwrap();
         db.migrate().await.unwrap();
         db
+    }
+
+    const LATER: &str = "2999-01-01T00:00:00.000Z";
+    const SHA: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+
+    fn wanted(origin: &str) -> Wanted<'_> {
+        Wanted {
+            origin,
+            kind: Kind::Image,
+            wanted_by: None,
+        }
+    }
+
+    /// As if the claim had been made long ago, by a worker that never came
+    /// back, and its try had come due.
+    async fn abandon(db: &Db, id: &str) {
+        sqlx::query(db.sql(
+            "UPDATE media_asset
+             SET claimed_at = '2000-01-01T00:00:00.000Z', next_attempt_at = NULL
+             WHERE id = ?",
+        ))
+        .bind(id)
+        .execute(db.pool())
+        .await
+        .unwrap();
+    }
+
+    async fn work_with(db: &Db, images: &[&str], theme: Option<&str>) -> String {
+        let mut item = crate::domain::MediaItem::empty(crate::domain::MediaKind::Series);
+        item.title = "A".into();
+        item.slug = item.id.clone();
+        item.theme_music = theme.map(str::to_string);
+        for url in images {
+            item.images.push(crate::domain::Image {
+                id: new_id(),
+                season_number: None,
+                cover_type: crate::domain::CoverType::Poster,
+                url: (*url).into(),
+                language: None,
+                sort_order: 0,
+                // A provider's row: a hand-added one is written by its own
+                // path, not with the work.
+                source: Some("tmdb".into()),
+                is_manual: false,
+            });
+        }
+        crate::db::repo::item::upsert(
+            db,
+            crate::db::repo::item::ItemWrite {
+                item: &item,
+                replace_children: true,
+            },
+        )
+        .await
+        .unwrap();
+        item.id
     }
 
     #[tokio::test]
@@ -691,21 +872,27 @@ mod tests {
         );
         assert_eq!(line[1].kind, Kind::Audio);
 
-        // Put off: not due until then.
-        mark_failed(
-            &db,
-            &line[0].id,
-            1,
-            "timed out",
-            Some("2999-01-01T00:00:00Z"),
-        )
-        .await
-        .unwrap();
+        // Taken, and put off: not due until then.
+        assert_eq!(
+            claim(&db, &line[0].id, "me", 5, LATER).await.unwrap(),
+            Claim::Taken
+        );
+        assert_eq!(
+            claim(&db, &line[0].id, "you", 5, LATER).await.unwrap(),
+            Claim::Lost,
+            "taken once"
+        );
+        mark_failed(&db, &line[0].id, "timed out", Some(LATER), false)
+            .await
+            .unwrap();
         assert_eq!(due(&db, 10).await.unwrap().len(), 1);
         assert_eq!(pending_count(&db).await.unwrap(), 2);
+        let troubled_now = troubled(&db, 10).await.unwrap();
+        assert_eq!(troubled_now.len(), 1);
+        assert_eq!(troubled_now[0].attempts, 1, "the try was counted once");
 
         // Given up on: listed among the troubled, asked again on request.
-        mark_failed(&db, &line[0].id, 5, "gone", None)
+        mark_failed(&db, &line[0].id, "gone", None, false)
             .await
             .unwrap();
         assert_eq!(troubled(&db, 10).await.unwrap()[0].status, Status::Failed);
@@ -713,19 +900,55 @@ mod tests {
         assert_eq!(due(&db, 10).await.unwrap().len(), 2);
     }
 
+    /// A try is counted as it is taken: a fetch that brings the server down
+    /// counts all the same, and is given up on once every try it had was.
+    #[tokio::test]
+    async fn a_fetch_cut_short_too_often_is_given_up() {
+        let db = db().await;
+        enqueue(&db, &[wanted("https://a/poison.jpg")])
+            .await
+            .unwrap();
+        let id = due(&db, 1).await.unwrap().remove(0).id;
+
+        assert_eq!(claim(&db, &id, "me", 2, LATER).await.unwrap(), Claim::Taken);
+        let row = get(&db, &id).await.unwrap().unwrap();
+        assert_eq!((row.attempts, row.error.as_deref()), (1, None));
+        assert!(
+            troubled(&db, 10).await.unwrap().is_empty(),
+            "a first fetch under way is no trouble"
+        );
+
+        // The server dies mid-fetch; the claim goes stale; another takes it.
+        abandon(&db, &id).await;
+        assert_eq!(claim(&db, &id, "me", 2, LATER).await.unwrap(), Claim::Taken);
+        let row = get(&db, &id).await.unwrap().unwrap();
+        assert_eq!((row.attempts, row.error.as_deref()), (2, Some(CUT_SHORT)));
+        assert_eq!(troubled(&db, 10).await.unwrap().len(), 1);
+
+        // And dies again: that was its last try.
+        abandon(&db, &id).await;
+        assert_eq!(
+            claim(&db, &id, "me", 2, LATER).await.unwrap(),
+            Claim::GivenUp
+        );
+        let row = get(&db, &id).await.unwrap().unwrap();
+        assert_eq!(row.status, Status::Failed);
+        assert_eq!(
+            (row.attempts, row.error.as_deref()),
+            (UNFIT, Some(GIVEN_UP))
+        );
+        assert_eq!(
+            retry_troubled(&db).await.unwrap(),
+            0,
+            "not asked again with the rest"
+        );
+        assert!(due(&db, 10).await.unwrap().is_empty());
+    }
+
     #[tokio::test]
     async fn a_stored_row_is_indexed_and_counted() {
         let db = db().await;
-        enqueue(
-            &db,
-            &[Wanted {
-                origin: "https://a/1.jpg",
-                kind: Kind::Image,
-                wanted_by: None,
-            }],
-        )
-        .await
-        .unwrap();
+        enqueue(&db, &[wanted("https://a/1.jpg")]).await.unwrap();
         let row = due(&db, 1).await.unwrap().remove(0);
         mark_stored(
             &db,
@@ -746,22 +969,48 @@ mod tests {
         let index = stored_index(&db).await.unwrap();
         assert_eq!(
             index,
-            vec![(
-                "https://a/1.jpg".into(),
-                "ab.jpg".into(),
-                Thumb::Jpeg,
-                "image/jpeg".into()
-            )]
+            vec![("https://a/1.jpg".into(), "ab.jpg".into(), Thumb::Jpeg)]
         );
         let counts = counts(&db).await.unwrap();
         assert_eq!((counts.stored, counts.bytes, counts.pending), (1, 10, 0));
-        let keys = all_keys(&db).await.unwrap();
-        assert!(keys.contains("ab.jpg") && keys.contains("ab-t.jpg"));
-        assert!(!key_shared(&db, "ab.jpg", &row.id).await.unwrap());
+        assert!(held_stems(&db).await.unwrap().contains("ab"));
+        assert!(key_named(&db, "ab.jpg").await.unwrap());
+        assert!(stem_named(&db, "ab").await.unwrap());
+        assert!(!key_named(&db, "cd.jpg").await.unwrap());
         assert!(
             !retry(&db, &row.id).await.unwrap(),
             "stored is not asked again"
         );
+        assert!(
+            !reserve_key(&db, &row.id, "cd.jpg").await.unwrap(),
+            "a stored row's key stays its own"
+        );
+    }
+
+    /// A fetch files its key before it puts the bytes, so nothing deletes
+    /// them as nobody's meanwhile; a failure takes the key back.
+    #[tokio::test]
+    async fn a_key_is_named_from_the_moment_it_is_reserved() {
+        let db = db().await;
+        enqueue(&db, &[wanted("https://a/1.jpg")]).await.unwrap();
+        let id = due(&db, 1).await.unwrap().remove(0).id;
+        let key = format!("{SHA}.jpg");
+
+        assert!(!key_named(&db, &key).await.unwrap());
+        assert!(reserve_key(&db, &id, &key).await.unwrap());
+        assert!(key_named(&db, &key).await.unwrap());
+        assert!(stem_named(&db, SHA).await.unwrap(), "and its thumbnail too");
+        assert!(held_stems(&db).await.unwrap().contains(SHA));
+        assert!(
+            stored_index(&db).await.unwrap().is_empty(),
+            "reserved is not stored"
+        );
+
+        mark_failed(&db, &id, "the address answered 503", Some(LATER), false)
+            .await
+            .unwrap();
+        assert!(!key_named(&db, &key).await.unwrap());
+        assert!(!stem_named(&db, SHA).await.unwrap());
     }
 
     #[tokio::test]
@@ -770,54 +1019,156 @@ mod tests {
         enqueue(
             &db,
             &[
-                Wanted {
-                    origin: "https://a/kept.jpg",
-                    kind: Kind::Image,
-                    wanted_by: None,
-                },
-                Wanted {
-                    origin: "https://a/lost.jpg",
-                    kind: Kind::Image,
-                    wanted_by: None,
-                },
-                Wanted {
-                    origin: "https://a/locked.jpg",
-                    kind: Kind::Image,
-                    wanted_by: None,
-                },
+                wanted("https://a/kept.jpg"),
+                wanted("https://a/lost.jpg"),
+                wanted("https://a/locked.jpg"),
             ],
         )
         .await
         .unwrap();
         // A work holding the first, as its poster.
-        let mut item = crate::domain::MediaItem::empty(crate::domain::MediaKind::Movie);
-        item.title = "A".into();
-        item.images.push(crate::domain::Image {
-            id: new_id(),
-            season_number: None,
-            cover_type: crate::domain::CoverType::Poster,
-            url: "https://a/kept.jpg".into(),
-            language: None,
-            sort_order: 0,
-            source: Some("tmdb".into()),
-            is_manual: false,
-        });
-        crate::db::repo::item::upsert(
+        work_with(&db, &["https://a/kept.jpg"], None).await;
+
+        let locked: HashSet<String> = ["https://a/locked.jpg".to_string()].into();
+        let lost = unreferenced(&db, &locked, LATER).await.unwrap();
+        assert_eq!(lost.len(), 1);
+        assert_eq!(lost[0].origin, "https://a/lost.jpg");
+        assert!(
+            unreferenced(&db, &locked, "2000-01-01T00:00:00.000Z")
+                .await
+                .unwrap()
+                .is_empty(),
+            "a row younger than the cutoff is left: its reference may be on its way"
+        );
+
+        let unknown = unknown_origins(&db, true, true).await.unwrap();
+        assert!(unknown.is_empty(), "the poster is known already");
+    }
+
+    /// The one check made before an upload is deleted: a picture of any
+    /// work, a theme, a lock on any work — by the upload's own name, or by
+    /// the path of its bytes here — keeps it; nothing left naming it, it goes.
+    #[tokio::test]
+    async fn an_upload_is_kept_while_anything_names_it() {
+        use crate::{db::repo::override_field, domain::fields::Scope};
+        use serde_json::Value;
+
+        let db = db().await;
+        let origin = "upload:0190f2a8-7b8f-7c3e-9b1a-3d2f1e0c9b8a";
+        let key = format!("{SHA}.png");
+        insert_upload(
             &db,
-            crate::db::repo::item::ItemWrite {
-                item: &item,
-                replace_children: true,
+            &Upload {
+                id: "0190f2a8-7b8f-7c3e-9b1a-3d2f1e0c9b8a",
+                origin,
+                kind: Kind::Image,
+                stored: Stored {
+                    key: &key,
+                    content_type: "image/png",
+                    bytes: 10,
+                    sha256: SHA,
+                    width: Some(2),
+                    height: Some(3),
+                    thumb: Thumb::Png,
+                },
+                uploaded_by: "editor:bob",
+                wanted_by: "w",
             },
         )
         .await
         .unwrap();
+        let asset = by_origin(&db, origin).await.unwrap().unwrap();
+        let kept = |why: &str| {
+            let (db, asset, why) = (&db, &asset, why.to_string());
+            async move {
+                assert!(
+                    !delete_unless_referenced(db, asset).await.unwrap(),
+                    "{why}: deleted"
+                );
+                assert!(get(db, &asset.id).await.unwrap().is_some(), "{why}");
+            }
+        };
 
-        let locked: HashSet<String> = ["https://a/locked.jpg".to_string()].into();
-        let lost = unreferenced(&db, &locked).await.unwrap();
-        assert_eq!(lost.len(), 1);
-        assert_eq!(lost[0].origin, "https://a/lost.jpg");
+        // One of a work's pictures.
+        work_with(&db, &[origin], None).await;
+        kept("a picture").await;
+        sqlx::query(db.sql("DELETE FROM media_image WHERE url = ?"))
+            .bind(origin)
+            .execute(db.pool())
+            .await
+            .unwrap();
 
-        let unknown = unknown_origins(&db, true, true).await.unwrap();
-        assert!(unknown.is_empty(), "the poster is known already");
+        // A theme, on another work.
+        work_with(&db, &[], Some(origin)).await;
+        kept("a theme").await;
+        sqlx::query(db.sql("UPDATE media_item SET theme_music = NULL"))
+            .execute(db.pool())
+            .await
+            .unwrap();
+
+        // A lock on a work, by the upload's name: an episode's still, a
+        // season's chosen poster, the work's background or theme.
+        let locker = work_with(&db, &[], None).await;
+        for (scope, field) in [
+            (
+                Scope::Episode {
+                    season: 1,
+                    episode: 2,
+                },
+                "image",
+            ),
+            (Scope::Season(1), "primaryPoster"),
+            (Scope::Item, "primaryFanart"),
+            (Scope::Item, "themeMusic"),
+        ] {
+            override_field::set(
+                &db,
+                &locker,
+                scope,
+                field,
+                Some(&Value::String(origin.into())),
+                Some("editor:bob"),
+            )
+            .await
+            .unwrap();
+            kept(field).await;
+            override_field::clear(&db, &locker).await.unwrap();
+        }
+
+        // By the path of its bytes, as a lock written before locks were
+        // filed by their origin holds it — the thumbnail's path too.
+        for path in [
+            format!("/media/{key}"),
+            format!("https://ams.example/media/{SHA}-t.png"),
+        ] {
+            override_field::set(
+                &db,
+                &locker,
+                Scope::Item,
+                "primaryPoster",
+                Some(&Value::String(path.clone())),
+                None,
+            )
+            .await
+            .unwrap();
+            kept(&path).await;
+            override_field::clear(&db, &locker).await.unwrap();
+        }
+
+        // Another upload's lock, or a path of other bytes, is not this one.
+        override_field::set(
+            &db,
+            &locker,
+            Scope::Item,
+            "primaryPoster",
+            Some(&Value::String("upload:another".into())),
+            None,
+        )
+        .await
+        .unwrap();
+
+        // Nothing names it: it goes.
+        assert!(delete_unless_referenced(&db, &asset).await.unwrap());
+        assert!(get(&db, &asset.id).await.unwrap().is_none());
     }
 }

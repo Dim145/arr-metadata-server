@@ -26,11 +26,15 @@ const FIELDS: &str = "id,title,main_picture,alternative_titles,start_date,synops
                       num_scoring_users,genres,rating,studios";
 
 pub struct MalClient {
+    /// One that follows a redirect on the same host only: the client id goes
+    /// in a header of MyAnimeList's own, which reqwest does not know to drop
+    /// on the way to another.
     http: reqwest::Client,
     official: String,
     jikan: String,
     client_id: Option<String>,
     pacer: Pacer,
+    gate: crate::providers::Gate,
 }
 
 impl MalClient {
@@ -49,6 +53,8 @@ impl MalClient {
                 1_100
             })),
             client_id,
+            // Spaced already; this is for its `Retry-After`.
+            gate: crate::providers::Gate::new("mal", "MyAnimeList", 4),
         }
     }
 
@@ -64,22 +70,24 @@ impl MalClient {
             anyhow::bail!("MyAnimeList's queue is full; this fetch goes without it");
         }
 
-        let request = match &self.client_id {
+        let request = || match &self.client_id {
             Some(client_id) => self
                 .http
                 .get(format!("{}/anime/{id}", self.official))
                 .query(&[("fields", FIELDS)])
-                .header("X-MAL-CLIENT-ID", client_id),
-            None => self.http.get(format!("{}/anime/{id}", self.jikan)),
+                .header("X-MAL-CLIENT-ID", client_id)
+                .timeout(std::time::Duration::from_secs(20)),
+            None => self
+                .http
+                .get(format!("{}/anime/{id}", self.jikan))
+                .timeout(std::time::Duration::from_secs(20)),
         };
 
-        let started = std::time::Instant::now();
-        let response = request
-            .timeout(std::time::Duration::from_secs(20))
-            .send()
-            .await;
-        crate::metrics::upstream("mal", started, response.as_ref().ok().map(|r| r.status()));
-        let response = response.context("MyAnimeList request failed")?;
+        let (response, _permit) = self
+            .gate
+            .send(request)
+            .await
+            .map_err(|e| anyhow::anyhow!("MyAnimeList request failed: {e}"))?;
 
         let status = response.status();
         if status == reqwest::StatusCode::NOT_FOUND {
@@ -92,7 +100,8 @@ impl MalClient {
             anyhow::bail!("Jikan could not reach MyAnimeList and had nothing cached");
         }
         if !status.is_success() {
-            anyhow::bail!("MyAnimeList returned {status}");
+            let reason = crate::providers::error_text(response).await;
+            anyhow::bail!("MyAnimeList returned {status}: {reason}");
         }
 
         let raw = crate::providers::read_json(response)

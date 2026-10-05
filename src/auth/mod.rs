@@ -3,6 +3,7 @@
 //! Policy is set per API surface rather than globally, because the clients
 //! differ in what they are able to send. See [`crate::config::SurfacePolicy`].
 
+pub mod csrf;
 pub mod ip;
 pub mod middleware;
 pub mod naming;

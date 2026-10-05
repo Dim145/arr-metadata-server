@@ -265,7 +265,9 @@ async fn airing_atom(
             // rather than ahead: a reader may hide what is dated in the
             // future, and a date that moved every second would never let a
             // poll be answered "unchanged".
-            let aired = rfc3339(&browse::aired_at(episode)?)?;
+            let aired = browse::aired_at(episode)?
+                .format("%Y-%m-%dT%H:%M:%SZ")
+                .to_string();
             let updated = if aired > now {
                 rfc3339(&work.updated_at).unwrap_or_else(|| now.clone())
             } else {
@@ -325,11 +327,15 @@ fn window_of(past: Option<i64>, future: Option<i64>) -> AppResult<(DateTime<Utc>
 
 /// The language the feed is written in: the one asked for, or the one this
 /// caller is answered in everywhere else.
+///
+/// One asked for that is not a language ([`service::language::tag`]) is as
+/// one not asked for, rather than a refusal: a feed's address is pasted into
+/// a calendar app or a reader once and polled for years, and neither shows
+/// an error to anybody — the feed would just stop. Nothing here is fetched
+/// for any language, only what is held laid over.
 fn language_for(state: &AppState, identity: &Identity, asked: Option<&str>) -> String {
     asked
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .map(str::to_string)
+        .and_then(service::language::tag)
         .unwrap_or_else(|| state.language(identity.client_id(), identity.peer_id()))
 }
 

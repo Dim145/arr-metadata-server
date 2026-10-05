@@ -18,11 +18,11 @@ use std::{
 
 use anyhow::{Context, Result};
 
-use crate::domain::{CoverType, Episode, MediaItem, MediaKind};
-
-/// Refuse anything larger. Artwork is measured in megabytes; a hundred of them
-/// is a redirect to something that is not a picture.
-const MAX_BYTES: u64 = 25 * 1024 * 1024;
+use crate::{
+    db::repo::asset::Kind,
+    domain::{CoverType, Episode, MediaItem, MediaKind},
+    media::file,
+};
 
 /// One file to place at one path: a picture, or the theme.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -203,6 +203,12 @@ fn extension(url: &str) -> &str {
 ///
 /// Returns `false` when the file already existed, so a second export costs
 /// nothing rather than refetching a library's worth of artwork.
+///
+/// Fetched as the media store fetches: through its guarded client, every
+/// redirect judged, no larger than a picture — or a theme — may be, and
+/// written only when the bytes are the picture or the sound wanted. An
+/// address that answers with anything else is somebody's page, or worse,
+/// and is not left beside the documents under a picture's name.
 pub async fn fetch_one(
     state: &crate::state::AppState,
     root: &Path,
@@ -234,9 +240,9 @@ pub async fn fetch_one(
     // Again here, and not only where the URL was stored: a name that pointed
     // somewhere ordinary when it was accepted can point at loopback by the time
     // this runs, and rows written before the check existed are still in there.
-    if crate::outbound::resolves_internally(&download.url).await {
+    if state.media.guard.refuses_url(&download.url).await {
         anyhow::bail!(
-            "{} resolves to an address only this server can reach",
+            "{} is not an address this server fetches from here",
             download.url
         );
     }
@@ -248,25 +254,34 @@ pub async fn fetch_one(
         .await
         .with_context(|| format!("could not fetch {}", download.url))?;
 
+    // An answer that is not the file is not read: its body is nothing
+    // wanted, and is bounded by nothing.
     let status = response.status();
     if !status.is_success() {
         anyhow::bail!("{status} fetching {}", download.url);
     }
 
-    if response.content_length().is_some_and(|n| n > MAX_BYTES) {
-        anyhow::bail!("{} is larger than this export will write", download.url);
-    }
-
-    let bytes = response
-        .bytes()
+    let kind = kind_of(download);
+    let limit = match kind {
+        Kind::Image => file::MAX_IMAGE_BYTES,
+        Kind::Audio => file::MAX_AUDIO_BYTES,
+    };
+    let bytes = crate::providers::read_body(response, limit)
         .await
         .with_context(|| format!("could not read {}", download.url))?;
 
-    if bytes.len() as u64 > MAX_BYTES {
-        anyhow::bail!("{} is larger than this export will write", download.url);
-    }
+    file::inspect(&bytes, kind).with_context(|| format!("{} was not kept", download.url))?;
 
     write(&destination, &bytes).await.map(|()| true)
+}
+
+/// What a planned file is: the theme a sound, everything else a picture.
+fn kind_of(download: &Download) -> Kind {
+    if download.path.ends_with("/theme.mp3") {
+        Kind::Audio
+    } else {
+        Kind::Image
+    }
 }
 
 /// Put a picture in its place: written beside the target and renamed, so
@@ -460,6 +475,15 @@ mod tests {
         assert!(resolve(root, "series/x/poster.jpg").is_ok());
         assert!(resolve(root, "series/../../etc/passwd").is_err());
         assert!(resolve(root, "series//poster.jpg").is_err());
+    }
+
+    #[test]
+    fn a_theme_is_a_sound_and_the_rest_are_pictures() {
+        let mut item = series();
+        item.theme_music = Some("https://x.invalid/theme".into());
+        item.images = vec![image(CoverType::Poster, None, "https://x.invalid/p.jpg")];
+        let kinds: Vec<Kind> = plan(&item).iter().map(kind_of).collect();
+        assert_eq!(kinds, [Kind::Image, Kind::Audio]);
     }
 
     #[test]

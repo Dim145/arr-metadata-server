@@ -26,10 +26,15 @@ pub mod serve;
 pub mod store;
 pub mod worker;
 
-pub use file::{thumb_key, valid_key};
+pub use file::valid_key;
 
 /// The path the media are served under, on this server.
 pub const ROUTE: &str = "/media/";
+
+/// The fields whose locked value is an address: a still put on an episode by
+/// hand, a theme put on a work, the poster and background a work or a season
+/// is to lead with.
+pub const ADDRESS_FIELDS: &[&str] = &["image", "themeMusic", "primaryPoster", "primaryFanart"];
 
 /// The media store, as this process holds it.
 pub struct Media {
@@ -38,6 +43,8 @@ pub struct Media {
     /// The client that follows the addresses providers gave: resolving
     /// through the guard, so a name that turns internal gets nowhere.
     pub http: reqwest::Client,
+    /// What that client may reach, for the checks made before it is asked.
+    pub guard: crate::outbound::Guard,
     /// Rung by whatever put an address in line.
     pub notify: tokio::sync::Notify,
     /// What the served addresses begin with: the public URL, so that a
@@ -68,12 +75,12 @@ pub struct Entry {
     pub key: Arc<str>,
 }
 
-/// A key, as the index knows it.
+/// A key, as the index knows it. Its content type is its extension's: see
+/// [`file::content_type_of`].
 #[derive(Clone, Debug)]
 pub struct Keyed {
     pub origin: Arc<str>,
     pub thumb: Thumb,
-    pub content_type: Arc<str>,
 }
 
 impl Media {
@@ -86,10 +93,15 @@ impl Media {
         if let Some(store) = &store {
             tracing::info!(backend = ?store.backend, "media are kept");
         }
+        let guard = crate::outbound::Guard::from_env()?;
+        if !guard.private_networks {
+            tracing::info!("media are not fetched from private networks");
+        }
         Ok(Self {
             store,
             index: RwLock::new(Index::default()),
-            http: crate::outbound::guarded_client()?,
+            http: crate::outbound::guarded_client(guard)?,
+            guard,
             notify: tokio::sync::Notify::new(),
             base: public_url
                 .map(|u| u.trim_end_matches('/').to_string())
@@ -126,8 +138,8 @@ impl Media {
     pub async fn load_index(&self, db: &crate::db::Db) -> anyhow::Result<()> {
         let rows = crate::db::repo::asset::stored_index(db).await?;
         let mut index = Index::default();
-        for (origin, key, thumb, content_type) in rows {
-            index.insert(&origin, &key, thumb, &content_type);
+        for (origin, key, thumb) in rows {
+            index.insert(&origin, &key, thumb);
         }
         let n = index.by_origin.len();
         *self.index.write().unwrap_or_else(|e| e.into_inner()) = index;
@@ -147,12 +159,22 @@ impl Media {
     }
 
     /// Note an asset as stored, here alone: what another instance's word
-    /// does.
+    /// does. That word comes over the cache server, which somebody else may
+    /// be able to write to, so it is checked as any other request is: a key
+    /// of this server's grammar, a content type its extension stands for, an
+    /// origin that is an address or an upload. Anything else is not noted.
     pub fn remember_quietly(&self, origin: &str, key: &str, thumb: Thumb, content_type: &str) {
+        if !fits_the_index(origin, key, content_type) {
+            tracing::warn!(
+                key = ?key.chars().take(80).collect::<String>(),
+                "a medium kept was refused: not a key, type or origin this server files"
+            );
+            return;
+        }
         self.index
             .write()
             .unwrap_or_else(|e| e.into_inner())
-            .insert(origin, key, thumb, content_type);
+            .insert(origin, key, thumb);
     }
 
     /// Forget an asset, here and on every other instance: its address is a
@@ -356,7 +378,9 @@ impl Media {
         let mut seen = HashSet::new();
         let mut out = Vec::new();
         let mut want = |url: &str, kind: Kind| {
-            if !fetch::fetchable(url) || self.lookup(url).is_some() || !seen.insert(url.to_string())
+            if !fetch::fetchable(url, self.guard)
+                || self.lookup(url).is_some()
+                || !seen.insert(url.to_string())
             {
                 return;
             }
@@ -431,10 +455,21 @@ impl Media {
     }
 }
 
+/// Whether an entry is one this server could have filed: a picture's or a
+/// sound's key — never a thumbnail's, which is found by its picture's —
+/// served as the type its extension stands for, for an address or an upload.
+fn fits_the_index(origin: &str, key: &str, content_type: &str) -> bool {
+    valid_key(key)
+        && !file::is_thumb(key)
+        && file::content_type_of(key) == Some(content_type)
+        && (origin.starts_with("https://")
+            || origin.starts_with("http://")
+            || origin.starts_with("upload:"))
+}
+
 impl Index {
-    fn insert(&mut self, origin: &str, key: &str, thumb: Thumb, content_type: &str) {
+    fn insert(&mut self, origin: &str, key: &str, thumb: Thumb) {
         let key: Arc<str> = Arc::from(key);
-        let content_type: Arc<str> = Arc::from(content_type);
         let origin_arc: Arc<str> = Arc::from(origin);
         self.by_origin
             .insert(origin.to_string(), Entry { key: key.clone() });
@@ -447,7 +482,6 @@ impl Index {
             Keyed {
                 origin: origin_arc,
                 thumb,
-                content_type,
             },
         );
         if let Some(sha) = key.split('.').next() {
@@ -520,7 +554,7 @@ mod tests {
         assert_eq!(
             media.unlocalize(&format!(
                 "http://other.host/media/{}",
-                thumb_key(KEY, Thumb::Jpeg).unwrap()
+                file::thumb_key(KEY, Thumb::Jpeg).unwrap()
             )),
             "https://p/poster.jpg",
             "a thumbnail's address is its picture's"
@@ -607,6 +641,40 @@ mod tests {
             public.for_elsewhere("https://r/c.jpg").as_deref(),
             Some("https://r/c.jpg")
         );
+    }
+
+    /// Another instance's word, as the cache server carries it, is checked
+    /// before it is believed: anybody able to write there could otherwise
+    /// have a picture served as a page.
+    #[test]
+    fn a_word_from_elsewhere_is_checked_before_it_is_noted() {
+        let media = media(None);
+        let sha = KEY.split('.').next().unwrap();
+        for (origin, key, content_type) in [
+            // A type the key's extension does not stand for.
+            ("https://p/a.jpg", KEY, "text/html"),
+            ("https://p/a.jpg", KEY, "image/png"),
+            // Not a key of this server's.
+            ("https://p/a.jpg", "../../etc/passwd", "image/jpeg"),
+            ("https://p/a.jpg", &*format!("{sha}.svg"), "image/svg+xml"),
+            ("https://p/a.jpg", &*format!("{sha}.html"), "text/html"),
+            // A thumbnail's key, which is found through its picture's.
+            ("https://p/a.jpg", &*format!("{sha}-t.jpg"), "image/jpeg"),
+            // Not an address or an upload.
+            ("javascript:alert(1)", KEY, "image/jpeg"),
+        ] {
+            media.remember_quietly(origin, key, Thumb::None, content_type);
+            assert!(
+                media.lookup(origin).is_none() && media.keyed(key).is_none(),
+                "{origin} {key} {content_type}"
+            );
+        }
+
+        media.remember_quietly("https://p/a.jpg", KEY, Thumb::Jpeg, "image/jpeg");
+        assert_eq!(media.lookup("https://p/a.jpg").unwrap().key.as_ref(), KEY);
+        const SOUND: &str = "cb7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad.m4a";
+        media.remember_quietly("upload:1", SOUND, Thumb::None, "audio/mp4");
+        assert!(media.keyed(SOUND).is_some());
     }
 
     #[test]

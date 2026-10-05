@@ -18,6 +18,20 @@ pub const MAX_AUDIO_BYTES: u64 = 60 * 1024 * 1024;
 const THUMB_PORTRAIT_WIDTH: u32 = 480;
 const THUMB_LANDSCAPE_WIDTH: u32 = 960;
 
+/// The largest picture kept at all: a side no screen draws, or a canvas
+/// whose pixels alone would take gigabytes, is not artwork but a trap — for
+/// this server's decoder, and for every client it would be handed to.
+const MAX_SIDE: u32 = 16_384;
+const MAX_PIXELS: u64 = 120_000_000;
+
+/// The largest picture a thumbnail is made of: an 8K backdrop, a poster from
+/// a good camera. Decoding one takes a few hundred megabytes — a progressive
+/// JPEG's coefficients are held whole beside its pixels — so a larger one is
+/// served as it is rather than decoded.
+const THUMB_MAX_PIXELS: u64 = 36_000_000;
+/// What a decoder may set aside for the pixels of one.
+const THUMB_MAX_ALLOC: u64 = 256 * 1024 * 1024;
+
 /// The kinds of file kept, by the extension their key carries.
 ///
 /// No SVG, though a logo could be one: a document that can carry a script,
@@ -48,7 +62,16 @@ pub struct Inspected {
 }
 
 /// What the bytes are, and that they are what was wanted.
+///
+/// The sniffing and the reading of a header are done here, on bytes
+/// somebody else chose: a parser that panics on them is a file refused, not
+/// a worker or a request brought down.
 pub fn inspect(bytes: &[u8], wanted: Kind) -> Result<Inspected> {
+    std::panic::catch_unwind(|| inspect_unguarded(bytes, wanted))
+        .unwrap_or_else(|_| Err(anyhow::anyhow!("a file this server could not read")))
+}
+
+fn inspect_unguarded(bytes: &[u8], wanted: Kind) -> Result<Inspected> {
     let Some(found) = infer::get(bytes) else {
         bail!("not a picture or a sound this server keeps");
     };
@@ -87,6 +110,11 @@ pub fn inspect(bytes: &[u8], wanted: Kind) -> Result<Inspected> {
         },
         Kind::Audio => (None, None),
     };
+    if let (Some(w), Some(h)) = (width, height)
+        && (w > MAX_SIDE || h > MAX_SIDE || u64::from(w) * u64::from(h) > MAX_PIXELS)
+    {
+        bail!("a picture of {w}×{h}, larger than any this server keeps");
+    }
 
     Ok(Inspected {
         content_type,
@@ -125,6 +153,33 @@ pub fn valid_key(name: &str) -> bool {
         && EXTENSIONS.iter().any(|(e, _, _)| *e == ext)
 }
 
+/// The content type a key's bytes are served as: the one its extension
+/// stands for, and nothing else — not what the bytes were said to be by
+/// whoever told this server of them.
+pub fn content_type_of(key: &str) -> Option<&'static str> {
+    let (_, ext) = key.rsplit_once('.')?;
+    EXTENSIONS
+        .iter()
+        .find(|(e, _, _)| *e == ext)
+        .map(|(_, content_type, _)| *content_type)
+}
+
+/// The hash a key files its bytes under, whether it is the bytes' key or
+/// their thumbnail's.
+pub fn stem_of(key: &str) -> &str {
+    let stem = key.split('.').next().unwrap_or(key);
+    stem.strip_suffix("-t").unwrap_or(stem)
+}
+
+/// Every key the bytes of a hash could be filed under: one per extension
+/// kept.
+pub fn keys_of_stem(stem: &str) -> Vec<String> {
+    EXTENSIONS
+        .iter()
+        .map(|(ext, _, _)| format!("{stem}.{ext}"))
+        .collect()
+}
+
 /// Whether a key names a thumbnail.
 pub fn is_thumb(key: &str) -> bool {
     key.split('.')
@@ -143,16 +198,35 @@ fn hex(bytes: &[u8]) -> String {
 /// kept as it is, and served whole.
 ///
 /// Decoded within limits: a picture's header can promise a canvas that
-/// would take every byte of memory to draw.
+/// would take every byte of memory to draw, so the header is read first, by
+/// the decoder that would draw it, and a picture past
+/// [`THUMB_MAX_PIXELS`] is not decoded at all.
 pub fn thumbnail(bytes: &[u8]) -> Option<(Vec<u8>, Thumb)> {
-    let mut limits = image::Limits::default();
-    limits.max_image_width = Some(16_000);
-    limits.max_image_height = Some(16_000);
-    limits.max_alloc = Some(512 * 1024 * 1024);
+    thumbnail_within(bytes, THUMB_MAX_PIXELS)
+}
 
-    let mut reader = image::ImageReader::new(Cursor::new(bytes))
-        .with_guessed_format()
-        .ok()?;
+fn thumbnail_within(bytes: &[u8], max_pixels: u64) -> Option<(Vec<u8>, Thumb)> {
+    let reader = || {
+        image::ImageReader::new(Cursor::new(bytes))
+            .with_guessed_format()
+            .ok()
+    };
+    let (width, height) = reader()?.into_dimensions().ok()?;
+    if u64::from(width) * u64::from(height) > max_pixels {
+        tracing::debug!(
+            width,
+            height,
+            "no thumbnail: the picture is too large to decode"
+        );
+        return None;
+    }
+
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_SIDE);
+    limits.max_image_height = Some(MAX_SIDE);
+    limits.max_alloc = Some(THUMB_MAX_ALLOC);
+
+    let mut reader = reader()?;
     reader.limits(limits);
     let picture = match reader.decode() {
         Ok(picture) => picture,
@@ -260,6 +334,50 @@ mod tests {
         ] {
             assert!(!valid_key(bad), "{bad}");
         }
+    }
+
+    /// A PNG's signature and header, promising a canvas of this size, and
+    /// nothing after: enough for the sniffer and the header reader.
+    fn png_header(width: u32, height: u32) -> Vec<u8> {
+        let mut out = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
+        out.extend_from_slice(&width.to_be_bytes());
+        out.extend_from_slice(&height.to_be_bytes());
+        out.extend_from_slice(&[8, 2, 0, 0, 0, 0, 0, 0, 0]);
+        out
+    }
+
+    #[test]
+    fn a_canvas_no_screen_draws_is_not_kept() {
+        assert!(inspect(&png_header(4000, 6000), Kind::Image).is_ok());
+        for (width, height) in [(20_000, 100), (100, 40_000), (12_000, 12_000)] {
+            let refused = inspect(&png_header(width, height), Kind::Image).unwrap_err();
+            assert!(
+                refused.to_string().contains("larger than any"),
+                "{width}×{height}: {refused}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_key_is_served_as_its_extension_says() {
+        let sha = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        assert_eq!(content_type_of(&format!("{sha}.jpg")), Some("image/jpeg"));
+        assert_eq!(content_type_of(&format!("{sha}-t.png")), Some("image/png"));
+        assert_eq!(content_type_of(&format!("{sha}.m4a")), Some("audio/mp4"));
+        assert_eq!(content_type_of(&format!("{sha}.html")), None);
+        assert_eq!(content_type_of(sha), None);
+
+        assert_eq!(stem_of(&format!("{sha}.jpg")), sha);
+        assert_eq!(stem_of(&format!("{sha}-t.jpg")), sha);
+        let keys = keys_of_stem(sha);
+        assert!(keys.contains(&format!("{sha}.webp")) && keys.contains(&format!("{sha}.mp3")));
+    }
+
+    #[test]
+    fn a_picture_too_large_to_decode_is_served_without_a_thumbnail() {
+        let wide = png(1200, 1800);
+        assert!(thumbnail_within(&wide, 1_000_000).is_none());
+        assert!(thumbnail_within(&wide, 2_160_000).is_some());
     }
 
     #[test]

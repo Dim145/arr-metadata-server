@@ -272,6 +272,7 @@ impl Outcome {
 /// The work a document names, as much of it as setting its locks needs.
 struct Known {
     id: String,
+    kind: MediaKind,
     title: String,
     seasons: HashSet<i32>,
     episodes: HashSet<(i32, i32)>,
@@ -362,33 +363,48 @@ async fn apply(
         }
 
         let slot = (scope.to_string(), lock.field.clone());
-        if known
+        let unchanged = known
             .current
             .get(&slot)
-            .is_some_and(|stored| stored == value)
-        {
+            .is_some_and(|stored| stored == value);
+        // The work's identity is written through to its row as an edit by
+        // hand writes it — an adult work kept from every list at once — and
+        // so even where the lock is already so: imported before, its row may
+        // never have followed it.
+        let of_identity =
+            scope == fields::Scope::Item && fields::IDENTITY.contains(&lock.field.as_str());
+        if unchanged && !of_identity {
             outcome.unchanged += 1;
             continue;
         }
 
-        repo::override_field::set(
-            &state.db,
-            &known.id,
+        // Served afresh from here on, and the lists drawn before it dropped,
+        // whether or not the request gets to the end of the document.
+        match super::overrides::lock(
+            state,
+            (&known.id, known.kind),
             scope,
             &lock.field,
             value.as_ref(),
-            Some(&identity.label()),
+            &identity.label(),
         )
-        .await?;
-        // Served afresh from here on, whether or not the request gets to the
-        // end of the document.
-        state
-            .caches
-            .items
-            .invalidate(&format!("item:{}", known.id))
-            .await;
+        .await
+        {
+            Ok(()) => {}
+            // A slug or an identifier another work holds: this lock, not the
+            // document.
+            Err(AppError::Conflict(why)) => {
+                refuse(outcome, &why);
+                continue;
+            }
+            Err(e) => return Err(e),
+        }
         known.current.insert(slot, value.clone());
-        outcome.applied += 1;
+        if unchanged {
+            outcome.unchanged += 1;
+        } else {
+            outcome.applied += 1;
+        }
         outcome.touch(&known.id);
     }
     Ok(())
@@ -414,6 +430,7 @@ async fn know(state: &AppState, work: &LockedWork) -> AppResult<Option<Known>> {
         .collect();
     Ok(Some(Known {
         id: item.id,
+        kind: item.kind,
         title: item.title,
         seasons: item.seasons.iter().map(|s| s.season_number).collect(),
         episodes: item
@@ -539,5 +556,120 @@ mod tests {
             named(Some(""), Some("0113277"))
         );
         assert_ne!(named(Some("a"), None), named(Some("b"), None));
+    }
+
+    /// A film, stored, by its title and TMDB id.
+    async fn film(state: &AppState, title: &str, tmdb: i64) -> crate::domain::MediaItem {
+        let mut work = crate::domain::MediaItem::empty(MediaKind::Movie);
+        work.title = title.into();
+        work.slug = crate::domain::make_slug(title, None);
+        work.external_ids.tmdb = Some(tmdb);
+        repo::item::upsert(
+            &state.db,
+            repo::item::ItemWrite {
+                item: &work,
+                replace_children: true,
+            },
+        )
+        .await
+        .expect("stored");
+        work
+    }
+
+    /// What a reader the adult policy keeps from adult titles is listed.
+    async fn listed(state: &AppState) -> Vec<String> {
+        repo::item::search(
+            &state.db,
+            &repo::item::Query {
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("listed")
+        .into_iter()
+        .map(|w| w.title)
+        .collect()
+    }
+
+    #[tokio::test]
+    async fn an_imported_identity_lock_is_written_to_the_row_every_list_reads() {
+        let state = super::super::testing::server().await;
+        let heat = film(&state, "Heat", 949).await;
+        film(&state, "Ronin", 8195).await;
+        let heat_lock = |field: &str, value: Value| {
+            serde_json::json!({
+                "work": { "kind": "movie", "title": "Heat", "tmdb": 949 },
+                "scope": "item",
+                "field": field,
+                "value": value,
+            })
+        };
+        let document = |locks: Vec<Value>| -> Locks {
+            serde_json::from_value(serde_json::json!({ "version": 1, "locks": locks }))
+                .expect("a document")
+        };
+
+        // Adult, and a slug another film has.
+        let mut outcome = Outcome::default();
+        apply(
+            &state,
+            &Identity::Anonymous,
+            &document(vec![
+                heat_lock("isAdult", Value::Bool(true)),
+                heat_lock("slug", Value::String("ronin".into())),
+            ]),
+            &mut outcome,
+        )
+        .await
+        .expect("imported");
+
+        assert_eq!((outcome.applied, outcome.unchanged), (1, 0));
+        assert_eq!(outcome.refused.len(), 1, "{:?}", outcome.refused);
+        let row = repo::item::get(&state.db, &heat.id).await.unwrap().unwrap();
+        // The row every list, the calendar, the feeds and the clients'
+        // lookups read: the film is for adults there, at once.
+        assert!(row.is_adult);
+        assert_eq!(listed(&state).await, ["Ronin"]);
+        // The slug stays its own, and the lock refused is not kept.
+        assert_eq!(row.slug, "heat");
+        let locks = repo::override_field::list(&state.db, &heat.id)
+            .await
+            .unwrap();
+        assert_eq!(
+            locks.iter().map(|l| l.field.as_str()).collect::<Vec<_>>(),
+            ["isAdult"]
+        );
+
+        // Imported again over a row that never followed the lock — as an
+        // import before this left it: written through all the same, and
+        // counted as already so.
+        sqlx::query(
+            state
+                .db
+                .sql("UPDATE media_item SET is_adult = 0 WHERE id = ?"),
+        )
+        .bind(&heat.id)
+        .execute(state.db.pool())
+        .await
+        .unwrap();
+        let mut outcome = Outcome::default();
+        apply(
+            &state,
+            &Identity::Anonymous,
+            &document(vec![heat_lock("isAdult", Value::Bool(true))]),
+            &mut outcome,
+        )
+        .await
+        .expect("imported");
+        assert_eq!((outcome.applied, outcome.unchanged), (0, 1));
+        assert!(
+            repo::item::get(&state.db, &heat.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .is_adult
+        );
+        assert_eq!(listed(&state).await, ["Ronin"]);
     }
 }

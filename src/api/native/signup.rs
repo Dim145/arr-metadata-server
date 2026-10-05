@@ -16,7 +16,7 @@
 
 use std::{
     collections::HashMap,
-    net::{IpAddr, Ipv6Addr},
+    net::IpAddr,
     sync::{LazyLock, Mutex},
     time::{Duration, Instant},
 };
@@ -37,7 +37,7 @@ use crate::{
         extract::ClientIp,
         native::{auth, users},
     },
-    auth::secrets,
+    auth::{ip::bucket, secrets},
     db::repo::{
         self,
         audit::Action,
@@ -69,21 +69,8 @@ static RECENT: LazyLock<Mutex<Recent>> = LazyLock::new(|| Mutex::new(Recent::def
 
 const HOUR: Duration = Duration::from_secs(3600);
 
-/// What an address is counted under: itself, or for IPv6 its /64 — one home,
-/// one phone — since a single machine has a whole /64 to pick from.
-fn bucket(ip: IpAddr) -> IpAddr {
-    match ip {
-        IpAddr::V4(_) => ip,
-        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
-            Some(v4) => IpAddr::V4(v4),
-            None => {
-                let mut segments = v6.segments();
-                segments[4..].fill(0);
-                IpAddr::V6(Ipv6Addr::from(segments))
-            }
-        },
-    }
-}
+// An address is counted by `ip::bucket`: itself, or for IPv6 its /64 — one
+// home, one phone — since a single machine has a whole /64 to pick from.
 
 /// A place in the last hour's count, given back when it is dropped unless
 /// the account was made: a name already taken, a password refused, must not
@@ -382,6 +369,7 @@ pub struct Registered {
 async fn register(
     State(state): State<AppState>,
     ip: ClientIp,
+    peer: auth::Peer,
     headers: HeaderMap,
     Json(request): Json<RegisterRequest>,
 ) -> AppResult<Response> {
@@ -466,9 +454,7 @@ async fn register(
 
     // Hashed before the invitation is spent: a password the rules refuse
     // must not cost its sender a use.
-    let hash = secrets::hash_password_async(request.password)
-        .await
-        .map_err(|e| AppError::BadRequest(e.to_string()))?;
+    let hash = secrets::hash_password_async(request.password).await?;
 
     let (role, status) = match &invitation {
         Some(invitation) => (invitation.role, Status::Active),
@@ -559,7 +545,8 @@ async fn register(
             .into_response());
     }
 
-    let (cookie, answer) = auth::open_session(&state, user, &headers, &ip).await?;
+    let secure = auth::served_securely(&state, &headers, &peer);
+    let (cookie, answer) = auth::open_session(&state, user, &headers, &ip, secure).await?;
     Ok((StatusCode::OK, [(header::SET_COOKIE, cookie)], Json(answer)).into_response())
 }
 

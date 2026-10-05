@@ -17,8 +17,11 @@ use axum::{extract::Request, middleware::Next, response::Response};
 
 /// The surfaces a request lands on, in the order they are counted. The
 /// liveness probes are a surface of their own, so a monitor does not count
-/// as readers.
-pub const SURFACES: [&str; 6] = ["sonarr", "radarr", "tmdb", "native", "probe", "ui"];
+/// as readers; so are the media kept, and the authority's files a client
+/// fetches to trust this server.
+pub const SURFACES: [&str; 10] = [
+    "sonarr", "radarr", "tmdb", "tvdb", "anilist", "native", "media", "ca", "probe", "ui",
+];
 
 /// The providers asked upstream, in the order they are counted.
 pub const PROVIDERS: [&str; 12] = [
@@ -103,40 +106,79 @@ impl Histogram {
 
 struct Registry {
     /// Requests answered, by surface and status class.
-    requests: [[AtomicU64; 5]; 6],
-    request_time: [Histogram; 6],
+    requests: [[AtomicU64; 5]; SURFACES.len()],
+    request_time: [Histogram; SURFACES.len()],
     /// Calls made upstream, by provider and outcome.
     upstream: [[AtomicU64; 4]; PROVIDERS.len()],
     upstream_time: [Histogram; PROVIDERS.len()],
 }
 
 static REGISTRY: Registry = Registry {
-    requests: [const { [const { AtomicU64::new(0) }; 5] }; 6],
-    request_time: [const { Histogram::new() }; 6],
+    requests: [const { [const { AtomicU64::new(0) }; 5] }; SURFACES.len()],
+    request_time: [const { Histogram::new() }; SURFACES.len()],
     upstream: [const { [const { AtomicU64::new(0) }; 4] }; PROVIDERS.len()],
     upstream_time: [const { Histogram::new() }; PROVIDERS.len()],
 };
 
+/// The index of a surface's name in [`SURFACES`].
+fn surface(name: &str) -> usize {
+    SURFACES
+        .iter()
+        .position(|s| *s == name)
+        .unwrap_or(SURFACES.len() - 1)
+}
+
 /// Which surface a path lands on.
 pub fn surface_of(path: &str) -> usize {
-    if path.starts_with("/v1/tvdb/") {
-        0
+    let name = if path.starts_with("/v1/tvdb/") || path == "/v1/scenemapping" {
+        // Sonarr's: Skyhook's in its place, and services.sonarr.tv's list.
+        "sonarr"
     } else if path.starts_with("/v1/") {
-        1
+        "radarr"
     } else if path.starts_with("/3/") || path.starts_with("/4/") {
-        2
+        "tmdb"
+    } else if path.starts_with("/v4/") || path == "/v4" {
+        "tvdb"
     } else if path.starts_with("/api/") {
-        3
+        "native"
+    } else if path.starts_with("/media/") {
+        "media"
+    } else if path == "/ca.crt" || path == "/trust-ca.sh" {
+        "ca"
     } else if path == "/health" || path == "/ready" {
-        4
+        "probe"
     } else {
-        5
+        "ui"
+    };
+    surface(name)
+}
+
+/// Which surface a request to the clients' door lands on: what it was
+/// asked of decides first — AniList's queries all go to `/`, and every path
+/// of services.sonarr.tv is Sonarr's — and the path after that.
+fn door_surface_of(request: &Request) -> usize {
+    if crate::api::anilist::is_anilist_host(request.headers(), request.uri()) {
+        surface("anilist")
+    } else if crate::api::sonarr_services::is_services_host(request.headers(), request.uri()) {
+        surface("sonarr")
+    } else {
+        surface_of(request.uri().path())
     }
 }
 
 /// Count a request as it is answered: the surface, the status and the time.
 pub async fn observe(request: Request, next: Next) -> Response {
     let surface = surface_of(request.uri().path());
+    count(surface, request, next).await
+}
+
+/// [`observe`], for the clients' door.
+pub async fn observe_door(request: Request, next: Next) -> Response {
+    let surface = door_surface_of(&request);
+    count(surface, request, next).await
+}
+
+async fn count(surface: usize, request: Request, next: Next) -> Response {
     let started = Instant::now();
     let response = next.run(request).await;
     let class = usize::from(response.status().as_u16() / 100).clamp(1, 5) - 1;
@@ -271,6 +313,35 @@ mod tests {
         assert_eq!(SURFACES[surface_of("/")], "ui");
         assert_eq!(SURFACES[surface_of("/assets/index.js")], "ui");
         assert_eq!(SURFACES[surface_of("/work/x")], "ui");
+        // Each relay and file kind under its own name, not the interface's.
+        assert_eq!(SURFACES[surface_of("/v1/scenemapping")], "sonarr");
+        assert_eq!(SURFACES[surface_of("/v4/series/81189")], "tvdb");
+        assert_eq!(SURFACES[surface_of("/media/abc.jpg")], "media");
+        assert_eq!(SURFACES[surface_of("/ca.crt")], "ca");
+        assert_eq!(SURFACES[surface_of("/trust-ca.sh")], "ca");
+    }
+
+    #[test]
+    fn the_clients_door_counts_by_the_name_asked() {
+        let request = |host: &str, path: &str| {
+            axum::http::Request::builder()
+                .uri(path)
+                .header(axum::http::header::HOST, host)
+                .body(axum::body::Body::empty())
+                .unwrap()
+        };
+        assert_eq!(
+            SURFACES[door_surface_of(&request("graphql.anilist.co", "/"))],
+            "anilist"
+        );
+        assert_eq!(
+            SURFACES[door_surface_of(&request("services.sonarr.tv", "/v1/update"))],
+            "sonarr"
+        );
+        assert_eq!(
+            SURFACES[door_surface_of(&request("api.radarr.video", "/v1/movie/550"))],
+            "radarr"
+        );
     }
 
     #[test]

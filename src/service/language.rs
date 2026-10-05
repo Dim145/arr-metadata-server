@@ -22,17 +22,113 @@ use crate::{
     state::AppState,
 };
 
+/// The most languages a work's episode text is fetched in between two of its
+/// refreshes.
+///
+/// A language is fetched the first time it is asked for: a season's worth of
+/// calls upstream, on the operator's keys, and rows here. Whoever reads a
+/// work's page chooses the language, so without a bound every code there is
+/// was one more fetch of every work — the providers' quota, and the disk,
+/// spent by anyone. A work is read in one language or two; past this many, a
+/// new one is served what is held in it until the work's next refresh starts
+/// the count again. Refused rather than made room for: dropping the oldest to
+/// fetch the newest would let a caller cycling through nine languages fetch
+/// for ever.
+pub const MOST_LANGUAGES: usize = 8;
+
+/// A language as a caller may ask for one, written one way: a primary
+/// language of two or three letters, and at most one subtag of two to four —
+/// `fr`, `fra`, `pt-BR`, `zh-Hant` — the primary in lower case, a region in
+/// capitals, a script in title case. `_` is read as `-`, as some clients
+/// write it.
+///
+/// Anything else is no language at all: not a key to file text under, not a
+/// parameter for a provider, not a line in the log. A path, a query, a string
+/// the size of a request was each of those before.
+pub fn tag(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    // Three letters, a hyphen and four: nothing longer is one.
+    if raw.len() > 8 {
+        return None;
+    }
+    let letters = |part: &str, least: usize, most: usize| {
+        (least..=most).contains(&part.len()) && part.bytes().all(|b| b.is_ascii_alphabetic())
+    };
+
+    let (primary, subtag) = match raw.split_once(['-', '_']) {
+        Some((primary, subtag)) => (primary, Some(subtag)),
+        None => (raw, None),
+    };
+    if !letters(primary, 2, 3) {
+        return None;
+    }
+
+    let mut tag = primary.to_ascii_lowercase();
+    if let Some(subtag) = subtag {
+        if !letters(subtag, 2, 4) {
+            return None;
+        }
+        tag.push('-');
+        match subtag.len() {
+            // A region: `BR`.
+            2 => tag.push_str(&subtag.to_ascii_uppercase()),
+            // A script: `Hant`.
+            4 => {
+                tag.push_str(&subtag[..1].to_ascii_uppercase());
+                tag.push_str(&subtag[1..].to_ascii_lowercase());
+            }
+            _ => tag.push_str(&subtag.to_ascii_lowercase()),
+        }
+    }
+    Some(tag)
+}
+
 /// Normalise whatever a client sent into the key translations are stored under.
 ///
-/// Clients send `fr`, `fr-FR` or `fra`; all three mean the same shelf.
+/// Clients send `fr`, `fr-FR` or `fra`; all three mean the same shelf. What is
+/// not a language ([`tag`]) is no shelf: empty, which every overlay takes for
+/// "as stored".
 pub fn normalize(requested: &str) -> String {
-    let base = base_language(requested.trim());
+    let Some(tag) = tag(requested) else {
+        return String::new();
+    };
+    let base = base_language(&tag);
 
     if base.len() == 3 {
-        base.to_ascii_lowercase()
+        base.to_string()
     } else {
         iso_639_1_to_3(base)
     }
+}
+
+/// Whether a normalised language is one the code tables know — one a
+/// provider has text in. A code of the right shape that names no language is
+/// served what is held under it, which is nothing, and never fetched.
+pub fn is_known(language: &str) -> bool {
+    two_letter(language) != language
+}
+
+/// The language TMDB is asked in, which is also what its answer is kept
+/// under: the one asked for, by its two-letter code — with its region where
+/// it is the language this reader is answered in anyway — or, for a
+/// language the tables do not know and when none is asked, the reader's own
+/// (`own`, from the settings).
+///
+/// So the keys an answer can be kept under are as many as there are
+/// languages, not as many as there are strings: a reader who sends
+/// `en-AA`, `en-AB`… is answered from the one copy, rather than asking TMDB
+/// again each time.
+pub fn tmdb_locale(asked: Option<&str>, own: &str) -> String {
+    let own = tag(own).unwrap_or_else(|| "en-US".to_string());
+    let Some(asked) = asked.and_then(tag) else {
+        return own;
+    };
+
+    let language = normalize(&asked);
+    if !is_known(&language) || normalize(&own) == language {
+        return own;
+    }
+    two_letter(&language)
 }
 
 /// Whether this is the language the entity is already stored in.
@@ -48,6 +144,8 @@ fn is_default(state: &AppState, language: &str) -> bool {
 /// Nothing is fetched for a work switched off in the catalogue: like the work
 /// itself (see [`crate::service::served_as_held`]), it is given what is held
 /// in the language, as [`apply_stored`] gives it, and no provider is asked.
+/// Nor in a language the code tables do not know, nor in one past the first
+/// [`MOST_LANGUAGES`] tried for the work since its last refresh.
 pub async fn apply(state: &AppState, item: &mut MediaItem, requested: &str) -> Result<()> {
     let language = normalize(requested);
 
@@ -59,21 +157,24 @@ pub async fn apply(state: &AppState, item: &mut MediaItem, requested: &str) -> R
     // here. Episode text is fetched per language, on first request — and only
     // once, however many requests arrive for it together: a season's worth of
     // calls per work per language is the price, and two French Sonarrs opening
-    // the same series should not pay it twice. Checked again once through, for
-    // the same reason as `FETCHING`. A fetch that came to less than a whole
-    // answer is tried again later, not on the next request: see `store`.
-    // Never for a series switched off: it is served as it is held, in every
-    // language.
+    // the same series should not pay it twice. One fetch per work at a time,
+    // whatever its language, so that requests arriving together in nine new
+    // languages cannot all pass the count before the first is recorded; checked
+    // again once through, for the same reason as `FETCHING`. A fetch that came
+    // to less than a whole answer is tried again later, not on the next
+    // request: see `store`. Never for a series switched off: it is served as it
+    // is held, in every language.
     if item.kind == MediaKind::Series
         && item.is_enabled
         && !item.episodes.is_empty()
-        && repo::translation::is_due(&state.db, &item.id, &language).await?
+        && is_known(&language)
+        && wanted(state, &item.id, &language).await?
     {
         let _fetching = crate::service::FETCHING
-            .lock(&format!("episodes:{}:{language}", item.id))
+            .lock(&format!("episodes:{}", item.id))
             .await;
 
-        if repo::translation::is_due(&state.db, &item.id, &language).await? {
+        if wanted(state, &item.id, &language).await? {
             fetch_episodes(state, item, &language).await;
         }
     }
@@ -87,22 +188,60 @@ pub async fn apply(state: &AppState, item: &mut MediaItem, requested: &str) -> R
     Ok(())
 }
 
+/// Whether a work's episode text is to be fetched in a language now: due —
+/// never tried since the work's last refresh, or tried to no avail and its
+/// wait over — and either tried already, or one of the first
+/// [`MOST_LANGUAGES`].
+async fn wanted(state: &AppState, id: &str, language: &str) -> Result<bool> {
+    let tried = repo::translation::tried(&state.db, id).await?;
+
+    Ok(match tried.iter().find(|t| t.language == language) {
+        Some(this) => this
+            .retry_after
+            .as_deref()
+            .is_some_and(|at| at <= crate::db::now().as_str()),
+        None => tried.len() < MOST_LANGUAGES,
+    })
+}
+
 /// Overlay what is already held in the requested language, and ask no
 /// provider for more.
 ///
-/// For episodes drawn from many works at once — a calendar — where [`apply`]
-/// would fetch each work's missing text in turn.
+/// For a document read rather than a page — a calendar, a feed — where
+/// [`apply`] would fetch each work's missing text in turn.
 pub async fn apply_stored(state: &AppState, item: &mut MediaItem, requested: &str) -> Result<()> {
+    apply_stored_many(state, std::slice::from_mut(item), requested).await
+}
+
+/// [`apply_stored`] for many works at once: their episode text read in one
+/// statement for a few hundred works rather than one each — a calendar's
+/// window held a query per series in it.
+pub async fn apply_stored_many(
+    state: &AppState,
+    items: &mut [MediaItem],
+    requested: &str,
+) -> Result<()> {
     let language = normalize(requested);
 
     if language.is_empty() || is_default(state, &language) {
         return Ok(());
     }
 
-    overlay_item(item, &language);
+    for item in items.iter_mut() {
+        overlay_item(item, &language);
+    }
 
-    if item.kind == MediaKind::Series && !item.episodes.is_empty() {
-        overlay_episodes(state, item, &language).await?;
+    let series: Vec<String> = items
+        .iter()
+        .filter(|i| i.kind == MediaKind::Series && !i.episodes.is_empty())
+        .map(|i| i.id.clone())
+        .collect();
+    let mut held = repo::translation::for_episodes_of(&state.db, &series, &language).await?;
+
+    for item in items.iter_mut() {
+        if let Some(texts) = held.remove(&item.id) {
+            overlay_texts(item, &texts);
+        }
     }
 
     Ok(())
@@ -159,9 +298,18 @@ fn locked(item: &MediaItem, path: &str) -> bool {
 
 async fn overlay_episodes(state: &AppState, item: &mut MediaItem, language: &str) -> Result<()> {
     let texts = repo::translation::for_episodes(&state.db, &item.id, language).await?;
+    overlay_texts(item, &texts);
+    Ok(())
+}
 
+/// Lay the episode text held in a language over the work's episodes, but
+/// over none somebody locked.
+fn overlay_texts(
+    item: &mut MediaItem,
+    texts: &HashMap<(i32, i32), repo::translation::EpisodeText>,
+) {
     if texts.is_empty() {
-        return Ok(());
+        return;
     }
 
     // Collected first: checking a lock needs the item, and the loop below holds
@@ -190,8 +338,6 @@ async fn overlay_episodes(state: &AppState, item: &mut MediaItem, language: &str
             episode.overview = Some(overview.to_string());
         }
     }
-
-    Ok(())
 }
 
 /// Episode text fetched in one language, and whether it is the whole answer.
@@ -454,6 +600,76 @@ mod tests {
     fn an_unknown_code_passes_through_rather_than_being_dropped() {
         assert_eq!(normalize("xx"), "xx");
         assert_eq!(normalize("qqq"), "qqq");
+    }
+
+    #[test]
+    fn a_language_is_a_tag_written_one_way_or_none() {
+        for (asked, written) in [
+            ("fr", "fr"),
+            ("FRA", "fra"),
+            (" fr-fr ", "fr-FR"),
+            ("pt_BR", "pt-BR"),
+            ("zh-hant", "zh-Hant"),
+            ("zh-YUE", "zh-yue"),
+        ] {
+            assert_eq!(tag(asked).as_deref(), Some(written), "{asked:?}");
+        }
+
+        // A path, a query, a fragment, a string the size of a request: none
+        // of them is a language, nor a key, a parameter or a log line.
+        for odd in [
+            "",
+            "f",
+            "fren",
+            "fr-",
+            "fr-F",
+            "fr-FRANCE",
+            "en-US-x",
+            "../../../../search?query=x#",
+            "fr/../x",
+            "fr%2F",
+            "fr-FR&x=1",
+            "zz1",
+            "français",
+            "fr\nINFO forged",
+        ] {
+            assert_eq!(tag(odd), None, "{odd:?}");
+            assert_eq!(normalize(odd), "", "{odd:?}");
+        }
+        assert_eq!(tag(&"a".repeat(65_000)), None);
+    }
+
+    #[test]
+    fn only_a_language_the_tables_know_is_one_a_provider_is_asked_in() {
+        assert!(is_known("fra"));
+        assert!(is_known("jpn"));
+        assert!(!is_known("qqq"));
+        assert!(!is_known("xx"));
+        assert!(!is_known(""));
+    }
+
+    #[test]
+    fn tmdb_is_asked_in_a_language_it_has_and_kept_under_few_keys() {
+        // The reader's own, region and all, when nothing is asked, when it is
+        // what is asked, or the same language is.
+        assert_eq!(tmdb_locale(None, "fr-FR"), "fr-FR");
+        assert_eq!(tmdb_locale(Some("fr"), "fr-FR"), "fr-FR");
+        assert_eq!(tmdb_locale(Some("fr-CA"), "fr-FR"), "fr-FR");
+        assert_eq!(tmdb_locale(Some("fra"), "fr-FR"), "fr-FR");
+
+        // Another language, by its two letters alone: `en-AA`, `en-AB`… are
+        // one key, not one each.
+        assert_eq!(tmdb_locale(Some("de"), "fr-FR"), "de");
+        assert_eq!(tmdb_locale(Some("de-AT"), "fr-FR"), "de");
+        assert_eq!(tmdb_locale(Some("en-AB"), "fr-FR"), "en");
+        assert_eq!(tmdb_locale(Some("deu"), "fr-FR"), "de");
+
+        // A code no table knows is the reader's own.
+        assert_eq!(tmdb_locale(Some("qq"), "fr-FR"), "fr-FR");
+        assert_eq!(tmdb_locale(Some("qqq-AA"), "fr-FR"), "fr-FR");
+
+        // Settings that say nothing usable: English, as the server's default.
+        assert_eq!(tmdb_locale(None, "?"), "en-US");
     }
 
     #[test]
@@ -820,6 +1036,62 @@ mod tests {
         apply(&state, &mut on, "fr").await.expect("served");
         assert!(nowhere.asked() > 0, "the providers were asked");
         assert!(recorded(&state, &on.id).await.is_some(), "the attempt");
+    }
+
+    #[tokio::test]
+    async fn a_work_is_fetched_in_so_many_languages_and_never_in_one_no_table_knows() {
+        let (state, nowhere) = crate::service::testing::server().await;
+        let series = held_in_french(&state, "Breaking Bad", (81189, 1396), true).await;
+
+        // A code of the right shape that names no language: what is held
+        // under it — nothing — and nobody asked, nothing recorded.
+        let mut odd = series.clone();
+        apply(&state, &mut odd, "qq").await.expect("served");
+        assert_eq!(nowhere.asked(), 0, "nobody was asked");
+        assert!(
+            repo::translation::tried(&state.db, &series.id)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        // Asked in as many languages as a work is fetched in since its last
+        // refresh, a new one is served what is held in it and fetched for
+        // nothing — not in place of the oldest, or one caller cycling through
+        // a few more would fetch for ever.
+        for language in ["deu", "spa", "ita", "jpn", "kor", "por", "rus", "zho"]
+            .into_iter()
+            .take(MOST_LANGUAGES)
+        {
+            repo::translation::mark_fetched(&state.db, &series.id, language)
+                .await
+                .unwrap();
+        }
+        let french = in_french(&state, &series.id).await;
+        assert_eq!(nowhere.asked(), 0, "nobody was asked");
+        assert_eq!(french.episodes[0].title, "Chute libre", "what is held");
+        assert_eq!(recorded(&state, &series.id).await, None, "no attempt");
+
+        // One tried already is tried again once its wait is over: the count
+        // is of languages, not of attempts.
+        let over = crate::db::to_rfc3339(chrono::Utc::now() - chrono::TimeDelta::minutes(1));
+        repo::translation::mark_unanswered(&state.db, &series.id, "deu", &over)
+            .await
+            .unwrap();
+        let mut german = crate::service::load(&state, &series.id)
+            .await
+            .unwrap()
+            .unwrap();
+        apply(&state, &mut german, "de").await.expect("served");
+        assert!(nowhere.asked() > 0, "asked again");
+
+        // A refresh starts the count again.
+        repo::translation::clear_fetched(&state.db, &series.id)
+            .await
+            .unwrap();
+        in_french(&state, &series.id).await;
+        assert!(nowhere.asked() > 0, "French is asked for at last");
+        assert!(recorded(&state, &series.id).await.is_some());
     }
 
     #[tokio::test]

@@ -172,12 +172,13 @@ fn reader_day(asked: Option<&str>) -> String {
 }
 
 /// A language as translations are filed, or none: `fr`, `fr-FR` and `fra` are
-/// one language and one cached chart, and a code that is not one is no
-/// language — nor a way round the cache.
-fn filed_language(asked: Option<&str>) -> Option<String> {
-    asked
-        .map(service::language::normalize)
-        .filter(|l| l.len() == 3 && l.bytes().all(|b| b.is_ascii_lowercase()))
+/// one language and one cached chart. One that is not a language is refused
+/// where it arrives ([`crate::api::extract::language`]), and a code no table
+/// knows is no language — neither is a way round the cache.
+fn filed_language(asked: Option<&str>) -> AppResult<Option<String>> {
+    Ok(crate::api::extract::language(asked)?
+        .map(|tag| service::language::normalize(&tag))
+        .filter(|l| service::language::is_known(l)))
 }
 
 /// What a season brought to the catalogue: its new series, the series that
@@ -207,7 +208,7 @@ async fn chart(
     let (season, from, to) = quarter(year, &season)?;
     let adult = state.adult_for(identity.client_id(), identity.peer_id(), None);
     let today = reader_day(query.today.as_deref());
-    let language = filed_language(query.language.as_deref());
+    let language = filed_language(query.language.as_deref())?;
 
     // Read across the whole catalogue on every visit, so kept a while: under a
     // mark of the catalogue, so a work stored or corrected is counted at once,
@@ -405,19 +406,17 @@ async fn candidates(
     }
 
     let (_, from, to) = quarter(year, &season)?;
-    // TMDB speaks two-letter languages; the catalogue files three.
-    let original = query
-        .original_language
-        .as_deref()
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .map(service::language::two_letter);
-    let language = query
-        .language
-        .as_deref()
-        .map(str::trim)
-        .filter(|l| l.len() == 2 && l.chars().all(|c| c.is_ascii_alphabetic()))
-        .map(str::to_ascii_lowercase);
+    // TMDB speaks two-letter languages; the catalogue files three. Both are
+    // checked where they arrive: each goes into a request to TMDB, and into
+    // the key its answer is kept under.
+    let original = crate::api::extract::language(query.original_language.as_deref())?
+        .map(|tag| service::language::two_letter(&service::language::normalize(&tag)));
+    let language = crate::api::extract::language(query.language.as_deref())?.map(|tag| {
+        service::language::tmdb_locale(
+            Some(&tag),
+            &state.language(identity.client_id(), identity.peer_id()),
+        )
+    });
     let asking = Asking {
         from: &from,
         to: &to,
@@ -615,16 +614,20 @@ mod tests {
     }
 
     #[test]
-    fn a_language_is_filed_under_one_code_or_none() {
+    fn a_language_is_filed_under_one_code_or_refused() {
         for asked in ["fr", "fr-FR", "fra", "FRA"] {
             assert_eq!(
-                filed_language(Some(asked)).as_deref(),
+                filed_language(Some(asked)).unwrap().as_deref(),
                 Some("fra"),
                 "{asked}"
             );
         }
-        for asked in ["", "x1", "zz-9", "français"] {
-            assert_eq!(filed_language(Some(asked)), None, "{asked:?}");
+        assert_eq!(filed_language(Some("")).unwrap(), None);
+        assert_eq!(filed_language(None).unwrap(), None);
+        // The shape of one, and no language the tables know: as none.
+        assert_eq!(filed_language(Some("qqq")).unwrap(), None);
+        for asked in ["x1", "zz-9", "français", "../x"] {
+            assert!(filed_language(Some(asked)).is_err(), "{asked:?}");
         }
     }
 }

@@ -18,7 +18,10 @@ services:
       AMS_TMDB_INCLUDE_ADULT: ${AMS_TMDB_INCLUDE_ADULT:-false}
       AMS_ADMIN_USERNAME: ${AMS_ADMIN_USERNAME:-}
       AMS_ADMIN_PASSWORD: ${AMS_ADMIN_PASSWORD:-}
-      AMS_ARR_ALLOWLIST: ${AMS_ARR_ALLOWLIST:-172.16.0.0/12,10.0.0.0/8,192.168.0.0/16,127.0.0.0/8}
+      # Who may call the address-guarded surfaces, as a first value only: the
+      # list is edited on the Access page from the first start on. Unset, it
+      # starts as the private ranges and loopback.
+      AMS_ARR_ALLOWLIST: ${AMS_ARR_ALLOWLIST:-}
       # The clients' door for Sonarr, Radarr and the TMDB relay: TLS on 443,
       # with a certificate the server issues itself. Map "443:443" below too;
       # no privilege is needed inside a container. See docs/integration.md.

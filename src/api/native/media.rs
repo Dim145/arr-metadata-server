@@ -22,7 +22,7 @@ use crate::{
     auth::Identity,
     db::repo::{
         self,
-        asset::{Asset, Kind, Status},
+        asset::{Asset, Kind},
         audit::Action,
     },
     domain::{CoverType, MediaItem, fields::Scope},
@@ -203,13 +203,9 @@ async fn reset(
     ip: ClientIp,
 ) -> AppResult<Json<Forgotten>> {
     identity.require_admin()?;
-    // Not under a fetch: the rows it is marking would come back as copies
-    // the index alone knows of.
-    if crate::media::worker::is_storing() {
-        return Err(AppError::Conflict(
-            "media are being fetched; wait for the run to end, or stop it".into(),
-        ));
-    }
+    // Not under a fetch, and none started until it is done: the rows a
+    // fetch is marking would come back as copies the index alone knows of.
+    let _fetching_held_off = crate::media::worker::hold_off_fetching(&state).await?;
     let forgotten = repo::asset::delete_fetched(&state.db).await?;
     // The index again from what is left: the uploads.
     state.media.load_index(&state.db).await?;
@@ -286,6 +282,9 @@ async fn work_media(
         .await?
         .ok_or(AppError::NotFound)?;
     repo::item::load_children(&state.db, &mut item).await?;
+    // What an address answered is an administrator's to read; a writer is
+    // told the kind of trouble, since any address can be typed in.
+    let admin = identity.is_admin();
 
     let origins = addresses_of(&item);
     let known: HashMap<String, Asset> = repo::asset::by_origins(
@@ -310,7 +309,13 @@ async fn work_media(
                 width: asset.width,
                 height: asset.height,
                 attempts: Some(asset.attempts),
-                error: asset.error.clone(),
+                error: asset.error.as_deref().map(|error| {
+                    if admin {
+                        error.to_string()
+                    } else {
+                        crate::media::fetch::reason_for_writers(error).to_string()
+                    }
+                }),
                 uploaded_by: asset.uploaded_by.clone(),
             },
             None => WorkMedium {
@@ -334,8 +339,10 @@ async fn work_media(
     }))
 }
 
-/// Delete the uploads among these addresses: an upload's file goes with the
-/// row or the lock that pointed at it. Quiet — what pointed at it is gone
+/// Delete the uploads among these addresses, once the row or the lock that
+/// pointed at it is gone — unless something else still names it: a picture
+/// of the work, a lock of another field — a season's poster, an episode's
+/// still, a theme — or of another work. Quiet — what pointed at it is gone
 /// already, and the sweep removes whatever this could not.
 pub async fn forget_uploads<'a>(state: &AppState, origins: impl IntoIterator<Item = &'a str>) {
     for origin in origins {
@@ -350,8 +357,10 @@ pub async fn forget_uploads<'a>(state: &AppState, origins: impl IntoIterator<Ite
                 continue;
             }
         };
-        if let Err(e) = remove_asset(state, &asset).await {
-            tracing::warn!(origin, error = %e, "could not delete an upload");
+        match remove_asset(state, &asset, Removal::UnlessNamed).await {
+            Ok(true) => {}
+            Ok(false) => tracing::debug!(origin, "an upload is still named elsewhere: kept"),
+            Err(e) => tracing::warn!(origin, error = %e, "could not delete an upload"),
         }
     }
 }
@@ -561,7 +570,8 @@ async fn upload(
 
     let asset_id = crate::db::new_id();
     let origin = format!("upload:{asset_id}");
-    let kept = crate::media::worker::keep(&state, store, bytes, &inspected)
+    let (key, sha256) = file::key_for(&bytes, inspected.ext);
+    let kept = crate::media::worker::keep(store, key, sha256, bytes, &inspected)
         .await
         .map_err(|e| AppError::Internal(e.context("could not keep the upload")))?;
     let by = identity.label();
@@ -577,6 +587,7 @@ async fn upload(
         },
     )
     .await?;
+    crate::media::worker::settle(store, &kept).await;
     state
         .media
         .remember(&origin, &kept.key, kept.thumb, inspected.content_type);
@@ -649,9 +660,11 @@ async fn upload(
 
 /// Take a copy away.
 ///
-/// An upload is taken off the work and deleted. A provider's copy is
-/// forgotten and deleted — the work keeps pointing at the provider, and the
-/// next refresh fetches it again.
+/// An upload is taken off the work, and deleted unless something else still
+/// names it — another work's lock, say. A provider's copy is forgotten and
+/// deleted — the work keeps pointing at the provider, and the next refresh
+/// fetches it again. Only a copy of the work's own: an address its rows or
+/// its locks hold, or an upload made for it.
 #[utoipa::path(
     delete, path = "/items/{id}/media/{asset_id}", tag = TAG,
     params(
@@ -661,7 +674,7 @@ async fn upload(
     responses(
         (status = 204, description = "Gone"),
         (status = 403, description = "The caller may not write"),
-        (status = 404, description = "No such work, or no such copy"),
+        (status = 404, description = "No such work, or no copy of the work's"),
     ),
 )]
 async fn forget(
@@ -671,31 +684,49 @@ async fn forget(
     Path((id, asset_id)): Path<(String, String)>,
 ) -> AppResult<StatusCode> {
     require_write(&identity)?;
-    if repo::item::get(&state.db, &id).await?.is_none() {
-        return Err(AppError::NotFound);
-    }
+    let mut item = repo::item::get(&state.db, &id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    repo::item::load_children(&state.db, &mut item).await?;
     let asset = repo::asset::get(&state.db, &asset_id)
         .await?
         .ok_or(AppError::NotFound)?;
 
+    // The work's locks that name the copy: by its address, or by the path
+    // of its bytes here, as a lock written before locks were filed by their
+    // origin holds it.
+    let locks = repo::override_field::list(&state.db, &id).await?;
+    let names_it = |locked: &&crate::domain::fields::Override| {
+        crate::media::ADDRESS_FIELDS.contains(&locked.field.as_str())
+            && locked
+                .value
+                .as_ref()
+                .and_then(|v| v.as_str())
+                .is_some_and(|v| v == asset.origin || state.media.unlocalize(v) == asset.origin)
+    };
     let uploaded = asset.origin.starts_with("upload:");
-    if uploaded {
+    let the_works = (uploaded && asset.wanted_by.as_deref() == Some(id.as_str()))
+        || addresses_of(&item)
+            .iter()
+            .any(|(origin, _)| *origin == asset.origin)
+        || locks.iter().any(|locked| names_it(&locked));
+    if !the_works {
+        return Err(AppError::NotFound);
+    }
+
+    let removed = if uploaded {
         repo::child::remove_images_by_url(&state.db, &id, &asset.origin).await?;
         // A field that held the upload — a still, a theme, the poster the
         // work or a season was to lead with — holds nothing now.
-        for locked in repo::override_field::list(&state.db, &id).await? {
-            if matches!(
-                locked.field.as_str(),
-                "image" | "themeMusic" | "primaryPoster" | "primaryFanart"
-            ) && locked.value.as_ref().and_then(|v| v.as_str()) == Some(asset.origin.as_str())
-                && let Ok(scope) = locked.scope.parse::<Scope>()
-            {
+        for locked in locks.iter().filter(names_it) {
+            if let Ok(scope) = locked.scope.parse::<Scope>() {
                 repo::override_field::unset(&state.db, &id, scope, &locked.field).await?;
             }
         }
-    }
-
-    remove_asset(&state, &asset).await?;
+        remove_asset(&state, &asset, Removal::UnlessNamed).await?
+    } else {
+        remove_asset(&state, &asset, Removal::Always).await?
+    };
 
     state.caches.touched(&id).await;
     state.caches.searches.invalidate_all().await;
@@ -706,10 +737,10 @@ async fn forget(
             ip: &ip,
             action: Action::MediaRemoved,
             target: Some(&id),
-            detail: Some(if uploaded {
-                "an upload"
-            } else {
-                "a provider's copy"
+            detail: Some(match (uploaded, removed) {
+                (true, true) => "an upload",
+                (true, false) => "an upload, taken off the work; named elsewhere, it is kept",
+                (false, _) => "a provider's copy",
             }),
         },
     )
@@ -718,20 +749,39 @@ async fn forget(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Delete an asset: its bytes, unless another row holds them, and its row.
-pub async fn remove_asset(state: &AppState, asset: &Asset) -> AppResult<()> {
-    if let (Some(key), Some(store)) = (&asset.key, state.media.store())
-        && asset.status == Status::Stored
-        && !repo::asset::key_shared(&state.db, key, &asset.id).await?
-    {
-        store.delete(key).await?;
-        if let Some(thumb) = file::thumb_key(key, asset.thumb) {
-            store.delete(&thumb).await?;
+/// When an asset may be deleted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Removal {
+    /// Whatever names it: a provider's copy, which the next refresh fetches
+    /// again.
+    Always,
+    /// Only once nothing names it — no picture, theme or lock of any work:
+    /// an upload, which is gone for good once deleted.
+    UnlessNamed,
+}
+
+/// Delete an asset — its row first, then its bytes unless another row holds
+/// them — and say whether it went. An upload goes through here whatever
+/// asks, and asks [`repo::asset::delete_unless_referenced`], the one check
+/// of whether something still names it.
+pub async fn remove_asset(state: &AppState, asset: &Asset, removal: Removal) -> AppResult<bool> {
+    let gone = match removal {
+        Removal::UnlessNamed => repo::asset::delete_unless_referenced(&state.db, asset).await?,
+        Removal::Always => {
+            repo::asset::delete(&state.db, &asset.id).await?;
+            true
         }
+    };
+    if !gone {
+        return Ok(false);
     }
-    repo::asset::delete(&state.db, &asset.id).await?;
     state.media.forget(&asset.origin);
-    Ok(())
+    // The row is gone first: a store that fails now leaves a file the
+    // sweep removes, never a row that names a file that is not there.
+    if let (Some(key), Some(store)) = (&asset.key, state.media.store()) {
+        crate::media::worker::delete_files(state, store, key, asset.thumb).await;
+    }
+    Ok(true)
 }
 
 fn require_write(identity: &Identity) -> AppResult<()> {

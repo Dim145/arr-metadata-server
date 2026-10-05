@@ -49,6 +49,74 @@ pub async fn for_episodes(
     Ok(out)
 }
 
+/// Episode text for one language, for several works at once: by work, then
+/// by `(season, episode)`. A work with none held in the language is absent.
+pub async fn for_episodes_of(
+    db: &Db,
+    media_ids: &[String],
+    language: &str,
+) -> Result<HashMap<String, HashMap<(i32, i32), EpisodeText>>> {
+    let mut out: HashMap<String, HashMap<(i32, i32), EpisodeText>> = HashMap::new();
+
+    // Within every engine's limit on bound values.
+    for chunk in media_ids.chunks(400) {
+        let sql = format!(
+            "SELECT media_id, season_number, episode_number, title, overview
+             FROM media_episode_translation WHERE language = ? AND media_id IN ({})",
+            vec!["?"; chunk.len()].join(", ")
+        );
+        let mut query = sqlx::query(db.sql(&sql)).bind(language);
+        for id in chunk {
+            query = query.bind(id);
+        }
+
+        for row in query.fetch_all(db.pool()).await? {
+            let text = EpisodeText {
+                season_number: row.int("season_number")?,
+                episode_number: row.int("episode_number")?,
+                title: row.opt_text("title")?,
+                overview: row.opt_text("overview")?,
+            };
+            out.entry(row.text("media_id")?)
+                .or_default()
+                .insert((text.season_number, text.episode_number), text);
+        }
+    }
+
+    Ok(out)
+}
+
+/// A language tried for a work since its last refresh.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Tried {
+    pub language: String,
+    /// When it is to be tried again — it is due once this is past — set by
+    /// [`mark_unanswered`]; `None` for one fetched in full.
+    pub retry_after: Option<String>,
+}
+
+/// Every language tried for a work since its last refresh: whether one is
+/// due again, and what bounds how many a work is fetched in
+/// (`service::language::MOST_LANGUAGES`).
+pub async fn tried(db: &Db, media_id: &str) -> Result<Vec<Tried>> {
+    let rows = sqlx::query(db.sql(
+        "SELECT language, retry_after FROM media_language_fetch WHERE media_id = ?
+         ORDER BY language",
+    ))
+    .bind(media_id)
+    .fetch_all(db.pool())
+    .await?;
+
+    rows.iter()
+        .map(|row| {
+            Ok(Tried {
+                language: row.text("language")?,
+                retry_after: row.opt_text("retry_after")?,
+            })
+        })
+        .collect()
+}
+
 /// Store the episode text the providers gave in one language.
 ///
 /// An episode they gave text for has it replaced, field by field: a field
@@ -164,24 +232,6 @@ pub async fn mark_unanswered(
     .await?;
 
     Ok(())
-}
-
-/// Whether a language's episode text is to be fetched for a work now: it has
-/// not been tried since the work's last refresh, or it was to no avail and
-/// the wait [`mark_unanswered`] set is over.
-pub async fn is_due(db: &Db, media_id: &str, language: &str) -> Result<bool> {
-    let row = sqlx::query(db.sql(
-        "SELECT 1 AS present FROM media_language_fetch
-         WHERE media_id = ? AND language = ?
-           AND (retry_after IS NULL OR retry_after > ?)",
-    ))
-    .bind(media_id)
-    .bind(language)
-    .bind(now())
-    .fetch_optional(db.pool())
-    .await?;
-
-    Ok(row.is_none())
 }
 
 /// Forget which languages were fetched or tried, so a refresh picks them up

@@ -793,23 +793,40 @@ pub async fn listed_changes(db: &Db, ids: &[String]) -> Result<HashMap<String, i
         .collect()
 }
 
+/// One work's listed values, as of the change they were read at.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Relisted {
+    pub id: String,
+    /// The change the work was read at; see [`listed_changes`].
+    pub change: i64,
+    pub values: Listed,
+    /// The adult flag a lock on `isAdult` gives the work, where its row says
+    /// otherwise: written to the row with the values. Every list, the
+    /// calendar, the feeds and the clients' lookups filter on the row, so a
+    /// lock the row did not follow — set before the row was written with it,
+    /// or by a write that does not pin the locked identity — left an adult
+    /// work in every one of them.
+    pub adult: Option<bool>,
+}
+
 /// Store what works are listed by, each as of the change it was read at.
 ///
 /// A work that has changed again since is left alone — still to be listed,
 /// from what it holds now — rather than written with what it held then.
 /// Returns how many were written.
-pub async fn write_listed(
-    db: &Db,
-    listed: &[(String, i64, Listed)],
-    imdb: bool,
-    version: i64,
-) -> Result<u64> {
+pub async fn write_listed(db: &Db, listed: &[Relisted], imdb: bool, version: i64) -> Result<u64> {
     let _turn = LISTING.lock().await;
     let mut tx = db.begin_write().await?;
     let at = now();
     let mut written = 0;
 
-    for (id, change, values) in listed {
+    for Relisted {
+        id,
+        change,
+        values,
+        adult,
+    } in listed
+    {
         let result = sqlx::query(db.sql(
             "UPDATE media_item SET
                  listed_title = ?, listed_year = ?, listed_genres = ?, listed_keywords = ?,
@@ -836,6 +853,18 @@ pub async fn write_listed(
         .bind(*change)
         .execute(&mut *tx)
         .await?;
+
+        // As of the same change: a lock lifted meanwhile is not written back.
+        if result.rows_affected() > 0
+            && let Some(adult) = adult
+        {
+            sqlx::query(db.sql("UPDATE media_item SET is_adult = ?, updated_at = ? WHERE id = ?"))
+                .bind(from_bool(*adult))
+                .bind(&at)
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+        }
 
         written += result.rows_affected();
     }
@@ -1655,7 +1684,9 @@ fn narrow(
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
             return Ok(());
         }
-        let pattern = format!("%{}%", term.to_lowercase());
+        // Matched as typed: `%` and `_` are characters a title can hold, not
+        // wildcards. `_` found every work, and `a_c` found `abc`.
+        let pattern = format!("%{}%", like_escaped(&term.to_lowercase()));
 
         // The stored title is the provider's. Someone who renamed a work will
         // look for it by the name they gave it, so overrides are searched too:
@@ -1666,26 +1697,40 @@ fn narrow(
         // disagree: PostgreSQL folds `Été` to `été`, SQLite folds only ASCII and
         // leaves it as `Été` — so a search for `été` found the work on one
         // engine and not the other. The slug was transliterated when the work
-        // was stored, so `ete` matches `Été` on both.
+        // was stored, so `ete` matches `Été` on both. A term with no letter or
+        // digit in it has no slug, and is not looked for in one: the slug of
+        // nothing was `untitled`, and found every work named so.
+        let slugged = slug::slugify(term);
         sql.push_str(
-            " AND (LOWER(title) LIKE ? OR LOWER(COALESCE(sort_title, '')) LIKE ?
-                   OR slug LIKE ?
+            r" AND (LOWER(title) LIKE ? ESCAPE '\'
+                   OR LOWER(COALESCE(sort_title, '')) LIKE ? ESCAPE '\'
                    OR id IN (SELECT media_id FROM media_alternative_title
-                             WHERE LOWER(title) LIKE ?)
+                             WHERE LOWER(title) LIKE ? ESCAPE '\')
                    OR id IN (SELECT media_id FROM media_override
                              WHERE field IN ('title', 'sortTitle', 'originalTitle')
-                               AND LOWER(COALESCE(value, '')) LIKE ?))",
+                               AND LOWER(COALESCE(value, '')) LIKE ? ESCAPE '\')",
         );
-
-        let slugged = format!("%{}%", crate::domain::make_slug(term, None));
-
-        for pattern in [&pattern, &pattern, &slugged, &pattern, &pattern] {
+        for _ in 0..4 {
             args.add(pattern.clone())
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
         }
+        if !slugged.is_empty() {
+            sql.push_str(r" OR slug LIKE ? ESCAPE '\'");
+            args.add(format!("%{}%", like_escaped(&slugged)))
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+        }
+        sql.push(')');
     }
 
     Ok(())
+}
+
+/// Text as a `LIKE` pattern matches it, whatever it holds: the wildcards
+/// `%` and `_`, and `\` that escapes them (`ESCAPE '\'`), each escaped.
+fn like_escaped(text: &str) -> String {
+    text.replace('\\', r"\\")
+        .replace('%', r"\%")
+        .replace('_', r"\_")
 }
 
 /// A term as one FTS5 phrase: quoted, so nothing in it is read as syntax,
@@ -2089,7 +2134,11 @@ pub async fn person_credits(
 
 // ─── writes ──────────────────────────────────────────────────────────────────
 
-/// Insert or update a work and, optionally, its provider-sourced children.
+/// Insert or update a work and, optionally, its provider-sourced children,
+/// with no record of where its values came from: what a test stores a work
+/// with. The server writes a refresh with [`upsert_traced`], a sync with
+/// [`upsert_unchanged`] and a work entered by hand with [`insert_manual`].
+#[cfg(test)]
 pub async fn upsert(db: &Db, write: ItemWrite<'_>) -> Result<()> {
     write_item(db, write, None, None).await.map(|_| ())
 }
@@ -2127,6 +2176,54 @@ pub async fn upsert_unchanged(
     provenance: &crate::merge::provenance::Provenance,
 ) -> Result<Conditional> {
     write_item(db, write, Some(read_at), Some(provenance)).await
+}
+
+/// Write a work entered by hand with its identifiers, in one transaction, so
+/// long as none of them is another work's: when one is, it is named and
+/// nothing is written.
+///
+/// Claimed where it is written. A look beforehand let two entries made at
+/// once with the same id both through, and the upsert a refresh writes with —
+/// the last writer wins — then moved the id from the first to the second.
+pub async fn insert_manual(
+    db: &Db,
+    item: &MediaItem,
+) -> Result<Result<(), (ExternalSource, String)>> {
+    let mut tx = db.begin_write().await?;
+
+    upsert_row(db, &mut tx, item).await?;
+
+    let created = now();
+    let mut claimed: Vec<(ExternalSource, String)> = Vec::new();
+    for (source, value) in item.external_ids.rows(item.kind) {
+        // An id given twice is claimed once.
+        if claimed.iter().any(|(s, v)| *s == source && *v == value) {
+            continue;
+        }
+        let written = sqlx::query(db.sql(
+            "INSERT INTO media_external_id (media_id, source, value, created_at)
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT (source, value) DO NOTHING",
+        ))
+        .bind(&item.id)
+        .bind(source.as_str())
+        .bind(&value)
+        .bind(&created)
+        .execute(&mut *tx)
+        .await
+        .with_context(|| format!("failed to write external id {source}={value}"))?;
+
+        if written.rows_affected() == 0 {
+            // Another work's: the whole entry goes with the transaction.
+            return Ok(Err((source, value)));
+        }
+        claimed.push((source, value));
+    }
+
+    tx.commit()
+        .await
+        .context("failed to commit the work entered by hand")?;
+    Ok(Ok(()))
 }
 
 async fn write_item(
@@ -2428,6 +2525,10 @@ async fn replace_children(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaIt
 
     let created = now();
 
+    // A season or an episode added by hand outlives the delete above, so a
+    // provider listing the same number lands on it: the update leaves it as
+    // the person wrote it (`WHERE … is_manual = 0`), on both engines, rather
+    // than writing the provider's text, date and still over it.
     for season in &item.seasons {
         if season.is_manual {
             continue;
@@ -2443,7 +2544,8 @@ async fn replace_children(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaIt
                  air_date = excluded.air_date,
                  tmdb_id = excluded.tmdb_id,
                  tvdb_id = excluded.tvdb_id,
-                 updated_at = excluded.updated_at",
+                 updated_at = excluded.updated_at
+             WHERE media_season.is_manual = 0",
         ))
         .bind(if season.id.is_empty() {
             new_id()
@@ -2492,7 +2594,8 @@ async fn replace_children(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaIt
                  tmdb_id = excluded.tmdb_id,
                  rating_value = excluded.rating_value,
                  rating_count = excluded.rating_count,
-                 updated_at = excluded.updated_at",
+                 updated_at = excluded.updated_at
+             WHERE media_episode.is_manual = 0",
         ))
         .bind(if ep.id.is_empty() {
             new_id()
@@ -2693,66 +2796,6 @@ pub async fn delete(db: &Db, id: &str) -> Result<bool> {
         .await?;
 
     Ok(result.rows_affected() > 0)
-}
-
-/// Mark a work adult, or not, on its row: what every list and every client
-/// lookup reads. Whether the row was there.
-pub async fn set_adult(db: &Db, id: &str, adult: bool) -> Result<bool> {
-    let done =
-        sqlx::query(db.sql("UPDATE media_item SET is_adult = ?, updated_at = ? WHERE id = ?"))
-            // An integer on PostgreSQL, as every flag here.
-            .bind(from_bool(adult))
-            .bind(now())
-            .bind(id)
-            .execute(db.pool())
-            .await?;
-    Ok(done.rows_affected() > 0)
-}
-
-/// Give a work its address. The caller has checked the slug is free among
-/// works of the kind. Whether the row was there.
-pub async fn set_slug(db: &Db, id: &str, slug: &str) -> Result<bool> {
-    let done = sqlx::query(db.sql("UPDATE media_item SET slug = ?, updated_at = ? WHERE id = ?"))
-        .bind(slug)
-        .bind(now())
-        .bind(id)
-        .execute(db.pool())
-        .await?;
-    Ok(done.rows_affected() > 0)
-}
-
-/// Replace every identifier a work goes by elsewhere with these. The caller
-/// has checked none is held by another work.
-pub async fn replace_external_ids(
-    db: &Db,
-    id: &str,
-    kind: MediaKind,
-    ids: &ExternalIds,
-) -> Result<()> {
-    let mut tx = db.begin_write().await?;
-    sqlx::query(db.sql("DELETE FROM media_external_id WHERE media_id = ?"))
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
-    let at = now();
-    for (source, value) in ids.rows(kind) {
-        sqlx::query(db.sql(
-            "INSERT INTO media_external_id (media_id, source, value, created_at) VALUES (?, ?, ?, ?)",
-        ))
-        .bind(id)
-        .bind(source.as_str())
-        .bind(&value)
-        .bind(&at)
-        .execute(&mut *tx)
-        .await?;
-    }
-    sqlx::query(db.sql("UPDATE media_item SET updated_at = ? WHERE id = ?"))
-        .bind(&at)
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
-    tx.commit().await?;
-    Ok(())
 }
 
 pub async fn set_enabled(db: &Db, id: &str, enabled: bool) -> Result<bool> {
@@ -4543,5 +4586,100 @@ mod tests {
                 .map(|k| (k.title.as_str(), k.work_id.is_some())),
             Some(("The old one", false))
         );
+    }
+
+    #[test]
+    fn a_term_is_escaped_into_a_pattern_that_matches_it_as_typed() {
+        assert_eq!(like_escaped("100%"), r"100\%");
+        assert_eq!(like_escaped("a_c"), r"a\_c");
+        assert_eq!(like_escaped(r"back\slash"), r"back\\slash");
+        assert_eq!(like_escaped(r"\%_"), r"\\\%\_");
+        assert_eq!(like_escaped("plain"), "plain");
+    }
+
+    #[tokio::test]
+    async fn a_wildcard_in_a_term_is_a_character_not_a_wildcard() {
+        let db = db().await;
+        stored(&db, |i| i.title = "50% Off".into()).await;
+        stored(&db, |i| i.title = "snake_case".into()).await;
+        stored(&db, |i| i.title = "Abc".into()).await;
+        stored(&db, |i| i.title = "Untitled".into()).await;
+
+        let found = |term: &str| {
+            titles(
+                &db,
+                Query {
+                    term: Some(term.into()),
+                    ..Default::default()
+                },
+            )
+        };
+
+        // Terms shorter than a trigram take the `LIKE` path on SQLite, as
+        // every term does on PostgreSQL. `%` and `_` found every work.
+        assert_eq!(found("%").await, ["50% Off"]);
+        assert_eq!(found("_").await, ["snake_case"]);
+        assert_eq!(found("%%").await, Vec::<String>::new());
+        assert_eq!(found(r"\").await, Vec::<String>::new());
+        // A term with nothing to make a slug of is not looked for in the
+        // slugs: the slug of nothing was `untitled`.
+        assert_eq!(found("!").await, Vec::<String>::new());
+        // An ordinary short term still matches as it did.
+        assert_eq!(found("ab").await, ["Abc"]);
+    }
+
+    #[tokio::test]
+    async fn a_work_entered_by_hand_takes_no_identifier_from_another() {
+        let db = db().await;
+        let held = stored(&db, |i| {
+            i.title = "Held".into();
+            i.external_ids = ExternalIds {
+                tmdb: Some(4242),
+                ..Default::default()
+            };
+        })
+        .await;
+
+        let mut claiming = sample();
+        claiming.id = crate::db::new_id();
+        claiming.title = "Claiming".into();
+        claiming.slug = "claiming".into();
+        claiming.credits.clear();
+        claiming.ratings.clear();
+        claiming.external_ids = ExternalIds {
+            imdb: Some("tt0000007".into()),
+            tmdb: Some(4242),
+            ..Default::default()
+        };
+
+        let refused = insert_manual(&db, &claiming).await.expect("asked");
+        assert_eq!(
+            refused,
+            Err((ExternalSource::TmdbMovie, "4242".to_string())),
+            "the id another work goes by is named"
+        );
+        // Nothing of it was written, and the id stays where it was.
+        assert!(get(&db, &claiming.id).await.unwrap().is_none());
+        assert_eq!(
+            find_id_by_external(&db, ExternalSource::TmdbMovie, "4242")
+                .await
+                .unwrap(),
+            Some(held.id.clone())
+        );
+        assert_eq!(
+            find_id_by_external(&db, ExternalSource::Imdb, "tt0000007")
+                .await
+                .unwrap(),
+            None
+        );
+
+        // With an id of its own, and the same one given twice, it is written.
+        claiming.external_ids = ExternalIds {
+            mal: vec![77, 77],
+            ..Default::default()
+        };
+        assert_eq!(insert_manual(&db, &claiming).await.expect("asked"), Ok(()));
+        let read = get(&db, &claiming.id).await.unwrap().expect("written");
+        assert_eq!(read.external_ids.mal, [77]);
     }
 }

@@ -410,6 +410,13 @@ default: nothing is kept until it is asked for.
   store was switched on. An address that fails is tried again a few hours
   later, five times; one that answers with something else is given up on at
   once. Both are listed on the page, to be tried again.
+- **Where from.** An address is whatever somebody who may edit put on a work,
+  so none is fetched from this machine, from a cloud's metadata service or
+  from any other address only this server can reach — however it is written,
+  and whatever it redirects to. A picture mirror on a private network is
+  reached all the same; `AMS_MEDIA_PRIVATE_NETWORKS=false` keeps the store
+  and the NFO export out of `10/8`, `172.16/12`, `192.168/16`, `100.64/10`
+  and IPv6's unique-local `fc00::/7` too (`true` by default).
 - **How they are served.** Every copy is addressed by the hash of its bytes
   under `/media/`, and served immutable — with a thumbnail beside each
   picture, so a page of cards weighs what it did. The rows keep the
@@ -548,7 +555,7 @@ live on the cache server beside the cache: with `allkeys-lru` they are
 what is touched most and evicted last, but a server that runs out of
 memory is a server that may forget who leads — size it so that it never
 does, or give the instances a server of their own for coordination.
-`compose.multi.yaml` is a complete stack — PostgreSQL, Valkey, a MinIO
+`compose.multi.yaml` is a complete stack — PostgreSQL, Valkey, a Garage
 bucket, two instances, Caddy in front — and `scripts/e2e-multi.sh` starts
 two instances against a PostgreSQL of its own and checks that they agree,
 pass on what changes, count together and hand the lead over.
@@ -807,7 +814,8 @@ key, so those surfaces are guarded by address. That list lives in the database
 and is edited under **Access** in the web UI, beside the API keys — it is the
 same decision said a different way — and a change applies from the next request
 without a restart. `AMS_ALLOWLIST` seeds it once, the first time the server
-starts against an empty table, and is ignored afterwards.
+starts against an empty table, and is ignored afterwards; a start with the
+variable still set, and different from the list, says so in the log.
 
 The same screen shows **who has been calling**: every address that has reached a
 guarded route, refused ones included. A refused client leaves no other trace,
@@ -816,8 +824,12 @@ name the hosts file or the system resolver gives that address (inside a compose
 network, the container's name), what the caller called itself (`Sonarr/4.0.20`),
 how many times it has called, how many times it was turned away, and a button
 that allows it. Some TMDB clients
-compile their key in too — Jellyseerr does — and need the same treatment. Set
-`AMS_ALLOWLIST` to the networks your stack runs on.
+compile their key in too — Jellyseerr does — and need the same treatment. Allow
+the clients' own addresses rather than the networks they are on: a Docker
+network's gateway is on it, and whatever reaches the host's published ports
+through Docker's proxy arrives from there. Behind a reverse proxy, name it in
+`AMS_TRUSTED_PROXIES`: a request forwarded by a proxy that is not there is
+refused on these surfaces, since every client behind it would look like it.
 
 `AMS_AUTH_DISABLED=true` opens every surface. It exists for closed networks and
 first-run setup; do not use it on anything reachable from outside. The same goes
@@ -842,18 +854,50 @@ A few things worth knowing before this is reachable from anywhere:
   not merely a credential. A key issued to Jellyseerr cannot read which surface
   takes which credential or whether authentication is off.
 - **The session cookie** is `HttpOnly`, `SameSite=Strict`, and `Secure` when this
-  server terminates TLS or `AMS_PUBLIC_URL` says `https`.
+  server terminates TLS, `AMS_PUBLIC_URL` says `https`, or a trusted proxy says
+  the request reached it in `https`. Two session cookies on one request — a
+  second can only have been planted by a sibling under the same domain — sign
+  that request in as nobody.
+- **A change has to be asked from this server's own pages.** SameSite stops
+  other sites, but every other application on the same host or domain is the
+  same *site*. So a write carried by the session cookie — or, on the native API
+  under `allowlist` or `open`, by the browser's address — is refused when the
+  browser's `Sec-Fetch-Site` says it came from another page, or an older
+  browser's `Origin` is not this server's (`AMS_PUBLIC_URL` and
+  `AMS_CORS_ORIGINS` count as this server's). Keys, Sonarr, Radarr and scripts
+  are not concerned.
 - **Every response carries a content security policy** with `frame-ancestors
   'none'`, so no page elsewhere can frame this one and borrow an administrator's
   clicks, and `Referrer-Policy: no-referrer`, so the ids of what you are looking
-  at do not travel to the artwork hosts.
+  at do not travel to the artwork hosts; a `Permissions-Policy` that denies the
+  camera, the microphone, the location and payments; on pages, a
+  `Cross-Origin-Opener-Policy`; and, over TLS — this server's own or a trusted
+  proxy's — `Strict-Transport-Security` for a year.
 - **Every surface is rate limited**, the arr and TMDB ones included
-  (`AMS_RATE_LIMIT_PER_MINUTE`, 600 by default, per address).
+  (`AMS_RATE_LIMIT_PER_MINUTE`, 600 by default, per address — an IPv6 address
+  by its /64). Signing in has two brakes of its own: an account that failed
+  `AMS_SIGNIN_FAILURES_PER_ACCOUNT` times (10) in fifteen minutes is refused
+  without being checked until the window closes, from wherever the attempts
+  come; and passwords are checked a few at a time — as many as the machine has
+  cores, two to eight — so a burst of sign-ins waits, or is told to come back,
+  rather than taking the memory argon2 needs for each. With passwords off, the
+  name `AMS_ADMIN_USERNAME` keeps its door, and takes as long to refuse as any
+  other name.
+- **Each door holds `AMS_MAX_CONNECTIONS` connections at once** (1024); past
+  that, a new one waits to be accepted. A connection has
+  `AMS_HEADER_READ_TIMEOUT` seconds (30) to send a request's head, and may sit
+  idle between two requests no longer.
+- **What is logged has its secrets masked:** the values of `api_key`, `apikey`,
+  `token` and their like in any address, what follows `Bearer` or `Basic`, the
+  password of an address, the configured keys and passwords, the webhook's
+  address. A failed sign-in's username is logged quoted, its line breaks
+  escaped.
 - **An image URL may not name an address only this server can reach** — loopback,
   link-local, `169.254.169.254`. The NFO export downloads stored artwork, which
   makes an image URL a request this server makes on somebody else's say-so.
-  A private LAN address is still allowed: a picture mirror at home is a
-  reasonable thing to own.
+  A private LAN address is still allowed — a picture mirror at home is a
+  reasonable thing to own — unless `AMS_MEDIA_PRIVATE_NETWORKS=false` refuses
+  those too.
 - **`AMS_CORS_ORIGINS` names origins.** `*` is ignored with a warning rather than
   honoured — this server sends credentials, and the two cannot be combined.
 - **`AMS_ALLOWED_HOSTS` names the hostnames this server answers to**, and is the
@@ -863,7 +907,10 @@ A few things worth knowing before this is reachable from anywhere:
   Empty by default, because there is no safe guess: this is reached by container
   name, by LAN address, by whatever the router calls it. Worth setting on
   anything using `AMS_NATIVE_AUTH=allowlist`, where a browser calling from an
-  allowed address is all the credential an attacker needs.
+  allowed address is all the credential an attacker needs. `/health`, `/ready`,
+  `/ca.crt` and `/trust-ca.sh` answer under any name: the container's health
+  check, a proxy's and a client's trust script ask by address, and none of them
+  holds anything of anyone's.
 
 ## Running it in containers
 

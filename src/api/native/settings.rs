@@ -114,18 +114,17 @@ async fn put(
         )));
     }
 
+    // A value refused is the caller's (400); a database that failed is the
+    // server's (500), logged rather than handed back as a driver's message.
     match write.value {
-        Some(value) => state
-            .settings
-            .set(scope, &id, &write.key, &value, Some(&identity.label()))
-            .await
-            .map_err(|e| AppError::BadRequest(e.to_string()))?,
-        None => {
+        Some(value) => {
             state
                 .settings
-                .clear(scope, &id, &write.key)
-                .await
-                .map_err(|e| AppError::BadRequest(e.to_string()))?;
+                .set(scope, &id, &write.key, &value, Some(&identity.label()))
+                .await?
+        }
+        None => {
+            state.settings.clear(scope, &id, &write.key).await?;
         }
     }
 
@@ -179,6 +178,7 @@ async fn put(
 async fn clear(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
+    ip: ClientIp,
     Path((scope, id)): Path<(String, String)>,
 ) -> AppResult<StatusCode> {
     require_admin(&identity)?;
@@ -191,8 +191,37 @@ async fn clear(
         ));
     }
 
+    // Which settings the scope set, by key — never a value: a secret's would
+    // land in the journal, and what each now inherits is one read away.
+    let cleared: Vec<String> = state
+        .settings
+        .effective(scope, &id)
+        .into_iter()
+        .filter(|setting| setting.overridden)
+        .map(|setting| setting.key)
+        .collect();
+
     state.settings.forget(scope, &id).await?;
     state.sync_providers().await;
+
+    // In the journal as every other change of a setting is: dropping a key's
+    // `adult.clientPolicy` hands it the adult titles back.
+    let detail = if cleared.is_empty() {
+        "nothing was set".to_string()
+    } else {
+        format!("cleared {}", cleared.join(", "))
+    };
+    audit::record(
+        &state,
+        Event {
+            identity: Some(&identity),
+            ip: &ip,
+            action: Action::SettingChanged,
+            target: Some(&format!("{}:{id}:*", scope.as_str())),
+            detail: Some(&detail),
+        },
+    )
+    .await;
 
     Ok(StatusCode::NO_CONTENT)
 }

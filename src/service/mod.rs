@@ -51,12 +51,14 @@ pub async fn load(state: &AppState, id: &str) -> Result<Option<MediaItem>> {
         state.caches.items.invalidate(&cache_key).await;
     }
 
-    // The caches' epoch as the read begins. A write that lands while the
-    // work is being read — a lock put on it from another request — bumps
-    // it, and what was read is then a moment too old to keep: answered, but
-    // not cached, so the next read starts afresh rather than finding the
-    // stale copy that an insert after the write's invalidation would leave.
-    let epoch = state.caches.epoch();
+    // The caches' marks as the read begins. A write that lands while the
+    // work is being read — a lock put on it from another request, here or
+    // on another instance — moves them, and what was read is then a moment
+    // too old to keep: answered, but not cached, so the next read starts
+    // afresh rather than finding the stale copy that an insert after the
+    // write's invalidation would leave. Checked again once the copy is kept,
+    // on the server too; see `Space::insert_unless_moved`.
+    let mark = state.caches.read_mark();
 
     let Some(mut item) = repo::item::get(&state.db, id).await? else {
         return Ok(None);
@@ -82,10 +84,14 @@ pub async fn load(state: &AppState, id: &str) -> Result<Option<MediaItem>> {
     // address too, and may be kept.
     state.media.localize(&mut item);
 
-    if state.caches.epoch() == epoch
+    if state.caches.read_mark() == mark
         && let Ok(encoded) = serde_json::to_string(&item)
     {
-        state.caches.items.insert(cache_key, encoded).await;
+        state
+            .caches
+            .items
+            .insert_unless_moved(cache_key, encoded, || state.caches.read_mark() == mark)
+            .await;
     }
 
     Ok(Some(item))
@@ -281,7 +287,7 @@ pub async fn apply_overrides(state: &AppState, items: &mut [MediaItem]) -> Resul
 ///
 /// Checked in order of how strongly each id identifies a single work: an IMDb
 /// id is shared between a film and its remake far more often than a TMDB id is.
-async fn find_existing(state: &AppState, item: &MediaItem) -> Result<Option<String>> {
+pub(crate) async fn find_existing(state: &AppState, item: &MediaItem) -> Result<Option<String>> {
     let rows = item.external_ids.rows(item.kind);
     let (decisive, weak): (Vec<_>, Vec<_>) = rows
         .into_iter()
@@ -456,17 +462,26 @@ fn keep_title_qualifier(item: &mut MediaItem, stored: &MediaItem, snapshots: &[(
     }
 }
 
+/// The most of a failure kept on a work as its `refreshError`.
+pub const REFRESH_ERROR_CHARS: usize = 500;
+
 /// Store a freshly fetched work and its raw provider payload.
 ///
 /// If the work already exists locally, its identity is preserved: the same row
 /// id, creation time and manual flag. Overwriting those would orphan every
 /// override attached to it, which is exactly the failure this design exists to
 /// prevent.
+///
+/// `failure` says which providers did not answer, when some did not: the
+/// work is then written as refreshed in part — the failure kept as its
+/// `refreshError`, and its next refresh brought forward to when a failed one
+/// is tried again ([`retry_after_failure`]) rather than a full interval away.
 pub async fn persist(
     state: &AppState,
     mut item: MediaItem,
     snapshots: &[(String, Value)],
     provenance: crate::merge::provenance::Provenance,
+    failure: Option<&str>,
 ) -> Result<MediaItem> {
     // As the merge came back, before what it lacked is put back.
     let returned = crate::merge::provenance::Returned::of(&item);
@@ -492,8 +507,16 @@ pub async fn persist(
     crate::merge::drop_own_title(&mut item);
 
     item.refreshed_at = Some(crate::db::now());
-    item.refresh_after = Some(next_refresh(state, &item));
-    item.refresh_error = None;
+    match failure {
+        None => {
+            item.refresh_after = Some(next_refresh(state, &item));
+            item.refresh_error = None;
+        }
+        Some(failure) => {
+            item.refresh_after = Some(next_refresh_in_part(state, &item));
+            item.refresh_error = Some(crate::providers::clip(failure, REFRESH_ERROR_CHARS));
+        }
+    }
 
     let _writing = WRITING.lock(&item.id).await;
 
@@ -648,6 +671,21 @@ fn next_refresh(state: &AppState, item: &MediaItem) -> String {
     };
 
     to_rfc3339(refresh_at(item, ttl, Utc::now()))
+}
+
+/// When a work refreshed in part — some providers did not answer — is fetched
+/// again: when a failed refresh would be, and never later than a complete one
+/// would have been.
+fn next_refresh_in_part(state: &AppState, item: &MediaItem) -> String {
+    let cfg = &state.config.refresh;
+    let ttl = if has_finished(item) {
+        cfg.ended_ttl
+    } else {
+        cfg.continuing_ttl
+    };
+    let now = Utc::now();
+
+    to_rfc3339(retry_at(Some(item), now).min(refresh_at(item, ttl, now)))
 }
 
 /// [`next_refresh`], as of `now`.
@@ -891,7 +929,7 @@ async fn or_held(
     let failure = match &fetched {
         Ok(Some(_)) => return fetched,
         Ok(None) => "no provider answered; the stored entry was kept".to_string(),
-        Err(e) => format!("{e:#}"),
+        Err(e) => crate::providers::clip(&format!("{e:#}"), REFRESH_ERROR_CHARS),
     };
 
     let item = match held(state, source, value).await {

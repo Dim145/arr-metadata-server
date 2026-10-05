@@ -10,9 +10,10 @@
 
 use std::{sync::LazyLock, time::Duration};
 
-use axum::http::{HeaderMap, HeaderName, HeaderValue, Uri, header};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, Uri, header};
 
 use crate::{
+    cache,
     domain::{CoverType, ExternalSource, MediaItem},
     error::AppResult,
     service,
@@ -112,6 +113,11 @@ pub fn without_our_params(uri: &Uri) -> String {
 /// The query asked, less the parameters named, in a fixed order: what a
 /// cached document is filed under, so that two spellings of one request are
 /// one entry.
+///
+/// Ordered by name alone: a parameter given twice keeps the order it was
+/// given in, which is the order a service reads it in — the last
+/// `language` wins — so `language=fr&language=de` and the other way round,
+/// two answers, are two entries.
 pub fn sorted_query(uri: &Uri, dropped: &[&str]) -> String {
     let mut pairs: Vec<(String, String)> = uri
         .query()
@@ -122,10 +128,25 @@ pub fn sorted_query(uri: &Uri, dropped: &[&str]) -> String {
                 .collect()
         })
         .unwrap_or_default();
-    pairs.sort();
+    // Stable: equal names stay as they came.
+    pairs.sort_by(|a, b| a.0.cmp(&b.0));
     url::form_urlencoded::Serializer::new(String::new())
         .extend_pairs(pairs)
         .finish()
+}
+
+/// How long a relay keeps an answer of this status, when it keeps it at
+/// all: a document for as long as its kind stays good — `path` as
+/// [`cache::relay_ttl`] reads it — and a "no such thing" a few minutes.
+/// Any other answer is asked again: another success than `200` — a
+/// fragment of a document, "no content" — a redirect, "unchanged", a
+/// refusal or an error was one caller's answer, or is gone the next minute.
+pub fn kept_for(status: StatusCode, path: &str) -> Option<Duration> {
+    match status {
+        StatusCode::OK => Some(cache::relay_ttl(path)),
+        StatusCode::NOT_FOUND => Some(Duration::from_secs(5 * 60)),
+        _ => None,
+    }
 }
 
 /// The caller's headers the service is asked with: those named, and nothing
@@ -314,6 +335,47 @@ mod tests {
         assert_eq!(sorted_query(&a, OUR_PARAMS), "meta=episodes&page=1");
         let none: Uri = "/v4/series/1".parse().unwrap();
         assert_eq!(sorted_query(&none, OUR_PARAMS), "");
+
+        // A parameter given twice is read last-wins upstream: two orders,
+        // two answers, two entries.
+        let fr_last: Uri = "/3/movie/1?language=de&page=1&language=fr".parse().unwrap();
+        let de_last: Uri = "/3/movie/1?language=fr&page=1&language=de".parse().unwrap();
+        assert_ne!(
+            sorted_query(&fr_last, OUR_PARAMS),
+            sorted_query(&de_last, OUR_PARAMS)
+        );
+        assert_eq!(
+            sorted_query(&fr_last, OUR_PARAMS),
+            "language=de&language=fr&page=1"
+        );
+    }
+
+    #[test]
+    fn only_a_whole_document_or_a_no_such_thing_is_kept() {
+        assert_eq!(
+            kept_for(StatusCode::OK, "/v4/series/1"),
+            Some(cache::relay_ttl("/v4/series/1"))
+        );
+        assert_eq!(
+            kept_for(StatusCode::NOT_FOUND, "/v4/series/1"),
+            Some(Duration::from_secs(5 * 60))
+        );
+        for status in [
+            StatusCode::CREATED,
+            StatusCode::NON_AUTHORITATIVE_INFORMATION,
+            StatusCode::NO_CONTENT,
+            StatusCode::PARTIAL_CONTENT,
+            StatusCode::MOVED_PERMANENTLY,
+            StatusCode::FOUND,
+            StatusCode::NOT_MODIFIED,
+            StatusCode::BAD_REQUEST,
+            StatusCode::UNAUTHORIZED,
+            StatusCode::TOO_MANY_REQUESTS,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            StatusCode::BAD_GATEWAY,
+        ] {
+            assert_eq!(kept_for(status, "/v4/series/1"), None, "{status}");
+        }
     }
 
     #[test]

@@ -137,6 +137,16 @@ async fn create(
         }
     }
 
+    // Kept as a time this server reads, in UTC: what is stored is what the
+    // guard compares.
+    let expires_at = request
+        .expires_at
+        .as_deref()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(expiry)
+        .transpose()?;
+
     // The server's keys share one namespace; a person's are theirs alone.
     let _held = state.accounts_lock().await;
     if repo::client::name_taken(&state.db, None, name, None).await? {
@@ -154,7 +164,7 @@ async fn create(
             key_prefix: &generated.prefix,
             key_hash: &generated.hash,
             scopes: &request.scopes,
-            expires_at: request.expires_at.as_deref(),
+            expires_at: expires_at.as_deref(),
             note: request.note.as_deref(),
             owner_id: None,
         },
@@ -228,11 +238,23 @@ async fn update(
     require_admin(&identity)?;
 
     if let Some(enabled) = request.is_enabled {
-        // Read the name first: the trail is read by humans, who know the name.
-        let name = repo::client::get(&state.db, &id).await?.map(|c| c.name);
+        // Read first: the trail is read by humans, who know the name, and a
+        // person's key paused from here is one its owner cannot resume.
+        let key = repo::client::get(&state.db, &id).await?;
+        let name = key.as_ref().map(|c| c.name.clone());
 
         if !repo::client::set_enabled(&state.db, &id, enabled).await? {
             return Err(AppError::NotFound);
+        }
+
+        // A server key has no owner to keep it from; an administrator's own
+        // key, paused from here, is theirs to resume from their account.
+        if let Some(owner) = key.as_ref().and_then(|k| k.owner_id.as_deref()) {
+            if !enabled && identity.person_id() != Some(owner) {
+                mark_paused(&state, &id, Some(&identity.label())).await?;
+            } else if enabled {
+                mark_paused(&state, &id, None).await?;
+            }
         }
 
         audit::record(
@@ -315,4 +337,60 @@ async fn remove(
 
 fn require_admin(identity: &Identity) -> AppResult<()> {
     identity.is_admin().then_some(()).ok_or(AppError::Forbidden)
+}
+
+/// An expiry a caller gave, or why it cannot be one: a time — RFC 3339, or a
+/// bare date, read as its first moment in UTC — still to come. Returned as
+/// stored, in RFC 3339 and UTC.
+fn expiry(text: &str) -> AppResult<String> {
+    let at = crate::auth::middleware::key_expiry(text).ok_or_else(|| {
+        AppError::BadRequest("expiresAt is a time, as 2026-12-31T23:59:00Z or 2026-12-31".into())
+    })?;
+    if at <= chrono::Utc::now() {
+        return Err(AppError::BadRequest("expiresAt has already passed".into()));
+    }
+    Ok(crate::db::to_rfc3339(at))
+}
+
+/// Where the administrator who paused a person's key is written down.
+///
+/// In the store every instance shares rather than on the key's row: what
+/// matters is only that the owner's own "resume" is refused while it is
+/// there, and that is the store that needs no change of schema to hold it.
+fn pause_entry(id: &str) -> String {
+    format!("client.pausedBy:{id}")
+}
+
+/// Write down who paused a person's key, or that nobody holds it paused.
+async fn mark_paused(state: &AppState, id: &str, by: Option<&str>) -> AppResult<()> {
+    repo::keystore::put(&state.db, &pause_entry(id), by.unwrap_or_default()).await?;
+    Ok(())
+}
+
+/// Whether an administrator paused this key, which its owner then may not
+/// resume.
+pub(crate) async fn paused_by_admin(state: &AppState, id: &str) -> AppResult<bool> {
+    Ok(repo::keystore::get(&state.db, &pause_entry(id))
+        .await?
+        .is_some_and(|by| !by.is_empty()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_expiry_is_a_time_still_to_come() {
+        assert_eq!(
+            expiry("2999-12-31T00:00:00+02:00").unwrap(),
+            "2999-12-30T22:00:00.000Z"
+        );
+        assert_eq!(expiry("2999-12-31").unwrap(), "2999-12-31T00:00:00.000Z");
+        for refused in ["31/12/2999", "Dec 31 2999", "2001-01-01", "soon"] {
+            assert!(
+                matches!(expiry(refused), Err(AppError::BadRequest(_))),
+                "{refused}"
+            );
+        }
+    }
 }

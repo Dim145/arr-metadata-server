@@ -159,8 +159,10 @@ async fn calendar(
         )));
     }
 
-    let language = query.language.as_deref().filter(|l| !l.is_empty());
-    Ok(Json(window(&state, &identity, from, to, language).await?))
+    let language = crate::api::extract::language(query.language.as_deref())?;
+    Ok(Json(
+        window(&state, &identity, from, to, language.as_deref()).await?,
+    ))
 }
 
 /// The schedule of a window, as the calendar answers it and the feeds repeat
@@ -204,11 +206,10 @@ pub(super) async fn window(
     service::apply_overrides(state, &mut works).await?;
     // Before the language: the stored translations the overlay reads come
     // with the artwork, and without them every series kept its own title.
+    // The window's works at once: one query a series was up to a thousand.
     repo::item::load_artwork(&state.db, &mut works).await?;
     if let Some(language) = language {
-        for work in &mut works {
-            service::language::apply_stored(state, work, language).await?;
-        }
+        service::language::apply_stored_many(state, &mut works, language).await?;
     }
     service::overlay_imdb_many(state, &mut works).await;
     for work in &mut works {
@@ -222,7 +223,6 @@ pub(super) async fn window(
         .map(|w| (w.id.clone(), w.title.to_lowercase()))
         .collect();
 
-    let (from, to) = (stamp(from), stamp(to));
     let mut episodes: Vec<Airing> = works
         .iter_mut()
         .flat_map(|work| {
@@ -258,12 +258,31 @@ pub(super) async fn window(
     })
 }
 
-/// When an episode airs, as the calendar compares it.
-pub(super) fn aired_at(episode: &Episode) -> Option<String> {
+/// When an episode airs, as the calendar compares it: its instant, or
+/// midnight UTC on its day where no provider knew the time.
+///
+/// Read as an instant, not compared as text. A time corrected by hand is any
+/// RFC 3339 instant the registry takes — `2026-10-05T21:00:00+02:00`,
+/// `…T20:00:00.000Z` — and as text those landed on the wrong day, in the
+/// wrong order; a day given as an instant became `…ZT00:00:00Z`.
+pub(super) fn aired_at(episode: &Episode) -> Option<chrono::DateTime<chrono::Utc>> {
+    let instant = |text: &str| {
+        chrono::DateTime::parse_from_rfc3339(text.trim())
+            .ok()
+            .map(|t| t.with_timezone(&chrono::Utc))
+    };
     episode
         .air_date_utc
-        .clone()
-        .or_else(|| episode.air_date.as_ref().map(|d| format!("{d}T00:00:00Z")))
+        .as_deref()
+        .and_then(instant)
+        .or_else(|| {
+            let day = episode.air_date.as_deref()?.trim();
+            chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d")
+                .ok()
+                .and_then(|d| d.and_hms_opt(0, 0, 0))
+                .map(|t| t.and_utc())
+                .or_else(|| instant(day))
+        })
 }
 
 // ─── people ──────────────────────────────────────────────────────────────────
@@ -349,6 +368,7 @@ async fn person(
     Path(tmdb_id): Path<i64>,
     Query(query): Query<PersonQuery>,
 ) -> AppResult<Json<Person>> {
+    let language = crate::api::extract::language(query.language.as_deref())?;
     let adult = state.adult_for(identity.client_id(), identity.peer_id(), None);
     let credits = repo::item::person_credits(&state.db, tmdb_id, adult).await?;
 
@@ -357,7 +377,11 @@ async fn person(
     };
 
     let name = first.credit.person_name.clone();
-    let details = details_for(&state, tmdb_id, query.language.as_deref()).await;
+    let locale = service::language::tmdb_locale(
+        language.as_deref(),
+        &state.language(identity.client_id(), identity.peer_id()),
+    );
+    let details = details_for(&state, tmdb_id, &locale).await;
     let image = credits
         .iter()
         .find_map(|c| c.credit.image.as_deref().map(|u| state.media.localized(u)))
@@ -374,7 +398,7 @@ async fn person(
     service::apply_overrides(&state, &mut works).await?;
     repo::item::load_artwork(&state.db, &mut works).await?;
     service::overlay_imdb_many(&state, &mut works).await;
-    if let Some(language) = query.language.as_deref().filter(|l| !l.is_empty()) {
+    if let Some(language) = language.as_deref() {
         for work in &mut works {
             service::language::apply_shallow(&state, work, language);
         }
@@ -409,38 +433,23 @@ async fn person(
 }
 
 /// What TMDB says of somebody, from the day-long cache or fetched — in the
-/// reader's language, with the English biography where that language has
-/// none. Nothing when TMDB is not configured or did not answer, which costs
-/// the page its biography and nothing else.
-async fn details_for(
-    state: &AppState,
-    tmdb_id: i64,
-    language: Option<&str>,
-) -> Option<PersonDetails> {
+/// reader's language, `locale` ([`service::language::tmdb_locale`]: the
+/// value is a cache key and a request parameter, and whoever reads the page
+/// chose it), with the English biography where that language has none.
+/// Nothing when TMDB is not configured or did not answer, which costs the
+/// page its biography and nothing else.
+async fn details_for(state: &AppState, tmdb_id: i64, locale: &str) -> Option<PersonDetails> {
     if !state.tmdb.is_configured() {
         return None;
     }
-    let language = language.and_then(tmdb_language).unwrap_or("en-US");
-    let mut details = person_details(&fetch_person(state, tmdb_id, language).await?);
+    let mut details = person_details(&fetch_person(state, tmdb_id, locale).await?);
     if details.biography.is_none()
-        && !language.to_ascii_lowercase().starts_with("en")
+        && !locale.to_ascii_lowercase().starts_with("en")
         && let Some(english) = fetch_person(state, tmdb_id, "en-US").await
     {
         details.biography = person_details(&english).biography;
     }
     Some(details)
-}
-
-/// A language as TMDB takes one — `fr`, `pt-BR` — and nothing else: the
-/// value is a cache key and a request parameter, and whoever reads the
-/// page chose it.
-fn tmdb_language(asked: &str) -> Option<&str> {
-    let asked = asked.trim();
-    let (base, region) = asked.split_once('-').unwrap_or((asked, ""));
-    let base_ok = matches!(base.len(), 2 | 3) && base.bytes().all(|b| b.is_ascii_lowercase());
-    let region_ok =
-        region.is_empty() || (region.len() == 2 && region.bytes().all(|b| b.is_ascii_uppercase()));
-    (base_ok && region_ok).then_some(asked)
 }
 
 async fn fetch_person(state: &AppState, tmdb_id: i64, language: &str) -> Option<Value> {
@@ -559,33 +568,49 @@ mod tests {
     }
 
     #[test]
-    fn only_a_language_shaped_like_one_reaches_tmdb() {
-        for fine in ["fr", "en-US", "pt-BR", "ast", " de "] {
-            assert!(tmdb_language(fine).is_some(), "{fine:?}");
-        }
-        for odd in [
-            "",
-            "f",
-            "FR",
-            "fr-fr",
-            "fr-FRA",
-            "en_US",
-            "../x",
-            "fr-FR&x=1",
-            "français",
-        ] {
-            assert_eq!(tmdb_language(odd), None, "{odd:?}");
-        }
-    }
-
-    #[test]
     fn an_episode_without_a_time_is_placed_at_midnight_utc() {
+        let at = |text: &str| {
+            chrono::DateTime::parse_from_rfc3339(text)
+                .unwrap()
+                .with_timezone(&chrono::Utc)
+        };
         let mut episode = crate::db::repo::child::blank_episode(1, 1);
         episode.air_date = Some("2026-09-24".into());
         episode.air_date_utc = None;
-        assert_eq!(aired_at(&episode).as_deref(), Some("2026-09-24T00:00:00Z"));
+        assert_eq!(aired_at(&episode), Some(at("2026-09-24T00:00:00Z")));
 
         episode.air_date_utc = Some("2026-09-25T01:30:00Z".into());
-        assert_eq!(aired_at(&episode).as_deref(), Some("2026-09-25T01:30:00Z"));
+        assert_eq!(aired_at(&episode), Some(at("2026-09-25T01:30:00Z")));
+    }
+
+    #[test]
+    fn a_time_corrected_by_hand_is_compared_as_the_instant_it_names() {
+        let at = |text: &str| {
+            chrono::DateTime::parse_from_rfc3339(text)
+                .unwrap()
+                .with_timezone(&chrono::Utc)
+        };
+        let mut episode = crate::db::repo::child::blank_episode(1, 1);
+
+        // Nine in the evening in Paris is seven in UTC, the same day; as text
+        // it sorted after a quarter past eight UTC.
+        episode.air_date_utc = Some("2026-10-05T21:00:00+02:00".into());
+        let paris = aired_at(&episode).unwrap();
+        assert_eq!(paris, at("2026-10-05T19:00:00Z"));
+        episode.air_date_utc = Some("2026-10-05T20:15:00.000Z".into());
+        assert!(paris < aired_at(&episode).unwrap());
+
+        // Two in the morning in Tokyo is the day before in UTC.
+        episode.air_date_utc = Some("2026-10-06T02:00:00+09:00".into());
+        assert_eq!(aired_at(&episode), Some(at("2026-10-05T17:00:00Z")));
+
+        // A day given as an instant is that instant, not `…ZT00:00:00Z`.
+        episode.air_date_utc = None;
+        episode.air_date = Some("2026-10-05T21:00:00Z".into());
+        assert_eq!(aired_at(&episode), Some(at("2026-10-05T21:00:00Z")));
+
+        // What reads as neither is not in any window.
+        episode.air_date = Some("TBA".into());
+        assert_eq!(aired_at(&episode), None);
     }
 }

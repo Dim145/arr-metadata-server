@@ -35,6 +35,7 @@ pub struct FankaiWikiClient {
     http: reqwest::Client,
     api: String,
     pacer: Pacer,
+    gate: crate::providers::Gate,
 }
 
 /// What a production's page says, as far as this server reads it.
@@ -58,6 +59,11 @@ pub struct Original {
 
 impl Original {
     /// The entry as a relation of the Fan-Kai, from what the wiki says alone.
+    ///
+    /// Taken for one for adults: the wiki is anybody's to edit and says
+    /// nothing of an entry's audience, so one it names is kept from the
+    /// readers who may not see those until something that knows — AniList,
+    /// the work the catalogue holds — says otherwise (`service::gather`).
     pub fn relation(&self) -> Option<Relation> {
         let (source, external_id, site) = match (self.anilist, self.mal) {
             (Some(id), _) => ("anilist", id, "AniList"),
@@ -79,7 +85,7 @@ impl Original {
             format: None,
             year: None,
             image: None,
-            is_adult: false,
+            is_adult: true,
             work_id: None,
             sort_order: 0,
         })
@@ -93,12 +99,11 @@ impl FankaiWikiClient {
             api: cfg.upstream.clone(),
             // A wiki, not an API service: one call a second.
             pacer: Pacer::new(Duration::from_secs(1)),
+            // Spaced already; this is for its `Retry-After`.
+            gate: crate::providers::Gate::new(names::FANKAI_WIKI, "The Fankai wiki", 1),
         }
     }
 
-    /// The page for a production, found by its name and, where the wiki keeps
-    /// one page per cut, by whoever cut it. Returns the page's text alongside
-    /// what was read from it.
     /// The page's own address, for a reader: beside the API this client asks,
     /// where MediaWiki lays out its pages.
     pub fn page_url(&self, title: &str) -> Option<String> {
@@ -114,6 +119,9 @@ impl FankaiWikiClient {
         api.join(&format!("wiki/{path}")).ok().map(String::from)
     }
 
+    /// The page for a production, found by its name and, where the wiki keeps
+    /// one page per cut, by whoever cut it. Returns the page's text alongside
+    /// what was read from it.
     pub async fn page(&self, title: &str, kaieurs: &[&str]) -> Result<Option<(Value, Page)>> {
         if title.trim().is_empty() {
             return Ok(None);
@@ -123,38 +131,35 @@ impl FankaiWikiClient {
             anyhow::bail!("the Fankai wiki's queue is full; this fetch goes without it");
         }
 
-        let started = std::time::Instant::now();
-        let response = self
-            .http
-            .get(&self.api)
-            .query(&[
-                ("action", "query"),
-                ("format", "json"),
-                ("formatversion", "2"),
-                ("generator", "search"),
-                ("gsrsearch", title.trim()),
-                ("gsrnamespace", "0"),
-                ("gsrlimit", RESULTS),
-                ("prop", "revisions"),
-                ("rvprop", "content"),
-                ("rvslots", "main"),
-            ])
-            .timeout(Duration::from_secs(20))
-            .send()
-            .await;
-        crate::metrics::upstream(
-            names::FANKAI_WIKI,
-            started,
-            response.as_ref().ok().map(|r| r.status()),
-        );
-        let response = response.context("the Fankai wiki could not be reached")?;
+        let (response, _permit) = self
+            .gate
+            .send(|| {
+                self.http
+                    .get(&self.api)
+                    .query(&[
+                        ("action", "query"),
+                        ("format", "json"),
+                        ("formatversion", "2"),
+                        ("generator", "search"),
+                        ("gsrsearch", title.trim()),
+                        ("gsrnamespace", "0"),
+                        ("gsrlimit", RESULTS),
+                        ("prop", "revisions"),
+                        ("rvprop", "content"),
+                        ("rvslots", "main"),
+                    ])
+                    .timeout(Duration::from_secs(20))
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("the Fankai wiki could not be reached: {e}"))?;
 
         let status = response.status();
         if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
             anyhow::bail!("the Fankai wiki's rate limit was reached");
         }
         if !status.is_success() {
-            anyhow::bail!("the Fankai wiki returned {status}");
+            let reason = crate::providers::error_text(response).await;
+            anyhow::bail!("the Fankai wiki returned {status}: {reason}");
         }
 
         let raw = crate::providers::read_json(response)

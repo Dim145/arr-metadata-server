@@ -168,26 +168,86 @@ pub fn verify_password(password: &str, phc: &str) -> bool {
     }
 }
 
+/// Why a password could not be hashed or checked just now.
+#[derive(Debug, thiserror::Error)]
+pub enum HashError {
+    /// The password itself was refused: too short.
+    #[error("{0}")]
+    Rejected(String),
+    /// Every hashing slot stayed taken for [`HASH_WAIT`]: a burst of sign-ins
+    /// is being worked through. Nothing was checked; the caller may try again.
+    #[error("too many passwords are being checked at once; try again in a moment")]
+    Busy,
+    #[error("the hashing task failed: {0}")]
+    Failed(String),
+}
+
+impl From<HashError> for crate::error::AppError {
+    fn from(e: HashError) -> Self {
+        match e {
+            HashError::Rejected(why) => Self::BadRequest(why),
+            HashError::Busy => Self::RateLimited,
+            HashError::Failed(why) => Self::Internal(anyhow::anyhow!(why)),
+        }
+    }
+}
+
+/// How long a password waits for a hashing slot before the request is told
+/// to come back: long enough for a family signing in at once, short enough
+/// that a burst cannot queue up a minute of work.
+const HASH_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Hashes in flight at once: as many as the machine has cores, from two to
+/// eight. Each one holds 19 MiB for its duration, so this is what bounds the
+/// memory a burst of sign-ins can take — a few hundred at once used to be a
+/// few gigabytes, and an OOM kill of everything this server answers for.
+static HASHING: std::sync::LazyLock<tokio::sync::Semaphore> =
+    std::sync::LazyLock::new(|| tokio::sync::Semaphore::new(hashing_slots()));
+
+fn hashing_slots() -> usize {
+    std::thread::available_parallelism()
+        .map_or(2, std::num::NonZeroUsize::get)
+        .clamp(2, 8)
+}
+
+/// A slot to hash in, or [`HashError::Busy`] after [`HASH_WAIT`].
+async fn hashing_slot() -> Result<tokio::sync::SemaphorePermit<'static>, HashError> {
+    match tokio::time::timeout(HASH_WAIT, HASHING.acquire()).await {
+        Ok(Ok(permit)) => Ok(permit),
+        // The semaphore is never closed; a closed one would be a bug.
+        Ok(Err(e)) => Err(HashError::Failed(e.to_string())),
+        Err(_) => Err(HashError::Busy),
+    }
+}
+
 /// [`hash_password`], off the async executor.
 ///
 /// argon2's whole point is that it is slow and memory-hungry — around 20 ms of
 /// CPU and 19 MiB per call at the defaults. Run on a tokio worker that is the
 /// worker not running anything else for 20 ms, and a handful of sign-in attempts
-/// stalls every surface this server has, Sonarr's included.
-pub async fn hash_password_async(password: String) -> Result<String> {
+/// stalls every surface this server has, Sonarr's included. Bounded by the
+/// same slots as [`verify_password_async`].
+pub async fn hash_password_async(password: String) -> Result<String, HashError> {
+    let _slot = hashing_slot().await?;
     tokio::task::spawn_blocking(move || hash_password(&password))
         .await
-        .map_err(|e| anyhow::anyhow!("hashing task failed: {e}"))?
+        .map_err(|e| HashError::Failed(e.to_string()))?
+        .map_err(|e| HashError::Rejected(e.to_string()))
 }
 
-/// [`verify_password`], off the async executor. See [`hash_password_async`].
-pub async fn verify_password_async(password: String, phc: String) -> bool {
-    tokio::task::spawn_blocking(move || verify_password(&password, &phc))
-        .await
-        .unwrap_or_else(|e| {
-            tracing::error!(error = %e, "password verification task failed");
-            false
-        })
+/// [`verify_password`], off the async executor and within the hashing slots.
+/// See [`hash_password_async`]. `Ok(false)` for a wrong password; an error
+/// only when nothing was checked.
+pub async fn verify_password_async(password: String, phc: String) -> Result<bool, HashError> {
+    let _slot = hashing_slot().await?;
+    Ok(
+        tokio::task::spawn_blocking(move || verify_password(&password, &phc))
+            .await
+            .unwrap_or_else(|e| {
+                tracing::error!(error = %e, "password verification task failed");
+                false
+            }),
+    )
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -294,6 +354,36 @@ mod tests {
     #[test]
     fn a_corrupt_hash_fails_closed() {
         assert!(!verify_password("anything", "not-a-phc-string"));
+    }
+
+    /// However many ask at once, no more hash than there are slots; the
+    /// others wait their turn, and each is answered.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn hashing_is_bounded_and_everyone_is_answered() {
+        let phc = hash_password("correct horse battery").unwrap();
+        assert!((2..=8).contains(&hashing_slots()));
+
+        let checks: Vec<_> = (0..12)
+            .map(|i| {
+                let phc = phc.clone();
+                let password = if i % 2 == 0 {
+                    "correct horse battery"
+                } else {
+                    "wrong horse battery"
+                };
+                tokio::spawn(verify_password_async(password.to_string(), phc))
+            })
+            .collect();
+        let mut answers = Vec::new();
+        for check in checks {
+            answers.push(check.await.unwrap().unwrap());
+        }
+        assert_eq!(answers.iter().filter(|ok| **ok).count(), 6);
+
+        assert!(matches!(
+            hash_password_async("short".into()).await,
+            Err(HashError::Rejected(_))
+        ));
     }
 
     #[test]

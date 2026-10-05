@@ -24,7 +24,10 @@ use crate::{
     },
     auth::Identity,
     db::repo::{self, audit::Action},
-    domain::{CoverType, CreditType, MediaKind},
+    domain::{
+        CoverType, CreditType, MediaKind,
+        fields::{self, Scope},
+    },
     error::{AppError, AppResult},
     service,
     state::AppState,
@@ -106,6 +109,10 @@ async fn add_season(
             request.season_number
         )));
     }
+    registry_checks(
+        Scope::Season(request.season_number),
+        &[("airDate", request.air_date.as_deref())],
+    )?;
 
     let mut season = repo::child::blank_season(request.season_number);
     season.title = request.title;
@@ -220,6 +227,25 @@ async fn add_episode(
     if let Some(url) = &request.image {
         check_url(url)?;
     }
+    registry_checks(
+        Scope::Episode {
+            season: request.season_number,
+            episode: request.episode_number,
+        },
+        &[
+            ("airDate", request.air_date.as_deref()),
+            ("image", request.image.as_deref()),
+        ],
+    )?;
+    // Counts, not offsets: Sonarr reads a negative runtime or absolute
+    // number as the nonsense it is.
+    if request.runtime.is_some_and(|r| r < 0)
+        || request.absolute_episode_number.is_some_and(|n| n < 0)
+    {
+        return Err(AppError::BadRequest(
+            "a runtime and an absolute episode number are not negative".into(),
+        ));
+    }
 
     let mut episode = repo::child::blank_episode(request.season_number, request.episode_number);
     episode.title = request.title.unwrap_or_default();
@@ -326,14 +352,27 @@ async fn add_image(
     Path(id): Path<String>,
     Json(request): Json<NewImage>,
 ) -> AppResult<(StatusCode, Json<Created>)> {
-    writable(&state, &identity, &id).await?;
+    let item = writable(&state, &identity, &id).await?;
     check_url(&request.url)?;
+
+    // A season's picture is of a season the series has: filed under another
+    // number, it was kept and shown nowhere.
+    if let Some(number) = request.season_number
+        && (item.kind != MediaKind::Series
+            || number < 0
+            || !item.seasons.iter().any(|s| s.season_number == number))
+    {
+        return Err(AppError::BadRequest(format!(
+            "season {number} is not a season of this work"
+        )));
+    }
+    let language = crate::api::extract::filed_language(request.language)?;
 
     let cover_type: CoverType = request.cover_type.parse().unwrap_or(CoverType::Unknown);
 
     let mut image = repo::child::blank_image(cover_type, request.url.clone());
     image.season_number = request.season_number;
-    image.language = request.language;
+    image.language = language;
     image.sort_order = request.sort_order.unwrap_or(0);
 
     let created = repo::child::add_image(&state.db, &id, &image).await?;
@@ -521,13 +560,14 @@ async fn add_alternative_title(
     if title.is_empty() {
         return Err(AppError::BadRequest("title must not be empty".into()));
     }
+    let language = crate::api::extract::filed_language(request.language)?;
 
     // The database has a unique index over (media_id, title, language); catching
     // it here gives a usable message instead of a 500.
     if item
         .alternative_titles
         .iter()
-        .any(|t| t.title == title && t.language == request.language)
+        .any(|t| t.title == title && t.language == language)
     {
         return Err(AppError::Conflict(format!("{title:?} is already listed")));
     }
@@ -536,7 +576,7 @@ async fn add_alternative_title(
         id: String::new(),
         title: title.to_string(),
         title_type: request.title_type,
-        language: request.language,
+        language,
         is_manual: true,
     };
 
@@ -597,6 +637,24 @@ async fn writable(
     }
 
     service::load(state, id).await?.ok_or(AppError::NotFound)
+}
+
+/// The field registry's own checks, for the fields a child is entered with
+/// as for the same fields locked by hand: a day as a day — one typed in as
+/// "TBA" was stored, served, and failed in Sonarr — an address a client can
+/// follow. Each `(field, value)` given is checked; one left out is not.
+fn registry_checks(scope: Scope, given: &[(&str, Option<&str>)]) -> AppResult<()> {
+    for (field, value) in given {
+        if let Some(value) = value {
+            fields::validate(
+                scope,
+                field,
+                Some(&serde_json::Value::String((*value).to_string())),
+            )
+            .map_err(AppError::BadRequest)?;
+        }
+    }
+    Ok(())
 }
 
 /// An image URL has to be something a client can actually fetch.

@@ -65,31 +65,73 @@ pub struct Stats {
     pub series: i64,
     pub movies: i64,
     pub total: i64,
-    pub overrides: i64,
-    pub clients: i64,
-    pub audit_entries: i64,
-    pub jobs: i64,
-    pub cached_items: u64,
-    pub cached_searches: u64,
+    /// The rest is how the server is run, for whoever maintains the catalogue
+    /// — the administration's dashboard reads them — and absent for anybody
+    /// else.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub overrides: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clients: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audit_entries: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub jobs: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cached_items: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cached_searches: Option<u64>,
 }
 
 /// How much this server is holding.
+///
+/// Counted as the reader is shown the catalogue: for whoever maintains it,
+/// every work; for anybody else — a visitor among them, under public
+/// browsing — the works switched on and, as the adult policy has it for
+/// them, not for adults, as the lists and `/figures` count them. How the
+/// server is run — keys, locks, the journal, the jobs, the caches — is told
+/// only to whoever maintains it, whose dashboard this is.
 #[utoipa::path(get, path = "/stats", tag = TAG, responses((status = 200, body = Stats)))]
-async fn stats(State(state): State<AppState>) -> AppResult<Json<Stats>> {
-    let series = repo::item::count(&state.db, Some(MediaKind::Series)).await?;
-    let movies = repo::item::count(&state.db, Some(MediaKind::Movie)).await?;
+async fn stats(
+    State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
+) -> AppResult<Json<Stats>> {
+    let (series, movies) = if identity.can_write() {
+        (
+            repo::item::count(&state.db, Some(MediaKind::Series)).await?,
+            repo::item::count(&state.db, Some(MediaKind::Movie)).await?,
+        )
+    } else {
+        let shown = |kind: MediaKind| repo::item::Query {
+            kind: Some(kind),
+            include_adult: state.adult_for(identity.client_id(), identity.peer_id(), None),
+            ..Default::default()
+        };
+        (
+            repo::item::count_matching(&state.db, &shown(MediaKind::Series)).await?,
+            repo::item::count_matching(&state.db, &shown(MediaKind::Movie)).await?,
+        )
+    };
 
-    Ok(Json(Stats {
+    let mut stats = Stats {
         series,
         movies,
         total: series + movies,
-        overrides: repo::override_field::count(&state.db).await?,
-        clients: repo::client::count(&state.db).await?,
-        audit_entries: repo::audit::count(&state.db).await?,
-        jobs: repo::job::count(&state.db).await?,
-        cached_items: state.caches.items.l1_entries(),
-        cached_searches: state.caches.searches.l1_entries(),
-    }))
+        overrides: None,
+        clients: None,
+        audit_entries: None,
+        jobs: None,
+        cached_items: None,
+        cached_searches: None,
+    };
+    if identity.can_write() {
+        stats.overrides = Some(repo::override_field::count(&state.db).await?);
+        stats.clients = Some(repo::client::count(&state.db).await?);
+        stats.audit_entries = Some(repo::audit::count(&state.db).await?);
+        stats.jobs = Some(repo::job::count(&state.db).await?);
+        stats.cached_items = Some(state.caches.items.l1_entries());
+        stats.cached_searches = Some(state.caches.searches.l1_entries());
+    }
+    Ok(Json(stats))
 }
 
 #[derive(Serialize, ToSchema)]
@@ -452,5 +494,55 @@ pub(crate) fn policy_name(policy: SurfacePolicy) -> &'static str {
         SurfacePolicy::ApiKey => "apikey",
         SurfacePolicy::Allowlist => "allowlist",
         SurfacePolicy::Open => "open",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::MediaItem;
+
+    #[tokio::test]
+    async fn a_reader_is_counted_what_a_reader_is_shown() {
+        let state = super::super::testing::server().await;
+        for (title, enabled, adult) in [
+            ("Shown", true, false),
+            ("Switched off", false, false),
+            ("For adults", true, true),
+        ] {
+            let mut work = MediaItem::empty(MediaKind::Series);
+            work.title = title.into();
+            work.slug = crate::domain::make_slug(title, None);
+            work.is_enabled = enabled;
+            work.is_adult = adult;
+            repo::item::upsert(
+                &state.db,
+                repo::item::ItemWrite {
+                    item: &work,
+                    replace_children: true,
+                },
+            )
+            .await
+            .expect("stored");
+        }
+
+        // A visitor: what the lists show them, and nothing of how the server
+        // is run.
+        let Json(seen) = stats(State(state.clone()), Extension(Identity::Visitor))
+            .await
+            .expect("answered");
+        assert_eq!((seen.series, seen.movies, seen.total), (1, 0, 1));
+        assert!(seen.overrides.is_none() && seen.clients.is_none());
+        assert!(seen.audit_entries.is_none() && seen.jobs.is_none());
+        assert!(seen.cached_items.is_none() && seen.cached_searches.is_none());
+        let shape = serde_json::to_value(&seen).unwrap();
+        assert!(shape.get("auditEntries").is_none(), "{shape}");
+
+        // Whoever maintains the catalogue: every work, and the counters.
+        let Json(kept) = stats(State(state), Extension(Identity::Anonymous))
+            .await
+            .expect("answered");
+        assert_eq!(kept.series, 3);
+        assert!(kept.clients.is_some() && kept.audit_entries.is_some());
     }
 }

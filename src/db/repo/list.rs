@@ -146,10 +146,17 @@ const COLUMNS: &str = "l.id, l.slug, l.name, l.description, l.kind, l.mode, l.fi
                                    WHERE i.list_id = l.id)
                             ELSE 0 END AS item_count";
 
-pub async fn create(db: &Db, fields: ListFields<'_>) -> Result<CuratedList> {
+/// Create a list, with its members when given, in one transaction: a failure
+/// between the two left a list without the works it was made with.
+pub async fn create(
+    db: &Db,
+    fields: ListFields<'_>,
+    members: Option<&[String]>,
+) -> Result<CuratedList> {
     let id = new_id();
     let at = now();
     let filter_json = fields.filter.map(serde_json::to_string).transpose()?;
+    let mut tx = db.begin_write().await?;
 
     sqlx::query(db.sql(
         "INSERT INTO curated_list
@@ -166,18 +173,31 @@ pub async fn create(db: &Db, fields: ListFields<'_>) -> Result<CuratedList> {
     .bind(from_bool(fields.is_public))
     .bind(&at)
     .bind(&at)
-    .execute(db.pool())
+    .execute(&mut *tx)
     .await
     .context("failed to create the list")?;
+
+    if let Some(members) = members {
+        write_members(db, &mut tx, &id, members).await?;
+    }
+
+    tx.commit().await.context("failed to commit the new list")?;
 
     get(db, &id)
         .await?
         .context("the list just created is not there")
 }
 
-/// Replace what a list is made of. `false` when there is no such list.
-pub async fn update(db: &Db, id: &str, fields: ListFields<'_>) -> Result<bool> {
+/// Replace what a list is made of, and its members when given, in one
+/// transaction. `false` when there is no such list, and nothing is written.
+pub async fn update(
+    db: &Db,
+    id: &str,
+    fields: ListFields<'_>,
+    members: Option<&[String]>,
+) -> Result<bool> {
     let filter_json = fields.filter.map(serde_json::to_string).transpose()?;
+    let mut tx = db.begin_write().await?;
 
     let result = sqlx::query(db.sql(
         "UPDATE curated_list
@@ -194,11 +214,21 @@ pub async fn update(db: &Db, id: &str, fields: ListFields<'_>) -> Result<bool> {
     .bind(from_bool(fields.is_public))
     .bind(now())
     .bind(id)
-    .execute(db.pool())
+    .execute(&mut *tx)
     .await
     .context("failed to update the list")?;
 
-    Ok(result.rows_affected() > 0)
+    if result.rows_affected() == 0 {
+        return Ok(false);
+    }
+    if let Some(members) = members {
+        write_members(db, &mut tx, id, members).await?;
+    }
+
+    tx.commit()
+        .await
+        .context("failed to commit the list's change")?;
+    Ok(true)
 }
 
 pub async fn delete(db: &Db, id: &str) -> Result<bool> {
@@ -267,11 +297,24 @@ pub async fn member_ids(db: &Db, list_id: &str) -> Result<Vec<String>> {
 /// twice is kept once, where it first appears.
 pub async fn set_members(db: &Db, list_id: &str, media_ids: &[String]) -> Result<()> {
     let mut tx = db.begin_write().await?;
+    write_members(db, &mut tx, list_id, media_ids).await?;
+    tx.commit()
+        .await
+        .context("failed to commit the list's members")
+}
+
+/// [`set_members`], inside the transaction that writes the list.
+async fn write_members(
+    db: &Db,
+    tx: &mut sqlx::Transaction<'_, sqlx::Any>,
+    list_id: &str,
+    media_ids: &[String],
+) -> Result<()> {
     let at = now();
 
     sqlx::query(db.sql("DELETE FROM curated_list_item WHERE list_id = ?"))
         .bind(list_id)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
 
     let mut seen = std::collections::HashSet::new();
@@ -288,7 +331,7 @@ pub async fn set_members(db: &Db, list_id: &str, media_ids: &[String]) -> Result
         .bind(media_id)
         .bind(position)
         .bind(&at)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
         position += 1;
     }
@@ -296,12 +339,45 @@ pub async fn set_members(db: &Db, list_id: &str, media_ids: &[String]) -> Result
     sqlx::query(db.sql("UPDATE curated_list SET updated_at = ? WHERE id = ?"))
         .bind(&at)
         .bind(list_id)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
 
-    tx.commit()
-        .await
-        .context("failed to commit the list's members")
+    Ok(())
+}
+
+/// Count the hand-made lists' members again as a reader who may not be
+/// shown a work for adults sees them: of those switched on and not for
+/// adults. The count otherwise is every member switched on, which told such
+/// a reader how many adult works a list holds.
+pub async fn count_without_adult(db: &Db, lists: &mut [CuratedList]) -> Result<()> {
+    let manual: Vec<String> = lists
+        .iter()
+        .filter(|l| l.mode == ListMode::Manual)
+        .map(|l| l.id.clone())
+        .collect();
+    let mut counts = std::collections::HashMap::new();
+
+    for chunk in manual.chunks(400) {
+        let sql = format!(
+            "SELECT i.list_id, COUNT(*) AS n FROM curated_list_item i
+               JOIN media_item m ON m.id = i.media_id AND m.is_enabled = 1 AND m.is_adult = 0
+              WHERE i.list_id IN ({})
+              GROUP BY i.list_id",
+            vec!["?"; chunk.len()].join(", ")
+        );
+        let mut query = sqlx::query(db.sql(&sql));
+        for id in chunk {
+            query = query.bind(id);
+        }
+        for row in query.fetch_all(db.pool()).await? {
+            counts.insert(row.text("list_id")?, row.big("n")?);
+        }
+    }
+
+    for list in lists.iter_mut().filter(|l| l.mode == ListMode::Manual) {
+        list.item_count = counts.get(&list.id).copied().unwrap_or(0);
+    }
+    Ok(())
 }
 
 /// The hand-made lists holding a work, by name. A list composed by a filter

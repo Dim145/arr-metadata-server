@@ -75,7 +75,8 @@ async fn similar(
     Path(id): Path<String>,
     Query(query): Query<LanguageQuery>,
 ) -> AppResult<Json<Similar>> {
-    let item = visible(&state, &identity, &id).await?;
+    let language = crate::api::extract::language(query.language.as_deref())?;
+    let item = super::visible_work(&state, &identity, &id).await?;
     let adult = state.adult_for(identity.client_id(), identity.peer_id(), None);
 
     // The candidates: the same kind, sharing the first genre — the one a
@@ -120,7 +121,7 @@ async fn similar(
         .take(SIMILAR)
         .map(|(_, _, other)| other)
         .collect();
-    cards(&state, &identity, &mut items, query.language.as_deref()).await?;
+    cards(&state, &identity, &mut items, language.as_deref()).await?;
     Ok(Json(Similar { items }))
 }
 
@@ -313,8 +314,9 @@ async fn collections(
     Extension(identity): Extension<Identity>,
     Query(query): Query<LanguageQuery>,
 ) -> AppResult<Json<Collections>> {
+    let asked = crate::api::extract::language(query.language.as_deref())?;
     let adult = state.adult_for(identity.client_id(), identity.peer_id(), None);
-    let language = language_of(&state, &identity, query.language.as_deref());
+    let language = language_of(&state, &identity, asked.as_deref());
     let held = repo::item::collections(&state.db, adult).await?;
     // Named all at once — TMDB's own gate on concurrency bounds it — rather
     // than one after another, on a page every reader of the lists opens.
@@ -359,6 +361,7 @@ async fn collection(
     Path(tmdb_id): Path<i64>,
     Query(query): Query<LanguageQuery>,
 ) -> AppResult<Json<CollectionPage>> {
+    let asked = crate::api::extract::language(query.language.as_deref())?;
     let adult = state.adult_for(identity.client_id(), identity.peer_id(), None);
     let mut items = repo::item::search(
         &state.db,
@@ -376,9 +379,9 @@ async fn collection(
     if items.is_empty() && !identity.can_write() {
         return Err(AppError::NotFound);
     }
-    cards(&state, &identity, &mut items, query.language.as_deref()).await?;
+    cards(&state, &identity, &mut items, asked.as_deref()).await?;
 
-    let language = language_of(&state, &identity, query.language.as_deref());
+    let language = language_of(&state, &identity, asked.as_deref());
     let named = named(&state, tmdb_id, &language).await;
     let field = |name: &str| {
         named
@@ -444,33 +447,20 @@ async fn named(state: &AppState, tmdb_id: i64, language: &str) -> Option<Value> 
     .filter(|v| !v.is_null())
 }
 
-/// The language a reader is answered in: the one asked for, in the shape
-/// TMDB takes, or the one they are answered in everywhere else.
+/// The language TMDB is asked in for a reader, and what its answer is kept
+/// under: the one asked for (a tag, checked where it arrived), as far as it
+/// is a language TMDB has, or the one the reader is answered in everywhere
+/// else — see [`service::language::tmdb_locale`]. Not whatever was asked:
+/// each new string was a key no answer was kept under, and so one call to
+/// TMDB for every collection held, on every request.
 fn language_of(state: &AppState, identity: &Identity, asked: Option<&str>) -> String {
-    asked
-        .map(str::trim)
-        .filter(|l| {
-            !l.is_empty()
-                && l.len() <= 10
-                && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
-        })
-        .map(str::to_string)
-        .unwrap_or_else(|| state.language(identity.client_id(), identity.peer_id()))
+    service::language::tmdb_locale(
+        asked,
+        &state.language(identity.client_id(), identity.peer_id()),
+    )
 }
 
 // ─── the pieces ──────────────────────────────────────────────────────────────
-
-/// A work this caller may see, as its own page decides it.
-async fn visible(state: &AppState, identity: &Identity, id: &str) -> AppResult<MediaItem> {
-    let item = service::load(state, id).await?.ok_or(AppError::NotFound)?;
-    let hidden = !item.is_enabled
-        || (item.is_adult
-            && !state.adult_for(identity.client_id(), identity.peer_id(), Some(true)));
-    if hidden && !identity.can_write() {
-        return Err(AppError::NotFound);
-    }
-    Ok(item)
-}
 
 /// Works drawn as a list is: overrides, artwork, scores and the reader's
 /// language applied, and nothing a reader may not see.
@@ -483,7 +473,7 @@ async fn cards(
     service::apply_overrides(state, items).await?;
     repo::item::load_artwork(&state.db, items).await?;
     service::overlay_imdb_many(state, items).await;
-    if let Some(language) = language.map(str::trim).filter(|l| !l.is_empty()) {
+    if let Some(language) = language {
         for item in items.iter_mut() {
             service::language::apply_shallow(state, item, language);
         }
@@ -496,7 +486,40 @@ async fn cards(
     Ok(())
 }
 
+/// How long a fetch that failed is not tried again for the same key.
+const FAILED_FOR: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// The keys whose fetch failed lately, and when. In this process only: what
+/// it saves is this process's calls.
+static FAILED: std::sync::LazyLock<
+    parking_lot::Mutex<std::collections::HashMap<String, std::time::Instant>>,
+> = std::sync::LazyLock::new(Default::default);
+
+/// Whether the fetch for `key` failed less than [`FAILED_FOR`] ago.
+fn failed_lately(key: &str) -> bool {
+    FAILED
+        .lock()
+        .get(key)
+        .is_some_and(|at| at.elapsed() < FAILED_FOR)
+}
+
+/// Remember that the fetch for `key` failed, now.
+fn failed(key: &str) {
+    let mut failed = FAILED.lock();
+    // Bounded: the keys are as many as collections, people and languages,
+    // and those long past their wait are of no use.
+    if failed.len() >= 4096 {
+        failed.retain(|_, at| at.elapsed() < FAILED_FOR);
+    }
+    failed.insert(key.to_string(), std::time::Instant::now());
+}
+
 /// A JSON value from the day-long cache, or fetched and kept.
+///
+/// A fetch that failed is not tried again for the same key for a few
+/// minutes: with TMDB out of reach, or answering 429, the collections page
+/// asked it again for every collection held on every request, and kept it
+/// throttled.
 pub(crate) async fn cached_value<F, Fut>(state: &AppState, key: &str, fetch: F) -> AppResult<Value>
 where
     F: FnOnce() -> Fut,
@@ -507,7 +530,18 @@ where
     {
         return Ok(value);
     }
-    let value = fetch().await.map_err(AppError::UpstreamUnavailable)?;
+    if failed_lately(key) {
+        return Err(AppError::UpstreamUnavailable(anyhow::anyhow!(
+            "asked a moment ago, to no avail"
+        )));
+    }
+    let value = match fetch().await {
+        Ok(value) => value,
+        Err(e) => {
+            failed(key);
+            return Err(AppError::UpstreamUnavailable(e));
+        }
+    };
     let bytes = Bytes::from(serde_json::to_vec(&value).unwrap_or_default());
     state.caches.lists.insert(key.to_string(), bytes).await;
     Ok(value)

@@ -156,7 +156,14 @@ async fn deliver(http: &reqwest::Client, url: &str, happening: &Happening) {
             tracing::warn!(host, status = %response.status(), event = happening.action.as_str(), "the webhook refused the event");
         }
         Err(e) => {
-            tracing::warn!(host, error = %e, event = happening.action.as_str(), "the webhook could not be reached");
+            // Never `%e`: reqwest's own words end with the address, and the
+            // address is the webhook's secret.
+            tracing::warn!(
+                host,
+                error = %crate::providers::describe_request_error(&e),
+                event = happening.action.as_str(),
+                "the webhook could not be reached"
+            );
         }
     }
 }

@@ -82,6 +82,11 @@ async fn main() -> Result<()> {
 
     let config = config::Config::from_env().context("invalid configuration")?;
 
+    // Whatever an error or a trace repeats, none of these reaches the log.
+    for secret in config.secrets() {
+        telemetry::redact_also(&secret);
+    }
+
     let state = state::AppState::bootstrap(config).await?;
 
     web::serve(state).await
@@ -134,29 +139,21 @@ async fn transfer(args: &[String]) -> Result<()> {
     Ok(())
 }
 
-/// Probe the running server over loopback and exit non-zero if it is unwell.
+/// Probe the running server and exit non-zero if it is unwell.
 ///
-/// `AMS_BIND_ADDRESS` gives the port; the host is always loopback, because this
-/// runs inside the same container.
+/// The address and the scheme are the server's own, read from the same
+/// configuration it was started with — every name `AMS_BIND_ADDRESS` goes
+/// by, an empty variable read as unset — and probed over loopback when it
+/// listens on every interface, at the address it is bound to otherwise.
 async fn healthcheck() -> Result<()> {
-    let bind = std::env::var("AMS_BIND_ADDRESS")
-        .or_else(|_| std::env::var("BIND_ADDRESS"))
-        .unwrap_or_else(|_| "0.0.0.0:8080".to_string());
-
-    let port = bind.rsplit(':').next().unwrap_or("8080");
-
-    // TLS terminates here when configured, so probe the same scheme.
-    let scheme = if std::env::var("AMS_TLS_CERT").is_ok() {
-        "https"
-    } else {
-        "http"
-    };
-    let url = format!("{scheme}://127.0.0.1:{port}/health");
+    let _ = dotenvy::dotenv();
+    let config = config::Config::from_env().context("invalid configuration")?;
+    let url = health_url(config.server.bind, config.server.tls.is_some());
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
         // The certificate is issued for a provider hostname, not for loopback.
-        .danger_accept_invalid_certs(scheme == "https")
+        .danger_accept_invalid_certs(url.starts_with("https://"))
         .build()?;
 
     let status = client.get(&url).send().await?.status();
@@ -165,5 +162,43 @@ async fn healthcheck() -> Result<()> {
         Ok(())
     } else {
         anyhow::bail!("health check returned {status}")
+    }
+}
+
+/// Where the health check asks: loopback for a server on every interface —
+/// IPv4's, which a dual-stack `[::]` answers too — the bound address for one
+/// bound to a single interface.
+fn health_url(bind: std::net::SocketAddr, tls: bool) -> String {
+    let scheme = if tls { "https" } else { "http" };
+    let host = match bind.ip() {
+        ip if ip.is_unspecified() => "127.0.0.1".to_string(),
+        std::net::IpAddr::V6(v6) => format!("[{v6}]"),
+        ip => ip.to_string(),
+    };
+    format!("{scheme}://{host}:{}/health", bind.port())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::health_url;
+
+    #[test]
+    fn the_health_check_asks_where_the_server_listens() {
+        assert_eq!(
+            health_url("0.0.0.0:8080".parse().unwrap(), false),
+            "http://127.0.0.1:8080/health"
+        );
+        assert_eq!(
+            health_url("[::]:9000".parse().unwrap(), true),
+            "https://127.0.0.1:9000/health"
+        );
+        assert_eq!(
+            health_url("192.168.1.5:8080".parse().unwrap(), false),
+            "http://192.168.1.5:8080/health"
+        );
+        assert_eq!(
+            health_url("[::1]:8080".parse().unwrap(), false),
+            "http://[::1]:8080/health"
+        );
     }
 }

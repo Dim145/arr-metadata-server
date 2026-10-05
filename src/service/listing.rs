@@ -24,7 +24,9 @@ use crate::{
 /// what it derives, and every work is listed again.
 ///
 /// 2: a series' combined genres are listed as the film genres they stand for.
-pub const VERSION: i64 = 2;
+/// 3: a lock on `isAdult` is written to the row the lists filter on; listed
+/// again, a work locked so before its row followed is kept from the lists.
+pub const VERSION: i64 = 3;
 
 /// How many works are read and written at a time.
 const BATCH: usize = 200;
@@ -104,6 +106,7 @@ async fn relist_batch(db: &Db, imdb: bool, chunk: &[String]) -> Result<u64> {
         let Some(change) = changes.get(&item.id).copied() else {
             continue;
         };
+        let row_adult = item.is_adult;
 
         // As `service::load` and `apply_overrides` read it, so the list and
         // the page cannot disagree about what a work is.
@@ -125,7 +128,16 @@ async fn relist_batch(db: &Db, imdb: bool, chunk: &[String]) -> Result<u64> {
             super::take_newer_imdb(&mut item.ratings, rating);
         }
 
-        listed.push((item.id.clone(), change, repo::item::Listed::of(&item)));
+        listed.push(repo::item::Relisted {
+            id: item.id.clone(),
+            change,
+            values: repo::item::Listed::of(&item),
+            // What a lock says of the work being for adults is what its row
+            // says, which is what every list filters on: whatever wrote the
+            // row last — a sync from chosen sources pins no lock — and
+            // whenever the lock was set.
+            adult: (item.is_adult != row_adult).then_some(item.is_adult),
+        });
     }
 
     repo::item::write_listed(db, &listed, imdb, VERSION).await
@@ -392,6 +404,69 @@ mod tests {
         assert_eq!(titles(&db, rated(6.0)).await, ["Steady", "Rescored"]);
     }
 
+    #[tokio::test]
+    async fn a_lock_on_adult_is_what_the_row_the_lists_filter_on_says() {
+        let db = db().await;
+        let work = stored(&db, |i| i.title = "Locked adult".into()).await;
+        stored(&db, |i| i.title = "Plain".into()).await;
+
+        // Locked as a write that does not pin the locked identity leaves it:
+        // a sync from chosen sources, an import of locks before this — the
+        // lock without its row.
+        lock(&db, &work.id, "isAdult", serde_json::json!(true)).await;
+        assert!(
+            !repo::item::get(&db, &work.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .is_adult
+        );
+
+        // Listed again, the row follows the lock, and the lists with it.
+        relist_stale(&db, false, 100).await.unwrap();
+        assert!(
+            repo::item::get(&db, &work.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .is_adult
+        );
+        assert_eq!(titles(&db, Query::default()).await, ["Plain"]);
+        assert_eq!(
+            titles(
+                &db,
+                Query {
+                    include_adult: true,
+                    sort: Sort::Title,
+                    ..Default::default()
+                }
+            )
+            .await,
+            ["Locked adult", "Plain"]
+        );
+
+        // A lock saying it is not, over a row a write marked so: the same.
+        repo::override_field::set(
+            &db,
+            &work.id,
+            Scope::Item,
+            "isAdult",
+            Some(&serde_json::json!(false)),
+            None,
+        )
+        .await
+        .unwrap();
+        relist_stale(&db, false, 100).await.unwrap();
+        assert!(
+            !repo::item::get(&db, &work.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .is_adult
+        );
+        assert_eq!(titles(&db, Query::default()).await.len(), 2);
+    }
+
     #[test]
     fn a_nul_in_a_lock_is_left_out_of_what_the_work_is_listed_by() {
         // PostgreSQL will not store one; written as it came, it failed every
@@ -487,10 +562,15 @@ mod tests {
             genres: vec!["Drama".into()],
             ..Default::default()
         };
-        let written =
-            repo::item::write_listed(&db, &[(work.id.clone(), read, stale)], false, VERSION)
-                .await
-                .unwrap();
+        let stale = repo::item::Relisted {
+            id: work.id.clone(),
+            change: read,
+            values: stale,
+            adult: None,
+        };
+        let written = repo::item::write_listed(&db, &[stale], false, VERSION)
+            .await
+            .unwrap();
 
         assert_eq!(written, 0, "what it held before the lock is not written");
         assert!(

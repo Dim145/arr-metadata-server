@@ -130,7 +130,10 @@ serde_urlencoded = "0.7"
 opt-level = 3
 lto = "fat"
 codegen-units = 1
-panic = "abort"
+# Unwind, not abort: a panic in one handler is a 500 for that request — what
+# the CatchPanicLayers are there for, and what a task's JoinError assumes —
+# rather than every connection dropped and the process gone.
+panic = "unwind"
 strip = "symbols"
 
 # Proc macros and build scripts run on the machine doing the build and are never

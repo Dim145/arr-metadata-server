@@ -28,7 +28,12 @@ pub struct SkyhookClient {
     http: reqwest::Client,
     base: String,
     instance: String,
+    gate: crate::providers::Gate,
 }
+
+/// How many requests to Skyhook are in flight at once: a Sonarr library
+/// refresh asks for every series at the same moment.
+const AT_ONCE: usize = 8;
 
 impl SkyhookClient {
     pub fn new(http: reqwest::Client, cfg: &config::Skyhook, instance: String) -> Self {
@@ -36,6 +41,7 @@ impl SkyhookClient {
             http,
             base: cfg.upstream.clone(),
             instance,
+            gate: crate::providers::Gate::new("skyhook", "Skyhook", AT_ONCE),
         }
     }
 
@@ -72,23 +78,20 @@ impl SkyhookClient {
     }
 
     async fn fetch(&self, url: &str, query: &[(&str, &str)]) -> Result<Option<Value>> {
-        let started = std::time::Instant::now();
-        let response = self
-            .http
-            .get(url)
-            .query(query)
-            // See `providers::radarr::LOOP_HEADER`: this hostname is one we also
-            // answer on, so a resolver-level redirect would have us call ourselves.
-            .header(crate::providers::radarr::LOOP_HEADER, &self.instance)
-            .timeout(std::time::Duration::from_secs(20))
-            .send()
-            .await;
-        crate::metrics::upstream(
-            "skyhook",
-            started,
-            response.as_ref().ok().map(|r| r.status()),
-        );
-        let response = response.with_context(|| format!("Skyhook request failed: {url}"))?;
+        let (response, _permit) = self
+            .gate
+            .send(|| {
+                self.http
+                    .get(url)
+                    .query(query)
+                    // See `providers::radarr::LOOP_HEADER`: this hostname is one
+                    // we also answer on, so a resolver-level redirect would have
+                    // us call ourselves.
+                    .header(crate::providers::radarr::LOOP_HEADER, &self.instance)
+                    .timeout(std::time::Duration::from_secs(20))
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("Skyhook request failed: {url}: {e}"))?;
 
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
@@ -103,7 +106,8 @@ impl SkyhookClient {
 
         let status = response.status();
         if !status.is_success() {
-            anyhow::bail!("Skyhook returned {status} for {url}");
+            let reason = crate::providers::error_text(response).await;
+            anyhow::bail!("Skyhook returned {status} for {url}: {reason}");
         }
 
         crate::providers::read_json(response)

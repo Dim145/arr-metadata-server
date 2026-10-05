@@ -37,7 +37,37 @@ pub mod watch;
 
 use utoipa_axum::router::OpenApiRouter;
 
-use crate::state::AppState;
+use crate::{
+    auth::Identity,
+    domain::MediaItem,
+    error::{AppError, AppResult},
+    service,
+    state::AppState,
+};
+
+/// Whether a work is kept from this reader: switched off, or for adults where
+/// the reader's policy would not show one even were they to ask. Whoever
+/// maintains the catalogue is kept from nothing — they open it to put it right.
+pub(crate) fn hidden_from(state: &AppState, identity: &Identity, item: &MediaItem) -> bool {
+    !identity.can_write()
+        && (!item.is_enabled
+            || (item.is_adult
+                && !state.adult_for(identity.client_id(), identity.peer_id(), Some(true))))
+}
+
+/// A work this reader may see, as its own page decides it; for one kept from
+/// them, no work at all — knowing its id is no reason to be shown it.
+pub(crate) async fn visible_work(
+    state: &AppState,
+    identity: &Identity,
+    id: &str,
+) -> AppResult<MediaItem> {
+    let item = service::load(state, id).await?.ok_or(AppError::NotFound)?;
+    if hidden_from(state, identity, &item) {
+        return Err(AppError::NotFound);
+    }
+    Ok(item)
+}
 
 /// Routes that require an authenticated caller.
 pub fn router() -> OpenApiRouter<AppState> {
@@ -80,4 +110,33 @@ pub fn public_router() -> OpenApiRouter<AppState> {
     auth::public_router()
         .merge(signup::router())
         .merge(oidc::public_router())
+}
+
+/// What the tests of a handler run against.
+#[cfg(test)]
+pub(crate) mod testing {
+    use crate::{config, state::AppState};
+
+    /// The whole server, on a database in memory: no provider to ask, no
+    /// cache server, nothing kept on disk, and adult titles hidden, as a new
+    /// server has them.
+    pub async fn server() -> AppState {
+        let mut config = config::Config::from_env().expect("a configuration");
+        config.mode = config::Mode::Single;
+        config.database = config::Database {
+            url: "sqlite::memory:".into(),
+            max_connections: 1,
+            acquire_timeout: std::time::Duration::from_secs(5),
+        };
+        config.security.bootstrap_admin = None;
+        config.cache.redis_url = None;
+        config.media.storage = config::MediaStorage::Off;
+        config.clients = None;
+        config.tmdb.api_key = None;
+        config.tmdb.include_adult = false;
+        config.tvdb.api_key = None;
+        config.tvdb.enabled = false;
+
+        AppState::bootstrap(config).await.expect("a server")
+    }
 }

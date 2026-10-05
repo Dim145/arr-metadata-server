@@ -303,9 +303,7 @@ async fn create(
     }
 
     let (password, generated) = given_or_generated(request.password)?;
-    let hash = secrets::hash_password_async(password)
-        .await
-        .map_err(|e| AppError::BadRequest(e.to_string()))?;
+    let hash = secrets::hash_password_async(password).await?;
 
     let user = repo::user::create(
         &state.db,
@@ -463,12 +461,14 @@ async fn change(
     }
 
     if let Some(status) = status.filter(|s| *s != target.status) {
+        // The sessions closed before the cache is forgotten for the last
+        // time, or one read in between outlives its row there.
         state.caches.forget_sessions();
         repo::user::set_status(&state.db, &target.id, status).await?;
-        state.caches.forget_sessions();
         if status != Status::Active {
             repo::user::delete_sessions_for_user(&state.db, &target.id).await?;
         }
+        state.caches.forget_sessions();
         changes.push(format!(
             "status {} → {}",
             target.status.as_str(),
@@ -604,14 +604,15 @@ async fn reset_password(
     }
 
     let (password, generated) = given_or_generated(request.password)?;
-    let hash = secrets::hash_password_async(password)
-        .await
-        .map_err(|e| AppError::BadRequest(e.to_string()))?;
+    let hash = secrets::hash_password_async(password).await?;
 
+    // Both written before the sessions remembered are forgotten for the last
+    // time: a request read in between would otherwise put a session back
+    // into the cache after its row was gone, for the cache's lifetime.
     state.caches.forget_sessions();
     repo::user::set_password(&state.db, &id, &hash).await?;
-    state.caches.forget_sessions();
     repo::user::delete_sessions_for_user(&state.db, &id).await?;
+    state.caches.forget_sessions();
 
     audit::record(
         &state,

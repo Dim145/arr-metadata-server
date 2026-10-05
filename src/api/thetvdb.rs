@@ -18,7 +18,10 @@
 //! Reads only. TheTVDB's one write is a user's favourites, and a relay that
 //! forwarded it would let any key issued here edit the operator's.
 
-use std::time::Instant;
+use std::{
+    sync::atomic::{AtomicU64, Ordering},
+    time::Instant,
+};
 
 use axum::{
     Extension, Json,
@@ -330,14 +333,9 @@ pub async fn relay(
         None => {
             let answer = send(&state, &parts, Bytes::new(), &credential).await?;
             if let Some(key) = cache_key
-                && (answer.status.is_success() || answer.status == StatusCode::NOT_FOUND)
+                && let Some(ttl) = relay::kept_for(answer.status, &path)
                 && answer.body.len() <= RELAY_MAX_BYTES
             {
-                let ttl = if answer.status == StatusCode::NOT_FOUND {
-                    std::time::Duration::from_secs(5 * 60)
-                } else {
-                    cache::relay_ttl(&path)
-                };
                 let content_type = answer
                     .headers
                     .get(header::CONTENT_TYPE)
@@ -440,11 +438,7 @@ async fn send(
         let mut ours = None;
         match credential {
             Credential::Ours => {
-                let token = state
-                    .tvdb
-                    .bearer()
-                    .await
-                    .map_err(AppError::UpstreamUnavailable)?;
+                let token = operators_token(state).await?;
                 outbound = outbound.bearer_auth(&token);
                 ours = Some(token);
             }
@@ -502,6 +496,59 @@ async fn send(
             headers,
             body: Bytes::from(body),
         });
+    }
+}
+
+/// How long the relay stands back after TheTVDB refused to sign the
+/// operator in: a minute, twice as long after each refusal in a row, ten
+/// minutes at most.
+const SIGN_IN_PAUSE_SECS: u64 = 60;
+const SIGN_IN_PAUSE_MOST_SECS: u64 = 10 * 60;
+
+/// The operator's sign-ins that failed in a row, and when the last did, in
+/// seconds since the epoch.
+static SIGN_IN_FAILURES: AtomicU64 = AtomicU64::new(0);
+static SIGN_IN_FAILED_AT: AtomicU64 = AtomicU64::new(0);
+
+/// How long `failures` refused sign-ins in a row keep the relay from
+/// signing in again, in seconds.
+fn sign_in_pause(failures: u64) -> u64 {
+    if failures == 0 {
+        return 0;
+    }
+    let doublings = (failures - 1).min(4);
+    (SIGN_IN_PAUSE_SECS << doublings).min(SIGN_IN_PAUSE_MOST_SECS)
+}
+
+/// The operator's token for a relayed call — or, while TheTVDB has lately
+/// refused to sign the operator in, a refusal at once. Every call a client
+/// makes would otherwise be one more sign-in with the operator's key, one
+/// after another behind the token's lock, while TheTVDB refuses it,
+/// rate-limits it, or locks the key out: a wrong or rotated key, a missing
+/// PIN, TheTVDB down.
+async fn operators_token(state: &AppState) -> AppResult<String> {
+    let failures = SIGN_IN_FAILURES.load(Ordering::Relaxed);
+    let failed_at = SIGN_IN_FAILED_AT.load(Ordering::Relaxed);
+    if cache::now_secs() < failed_at.saturating_add(sign_in_pause(failures)) {
+        // Said once, when the sign-in failed; a 503 is "later" to a client.
+        return Err(AppError::Disabled {
+            code: "upstream_unavailable",
+            message: "TheTVDB did not sign this server in a moment ago; try again later".into(),
+        });
+    }
+    match state.tvdb.bearer().await {
+        Ok(token) => {
+            SIGN_IN_FAILURES.store(0, Ordering::Relaxed);
+            Ok(token)
+        }
+        Err(e) => {
+            SIGN_IN_FAILED_AT.store(cache::now_secs(), Ordering::Relaxed);
+            let failures = SIGN_IN_FAILURES.fetch_add(1, Ordering::Relaxed) + 1;
+            Err(AppError::UpstreamUnavailable(e.context(format!(
+                "TheTVDB did not sign the operator in; the relay asks again in {}s",
+                sign_in_pause(failures)
+            ))))
+        }
     }
 }
 
@@ -949,6 +996,17 @@ mod tests {
         assert_eq!(data["episodes"][1]["aired"], json!("2026-01-03"));
         // The overview is not locked: TheTVDB's stays.
         assert_eq!(data["episodes"][1]["overview"], json!("TheTVDB's"));
+    }
+
+    #[test]
+    fn a_refused_sign_in_holds_the_relay_back_longer_each_time() {
+        assert_eq!(sign_in_pause(0), 0);
+        assert_eq!(sign_in_pause(1), 60);
+        assert_eq!(sign_in_pause(2), 120);
+        assert_eq!(sign_in_pause(3), 240);
+        assert_eq!(sign_in_pause(4), 480);
+        assert_eq!(sign_in_pause(5), 600);
+        assert_eq!(sign_in_pause(u64::MAX), 600);
     }
 
     #[test]

@@ -11,6 +11,7 @@ use std::{
 };
 
 use anyhow::Result;
+use futures::FutureExt as _;
 
 use crate::{
     db::{
@@ -326,7 +327,7 @@ pub async fn run(state: AppState) {
              instance's name"
         );
     } else {
-        match job::fail_orphaned(&state.db, state.coord.is_multi()).await {
+        match job::fail_orphaned(&state.db, state.coord.is_multi(), job::process_started()).await {
             Ok(0) => {}
             Ok(closed) => tracing::warn!(closed, "closed job runs left open by a previous stop"),
             Err(e) => tracing::warn!(error = %e, "could not close orphaned job runs"),
@@ -490,7 +491,23 @@ async fn refresh_due(state: &AppState, id: &str, recorder: &Recorder) -> bool {
         }
     };
 
-    let (came_back, outcome, note) = match refresh_one(state, &item).await {
+    // A panic refreshing one work — on a provider's answer, in the merge —
+    // fails that work, not the sweep: unwound, it would end the loop that
+    // runs every sweep for good, and the work, still first by its deadline,
+    // would be the first of the next.
+    let refreshed = std::panic::AssertUnwindSafe(refresh_one(state, &item))
+        .catch_unwind()
+        .await
+        .unwrap_or_else(|panic| {
+            let what = panic
+                .downcast_ref::<&str>()
+                .map(|s| (*s).to_string())
+                .or_else(|| panic.downcast_ref::<String>().cloned())
+                .unwrap_or_default();
+            Err(anyhow::anyhow!("the refresh panicked: {what}"))
+        });
+
+    let (came_back, outcome, note) = match refreshed {
         // Answered with what was stored — no provider had it — and still due:
         // pushed out, or it would take the first slot of every sweep.
         Ok(Some(fresh))
@@ -502,6 +519,13 @@ async fn refresh_due(state: &AppState, id: &str, recorder: &Recorder) -> bool {
             mark_failure(state, id, Some(&item), notes::KEPT).await;
             (false, job::Outcome::Failed, notes::KEPT.to_string())
         }
+        // Written, with what the providers that failed gave before: the
+        // failure is on the work, and it is tried again sooner.
+        Ok(Some(fresh)) if fresh.refresh_error.is_some() => (
+            false,
+            job::Outcome::Failed,
+            fresh.refresh_error.unwrap_or_default(),
+        ),
         Ok(Some(_)) => (true, job::Outcome::Ok, notes::REFRESHED.to_string()),
         Ok(None) => {
             // Nothing to refresh from. Push the deadline out so this entry
@@ -510,7 +534,7 @@ async fn refresh_due(state: &AppState, id: &str, recorder: &Recorder) -> bool {
             (false, job::Outcome::Failed, notes::UNRESOLVED.to_string())
         }
         Err(e) => {
-            tracing::warn!(%id, error = %e, "refresh failed");
+            tracing::warn!(%id, error = format_args!("{e:#}"), "refresh failed");
             let why = e.to_string();
             mark_failure(state, id, Some(&item), &why).await;
             (false, job::Outcome::Failed, why)
@@ -594,8 +618,9 @@ fn days_ago(days: i64) -> Option<String> {
 /// when it could be.
 async fn mark_failure(state: &AppState, id: &str, item: Option<&MediaItem>, error: &str) {
     let next = crate::service::retry_after_failure(item);
+    let error = crate::providers::clip(error, crate::service::REFRESH_ERROR_CHARS);
 
-    if let Err(e) = repo::item::mark_refreshed(&state.db, id, Some(&next), Some(error)).await {
+    if let Err(e) = repo::item::mark_refreshed(&state.db, id, Some(&next), Some(&error)).await {
         tracing::warn!(%id, error = %e, "could not record the refresh failure");
     }
 

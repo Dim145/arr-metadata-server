@@ -4,7 +4,9 @@
 //! server grew out of (`TMDB_API_KEY`, `BIND_ADDRESS`, …) are still accepted as
 //! fallbacks so an existing `.env` keeps working.
 
-use std::{net::SocketAddr, path::PathBuf, str::FromStr, time::Duration};
+use std::{
+    fmt::Display, net::SocketAddr, ops::RangeInclusive, path::PathBuf, str::FromStr, time::Duration,
+};
 
 use anyhow::{Context, Result, bail};
 use ipnet::IpNet;
@@ -133,6 +135,13 @@ pub struct Server {
     /// container name, by LAN address, by whatever the router calls it. Naming
     /// them is the operator's to do.
     pub allowed_hosts: Vec<String>,
+    /// Connections each door holds at once. Past it, a new one waits in the
+    /// system's queue until another closes, rather than taking a descriptor
+    /// the database and the providers need.
+    pub max_connections: usize,
+    /// How long a connection has to say what it wants — its first bytes, a
+    /// request's head — and how long it may sit idle between two requests.
+    pub header_read_timeout: Duration,
 }
 
 #[derive(Clone, Debug)]
@@ -161,14 +170,47 @@ pub struct ClientsDoor {
     pub replace_authority: Option<String>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Database {
     pub url: String,
     pub max_connections: u32,
     pub acquire_timeout: Duration,
 }
 
-#[derive(Clone, Debug)]
+/// Written by hand: the URL may carry the database's password.
+impl std::fmt::Debug for Database {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Database")
+            .field("url", &masked_url(&self.url))
+            .field("max_connections", &self.max_connections)
+            .field("acquire_timeout", &self.acquire_timeout)
+            .finish()
+    }
+}
+
+/// An address as a log may show it: its password, if any, masked, and its
+/// query — which can carry one too (`?password=`) — left out.
+fn masked_url(text: &str) -> String {
+    match url::Url::parse(text) {
+        Ok(mut url) => {
+            if url.password().is_some() {
+                let _ = url.set_password(Some("***"));
+            }
+            url.set_query(None);
+            url.to_string()
+        }
+        // `sqlite:data/ams.db` and the like: nothing a password hides in.
+        Err(_) if !text.contains('@') => text.to_string(),
+        Err(_) => "<unreadable>".to_string(),
+    }
+}
+
+/// A secret, as a log may show it: whether there is one.
+fn masked(secret: &Option<String>) -> Option<&'static str> {
+    secret.as_ref().map(|_| "***")
+}
+
+#[derive(Clone)]
 pub struct Security {
     /// Master switch. When true every surface becomes [`SurfacePolicy::Open`].
     pub auth_disabled: bool,
@@ -210,16 +252,62 @@ pub struct Security {
     ///
     /// Not only the arr surfaces: a TMDB client whose key is compiled in — which
     /// is most of them — can only be let through by address either.
+    ///
+    /// The list's first value, in an empty table, and nothing after: the
+    /// Access page edits it from then on.
     pub allowlist: Vec<IpNet>,
+    /// Whether the environment named an allowlist at all, rather than the
+    /// default being taken: a start then says so when the two differ.
+    pub allowlist_from_env: bool,
     /// Bootstrap administrator, created on first start when no admin exists.
     pub bootstrap_admin: Option<(String, String)>,
     /// Requests per minute per peer on the native API. `0` disables the limiter.
     pub rate_limit_per_minute: u32,
+    /// Failed sign-ins an account takes in fifteen minutes before it is
+    /// refused without being checked. `0` never refuses.
+    pub sign_in_failures_per_account: u32,
     /// Days of audit history to keep. `0` keeps everything.
     pub audit_retention_days: u32,
 }
 
-#[derive(Clone, Debug)]
+/// Written by hand so that no log line, however it came to print the
+/// configuration, can carry the client secret or the administrator's
+/// password.
+impl std::fmt::Debug for Security {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Security")
+            .field("auth_disabled", &self.auth_disabled)
+            .field("public_browse", &self.public_browse)
+            .field("public_browse_env", &self.public_browse_env)
+            .field("signups_per_hour", &self.signups_per_hour)
+            .field("signups_per_hour_total", &self.signups_per_hour_total)
+            .field("oidc_client_secret", &masked(&self.oidc_client_secret))
+            .field("force_password_login", &self.force_password_login)
+            .field("native_policy", &self.native_policy)
+            .field("tmdb_policy", &self.tmdb_policy)
+            .field("tvdb_policy", &self.tvdb_policy)
+            .field("anilist_policy", &self.anilist_policy)
+            .field("arr_policy", &self.arr_policy)
+            .field("allowlist", &self.allowlist)
+            .field("allowlist_from_env", &self.allowlist_from_env)
+            .field(
+                "bootstrap_admin",
+                &self
+                    .bootstrap_admin
+                    .as_ref()
+                    .map(|(username, _)| (username, "***")),
+            )
+            .field("rate_limit_per_minute", &self.rate_limit_per_minute)
+            .field(
+                "sign_in_failures_per_account",
+                &self.sign_in_failures_per_account,
+            )
+            .field("audit_retention_days", &self.audit_retention_days)
+            .finish()
+    }
+}
+
+#[derive(Clone)]
 pub struct Tmdb {
     pub api_key: Option<String>,
     pub upstream: String,
@@ -229,6 +317,19 @@ pub struct Tmdb {
     pub search_limit: usize,
     /// Whether unmatched `/3/*` requests are forwarded upstream.
     pub passthrough: bool,
+}
+
+impl std::fmt::Debug for Tmdb {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Tmdb")
+            .field("api_key", &masked(&self.api_key))
+            .field("upstream", &self.upstream)
+            .field("language", &self.language)
+            .field("include_adult", &self.include_adult)
+            .field("search_limit", &self.search_limit)
+            .field("passthrough", &self.passthrough)
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -258,7 +359,7 @@ pub struct SonarrServices {
     pub scene_mapping_search: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Tvdb {
     pub upstream: String,
     /// Without a key the provider is skipped.
@@ -270,6 +371,18 @@ pub struct Tvdb {
     /// there — Yamtrack, Jellyfin's plugin, Kodi's scraper — with this
     /// catalogue's locked fields written into the answers.
     pub passthrough: bool,
+}
+
+impl std::fmt::Debug for Tvdb {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Tvdb")
+            .field("upstream", &self.upstream)
+            .field("api_key", &masked(&self.api_key))
+            .field("pin", &masked(&self.pin))
+            .field("enabled", &self.enabled)
+            .field("passthrough", &self.passthrough)
+            .finish()
+    }
 }
 
 /// TVmaze: exact broadcast times, for series. No key.
@@ -308,7 +421,7 @@ pub struct Anilist {
 }
 
 /// MyAnimeList: its official API when a client id is set, Jikan otherwise.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Mal {
     pub upstream: String,
     pub jikan_upstream: String,
@@ -317,6 +430,17 @@ pub struct Mal {
     /// weeks old and fails outright when MyAnimeList refuses it.
     pub client_id: Option<String>,
     pub enabled: bool,
+}
+
+impl std::fmt::Debug for Mal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Mal")
+            .field("upstream", &self.upstream)
+            .field("jikan_upstream", &self.jikan_upstream)
+            .field("client_id", &masked(&self.client_id))
+            .field("enabled", &self.enabled)
+            .finish()
+    }
 }
 
 /// IMDb's own non-commercial datasets, for ratings. No key, no API.
@@ -333,12 +457,22 @@ pub struct AnimeMapping {
     pub url: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Fanart {
     pub upstream: String,
     /// Without a key the provider is simply skipped.
     pub api_key: Option<String>,
     pub enabled: bool,
+}
+
+impl std::fmt::Debug for Fanart {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Fanart")
+            .field("upstream", &self.upstream)
+            .field("api_key", &masked(&self.api_key))
+            .field("enabled", &self.enabled)
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -540,7 +674,8 @@ impl Config {
                     (None, None) => None,
                     _ => bail!("AMS_TLS_CERT and AMS_TLS_KEY must be set together"),
                 },
-                request_timeout: secs(&["AMS_REQUEST_TIMEOUT"], 60)?,
+                // Zero would answer every request that waits on anything 504.
+                request_timeout: secs_in(&["AMS_REQUEST_TIMEOUT"], 60, 1..=86_400)?,
                 cors_origins: list(&["AMS_CORS_ORIGINS"]),
                 allowed_hosts: list(&["AMS_ALLOWED_HOSTS"])
                     .into_iter()
@@ -548,14 +683,16 @@ impl Config {
                     .filter(|h| !h.is_empty())
                     .collect(),
                 trusted_proxies: nets(&["AMS_TRUSTED_PROXIES"], &[])?,
+                max_connections: num_in(&["AMS_MAX_CONNECTIONS"], 1024, 1..=1_000_000)?,
+                header_read_timeout: secs_in(&["AMS_HEADER_READ_TIMEOUT"], 30, 1..=600)?,
             },
             database: Database {
                 url: var_or(
                     &["AMS_DATABASE_URL", "DATABASE_URL"],
                     "sqlite://data/ams.db?mode=rwc",
                 ),
-                max_connections: num(&["AMS_DATABASE_MAX_CONNECTIONS"], 10)?,
-                acquire_timeout: secs(&["AMS_DATABASE_ACQUIRE_TIMEOUT"], 30)?,
+                max_connections: num_in(&["AMS_DATABASE_MAX_CONNECTIONS"], 10, 1..=10_000)?,
+                acquire_timeout: secs_in(&["AMS_DATABASE_ACQUIRE_TIMEOUT"], 30, 1..=3_600)?,
             },
             security: Security {
                 auth_disabled: flag(&["AMS_AUTH_DISABLED"], false)?,
@@ -585,6 +722,7 @@ impl Config {
                         "fc00::/7",
                     ],
                 )?,
+                allowlist_from_env: opt(&["AMS_ALLOWLIST", "AMS_ARR_ALLOWLIST"]).is_some(),
                 bootstrap_admin: match (opt(&["AMS_ADMIN_USERNAME"]), opt(&["AMS_ADMIN_PASSWORD"]))
                 {
                     (Some(u), Some(p)) => Some((u, p)),
@@ -592,6 +730,7 @@ impl Config {
                     _ => bail!("AMS_ADMIN_USERNAME and AMS_ADMIN_PASSWORD must be set together"),
                 },
                 rate_limit_per_minute: num(&["AMS_RATE_LIMIT_PER_MINUTE"], 600)?,
+                sign_in_failures_per_account: num(&["AMS_SIGNIN_FAILURES_PER_ACCOUNT"], 10)?,
                 audit_retention_days: num(&["AMS_AUDIT_RETENTION_DAYS"], 90)?,
             },
             tmdb: Tmdb {
@@ -604,7 +743,12 @@ impl Config {
                 .to_string(),
                 language: var_or(&["AMS_TMDB_LANGUAGE", "TMDB_LANGUAGE"], "en-US"),
                 include_adult: flag(&["AMS_TMDB_INCLUDE_ADULT", "TMDB_INCLUDE_ADULT"], false)?,
-                search_limit: num::<usize>(&["AMS_TMDB_SEARCH_LIMIT", "TMDB_SEARCH_LIMIT"], 10)?,
+                // The range `tmdb.searchLimit` holds, which this seeds.
+                search_limit: num_in::<usize>(
+                    &["AMS_TMDB_SEARCH_LIMIT", "TMDB_SEARCH_LIMIT"],
+                    10,
+                    1..=50,
+                )?,
                 passthrough: flag(&["AMS_TMDB_PASSTHROUGH"], true)?,
             },
             skyhook: Skyhook {
@@ -741,7 +885,12 @@ impl Config {
                     .filter(|u| !u.is_empty())
                     .map(RedisUrl),
                 redis_prefix: var_or(&["AMS_REDIS_PREFIX"], "ams:"),
-                redis_timeout: Duration::from_millis(num(&["AMS_REDIS_TIMEOUT_MS"], 150)?),
+                // Zero would time every call to the cache server out.
+                redis_timeout: Duration::from_millis(num_in(
+                    &["AMS_REDIS_TIMEOUT_MS"],
+                    150,
+                    1..=60_000,
+                )?),
                 public_seconds: num(&["AMS_PUBLIC_CACHE_SECONDS"], 60)?,
             },
             export: Export {
@@ -810,12 +959,14 @@ impl Config {
                 }),
                 None => None,
             },
+            // The two the settings take over are held to the ranges the
+            // settings hold, here, rather than found out by the seeding.
             refresh: Refresh {
                 enabled: flag(&["AMS_REFRESH_ENABLED"], true)?,
-                interval: secs(&["AMS_REFRESH_INTERVAL"], 900)?,
+                interval: secs_in(&["AMS_REFRESH_INTERVAL"], 900, 60..=604_800)?,
                 continuing_ttl: secs(&["AMS_REFRESH_CONTINUING_TTL"], 21_600)?,
                 ended_ttl: secs(&["AMS_REFRESH_ENDED_TTL"], 604_800)?,
-                batch_size: num(&["AMS_REFRESH_BATCH_SIZE"], 25)?,
+                batch_size: num_in(&["AMS_REFRESH_BATCH_SIZE"], 25, 1..=500)?,
             },
         })
     }
@@ -832,6 +983,39 @@ impl Config {
             Surface::Anilist => self.security.anilist_policy,
             Surface::Arr => self.security.arr_policy,
         }
+    }
+
+    /// Every secret the configuration holds — provider keys, the identity
+    /// provider's client secret, the administrator's password, the bucket's
+    /// secret, the passwords in the database's and the cache server's
+    /// addresses — for the log to mask wherever one turns up.
+    pub fn secrets(&self) -> Vec<String> {
+        let password_of = |address: &str| {
+            url::Url::parse(address)
+                .ok()
+                .and_then(|url| url.password().map(str::to_string))
+        };
+        [
+            self.tmdb.api_key.clone(),
+            self.tvdb.api_key.clone(),
+            self.tvdb.pin.clone(),
+            self.fanart.api_key.clone(),
+            self.mal.client_id.clone(),
+            self.security.oidc_client_secret.clone(),
+            self.security
+                .bootstrap_admin
+                .as_ref()
+                .map(|(_, password)| password.clone()),
+            self.media.s3.as_ref().map(|s3| s3.secret_key.clone()),
+            password_of(&self.database.url),
+            self.cache
+                .redis_url
+                .as_ref()
+                .and_then(|redis| password_of(&redis.0)),
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
     }
 }
 
@@ -973,6 +1157,30 @@ fn secs(keys: &[&str], default: u64) -> Result<Duration> {
     Ok(Duration::from_secs(num(keys, default)?))
 }
 
+/// A number within `range`, or why not, naming the variable: a value that
+/// would stop the server working is refused at start, not found out later.
+fn num_in<T>(keys: &[&str], default: T, range: RangeInclusive<T>) -> Result<T>
+where
+    T: FromStr + PartialOrd + Display,
+    T::Err: Display,
+{
+    let value = num(keys, default)?;
+    if !range.contains(&value) {
+        bail!(
+            "{} must be between {} and {}, not {value}",
+            keys[0],
+            range.start(),
+            range.end()
+        );
+    }
+    Ok(value)
+}
+
+/// [`num_in`], in seconds.
+fn secs_in(keys: &[&str], default: u64, range: RangeInclusive<u64>) -> Result<Duration> {
+    Ok(Duration::from_secs(num_in(keys, default, range)?))
+}
+
 /// Comma-separated list, empty entries dropped.
 fn list(keys: &[&str]) -> Vec<String> {
     opt(keys)
@@ -1008,6 +1216,71 @@ fn nets(keys: &[&str], defaults: &[&str]) -> Result<Vec<IpNet>> {
 fn policy(keys: &[&str], default: SurfacePolicy) -> Result<SurfacePolicy> {
     match opt(keys) {
         None => Ok(default),
-        Some(v) => v.parse(),
+        Some(v) => v
+            .parse()
+            .with_context(|| format!("{} is not a surface policy", keys[0])),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_value_out_of_range_is_refused_naming_its_variable() {
+        // Unset variables give their defaults, which are within range.
+        assert_eq!(num_in(&["AMS_TEST_UNSET_A7Q"], 25u32, 1..=500).unwrap(), 25);
+        let refused = num_in(&["AMS_TEST_UNSET_A7Q"], 0u32, 1..=500).unwrap_err();
+        assert_eq!(
+            refused.to_string(),
+            "AMS_TEST_UNSET_A7Q must be between 1 and 500, not 0"
+        );
+        assert!(secs_in(&["AMS_TEST_UNSET_A7Q"], 30, 60..=604_800).is_err());
+    }
+
+    #[test]
+    fn printing_the_configuration_prints_no_secret() {
+        let security = format!(
+            "{:?}",
+            Security {
+                auth_disabled: false,
+                public_browse: false,
+                public_browse_env: None,
+                signups_per_hour: 5,
+                signups_per_hour_total: 100,
+                oidc_client_secret: Some("oidc-secret-value".into()),
+                force_password_login: false,
+                native_policy: SurfacePolicy::ApiKey,
+                tmdb_policy: SurfacePolicy::ApiKey,
+                tvdb_policy: SurfacePolicy::ApiKey,
+                anilist_policy: SurfacePolicy::Allowlist,
+                arr_policy: SurfacePolicy::Allowlist,
+                allowlist: Vec::new(),
+                allowlist_from_env: false,
+                bootstrap_admin: Some(("admin".into(), "admin-password-value".into())),
+                rate_limit_per_minute: 600,
+                sign_in_failures_per_account: 10,
+                audit_retention_days: 90,
+            }
+        );
+        assert!(!security.contains("oidc-secret-value"), "{security}");
+        assert!(!security.contains("admin-password-value"), "{security}");
+        assert!(security.contains("\"admin\""), "{security}");
+
+        let database = format!(
+            "{:?}",
+            Database {
+                url: "postgres://ams:db-password-value@db:5432/ams?password=other".into(),
+                max_connections: 10,
+                acquire_timeout: Duration::from_secs(30),
+            }
+        );
+        assert!(!database.contains("db-password-value"), "{database}");
+        assert!(!database.contains("other"), "{database}");
+        assert!(database.contains("db:5432"), "{database}");
+        assert_eq!(
+            masked_url("sqlite://data/ams.db?mode=rwc"),
+            "sqlite://data/ams.db"
+        );
     }
 }

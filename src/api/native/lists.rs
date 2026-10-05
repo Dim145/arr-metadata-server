@@ -119,7 +119,8 @@ async fn list(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
 ) -> AppResult<Json<CuratedLists>> {
-    let lists = repo::list::list(&state.db, !identity.can_write()).await?;
+    let mut lists = repo::list::list(&state.db, !identity.can_write()).await?;
+    counted_for(&state, &identity, &mut lists).await?;
     Ok(Json(CuratedLists { lists }))
 }
 
@@ -138,20 +139,15 @@ async fn detail(
     Path(key): Path<String>,
     Query(query): Query<PageQuery>,
 ) -> AppResult<Json<CuratedListPage>> {
-    let list = visible(&state, &identity, &key).await?;
+    let language = crate::api::extract::language(query.language.as_deref())?;
+    let mut list = visible(&state, &identity, &key).await?;
+    counted_for(&state, &identity, std::slice::from_mut(&mut list)).await?;
     let audience = if identity.can_write() {
         Audience::Maintainer
     } else {
         Audience::Reader
     };
-    let (items, total) = resolve(
-        &state,
-        &identity,
-        &list,
-        query.language.as_deref(),
-        audience,
-    )
-    .await?;
+    let (items, total) = resolve(&state, &identity, &list, language.as_deref(), audience).await?;
     Ok(Json(CuratedListPage { list, items, total }))
 }
 
@@ -180,7 +176,8 @@ async fn holding(
     if hidden && !identity.can_write() {
         return Err(AppError::NotFound);
     }
-    let lists = repo::list::holding(&state.db, &item.id, !identity.can_write()).await?;
+    let mut lists = repo::list::holding(&state.db, &item.id, !identity.can_write()).await?;
+    counted_for(&state, &identity, &mut lists).await?;
     Ok(Json(CuratedLists { lists }))
 }
 
@@ -291,15 +288,10 @@ async fn create(
     };
     let slug = free_slug(&state, &checked.name).await?;
 
-    let list = repo::list::create(&state.db, checked.fields(&slug))
+    // The list and its members together, or neither.
+    let list = repo::list::create(&state.db, checked.fields(&slug), members.as_deref())
         .await
         .map_err(|e| conflict_or_internal(e, &checked.name))?;
-    if let Some(members) = members {
-        repo::list::set_members(&state.db, &list.id, &members).await?;
-    }
-    let list = repo::list::get(&state.db, &list.id)
-        .await?
-        .ok_or(AppError::NotFound)?;
 
     tracing::info!(list = %list.name, actor = %identity.label(), "created a list");
     audit::record(
@@ -348,14 +340,17 @@ async fn update(
         (ListMode::Manual, None) => None,
     };
 
-    let written = repo::list::update(&state.db, &current.id, checked.fields(&current.slug))
-        .await
-        .map_err(|e| conflict_or_internal(e, &checked.name))?;
+    // What the list is made of and its members together, or neither.
+    let written = repo::list::update(
+        &state.db,
+        &current.id,
+        checked.fields(&current.slug),
+        members.as_deref(),
+    )
+    .await
+    .map_err(|e| conflict_or_internal(e, &checked.name))?;
     if !written {
         return Err(AppError::NotFound);
-    }
-    if let Some(members) = members {
-        repo::list::set_members(&state.db, &current.id, &members).await?;
     }
     let list = repo::list::get(&state.db, &current.id)
         .await?
@@ -477,6 +472,20 @@ async fn find(state: &AppState, key: &str) -> AppResult<Option<CuratedList>> {
         return Ok(Some(list));
     }
     Ok(repo::list::by_slug(&state.db, key).await?)
+}
+
+/// The hand-made lists' counts as this reader is shown them: of the members
+/// switched on and — for a reader the adult policy keeps them from — not for
+/// adults. Whoever maintains the lists is told every member switched on.
+async fn counted_for(
+    state: &AppState,
+    identity: &Identity,
+    lists: &mut [CuratedList],
+) -> AppResult<()> {
+    if !identity.can_write() && !state.adult_for(identity.client_id(), identity.peer_id(), None) {
+        repo::list::count_without_adult(&state.db, lists).await?;
+    }
+    Ok(())
 }
 
 /// A list this caller may read: any, for one who maintains them; a public

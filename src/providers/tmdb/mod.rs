@@ -7,14 +7,13 @@
 pub mod map;
 pub mod models;
 
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use futures::future::join_all;
 use serde_json::Value;
-use tokio::sync::Semaphore;
 
-use crate::{config, domain::MediaKind};
+use crate::{config, domain::MediaKind, providers::Gate};
 
 pub const IMAGE_BASE: &str = "https://image.tmdb.org/t/p/original";
 
@@ -32,7 +31,9 @@ pub struct TmdbClient {
     /// threading them through eight call sites keeps the change where it
     /// belongs, which is one method.
     tuning: parking_lot::RwLock<Tuning>,
-    permits: Arc<Semaphore>,
+    /// At most [`MAX_CONCURRENT`] in flight, and none while TMDB asked to be
+    /// left alone.
+    gate: Gate,
 }
 
 #[derive(Clone)]
@@ -51,7 +52,7 @@ impl TmdbClient {
                 language: cfg.language.clone(),
                 include_adult: cfg.include_adult,
             }),
-            permits: Arc::new(Semaphore::new(MAX_CONCURRENT)),
+            gate: Gate::new("tmdb", "TMDB", MAX_CONCURRENT),
         }
     }
 
@@ -79,45 +80,33 @@ impl TmdbClient {
     /// A v4 token is a JWT and goes in `Authorization`; a v3 key goes in the
     /// query string. Accepting both means an existing `.env` from either
     /// predecessor project keeps working.
-    fn get(&self, url: &str) -> Result<reqwest::RequestBuilder> {
+    fn get(&self, url: &str, key: &str) -> reqwest::RequestBuilder {
+        if key.starts_with("eyJ") {
+            self.http.get(url).bearer_auth(key)
+        } else {
+            self.http.get(url).query(&[("api_key", key)])
+        }
+    }
+
+    /// Perform a GET and return the parsed body, or `None` on 404.
+    async fn fetch(&self, url: &str, params: &[(&str, String)]) -> Result<Option<Value>> {
         let key = self
             .api_key
             .as_deref()
             .ok_or_else(|| anyhow!("no TMDB API key configured"))?;
 
-        Ok(if key.starts_with("eyJ") {
-            self.http.get(url).bearer_auth(key)
-        } else {
-            self.http.get(url).query(&[("api_key", key)])
-        })
-    }
-
-    /// Perform a GET and return the parsed body, or `None` on 404.
-    async fn fetch(&self, url: &str, params: &[(&str, String)]) -> Result<Option<Value>> {
-        let _permit = self
-            .permits
-            .acquire()
+        // A request error names the address it was sent to, key and all, and
+        // the error is logged: the gate keeps its kind and what lay under it
+        // — `url` here is the path alone.
+        let (response, _permit) = self
+            .gate
+            .send(|| {
+                self.get(url, key)
+                    .query(params)
+                    .timeout(Duration::from_secs(20))
+            })
             .await
-            .expect("semaphore is never closed");
-
-        let started = std::time::Instant::now();
-        let response = self
-            .get(url)?
-            .query(params)
-            .timeout(Duration::from_secs(20))
-            .send()
-            .await
-            // A request error names the address it was sent to, key and
-            // all, and the error is logged: what is kept of it is its kind
-            // and what lay under it — `url` here is the path alone.
-            .map_err(|e| {
-                anyhow::anyhow!(
-                    "TMDB request failed: {url}: {}",
-                    crate::providers::describe_request_error(&e)
-                )
-            });
-        crate::metrics::upstream("tmdb", started, response.as_ref().ok().map(|r| r.status()));
-        let response = response?;
+            .map_err(|e| anyhow!("TMDB request failed: {url}: {e}"))?;
 
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
@@ -130,9 +119,10 @@ impl TmdbClient {
         let status = response.status();
         if !status.is_success() {
             // TMDB puts a human-readable reason in the body; include it, since
-            // "401" alone does not distinguish a bad key from a revoked one.
-            let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("TMDB returned {status} for {url}: {}", body.trim());
+            // "401" alone does not distinguish a bad key from a revoked one —
+            // the start of it, read no further than that.
+            let reason = crate::providers::error_text(response).await;
+            anyhow::bail!("TMDB returned {status} for {url}: {reason}");
         }
 
         let value = crate::providers::read_json(response)
@@ -213,25 +203,46 @@ impl TmdbClient {
         self.fetch(&url, &params).await
     }
 
-    /// Every season's episode list, fetched concurrently.
+    /// Every season's episode list, fetched concurrently, and the numbers of
+    /// those that went unanswered.
     ///
-    /// A season that fails is dropped rather than failing the series: a missing
-    /// special is better than no show at all.
-    pub async fn tv_seasons(&self, id: i64, numbers: &[i32]) -> Vec<models::Season> {
+    /// A season that fails is left out rather than failing the series — and
+    /// named, so that what is stored of it stands: taken for a season with no
+    /// episodes, it was written as one, and Sonarr deleted every episode of
+    /// it until the next refresh. A season the series lists and its own
+    /// address does not know is the same failure.
+    pub async fn tv_seasons(&self, id: i64, numbers: &[i32]) -> (Vec<models::Season>, Vec<i32>) {
         let results = join_all(numbers.iter().map(|&n| self.tv_season(id, n))).await;
 
-        results
+        let mut unanswered = Vec::new();
+        let seasons = results
             .into_iter()
             .zip(numbers)
-            .filter_map(|(result, number)| match result {
+            .filter_map(|(result, &number)| match result {
                 Ok(Some(season)) => Some(season),
-                Ok(None) => None,
+                Ok(None) => {
+                    tracing::warn!(
+                        tmdb_id = id,
+                        season = number,
+                        "a season the series lists was not found"
+                    );
+                    unanswered.push(number);
+                    None
+                }
                 Err(e) => {
-                    tracing::warn!(tmdb_id = id, season = number, error = %e, "season fetch failed");
+                    tracing::warn!(
+                        tmdb_id = id,
+                        season = number,
+                        error = format_args!("{e:#}"),
+                        "season fetch failed"
+                    );
+                    unanswered.push(number);
                     None
                 }
             })
-            .collect()
+            .collect();
+
+        (seasons, unanswered)
     }
 
     async fn tv_season(&self, id: i64, number: i32) -> Result<Option<models::Season>> {

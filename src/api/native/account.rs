@@ -17,7 +17,10 @@ use crate::{
     api::{
         audit::{self, Event},
         extract::ClientIp,
-        native::users::{clean_display_name, clean_email, clean_locale},
+        native::{
+            clients,
+            users::{clean_display_name, clean_email, clean_locale},
+        },
     },
     auth::{Identity, middleware::CurrentSession, secrets},
     db::repo::{
@@ -213,9 +216,14 @@ async fn close_session(
 ) -> AppResult<StatusCode> {
     let me = identity.require_user()?;
 
+    // Forgotten after the row goes as well as before: a request on that
+    // session read in between would put it back into the cache otherwise,
+    // alive there for the cache's lifetime after it was closed.
     state.caches.forget_sessions();
-    repo::user::delete_user_session(&state.db, &me.id, &id)
-        .await?
+    let closed = repo::user::delete_user_session(&state.db, &me.id, &id).await?;
+    state.caches.forget_sessions();
+
+    closed
         .then_some(StatusCode::NO_CONTENT)
         .ok_or(AppError::NotFound)
 }
@@ -253,7 +261,6 @@ async fn keys(
     Extension(identity): Extension<Identity>,
 ) -> AppResult<Json<AccountKeys>> {
     let me = identity.require_user()?;
-    state.caches.forget_sessions();
 
     Ok(Json(AccountKeys {
         keys: repo::client::list(&state.db, repo::client::Owner::User(&me.id)).await?,
@@ -448,6 +455,19 @@ async fn update_key(
         return Err(AppError::Conflict(format!(
             "you already have a key named {name:?}"
         )));
+    }
+
+    // Paused by an administrator, it stays paused until one resumes it: a
+    // member whose key was stopped for hammering the relays does not get to
+    // start it again.
+    if update.is_enabled == Some(true)
+        && !key.is_enabled
+        && clients::paused_by_admin(&state, &id).await?
+    {
+        return Err(AppError::Refused {
+            code: "key_paused_by_admin",
+            message: "an administrator paused this key; only an administrator can resume it".into(),
+        });
     }
 
     if let Some(name) = &name {

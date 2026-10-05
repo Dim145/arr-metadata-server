@@ -18,7 +18,7 @@ use axum::{
 };
 
 use crate::{
-    auth::{Identity, ip, secrets},
+    auth::{Identity, csrf, ip, secrets},
     config::{Api, Surface, SurfacePolicy},
     db::repo,
     error::{AppError, AppResult},
@@ -97,11 +97,21 @@ async fn authorize(
         .get::<axum::extract::ConnectInfo<SocketAddr>>()
         .map(|ci| ci.0);
 
-    let client_ip = ip::resolve(
+    let caller = ip::caller(
         peer,
         request.headers(),
         &state.config.server.trusted_proxies,
     );
+    if let ip::Caller::Unreadable { proxy } = caller
+        && warning_due(proxy, Warning::Unreadable)
+    {
+        tracing::warn!(
+            %proxy,
+            "a trusted proxy forwarded an X-Forwarded-For this server cannot read; its \
+             client is treated as unknown — refused by every allowlist"
+        );
+    }
+    let client_ip = caller.address();
 
     // What the clients' door relays for services.sonarr.tv is Sonarr's,
     // whatever its path. A route matched under that name is what its path says.
@@ -123,7 +133,7 @@ async fn authorize(
         || extract_key(request.headers(), request.uri().query()).is_some())
         && !(surface == Surface::Tvdb && tvdb_login(&request));
 
-    let identity = match identify(&state, surface, api, client_ip, &mut request).await {
+    let identity = match identify(&state, surface, api, peer, client_ip, &mut request).await {
         Ok(identity) => {
             if counted {
                 state.calls.note(api, true);
@@ -178,6 +188,7 @@ async fn identify(
     state: &AppState,
     surface: Surface,
     api: Api,
+    peer: Option<SocketAddr>,
     client_ip: Option<IpAddr>,
     request: &mut Request,
 ) -> AppResult<Identity> {
@@ -201,8 +212,21 @@ async fn identify(
         SurfacePolicy::Open => Identity::Anonymous,
 
         SurfacePolicy::Allowlist => {
+            // A proxy nobody declared makes every client behind it look like
+            // the proxy — a private address, on the list by default — so the
+            // whole internet would come in through it. Sonarr and Radarr
+            // calling directly never forward anything.
+            let stranger = ip::forwarded_by_stranger(
+                peer,
+                request.headers(),
+                &state.config.server.trusted_proxies,
+            );
             let rules = state.allowlist();
-            let matched = ip::matching_rule(client_ip, &rules);
+            let matched = if stranger {
+                None
+            } else {
+                ip::matching_rule(client_ip, &rules)
+            };
             let allowed = matched.is_some();
 
             // Recorded either way. A refusal is the only trace a client that
@@ -211,11 +235,23 @@ async fn identify(
             note_caller(state, client_ip, request, surface, allowed);
 
             if !allowed {
-                tracing::warn!(
-                    ?client_ip,
-                    path = %request.uri().path(),
-                    "rejected: peer is not in the allowlist"
-                );
+                match (stranger, client_ip) {
+                    (true, Some(proxy)) if warning_due(proxy, Warning::Stranger) => {
+                        tracing::warn!(
+                            %proxy,
+                            path = %request.uri().path(),
+                            "refused a forwarded request from a proxy outside AMS_TRUSTED_PROXIES: \
+                             every client behind it would look like the proxy. Add the proxy's \
+                             address to AMS_TRUSTED_PROXIES"
+                        );
+                    }
+                    (true, _) => {}
+                    (false, _) => tracing::warn!(
+                        ?client_ip,
+                        path = %request.uri().path(),
+                        "rejected: peer is not in the allowlist"
+                    ),
+                }
                 return Err(AppError::Forbidden);
             }
 
@@ -256,6 +292,34 @@ async fn identify(
             }
         }
     };
+
+    // A change carried by something the browser sends on its own — the
+    // session cookie, or, on the native surface, the address it calls from
+    // or nothing at all — has to be asked from this server's own pages. A
+    // key is not ambient: no page elsewhere can attach one.
+    let ambient = match &identity {
+        Identity::User(_) => true,
+        Identity::Network(_) | Identity::Anonymous => surface == Surface::Native,
+        Identity::Client(_) | Identity::Visitor => false,
+    };
+    if ambient && !request.method().is_safe() {
+        let own = own_origin(state, peer, request);
+        if let Err(why) = csrf::check(request.method(), request.headers(), &own) {
+            tracing::warn!(
+                reason = why,
+                origin = ?request.headers().get(header::ORIGIN),
+                fetch_site = ?request.headers().get("sec-fetch-site"),
+                path = %request.uri().path(),
+                "refused a change asked from another site's page"
+            );
+            return Err(AppError::Refused {
+                code: "cross_site_request",
+                message: "this change was asked from another site's page; make it from this \
+                          server's own"
+                    .into(),
+            });
+        }
+    }
 
     // A member reads what a visitor may, and keeps their own account; the rest
     // of the native surface is for the people who keep the catalogue. Decided
@@ -306,6 +370,73 @@ fn switched_off(api: Api) -> AppError {
     }
 }
 
+/// What a request's own origin may be: the names it was addressed to, the
+/// scheme it came in when that is known, and the origins the operator named.
+fn own_origin(state: &AppState, peer: Option<SocketAddr>, request: &Request) -> csrf::Own<'static> {
+    let server = &state.config.server;
+    let headers = request.headers();
+
+    let mut hosts: Vec<String> = headers
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string)
+        .into_iter()
+        .collect();
+    // HTTP/2 carries the name in the request's authority.
+    if let Some(authority) = request.uri().authority() {
+        hosts.push(authority.as_str().to_string());
+    }
+    if let Some(forwarded) = ip::forwarded_host(peer, headers, &server.trusted_proxies) {
+        hosts.push(forwarded);
+    }
+
+    csrf::Own {
+        hosts,
+        scheme: ip::scheme(peer, headers, &server.trusted_proxies, server.tls.is_some()),
+        named: server
+            .public_url
+            .iter()
+            .chain(&server.cors_origins)
+            .cloned()
+            .collect(),
+    }
+}
+
+/// Something worth a warning in the log once in a while, not on every request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Warning {
+    /// A trusted proxy forwarded a chain that cannot be read.
+    Unreadable,
+    /// A peer outside `AMS_TRUSTED_PROXIES` forwarded a request.
+    Stranger,
+}
+
+/// How often the same warning about the same peer is written.
+const WARNING_INTERVAL: Duration = Duration::from_secs(600);
+
+static LAST_WARNED: LazyLock<Mutex<HashMap<(IpAddr, Warning), Instant>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Whether this warning about this peer is due again.
+fn warning_due(peer: IpAddr, warning: Warning) -> bool {
+    let Ok(mut last) = LAST_WARNED.lock() else {
+        return false;
+    };
+    let now = Instant::now();
+    let key = (ip::bucket(peer), warning);
+    match last.get(&key) {
+        Some(at) if now.duration_since(*at) < WARNING_INTERVAL => false,
+        _ => {
+            last.insert(key, now);
+            // Bounded, because the keys come from whoever can reach the port.
+            if last.len() > 4096 {
+                last.retain(|_, at| now.duration_since(*at) < WARNING_INTERVAL);
+            }
+            true
+        }
+    }
+}
+
 /// How often the same address is written back to the callers table.
 ///
 /// Sonarr refreshing a library is hundreds of reads a minute, and turning each
@@ -315,6 +446,12 @@ const SIGHTING_INTERVAL: Duration = Duration::from_secs(60);
 
 static LAST_NOTED: LazyLock<Mutex<HashMap<(IpAddr, bool), Instant>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Reverse lookups of callers' names running at once. A lookup waits on a
+/// resolver the caller may control — its own PTR records — so a stream of
+/// fresh addresses must not be able to fill the blocking pool with them:
+/// past this many, a name is simply not looked up this time.
+static LOOKUPS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
 
 /// Record that somebody called a guarded surface, off the request path.
 ///
@@ -329,7 +466,10 @@ fn note_caller(
 ) {
     let Some(ip) = client_ip else { return };
 
-    if !due(ip, allowed) {
+    // Counted by network, as the rate limiter counts: an IPv6 client has a
+    // whole /64 to call from, and each fresh address must not be a fresh
+    // write and a fresh lookup.
+    if !due(ip::bucket(ip), allowed) {
         return;
     }
 
@@ -349,13 +489,16 @@ fn note_caller(
         // container that keeps its address, is about once an hour.
         let hostname = match state.resolver.cached(ip) {
             Some(name) => Some(name),
-            None if state.resolver.is_stale(ip) => {
-                let resolver = state.resolver.clone();
-                tokio::task::spawn_blocking(move || resolver.resolve(ip))
-                    .await
-                    .ok()
-                    .flatten()
-            }
+            None if state.resolver.is_stale(ip) => match LOOKUPS.try_acquire() {
+                Ok(_slot) => {
+                    let resolver = state.resolver.clone();
+                    tokio::task::spawn_blocking(move || resolver.resolve(ip))
+                        .await
+                        .ok()
+                        .flatten()
+                }
+                Err(_) => None,
+            },
             None => None,
         };
 
@@ -595,8 +738,10 @@ pub(crate) async fn resolve_key(
         return Err(AppError::Forbidden);
     }
 
+    // Compared as a time, not as text: `31/12/2026` sorted after every
+    // `2026-…` and never ran out. One nobody can read is refused, as run out.
     if let Some(expires_at) = &found.client.expires_at
-        && expires_at.as_str() <= crate::db::now().as_str()
+        && key_expiry(expires_at).is_none_or(|at| at <= chrono::Utc::now())
     {
         tracing::warn!(client = %found.client.name, "rejected: key has expired");
         return Err(AppError::Forbidden);
@@ -628,6 +773,18 @@ pub(crate) async fn resolve_key(
     }
 
     Ok(Identity::Client(Box::new(client)))
+}
+
+/// When a key runs out, from what was stored or asked for: an RFC 3339 time,
+/// or a bare date, read as its first moment in UTC. Nothing for anything else.
+pub(crate) fn key_expiry(text: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    let text = text.trim();
+    crate::db::parse_rfc3339(text).or_else(|| {
+        chrono::NaiveDate::parse_from_str(text, "%Y-%m-%d")
+            .ok()
+            .and_then(|day| day.and_hms_opt(0, 0, 0))
+            .map(|midnight| midnight.and_utc())
+    })
 }
 
 /// The session a request was authenticated by: the SHA-256 of its token, which
@@ -674,16 +831,27 @@ async fn resolve_session(
     Ok(found.map(|user| (Identity::User(Box::new(user)), hash)))
 }
 
-fn session_token(headers: &HeaderMap) -> Option<String> {
-    headers
+/// The session token a request carries.
+///
+/// Two cookies by that name are refused together: this server sets one, for
+/// the whole host, and a second can only have been planted beside it — by a
+/// sibling under the same domain, with a longer path so that it is sent
+/// first — to have the person act, unknowing, in somebody else's session.
+pub(crate) fn session_token(headers: &HeaderMap) -> Option<String> {
+    let mut tokens = headers
         .get_all(header::COOKIE)
         .iter()
         .filter_map(|v| v.to_str().ok())
         .flat_map(|raw| raw.split(';'))
         .filter_map(|pair| pair.trim().split_once('='))
-        .find(|(name, _)| *name == SESSION_COOKIE)
-        .map(|(_, value)| value.trim().to_string())
-        .filter(|v| !v.is_empty())
+        .filter(|(name, _)| *name == SESSION_COOKIE)
+        .map(|(_, value)| value.trim());
+
+    let token = tokens.next()?;
+    if tokens.next().is_some() {
+        return None;
+    }
+    Some(token.to_string()).filter(|v| !v.is_empty())
 }
 
 #[cfg(test)]
@@ -898,5 +1066,35 @@ mod tests {
     fn session_cookies_split_across_headers_are_still_found() {
         let h = headers(&[("cookie", "theme=dark"), ("cookie", "ams_session=tok123")]);
         assert_eq!(session_token(&h).as_deref(), Some("tok123"));
+    }
+
+    #[test]
+    fn a_session_cookie_planted_beside_ours_spoils_both() {
+        // A sibling under the same domain sets its own, with a longer path,
+        // so that it is sent first.
+        let h = headers(&[("cookie", "ams_session=theirs; theme=dark; ams_session=ours")]);
+        assert_eq!(session_token(&h), None);
+        let h = headers(&[
+            ("cookie", "ams_session=theirs"),
+            ("cookie", "ams_session=ours"),
+        ]);
+        assert_eq!(session_token(&h), None);
+    }
+
+    #[test]
+    fn a_key_runs_out_at_a_time_not_at_a_spelling() {
+        let at = |text: &str| key_expiry(text).map(crate::db::to_rfc3339);
+        assert_eq!(
+            at("2026-12-31T00:00:00+02:00").as_deref(),
+            Some("2026-12-30T22:00:00.000Z")
+        );
+        assert_eq!(
+            at(" 2026-12-31 ").as_deref(),
+            Some("2026-12-31T00:00:00.000Z")
+        );
+        // What sorted after every date and so never ran out.
+        assert_eq!(at("31/12/2026"), None);
+        assert_eq!(at("Dec 31 2026"), None);
+        assert_eq!(at(""), None);
     }
 }

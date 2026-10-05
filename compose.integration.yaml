@@ -38,7 +38,12 @@ services:
       AMS_FANART_API_KEY: ${AMS_FANART_API_KEY:-${FANARTTV_API_KEY:-}}
       AMS_ADMIN_USERNAME: ${AMS_ADMIN_USERNAME:?}
       AMS_ADMIN_PASSWORD: ${AMS_ADMIN_PASSWORD:?}
-      AMS_ALLOWLIST: 172.31.0.0/24
+      # The clients themselves, one address each — not the whole network:
+      # Docker's gateway, 172.31.0.1, is on it, and whatever reaches the
+      # host's published ports through Docker's own proxy arrives from there.
+      # The list's first value only: after the first start it is edited on
+      # the Access page, and this variable is not read again.
+      AMS_ALLOWLIST: 172.31.0.20,172.31.0.21,172.31.0.22
       # Jellyseerr compiles its TMDB key in and cannot be given one of ours, so
       # its surface is guarded by address like Sonarr's and Radarr's.
       AMS_TMDB_AUTH: allowlist
@@ -78,9 +83,14 @@ services:
       PGID: ${PGID:-1000}
       TZ: ${TZ:-UTC}
       # Where the init script below fetches the authority from: the server's
-      # web door, over the stack's own network. Pin it, once known, with
-      # AMS_CA_FINGERPRINT — the SHA-256 the administration page shows.
+      # web door, over the stack's own network — plain HTTP, so the script
+      # wants what it fetches pinned: put AMS_CA_FINGERPRINT, the SHA-256 the
+      # administration page shows, in .env. Until there is one to copy — a
+      # stack's very first start — AMS_CA_INSECURE accepts the fetch unpinned,
+      # on this network only these containers are on.
       AMS_CA_URL: http://172.31.0.10:8080/ca.crt
+      AMS_CA_FINGERPRINT: ${AMS_CA_FINGERPRINT:-}
+      AMS_CA_INSECURE: ${AMS_CA_INSECURE:-1}
 
     volumes:
       - sonarr-config:/config
@@ -98,7 +108,10 @@ services:
 
     ports:
       - "${SONARR_PORT:-8989}:8989"
-    networks: [stack]
+    # A fixed address: the one the allowlist names.
+    networks:
+      stack:
+        ipv4_address: 172.31.0.20
 
   radarr:
     image: lscr.io/linuxserver/radarr:latest
@@ -113,6 +126,8 @@ services:
       PGID: ${PGID:-1000}
       TZ: ${TZ:-UTC}
       AMS_CA_URL: http://172.31.0.10:8080/ca.crt
+      AMS_CA_FINGERPRINT: ${AMS_CA_FINGERPRINT:-}
+      AMS_CA_INSECURE: ${AMS_CA_INSECURE:-1}
 
     volumes:
       - radarr-config:/config
@@ -123,7 +138,9 @@ services:
 
     ports:
       - "${RADARR_PORT:-7878}:7878"
-    networks: [stack]
+    networks:
+      stack:
+        ipv4_address: 172.31.0.21
 
   jellyseerr:
     image: fallenbagel/jellyseerr:latest
@@ -157,7 +174,9 @@ services:
 
     ports:
       - "${JELLYSEERR_PORT:-5055}:5055"
-    networks: [stack]
+    networks:
+      stack:
+        ipv4_address: 172.31.0.22
 
   # A client that asks TheTVDB and AniList itself, Yamtrack for one, is
   # redirected the same way for those names — a new stack's authority covers
@@ -179,6 +198,11 @@ services:
   #       - "api.themoviedb.org:172.31.0.10"
   #       - "api4.thetvdb.com:172.31.0.10"
   #       - "graphql.anilist.co:172.31.0.10"
+  #     # AniList's relay lets callers in by address: allow this one on the
+  #     # Access page (or add it to AMS_ALLOWLIST before the first start).
+  #     networks:
+  #       stack:
+  #         ipv4_address: 172.31.0.23
 
 networks:
   stack:

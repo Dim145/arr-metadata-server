@@ -18,7 +18,7 @@ use crate::{
     auth::Identity,
     db::repo::{self, audit::Action},
     domain::{
-        ExternalIds, MediaItem,
+        MediaKind,
         fields::{self, Override, Scope},
     },
     error::{AppError, AppResult},
@@ -36,16 +36,32 @@ pub fn router() -> OpenApiRouter<AppState> {
 }
 
 /// Every manual edit stored against a work.
+///
+/// Of a work this caller may see, as its own page decides it. Who made each
+/// edit is said to whoever maintains the catalogue: to anybody else it would
+/// name accounts and keys.
 #[utoipa::path(
     get, path = "/items/{id}/overrides", tag = TAG,
     params(("id" = String, Path, description = "The work's identifier")),
-    responses((status = 200, body = Vec<Override>)),
+    responses(
+        (status = 200, body = Vec<Override>),
+        (status = 404, description = "No such work, or none this caller may see"),
+    ),
 )]
 async fn list(
     State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
     Path(id): Path<String>,
 ) -> AppResult<Json<Vec<Override>>> {
-    Ok(Json(repo::override_field::list(&state.db, &id).await?))
+    super::visible_work(&state, &identity, &id).await?;
+
+    let mut overrides = repo::override_field::list(&state.db, &id).await?;
+    if !identity.can_write() {
+        for edit in &mut overrides {
+            edit.updated_by = None;
+        }
+    }
+    Ok(Json(overrides))
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -135,25 +151,15 @@ async fn set(
         _ => {}
     }
 
-    // The work's identity is written to its row as well as locked: the
-    // lists, the addresses and the clients' lookups read the row, not the
-    // lock. Checked before anything is written, so a slug or an identifier
-    // another work holds refuses the whole edit.
-    if scope == Scope::Item && fields::IDENTITY.contains(&request.field.as_str()) {
-        write_identity(&state, &item, &request.field, request.value.as_ref()).await?;
-    }
-
-    repo::override_field::set(
-        &state.db,
-        &id,
+    lock(
+        &state,
+        (&item.id, item.kind),
         scope,
         &request.field,
         request.value.as_ref(),
-        Some(&identity.label()),
+        &identity.label(),
     )
     .await?;
-
-    state.caches.touched(&id).await;
     service::listing::after_write(&state, &id).await;
 
     tracing::info!(
@@ -287,51 +293,34 @@ async fn clear(
     Ok(Json(ClearResponse { removed }))
 }
 
-/// Write a locked identity field through to the row: adult, the slug, the
-/// identifiers. A slug is refused while another work of the kind has it,
-/// an identifier while another work goes by it.
-async fn write_identity(
+/// Lock a field of a work, or of one of its seasons or episodes: what an edit
+/// by hand and an imported lock both come to.
+///
+/// A lock on the work's identity — adult, its slug, its identifiers — is
+/// written to its row as well, in the lock's own transaction: the lists, the
+/// calendar, the feeds, the addresses and the clients' lookups read the row,
+/// not the lock, and an adult work locked so is kept from all of them at
+/// once. A slug or an identifier another work holds refuses the lock, with
+/// nothing written (409). The value has been checked against the registry.
+/// The work is served afresh from here on; listing it again is the caller's.
+pub(super) async fn lock(
     state: &AppState,
-    item: &MediaItem,
+    (id, kind): (&str, MediaKind),
+    scope: Scope,
     field: &str,
     value: Option<&Value>,
+    by: &str,
 ) -> AppResult<()> {
-    match (field, value) {
-        ("isAdult", Some(Value::Bool(adult))) => {
-            repo::item::set_adult(&state.db, &item.id, *adult).await?;
+    match scope {
+        Scope::Item => {
+            repo::override_field::set_on_work(&state.db, id, kind, field, value, Some(by))
+                .await?
+                .map_err(|taken| AppError::Conflict(taken.0))?;
         }
-        ("slug", Some(Value::String(slug))) => {
-            if let Some(owner) = repo::item::find_id_by_slug(&state.db, item.kind, slug).await?
-                && owner != item.id
-            {
-                return Err(AppError::Conflict(format!(
-                    "another {} already has the address {slug:?}",
-                    item.kind.as_str()
-                )));
-            }
-            repo::item::set_slug(&state.db, &item.id, slug).await?;
-        }
-        ("externalIds", Some(value @ Value::Object(_))) => {
-            let ids: ExternalIds = serde_json::from_value(value.clone()).map_err(|e| {
-                AppError::BadRequest(format!("the identifiers cannot be read: {e}"))
-            })?;
-            for (source, id) in ids.rows(item.kind) {
-                let held =
-                    repo::item::held_external_ids(&state.db, source, std::slice::from_ref(&id))
-                        .await?;
-                if let Some(owner) = held.get(&id)
-                    && *owner != item.id
-                {
-                    return Err(AppError::Conflict(format!(
-                        "another work already goes by {} {id}",
-                        source.as_str()
-                    )));
-                }
-            }
-            repo::item::replace_external_ids(&state.db, &item.id, item.kind, &ids).await?;
-        }
-        _ => {}
+        _ => repo::override_field::set(&state.db, id, scope, field, value, Some(by)).await?,
     }
+
+    state.caches.touched(id).await;
     Ok(())
 }
 

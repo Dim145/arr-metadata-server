@@ -186,31 +186,12 @@ impl AppState {
         let db = Db::connect(&config.database).await?;
         db.migrate().await?;
 
-        let http = reqwest::Client::builder()
-            .user_agent(concat!(
-                "arr-metadata-server/",
-                env!("CARGO_PKG_VERSION"),
-                " (+",
-                env!("CARGO_PKG_REPOSITORY"),
-                ")"
-            ))
-            .timeout(std::time::Duration::from_secs(30))
-            .connect_timeout(std::time::Duration::from_secs(10))
-            .pool_max_idle_per_host(16)
-            // A redirect is a URL somebody else chose, which is the same
-            // problem as an image URL somebody else stored — and it arrives
-            // after every check has already passed.
-            .redirect(reqwest::redirect::Policy::custom(|attempt| {
-                if crate::outbound::names_internal_host(attempt.url().as_str()) {
-                    return attempt.stop();
-                }
-                if attempt.previous().len() >= 5 {
-                    return attempt.error("too many redirects");
-                }
-                attempt.follow()
-            }))
-            .build()
-            .context("failed to build the outbound HTTP client")?;
+        let upstreams = std::sync::Arc::new(configured_hosts(&config));
+        let http = outbound_client(&upstreams, Redirects::Anywhere)?;
+        // MyAnimeList's client id travels in a header of its own, which a
+        // redirect to another host would carry along: reqwest strips only
+        // the ones it knows for credentials.
+        let mal_http = outbound_client(&upstreams, Redirects::SameHost)?;
 
         let slot = crate::cache::RedisSlot::default();
         let caches = Caches::new(&config.cache, slot.clone());
@@ -219,7 +200,26 @@ impl AppState {
             config.security.rate_limit_per_minute,
             (config.mode == crate::config::Mode::Multi)
                 .then(|| (slot.clone(), config.cache.redis_prefix.clone())),
+            config.security.sign_in_failures_per_account,
         );
+
+        // Published in https by something in front, which nobody declared:
+        // every client then looks like that proxy — one rate-limit bucket,
+        // and on the address-guarded surfaces, a private address.
+        if config.server.tls.is_none()
+            && config.server.trusted_proxies.is_empty()
+            && config
+                .server
+                .public_url
+                .as_deref()
+                .is_some_and(|url| url.starts_with("https://"))
+        {
+            tracing::warn!(
+                "AMS_PUBLIC_URL says https, but this server holds no TLS of its own and \
+                 AMS_TRUSTED_PROXIES is empty: whatever terminates TLS in front of it is taken \
+                 for every client. Set AMS_TRUSTED_PROXIES to its address"
+            );
+        }
         let instance = coord.instance.id.clone();
         crate::db::repo::job::name_instance(&config.instance_name);
         let cookie_key = match config.mode {
@@ -239,7 +239,7 @@ impl AppState {
         );
         let tvmaze = TvmazeClient::new(http.clone(), &config.tvmaze);
         let anilist = AnilistClient::new(http.clone(), &config.anilist, instance.clone());
-        let mal = MalClient::new(http.clone(), &config.mal);
+        let mal = MalClient::new(mal_http, &config.mal);
         let fankai = FankaiClient::new(http.clone(), &config.fankai, &config.tmdb.language);
         let fankai_wiki = FankaiWikiClient::new(http.clone(), &config.fankai_wiki);
 
@@ -820,7 +820,9 @@ impl AppState {
     /// `AMS_ALLOWLIST` seeds an empty table so an existing deployment keeps
     /// working across the upgrade. After that the table is the truth and the
     /// variable is ignored: two sources for one decision is how a server ends
-    /// up refusing a client nobody can explain.
+    /// up refusing a client nobody can explain. Said at every start where the
+    /// variable is still set and the two disagree, since an operator who sets
+    /// it later believes the list narrowed.
     async fn bootstrap_allowlist(&self) -> Result<()> {
         if repo::network::count_rules(&self.db).await? == 0 {
             let seeded = repo::network::seed(&self.db, &self.config.security.allowlist).await?;
@@ -834,7 +836,22 @@ impl AppState {
             }
         }
 
-        self.reload_allowlist().await
+        self.reload_allowlist().await?;
+
+        if self.config.security.allowlist_from_env {
+            let stored: Vec<ipnet::IpNet> =
+                self.allowlist().into_iter().map(|(_, net)| net).collect();
+            if !same_networks(&self.config.security.allowlist, &stored) {
+                tracing::warn!(
+                    from_environment = ?self.config.security.allowlist,
+                    applied = ?stored,
+                    "AMS_ALLOWLIST differs from the allowlist on the Access page, which is what \
+                     applies: the variable only gave the list its first value. Edit the list \
+                     there, or remove the variable"
+                );
+            }
+        }
+        Ok(())
     }
 
     /// Create the administrator named in the environment, if there is none yet.
@@ -907,11 +924,144 @@ impl AppState {
     }
 }
 
+/// Where the providers' client follows a redirect.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Redirects {
+    /// To any host the guard does not refuse.
+    Anywhere,
+    /// Only on the host first asked: a credential in a header of the
+    /// provider's own goes nowhere else.
+    SameHost,
+}
+
+/// The client every provider, dataset, relay to TMDB and webhook is asked
+/// with.
+///
+/// A redirect is a URL somebody else chose — the same problem as an image
+/// URL somebody else stored, arriving after every check has passed — so each
+/// hop is judged as the media client judges it ([`crate::outbound::Guard`]):
+/// an http or https address, never one written as an address only this
+/// server can reach, five at most. A hop to a name is judged where it is
+/// resolved: see [`UpstreamResolver`].
+fn outbound_client(
+    upstreams: &std::sync::Arc<std::collections::HashSet<String>>,
+    redirects: Redirects,
+) -> Result<reqwest::Client> {
+    let guard = crate::outbound::Guard::default();
+    reqwest::Client::builder()
+        .user_agent(concat!(
+            "arr-metadata-server/",
+            env!("CARGO_PKG_VERSION"),
+            " (+",
+            env!("CARGO_PKG_REPOSITORY"),
+            ")"
+        ))
+        .timeout(std::time::Duration::from_secs(30))
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .pool_max_idle_per_host(16)
+        .dns_resolver(std::sync::Arc::new(UpstreamResolver {
+            configured: std::sync::Arc::clone(upstreams),
+        }))
+        .redirect(reqwest::redirect::Policy::custom(move |attempt| {
+            if redirects == Redirects::SameHost
+                && attempt
+                    .previous()
+                    .first()
+                    .and_then(|first| first.host_str())
+                    != attempt.url().host_str()
+            {
+                return attempt.stop();
+            }
+            match guard.redirect(attempt.url(), attempt.previous().len()) {
+                Ok(()) => attempt.follow(),
+                Err(why) => attempt.error(format!("redirected to {why}")),
+            }
+        }))
+        .build()
+        .context("failed to build the outbound HTTP client")
+}
+
+/// Every host the configuration names an upstream at.
+fn configured_hosts(config: &Config) -> std::collections::HashSet<String> {
+    [
+        &config.tmdb.upstream,
+        &config.tvdb.upstream,
+        &config.fanart.upstream,
+        &config.skyhook.upstream,
+        &config.sonarr_services.upstream,
+        &config.sonarr_services.xem_upstream,
+        &config.radarr_metadata.upstream,
+        &config.tvmaze.upstream,
+        &config.anilist.upstream,
+        &config.mal.upstream,
+        &config.mal.jikan_upstream,
+        &config.fankai.upstream,
+        &config.fankai_wiki.upstream,
+        &config.imdb.datasets,
+        &config.anime_mapping.url,
+    ]
+    .into_iter()
+    .filter_map(|url| url::Url::parse(url).ok())
+    .filter_map(|url| url.host_str().map(host_key))
+    .collect()
+}
+
+/// A host name as the resolver compares it.
+fn host_key(host: &str) -> String {
+    host.trim_end_matches('.').to_ascii_lowercase()
+}
+
+/// The providers' client's resolver.
+///
+/// A host the configuration names an upstream at resolves wherever it is: an
+/// operator chose it, and a mirror on this machine or in the same network is
+/// a reasonable thing to run. Any other name — where a redirect leads, or a
+/// webhook — is refused when it resolves to an address only this server can
+/// reach (loopback, link-local, a cloud's metadata service), as the media
+/// client refuses it: a redirect to `169.254.169.254.nip.io` was followed
+/// until now, since the redirect policy only reads what the URL says.
+#[derive(Clone)]
+struct UpstreamResolver {
+    configured: std::sync::Arc<std::collections::HashSet<String>>,
+}
+
+impl reqwest::dns::Resolve for UpstreamResolver {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        let host = host_key(name.as_str());
+        let configured = self.configured.contains(&host);
+        Box::pin(async move {
+            let found: Vec<std::net::SocketAddr> = tokio::net::lookup_host((host.as_str(), 0))
+                .await
+                .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?
+                .collect();
+            if !configured && found.iter().any(|a| crate::outbound::is_internal(a.ip())) {
+                return Err(
+                    format!("{host} resolves to an address only this server can reach").into(),
+                );
+            }
+            Ok(Box::new(found.into_iter()) as reqwest::dns::Addrs)
+        })
+    }
+}
+
 /// The right to change accounts, held: this process's, and — among several
 /// instances — every instance's.
 pub struct AccountsHeld<'a> {
     _local: tokio::sync::MutexGuard<'a, ()>,
     _shared: Option<crate::coord::Held>,
+}
+
+/// Whether two lists name the same networks, whatever their order, their
+/// repeats, and the host bits a block was written with (`10.0.0.1/8` is
+/// `10.0.0.0/8`).
+fn same_networks(a: &[ipnet::IpNet], b: &[ipnet::IpNet]) -> bool {
+    let normal = |nets: &[ipnet::IpNet]| {
+        let mut nets: Vec<ipnet::IpNet> = nets.iter().map(ipnet::IpNet::trunc).collect();
+        nets.sort_unstable();
+        nets.dedup();
+        nets
+    };
+    normal(a) == normal(b)
 }
 
 /// The key every instance seals the sign-in's cookies with: made by the
@@ -958,6 +1108,28 @@ fn decide_adult(visible: bool, policy: &str, forced: bool, asked: Option<bool>) 
         // Silence means no. A client that never mentions adult titles is not
         // asking for them.
         _ => asked.unwrap_or(false),
+    }
+}
+
+#[cfg(test)]
+mod allowlist_tests {
+    use super::same_networks;
+
+    fn nets(values: &[&str]) -> Vec<ipnet::IpNet> {
+        values.iter().map(|v| v.parse().unwrap()).collect()
+    }
+
+    #[test]
+    fn the_same_networks_are_the_same_list_however_written() {
+        assert!(same_networks(
+            &nets(&["10.0.0.0/8", "192.168.0.0/16"]),
+            &nets(&["192.168.0.0/16", "10.0.0.1/8", "10.0.0.0/8"]),
+        ));
+        assert!(!same_networks(
+            &nets(&["172.31.0.0/24"]),
+            &nets(&["172.16.0.0/12", "10.0.0.0/8"]),
+        ));
+        assert!(same_networks(&[], &[]));
     }
 }
 

@@ -39,6 +39,16 @@ const API_PREFIXES: &[&str] = &[
     "/api/", "/v1/", "/3/", "/4/", "/v4/", "/media/", "/health", "/ready",
 ];
 
+/// The same roots, as the trailing-slash normalisation leaves `/api/` and
+/// its like: no prefix above matches them any more, and they used to be
+/// answered the interface's page.
+const API_ROOTS: &[&str] = &["/api", "/v1", "/3", "/4", "/v4", "/media"];
+
+/// Where Vite puts what it fingerprints. A file there that is not in the
+/// build is a bundle a page from before a deploy still names: a 404 the
+/// browser reports, never the page itself served as a script.
+const ASSETS: &str = "assets/";
+
 /// Where the page keeps the lines a preview replaces.
 const PREVIEW_START: &str = "<!-- preview -->";
 const PREVIEW_END: &str = "<!-- /preview -->";
@@ -50,14 +60,18 @@ pub fn router() -> Router<AppState> {
 async fn serve(State(state): State<AppState>, request: Request) -> Response {
     let path = request.uri().path();
 
-    if API_PREFIXES.iter().any(|prefix| path.starts_with(prefix)) {
-        return not_found();
+    if is_api_path(path) {
+        // In the API's own shape, as its other refusals are.
+        return crate::error::AppError::NotFound.into_response();
     }
 
     let trimmed = path.trim_start_matches('/');
 
     if let Some(response) = asset(trimmed) {
         return response;
+    }
+    if trimmed.starts_with(ASSETS) {
+        return not_found();
     }
 
     // Anything else is a client-side route: hand back the app and let the
@@ -82,7 +96,7 @@ fn asset(path: &str) -> Option<Response> {
 
     // Only what Vite fingerprints may be kept for a year: a manifest or an
     // icon at a fixed name would otherwise be the old one until then.
-    let cache = if path.starts_with("assets/") {
+    let cache = if path.starts_with(ASSETS) {
         "public, max-age=31536000, immutable"
     } else {
         "no-cache"
@@ -117,12 +131,16 @@ fn not_found() -> Response {
     (StatusCode::NOT_FOUND, "not found").into_response()
 }
 
+/// Whether a path belongs to the API: under one of its prefixes, or one of
+/// its roots on its own.
+fn is_api_path(path: &str) -> bool {
+    API_PREFIXES.iter().any(|prefix| path.starts_with(prefix)) || API_ROOTS.contains(&path)
+}
+
 /// Whether a URI addresses the UI rather than the API.
 #[allow(dead_code)]
 pub fn is_ui_path(uri: &Uri) -> bool {
-    !API_PREFIXES
-        .iter()
-        .any(|prefix| uri.path().starts_with(prefix))
+    !is_api_path(uri.path())
 }
 
 // ─── link previews ───────────────────────────────────────────────────────────
@@ -361,6 +379,22 @@ mod tests {
         // "/v1abc" is not under "/v1/", so it belongs to the client router.
         assert!(is_ui_path(&"/v1abc".parse::<Uri>().unwrap()));
         assert!(is_ui_path(&"/apifoo".parse::<Uri>().unwrap()));
+    }
+
+    #[test]
+    fn an_api_root_trimmed_of_its_slash_is_still_the_apis() {
+        // `/api/` reaches here as `/api`, the trailing slash normalised away.
+        for path in ["/api", "/v1", "/3", "/4", "/v4", "/media"] {
+            assert!(!is_ui_path(&path.parse::<Uri>().unwrap()), "{path}");
+        }
+    }
+
+    #[test]
+    fn a_bundle_no_longer_built_is_not_the_page() {
+        // Whatever the build holds, a name it cannot hold is missing.
+        let missing = asset("assets/index-0000000000-gone.js");
+        assert!(missing.is_none());
+        assert!("assets/index-0000000000-gone.js".starts_with(ASSETS));
     }
 
     #[test]

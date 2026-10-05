@@ -7,7 +7,7 @@ use std::{
 };
 
 use axum::{Extension, Json, extract::State, http::header};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
@@ -38,14 +38,14 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(metrics))
 }
 
-#[derive(Serialize, ToSchema)]
+#[derive(Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Count {
     pub name: String,
     pub count: i64,
 }
 
-#[derive(Serialize, ToSchema)]
+#[derive(Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Figures {
     pub total: i64,
@@ -80,6 +80,23 @@ async fn figures(
     Extension(identity): Extension<Identity>,
 ) -> AppResult<Json<Figures>> {
     let adult = state.adult_for(identity.client_id(), identity.peer_id(), None);
+
+    // Read across the whole catalogue, by anyone the site is open to, so
+    // kept a while: under a mark of the catalogue, so a work stored, changed
+    // or listed again is counted at once, and under the settings generation
+    // and the adult decision, which say what is counted. An empty catalogue's
+    // figures are not kept, as the facets' are not.
+    let key = format!(
+        "figures:{adult}:{}:{}",
+        state.caches.stamp(),
+        repo::item::catalogue_stamp(&state.db).await?
+    );
+    if let Some(cached) = state.caches.searches.get(&key).await
+        && let Ok(figures) = serde_json::from_str::<Figures>(&cached)
+    {
+        return Ok(Json(figures));
+    }
+
     let query = repo::item::Query {
         include_adult: adult,
         ..Default::default()
@@ -115,7 +132,7 @@ async fn figures(
             .collect()
     };
 
-    Ok(Json(Figures {
+    let figures = Figures {
         total: series + movies,
         series,
         movies,
@@ -141,7 +158,13 @@ async fn figures(
             })
             .collect(),
         statuses: counts(facets.statuses, 8),
-    }))
+    };
+    if figures.total > 0
+        && let Ok(encoded) = serde_json::to_string(&figures)
+    {
+        state.caches.searches.insert(key, encoded).await;
+    }
+    Ok(Json(figures))
 }
 
 #[derive(Serialize, ToSchema)]

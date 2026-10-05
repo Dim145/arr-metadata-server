@@ -160,6 +160,38 @@ impl<V: Cached> Space<V> {
         self.insert_for(key, value, self.ttl).await;
     }
 
+    /// Keep a value read from the database, so long as `current` still says
+    /// it is: asked before it is kept, and again once the server has it —
+    /// the server's part awaited, not sent off — with what was kept undone
+    /// when a write landed meanwhile.
+    ///
+    /// A write forgets the entry after it moves the mark `current` reads. So
+    /// either the second look sees the mark moved and the copy is taken back
+    /// here, or the write's forgetting comes after the server took the copy
+    /// and removes it there. Sent off in the background, the copy could reach
+    /// the server after the write's `UNLINK` and be served, stale, until it
+    /// expired — an hour, for a work switched off or flagged adult meanwhile.
+    pub async fn insert_unless_moved(&self, key: String, value: V, current: impl Fn() -> bool) {
+        if !self.enabled() || !current() {
+            return;
+        }
+        self.l1.insert(key.clone(), value.clone()).await;
+        let l2 = self.l2();
+        if let Some(redis) = &l2
+            && value.weight() <= L2_MAX_BYTES
+        {
+            redis
+                .set_ex(&redis.key(self.id, &key), value.to_bytes(), self.ttl)
+                .await;
+        }
+        if !current() {
+            self.l1.invalidate(&key).await;
+            if let Some(redis) = &l2 {
+                redis.unlink(&redis.key(self.id, &key)).await;
+            }
+        }
+    }
+
     /// Keep a value the server holds for `ttl` rather than the space's
     /// time — a document whose kind says how long it stays good. The memory
     /// keeps it the space's time at most; the caller judges the rest.
@@ -272,8 +304,15 @@ impl<V: Cached> Space<V> {
         self.l1.invalidate_all();
     }
 
-    pub async fn forget_local_key(&self, key: &str) {
+    /// Forget one key here and on the server, on another instance's word —
+    /// so without telling anyone again. The server's copy too: one written
+    /// by a read that crossed the other instance's write would otherwise
+    /// outlive the `UNLINK` that instance sent before it.
+    pub async fn forget_told_key(&self, key: &str) {
         self.l1.invalidate(key).await;
+        if let Some(redis) = self.l2() {
+            redis.unlink(&redis.key(self.id, key)).await;
+        }
     }
 
     pub fn l1_entries(&self) -> u64 {

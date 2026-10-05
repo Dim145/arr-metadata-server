@@ -356,7 +356,7 @@ async fn from_radarr(
                 crate::merge::provenance::single(crate::providers::names::RADARR, &item);
             let snapshots = vec![(crate::providers::names::RADARR.to_string(), raw)];
 
-            let stored = persist(state, item, &snapshots, provenance).await?;
+            let stored = persist(state, item, &snapshots, provenance, None).await?;
             Ok(Some(stored))
         }
         Ok(None) => Ok(None),

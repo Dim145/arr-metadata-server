@@ -431,11 +431,13 @@ pub(crate) fn merge_ids(into: &mut ExternalIds, other: ExternalIds) {
 /// Sort order is preserved so the first provider's choice still leads: a lower
 /// priority provider's poster is added after, not in front.
 fn union_images(into: &mut Vec<Image>, other: Vec<Image>) {
+    // Saturating: a sort order is a provider's number, and one at `i32::MAX`
+    // panics a debug build and wraps a release one to the front.
     let offset = into
         .iter()
         .map(|i| i.sort_order)
         .max()
-        .map(|m| m + 1)
+        .map(|m| m.saturating_add(1))
         .unwrap_or(0);
 
     for mut image in other {
@@ -447,7 +449,7 @@ fn union_images(into: &mut Vec<Image>, other: Vec<Image>) {
             continue;
         }
 
-        image.sort_order += offset;
+        image.sort_order = image.sort_order.saturating_add(offset);
         into.push(image);
     }
 }

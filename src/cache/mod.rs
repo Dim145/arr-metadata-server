@@ -157,6 +157,11 @@ impl Cached for Relayed {
         Bytes::from(out)
     }
 
+    /// Read back as somebody else's bytes, since whoever can write under the
+    /// prefix can write these: a status that is not one, or a type that is
+    /// not one of the documents the relays keep — JSON, or plain text — is no
+    /// document of this server's, and is not served. A `text/html` filed
+    /// there would otherwise be served from this server's own origin.
     fn from_bytes(bytes: Bytes) -> Option<Self> {
         let mut cuts = bytes
             .iter()
@@ -165,10 +170,15 @@ impl Cached for Relayed {
             .map(|(i, _)| i);
         let (first, second, third) = (cuts.next()?, cuts.next()?, cuts.next()?);
         let text = |from: usize, to: usize| std::str::from_utf8(&bytes[from..to]).ok();
+        let status: u16 = text(0, first)?.parse().ok()?;
+        let content_type = text(second + 1, third)?;
+        if !(100..=599).contains(&status) || !is_relayed_type(content_type) {
+            return None;
+        }
         Some(Self {
-            status: text(0, first)?.parse().ok()?,
+            status,
             expires_at: text(first + 1, second)?.parse().ok()?,
-            content_type: text(second + 1, third)?.to_string(),
+            content_type: content_type.to_string(),
             body: bytes.slice(third + 1..),
         })
     }
@@ -221,6 +231,12 @@ pub struct Caches {
     /// bumps come in bursts — a refresh sweep, a media backfill — and the
     /// server is told once per burst.
     epoch_sync: Arc<AtomicBool>,
+    /// Moved on by every work written here, and by every work another
+    /// instance says it wrote (`drop:items:…`): what a read of a work checks
+    /// before it keeps what it read. This instance's own count, in no key —
+    /// unlike the epoch, which instances share and which reaches the others
+    /// half a second late.
+    item_writes: AtomicU64,
     wants_redis: bool,
     /// The server behind the second tier, when there is one.
     slot: RedisSlot,
@@ -269,6 +285,7 @@ impl Caches {
             generation: AtomicU64::new(0),
             epoch: Arc::new(AtomicU64::new(0)),
             epoch_sync: Arc::new(AtomicBool::new(false)),
+            item_writes: AtomicU64::new(0),
             wants_redis: cfg.redis_url.is_some(),
             slot,
             session_ttl: cfg.session_ttl,
@@ -474,12 +491,20 @@ impl Caches {
         });
     }
 
+    /// What a read of a work notes before it reads, and compares after: the
+    /// epoch and this instance's count of works written. See
+    /// [`Space::insert_unless_moved`].
+    pub fn read_mark(&self) -> (u64, u64) {
+        (self.epoch(), self.item_writes.load(Ordering::SeqCst))
+    }
+
     /// A work was written: its own entry is forgotten and every list moves
     /// on, here and on every instance.
     pub async fn touched(&self, id: &str) {
-        // The epoch first: a read of the work under way finishes either
-        // before it moved, and its copy is dropped by the invalidation that
-        // follows, or after, and sees it moved and keeps nothing.
+        // The marks first: a read of the work under way finishes either
+        // before they moved, and its copy is dropped by the invalidation that
+        // follows, or after, and sees them moved and keeps nothing.
+        self.item_writes.fetch_add(1, Ordering::SeqCst);
         self.bump_epoch().await;
         self.items.invalidate(&format!("item:{id}")).await;
     }
@@ -488,13 +513,19 @@ impl Caches {
 
     /// Act on a message from the channel: what another instance forgot, or
     /// the generation it moved to.
+    ///
+    /// Read as somebody else's words, since anyone who can publish on the
+    /// channel can say them: a number further ahead than any run of bumps
+    /// gets is not taken — `gen:18446744073709551615` would pin every
+    /// search to one generation for good — and a key that is not one this
+    /// server writes is not looked for.
     pub async fn apply_message(&self, message: &str) {
         if let Some(n) = message.strip_prefix("gen:") {
-            if let Ok(n) = n.parse::<u64>() {
+            if let Some(n) = plausible(n, self.generation()) {
                 self.generation.fetch_max(n, Ordering::SeqCst);
             }
         } else if let Some(n) = message.strip_prefix("epoch:") {
-            if let Ok(n) = n.parse::<u64>() {
+            if let Some(n) = plausible(n, self.epoch()) {
                 self.epoch.fetch_max(n, Ordering::SeqCst);
             }
         } else if let Some(space) = message.strip_prefix("flush:") {
@@ -511,16 +542,70 @@ impl Caches {
             }
         } else if let Some(rest) = message.strip_prefix("drop:")
             && let Some((space, key)) = rest.split_once(':')
+            && is_key(key)
         {
+            // The server's copy as well as this memory's: a read here that
+            // crossed the other instance's write may have filed one after
+            // that instance's `UNLINK`.
             match space {
-                "items" => self.items.forget_local_key(key).await,
-                "searches" => self.searches.forget_local_key(key).await,
-                "lists" => self.lists.forget_local_key(key).await,
-                "relay" => self.relay.forget_local_key(key).await,
+                "items" => {
+                    self.item_writes.fetch_add(1, Ordering::SeqCst);
+                    self.items.forget_told_key(key).await;
+                }
+                "searches" => self.searches.forget_told_key(key).await,
+                "lists" => self.lists.forget_told_key(key).await,
+                "relay" => self.relay.forget_told_key(key).await,
                 _ => {}
             }
         }
     }
+}
+
+/// Whether a content type is one a relayed document is kept with: JSON in
+/// any of its names, or plain text, as a header may carry it.
+fn is_relayed_type(value: &str) -> bool {
+    if value.len() > 255 || !value.bytes().all(|b| (b' '..=b'~').contains(&b)) {
+        return false;
+    }
+    let essence = value
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    let Some((kind, subtype)) = essence.split_once('/') else {
+        return false;
+    };
+    let token = |s: &str| {
+        !s.is_empty()
+            && s.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"!#$&-^_.+".contains(&b))
+    };
+    if !token(kind) || !token(subtype) {
+        return false;
+    }
+    matches!(
+        (kind, subtype),
+        ("application", "json") | ("text", "json") | ("text", "plain")
+    ) || subtype.ends_with("+json")
+}
+
+/// The most a generation or an epoch moves between two messages: far past
+/// what bumps in a burst, or messages lost while the server was away, add
+/// up to.
+const MOST_AHEAD: u64 = 10_000_000;
+
+/// A number a message gives, when it is one to take from where this
+/// instance stands.
+fn plausible(text: &str, current: u64) -> Option<u64> {
+    let n = text.parse::<u64>().ok()?;
+    (n <= current.saturating_add(MOST_AHEAD)).then_some(n)
+}
+
+/// Whether a key a message names is one this server writes: printable, and
+/// not longer than any of its own.
+fn is_key(key: &str) -> bool {
+    !key.is_empty() && key.len() <= 4096 && !key.chars().any(char::is_control)
 }
 
 /// Attach the server named by the configuration, and keep at it until it
@@ -647,6 +732,103 @@ mod tests {
         caches.items.insert("d".into(), "4".into()).await;
         caches.apply_message("flush:items").await;
         assert!(caches.items.get("d").await.is_none());
+    }
+
+    /// A read of a work that a write crossed keeps nothing: neither when the
+    /// write came before it was kept, nor when it came while it was being
+    /// kept — the second look takes the copy back.
+    #[tokio::test]
+    async fn a_read_a_write_crossed_is_not_kept() {
+        let caches = caches();
+
+        let mark = caches.read_mark();
+        caches.touched("w").await;
+        caches
+            .items
+            .insert_unless_moved("item:w".into(), "old".into(), || caches.read_mark() == mark)
+            .await;
+        assert!(caches.items.get("item:w").await.is_none(), "moved before");
+
+        // Moved between the keeping and the second look.
+        let looks = std::sync::atomic::AtomicUsize::new(0);
+        caches
+            .items
+            .insert_unless_moved("item:w".into(), "old".into(), || {
+                looks.fetch_add(1, Ordering::SeqCst) == 0
+            })
+            .await;
+        assert_eq!(looks.load(Ordering::SeqCst), 2);
+        assert!(
+            caches.items.get("item:w").await.is_none(),
+            "moved while kept"
+        );
+
+        let mark = caches.read_mark();
+        caches
+            .items
+            .insert_unless_moved("item:w".into(), "new".into(), || caches.read_mark() == mark)
+            .await;
+        assert_eq!(caches.items.get("item:w").await.as_deref(), Some("new"));
+
+        // Another instance wrote it: the copy goes, and a read under way
+        // here keeps nothing.
+        let mark = caches.read_mark();
+        caches.apply_message("drop:items:item:w").await;
+        assert!(caches.items.get("item:w").await.is_none());
+        assert_ne!(caches.read_mark(), mark);
+    }
+
+    /// What anyone able to publish on the channel can say is weighed first.
+    #[tokio::test]
+    async fn a_message_past_belief_is_not_taken() {
+        let caches = caches();
+        caches.apply_message("gen:5").await;
+        assert_eq!(caches.generation(), 5);
+        caches.apply_message(&format!("gen:{}", u64::MAX)).await;
+        assert_eq!(caches.generation(), 5, "pinned for good, otherwise");
+        caches.apply_message("epoch:nonsense").await;
+        caches.apply_message(&format!("epoch:{}", 20_000_000)).await;
+        assert_eq!(caches.epoch(), 0);
+
+        caches.items.insert("k".into(), "v".into()).await;
+        caches.apply_message("drop:items:").await;
+        caches.apply_message("drop:items:k\u{0}").await;
+        assert!(caches.items.get("k").await.is_some());
+    }
+
+    #[test]
+    fn a_relayed_document_of_another_kind_is_not_served() {
+        let doc = |content_type: &str, status: u16| Relayed {
+            status,
+            content_type: content_type.into(),
+            expires_at: now_secs() + 60,
+            body: Bytes::from_static(b"<script>alert(1)</script>"),
+        };
+        for kept in [
+            "application/json",
+            "application/json; charset=utf-8",
+            "application/problem+json",
+            "text/plain;charset=UTF-8",
+        ] {
+            assert!(
+                Relayed::from_bytes(doc(kept, 200).to_bytes()).is_some(),
+                "{kept}"
+            );
+        }
+        for refused in [
+            "text/html",
+            "image/svg+xml",
+            "application/xhtml+xml",
+            "application/json\r\nSet-Cookie: x=1",
+            "",
+            "json",
+        ] {
+            assert!(
+                Relayed::from_bytes(doc(refused, 200).to_bytes()).is_none(),
+                "{refused}"
+            );
+        }
+        assert!(Relayed::from_bytes(doc("application/json", 42).to_bytes()).is_none());
     }
 
     #[test]

@@ -63,18 +63,23 @@ fn xml(body: String, filename: &str) -> Response {
 ///
 /// Save it as `tvshow.nfo` at the series' root, or `movie.nfo` beside the film,
 /// and point Plex's Personal Media agent — or Kodi, or Jellyfin — at the library.
+/// Of a work this caller may see, as its own page decides it.
 #[utoipa::path(
     get, path = "/items/{id}/nfo", tag = TAG,
     params(("id" = String, Path, description = "The work's identifier")),
     responses(
         (status = 200, description = "A Kodi/XBMC .nfo document", content_type = "application/xml"),
-        (status = 404, description = "No such work"),
+        (status = 404, description = "No such work, or none this caller may see"),
     ),
 )]
-async fn item_nfo(State(state): State<AppState>, Path(id): Path<String>) -> AppResult<Response> {
-    let item = service::load(&state, &id)
-        .await?
-        .ok_or(AppError::NotFound)?;
+async fn item_nfo(
+    State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
+    Path(id): Path<String>,
+) -> AppResult<Response> {
+    // Switched off, or kept from this caller by the adult policy: its
+    // document is kept from them as the work is.
+    let item = super::visible_work(&state, &identity, &id).await?;
 
     let filename = match item.kind {
         MediaKind::Series => "tvshow.nfo",
@@ -98,16 +103,15 @@ async fn item_nfo(State(state): State<AppState>, Path(id): Path<String>) -> AppR
     ),
     responses(
         (status = 200, description = "A Kodi/XBMC .nfo document", content_type = "application/xml"),
-        (status = 404, description = "No such work or episode"),
+        (status = 404, description = "No such work or episode, or none this caller may see"),
     ),
 )]
 async fn episode_nfo(
     State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
     Path((id, season, number)): Path<(String, i32, i32)>,
 ) -> AppResult<Response> {
-    let item = service::load(&state, &id)
-        .await?
-        .ok_or(AppError::NotFound)?;
+    let item = super::visible_work(&state, &identity, &id).await?;
 
     let mut item = item;
     state.media.for_clients(&mut item);

@@ -63,6 +63,24 @@ const ASKED_WITH: &[&str] = &["user-agent", "accept", "accept-language", "conten
 /// answer, is not patched beyond this.
 const MOST_PATCHED: usize = 200;
 
+/// AniList's formats for an anime.
+const ANIME_FORMATS: &[&str] = &["TV", "TV_SHORT", "MOVIE", "SPECIAL", "OVA", "ONA", "MUSIC"];
+
+/// AniList's formats for a manga, a light novel or a one-shot.
+const MANGA_FORMATS: &[&str] = &["MANGA", "NOVEL", "ONE_SHOT"];
+
+/// What only an anime has a value for: a manga's are null.
+const ANIME_ONLY: &[&str] = &[
+    "episodes",
+    "season",
+    "seasonYear",
+    "duration",
+    "nextAiringEpisode",
+];
+
+/// What only a manga has a value for: an anime's are null.
+const MANGA_ONLY: &[&str] = &["chapters", "volumes"];
+
 /// The names in a document that make its answer one person's: a list, a
 /// user, what they did or were told. Never kept, even when nobody signed
 /// the query — a public list is still somebody's, read for its latest
@@ -179,14 +197,9 @@ pub async fn relay(State(state): State<AppState>, request: Request) -> AppResult
         None => {
             let (status, headers, bytes) = send(&state, &parts, body, theirs).await?;
             if let Some(key) = cache_key
-                && (status.is_success() || status == StatusCode::NOT_FOUND)
+                && let Some(ttl) = relay::kept_for(status, cache::ANILIST_QUERY)
                 && bytes.len() <= RELAY_MAX_BYTES
             {
-                let ttl = if status == StatusCode::NOT_FOUND {
-                    std::time::Duration::from_secs(5 * 60)
-                } else {
-                    cache::relay_ttl(cache::ANILIST_QUERY)
-                };
                 let content_type = headers
                     .get(header::CONTENT_TYPE)
                     .and_then(|v| v.to_str().ok())
@@ -389,8 +402,8 @@ fn relay_key(state: &AppState, method: &Method, uri: &Uri, body: &[u8]) -> Strin
 }
 
 /// The identifiers an answer's entries carry: AniList's own, and
-/// MyAnimeList's, which a client may ask for in its place — Yamtrack's
-/// import does, and never asks AniList's.
+/// MyAnimeList's — an anime's only, see [`is_anime`] — which a client may
+/// ask for in its place: Yamtrack's import does, and never asks AniList's.
 #[derive(Default)]
 struct Named {
     anilist: Vec<i64>,
@@ -412,17 +425,21 @@ struct Held {
 }
 
 impl Held {
+    /// The work an entry is: by AniList's id, which numbers anime and manga
+    /// alike in one sequence; or, on an anime alone, by MyAnimeList's.
     fn of(&self, object: &serde_json::Map<String, Value>) -> Option<&MediaItem> {
-        let id = object
+        let by_anilist = object
             .get("id")
             .and_then(Value::as_i64)
-            .and_then(|id| self.by_anilist.get(&id))
-            .or_else(|| {
-                object
-                    .get("idMal")
-                    .and_then(Value::as_i64)
-                    .and_then(|id| self.by_mal.get(&id))
-            })?;
+            .and_then(|id| self.by_anilist.get(&id));
+        let id = match by_anilist {
+            Some(id) => id,
+            None if is_anime(object) => object
+                .get("idMal")
+                .and_then(Value::as_i64)
+                .and_then(|id| self.by_mal.get(&id))?,
+            None => return None,
+        };
         self.works.get(id)
     }
 }
@@ -492,46 +509,62 @@ async fn patch(state: &AppState, answer: &mut Value) -> AppResult<bool> {
 }
 
 /// Whether an object is an entry of AniList's — a `Media` — this catalogue
-/// may hold: told by what only a media entry carries, since characters,
-/// staff, users and threads have ids and descriptions of their own in the
-/// same small numbers; identified by AniList's id or MyAnimeList's; and not
-/// manga.
+/// may hold: identified by AniList's id or MyAnimeList's; not manga, by its
+/// type or by its format; and told by what only a media entry carries — its
+/// title as an object, its format, its episodes — or by being named a
+/// `Media`, or an anime. Characters, staff, users, threads and a media's
+/// tags have ids of their own in the same small numbers, and descriptions;
+/// a tag says whether it is for adults, as a media does, so that says
+/// nothing.
 fn is_entry(object: &serde_json::Map<String, Value>) -> bool {
     let identified = object.get("id").is_some_and(Value::is_i64)
         || object.get("idMal").is_some_and(Value::is_i64);
     if !identified {
         return false;
     }
-    if let Some(typename) = object.get("__typename").and_then(Value::as_str)
-        && typename != "Media"
-    {
+    let typename = object.get("__typename").and_then(Value::as_str);
+    if typename.is_some_and(|name| name != "Media") {
         return false;
     }
-    if let Some(kind) = object.get("type").and_then(Value::as_str)
-        && kind != "ANIME"
-    {
+    let kind = object.get("type").and_then(Value::as_str);
+    if kind.is_some_and(|kind| kind != "ANIME") {
         return false;
     }
-    object.get("type").is_some_and(Value::is_string)
+    let format = object.get("format").and_then(Value::as_str);
+    if format.is_some_and(|format| MANGA_FORMATS.contains(&format)) {
+        return false;
+    }
+    typename == Some("Media")
+        || kind == Some("ANIME")
         || object.get("title").is_some_and(Value::is_object)
-        || object.get("coverImage").is_some_and(Value::is_object)
-        || object.get("__typename").and_then(Value::as_str) == Some("Media")
-        || [
-            "format",
-            "episodes",
-            "season",
-            "seasonYear",
-            "idMal",
-            "averageScore",
-            "meanScore",
-            "isAdult",
-        ]
-        .iter()
-        .any(|field| object.contains_key(*field))
+        || format.is_some()
+        || object.contains_key("episodes")
+}
+
+/// Whether an entry is an anime, as far as it says: its type, when it was
+/// asked; its format, when that was; otherwise a value only an anime has —
+/// a count of episodes, a season, a duration — and none only a manga has.
+///
+/// MyAnimeList numbers its anime and its manga apart, in sequences that
+/// overlap — anime 1 is Cowboy Bebop, manga 1 is Monster — and this
+/// catalogue holds anime: an entry is matched by MyAnimeList's id only when
+/// it says it is one. An anime still airing with no count of episodes yet,
+/// asked neither its type nor its format, says nothing a manga could not,
+/// and is left as it came.
+fn is_anime(object: &serde_json::Map<String, Value>) -> bool {
+    if let Some(kind) = object.get("type").and_then(Value::as_str) {
+        return kind == "ANIME";
+    }
+    if let Some(format) = object.get("format").and_then(Value::as_str) {
+        return ANIME_FORMATS.contains(&format);
+    }
+    let carries = |field: &&str| object.get(*field).is_some_and(|value| !value.is_null());
+    !MANGA_ONLY.iter().any(carries) && ANIME_ONLY.iter().any(carries)
 }
 
 /// The identifiers of the entries an answer carries, in the order it lists
-/// them, each once, the first [`MOST_PATCHED`] of them.
+/// them, each once, the first [`MOST_PATCHED`] of them: AniList's of every
+/// entry, MyAnimeList's of an anime's.
 fn collect_entries(value: &Value, named: &mut Named) {
     if named.len() >= MOST_PATCHED {
         return;
@@ -544,7 +577,8 @@ fn collect_entries(value: &Value, named: &mut Named) {
                 {
                     named.anilist.push(id);
                 }
-                if let Some(id) = object.get("idMal").and_then(Value::as_i64)
+                if is_anime(object)
+                    && let Some(id) = object.get("idMal").and_then(Value::as_i64)
                     && !named.mal.contains(&id)
                 {
                     named.mal.push(id);
@@ -833,6 +867,171 @@ mod tests {
             &mut named,
         );
         assert_eq!(named.anilist, vec![1]);
+    }
+
+    #[test]
+    fn a_media_tag_is_not_an_entry_whatever_its_id() {
+        // A tag has an id in the same small numbers, a description, and
+        // says whether it is for adults, as a media does.
+        let tag = json!({ "id": 1, "name": "Isekai", "description": "A tag", "isAdult": false, "rank": 90 });
+        let Value::Object(object) = &tag else {
+            unreachable!()
+        };
+        assert!(!is_entry(object));
+
+        let mut answer = json!({ "data": { "Media": {
+            "id": 21, "title": { "english": "One Piece" }, "description": "AniList's",
+            "tags": [ { "id": 1, "name": "Pirates", "description": "A tag", "isAdult": false } ]
+        }}});
+        let mut named = Named::default();
+        collect_entries(&answer["data"], &mut named);
+        assert_eq!(named.anilist, vec![21]);
+
+        // The work held under AniList's 1 is not the tag numbered 1.
+        assert!(!write_entries(
+            &mut answer["data"],
+            &held(&[1], &[], locked_anime())
+        ));
+        assert_eq!(
+            answer["data"]["Media"]["tags"][0]["description"],
+            json!("A tag")
+        );
+    }
+
+    #[test]
+    fn an_entry_is_an_anime_only_when_it_says_so() {
+        let anime = |value: Value| {
+            let Value::Object(object) = value else {
+                unreachable!()
+            };
+            is_anime(&object)
+        };
+        // By its type, or its format.
+        assert!(anime(json!({ "idMal": 1, "type": "ANIME" })));
+        assert!(!anime(
+            json!({ "idMal": 1, "type": "MANGA", "episodes": 12 })
+        ));
+        assert!(anime(json!({ "idMal": 1, "format": "TV" })));
+        assert!(anime(json!({ "idMal": 1, "format": "MOVIE" })));
+        assert!(!anime(json!({ "idMal": 1, "format": "MANGA" })));
+        assert!(!anime(json!({ "idMal": 1, "format": "NOVEL" })));
+        assert!(!anime(json!({ "idMal": 1, "format": "ONE_SHOT" })));
+        // Neither asked: a value only an anime has, and none a manga has.
+        assert!(anime(
+            json!({ "idMal": 1, "episodes": 26, "chapters": null })
+        ));
+        assert!(anime(json!({ "idMal": 1, "seasonYear": 1998 })));
+        assert!(anime(json!({ "idMal": 1, "duration": 24 })));
+        assert!(!anime(json!({ "idMal": 1, "chapters": 162 })));
+        assert!(!anime(
+            json!({ "idMal": 1, "volumes": 18, "episodes": null })
+        ));
+        // Nothing a manga could not say.
+        assert!(!anime(
+            json!({ "idMal": 1, "title": { "userPreferred": "x" } })
+        ));
+        assert!(!anime(
+            json!({ "idMal": 1, "episodes": null, "chapters": null })
+        ));
+    }
+
+    #[test]
+    fn yamtracks_import_patches_the_anime_and_not_the_manga_of_the_same_number() {
+        // Yamtrack's import asks both lists in one query, without `type`
+        // and without AniList's `id`: the anime with their counts, the manga
+        // with nothing but a title, a cover and MyAnimeList's id — whose
+        // numbers are the anime's too. Anime 1 is Cowboy Bebop and 21 One
+        // Piece; manga 1 is Monster and 21 Death Note.
+        let entry = |media: Value| json!({ "media": media, "status": "COMPLETED", "progress": 1 });
+        let mut answer = json!({ "data": {
+            "anime": { "lists": [{ "isCustomList": false, "entries": [
+                entry(json!({ "title": { "userPreferred": "Cowboy Bebop" }, "coverImage": { "large": "https://s4.anilist.co/bebop.jpg" }, "idMal": 1, "chapters": null, "episodes": 26 })),
+                entry(json!({ "title": { "userPreferred": "One Piece" }, "coverImage": { "large": "https://s4.anilist.co/op.jpg" }, "idMal": 21, "chapters": null, "episodes": null })),
+            ]}]},
+            "manga": { "lists": [{ "isCustomList": false, "entries": [
+                entry(json!({ "title": { "userPreferred": "Monster" }, "coverImage": { "large": "https://s4.anilist.co/monster.jpg" }, "idMal": 1 })),
+                entry(json!({ "title": { "userPreferred": "Death Note" }, "coverImage": { "large": "https://s4.anilist.co/dn.jpg" }, "idMal": 21 })),
+            ]}]}
+        }});
+
+        let mut named = Named::default();
+        collect_entries(&answer["data"], &mut named);
+        assert!(named.anilist.is_empty());
+        // Only an entry that says it is an anime is looked up by its number.
+        assert_eq!(named.mal, vec![1]);
+
+        let mut item = locked_anime();
+        item.locked_fields.push("item/primaryPoster".into());
+        item.images.push(crate::domain::Image {
+            id: "img1".into(),
+            season_number: None,
+            cover_type: CoverType::Poster,
+            url: "https://ams.example/media/chosen".into(),
+            language: None,
+            sort_order: 0,
+            source: None,
+            is_manual: true,
+        });
+        item.primary_images.poster = Some("img1".into());
+        assert!(write_entries(
+            &mut answer["data"],
+            &held(&[], &[1, 21], item)
+        ));
+
+        let anime = &answer["data"]["anime"]["lists"][0]["entries"];
+        assert_eq!(
+            anime[0]["media"]["title"]["userPreferred"],
+            json!("Mon titre")
+        );
+        assert_eq!(
+            anime[0]["media"]["coverImage"]["large"],
+            json!("https://ams.example/media/chosen")
+        );
+        // Still airing, no count yet, neither type nor format asked:
+        // nothing tells it from a manga, so it is left as it came.
+        assert_eq!(
+            anime[1]["media"]["title"]["userPreferred"],
+            json!("One Piece")
+        );
+
+        let manga = &answer["data"]["manga"]["lists"][0]["entries"];
+        assert_eq!(
+            manga[0]["media"]["title"]["userPreferred"],
+            json!("Monster")
+        );
+        assert_eq!(
+            manga[0]["media"]["coverImage"]["large"],
+            json!("https://s4.anilist.co/monster.jpg")
+        );
+        assert_eq!(
+            manga[1]["media"]["title"]["userPreferred"],
+            json!("Death Note")
+        );
+    }
+
+    #[test]
+    fn a_manga_told_by_its_format_is_not_an_entry() {
+        for manga in [
+            json!({ "id": 30001, "format": "MANGA", "title": { "english": "x" } }),
+            json!({ "id": 30001, "format": "NOVEL", "idMal": 1 }),
+            json!({ "id": 30001, "type": "MANGA", "title": { "english": "x" } }),
+        ] {
+            let Value::Object(object) = &manga else {
+                unreachable!()
+            };
+            assert!(!is_entry(object), "{manga}");
+        }
+        for anime in [
+            json!({ "id": 1, "format": "TV" }),
+            json!({ "id": 1, "type": "ANIME" }),
+            json!({ "idMal": 1, "episodes": null }),
+            json!({ "id": 1, "title": { "romaji": "x" } }),
+        ] {
+            let Value::Object(object) = &anime else {
+                unreachable!()
+            };
+            assert!(is_entry(object), "{anime}");
+        }
     }
 
     #[test]

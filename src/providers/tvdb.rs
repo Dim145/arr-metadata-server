@@ -103,6 +103,14 @@ const TOKEN_MAX_AGE_HOURS: i64 = 24;
 /// rate-limits sign-ins, and a refusal is not always the token's end.
 const RENEW_AT_MOST_EVERY_SECS: u64 = 60;
 
+/// How long a failed sign-in is remembered: every call meanwhile fails with
+/// it rather than signing in again. A wrong key otherwise cost a sign-in per
+/// call — a refresh's, and each relayed one's.
+const SIGN_IN_RETRY_SECS: u64 = 60;
+
+/// How many requests to TheTVDB are in flight at once.
+const AT_ONCE: usize = 8;
+
 /// How many of each artwork kind to keep — TVDB lists hundreds.
 const PER_KIND: usize = 5;
 
@@ -117,6 +125,9 @@ pub struct TvdbClient {
     token: Arc<Mutex<Option<Token>>>,
     /// When a refused token was last forgotten for the relay's sake.
     forgotten: parking_lot::Mutex<Option<std::time::Instant>>,
+    /// The last sign-in that failed, and why, while it is remembered.
+    failed_sign_in: parking_lot::Mutex<Option<(std::time::Instant, String)>>,
+    gate: crate::providers::Gate,
     /// This process, named on every call: `api4.thetvdb.com` is a name this
     /// server answers on too, and a resolver that sends it here would have
     /// it ask itself. See [`crate::providers::radarr::LOOP_HEADER`].
@@ -146,6 +157,8 @@ impl TvdbClient {
             ),
             token: Arc::new(Mutex::new(None)),
             forgotten: parking_lot::Mutex::new(None),
+            failed_sign_in: parking_lot::Mutex::new(None),
+            gate: crate::providers::Gate::new("tvdb", "TheTVDB", AT_ONCE),
             instance,
         }
     }
@@ -198,6 +211,12 @@ impl TvdbClient {
     /// endpoint, because `name` on a TVDB record is whatever TVDB considers the
     /// primary — 進撃の巨人 and its Japanese episode titles — and a client
     /// asking in English should not be answered in Japanese.
+    ///
+    /// An error when the episodes could not be read at all, whatever came of
+    /// the rest: a series answered without them was stored as having none —
+    /// its list numbered by TMDB under a TheTVDB id, the way Sonarr files
+    /// episodes under the wrong numbers. Failed, it is TheTVDB not answering,
+    /// and what it gave before stands (`service::gather`).
     pub async fn series(&self, tvdb_id: i64) -> Result<Option<(Value, MediaItem)>> {
         if !self.is_enabled() {
             return Ok(None);
@@ -217,18 +236,31 @@ impl TvdbClient {
         // An unknown language answers 200 with every name blank rather than an
         // error, so "did anything come back named" is the only real test of
         // whether TVDB holds this language at all.
-        let mut episodes = match episodes {
-            Ok(list) if list.iter().any(is_named) => list,
-            Ok(_) => Vec::new(),
+        let (named, unnamed) = match episodes {
+            Ok(list) if list.iter().any(is_named) => (Some(list), None),
+            Ok(list) => (None, Some(list)),
             Err(e) => {
-                tracing::debug!(tvdb_id, error = %e, "TheTVDB episodes could not be fetched");
-                Vec::new()
+                tracing::debug!(
+                    tvdb_id,
+                    error = format_args!("{e:#}"),
+                    "TheTVDB episodes could not be fetched"
+                );
+                (None, None)
             }
         };
 
-        if episodes.is_empty() {
-            episodes = self.untranslated_episodes(tvdb_id).await;
-        }
+        let episodes = match named {
+            Some(list) => list,
+            None => match self.untranslated_episodes(tvdb_id).await {
+                Ok(list) => list,
+                // Numbered without names beats not at all: another provider
+                // may name them.
+                Err(_) if unnamed.as_ref().is_some_and(|list| !list.is_empty()) => {
+                    unnamed.unwrap_or_default()
+                }
+                Err(e) => return Err(e.context("TheTVDB's episodes could not be read")),
+            },
+        };
 
         // Splice everything into one document, so the snapshot holds what TVDB
         // said and a single deserialisation sees all of it.
@@ -357,6 +389,13 @@ impl TvdbClient {
     /// Every episode in one language and one order, following TVDB's paging.
     async fn episodes_of(&self, tvdb_id: i64, order: &str, language: &str) -> Result<Vec<Value>> {
         let mut episodes = Vec::new();
+        // Each one segment of the path, whatever it holds: a language comes
+        // from a caller, and `../` in it would be another endpoint read with
+        // the operator's token.
+        let (order, language) = (
+            crate::providers::segment(order),
+            crate::providers::segment(language),
+        );
 
         // TVDB pages at 500. The cap is a guard against a paging bug upstream
         // turning into an unbounded loop, not a real limit: it allows 10000
@@ -395,25 +434,32 @@ impl TvdbClient {
     ///
     /// Titles in the wrong language beat no titles at all, and another provider
     /// may still fill them in.
-    async fn untranslated_episodes(&self, tvdb_id: i64) -> Vec<Value> {
+    async fn untranslated_episodes(&self, tvdb_id: i64) -> Result<Vec<Value>> {
         let path = format!("series/{tvdb_id}/extended?meta=episodes&short=true");
 
         match self.get(&path).await {
-            Ok(Some(body)) => body
+            Ok(Some(body)) => Ok(body
                 .get("data")
                 .and_then(|d| d.get("episodes"))
                 .and_then(Value::as_array)
                 .cloned()
-                .unwrap_or_default(),
-            Ok(None) => Vec::new(),
+                .unwrap_or_default()),
+            Ok(None) => Ok(Vec::new()),
             Err(e) => {
-                tracing::warn!(tvdb_id, error = %e, "TheTVDB episodes were not available");
-                Vec::new()
+                tracing::warn!(
+                    tvdb_id,
+                    error = format_args!("{e:#}"),
+                    "TheTVDB episodes were not available"
+                );
+                Err(e)
             }
         }
     }
 
-    /// A GET with the current token, retried once after re-authenticating.
+    /// A GET with the current token, retried once after re-authenticating —
+    /// at most once a minute: a path the operator's key may not read is
+    /// refused whatever the token, and asking for a new one on every such
+    /// call would sign the operator in on every call.
     async fn get(&self, path: &str) -> Result<Option<Value>> {
         let token = self.token().await?;
 
@@ -421,9 +467,13 @@ impl TvdbClient {
             Attempt::Body(value) => Ok(Some(value)),
             Attempt::Missing => Ok(None),
             Attempt::Unauthorized => {
+                if !self.refused(&token).await {
+                    anyhow::bail!(
+                        "TheTVDB refused a token issued within the minute; check the API key"
+                    );
+                }
                 // The token outlived its welcome. One fresh attempt, then give up.
                 tracing::debug!("TheTVDB rejected the token; re-authenticating");
-                self.token.lock().await.take();
 
                 let token = self.token().await?;
 
@@ -441,17 +491,17 @@ impl TvdbClient {
     async fn try_get(&self, path: &str, token: &str) -> Result<Attempt> {
         let url = format!("{}/{path}", self.base);
 
-        let started = std::time::Instant::now();
-        let response = self
-            .http
-            .get(&url)
-            .bearer_auth(token)
-            .header(crate::providers::radarr::LOOP_HEADER, &self.instance)
-            .timeout(std::time::Duration::from_secs(20))
-            .send()
-            .await;
-        crate::metrics::upstream("tvdb", started, response.as_ref().ok().map(|r| r.status()));
-        let response = response.with_context(|| format!("TheTVDB request failed: {url}"))?;
+        let (response, _permit) = self
+            .gate
+            .send(|| {
+                self.http
+                    .get(&url)
+                    .bearer_auth(token)
+                    .header(crate::providers::radarr::LOOP_HEADER, &self.instance)
+                    .timeout(std::time::Duration::from_secs(20))
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("TheTVDB request failed: {url}: {e}"))?;
 
         match response.status() {
             reqwest::StatusCode::NOT_FOUND => Ok(Attempt::Missing),
@@ -463,11 +513,18 @@ impl TvdbClient {
                         format!("TheTVDB returned a body this server could not read: {url}")
                     })?,
             )),
-            status => anyhow::bail!("TheTVDB returned {status} for {url}"),
+            status => {
+                let reason = crate::providers::error_text(response).await;
+                anyhow::bail!("TheTVDB returned {status} for {url}: {reason}")
+            }
         }
     }
 
     /// The current token, obtaining one if there is none or it is old.
+    ///
+    /// One sign-in at a time — the token's lock is held across it — and one
+    /// that failed is remembered for a minute: the calls meanwhile fail with
+    /// its reason instead of signing in again.
     async fn token(&self) -> Result<String> {
         let mut held = self.token.lock().await;
 
@@ -479,6 +536,31 @@ impl TvdbClient {
             return Ok(held.as_ref().expect("checked").value.clone());
         }
 
+        if let Some((at, why)) = self.failed_sign_in.lock().as_ref()
+            && at.elapsed() < std::time::Duration::from_secs(SIGN_IN_RETRY_SECS)
+        {
+            anyhow::bail!("{why} (not asked again for a minute)");
+        }
+
+        match self.sign_in().await {
+            Ok(value) => {
+                self.failed_sign_in.lock().take();
+                *held = Some(Token {
+                    value: value.clone(),
+                    obtained: chrono::Utc::now(),
+                });
+                tracing::debug!("authenticated with TheTVDB");
+                Ok(value)
+            }
+            Err(e) => {
+                *self.failed_sign_in.lock() = Some((std::time::Instant::now(), format!("{e:#}")));
+                Err(e)
+            }
+        }
+    }
+
+    /// Ask TheTVDB for a token.
+    async fn sign_in(&self) -> Result<String> {
         let key = self
             .api_key
             .as_deref()
@@ -490,35 +572,33 @@ impl TvdbClient {
             body["pin"] = Value::String(pin.clone());
         }
 
-        let started = std::time::Instant::now();
-        let response = self
-            .http
-            .post(format!("{}/login", self.base))
-            .json(&body)
-            .header(crate::providers::radarr::LOOP_HEADER, &self.instance)
-            .timeout(std::time::Duration::from_secs(20))
-            .send()
-            .await;
-        crate::metrics::upstream("tvdb", started, response.as_ref().ok().map(|r| r.status()));
-        let response = response.context("TheTVDB login failed")?;
+        let url = format!("{}/login", self.base);
+        let (response, _permit) = self
+            .gate
+            .send(|| {
+                self.http
+                    .post(&url)
+                    .json(&body)
+                    .header(crate::providers::radarr::LOOP_HEADER, &self.instance)
+                    .timeout(std::time::Duration::from_secs(20))
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("TheTVDB login failed: {e}"))?;
 
-        if !response.status().is_success() {
-            anyhow::bail!("TheTVDB login returned {}", response.status());
+        let status = response.status();
+        if !status.is_success() {
+            let reason = crate::providers::error_text(response).await;
+            anyhow::bail!("TheTVDB login returned {status}: {reason}");
         }
 
-        let envelope: Envelope<LoginData> = response
-            .json()
-            .await
-            .context("TheTVDB login returned a body this server could not interpret")?;
+        let envelope: Envelope<LoginData> = serde_json::from_value(
+            crate::providers::read_json(response)
+                .await
+                .context("TheTVDB login returned a body this server could not read")?,
+        )
+        .context("TheTVDB login returned a body this server could not interpret")?;
 
-        let value = envelope.data.token;
-        *held = Some(Token {
-            value: value.clone(),
-            obtained: chrono::Utc::now(),
-        });
-
-        tracing::debug!("authenticated with TheTVDB");
-        Ok(value)
+        Ok(envelope.data.token)
     }
 }
 
@@ -668,6 +748,10 @@ struct ArtworkRecord {
     image: Option<String>,
     language: Option<String>,
     score: Option<i64>,
+    /// The season record a season's artwork belongs to — of any order, the
+    /// DVD's and the absolute one included: what v4 sends.
+    season_id: Option<i64>,
+    /// A season's number, which v4 does not send; read when it does.
     season: Option<i64>,
 }
 
@@ -873,6 +957,16 @@ fn external_ids(series: &SeriesExtended) -> ExternalIds {
 fn artwork(series: &SeriesExtended) -> Vec<Image> {
     use std::collections::HashMap;
 
+    // A season's artwork names its season record by id. Only the aired
+    // order's are the work's seasons: a DVD season 1 is not the season 1
+    // every client means, and its pictures are not that season's.
+    let aired: HashMap<i64, i32> = series
+        .seasons
+        .iter()
+        .filter(|s| is_aired_order(s))
+        .filter_map(|s| Some((s.id?, s.number?)))
+        .collect();
+
     let mut kept: HashMap<(CoverType, Option<i32>), usize> = HashMap::new();
     let mut ranked: Vec<&ArtworkRecord> = series.artworks.iter().collect();
 
@@ -891,12 +985,18 @@ fn artwork(series: &SeriesExtended) -> Vec<Image> {
         };
 
         let season_number = if is_season {
-            // `try_from`, not `as`: a value past `i32` wraps to a negative
-            // season number and files the artwork under a season that does not
-            // exist, rather than being recognised as nonsense and dropped.
-            match record.season.and_then(|n| i32::try_from(n).ok()) {
+            let number = match record.season_id {
+                Some(id) => aired.get(&id).copied(),
+                // `try_from`, not `as`: a value past `i32` wraps to a negative
+                // season number and files the artwork under a season that does
+                // not exist, rather than being recognised as nonsense and
+                // dropped.
+                None => record.season.and_then(|n| i32::try_from(n).ok()),
+            };
+            match number {
                 Some(n) => Some(n),
-                // Season artwork with no usable season is unusable.
+                // Season artwork with no usable season — or another order's
+                // — is unusable.
                 None => continue,
             }
         } else {
@@ -925,17 +1025,22 @@ fn artwork(series: &SeriesExtended) -> Vec<Image> {
     images
 }
 
+/// Whether a season record is one of the aired order's: the seasons every
+/// client means.
+fn is_aired_order(season: &SeasonRecord) -> bool {
+    season
+        .season_type
+        .as_ref()
+        .is_none_or(|t| t.kind.is_empty() || t.kind == "official")
+}
+
 fn seasons(series: &SeriesExtended) -> Vec<Season> {
     let mut seasons: Vec<Season> = series
         .seasons
         .iter()
         // TVDB describes several orderings of the same series; only the aired
         // order matches what every client expects.
-        .filter(|s| {
-            s.season_type
-                .as_ref()
-                .is_none_or(|t| t.kind.is_empty() || t.kind == "official")
-        })
+        .filter(|s| is_aired_order(s))
         .filter_map(|s| {
             Some(Season {
                 id: new_id(),
@@ -1283,6 +1388,71 @@ mod tests {
         assert_eq!(season.cover_type, CoverType::Poster);
     }
 
+    /// A season's artwork as TheTVDB v4 sends it — by `seasonId`, never by
+    /// `season` — taken from a stored answer for *Rurouni Kenshin* (70863):
+    /// filed under the aired order's season it names, and dropped when it
+    /// names a DVD or absolute season.
+    #[test]
+    fn season_artwork_is_filed_under_the_aired_season_its_id_names() {
+        let season_type = |id: i64, name: &str, kind: &str| serde_json::json!({ "id": id, "name": name, "type": kind, "alternateName": null });
+        let aired = season_type(1, "Aired Order", "official");
+        let raw = serde_json::json!({
+            "id": 70863,
+            "name": "るろうに剣心 明治剣客浪漫譚",
+            "seasons": [
+                { "id": 1210, "seriesId": 70863, "type": aired, "number": 1, "name": "東京編",
+                  "image": "https://artworks.thetvdb.com/banners/v4/season/1210/posters/6a156459154c1.jpg",
+                  "imageType": 7, "lastUpdated": "2026-08-25 10:47:42", "year": null },
+                { "id": 1211, "seriesId": 70863, "type": aired, "number": 2, "name": "京都編",
+                  "image": null, "imageType": null, "lastUpdated": "2026-09-29 00:48:32", "year": null },
+                { "id": 18331, "seriesId": 70863, "type": aired, "number": 0, "name": null,
+                  "image": null, "imageType": 7, "lastUpdated": "2026-05-26 09:13:43", "year": null },
+                { "id": 1698153, "seriesId": 70863, "type": season_type(3, "Absolute Order", "absolute"),
+                  "number": 1, "name": null, "image": null, "imageType": 7, "lastUpdated": null, "year": null },
+                { "id": 1698154, "seriesId": 70863, "type": season_type(2, "DVD Order", "dvd"),
+                  "number": 0, "name": null, "image": null, "imageType": 6, "lastUpdated": null, "year": null }
+            ],
+            "artworks": [
+                { "id": 60942446, "image": "https://artworks.thetvdb.com/banners/seasons/70863-0-3.jpg",
+                  "thumbnail": "https://artworks.thetvdb.com/banners/seasons/70863-0-3_t.jpg",
+                  "language": "jpn", "type": 7, "score": 100000, "width": 400, "height": 578,
+                  "includesText": true, "thumbnailWidth": 0, "thumbnailHeight": 0, "updatedAt": 0,
+                  "seasonId": 18331, "status": { "id": 0, "name": null }, "tagOptions": null },
+                { "id": 60942468, "image": "https://artworks.thetvdb.com/banners/seasons/dvd-0.jpg",
+                  "language": "jpn", "type": 7, "score": 100000, "seasonId": 1698154 },
+                { "id": 64740947, "image": "https://artworks.thetvdb.com/banners/v4/season/1210/posters/6a156459154c1.jpg",
+                  "language": "eng", "type": 7, "score": 0, "seasonId": 1210 },
+                { "id": 62813919, "image": "https://artworks.thetvdb.com/banners/v4/season/1698153/posters/613ec075c2405.jpg",
+                  "language": "eng", "type": 7, "score": 0, "seasonId": 1698153 },
+                { "id": 60942447, "image": "https://artworks.thetvdb.com/banners/seasonswide/70863-0.jpg",
+                  "language": "eng", "type": 6, "score": 0, "seasonId": 18331 },
+                { "id": 60942469, "image": "https://artworks.thetvdb.com/banners/seasonswide/dvd-0.jpg",
+                  "language": "eng", "type": 6, "score": 0, "seasonId": 1698154 },
+                { "id": 1, "image": "https://artworks.thetvdb.com/banners/seasons/nowhere.jpg",
+                  "language": "eng", "type": 7, "score": 0, "seasonId": 999 }
+            ]
+        });
+        let series: SeriesExtended = serde_json::from_value(raw).expect("a real-shaped answer");
+
+        let mut filed: Vec<(Option<i32>, CoverType, &str)> = Vec::new();
+        let images = artwork(&series);
+        for image in &images {
+            let name = image.url.rsplit('/').next().unwrap_or_default();
+            filed.push((image.season_number, image.cover_type, name));
+        }
+        filed.sort_by_key(|(season, kind, name)| (*season, kind.as_str(), name.to_string()));
+
+        assert_eq!(
+            filed,
+            [
+                (Some(0), CoverType::Banner, "70863-0.jpg"),
+                (Some(0), CoverType::Poster, "70863-0-3.jpg"),
+                (Some(1), CoverType::Poster, "6a156459154c1.jpg"),
+            ],
+            "the aired seasons' pictures, and no other order's"
+        );
+    }
+
     #[test]
     fn only_the_aired_season_ordering_is_taken() {
         // TVDB describes DVD and absolute orderings of the same series; taking
@@ -1290,6 +1460,83 @@ mod tests {
         let item = to_item(&fixture(), "eng");
         let numbers: Vec<i32> = item.seasons.iter().map(|s| s.season_number).collect();
         assert_eq!(numbers, vec![0, 1]);
+    }
+
+    /// A server answering every request with `answer`, counting them, and the
+    /// path each asked for.
+    async fn answering(
+        answer: &'static str,
+    ) -> (String, std::sync::Arc<parking_lot::Mutex<Vec<String>>>) {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let at = format!("http://{}", listener.local_addr().unwrap());
+        let asked = std::sync::Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let seen = asked.clone();
+        tokio::spawn(async move {
+            while let Ok((mut connection, _)) = listener.accept().await {
+                let mut request = vec![0u8; 8192];
+                let read = connection.read(&mut request).await.unwrap_or(0);
+                let line = String::from_utf8_lossy(&request[..read])
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+                    .to_string();
+                seen.lock().push(line);
+                let _ = connection.write_all(answer.as_bytes()).await;
+                let _ = connection.shutdown().await;
+            }
+        });
+        (at, asked)
+    }
+
+    fn client_at(upstream: &str) -> TvdbClient {
+        TvdbClient::new(
+            reqwest::Client::new(),
+            &config::Tvdb {
+                upstream: upstream.into(),
+                api_key: Some("wrong".into()),
+                pin: None,
+                enabled: true,
+                passthrough: false,
+            },
+            "en",
+            "test".into(),
+        )
+    }
+
+    #[tokio::test]
+    async fn a_failed_sign_in_is_remembered_rather_than_asked_again_on_every_call() {
+        const REFUSED: &str = "HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\nContent-Length: 46\r\nConnection: close\r\n\r\n{\"status\":\"failure\",\"message\":\"InvalidAPIKey\"}";
+        let (at, asked) = answering(REFUSED).await;
+        let tvdb = client_at(&at);
+
+        let first = tvdb.bearer().await.unwrap_err();
+        assert!(format!("{first:#}").contains("401"), "{first:#}");
+        assert!(format!("{first:#}").contains("InvalidAPIKey"), "{first:#}");
+        // The relay's next call, and a refresh's: no second sign-in.
+        assert!(tvdb.bearer().await.is_err());
+        assert!(tvdb.series(81189).await.is_err());
+        let lines = asked.lock().clone();
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].starts_with("POST /login"), "{lines:?}");
+    }
+
+    #[tokio::test]
+    async fn a_language_is_one_segment_of_the_path_whatever_it_holds() {
+        const EMPTY: &str = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 47\r\nConnection: close\r\n\r\n{\"data\":{\"token\":\"t\",\"episodes\":[]},\"links\":{}}";
+        let (at, asked) = answering(EMPTY).await;
+        let tvdb = client_at(&at);
+
+        let texts = tvdb.episode_texts(81189, "../../login?x=1#").await.unwrap();
+        assert!(texts.is_empty());
+        let lines = asked.lock().clone();
+        assert!(
+            lines.iter().any(|l| l.starts_with(
+                "GET /series/81189/episodes/official/..%2F..%2Flogin%3Fx%3D1%23?page=0 "
+            )),
+            "{lines:?}"
+        );
     }
 
     #[test]

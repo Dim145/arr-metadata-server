@@ -58,6 +58,7 @@ struct SearchQuery {
     ),
     responses(
         (status = 200, body = ShowResource),
+        (status = 400, description = "The language is not a language tag"),
         (status = 403, description = "The caller's address is not in the allowlist"),
         (status = 404, description = "No provider could resolve this id"),
     ),
@@ -67,6 +68,7 @@ async fn show(
     State(state): State<AppState>,
     Path(ShowPath { language, tvdb_id }): Path<ShowPath>,
 ) -> AppResult<Json<ShowResource>> {
+    let language = asked_in(&language)?;
     let mut item = series::by_client_id(&state, tvdb_id)
         .await?
         .ok_or(AppError::NotFound)?;
@@ -96,6 +98,7 @@ async fn show(
     ),
     responses(
         (status = 200, body = Vec<ShowResource>),
+        (status = 400, description = "The language is not a language tag"),
         (status = 403, description = "The caller's address is not in the allowlist"),
     ),
     security(),
@@ -105,6 +108,7 @@ async fn search(
     Path(SearchPath { language }): Path<SearchPath>,
     Query(query): Query<SearchQuery>,
 ) -> AppResult<Json<Vec<ShowResource>>> {
+    let language = asked_in(&language)?;
     let term = query.term.unwrap_or_default();
 
     let mut items = series::search(&state, &term).await?;
@@ -127,6 +131,18 @@ async fn search(
         .collect();
 
     Ok(Json(shows))
+}
+
+/// The language in the URL, as a tag, or a 400.
+///
+/// Sonarr always sends one — `en` — so only a caller that is not Sonarr is
+/// refused. Not taken as it came: it became the key episode text is filed
+/// under, a segment of the path TheTVDB was asked on with the operator's
+/// token, and a line in the log, so a path or a query in its place
+/// reached TheTVDB, and every new string was a season's worth of calls.
+fn asked_in(language: &str) -> AppResult<String> {
+    crate::api::extract::language(Some(language))?
+        .ok_or_else(|| AppError::BadRequest("the address names no language".into()))
 }
 
 /// The title Sonarr is given: told apart from a homonym the way Skyhook tells

@@ -4,7 +4,8 @@
 # overlay on compose.yaml:
 #
 #   cp .env.example .env    # AMS_TMDB_API_KEY, the admin credentials, POSTGRES_PASSWORD,
-#                           # AMS_S3_SECRET_KEY (eight characters at least), AMS_PUBLIC_URL
+#                           # AMS_S3_SECRET_KEY, GARAGE_RPC_SECRET (openssl rand -hex 32),
+#                           # AMS_PUBLIC_URL
 #   docker compose -f compose.multi.yaml up -d
 #
 # The interface is on ${AMS_PORT:-8080}, answered by either instance in turn.
@@ -31,10 +32,11 @@ x-metadata: &metadata
     AMS_DATABASE_MAX_CONNECTIONS: ${AMS_DATABASE_MAX_CONNECTIONS:-20}
     AMS_REDIS_URL: redis://cache:6379
     AMS_MEDIA_STORAGE: s3
-    AMS_S3_ENDPOINT: http://bucket:9000
-    AMS_S3_REGION: ${AMS_S3_REGION:-us-east-1}
+    AMS_S3_ENDPOINT: http://bucket:3900
+    # The region the bucket below signs for, which must be the one asked.
+    AMS_S3_REGION: garage
     AMS_S3_BUCKET: ${AMS_S3_BUCKET:-ams-media}
-    AMS_S3_ACCESS_KEY: ${AMS_S3_ACCESS_KEY:-ams}
+    AMS_S3_ACCESS_KEY: ${AMS_S3_ACCESS_KEY:-ams-media}
     AMS_S3_SECRET_KEY: ${AMS_S3_SECRET_KEY:?AMS_S3_SECRET_KEY is required}
     AMS_S3_PATH_STYLE: "true"
     AMS_CLIENTS_BIND: 0.0.0.0:443
@@ -42,7 +44,9 @@ x-metadata: &metadata
     AMS_TMDB_LANGUAGE: ${AMS_TMDB_LANGUAGE:-en-US}
     AMS_ADMIN_USERNAME: ${AMS_ADMIN_USERNAME:-}
     AMS_ADMIN_PASSWORD: ${AMS_ADMIN_PASSWORD:-}
-    AMS_ARR_ALLOWLIST: ${AMS_ARR_ALLOWLIST:-172.16.0.0/12,10.0.0.0/8,192.168.0.0/16,127.0.0.0/8}
+    # A first value only: the list is edited on the Access page from the
+    # first start on. Unset, it starts as the private ranges and loopback.
+    AMS_ARR_ALLOWLIST: ${AMS_ARR_ALLOWLIST:-}
     # Caddy alone is trusted for the caller's address: its own, pinned below.
     AMS_TRUSTED_PROXIES: 172.30.0.10/32
     AMS_LOG: ${AMS_LOG:-info}
@@ -52,8 +56,8 @@ x-metadata: &metadata
       condition: service_healthy
     cache:
       condition: service_started
-    bucket-init:
-      condition: service_completed_successfully
+    bucket:
+      condition: service_healthy
   # Nothing is written to disk in multi mode: the authority lives in the
   # database, the media in the bucket. An authority an earlier, single
   # deployment kept can be handed over once by mounting its directory read
@@ -162,39 +166,38 @@ services:
     expose:
       - "6379"
 
-  # The bucket the media are kept in. MinIO here, pinned to the tag you
-  # deploy; Garage, RustFS, Ceph or Amazon's own do as well — point AMS_S3_*
-  # at them and drop this service and the next.
+  # The bucket the media are kept in: Garage, one node, which lays itself
+  # out and makes its bucket and its key on its first start — the key, with
+  # this access key id (eight characters at least) and secret. Pinned to a
+  # release; RustFS, Ceph or Amazon's own do as well — point AMS_S3_* at them
+  # and drop this service. (MinIO no longer publishes the images this
+  # example used to pull.)
   bucket:
-    image: minio/minio:latest
+    image: dxflrs/garage:v2.3.0
     container_name: arr-metadata-bucket
     restart: unless-stopped
-    command: server /data
+    command: ["/garage", "server", "--single-node", "--default-bucket"]
+    configs:
+      - source: garage
+        target: /etc/garage.toml
     environment:
-      MINIO_ROOT_USER: ${AMS_S3_ACCESS_KEY:-ams}
-      MINIO_ROOT_PASSWORD: ${AMS_S3_SECRET_KEY:?AMS_S3_SECRET_KEY is required}
+      # What its nodes sign their talk with: 32 bytes, in hex.
+      GARAGE_RPC_SECRET: ${GARAGE_RPC_SECRET:?GARAGE_RPC_SECRET is required (openssl rand -hex 32)}
+      GARAGE_DEFAULT_ACCESS_KEY: ${AMS_S3_ACCESS_KEY:-ams-media}
+      GARAGE_DEFAULT_SECRET_KEY: ${AMS_S3_SECRET_KEY:?AMS_S3_SECRET_KEY is required}
+      GARAGE_DEFAULT_BUCKET: ${AMS_S3_BUCKET:-ams-media}
     volumes:
-      - bucket-data:/data
+      - bucket-meta:/var/lib/garage/meta
+      - bucket-data:/var/lib/garage/data
     healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
+      test: ["CMD", "/garage", "status"]
       interval: 10s
       timeout: 5s
       retries: 5
+    security_opt:
+      - no-new-privileges:true
     expose:
-      - "9000"
-
-  # Makes the bucket, once. The secret travels in the environment, never
-  # in the command line.
-  bucket-init:
-    image: minio/mc:latest
-    environment:
-      S3_ACCESS_KEY: ${AMS_S3_ACCESS_KEY:-ams}
-      S3_SECRET_KEY: ${AMS_S3_SECRET_KEY:?AMS_S3_SECRET_KEY is required}
-      S3_BUCKET: ${AMS_S3_BUCKET:-ams-media}
-    depends_on:
-      bucket:
-        condition: service_healthy
-    entrypoint: ["/bin/sh", "-c", "mc alias set local http://bucket:9000 \"$$S3_ACCESS_KEY\" \"$$S3_SECRET_KEY\" && mc mb --ignore-existing \"local/$$S3_BUCKET\""]
+      - "3900"
 
 configs:
   caddyfile:
@@ -222,6 +225,18 @@ configs:
         option tcp-check
         server a metadata-a:443 check inter 5s fall 2 rise 1
         server b metadata-b:443 check inter 5s fall 2 rise 1
+  garage:
+    content: |
+      metadata_dir = "/var/lib/garage/meta"
+      data_dir = "/var/lib/garage/data"
+      db_engine = "sqlite"
+      replication_factor = 1
+      rpc_bind_addr = "[::]:3901"
+      rpc_public_addr = "127.0.0.1:3901"
+
+      [s3_api]
+      s3_region = "garage"
+      api_bind_addr = "[::]:3900"
 
 networks:
   default:
@@ -231,4 +246,5 @@ networks:
 
 volumes:
   postgres-data:
+  bucket-meta:
   bucket-data:

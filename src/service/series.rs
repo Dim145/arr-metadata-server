@@ -97,7 +97,7 @@ async fn fetch_by_tvdb_id(state: &AppState, tvdb_id: i64) -> Result<Option<Media
                 let item = sonarr::to_item(&show);
                 let provenance = crate::merge::provenance::single(names::SKYHOOK, &item);
                 let snapshots = vec![(names::SKYHOOK.to_string(), raw)];
-                let stored = persist(state, item, &snapshots, provenance).await?;
+                let stored = persist(state, item, &snapshots, provenance, None).await?;
                 return Ok(Some(stored));
             }
             Ok(None) => {}

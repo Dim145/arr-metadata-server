@@ -185,8 +185,18 @@ impl Store {
 
     /// How big a key's bytes are, when the store has the key.
     pub async fn size(&self, key: &str) -> Result<Option<u64>> {
+        Ok(self.head(key).await?.map(|meta| meta.size))
+    }
+
+    /// When a key's bytes were last put, when the store has the key: a put
+    /// again — the same bytes, wanted again — makes them new.
+    pub async fn modified(&self, key: &str) -> Result<Option<chrono::DateTime<chrono::Utc>>> {
+        Ok(self.head(key).await?.map(|meta| meta.last_modified))
+    }
+
+    async fn head(&self, key: &str) -> Result<Option<object_store::ObjectMeta>> {
         match self.inner.head(&self.path(key)).await {
-            Ok(meta) => Ok(Some(meta.size)),
+            Ok(meta) => Ok(Some(meta)),
             Err(object_store::Error::NotFound { .. }) => Ok(None),
             Err(e) => Err(e).with_context(|| format!("could not look for {key}")),
         }
@@ -218,13 +228,19 @@ impl Store {
     }
 
     /// A URL the bucket itself answers for a while, for a reader sent
-    /// straight to it. `None` for a store that cannot sign.
-    pub async fn presign(&self, key: &str, valid_for: Duration) -> Result<Option<url::Url>> {
+    /// straight to it — for the method it will ask with, which the signature
+    /// covers. `None` for a store that cannot sign.
+    pub async fn presign(
+        &self,
+        key: &str,
+        method: axum::http::Method,
+        valid_for: Duration,
+    ) -> Result<Option<url::Url>> {
         let Some(s3) = &self.s3 else {
             return Ok(None);
         };
         let url = s3
-            .signed_url(axum::http::Method::GET, &self.path(key), valid_for)
+            .signed_url(method, &self.path(key), valid_for)
             .await
             .with_context(|| format!("could not sign a URL for {key}"))?;
         Ok(Some(url))

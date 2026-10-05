@@ -58,6 +58,7 @@ pub struct FankaiClient {
     /// on Drama does not stand beside one on Drame.
     french: bool,
     pacer: Pacer,
+    gate: crate::providers::Gate,
     catalogue: tokio::sync::Mutex<Option<Catalogue>>,
 }
 
@@ -86,6 +87,8 @@ impl FankaiClient {
             french: language.trim().to_ascii_lowercase().starts_with("fr"),
             // A small service run by volunteers: one call a second.
             pacer: Pacer::new(Duration::from_secs(1)),
+            // Spaced already; this is for its `Retry-After`.
+            gate: crate::providers::Gate::new(names::FANKAI, "Fankai", 2),
             catalogue: tokio::sync::Mutex::new(None),
         }
     }
@@ -313,19 +316,19 @@ impl FankaiClient {
         }
 
         let url = format!("{}{path}", self.base);
-        let mut request = self.http.get(&url).timeout(Duration::from_secs(20));
-        if let Some(etag) = etag {
-            request = request.header(reqwest::header::IF_NONE_MATCH, etag);
-        }
+        let request = || {
+            let request = self.http.get(&url).timeout(Duration::from_secs(20));
+            match etag {
+                Some(etag) => request.header(reqwest::header::IF_NONE_MATCH, etag),
+                None => request,
+            }
+        };
 
-        let started = std::time::Instant::now();
-        let response = request.send().await;
-        crate::metrics::upstream(
-            names::FANKAI,
-            started,
-            response.as_ref().ok().map(|r| r.status()),
-        );
-        let response = response.with_context(|| format!("Fankai request failed: {url}"))?;
+        let (response, _permit) = self
+            .gate
+            .send(request)
+            .await
+            .map_err(|e| anyhow::anyhow!("Fankai request failed: {url}: {e}"))?;
 
         match response.status() {
             reqwest::StatusCode::NOT_MODIFIED => return Ok(Fetched::NotModified),
@@ -333,7 +336,10 @@ impl FankaiClient {
             reqwest::StatusCode::TOO_MANY_REQUESTS => {
                 anyhow::bail!("Fankai's rate limit was reached")
             }
-            status if !status.is_success() => anyhow::bail!("Fankai returned {status} for {url}"),
+            status if !status.is_success() => {
+                let reason = crate::providers::error_text(response).await;
+                anyhow::bail!("Fankai returned {status} for {url}: {reason}")
+            }
             _ => {}
         }
 
@@ -682,9 +688,11 @@ fn to_item(
         .sort_by_key(|e| (e.season_number, e.episode_number));
 
     // A film is an hour or so; the mean is what a client expects of "runtime".
+    // Summed as floats: the lengths are the service's numbers, and a sum of
+    // them past `i32` panics in a debug build and wraps in a release one.
     let lengths: Vec<i32> = item.episodes.iter().filter_map(|e| e.runtime).collect();
     if !lengths.is_empty() {
-        let mean = f64::from(lengths.iter().sum::<i32>()) / lengths.len() as f64;
+        let mean = lengths.iter().map(|n| f64::from(*n)).sum::<f64>() / lengths.len() as f64;
         item.runtime = Some(mean.round() as i32);
     }
 

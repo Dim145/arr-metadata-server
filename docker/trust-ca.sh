@@ -11,10 +11,12 @@
 #   1. a file mounted at /usr/local/share/ca-certificates/arr-metadata.crt;
 #   2. the server's data volume, mounted read-only: $AMS_CA_FILE, by default
 #      /arr-metadata/tls/ca.crt (mount the volume at /arr-metadata);
-#   3. the server itself: $AMS_CA_URL, e.g. http://metadata:8080/ca.crt — over
-#      plain HTTP on the stack's network, so pin what is fetched with
-#      $AMS_CA_FINGERPRINT, the SHA-256 the administration page shows, or
-#      prefer the volume.
+#   3. the server itself: $AMS_CA_URL, e.g. http://metadata:8080/ca.crt. Over
+#      plain HTTP, whatever answers would become a root this container
+#      trusts for everything, so the script refuses unless what is fetched is
+#      pinned with $AMS_CA_FINGERPRINT — the SHA-256 the administration page
+#      shows — or the risk is accepted, on a network you control, with
+#      AMS_CA_INSECURE=1.
 #
 # The same script is served by the server at /trust-ca.sh, and its
 # authority at /ca.crt, so a deployment from the image alone has both.
@@ -34,6 +36,21 @@ elif [ -s "${CA_FILE}" ]; then
     mkdir -p "$(dirname "${CA_PATH}")"
     cp "${CA_FILE}" "${CA_PATH}"
 elif [ -n "${AMS_CA_URL:-}" ]; then
+    case "${AMS_CA_URL}" in
+        [Hh][Tt][Tt][Pp]://*)
+            if [ -z "${AMS_CA_FINGERPRINT:-}" ]; then
+                case "$(printf '%s' "${AMS_CA_INSECURE:-}" | tr 'A-Z' 'a-z')" in
+                    1|true|yes|on)
+                        echo "[trust-ca] WARNING: installing an authority fetched over plain HTTP without AMS_CA_FINGERPRINT (AMS_CA_INSECURE is set): anyone on the way could have substituted their own" >&2
+                        ;;
+                    *)
+                        echo "[trust-ca] ERROR: ${AMS_CA_URL} is plain HTTP and AMS_CA_FINGERPRINT is not set: whatever answers would be trusted as a root. Set AMS_CA_FINGERPRINT to the SHA-256 the server's Opening & APIs page shows, mount the authority instead, or set AMS_CA_INSECURE=1 to accept the risk on a network you control" >&2
+                        exit 1
+                        ;;
+                esac
+            fi
+            ;;
+    esac
     echo "[trust-ca] fetching the authority from ${AMS_CA_URL}"
     mkdir -p "$(dirname "${CA_PATH}")"
     if command -v curl >/dev/null 2>&1; then

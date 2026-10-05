@@ -75,6 +75,7 @@ pub struct AnilistClient {
     /// this server answers on too, and a resolver that sends it here would
     /// have it ask itself. See [`crate::providers::radarr::LOOP_HEADER`].
     instance: String,
+    gate: crate::providers::Gate,
 }
 
 impl AnilistClient {
@@ -85,6 +86,8 @@ impl AnilistClient {
             // Thirty a minute, AniList's current ceiling.
             pacer: Pacer::new(std::time::Duration::from_millis(2_100)),
             instance,
+            // Spaced already; this is for its `Retry-After`.
+            gate: crate::providers::Gate::new("anilist", "AniList", 4),
         }
     }
 
@@ -122,22 +125,19 @@ impl AnilistClient {
             anyhow::bail!("AniList's queue is full; this fetch goes without it");
         }
 
-        let started = std::time::Instant::now();
-        let response = self
-            .http
-            .post(&self.endpoint)
-            .header(reqwest::header::ACCEPT, "application/json")
-            .header(crate::providers::radarr::LOOP_HEADER, &self.instance)
-            .json(&json!({ "query": query, "variables": { "id": id } }))
-            .timeout(std::time::Duration::from_secs(20))
-            .send()
-            .await;
-        crate::metrics::upstream(
-            "anilist",
-            started,
-            response.as_ref().ok().map(|r| r.status()),
-        );
-        let response = response.context("AniList request failed")?;
+        let body = json!({ "query": query, "variables": { "id": id } });
+        let (response, _permit) = self
+            .gate
+            .send(|| {
+                self.http
+                    .post(&self.endpoint)
+                    .header(reqwest::header::ACCEPT, "application/json")
+                    .header(crate::providers::radarr::LOOP_HEADER, &self.instance)
+                    .json(&body)
+                    .timeout(std::time::Duration::from_secs(20))
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("AniList request failed: {e}"))?;
 
         let status = response.status();
         if status == reqwest::StatusCode::NOT_FOUND {
@@ -147,7 +147,8 @@ impl AnilistClient {
             anyhow::bail!("AniList's rate limit was reached");
         }
         if !status.is_success() {
-            anyhow::bail!("AniList returned {status}");
+            let reason = crate::providers::error_text(response).await;
+            anyhow::bail!("AniList returned {status}: {reason}");
         }
 
         let raw = crate::providers::read_json(response)
@@ -157,7 +158,10 @@ impl AnilistClient {
         if raw.pointer("/data/Media").is_none_or(Value::is_null) {
             // GraphQL reports its errors in the body, with a 200 as often as not.
             if let Some(errors) = raw.get("errors") {
-                anyhow::bail!("AniList refused the query: {errors}");
+                anyhow::bail!(
+                    "AniList refused the query: {}",
+                    crate::providers::clip(&errors.to_string(), crate::providers::MESSAGE_CHARS)
+                );
             }
             return Ok(None);
         }
@@ -322,12 +326,15 @@ fn to_item(media: &Media, kind: MediaKind) -> MediaItem {
     // A mean out of a hundred, and no count of its own: the distribution's
     // buckets add up to everyone who scored it.
     if let Some(score) = media.average_score.filter(|s| *s > 0) {
+        // Saturating: the counts are a stranger's numbers, and a sum past
+        // `i64` panics in a debug build and wraps negative in a release one.
         let votes: i64 = media
             .stats
             .iter()
             .flat_map(|s| &s.score_distribution)
             .filter_map(|b| b.amount)
-            .sum();
+            .filter(|amount| *amount > 0)
+            .fold(0i64, i64::saturating_add);
 
         item.ratings = vec![Rating {
             source: "anilist".to_string(),

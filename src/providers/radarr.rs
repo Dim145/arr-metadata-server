@@ -28,7 +28,12 @@ pub struct RadarrMetadataClient {
     http: reqwest::Client,
     base: String,
     instance: String,
+    gate: crate::providers::Gate,
 }
+
+/// How many requests to Radarr's service are in flight at once: a Radarr bulk
+/// refresh of a hundred films asks for all of them at the same moment.
+const AT_ONCE: usize = 8;
 
 impl RadarrMetadataClient {
     pub fn new(http: reqwest::Client, cfg: &config::RadarrMetadata, instance: String) -> Self {
@@ -36,6 +41,7 @@ impl RadarrMetadataClient {
             http,
             base: cfg.upstream.clone(),
             instance,
+            gate: crate::providers::Gate::new("radarr", "Radarr's metadata service", AT_ONCE),
         }
     }
 
@@ -59,7 +65,11 @@ impl RadarrMetadataClient {
     }
 
     pub async fn by_imdb_id(&self, imdb_id: &str) -> Result<Option<(Value, MovieResource)>> {
-        let url = format!("{}/v1/movie/imdb/{imdb_id}", self.base);
+        let url = format!(
+            "{}/v1/movie/imdb/{}",
+            self.base,
+            crate::providers::segment(imdb_id)
+        );
 
         let Some(value) = self.fetch(&url, &[]).await? else {
             return Ok(None);
@@ -91,8 +101,12 @@ impl RadarrMetadataClient {
     /// under the same ceiling as every provider answer, this host being one
     /// a deployment redirects by design.
     pub async fn imdb_list(&self, id: &str) -> Result<Option<Bytes>> {
-        let url = format!("{}/v1/list/imdb/{id}", self.base);
-        let Some(response) = self.send(&url, &[], 90).await? else {
+        let url = format!(
+            "{}/v1/list/imdb/{}",
+            self.base,
+            crate::providers::segment(id)
+        );
+        let Some((response, _permit)) = self.send(&url, &[], 90).await? else {
             return Ok(None);
         };
         crate::providers::read_body(response, crate::providers::MAX_BODY_BYTES)
@@ -102,7 +116,7 @@ impl RadarrMetadataClient {
     }
 
     async fn fetch(&self, url: &str, query: &[(&str, &str)]) -> Result<Option<Value>> {
-        let Some(response) = self.send(url, query, 20).await? else {
+        let Some((response, _permit)) = self.send(url, query, 20).await? else {
             return Ok(None);
         };
 
@@ -117,29 +131,27 @@ impl RadarrMetadataClient {
     }
 
     /// One request to the service, answered or not: `None` for a 404, an
-    /// error for anything else that is not success.
+    /// error for anything else that is not success. The permit is the
+    /// request's place among those in flight, held while its body is read.
     async fn send(
         &self,
         url: &str,
         query: &[(&str, &str)],
         timeout_secs: u64,
-    ) -> Result<Option<reqwest::Response>> {
-        let started = std::time::Instant::now();
-        let response = self
-            .http
-            .get(url)
-            .query(query)
-            .header(LOOP_HEADER, &self.instance)
-            .timeout(std::time::Duration::from_secs(timeout_secs))
-            .send()
-            .await;
-        crate::metrics::upstream(
-            "radarr",
-            started,
-            response.as_ref().ok().map(|r| r.status()),
-        );
-        let response = response
-            .with_context(|| format!("request to Radarr's metadata service failed: {url}"))?;
+    ) -> Result<Option<(reqwest::Response, tokio::sync::SemaphorePermit<'_>)>> {
+        let (response, permit) = self
+            .gate
+            .send(|| {
+                self.http
+                    .get(url)
+                    .query(query)
+                    .header(LOOP_HEADER, &self.instance)
+                    .timeout(std::time::Duration::from_secs(timeout_secs))
+            })
+            .await
+            .map_err(|e| {
+                anyhow::anyhow!("request to Radarr's metadata service failed: {url}: {e}")
+            })?;
 
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
@@ -155,9 +167,10 @@ impl RadarrMetadataClient {
 
         let status = response.status();
         if !status.is_success() {
-            anyhow::bail!("Radarr's metadata service returned {status} for {url}");
+            let reason = crate::providers::error_text(response).await;
+            anyhow::bail!("Radarr's metadata service returned {status} for {url}: {reason}");
         }
 
-        Ok(Some(response))
+        Ok(Some((response, permit)))
     }
 }

@@ -129,6 +129,19 @@ impl AppError {
             Self::Internal(_) => "internal server error".into(),
         }
     }
+
+    /// What the log is told: the whole chain of causes on one line, with
+    /// whatever in it is a secret masked — a provider's key in the URL an
+    /// HTTP client error repeats, a token, a password in an address — and
+    /// what came from outside unable to start a line of its own.
+    fn log_text(&self) -> String {
+        let text = match self {
+            Self::Internal(cause) => format!("{cause:#}"),
+            Self::UpstreamUnavailable(cause) => format!("{self}: {cause:#}"),
+            other => other.to_string(),
+        };
+        crate::telemetry::redact(&text)
+    }
 }
 
 #[derive(Serialize)]
@@ -144,9 +157,9 @@ impl IntoResponse for AppError {
         // A surface an administrator switched off answers 503 on purpose:
         // a Sonarr library refresh against it is not a line of errors.
         if status.is_server_error() && !matches!(self, Self::Disabled { .. }) {
-            tracing::error!(error = ?self, "request failed");
+            tracing::error!(error = %self.log_text(), "request failed");
         } else {
-            tracing::debug!(error = %self, "request rejected");
+            tracing::debug!(error = %self.log_text(), "request rejected");
         }
 
         let body = ErrorBody {
@@ -187,5 +200,39 @@ impl From<reqwest::Error> for AppError {
 impl From<serde_json::Error> for AppError {
     fn from(e: serde_json::Error) -> Self {
         Self::Internal(e.into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn what_the_log_is_told_keeps_the_causes_and_loses_the_secrets() {
+        let failed = AppError::UpstreamUnavailable(
+            anyhow::anyhow!("error decoding response body for url (https://api.themoviedb.org/3/tv/1?api_key=0123456789abcdef)")
+                .context("TMDB answer could not be read"),
+        );
+        let text = failed.log_text();
+        assert!(
+            text.starts_with("upstream provider unavailable: TMDB answer could not be read: "),
+            "{text}"
+        );
+        assert!(text.contains("api_key=***"), "{text}");
+        assert!(!text.contains("0123456789abcdef"), "{text}");
+
+        let internal = AppError::Internal(
+            anyhow::anyhow!("connection refused").context("postgres://ams:hunter2@db/ams"),
+        );
+        let text = internal.log_text();
+        assert_eq!(text, "postgres://ams:***@db/ams: connection refused");
+
+        // A rejection quoting what a caller sent stays on its line.
+        let rejected = AppError::BadRequest("unknown action \"x\nINFO forged\"".into());
+        assert!(!rejected.log_text().contains('\n'));
+
+        // What the client is told does not change: generic, as before.
+        assert_eq!(failed.public_message(), "upstream provider unavailable");
+        assert_eq!(internal.public_message(), "internal server error");
     }
 }
