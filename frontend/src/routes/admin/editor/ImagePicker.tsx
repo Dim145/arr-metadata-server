@@ -43,6 +43,27 @@ const GROUPS: Candidate['group'][] = ['season', 'work', 'seasons']
 
 const ACCEPT = 'image/jpeg,image/png,image/webp,image/gif,image/avif'
 
+/** The schemes a typed address may have: a picture fetched over the web. */
+const WEB = ['http:', 'https:'] as const
+/** The scheme of a file chosen here, previewed from memory. */
+const BLOB = ['blob:'] as const
+
+/**
+ * `given` parsed and written back as the browser reads it, when its scheme
+ * is one of `schemes`; nothing otherwise. An `<img>` here is pointed at an
+ * address only once it has been through this, so that what reaches it is an
+ * address a picture loads from — never one that runs something, nor a line
+ * that is no address at all.
+ */
+function addressOf(given: string, schemes: readonly string[]): string | undefined {
+  try {
+    const url = new URL(given.trim())
+    return schemes.includes(url.protocol) ? url.href : undefined
+  } catch {
+    return undefined
+  }
+}
+
 export function ImagePicker({
   open,
   onClose,
@@ -153,6 +174,7 @@ export function ImagePicker({
     setPreviewUrl(url)
     return () => URL.revokeObjectURL(url)
   }, [file])
+  const filePreview = previewUrl ? addressOf(previewUrl, BLOB) : undefined
 
   const takeFile = (taken: File | undefined) => {
     if (!taken || !taken.type.startsWith('image/')) return
@@ -170,7 +192,7 @@ export function ImagePicker({
       return
     }
     const text = event.clipboardData.getData('text').trim()
-    if (source !== 'address' && /^https?:\/\/\S+$/.test(text)) {
+    if (source !== 'address' && addressOf(text, WEB)) {
       event.preventDefault()
       setAddress(text)
       setProbe({ state: 'idle' })
@@ -185,16 +207,17 @@ export function ImagePicker({
 
   const groups = GROUPS.filter((g) => offered.some((c) => c.group === g))
   const shownCandidates = offered.filter((c) => c.group === group)
-  const webAddress = /^https?:\/\/\S+$/.test(address.trim())
+  // The typed address as it will be kept and previewed: parsed, of the web.
+  const webAddress = addressOf(address, WEB)
   const busy = choose.isPending || upload.isPending
   const error = choose.error ?? upload.error
 
   const submit = () => {
     if (source === 'own' && picked) choose.mutate(picked)
     else if (source === 'file' && file) upload.mutate(file)
-    else if (source === 'address' && webAddress) choose.mutate(address.trim())
+    else if (source === 'address' && webAddress) choose.mutate(webAddress)
   }
-  const ready = source === 'own' ? Boolean(picked) : source === 'file' ? Boolean(file) && storeOn : webAddress
+  const ready = source === 'own' ? Boolean(picked) : source === 'file' ? Boolean(file) && storeOn : Boolean(webAddress)
 
   const onTabKey = (event: React.KeyboardEvent<HTMLDivElement>) => {
     const at = sources.indexOf(source)
@@ -377,10 +400,10 @@ export function ImagePicker({
                   over ? 'border-vermillion bg-vermillion/5' : 'border-rule-bright',
                 )}
               >
-                {previewUrl && file ? (
+                {filePreview && file ? (
                   <div className="flex flex-col items-center gap-3">
                     <img
-                      src={previewUrl}
+                      src={filePreview}
                       alt=""
                       className={cn('max-h-56 rounded-card border border-rule object-contain', wide ? 'aspect-video' : 'aspect-2/3')}
                     />
@@ -434,8 +457,8 @@ export function ImagePicker({
                 <div className={cn('relative overflow-hidden rounded-card border border-rule bg-ink-high', wide ? 'aspect-video' : 'aspect-2/3 w-28')}>
                   {webAddress ? (
                     <img
-                      key={address}
-                      src={address.trim()}
+                      key={webAddress}
+                      src={webAddress}
                       alt=""
                       className="size-full object-cover"
                       onLoad={(event) => setProbe({ state: 'ok', width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })}

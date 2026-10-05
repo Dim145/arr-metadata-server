@@ -7,6 +7,13 @@ may change what the API or the configuration means, and says so here.
 
 ## [Unreleased]
 
+### Changed
+
+- A picture's address, typed or pasted into the picker, is kept as the
+  browser reads it: parsed, of `http` or `https`, and written back whole —
+  the same address the preview shows. A line that parses as no address, or
+  as one of another scheme, is not offered for keeping.
+
 ## [0.7.0] — 2026-10-05
 
 ### Added

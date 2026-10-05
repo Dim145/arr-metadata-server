@@ -338,40 +338,55 @@ mod tests {
         assert!(h.chars().all(|c| c.is_ascii_hexdigit()));
     }
 
+    /// A password for a test, drawn at random: the tests need none in
+    /// particular, only one long enough and another unlike it, and a password
+    /// written in the code reads as a secret kept there to whoever scans it.
+    fn fresh_password() -> String {
+        generate_session_token().unwrap().0
+    }
+
+    /// Too short by one for [`hash_password`].
+    fn short_password() -> String {
+        fresh_password().chars().take(11).collect()
+    }
+
     #[test]
     fn passwords_round_trip_through_argon2() {
-        let phc = hash_password("correct horse battery").unwrap();
+        let password = fresh_password();
+        let phc = hash_password(&password).unwrap();
         assert!(phc.starts_with("$argon2id$"));
-        assert!(verify_password("correct horse battery", &phc));
-        assert!(!verify_password("wrong horse battery", &phc));
+        assert!(verify_password(&password, &phc));
+        assert!(!verify_password(&fresh_password(), &phc));
     }
 
     #[test]
     fn short_passwords_are_rejected() {
-        assert!(hash_password("short").is_err());
+        assert!(hash_password(&short_password()).is_err());
     }
 
     #[test]
     fn a_corrupt_hash_fails_closed() {
-        assert!(!verify_password("anything", "not-a-phc-string"));
+        assert!(!verify_password(&fresh_password(), "not-a-phc-string"));
     }
 
     /// However many ask at once, no more hash than there are slots; the
     /// others wait their turn, and each is answered.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn hashing_is_bounded_and_everyone_is_answered() {
-        let phc = hash_password("correct horse battery").unwrap();
+        let right = fresh_password();
+        let wrong = fresh_password();
+        let phc = hash_password(&right).unwrap();
         assert!((2..=8).contains(&hashing_slots()));
 
         let checks: Vec<_> = (0..12)
             .map(|i| {
                 let phc = phc.clone();
                 let password = if i % 2 == 0 {
-                    "correct horse battery"
+                    right.clone()
                 } else {
-                    "wrong horse battery"
+                    wrong.clone()
                 };
-                tokio::spawn(verify_password_async(password.to_string(), phc))
+                tokio::spawn(verify_password_async(password, phc))
             })
             .collect();
         let mut answers = Vec::new();
@@ -381,7 +396,7 @@ mod tests {
         assert_eq!(answers.iter().filter(|ok| **ok).count(), 6);
 
         assert!(matches!(
-            hash_password_async("short".into()).await,
+            hash_password_async(short_password()).await,
             Err(HashError::Rejected(_))
         ));
     }

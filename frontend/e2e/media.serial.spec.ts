@@ -136,6 +136,10 @@ test.describe('the media kept', () => {
     await picker.getByRole('tab', { name: /a file|un fichier/i }).click()
     await picker.locator('input[type="file"]').setInputFiles({ name: 'bandeau.png', mimeType: 'image/png', buffer: png(758, 140 + (Date.now() % 89)) })
     await expect(picker.getByText('bandeau.png')).toBeVisible()
+    // Previewed from memory before it is sent: a picture that loaded, not a blank.
+    const preview = picker.locator('img[src^="blob:"]')
+    await expect(preview).toBeVisible()
+    await expect.poll(() => preview.evaluate((img) => (img as HTMLImageElement).naturalWidth)).toBeGreaterThan(0)
     await picker.getByRole('button', { name: /^(add|ajouter)$/i }).click()
     await expect(picker).toBeHidden()
     const now = (await (await page.request.get(`/api/v1/items/${id}/media`)).json()) as {
