@@ -29,7 +29,7 @@ import {
   Spinner,
 } from '../../components/ui'
 import { describeAgent } from '../../lib/agent'
-import { api } from '../../lib/api'
+import { api, segment } from '../../lib/api'
 import { dateTime, longDate } from '../../lib/format'
 import { useI18n } from '../../lib/i18n'
 import type { AccountRole, AccountStatus, Me, User, UserDetail as Detail } from '../../lib/types'
@@ -43,7 +43,7 @@ export function UserDetail() {
   const me = useQuery({ queryKey: ['me'], queryFn: () => api.get<Me>('/auth/me'), staleTime: 5 * 60_000 })
   const detail = useQuery({
     queryKey: ['users', id],
-    queryFn: () => api.get<Detail>(`/users/${encodeURIComponent(id)}`),
+    queryFn: () => api.get<Detail>(`/users/${segment(id)}`),
   })
   useAdminTitle(detail.data?.user.displayName || detail.data?.user.username || null)
 
@@ -53,11 +53,11 @@ export function UserDetail() {
 
   const change = useMutation({
     mutationFn: (body: Partial<{ role: AccountRole; status: AccountStatus; displayName: string; email: string }>) =>
-      api.patch<User>(`/users/${encodeURIComponent(id)}`, body),
+      api.patch<User>(`/users/${segment(id)}`, body),
     onSuccess: refresh,
   })
   const remove = useMutation({
-    mutationFn: () => api.delete(`/users/${encodeURIComponent(id)}`),
+    mutationFn: () => api.delete(`/users/${segment(id)}`),
     onSuccess: () => {
       refresh()
       navigate('/admin/users', { replace: true })
@@ -123,6 +123,9 @@ export function UserDetail() {
                   value={user.role}
                   disabled={mine || change.isPending}
                   onChange={(role) => change.mutate({ role })}
+                  // Saved as it is made: an arrow key reading the options
+                  // must not be what makes somebody an administrator.
+                  deliberate
                   options={(['member', 'editor', 'admin'] as const).map((r) => ({ value: r, label: t.labels.roles[r] }))}
                 />
                 <p className="text-xs text-bone-faint">{t.account.roleHints[user.role]}</p>
@@ -134,6 +137,7 @@ export function UserDetail() {
                   value={user.status}
                   disabled={mine || change.isPending}
                   onChange={(status) => change.mutate({ status })}
+                  deliberate
                   options={(['active', 'pending', 'disabled'] as const).map((s) => ({
                     value: s,
                     label: t.labels.statuses[s],
@@ -246,7 +250,7 @@ function PasswordReset({ id }: { id: string }) {
 
   const reset = useMutation({
     mutationFn: () =>
-      api.post<{ password?: string }>(`/users/${encodeURIComponent(id)}/password`, {
+      api.post<{ password?: string }>(`/users/${segment(id)}/password`, {
         password: password || undefined,
       }),
     onSuccess: () => setPassword(''),
@@ -347,7 +351,7 @@ function SessionsPanel({
 }) {
   const { t, locale } = useI18n()
   const closeAll = useMutation({
-    mutationFn: () => api.delete(`/users/${encodeURIComponent(id)}/sessions`),
+    mutationFn: () => api.delete(`/users/${segment(id)}/sessions`),
     onSuccess: onChanged,
   })
 

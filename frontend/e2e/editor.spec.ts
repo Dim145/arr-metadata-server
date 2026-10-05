@@ -305,6 +305,37 @@ test.describe('the work editor', () => {
     }
   })
 
+  test('a list with a comma in one of its entries survives being opened and saved', async ({ page }, info) => {
+    await signIn(page)
+    const created = await page.request.post('/api/v1/items', {
+      data: { kind: 'movie', title: `Liste e2e ${info.project.name} ${Date.now()}`, year: 2034 },
+    })
+    expect(created.status()).toBe(201)
+    const { id } = (await created.json()) as { id: string }
+    const keywords = async () =>
+      ((await (await page.request.get(`/api/v1/items/${id}`)).json()) as { keywords?: string[] }).keywords
+
+    try {
+      await page.goto(`/admin/catalogue/${id}`)
+      const row = page.locator('li[data-field="keywords"]')
+      await row.getByRole('button', { name: /^(edit|modifier)$/i }).click()
+      // An entry with a comma of its own is typed in quotes, and stays whole.
+      await row.getByRole('textbox').fill('"Hello, World", plain')
+      await row.getByRole('button', { name: /save and lock|enregistrer et verrouiller/i }).click()
+      await expect.poll(keywords).toEqual(['Hello, World', 'plain'])
+
+      // Opened again, the box says it the same way, and saved as it is it
+      // does not become three: split on every comma it did.
+      await row.getByRole('button', { name: /^(edit|modifier)$/i }).click()
+      await expect(row.getByRole('textbox')).toHaveValue('"Hello, World", plain')
+      await row.getByRole('button', { name: /save and lock|enregistrer et verrouiller/i }).click()
+      await expect(row.getByRole('textbox')).toHaveCount(0)
+      expect(await keywords()).toEqual(['Hello, World', 'plain'])
+    } finally {
+      await page.request.delete(`/api/v1/items/${id}`)
+    }
+  })
+
   test('a season’s poster is chosen among the pictures on offer, locks, and is unlocked again', async ({ page }, info) => {
     await signIn(page)
     const series = await aSeries(page, ownSeries(info.project.name))
@@ -462,6 +493,12 @@ test.describe('the work editor', () => {
       const panel = page.locator('#identifiers')
       await expect(panel).toContainText(/none: the work is known here alone|aucun : l’œuvre n’est connue qu’ici/i)
       await panel.getByRole('button', { name: /^(edit|modifier)$/i }).click()
+      // A number and nothing after it: `parseInt` read these as 81189 and 1.
+      for (const typed of ['81189x', '1e5']) {
+        await page.locator('#id-tvdb').fill(typed)
+        await panel.getByRole('button', { name: /save and lock|enregistrer et verrouiller/i }).click()
+        await expect(panel.getByText(/a number is expected|un nombre est attendu/i)).toBeVisible()
+      }
       await page.locator('#id-tvdb').fill(tvdb)
       await panel.getByRole('button', { name: /save and lock|enregistrer et verrouiller/i }).click()
       await expect(panel).toContainText(/locked by hand|verrouillés à la main/i)

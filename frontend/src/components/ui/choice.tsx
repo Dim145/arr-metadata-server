@@ -11,6 +11,11 @@ import { useId, type ReactNode } from 'react'
 
 import { cn } from '../../lib/cn'
 
+/** Which way an arrow key walks along a row of options, and none for any other key. */
+function stepOf(key: string): number {
+  return key === 'ArrowRight' || key === 'ArrowDown' ? 1 : key === 'ArrowLeft' || key === 'ArrowUp' ? -1 : 0
+}
+
 export function Segmented<T extends string>({
   label,
   value,
@@ -18,6 +23,7 @@ export function Segmented<T extends string>({
   onChange,
   disabled,
   className,
+  deliberate,
 }: {
   /** What is being chosen, for a screen reader. */
   label: string
@@ -26,6 +32,13 @@ export function Segmented<T extends string>({
   onChange: (next: T) => void
   disabled?: boolean
   className?: string
+  /**
+   * For a choice that is acted on the moment it is made. A radio group's own
+   * arrow keys choose as they move, so one stroke on a keyboard — made to read
+   * the options — opened a private site or made a member an administrator.
+   * Here they only move the focus along; Space, Enter or a press chooses.
+   */
+  deliberate?: boolean
 }) {
   const name = useId()
 
@@ -33,6 +46,27 @@ export function Segmented<T extends string>({
     <div
       role="radiogroup"
       aria-label={label}
+      onKeyDown={
+        deliberate
+          ? (event) => {
+              const radio = event.target
+              if (!(radio instanceof HTMLInputElement) || radio.type !== 'radio') return
+              if (event.key === 'Enter') {
+                event.preventDefault()
+                radio.click()
+                return
+              }
+              const step = stepOf(event.key)
+              if (!step) return
+              // Without this the browser would check the next one as it focuses it.
+              event.preventDefault()
+              const radios = [
+                ...event.currentTarget.querySelectorAll<HTMLInputElement>('input[type="radio"]:not(:disabled)'),
+              ]
+              radios[(radios.indexOf(radio) + step + radios.length) % radios.length]?.focus()
+            }
+          : undefined
+      }
       className={cn(
         'inline-flex flex-wrap gap-1 rounded-full border border-rule bg-ink p-1',
         disabled && 'opacity-50',

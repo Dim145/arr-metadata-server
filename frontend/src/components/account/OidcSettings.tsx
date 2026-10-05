@@ -71,7 +71,8 @@ export function OidcSettings({ number, delay }: { number: number; delay: number 
     mutationFn: (issuer: string) => api.post<OidcTest>('/admin/oidc/test', { issuer }),
   })
 
-  if (config.isPending || draft === null) return <Skeleton className="h-96 w-full" />
+  // The failure first: a read that never came back leaves no draft to wait
+  // for, and was a skeleton that shimmered for as long as the page was open.
   if (config.isError) {
     return (
       <p role="alert" className="text-sm text-vermillion">
@@ -79,6 +80,7 @@ export function OidcSettings({ number, delay }: { number: number; delay: number 
       </p>
     )
   }
+  if (config.isPending || draft === null) return <Skeleton className="h-96 w-full" />
 
   const current = config.data
   const set = <K extends keyof Draft>(key: K, value: Draft[K]) => setDraft({ ...draft, [key]: value })

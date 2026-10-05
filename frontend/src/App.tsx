@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-quer
 import { lazy, Suspense } from 'react'
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router'
 
+import { PageBoundary } from './components/PageBoundary'
 import { PublicShell } from './components/PublicShell'
 import { Spinner } from './components/ui'
 import { ApiError, api } from './lib/api'
@@ -29,6 +30,7 @@ const Seasons = named(() => import('./routes/Seasons'), 'Seasons')
 const Lists = named(() => import('./routes/Lists'), 'Lists')
 const Figures = named(() => import('./routes/Figures'), 'Figures')
 const ListDetail = named(() => import('./routes/Lists'), 'ListDetail')
+const CollectionIndex = named(() => import('./routes/Lists'), 'CollectionIndex')
 const CollectionDetail = named(() => import('./routes/Lists'), 'CollectionDetail')
 
 const Login = named(() => import('./routes/Login'), 'Login')
@@ -72,7 +74,13 @@ export function App() {
     <QueryClientProvider client={queryClient}>
       <I18nProvider>
         <BrowserRouter>
-          <Router />
+          {/* Around everything the router draws, so that a shell, the sign-in
+              page or a screen's own chunk failing is caught too; each shell
+              has one of its own around the page, which is what keeps the bar
+              on screen when only a page throws. */}
+          <PageBoundary>
+            <Router />
+          </PageBoundary>
         </BrowserRouter>
       </I18nProvider>
     </QueryClientProvider>
@@ -111,6 +119,7 @@ function Router() {
           <Route path="/lists" element={<Lists />} />
           <Route path="/stats" element={<Figures />} />
           <Route path="/lists/:slug" element={<ListDetail />} />
+          <Route path="/collections" element={<CollectionIndex />} />
           <Route path="/collections/:id" element={<CollectionDetail />} />
           <Route path="/seasons" element={<Seasons />} />
           <Route path="/seasons/:year/:season" element={<Seasons />} />

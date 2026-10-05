@@ -76,6 +76,27 @@ function parse(text: string): unknown {
 
 const json = (body: unknown): RequestInit => ({ body: JSON.stringify(body) })
 
+/**
+ * A value that came out of the address, as one segment of an API path.
+ *
+ * Encoded, so a `/`, a `?` or a `#` in it stays inside the segment: the
+ * router hands `/work/..%2Fstats` over as `../stats`, and put into a path as
+ * it was, that asked the API for `/stats` and showed the answer as a work.
+ *
+ * A segment of dots alone is refused outright, as the "no such thing" it is.
+ * An address cannot hand one over — the browser resolves `..` in the address
+ * itself, `%2e` spellings too, before the router sees it — but encoding could
+ * not keep one from a value that came by another way: sent, it is resolved
+ * the same, and names the directory above.
+ */
+export function segment(value: string | number): string {
+  const text = String(value)
+  if (/^(?:\.|%2e)+$/i.test(text)) {
+    throw new ApiError(404, 'not_found', 'Not Found')
+  }
+  return encodeURIComponent(text)
+}
+
 export const api = {
   get: <T,>(path: string) => request<T>(path),
   post: <T,>(path: string, body?: unknown) =>

@@ -477,3 +477,40 @@ test.describe('a trailer', () => {
     await expect(page.locator('iframe')).toHaveCount(0)
   })
 })
+
+test.describe('an address that is not a work’s', () => {
+  test('never reaches the API as a path of its own', async ({ page }) => {
+    const asked: string[] = []
+    page.on('request', (request) => asked.push(new URL(request.url()).pathname))
+
+    // `..%2Fstats` reaches the router as `../stats`, which, put into
+    // `/api/v1/items/…` as it was, asked for `/api/v1/stats`.
+    await page.goto('/work/..%2Fstats')
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText(/no longer in the catalogue|plus au catalogue/i)
+    expect(asked.filter((path) => path === '/api/v1/stats')).toEqual([])
+
+    // Spelled out as text, which the browser leaves be, `..` is a work's id
+    // like any other: nothing there, and the API's root is not asked instead.
+    asked.length = 0
+    await page.goto('/work/%252e%252e')
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText(/no longer in the catalogue|plus au catalogue/i)
+    expect(asked.filter((path) => /^\/api\/v1\/?$/.test(path))).toEqual([])
+  })
+
+  test('a page that cannot be shown says so, with the bar still on screen', async ({ page, request }) => {
+    const { items } = await (await request.get('/api/v1/items?limit=1')).json()
+    const work = items[0] as { id: string } | undefined
+    test.skip(!work, 'no work in the catalogue')
+
+    // An answer that is JSON and is not a work, as a proxy in front of the
+    // server may give: the page used to throw, and the whole app went blank.
+    await page.route(pattern(`${escaped(`/api/v1/items/${work!.id}`)}(\\?.*)?$`), (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: '{"series": 3, "movies": 2}' }),
+    )
+    await page.goto(`/work/${work!.id}`)
+
+    await expect(page.getByText(/something went wrong|quelque chose s’est mal passé/i)).toBeVisible()
+    await expect(page.getByRole('button', { name: /try again|réessayer/i })).toBeVisible()
+    await expect(page.getByRole('link', { name: /cinémathèque/i }).first()).toBeVisible()
+  })
+})

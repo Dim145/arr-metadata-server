@@ -1,4 +1,5 @@
 import { expect, test, type Browser, type Page } from '@playwright/test'
+import { escaped, pattern } from './support/regex'
 
 /**
  * Accounts: an administrator opens one, its member signs in, finds their own
@@ -17,6 +18,14 @@ async function signIn(page: Page, username: string, password: string) {
   await page.getByLabel(/username|identifiant/i).fill(username)
   await page.getByLabel(/password|mot de passe/i).fill(password)
   await page.getByRole('button', { name: /sign in|se connecter/i }).click()
+}
+
+/** An account opened the way the administration opens one: the password is the one it generates. */
+async function open(page: Page, username: string) {
+  const created = await page.request.post('/api/v1/users', { data: { username, role: 'member' } })
+  expect(created.status()).toBe(201)
+  const { user, password } = (await created.json()) as { user: { id: string }; password: string }
+  return { id: user.id, password }
 }
 
 async function member(browser: Browser, project: string) {
@@ -119,5 +128,140 @@ test.describe('accounts', () => {
     await page.goto(`/admin/users/${me.user.id}`)
     await expect(page.getByText(/another administrator|un autre administrateur/i)).toBeVisible()
     await expect(page.getByRole('radio', { name: /^(member|membre)$/i })).toBeDisabled()
+  })
+
+  test('a member signs out from the catalogue, and the shelf of what they opened goes with them', async ({
+    page,
+    browser,
+    isMobile,
+  }, info) => {
+    test.slow()
+    await signIn(page, USERNAME!, PASSWORD!)
+    await page.waitForURL('**/admin')
+
+    const them = await member(browser, info.project.name)
+    const { id, password } = await open(page, them.username)
+    try {
+      await signIn(them.page, them.username, password)
+      await them.page.waitForURL((url) => url.pathname === '/')
+
+      // A work opened, so that there is a shelf to forget.
+      const { items } = await (await them.page.request.get('/api/v1/items?limit=1')).json()
+      test.skip(!items[0], 'no work in the catalogue')
+      await them.page.goto(`/work/${items[0].id}`)
+      await expect(them.page.getByRole('heading', { level: 1 })).toBeVisible()
+      expect(await them.page.evaluate(() => localStorage.getItem('ams.recent'))).not.toBeNull()
+
+      // The way out is in the catalogue's own bar — behind the menu on a phone.
+      if (isMobile) await them.page.getByRole('button', { name: /^(menu)$/i }).click()
+      await them.page.getByRole('button', { name: /sign out|déconnecter/i }).click()
+      await them.page.waitForURL('**/login')
+      expect((await them.page.request.get('/api/v1/account')).status()).toBe(401)
+      expect(await them.page.evaluate(() => localStorage.getItem('ams.recent'))).toBeNull()
+    } finally {
+      await page.request.delete(`/api/v1/users/${id}`)
+      await them.context.close()
+    }
+  })
+
+  test('what is done to a selection is done to what is shown, and a role is given on Apply', async ({ page }, info) => {
+    test.slow()
+    await signIn(page, USERNAME!, PASSWORD!)
+    await page.waitForURL('**/admin')
+
+    const stamp = `${info.project.name}-${Date.now().toString(36)}`
+    const alpha = `e2e-alpha-${stamp}`
+    const beta = `e2e-beta-${stamp}`
+    const first = await open(page, alpha)
+    const second = await open(page, beta)
+    const bulk: string[] = []
+    page.on('request', (request) => {
+      if (request.method() === 'POST' && request.url().endsWith('/api/v1/users/bulk')) bulk.push(request.postData() ?? '')
+    })
+    const roleOf = async (id: string) =>
+      ((await (await page.request.get(`/api/v1/users/${id}`)).json()) as { user: { role: string } }).user.role
+
+    try {
+      await page.goto('/admin/users')
+      const search = page.getByRole('searchbox', { name: /^(search a name|chercher un nom)/i })
+      const box = (name: string) => page.getByRole('checkbox', { name: pattern(`^(select|sélectionner) ${escaped(name)}$`, 'i') })
+
+      await search.fill(alpha)
+      await box(alpha).check()
+      await expect(page.getByRole('region', { name: /^(1 selected|1 sélectionné)$/i })).toBeVisible()
+
+      // Another search takes the first account off the page, and out of the
+      // selection: nothing may be done to what cannot be seen.
+      await search.fill(beta)
+      await expect(page.getByRole('link', { name: beta, exact: true })).toBeVisible()
+      await expect(page.getByRole('region', { name: /(selected|sélectionné)/i })).toHaveCount(0)
+      await box(beta).check()
+      const bar = page.getByRole('region', { name: /^(1 selected|1 sélectionné)$/i })
+      await expect(bar).toBeVisible()
+
+      // A role is chosen, and only then given: a select acting on `change`
+      // gave it on one arrow key.
+      await bar.getByRole('combobox', { name: /set the role|changer le rôle/i }).selectOption('editor')
+      await page.waitForTimeout(300)
+      expect(bulk).toEqual([])
+      await bar.getByRole('button', { name: /^(apply|appliquer)$/i }).click()
+      await expect.poll(() => roleOf(second.id)).toBe('editor')
+      // Only the one on screen was given it.
+      expect(bulk).toHaveLength(1)
+      expect(JSON.parse(bulk[0]!) as { ids: string[] }).toMatchObject({ ids: [second.id] })
+      expect(await roleOf(first.id)).toBe('member')
+    } finally {
+      await page.request.delete(`/api/v1/users/${first.id}`)
+      await page.request.delete(`/api/v1/users/${second.id}`)
+    }
+  })
+
+  test('a role is chosen on Space or a press, not stumbled on with an arrow key', async ({ page }, info) => {
+    await signIn(page, USERNAME!, PASSWORD!)
+    await page.waitForURL('**/admin')
+
+    const { id } = await open(page, `e2e-keys-${info.project.name}-${Date.now().toString(36)}`)
+    const writes: string[] = []
+    page.on('request', (request) => {
+      if (request.method() === 'PATCH' && request.url().endsWith(`/api/v1/users/${id}`)) writes.push(request.postData() ?? '')
+    })
+    try {
+      await page.goto(`/admin/users/${id}`)
+      const member = page.getByRole('radio', { name: /^(member|membre)$/i })
+      const editor = page.getByRole('radio', { name: /^(editor|éditeur)$/i })
+      await expect(member).toBeChecked()
+
+      // The browser's own radios would choose as they move, and write at once.
+      await member.focus()
+      await page.keyboard.press('ArrowRight')
+      await expect(editor).toBeFocused()
+      await page.waitForTimeout(300)
+      expect(writes).toEqual([])
+      await expect(member).toBeChecked()
+
+      await page.keyboard.press('Space')
+      await expect(editor).toBeChecked()
+      expect(writes).toHaveLength(1)
+    } finally {
+      await page.request.delete(`/api/v1/users/${id}`)
+    }
+  })
+
+  test('signing in goes back to a page of this site, and to nothing that only looks like one', async ({ page }) => {
+    // `/.//host` is a path that collapses to `//host`, which is another site;
+    // the others are the ways a browser reads a slash that is not one.
+    for (const [next, lands] of [
+      ['/browse?kind=movie', /\/browse\?kind=movie$/],
+      ['/.//evil.example/x', /\/admin$/],
+      ['//evil.example/x', /\/admin$/],
+      ['/\\evil.example', /\/admin$/],
+    ] as const) {
+      await page.goto(`/login?next=${encodeURIComponent(next)}`)
+      await page.getByLabel(/username|identifiant/i).fill(USERNAME!)
+      await page.getByLabel(/password|mot de passe/i).fill(PASSWORD!)
+      await page.getByRole('button', { name: /sign in|se connecter/i }).click()
+      await page.waitForURL(lands)
+      await page.request.post('/api/v1/auth/logout')
+    }
   })
 })

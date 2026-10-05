@@ -22,7 +22,7 @@ import { Button, Chip, FormField, Glyph, IconButton, Input, Panel, PanelHead, Se
 import { api } from '../../../lib/api'
 import { cn } from '../../../lib/cn'
 import { useI18n } from '../../../lib/i18n'
-import { providerName } from '../../../lib/labels'
+import { lookup, providerName } from '../../../lib/labels'
 import { seasonImages } from '../../../lib/media'
 import type { Image, MediaItem, Uploaded, WorkMedia, WorkMedium } from '../../../lib/types'
 
@@ -98,7 +98,7 @@ export function ArtworkTab({ work, onChanged }: { work: MediaItem; onChanged: ()
   const kinds = [...KINDS.filter((k) => own.some((image) => image.coverType === k)), ...[...new Set(own.map((image) => image.coverType))].filter((k) => !KINDS.includes(k))]
   const kindLabel = (value: string) => (t.gallery.kind as Record<string, string>)[value] ?? value
   const coverLabel = (value: string) =>
-    ({ poster: c.poster, fanart: c.fanart, banner: c.banner, clearlogo: c.clearlogo, landscape: c.landscape, clearart: c.clearart } as Record<string, string>)[value] ??
+    lookup({ poster: c.poster, fanart: c.fanart, banner: c.banner, clearlogo: c.clearlogo, landscape: c.landscape, clearart: c.clearart }, value) ??
     value
 
   // Under a heading that already names the kind, the caption says only

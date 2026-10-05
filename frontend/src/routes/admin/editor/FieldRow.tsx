@@ -485,15 +485,11 @@ function Editor({
 
       {def.fieldType === 'textList' && draft.trim() ? (
         <ul aria-hidden className="flex flex-wrap gap-1.5">
-          {draft
-            .split(',')
-            .map((part) => part.trim())
-            .filter(Boolean)
-            .map((part, index) => (
-              <li key={`${part}-${index}`} className="rounded-full border border-rule-bright px-2.5 py-0.5 text-xs text-bone-dim">
-                {part}
-              </li>
-            ))}
+          {unlisted(draft).map((part, index) => (
+            <li key={`${part}-${index}`} className="rounded-full border border-rule-bright px-2.5 py-0.5 text-xs text-bone-dim">
+              {part}
+            </li>
+          ))}
         </ul>
       ) : null}
 
@@ -513,10 +509,52 @@ function Editor({
 
 /* ── Values ───────────────────────────────────────────────────────────────── */
 
+/**
+ * The entries of a list, as one line a person types into: commas between
+ * them, and an entry with a comma of its own — or a quote — in quotes, a quote
+ * inside doubled. Split on every comma, a keyword like "Hello, World" came
+ * back from the box as two, whether or not it had been touched.
+ */
+function listed(entries: unknown[]): string {
+  return entries
+    .map((entry) => {
+      const text = String(entry)
+      return /[",]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
+    })
+    .join(', ')
+}
+
+/** The entries of what `listed` wrote, or of what was typed in the same way. */
+function unlisted(text: string): string[] {
+  const entries: string[] = []
+  let entry = ''
+  let quoted = false
+  for (let at = 0; at < text.length; at += 1) {
+    const char = text[at]
+    if (quoted) {
+      if (char !== '"') entry += char
+      else if (text[at + 1] === '"') {
+        entry += '"'
+        at += 1
+      } else quoted = false
+    } else if (char === '"' && entry.trim() === '') {
+      quoted = true
+      entry = ''
+    } else if (char === ',') {
+      entries.push(entry.trim())
+      entry = ''
+    } else {
+      entry += char
+    }
+  }
+  entries.push(entry.trim())
+  return entries.filter(Boolean)
+}
+
 /** What a stored value looks like in a box a person types into. */
 export function readable(value: unknown, t: Dict): string {
   if (value === null || value === undefined) return ''
-  if (Array.isArray(value)) return value.join(', ')
+  if (Array.isArray(value)) return listed(value)
   if (typeof value === 'boolean') return value ? t.common.yes : t.common.no
   return String(value)
 }
@@ -544,10 +582,7 @@ export function parse(draft: string, def: FieldDef): unknown {
     case 'boolean':
       return /^(true|yes|oui|1|on)$/i.test(trimmed)
     case 'textList':
-      return trimmed
-        .split(',')
-        .map((part) => part.trim())
-        .filter(Boolean)
+      return unlisted(trimmed)
     case 'dateTime': {
       // Typed by hand, in UTC: the seconds and the zone filled in, so that
       // "2009-03-22T21:00" is the instant the server expects.

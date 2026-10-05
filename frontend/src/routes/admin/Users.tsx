@@ -10,7 +10,7 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useDeferredValue, useState } from 'react'
+import { useDeferredValue, useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 
 import { Invitations } from '../../components/account/Invitations'
@@ -55,6 +55,9 @@ export function Users() {
   const [role, setRole] = useState<RoleFilter>('all')
   const [status, setStatus] = useState<StatusFilter>('all')
   const [selected, setSelected] = useState<string[]>([])
+  // The role to give the selection: chosen here, given by Apply — a select that
+  // acted on `change` gave it on a single arrow key, where one moves the choice.
+  const [roleChoice, setRoleChoice] = useState('')
   const [creating, setCreating] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [refused, setRefused] = useState<{ id: string; reason: string }[]>([])
@@ -75,12 +78,24 @@ export function Users() {
     onSuccess: (outcome) => {
       setRefused(outcome.refused)
       setSelected([])
+      setRoleChoice('')
       setDeleting(false)
       void queryClient.invalidateQueries({ queryKey: ['users'] })
     },
   })
 
   const users = page.data?.users ?? []
+  // The selection is of what is on screen: an account that a new search or
+  // filter took off the page leaves it, so nothing is done to what cannot be
+  // seen. Approve, disable, delete and the role all went to every account
+  // picked since the page was opened, whether or not the search still showed it.
+  const shown = page.data?.users
+  useEffect(() => {
+    setSelected((current) => {
+      const kept = shown ? current.filter((id) => shown.some((user) => user.id === id)) : []
+      return kept.length === current.length ? current : kept
+    })
+  }, [shown])
   const counts = page.data?.counts
   const allShown = users.length > 0 && users.every((u) => selected.includes(u.id))
   const toggle = (id: string) =>
@@ -158,10 +173,8 @@ export function Users() {
           <span className="mr-1 text-sm font-medium text-bone">{t.admin.people.selected(selected.length)}</span>
           <Select
             aria-label={t.admin.people.setRole}
-            value=""
-            onChange={(event) => {
-              if (event.target.value) bulk.mutate({ action: 'role', value: event.target.value })
-            }}
+            value={roleChoice}
+            onChange={(event) => setRoleChoice(event.target.value)}
             className="min-h-9 w-auto py-0 text-[0.8125rem]"
           >
             <option value="">{t.admin.people.setRole}</option>
@@ -171,6 +184,13 @@ export function Users() {
               </option>
             ))}
           </Select>
+          <Button
+            size="sm"
+            disabled={!roleChoice || bulk.isPending}
+            onClick={() => bulk.mutate({ action: 'role', value: roleChoice })}
+          >
+            {t.admin.people.apply}
+          </Button>
           <Button size="sm" onClick={() => bulk.mutate({ action: 'status', value: 'active' })}>
             {t.admin.people.approve}
           </Button>
@@ -267,6 +287,12 @@ export function Users() {
         }
       >
         {t.admin.people.deleteBody}
+        {/* Who, by name: a count says how many and not which. */}
+        <ul className="mt-3 max-h-32 space-y-0.5 overflow-y-auto font-mono text-xs text-bone">
+          {selected.map((id) => (
+            <li key={id}>{nameOf(id)}</li>
+          ))}
+        </ul>
       </Dialog>
     </div>
   )

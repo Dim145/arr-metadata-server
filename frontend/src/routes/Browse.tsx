@@ -193,7 +193,9 @@ export function Browse() {
     setDrawFailed(false)
     try {
       const work = await drawWork({ ...narrowing, sort, order, language: lang }, total)
+      // Nothing to draw is said, not left as a button that did nothing.
       if (work) navigate(`/work/${work.id}`)
+      else setDrawFailed(true)
     } catch {
       setDrawFailed(true)
     } finally {
@@ -240,7 +242,8 @@ export function Browse() {
               the order and the draw say in which order it comes. */}
           <Button
             onClick={() => void draw()}
-            disabled={drawing || !total}
+            // Not while the list is the last filters' still, whose count it would draw from.
+            disabled={drawing || !total || results.isPlaceholderData}
             aria-label={t.browse.random}
             title={t.browse.randomHint}
           >

@@ -54,8 +54,24 @@ function completed(base: unknown, over: unknown): unknown {
   return out
 }
 
+/**
+ * Every table of words without a prototype.
+ *
+ * Several are looked up by what the server sends — a gallery's kinds, a
+ * relation's type, an audit trail's actions — and on a plain object
+ * `table['constructor']` is the `Object` function, which a page then renders,
+ * folds or sorts as if it were a word. With no prototype, a key the table
+ * does not hold finds nothing, and the `?? key` after it says the key itself.
+ */
+function bare(value: unknown): unknown {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return value
+  const out = Object.create(null) as Record<string, unknown>
+  for (const [key, inner] of Object.entries(value)) out[key] = bare(inner)
+  return out
+}
+
 const DICTIONARIES = Object.fromEntries(
-  LANGS.map((lang) => [lang, completed(en, LANGUAGES[lang].dictionary) as Dict]),
+  LANGS.map((lang) => [lang, bare(completed(en, LANGUAGES[lang].dictionary)) as Dict]),
 ) as Record<Lang, Dict>
 
 function isLang(value: unknown): value is Lang {

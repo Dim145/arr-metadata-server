@@ -266,6 +266,16 @@ test.describe('curated lists', () => {
       await expect(page.getByText(`/api/v1/lists/${list.slug}/sonarr.json`)).toBeVisible()
       await expect(page.getByText(`/api/v1/lists/${list.slug}/radarr.json`)).toHaveCount(0)
 
+      // A browser that refuses the clipboard is told so, and the page carries on.
+      await page.evaluate(() => {
+        Object.defineProperty(navigator, 'clipboard', {
+          value: { writeText: () => Promise.reject(new Error('refused')) },
+          configurable: true,
+        })
+      })
+      await page.getByRole('button', { name: /^(copy|copier)$/i }).first().click()
+      await expect(page.getByText(/refused the clipboard|refusé le presse-papiers/i)).toBeVisible()
+
       // The work's page says which selection holds it.
       await page.goto(`/work/${series!.id}`)
       await expect(page.getByRole('link', { name })).toBeVisible()

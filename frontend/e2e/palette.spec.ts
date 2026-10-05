@@ -66,4 +66,37 @@ test.describe('the command palette', () => {
     await page.waitForURL(/\/work\/[^/]+$/)
     await expect(box).toBeHidden()
   })
+
+  test('keeps the keyboard inside while it is open', async ({ page, isMobile }) => {
+    test.skip(isMobile, 'a keyboard shortcut is a desktop thing')
+    await page.goto('/')
+    await page.keyboard.press('ControlOrMeta+k')
+    const box = page.getByRole('combobox', { name: /command palette|palette de commandes/i })
+    await expect(box).toBeFocused()
+
+    // Tab goes nowhere, either way: it used to walk out of the dialog onto
+    // the footer's links behind it.
+    for (const key of ['Tab', 'Tab', 'Shift+Tab', 'Shift+Tab']) {
+      await page.keyboard.press(key)
+      await expect(box).toBeFocused()
+    }
+    const dialog = page.getByRole('dialog', { name: /command palette|palette de commandes/i })
+    expect(await dialog.evaluate((node) => node.contains(document.activeElement))).toBe(true)
+
+    // And the page behind is out of reach altogether, not merely not tabbed to.
+    const reached = await page.evaluate(() => {
+      const link = document.querySelector<HTMLElement>('footer a')
+      link?.focus()
+      return document.activeElement === link
+    })
+    expect(reached).toBe(false)
+
+    // A press on the dark around it, or Escape, is the way out.
+    await page.mouse.click(5, 450)
+    await expect(box).toBeHidden()
+    await page.keyboard.press('ControlOrMeta+k')
+    await expect(box).toBeFocused()
+    await page.keyboard.press('Escape')
+    await expect(box).toBeHidden()
+  })
 })

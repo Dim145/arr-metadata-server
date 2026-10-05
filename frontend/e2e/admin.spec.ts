@@ -133,6 +133,20 @@ test.describe('the administration side', () => {
     await expect(page.getByRole('button', { name: /sign out|déconnecter/i })).toBeVisible()
   })
 
+  test('the identity provider’s settings say so when they cannot be read', async ({ page }) => {
+    await signIn(page)
+    // Not a skeleton for as long as the page is open: the failure is the answer.
+    await page.route(/\/api\/v1\/admin\/oidc$/, (route) =>
+      route.fulfill({
+        status: 500,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'internal', message: 'The provider settings could not be read.' }),
+      }),
+    )
+    await page.goto('/admin/access')
+    await expect(page.getByRole('alert').filter({ hasText: /could not be read/ })).toBeVisible({ timeout: 15_000 })
+  })
+
   test('speaks French throughout when asked to', async ({ page }) => {
     await signIn(page)
     await page.getByRole('button', { name: 'fr', exact: true }).click()
@@ -660,6 +674,46 @@ test.describe('a locked genre', () => {
 
     await page.goto(listed)
     await expect(page.getByText(/no work matches|aucune œuvre/i)).toBeVisible()
+  })
+})
+
+test.describe('a genre named like an object’s own property', () => {
+  test.skip(!USERNAME || !PASSWORD, 'needs a credential; see above')
+
+  test('is a genre like any other, in French too', async ({ page, isMobile }) => {
+    await signIn(page)
+    // A work of its own, removed again: nothing any other test reads.
+    const created = await page.request.post('/api/v1/items', {
+      data: { kind: 'movie', title: `Genres e2e ${Date.now()}`, year: 2035 },
+    })
+    expect(created.status()).toBe(201)
+    const { id } = (await created.json()) as { id: string }
+
+    try {
+      const names = ['constructor', 'toString', '__proto__', 'valueOf']
+      const locked = await page.request.put(`/api/v1/items/${id}/overrides`, {
+        data: { scope: 'item', field: 'genres', value: names },
+      })
+      expect(locked.ok()).toBe(true)
+
+      // Looked up in the table of French names, each used to come back as the
+      // function an object inherits, and the filter threw as it sorted them.
+      await page.addInitScript(() => localStorage.setItem('ams.lang', 'fr'))
+      await page.goto('/browse')
+      await expect(page.locator('html')).toHaveAttribute('lang', 'fr')
+      await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
+
+      // The filter folds and sorts every name it lists, and the search folds
+      // each again: all of it ran on the function, and threw.
+      if (isMobile) await page.getByRole('button', { name: /^(filters|filtres)/i }).click()
+      const search = page.getByRole('searchbox', { name: /find a genre|chercher un genre/i })
+      for (const name of names) {
+        await search.fill(name)
+        await expect(page.getByRole('button', { name: pattern(`^${literally(name)}`) }).first()).toBeVisible()
+      }
+    } finally {
+      await page.request.delete(`/api/v1/items/${id}`)
+    }
   })
 })
 

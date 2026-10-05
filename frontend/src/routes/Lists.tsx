@@ -11,10 +11,10 @@ import { Link, useParams } from 'react-router'
 
 import { PosterCard, PosterGrid } from '../components/media'
 import { Button, Chip, EmptyState, Glyph, Label, SectionTitle, Skeleton } from '../components/ui'
-import { ApiError, api, query } from '../lib/api'
+import { ApiError, api, query, segment } from '../lib/api'
 import { useCuratedLists, useTitle } from '../lib/hooks'
 import { useI18n } from '../lib/i18n'
-import type { CollectionPage, Collections, CuratedList, CuratedListPage } from '../lib/types'
+import type { CollectionCard, CollectionPage, Collections, CuratedList, CuratedListPage } from '../lib/types'
 
 export function Lists() {
   const { t } = useI18n()
@@ -58,15 +58,20 @@ export function Lists() {
   )
 }
 
-/** The film collections the catalogue holds part of, beneath the lists. */
-function CollectionsSection() {
-  const { t } = useI18n()
-  const collections = useQuery({
+/** The film collections the catalogue holds part of: read once, for their own page and for the foot of the lists'. */
+function useCollections() {
+  return useQuery({
     queryKey: ['collections'],
     queryFn: () => api.get<Collections>('/collections'),
     staleTime: 10 * 60_000,
     retry: false,
   })
+}
+
+/** The film collections the catalogue holds part of, beneath the lists. */
+function CollectionsSection() {
+  const { t } = useI18n()
+  const collections = useCollections()
   const cards = collections.data?.collections ?? []
   if (!cards.length) return null
 
@@ -74,38 +79,86 @@ function CollectionsSection() {
     <section className="mt-14">
       <SectionTitle>{t.collections.title}</SectionTitle>
       <p className="mb-6 max-w-prose text-sm leading-relaxed text-bone-dim">{t.collections.lead}</p>
-      <ul className="stagger grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {cards.map((collection) => (
-          <li key={collection.tmdbId} className="min-w-0">
-            <Link
-              to={`/collections/${collection.tmdbId}`}
-              className="plate group flex gap-4 rounded-panel border border-rule bg-ink-raised p-4 transition-colors duration-150 hover:border-rule-bright"
-            >
-              {collection.poster ? (
-                <img
-                  src={collection.poster}
-                  alt=""
-                  width={64}
-                  height={96}
-                  loading="lazy"
-                  className="h-24 w-16 shrink-0 rounded-sm object-cover"
-                />
-              ) : (
-                <span className="h-24 w-16 shrink-0 rounded-sm bg-ink-high" />
-              )}
-              <span className="min-w-0">
-                <span className="block font-display text-lg text-bone transition-colors duration-150 group-hover:text-vermillion">
-                  {collection.name ?? t.collections.unnamed(collection.tmdbId)}
-                </span>
-                <span className="mt-1 block font-mono text-xs text-bone-faint tabular-nums">
-                  {t.collections.held(collection.count, 0)}
-                </span>
-              </span>
-            </Link>
-          </li>
-        ))}
-      </ul>
+      <CollectionCards cards={cards} />
     </section>
+  )
+}
+
+/**
+ * The collections on a page of their own: where the navigation's
+ * "Collections" leads. The lists' page keeps its section for whoever comes
+ * by way of the selections.
+ */
+export function CollectionIndex() {
+  const { t } = useI18n()
+  useTitle(t.collections.label)
+
+  const collections = useCollections()
+  const cards = collections.data?.collections ?? []
+
+  return (
+    <div className="pt-10 pb-12">
+      <header className="rise mb-8">
+        <Label>{t.collections.label}</Label>
+        <h1 className="mt-2 font-display text-3xl font-medium text-bone sm:text-4xl">{t.collections.title}</h1>
+        <p className="mt-3 max-w-prose text-sm leading-relaxed text-bone-dim">{t.collections.lead}</p>
+      </header>
+
+      {collections.isPending ? (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {Array.from({ length: 3 }, (_, index) => (
+            <Skeleton key={index} className="h-32 w-full" />
+          ))}
+        </div>
+      ) : collections.isError ? (
+        <p role="alert" className="flex items-center gap-2 text-sm text-vermillion">
+          <Glyph name="alert" className="size-4" />
+          {t.collections.loadFailed}
+        </p>
+      ) : cards.length === 0 ? (
+        <EmptyState title={t.collections.empty} />
+      ) : (
+        <CollectionCards cards={cards} />
+      )}
+    </div>
+  )
+}
+
+function CollectionCards({ cards }: { cards: CollectionCard[] }) {
+  const { t } = useI18n()
+
+  return (
+    <ul className="stagger grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      {cards.map((collection) => (
+        <li key={collection.tmdbId} className="min-w-0">
+          <Link
+            to={`/collections/${collection.tmdbId}`}
+            className="plate group flex gap-4 rounded-panel border border-rule bg-ink-raised p-4 transition-colors duration-150 hover:border-rule-bright"
+          >
+            {collection.poster ? (
+              <img
+                src={collection.poster}
+                alt=""
+                width={64}
+                height={96}
+                loading="lazy"
+                className="h-24 w-16 shrink-0 rounded-sm object-cover"
+              />
+            ) : (
+              <span className="h-24 w-16 shrink-0 rounded-sm bg-ink-high" />
+            )}
+            <span className="min-w-0">
+              <span className="block font-display text-lg text-bone transition-colors duration-150 group-hover:text-vermillion">
+                {collection.name ?? t.collections.unnamed(collection.tmdbId)}
+              </span>
+              <span className="mt-1 block font-mono text-xs text-bone-faint tabular-nums">
+                {t.collections.held(collection.count, 0)}
+              </span>
+            </span>
+          </Link>
+        </li>
+      ))}
+    </ul>
   )
 }
 
@@ -115,7 +168,7 @@ export function CollectionDetail() {
 
   const page = useQuery({
     queryKey: ['collection-page', id, lang],
-    queryFn: () => api.get<CollectionPage>(`/collections/${encodeURIComponent(id)}${query({ language: lang })}`),
+    queryFn: () => api.get<CollectionPage>(`/collections/${segment(id)}${query({ language: lang })}`),
     retry: false,
   })
   const name = page.data?.name ?? t.collections.unnamed(Number(id))
@@ -141,8 +194,8 @@ export function CollectionDetail() {
         <EmptyState
           title={missing ? t.collections.notFound : t.collections.loadFailed}
           action={
-            <Link to="/lists" className="text-sm text-vermillion underline-offset-4 hover:underline">
-              {t.lists.label}
+            <Link to="/collections" className="text-sm text-vermillion underline-offset-4 hover:underline">
+              {t.collections.label}
             </Link>
           }
         />
@@ -157,11 +210,11 @@ export function CollectionDetail() {
     <div className="pt-10 pb-12">
       <header className="rise mb-8">
         <Link
-          to="/lists"
+          to="/collections"
           className="-ml-3 inline-flex min-h-11 items-center gap-1.5 rounded-full px-3 text-sm text-bone-dim transition-colors duration-150 hover:bg-ink-high hover:text-bone"
         >
           <Glyph name="chevronLeft" className="size-4" />
-          {t.lists.label}
+          {t.collections.label}
         </Link>
         <div className="mt-2">
           <Label>{t.collections.one}</Label>
@@ -248,7 +301,7 @@ export function ListDetail() {
   const page = useQuery({
     queryKey: ['list', slug, lang],
     queryFn: () =>
-      api.get<CuratedListPage>(`/lists/${encodeURIComponent(slug)}${query({ language: lang })}`),
+      api.get<CuratedListPage>(`/lists/${segment(slug)}${query({ language: lang })}`),
   })
   useTitle(page.data?.list.name ?? t.lists.one)
 
@@ -349,7 +402,7 @@ export function ImportAddresses({ list }: { list: CuratedList }) {
           .map((shape) => (
             <li key={shape.key} className="min-w-0">
               <p className="text-xs text-bone-dim">{shape.label}</p>
-              <div className="mt-1 flex items-center gap-2">
+              <div className="mt-1 flex flex-wrap items-center gap-2">
                 <code className="min-w-0 flex-1 truncate rounded-card border border-rule bg-ink px-3 py-2 font-mono text-xs text-bone">
                   {shape.url}
                 </code>
@@ -364,37 +417,53 @@ export function ImportAddresses({ list }: { list: CuratedList }) {
 
 function CopyButton({ text }: { text: string }) {
   const { t } = useI18n()
-  const [copied, setCopied] = useState(false)
+  const [copied, setCopied] = useState<'yes' | 'failed' | null>(null)
 
   return (
-    <Button
-      size="sm"
-      onClick={(event) => {
-        const done = () => {
-          setCopied(true)
-          window.setTimeout(() => setCopied(false), 2000)
-        }
-        // Off a secure context there is no clipboard to write to; the
-        // address is selected instead, a keystroke from copied.
-        const fallback = () => {
+    <>
+      <Button
+        size="sm"
+        onClick={(event) => {
+          // Found now, not when the clipboard has answered: the event is over
+          // by then, and React has taken its `currentTarget` back.
           const code = event.currentTarget.parentElement?.querySelector('code')
-          if (!code) return
-          const range = document.createRange()
-          range.selectNodeContents(code)
-          const selection = window.getSelection()
-          selection?.removeAllRanges()
-          selection?.addRange(range)
-        }
-        if (navigator.clipboard?.writeText) {
-          navigator.clipboard.writeText(text).then(done).catch(fallback)
-        } else {
-          fallback()
-        }
-      }}
-      aria-live="polite"
-    >
-      <Glyph name="copy" className="size-3.5" />
-      {copied ? t.lists.copied : t.lists.copy}
-    </Button>
+          const say = (outcome: 'yes' | 'failed') => {
+            setCopied(outcome)
+            window.setTimeout(() => setCopied(null), outcome === 'yes' ? 2000 : 6000)
+          }
+          // Off a secure context there is no clipboard to write to, and where
+          // there is one the browser may still refuse it: the address is
+          // selected instead, a keystroke from copied, and the refusal said.
+          const fallback = () => {
+            try {
+              if (code) {
+                const range = document.createRange()
+                range.selectNodeContents(code)
+                const selection = window.getSelection()
+                selection?.removeAllRanges()
+                selection?.addRange(range)
+              }
+            } catch {
+              // Nothing to select with: it is said all the same.
+            }
+            say('failed')
+          }
+          if (navigator.clipboard?.writeText) {
+            navigator.clipboard.writeText(text).then(() => say('yes'), fallback)
+          } else {
+            fallback()
+          }
+        }}
+        aria-live="polite"
+      >
+        <Glyph name="copy" className="size-3.5" />
+        {copied === 'yes' ? t.lists.copied : t.lists.copy}
+      </Button>
+      {copied === 'failed' ? (
+        <p role="status" className="basis-full text-xs text-vermillion">
+          {t.lists.copyFailed}
+        </p>
+      ) : null}
+    </>
   )
 }

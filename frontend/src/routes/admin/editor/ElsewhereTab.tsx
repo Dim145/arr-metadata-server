@@ -79,8 +79,12 @@ function idsOf(drafts: Record<string, string>): { ids: ExternalIds; error?: stri
       ids.imdb = text
       continue
     }
-    const numbers = text.split(',').map((part) => Number.parseInt(part.trim(), 10))
-    if (numbers.some((n) => Number.isNaN(n) || n < 0)) return { ids, error: key }
+    // Whole numbers and nothing after them: `parseInt` read "81189x" as 81189
+    // and "1e5" as 1, and locked what nobody had typed.
+    const parts = text.split(',').map((part) => part.trim())
+    if (parts.some((part) => !/^\d+$/.test(part))) return { ids, error: key }
+    const numbers = parts.map(Number)
+    if (numbers.some((n) => !Number.isSafeInteger(n))) return { ids, error: key }
     if (list) {
       ;(ids as Record<string, unknown>)[key] = numbers
     } else {

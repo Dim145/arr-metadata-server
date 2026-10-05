@@ -99,7 +99,9 @@ export function Clients() {
         <p className="mt-3 max-w-prose text-sm leading-relaxed text-bone-dim">{t.admin.keys.lead}</p>
       </header>
 
-      {issued ? <IssuedKey issued={issued} onDismiss={() => setIssued(null)} /> : null}
+      {/* Keyed by the key: the next one issued is a panel of its own, not this one
+          still marked as copied. */}
+      {issued ? <IssuedKey key={issued.key} issued={issued} onDismiss={() => setIssued(null)} /> : null}
 
       <Panel className="rise mb-6" style={{ animationDelay: '60ms' }}>
         <PanelHead title={t.admin.keys.issue} />

@@ -11,9 +11,9 @@
  * far more easily than the top.
  */
 
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { createContext, use, useEffect, useState } from 'react'
-import { Link, NavLink, Navigate, Outlet, useLocation, useNavigate } from 'react-router'
+import { Link, NavLink, Navigate, Outlet, useLocation } from 'react-router'
 
 import { api } from '../lib/api'
 import { useNavigationReset } from '../lib/hooks'
@@ -23,6 +23,8 @@ import { ThemeToggle } from './ThemeToggle'
 import { describeIdentity } from '../lib/labels'
 import type { Me, Settings, UsersPage } from '../lib/types'
 import { CommandPalette } from './CommandPalette'
+import { PageBoundary } from './PageBoundary'
+import { SignOut } from './SignOut'
 import { Glyph, Spinner, type GlyphName } from './ui'
 
 type Entry = {
@@ -139,8 +141,12 @@ export function AdminShell() {
           className="relative z-10 min-w-0 flex-1 px-4 pt-6 pb-28 outline-none sm:px-6 lg:px-10 lg:pt-10 lg:pb-16"
         >
           <TitleContext value={setOverride}>
-            <Outlet />
-            <CommandPalette admin />
+            {/* A page that throws is said so here, with the sidebar still
+                where it was. */}
+            <PageBoundary>
+              <Outlet />
+            </PageBoundary>
+            <CommandPalette canWrite isAdmin={me.data.isAdmin} />
           </TitleContext>
         </main>
 
@@ -378,37 +384,6 @@ function TabBar({ me }: { me: Me }) {
 }
 
 /* ── Controls shared by both ──────────────────────────────────────────────── */
-
-function SignOut({ className, iconOnly }: { className?: string; iconOnly?: boolean }) {
-  const { t } = useI18n()
-  const navigate = useNavigate()
-  const queryClient = useQueryClient()
-
-  return (
-    <button
-      type="button"
-      aria-label={iconOnly ? t.nav.signOut : undefined}
-      className={cn('cursor-pointer', className)}
-      onClick={async () => {
-        // Whatever the server says, the session is over here: everything cached
-        // was answered for somebody who is now gone. A server that cannot be
-        // reached is caught rather than left to reject — signing out still
-        // works, and an unhandled rejection would be the only trace of it.
-        try {
-          await api.post('/auth/logout')
-        } catch {
-          // Nothing to tell the operator: they are being signed out either way.
-        } finally {
-          queryClient.clear()
-          navigate('/login', { replace: true })
-        }
-      }}
-    >
-      <Glyph name="signOut" className={iconOnly ? 'size-5' : 'size-4'} />
-      {iconOnly ? null : t.nav.signOut}
-    </button>
-  )
-}
 
 function LanguageToggle({ compact }: { compact?: boolean }) {
   const { lang, setLang, t } = useI18n()

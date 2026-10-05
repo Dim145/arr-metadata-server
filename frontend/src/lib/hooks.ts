@@ -10,7 +10,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useEffect, useRef } from 'react'
 import { useLocation, useNavigationType } from 'react-router'
 
-import { api, query } from './api'
+import { api, query, segment } from './api'
 import { useI18n } from './i18n'
 import type { AuthOptions, CuratedLists, MediaItem, Me, Orders } from './types'
 
@@ -37,7 +37,7 @@ export function useHasLists(): boolean {
 export function workQuery(id: string, lang: string) {
   return {
     queryKey: ['work', id, lang] as const,
-    queryFn: () => api.get<MediaItem>(`/items/${id}${query({ language: lang })}`),
+    queryFn: () => api.get<MediaItem>(`/items/${segment(id)}${query({ language: lang })}`),
   }
 }
 
@@ -54,7 +54,7 @@ export function useWork(id: string) {
 export function useOrders(id: string) {
   return useQuery({
     queryKey: ['orders', id],
-    queryFn: () => api.get<Orders>(`/items/${id}/orders`),
+    queryFn: () => api.get<Orders>(`/items/${segment(id)}/orders`),
     enabled: Boolean(id),
     staleTime: 10 * 60_000,
     retry: false,

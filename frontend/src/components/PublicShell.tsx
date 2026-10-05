@@ -19,17 +19,21 @@ import { cn } from '../lib/cn'
 import { LANGS, LANGUAGES, useI18n } from '../lib/i18n'
 import { ThemeToggle } from './ThemeToggle'
 import { BrowseTab, Tab } from './nav'
-import { providerName } from '../lib/labels'
+import { lookup, providerName } from '../lib/labels'
 import { poster } from '../lib/media'
 import type { ItemPage, Me, Sources } from '../lib/types'
 import { CommandPalette, openPalette, paletteShortcut } from './CommandPalette'
 import { Artwork } from './media'
+import { PageBoundary } from './PageBoundary'
+import { SignOut } from './SignOut'
 import { Glyph, Input } from './ui'
 
 export function PublicShell({ me }: { me?: Me }) {
   const { t } = useI18n()
   // The selections are offered only while there is one to show.
   const hasLists = useHasLists()
+  // Signed in, whatever the account may do: a member has a way out too.
+  const signedIn = Boolean(me?.canWrite || me?.user)
   const [open, setOpen] = useState(false)
   const [searching, setSearching] = useState(false)
   const location = useLocation()
@@ -140,6 +144,12 @@ export function PublicShell({ me }: { me?: Me }) {
               <ThemeToggle className="hidden lg:flex" />
               <LanguageToggle />
               <AdminLink me={me} />
+              {signedIn ? (
+                <SignOut
+                  iconOnly
+                  className="grid size-11 shrink-0 place-items-center rounded-card text-bone-dim transition-colors duration-200 hover:bg-ink-high hover:text-vermillion"
+                />
+              ) : null}
             </div>
 
             <button
@@ -199,14 +209,20 @@ export function PublicShell({ me }: { me?: Me }) {
               <ThemeToggle />
               <LanguageToggle />
               <AdminLink me={me} labelled />
+              {signedIn ? (
+                <SignOut className="flex min-h-11 items-center gap-2 rounded-card px-3 text-sm font-medium text-bone-dim transition-colors duration-200 hover:bg-ink-high hover:text-vermillion" />
+              ) : null}
             </div>
           </div>
         ) : null}
       </header>
 
       <main id="main" tabIndex={-1} className="relative z-10 mx-auto max-w-7xl px-4 pb-24 outline-none sm:px-6">
-        <Outlet />
-        <CommandPalette admin={Boolean(me?.canWrite)} />
+        {/* A page that throws is said so here, with the bar still where it was. */}
+        <PageBoundary>
+          <Outlet />
+        </PageBoundary>
+        <CommandPalette canWrite={Boolean(me?.canWrite)} isAdmin={Boolean(me?.isAdmin)} />
       </main>
 
       <Footer />
@@ -490,9 +506,12 @@ function AdminLink({ me, labelled = false }: { me?: Me; labelled?: boolean }) {
     >
       {/* The word from `lg` up only: between `md` and `lg` the bar holds
           the tabs, the search, the language and this, and with the word it
-          was wider than an 820px tablet — this link cut off past the edge. */}
+          was wider than an 820px tablet — this link cut off past the edge.
+          For somebody signed in it waits for `xl`: the bar then holds the way
+          out beside it too, and a member's "My account" is the longest word
+          it carries — at 1024px it was this, and the way out, past the edge. */}
       <Glyph name={signedIn ? 'settings' : 'user'} className="size-4" />
-      <span className={labelled ? undefined : 'hidden lg:inline'}>{label}</span>
+      <span className={labelled ? undefined : signedIn || member ? 'hidden xl:inline' : 'hidden lg:inline'}>{label}</span>
     </Link>
   )
 }
@@ -593,7 +612,7 @@ const HOMES: Record<string, string> = {
  */
 function Credits({ active }: { active: string[] }) {
   const { t } = useI18n()
-  const linked = active.filter((key) => HOMES[key])
+  const linked = active.filter((key) => lookup(HOMES, key))
 
   return (
     <div className="max-w-xl text-xs leading-relaxed text-bone-faint sm:text-right">
@@ -605,7 +624,7 @@ function Credits({ active }: { active: string[] }) {
                 with one. */}
             <span className="whitespace-nowrap">
               <a
-                href={HOMES[key]}
+                href={lookup(HOMES, key)}
                 target="_blank"
                 rel="noreferrer"
                 className="text-bone-dim underline decoration-rule-bright underline-offset-2 transition-colors duration-150 hover:text-bone"

@@ -12,6 +12,21 @@
 import type { Dict, Lang } from './i18n'
 
 /**
+ * A word from a table, by a key the server sent.
+ *
+ * Own keys only. A plain object answers `constructor`, `toString` and
+ * `__proto__` with what it inherits, so a genre a provider — or an editor —
+ * named so came back as a function or an object where a word was expected,
+ * and the filter that folded and sorted the names threw on it, and with it
+ * the whole page. The dictionaries in `i18n.tsx` have no prototype for the
+ * same reason; the tables written here are plain objects, so they are asked
+ * through this.
+ */
+export function lookup<T>(table: Readonly<Record<string, T>>, key: string): T | undefined {
+  return Object.hasOwn(table, key) ? table[key] : undefined
+}
+
+/**
  * TMDB's movie and television genres and TheTVDB's, in French.
  *
  * Anything not listed is shown as it came: a server set to answer in French
@@ -64,7 +79,7 @@ const GENRES_FR: Record<string, string> = {
 }
 
 export function genreLabel(name: string, lang: Lang): string {
-  return lang === 'fr' ? (GENRES_FR[name] ?? name) : name
+  return lang === 'fr' ? (lookup(GENRES_FR, name) ?? name) : name
 }
 
 /**
@@ -88,7 +103,7 @@ const COMBINED: Record<string, string[]> = {
  */
 export function genreParts(genre: string): string[] {
   const name = genre.trim()
-  return name ? (COMBINED[name] ?? [name]) : []
+  return name ? (lookup(COMBINED, name) ?? [name]) : []
 }
 
 /** A work's genres, each once, as a list files them. */
@@ -135,7 +150,7 @@ const JOBS_FR: Record<string, string> = {
 }
 
 export function jobLabel(job: string, lang: Lang): string {
-  return lang === 'fr' ? (JOBS_FR[job] ?? job) : job
+  return lang === 'fr' ? (lookup(JOBS_FR, job) ?? job) : job
 }
 
 /**
@@ -266,8 +281,7 @@ export function statusLabel(status: string | undefined, t: Dict): string | undef
   if (!status) {
     return undefined
   }
-  const known = t.labels.status as Record<string, string>
-  return known[status] ?? status
+  return lookup(t.labels.status as Record<string, string>, status) ?? status
 }
 
 /**
@@ -297,13 +311,12 @@ const PROVIDERS: Record<string, string> = {
 }
 
 export function providerName(key: string): string {
-  return PROVIDERS[key] ?? key
+  return lookup(PROVIDERS, key) ?? key
 }
 
 /** How a surface authenticates — `apikey`, `allowlist` — as a word. */
 export function policyLabel(policy: string, t: Dict): string {
-  const known = t.labels.policy as Record<string, string>
-  return known[policy] ?? policy
+  return lookup(t.labels.policy as Record<string, string>, policy) ?? policy
 }
 
 /**

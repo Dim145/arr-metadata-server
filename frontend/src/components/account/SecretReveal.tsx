@@ -26,15 +26,19 @@ export function SecretReveal({
   wrap?: boolean
 }) {
   const { t } = useI18n()
-  const [copied, setCopied] = useState<'yes' | 'failed' | null>(null)
+  // What was copied is a secret, not this panel: a second one shown in its
+  // place — a key issued while the first was still up, a password reset twice —
+  // starts unmarked, and does not claim to be on the clipboard already.
+  const [attempt, setAttempt] = useState<{ of: string; outcome: 'yes' | 'failed' } | null>(null)
+  const copied = attempt?.of === secret ? attempt.outcome : null
   const id = `secret-${secret.slice(0, 8)}`
 
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(secret)
-      setCopied('yes')
+      setAttempt({ of: secret, outcome: 'yes' })
     } catch {
-      setCopied('failed')
+      setAttempt({ of: secret, outcome: 'failed' })
     }
   }
 

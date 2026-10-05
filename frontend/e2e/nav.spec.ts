@@ -65,6 +65,16 @@ test.describe('the browse tab and its panel', () => {
     await expect(panel).toHaveCount(0)
   })
 
+  test('leads to the collections, which have a page of their own', async ({ page }) => {
+    await page.goto('/')
+    await page.getByRole('button', { name: /browse: the menu|parcourir : le menu/i }).click()
+    const panel = page.getByRole('group', { name: /^(browse|parcourir)$/i })
+    await panel.getByRole('link', { name: /^(collections)$/i }).click()
+    await expect(page).toHaveURL(/\/collections$/)
+    // The page itself, not the "nothing lives at this address" one.
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText(/^(the sagas|les sagas)$/i)
+  })
+
   test('the panel meets WCAG 2.1 AA', async ({ page }) => {
     await page.goto('/')
     await page.getByRole('button', { name: /browse: the menu|parcourir : le menu/i }).click()
@@ -87,5 +97,15 @@ test.describe('the menu on a phone', () => {
     await expect(drawer.getByRole('link', { name: /^(series|séries)$/i })).toBeVisible()
     await expect(drawer.getByRole('link', { name: /^(films)$/i })).toBeVisible()
     await expect(drawer.getByRole('link', { name: /^(collections)$/i })).toBeVisible()
+  })
+
+  test('and the collections in it lead to a page of their own', async ({ page, isMobile }) => {
+    test.skip(!isMobile, 'the bar has the tab at this width')
+    await page.goto('/')
+    await page.getByRole('button', { name: /^(menu)$/i }).click()
+    const drawer = page.getByRole('navigation', { name: /^(browse|parcourir)$/i }).last()
+    await drawer.getByRole('link', { name: /^(collections)$/i }).click()
+    await expect(page).toHaveURL(/\/collections$/)
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText(/^(the sagas|les sagas)$/i)
   })
 })

@@ -37,7 +37,10 @@ interface Place {
   key: string
   label: string
   to: string
+  /** In the administration, which the note beside it says. */
   admin?: boolean
+  /** Of the administration, the part an editor is not given: the sidebar leaves it out for them. */
+  adminOnly?: boolean
   /** Something to do rather than somewhere to go. */
   run?: () => void | Promise<void>
 }
@@ -51,7 +54,13 @@ interface Option {
   run?: () => void | Promise<void>
 }
 
-export function CommandPalette({ admin }: { admin: boolean }) {
+/**
+ * `canWrite` is whether the administration is theirs to open, `isAdmin`
+ * whether all of it is: an editor is offered the catalogue's pages and not
+ * the keys to the house, as the sidebar does, rather than a page the server
+ * would only answer with a refusal.
+ */
+export function CommandPalette({ canWrite, isAdmin }: { canWrite: boolean; isAdmin: boolean }) {
   const { t, lang } = useI18n()
   const hasLists = useHasLists()
   const recent = useRecent()
@@ -60,6 +69,7 @@ export function CommandPalette({ admin }: { admin: boolean }) {
   const [term, setTerm] = useState('')
   const [active, setActive] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
+  const dialogRef = useRef<HTMLDialogElement>(null)
   const listId = useId()
   const settled = useSettled(term)
 
@@ -83,13 +93,18 @@ export function CommandPalette({ admin }: { admin: boolean }) {
   }, [])
 
   // Focus goes into the field on opening and back where it came from on
-  // closing; the page behind holds still meanwhile.
+  // closing; the page behind holds still meanwhile — and out of reach: the
+  // dialog is the browser's own, modal, so the rest of the page is inert and
+  // Tab cannot leave it for the links behind, as it did when this was a
+  // `div` that only claimed to be a modal.
   const before = useRef<HTMLElement | null>(null)
   useEffect(() => {
     if (!open) return
     before.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
     setTerm('')
     setActive(0)
+    const node = dialogRef.current
+    if (node && !node.open) node.showModal()
     const overflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'
     const frame = requestAnimationFrame(() => inputRef.current?.focus())
@@ -121,23 +136,23 @@ export function CommandPalette({ admin }: { admin: boolean }) {
       { key: 'calendar', label: t.nav.calendar, to: '/calendar' },
       { key: 'seasons', label: t.nav.seasons, to: '/seasons' },
       ...(hasLists ? [{ key: 'lists', label: t.nav.lists, to: '/lists' }] : []),
-      ...(admin
-        ? [
+      ...(canWrite
+        ? ([
             { key: 'admin', label: t.admin.dashboard, to: '/admin', admin: true },
             { key: 'catalogue', label: t.admin.catalogue, to: '/admin/catalogue', admin: true },
             { key: 'discover', label: t.admin.discover, to: '/admin/discover', admin: true },
-            { key: 'clients', label: t.admin.clients, to: '/admin/clients', admin: true },
-            { key: 'users', label: t.admin.users, to: '/admin/users', admin: true },
-            { key: 'access', label: t.admin.accessPage, to: '/admin/access', admin: true },
+            { key: 'clients', label: t.admin.clients, to: '/admin/clients', admin: true, adminOnly: true },
+            { key: 'users', label: t.admin.users, to: '/admin/users', admin: true, adminOnly: true },
+            { key: 'access', label: t.admin.accessPage, to: '/admin/access', admin: true, adminOnly: true },
             { key: 'account', label: t.admin.account, to: '/admin/account', admin: true },
             { key: 'admin-lists', label: t.admin.lists, to: '/admin/lists', admin: true },
-            { key: 'jobs', label: t.admin.jobs, to: '/admin/jobs', admin: true },
-            { key: 'audit', label: t.admin.audit, to: '/admin/audit', admin: true },
-            { key: 'settings', label: t.admin.settings, to: '/admin/settings', admin: true },
-          ]
+            { key: 'jobs', label: t.admin.jobs, to: '/admin/jobs', admin: true, adminOnly: true },
+            { key: 'audit', label: t.admin.audit, to: '/admin/audit', admin: true, adminOnly: true },
+            { key: 'settings', label: t.admin.settings, to: '/admin/settings', admin: true, adminOnly: true },
+          ] satisfies Place[]).filter((place) => isAdmin || !place.adminOnly)
         : []),
     ],
-    [t, lang, admin, hasLists, navigate],
+    [t, lang, canWrite, isAdmin, hasLists, navigate],
   )
 
   const needle = term.trim().toLowerCase()
@@ -197,18 +212,25 @@ export function CommandPalette({ admin }: { admin: boolean }) {
   if (!open) return null
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-ink/70 p-4 pt-[12vh] backdrop-blur-sm"
+    <dialog
+      ref={dialogRef}
+      aria-label={t.palette.open}
+      // Escape, which the field handles itself, and whatever else the browser
+      // closes a dialog by.
+      onClose={() => setOpen(false)}
       onMouseDown={(event) => {
+        // The dark around the panel: the dialog itself is what a press there lands on.
         if (event.target === event.currentTarget) setOpen(false)
       }}
+      onKeyDown={(event) => {
+        // The field is the one place to stand — the options are walked with the
+        // arrows, not tabbed to — so Tab stays on it rather than going out of
+        // the page to the browser's own controls and back. Escape is the way out.
+        if (event.key === 'Tab') event.preventDefault()
+      }}
+      className="plate m-auto mt-[12vh] w-[calc(100vw-2rem)] max-w-xl overflow-hidden rounded-panel border border-rule bg-ink-raised p-0 text-bone backdrop:bg-ink/70 backdrop:backdrop-blur-sm"
     >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label={t.palette.open}
-        className="plate w-full max-w-xl overflow-hidden rounded-panel border border-rule bg-ink-raised"
-      >
+      <div>
         <div className="flex items-center gap-3 border-b border-rule px-4">
           <Glyph name="search" className="size-4 shrink-0 text-bone-faint" />
           <input
@@ -275,6 +297,6 @@ export function CommandPalette({ admin }: { admin: boolean }) {
         </ul>
         <p className="border-t border-rule px-4 py-2 text-xs text-bone-faint">{t.palette.hint}</p>
       </div>
-    </div>
+    </dialog>
   )
 }

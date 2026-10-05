@@ -129,6 +129,9 @@ export function Access() {
             options={(['private', 'public'] as const).map((value) => ({ value, label: a.site[value] }))}
             onChange={(value) => set('site.access', value)}
             disabled={write.isPending || access.siteLocked}
+            // Written the moment it is chosen, and who may come in is no
+            // choice to stumble on with an arrow key.
+            deliberate
           />
           <Consequence>{a.siteHint[access.site]}</Consequence>
           {access.siteLocked ? <Caution>{a.locked}</Caution> : null}
@@ -143,6 +146,7 @@ export function Access() {
             options={REGISTRATIONS.map((value) => ({ value, label: a.registration[value] }))}
             onChange={(value) => set('registration.mode', value)}
             disabled={write.isPending}
+            deliberate
             // Four choices do not fit a phone's width as a row: a column there.
             className="max-sm:flex max-sm:w-full max-sm:flex-col max-sm:rounded-card"
           />
@@ -161,6 +165,7 @@ export function Access() {
                 label: t.labels.roles[value],
               }))}
               onChange={(value) => set('registration.role', value)}
+              deliberate
               // Only an account an administrator approves may be given more
               // than a member's rights.
               disabled={write.isPending || access.registration !== 'approval'}

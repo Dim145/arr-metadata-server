@@ -17,16 +17,26 @@ import { useI18n } from '../lib/i18n'
  *
  * Usually a moment — the server restarting, the network — so the first way
  * out is to ask again. Shared by a work's page and its season and episode
- * pages, which read the same record.
+ * pages, which read the same record, and by the boundary that stands in for
+ * a page that threw, which words the hint itself and, inside the
+ * administration, leads back to its dashboard.
  */
-export function Unavailable({ onRetry }: { onRetry: () => void }) {
+export function Unavailable({
+  onRetry,
+  hint,
+  admin = false,
+}: {
+  onRetry: () => void
+  hint?: string
+  admin?: boolean
+}) {
   const { t } = useI18n()
 
   return (
     <div className="pt-16">
       <EmptyState
         title={t.common.error}
-        hint={t.work.loadFailedHint}
+        hint={hint ?? t.work.loadFailedHint}
         action={
           <div className="mt-2 flex flex-wrap items-center justify-center gap-2">
             <button
@@ -38,11 +48,11 @@ export function Unavailable({ onRetry }: { onRetry: () => void }) {
               {t.common.retry}
             </button>
             <Link
-              to="/"
+              to={admin ? '/admin' : '/'}
               className="inline-flex min-h-11 items-center gap-2 rounded-card px-4 text-sm text-bone-dim transition-colors duration-200 hover:bg-ink-high hover:text-bone"
             >
               <Glyph name="arrowLeft" className="size-4" />
-              {t.work.back}
+              {admin ? t.admin.dashboard : t.work.back}
             </Link>
           </div>
         }

@@ -21,7 +21,7 @@ import { Link, useLocation, useParams, useSearchParams } from 'react-router'
 import { useAdminTitle } from '../../components/AdminShell'
 import { Artwork } from '../../components/media'
 import { Button, ButtonLink, Chip, Glyph, Provenance, Skeleton, Spinner } from '../../components/ui'
-import { api, query } from '../../lib/api'
+import { api, query, segment } from '../../lib/api'
 import { cn } from '../../lib/cn'
 import * as fmt from '../../lib/format'
 import { useI18n } from '../../lib/i18n'
@@ -60,7 +60,7 @@ export function WorkEditor() {
 
   const item = useQuery({
     queryKey: ['item', id, language],
-    queryFn: () => api.get<MediaItem>(`/items/${id}${query({ language })}`),
+    queryFn: () => api.get<MediaItem>(`/items/${segment(id)}${query({ language })}`),
   })
   const registry = useQuery({
     queryKey: ['fields'],
@@ -70,11 +70,11 @@ export function WorkEditor() {
   // Who gave what, and whom the work can be synced from.
   const report = useQuery({
     queryKey: ['item', id, 'provenance'],
-    queryFn: () => api.get<ProvenanceReport>(`/items/${id}/provenance`),
+    queryFn: () => api.get<ProvenanceReport>(`/items/${segment(id)}/provenance`),
   })
   const overrides = useQuery({
     queryKey: ['overrides', id],
-    queryFn: () => api.get<Override[]>(`/items/${id}/overrides`),
+    queryFn: () => api.get<Override[]>(`/items/${segment(id)}/overrides`),
   })
 
   useAdminTitle(item.data?.title ?? null)
@@ -115,7 +115,7 @@ export function WorkEditor() {
   }
 
   const refresh = useMutation({
-    mutationFn: () => api.post<MediaItem>(`/items/${id}/refresh`),
+    mutationFn: () => api.post<MediaItem>(`/items/${segment(id)}/refresh`),
     onSuccess: invalidate,
   })
 
@@ -125,7 +125,7 @@ export function WorkEditor() {
   const [choosing, setChoosing] = useState<'poster' | 'fanart' | null>(null)
   const lead = (kind: 'poster' | 'fanart', address: string) =>
     api
-      .put(`/items/${id}/overrides`, { scope: 'item', field: kind === 'poster' ? 'primaryPoster' : 'primaryFanart', value: address })
+      .put(`/items/${segment(id)}/overrides`, { scope: 'item', field: kind === 'poster' ? 'primaryPoster' : 'primaryFanart', value: address })
       .then(invalidate)
 
   // The registry too, and not only the work: it is asked for once and cached
@@ -373,7 +373,7 @@ export function WorkEditor() {
               <Glyph name="reel" className="size-4" />
               {e.publicPage}
             </Link>
-            <ButtonLink href={`/api/v1/items/${id}/nfo`} target="_blank" rel="noreferrer" title={e.nfoHint}>
+            <ButtonLink href={`/api/v1/items/${encodeURIComponent(id)}/nfo`} target="_blank" rel="noreferrer" title={e.nfoHint}>
               <Glyph name="download" className="size-4" />
               <span className="sm:hidden">.nfo</span>
               <span className="hidden sm:inline">{e.nfo}</span>
@@ -413,7 +413,8 @@ export function WorkEditor() {
                 type="button"
                 role="tab"
                 aria-selected={selected}
-                aria-controls={`panel-${one}`}
+                // Only the open tab has a panel in the page to point at.
+                aria-controls={selected ? `panel-${one}` : undefined}
                 tabIndex={selected ? 0 : -1}
                 onClick={() => choose(one)}
                 className={cn(

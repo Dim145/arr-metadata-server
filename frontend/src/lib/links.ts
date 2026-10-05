@@ -126,6 +126,33 @@ export function isWebAddress(href: string): boolean {
   }
 }
 
+/**
+ * A page of this site to go back to, from an address that asked for one, or
+ * nothing.
+ *
+ * A path and only a path: one `/` to start, none doubled — `//evil.example`
+ * is a host — no backslash or control character, which a browser reads as a
+ * slash or drops (`/\evil.example` and a tab after the slash both leave the
+ * site), and no `.` or `..` segment, which would let `/.//evil.example`
+ * collapse to the same host. Whatever passes is resolved the way the browser
+ * would, and checked once more by origin.
+ */
+export function sitePath(next: string | null | undefined): string | undefined {
+  if (!next || !next.startsWith('/') || next.startsWith('//')) return undefined
+  if (/[\\\u0000-\u001f\u007f]/.test(next)) return undefined
+
+  const path = next.split(/[?#]/, 1)[0] ?? ''
+  if (path.split('/').some((part) => /^(?:\.|%2e){1,2}$/i.test(part))) return undefined
+
+  try {
+    const url = new URL(next, window.location.origin)
+    if (url.origin !== window.location.origin || url.pathname.startsWith('//')) return undefined
+    return `${url.pathname}${url.search}${url.hash}`
+  } catch {
+    return undefined
+  }
+}
+
 /** Where a related work the catalogue does not hold is found, by where it is filed. */
 export function relationLink(relation: Pick<Relation, 'source' | 'externalId' | 'medium'>): string {
   const id = encodeURIComponent(String(relation.externalId))

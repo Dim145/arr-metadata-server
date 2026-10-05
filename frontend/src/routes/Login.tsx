@@ -14,6 +14,7 @@ import { Button, ButtonLink, FormField, Glyph, Input } from '../components/ui'
 import { ApiError, api } from '../lib/api'
 import { useAuthOptions } from '../lib/hooks'
 import { useI18n } from '../lib/i18n'
+import { sitePath } from '../lib/links'
 
 export function Login() {
   const { t } = useI18n()
@@ -35,7 +36,7 @@ export function Login() {
       ? (t.auth.ssoErrors as Record<string, string>)[sso]
       : t.common.error
     : undefined
-  const startSso = `/api/v1/auth/oidc/start?next=${encodeURIComponent(sameSite(params.get('next')) ?? '/')}`
+  const startSso = `/api/v1/auth/oidc/start?next=${encodeURIComponent(sitePath(params.get('next')) ?? '/')}`
 
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
@@ -48,7 +49,7 @@ export function Login() {
       await queryClient.invalidateQueries()
       // Where each belongs: the catalogue's maintainers to the administration,
       // a member back to the catalogue — or to the page they were sent from.
-      navigate(sameSite(new URLSearchParams(window.location.search).get('next')) ?? (answer.canWrite ? '/admin' : '/'))
+      navigate(sitePath(new URLSearchParams(window.location.search).get('next')) ?? (answer.canWrite ? '/admin' : '/'))
     },
   })
 
@@ -196,19 +197,4 @@ export function Login() {
       </div>
     </div>
   )
-}
-
-/**
- * A page of this site to go back to, or nothing. Resolved the way the browser
- * would resolve it, then compared by origin: `/\evil.example` and a tab after
- * the slash both look like paths and both leave the site.
- */
-function sameSite(next: string | null): string | undefined {
-  if (!next?.startsWith('/')) return undefined
-  try {
-    const url = new URL(next, window.location.origin)
-    return url.origin === window.location.origin ? `${url.pathname}${url.search}${url.hash}` : undefined
-  } catch {
-    return undefined
-  }
 }
