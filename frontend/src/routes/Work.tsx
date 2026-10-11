@@ -25,13 +25,16 @@ import {
   Provenance,
   SectionTitle,
   Select,
+  Shelf,
   Skeleton,
 } from '../components/ui'
 import { ApiError, api, query } from '../lib/api'
 import { feeds, webcal } from '../lib/feeds'
 import { useMe, useTitle, useWork } from '../lib/hooks'
 import { identifierLink } from '../lib/links'
+import { airsWhenOn, releaseDay, releasedNotAired } from '../lib/platforms'
 import { remember } from '../lib/recent'
+import { around, formatDay } from '../lib/seasons'
 import { POSTER } from '../lib/transitions'
 import { cn } from '../lib/cn'
 import * as fmt from '../lib/format'
@@ -267,6 +270,8 @@ function Plate({ item }: { item: MediaItem }) {
                 ))}
               </div>
             </div>
+
+            {item.kind === 'series' && item.status !== 'ended' ? <NextUp item={item} /> : null}
 
             <div className="mt-5 flex flex-wrap items-center gap-2">
                 {item.trailerYoutubeId ? (
@@ -505,15 +510,16 @@ function Seasons({ item }: { item: MediaItem }) {
         {item.externalIds.fankai && !item.externalIds.tvdb ? t.work.numberingFankai : t.work.numbering}
       </p>
 
-      {/* Bleeds past the container on the right so a clipped card shows there
-          is more; each card is a link, so a keyboard walks the shelf by
-          tabbing and the browser brings each one into view. */}
-      <ul
+      {/* Bleeds past the container on the right, where the shelf says it goes
+          on — its edge fading, its arrows — and each card is a link, so a
+          keyboard walks the shelf by tabbing and the browser brings each one
+          into view. Room above and to the left for a card's focus ring, which
+          a scroller would otherwise cut off. */}
+      <Shelf
         ref={shelf}
-        aria-label={t.work.seasons}
-        // Room above and to the left for a card's focus ring, which a scroller
-        // would otherwise cut off.
-        className="-mt-2 -mr-4 -ml-2 flex snap-x snap-mandatory scroll-pl-2 gap-4 overflow-x-auto pt-2 pr-4 pb-3 pl-2 sm:-mr-6 sm:pr-6"
+        label={t.work.seasons}
+        className="-mt-2 -mr-4 -ml-2 sm:-mr-6"
+        listClassName="gap-4 pt-2 pr-4 pb-3 pl-2 sm:pr-6"
       >
         {numbers.map((number) => (
           <li
@@ -524,7 +530,7 @@ function Seasons({ item }: { item: MediaItem }) {
             <SeasonCard item={item} season={number} />
           </li>
         ))}
-      </ul>
+      </Shelf>
     </section>
   )
 }
@@ -594,6 +600,81 @@ function SeasonCard({ item, season }: { item: MediaItem; season: number }) {
   )
 }
 
+/** A day in full, without its year while it is this year's: `Monday 12 October`. */
+function dayInFull(day: string, locale: string): string {
+  return formatDay(day, locale, {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: day.slice(0, 4) === String(new Date().getFullYear()) ? undefined : 'numeric',
+  })
+}
+
+/**
+ * What airs next, on the plate: the one line a running series is opened for,
+ * read before anything scrolls. The code, the title, the day and how far off
+ * it is, then how far the season it belongs to has got — counted as the
+ * season's card counts it below, and worded as the season chart words it:
+ * "2 of 8 aired" once the season is under way, "8 episodes" before it is.
+ * A platform's day is the one its midnight opens, as the episode's page says
+ * it; a network's, the reader's own. Nothing for a series that has ended, or
+ * one with nothing announced.
+ */
+function NextUp({ item }: { item: MediaItem }) {
+  const { t, locale } = useI18n()
+  const next = nextEpisode(item)
+  const when = next ? airTime(next) : undefined
+  if (!next || !when) return null
+
+  const episodes = episodesOf(item, next.seasonNumber)
+  const aired = episodes.filter((e) => {
+    const at = airTime(e)
+    return at !== undefined && hasAired(at)
+  }).length
+  const released = releasedNotAired(item.network, when)
+  const day = released ? releaseDay(when) : when.day
+  // Tonight's by the hour; past that in days, then weeks, as the chart says
+  // it. A platform's is a day, never hours.
+  const distance =
+    !released && when.moment && day === fmt.localDay(new Date()) ? airsWhen(when, locale) : around(day, locale)
+  const season = seasonName(
+    item.seasons?.find((s) => s.seasonNumber === next.seasonNumber)?.title,
+    next.seasonNumber,
+    t.work.season,
+  )
+
+  return (
+    // A gap between the rows a phone wraps it into, as wide as the reach of
+    // the targets in them.
+    <p className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-3 text-sm text-bone-dim">
+      {/* The label inside the way to the episode: a link named for what it
+          is, "Next episode: S05E03 · Title", not for a code alone. */}
+      <Link
+        to={`/work/${item.id}/season/${next.seasonNumber}/episode/${next.episodeNumber}`}
+        className="hit group inline-flex min-h-8 min-w-0 items-center gap-2"
+      >
+        <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-vermillion" />
+        <span className="shrink-0 font-medium text-vermillion">{t.work.nextUp}</span>{' '}
+        <span className="min-w-0 text-bone underline decoration-rule-bright underline-offset-4 transition-colors duration-150 group-hover:text-vermillion group-hover:decoration-vermillion">
+          <span className="font-mono text-xs text-bone-faint">{episodeCode(next)}</span>
+          {' · '}
+          {next.title || t.episode.untitled(next.episodeNumber)}
+        </span>
+      </Link>
+      <span>{[dayInFull(day, locale), distance].filter(Boolean).join(' · ')}</span>
+      <Link
+        to={`/work/${item.id}/season/${next.seasonNumber}`}
+        className="hit inline-flex min-h-8 items-center font-mono text-xs text-bone-faint tabular-nums underline decoration-rule-bright underline-offset-4 transition-colors duration-150 hover:text-bone hover:decoration-bone-faint"
+      >
+        <span className="sr-only">{season}, </span>
+        {aired > 0 && aired < episodes.length
+          ? t.work.airedOf(aired, episodes.length)
+          : t.work.episodeCount(episodes.length)}
+      </Link>
+    </p>
+  )
+}
+
 /**
  * Where a running series stands: what aired last, and what is next.
  *
@@ -628,7 +709,10 @@ function Milestone({
 }) {
   const { t, locale } = useI18n()
   const when = airTime(episode)
-  const time = when?.moment ? fmt.clock(when.moment.toISOString(), locale) : undefined
+  // A platform's midnight is a release day, not an hour anybody was up for.
+  const released = when !== undefined && releasedNotAired(item.network, when)
+  const date = fmt.longDate(when && released ? releaseDay(when) : airValue(when), locale)
+  const time = !released && when?.moment ? fmt.clock(when.moment.toISOString(), locale) : undefined
 
   return (
     <Link
@@ -656,8 +740,8 @@ function Milestone({
           {episode.title || t.episode.untitled(episode.episodeNumber)}
         </p>
         <p className="mt-0.5 text-xs text-bone-faint">
-          {[fmt.longDate(airValue(when), locale), time].filter(Boolean).join(' · ')}
-          {upcoming && when ? ` · ${airsWhen(when, locale)}` : ''}
+          {released && date ? t.episode.availableOn(date) : [date, time].filter(Boolean).join(' · ')}
+          {upcoming && when ? ` · ${airsWhenOn(item.network, when, locale)}` : ''}
         </p>
       </div>
     </Link>
@@ -1113,11 +1197,22 @@ function AlsoKnownAs({ item }: { item: MediaItem }) {
           <ul className="flex flex-wrap gap-x-1.5 gap-y-3">
             {keywords.map((keyword) => (
               <li key={keyword}>
+                {/* Worn as a genre wears its chip, filled and edged in its
+                    colour — the site's chip that leads somewhere — in the
+                    neutral a word has where a genre has a tint; an outline
+                    alone is the chip that only labels. Under the pointer its
+                    edge takes the colour of its text, as a genre's does. */}
                 <Link
                   to={`/browse?keyword=${encodeURIComponent(keyword)}`}
-                  className="hit inline-flex min-h-8 items-center rounded-full border border-rule-bright px-2.5 text-xs text-bone-dim transition-colors duration-150 hover:border-bone-faint hover:text-bone"
+                  className="hit group inline-flex min-h-8 items-center gap-1 rounded-full border border-bone-faint/35 bg-bone-faint/10 px-2.5 text-xs font-medium text-bone-dim transition-colors duration-150 hover:border-current hover:text-bone focus-visible:outline-offset-2"
                 >
-                  # {keyword}
+                  <span
+                    aria-hidden
+                    className="font-mono text-[0.8125rem] leading-none text-bone-faint transition-colors duration-150 group-hover:text-vermillion"
+                  >
+                    #
+                  </span>
+                  {keyword}
                 </Link>
               </li>
             ))}
@@ -1334,6 +1429,12 @@ function WorkSkeleton() {
 const REGION_KEY = 'ams.watchRegion'
 
 /**
+ * How many services a group shows before the rest wait behind a count: a
+ * film for rent is on twenty, and the panel was a column of logos.
+ */
+const FOLDED_PROVIDERS = 4
+
+/**
  * The services carrying the work in a country, as TMDB lists them from
  * JustWatch — named beside the data, as TMDB's terms ask. The country is
  * the reader's own setting, then the language's; any other TMDB knows of
@@ -1341,6 +1442,14 @@ const REGION_KEY = 'ams.watchRegion'
  */
 function WhereToWatch({ item }: { item: MediaItem }) {
   const { t, locale } = useI18n()
+  // The groups opened out past their first four, by name.
+  const [opened, setOpened] = useState<ReadonlySet<string>>(() => new Set())
+  const toggle = (group: string) =>
+    setOpened((was) => {
+      const next = new Set(was)
+      if (!next.delete(group)) next.add(group)
+      return next
+    })
   // The country picked last time, kept in this browser alone: a reader abroad
   // picks it once, not on every page.
   const [region, setRegion] = useState<string | undefined>(() => {
@@ -1422,33 +1531,52 @@ function WhereToWatch({ item }: { item: MediaItem }) {
       />
       <div className="space-y-4 p-5">
         {groups.length ? (
-          groups.map((group) => (
-            <div key={group}>
-              <span className="label">{t.work.watchGroups[group]}</span>
-              <ul className="mt-2 flex flex-wrap gap-2">
-                {data[group].map((provider) => (
-                  <li
-                    key={provider.id}
-                    className="flex items-center gap-2 rounded-full border border-rule py-1 pr-3 pl-1 text-sm text-bone"
-                  >
-                    {provider.logo ? (
-                      <img
-                        src={provider.logo}
-                        alt=""
-                        width={24}
-                        height={24}
-                        loading="lazy"
-                        className="size-6 rounded-full"
-                      />
-                    ) : (
-                      <span className="ml-2" />
-                    )}
-                    {provider.name}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ))
+          groups.map((group) => {
+            // The first few, and the rest a press away; a group of four or
+            // fewer is whole as it is.
+            const providers = data[group]
+            const open = opened.has(group)
+            const shown = open || providers.length <= FOLDED_PROVIDERS ? providers : providers.slice(0, FOLDED_PROVIDERS)
+            return (
+              <div key={group}>
+                <span className="label">{t.work.watchGroups[group]}</span>
+                <ul className="mt-2 flex flex-wrap gap-2">
+                  {shown.map((provider) => (
+                    <li
+                      key={provider.id}
+                      className="flex items-center gap-2 rounded-full border border-rule py-1 pr-3 pl-1 text-sm text-bone"
+                    >
+                      {provider.logo ? (
+                        <img
+                          src={provider.logo}
+                          alt=""
+                          width={24}
+                          height={24}
+                          loading="lazy"
+                          className="size-6 rounded-full"
+                        />
+                      ) : (
+                        <span className="ml-2" />
+                      )}
+                      {provider.name}
+                    </li>
+                  ))}
+                  {providers.length > FOLDED_PROVIDERS ? (
+                    <li className="flex">
+                      <button
+                        type="button"
+                        aria-expanded={open}
+                        onClick={() => toggle(group)}
+                        className="hit inline-flex min-h-8 cursor-pointer items-center rounded-full border border-dashed border-rule-bright px-3 text-xs text-bone-dim transition-colors duration-150 hover:border-bone-faint hover:text-bone"
+                      >
+                        {open ? t.work.fewerProviders : t.work.moreProviders(providers.length - shown.length)}
+                      </button>
+                    </li>
+                  ) : null}
+                </ul>
+              </div>
+            )
+          })
         ) : (
           <p className="text-sm text-bone-dim">{t.work.watchNone(place(data.region))}</p>
         )}

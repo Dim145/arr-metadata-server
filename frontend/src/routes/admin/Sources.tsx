@@ -6,7 +6,8 @@
  * consults them, and in each cell the provider's rank for that row — the
  * first with a value gives it, the next fill in what it lacks. Lists gathered
  * from everyone, and authorities that replace the rest, say so instead of a
- * number. Every mark is a word for a screen reader too.
+ * number. Every mark is a word for a screen reader too. Under MyAnimeList,
+ * which of its ways in answers, when it is not the first.
  */
 
 import { useQuery } from '@tanstack/react-query'
@@ -15,7 +16,7 @@ import { api } from '../../lib/api'
 import { cn } from '../../lib/cn'
 import { useI18n, type Dict } from '../../lib/i18n'
 import { providerName } from '../../lib/labels'
-import type { SourceRule, SourceRules } from '../../lib/types'
+import type { MalReach, SourceRule, SourceRules } from '../../lib/types'
 
 const GROUPS = ['identity', 'release', 'classification', 'people', 'episodes'] as const
 
@@ -55,6 +56,21 @@ function spoken(mark: Mark, t: Dict): string {
   }
 }
 
+/**
+ * What is said of how a source is reached: nothing while the first of its
+ * ways in answers; which were passed over and which serves when another
+ * does; that none answers when none does.
+ */
+function reachNote(reach: MalReach | undefined, t: Dict): { text: string; none: boolean } | null {
+  if (!reach) return null
+  const r = t.admin.sourcesPage.reach
+  if (!reach.serving) return { text: r.none, none: true }
+  const serving = reach.bases.findIndex((b) => b.base === reach.serving)
+  const down = reach.bases.slice(0, serving).filter((b) => b.failedAt)
+  if (serving <= 0 || !down.length) return null
+  return { text: r.serving(down.map((b) => r[b.base]), r[reach.serving]), none: false }
+}
+
 /** A cell's mark, drawn: a filled disc for the first, a ring for the rest. */
 function MarkGlyph({ mark }: { mark: Mark }) {
   switch (mark.kind) {
@@ -88,6 +104,8 @@ export function Sources() {
   const rules = useQuery({
     queryKey: ['sources', 'rules'],
     queryFn: () => api.get<SourceRules>('/sources/rules'),
+    // How MyAnimeList is reached moves while the page is open.
+    refetchInterval: 60_000,
   })
 
   return (
@@ -147,6 +165,12 @@ function Matrix({ rules }: { rules: SourceRules }) {
         {p.only[row.only]}
       </span>
     ) : null
+  // Said only of a source switched on: one switched off is asked nothing.
+  const notes = providers.flatMap((provider) => {
+    const note = provider.on ? reachNote(provider.reach, t) : null
+    return note ? [{ id: provider.id, note }] : []
+  })
+  const noteOf = (id: string) => notes.find((entry) => entry.id === id)?.note ?? null
 
   return (
     <Panel className="rise" style={{ animationDelay: '80ms' }}>
@@ -156,6 +180,20 @@ function Matrix({ rules }: { rules: SourceRules }) {
           columns do not fit a thumb's width, and a table that scrolls
           sideways hides the one it is asked about. */}
       <div className="md:hidden">
+        {notes.map(({ id, note }) => (
+          <p
+            key={id}
+            className={cn(
+              'flex items-center gap-2 border-b border-rule px-5 py-2.5 text-xs',
+              note.none ? 'text-vermillion' : 'text-brass',
+            )}
+          >
+            <Glyph name="alert" className="size-3.5 shrink-0" />
+            <span>
+              {providerName(id)} — {note.text}
+            </span>
+          </p>
+        ))}
         {GROUPS.map((group) => {
           const rows = rules.rows.filter((row) => row.group === group)
           if (!rows.length) return null
@@ -204,20 +242,33 @@ function Matrix({ rules }: { rules: SourceRules }) {
               <th scope="col" className="label px-5 py-3 text-left align-bottom">
                 {p.field}
               </th>
-              {providers.map((provider) => (
-                <th key={provider.id} scope="col" className="px-2 py-3 text-center align-bottom font-normal">
-                  <span
-                    aria-hidden
-                    className={cn(
-                      'mx-auto mb-2 block size-2 rounded-full',
-                      provider.on ? 'bg-moss' : 'bg-bone-faint',
-                    )}
-                  />
-                  <span className={cn('label block', provider.on ? '' : 'opacity-60')}>{providerName(provider.id)}</span>
-                  <span className="mt-1 block font-mono text-[0.625rem] text-bone-faint tabular-nums">{provider.rank}</span>
-                  <span className="sr-only">{provider.on ? p.on : p.off}</span>
-                </th>
-              ))}
+              {providers.map((provider) => {
+                const note = noteOf(provider.id)
+                return (
+                  <th key={provider.id} scope="col" className="px-2 py-3 text-center align-bottom font-normal">
+                    <span
+                      aria-hidden
+                      className={cn(
+                        'mx-auto mb-2 block size-2 rounded-full',
+                        provider.on ? 'bg-moss' : 'bg-bone-faint',
+                      )}
+                    />
+                    <span className={cn('label block', provider.on ? '' : 'opacity-60')}>{providerName(provider.id)}</span>
+                    <span className="mt-1 block font-mono text-[0.625rem] text-bone-faint tabular-nums">{provider.rank}</span>
+                    <span className="sr-only">{provider.on ? p.on : p.off}</span>
+                    {note ? (
+                      <span
+                        className={cn(
+                          'mx-auto mt-1.5 block max-w-[7rem] text-[0.625rem] leading-snug',
+                          note.none ? 'text-vermillion' : 'text-brass',
+                        )}
+                      >
+                        {note.text}
+                      </span>
+                    ) : null}
+                  </th>
+                )
+              })}
             </tr>
           </thead>
           {/* A body per group, its name heading the rows beneath it. */}

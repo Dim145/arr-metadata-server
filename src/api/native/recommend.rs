@@ -205,7 +205,7 @@ async fn suggestions(
         return Err(AppError::ProviderNotConfigured);
     }
 
-    let key = format!("suggest:{}:{tmdb_id}", item.kind.as_str());
+    let key = service::movie::suggestions_key(item.kind, tmdb_id);
     let results = cached_value(&state, &key, || async {
         state
             .tmdb
@@ -434,7 +434,7 @@ async fn named(state: &AppState, tmdb_id: i64, language: &str) -> Option<Value> 
     if !state.tmdb.is_configured() {
         return None;
     }
-    let key = format!("collection:{tmdb_id}:{language}");
+    let key = service::movie::collection_key(tmdb_id, language);
     cached_value(state, &key, || async {
         state
             .tmdb

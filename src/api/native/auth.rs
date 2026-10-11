@@ -106,13 +106,14 @@ async fn login(
     // An account that has failed too often lately is not checked at all, from
     // wherever the attempt comes: guessing one person's password from many
     // addresses runs out as surely as from one. Asked before anything is
-    // hashed, so a refused attempt costs nothing.
-    if !state.limiter.sign_in_allowed(&request.username).await {
+    // hashed, so a refused attempt costs nothing. Told when the account's
+    // window closes: the failures are no quota of requests, so that alone.
+    if let Err(wait) = state.limiter.sign_in_allowed(&request.username).await {
         tracing::warn!(
             username = ?request.username,
             "sign-in refused: too many failed attempts on this account lately"
         );
-        return Err(AppError::RateLimited);
+        return Err(AppError::RateLimited(crate::error::Throttle::after(wait)));
     }
 
     // Passwords switched off: the identity provider signs people in, and only

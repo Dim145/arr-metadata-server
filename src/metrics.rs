@@ -130,8 +130,12 @@ fn surface(name: &str) -> usize {
 
 /// Which surface a path lands on.
 pub fn surface_of(path: &str) -> usize {
-    let name = if path.starts_with("/v1/tvdb/") || path == "/v1/scenemapping" {
-        // Sonarr's: Skyhook's in its place, and services.sonarr.tv's list.
+    let name = if path.starts_with("/v1/tvdb/")
+        || path.starts_with("/v2/tvdb/")
+        || path == "/v1/scenemapping"
+    {
+        // Sonarr's: Skyhook's two editions in its place, and
+        // services.sonarr.tv's list.
         "sonarr"
     } else if path.starts_with("/v1/") {
         "radarr"
@@ -209,6 +213,16 @@ pub struct Metric {
     pub name: &'static str,
     pub help: &'static str,
     pub samples: Vec<(String, f64)>,
+}
+
+/// Whether a newer release is out, as the update check last found: `1`
+/// when one is. Offered only while the check is on.
+pub fn update_available(found: bool) -> Metric {
+    Metric {
+        name: "ams_update_available",
+        help: "Whether a newer release is out, as the update check last found: 1 when one is.",
+        samples: vec![(String::new(), if found { 1.0 } else { 0.0 })],
+    }
 }
 
 /// A label value, escaped as the text format asks.
@@ -301,6 +315,10 @@ mod tests {
     #[test]
     fn a_path_lands_on_one_surface() {
         assert_eq!(SURFACES[surface_of("/v1/tvdb/shows/en/81189")], "sonarr");
+        assert_eq!(
+            SURFACES[surface_of("/v2/tvdb/shows/eng/81189/official")],
+            "sonarr"
+        );
         assert_eq!(SURFACES[surface_of("/v1/tvdb/search/en")], "sonarr");
         assert_eq!(SURFACES[surface_of("/v1/movie/550")], "radarr");
         assert_eq!(SURFACES[surface_of("/v1/search")], "radarr");
@@ -414,5 +432,13 @@ mod tests {
         ));
         assert!(text.contains("ams_uptime_seconds 12.5\n"));
         assert_eq!(label("a\"b\\c\nd"), "a\\\"b\\\\c\\nd");
+    }
+
+    #[test]
+    fn a_newer_release_is_a_gauge_of_one() {
+        let text = render(&[update_available(true)]);
+        assert!(text.contains("# TYPE ams_update_available gauge\nams_update_available 1\n"));
+        let text = render(&[update_available(false)]);
+        assert!(text.contains("ams_update_available 0\n"));
     }
 }

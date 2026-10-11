@@ -353,7 +353,10 @@ test.describe('settings', () => {
     const row = () => rules.locator('li').filter({ hasText: address }).first()
 
     // A run that failed partway would otherwise leave the rule behind — named,
-    // once it got that far, so it is looked for by its name too.
+    // once it got that far, so it is looked for by its name too. The list is
+    // read once it is there: the addresses AMS_ALLOWLIST gives are always
+    // in it, so a count taken before they appear would miss the leftover.
+    await expect(rules.locator('li').first()).toBeVisible()
     const leftover = rules.locator('li').filter({ hasText: pattern(`${literally(address)}|${literally(name)}`) })
     if (await leftover.count()) {
       await leftover.first().getByRole('button', { name: /stop allowing|retirer/i }).click()
@@ -418,6 +421,105 @@ test.describe('settings', () => {
     await row().getByRole('button', { name: /stop allowing|retirer/i }).click()
     await page.getByRole('button', { name: /stop allowing|retirer/i }).last().click()
     await expect(rules.locator('li').filter({ hasText: address })).toHaveCount(0)
+  })
+
+  /**
+   * The webhook's events, ticked rather than typed, kept across a reload; and
+   * its address tested where it is set. Server-wide, so one project only.
+   *
+   * The address tried is under `.invalid`, which never resolves: the test is
+   * answered "not reached", and nothing the suite does meanwhile is posted
+   * anywhere. Whatever was set before is put back.
+   */
+  test('the webhook’s events are ticked, and its address is tested where it is set', async ({
+    page,
+  }, info) => {
+    test.skip(info.project.name !== 'desktop', 'the server scope is shared; one writer is enough')
+
+    await signIn(page)
+    await page.goto('/admin/settings')
+
+    const panel = page.getByRole('region', { name: /^webhooks$/i })
+    const fact = () => panel.getByRole('checkbox', { name: /a work’s refresh failed|l’actualisation d’une œuvre a échoué/i })
+    const every = () => panel.getByRole('checkbox', { name: /every event|tous les événements/i })
+    await expect(fact()).toBeVisible()
+    const everyBefore = await every().isChecked()
+    if (everyBefore) {
+      await every().uncheck()
+      await expect(every()).not.toBeChecked()
+    }
+    const before = await fact().isChecked()
+
+    await fact().setChecked(!before)
+    await expect(panel.getByText(/^(saved|enregistré)$/i).first()).toBeVisible()
+    await page.reload()
+    await expect(fact()).toBeChecked({ checked: !before })
+
+    await fact().setChecked(before)
+    await expect(fact()).toBeChecked({ checked: before })
+    if (everyBefore) {
+      await every().check()
+      await expect(every()).toBeChecked()
+    }
+
+    const address = panel.getByLabel(/webhook address|adresse du webhook/i)
+    const tryIt = panel.getByRole('button', { name: /^(test|tester)$/i })
+    const was = await address.inputValue()
+    try {
+      // Nothing saved, nothing to test.
+      await address.fill('')
+      await address.blur()
+      await expect(tryIt).toBeDisabled()
+
+      await address.fill('https://ams-e2e.invalid/hook')
+      await address.blur()
+      await expect(tryIt).toBeEnabled()
+      await tryIt.click()
+      await expect(panel.getByRole('status')).toContainText(/not reached|pas atteinte/i, { timeout: 20_000 })
+    } finally {
+      await address.fill(was)
+      await address.blur()
+      await expect(address).toHaveValue(was)
+    }
+  })
+
+  /**
+   * The check for a newer version: off unless turned on, said what it sends,
+   * and its task on the tasks page following the switch. Put back as it was
+   * before the next minute's tick could ask GitHub anything.
+   */
+  test('the check for a newer version is a switch its task follows', async ({ page }, info) => {
+    test.skip(info.project.name !== 'desktop', 'the server scope is shared; one writer is enough')
+
+    await signIn(page)
+    await page.goto('/admin/settings')
+
+    const name = /check for a newer version|chercher une nouvelle version/i
+    const toggle = () => page.getByRole('switch', { name })
+    // What leaves the server is said beside the switch.
+    await expect(page.getByText(/api\.github\.com/).first()).toBeVisible()
+    const was = (await toggle().getAttribute('aria-checked')) === 'true'
+
+    try {
+      await toggle().click()
+      await expect(toggle()).toHaveAttribute('aria-checked', String(!was))
+
+      await page.goto('/admin/jobs')
+      const card = page.getByRole('region', { name })
+      await expect(card.getByText(was ? /^(off|coupée)$/i : /^(daily|chaque jour)$/i)).toBeVisible()
+    } finally {
+      await page.goto('/admin/settings')
+      if ((await toggle().getAttribute('aria-checked')) !== String(was)) {
+        await toggle().click()
+      }
+      await expect(toggle()).toHaveAttribute('aria-checked', String(was))
+    }
+
+    // Off, the dashboard says nothing of a newer version.
+    if (!was) {
+      await page.goto('/admin')
+      await expect(page.getByRole('link', { name: /what changed, on github|ce qui a changé, sur github/i })).toHaveCount(0)
+    }
   })
 })
 

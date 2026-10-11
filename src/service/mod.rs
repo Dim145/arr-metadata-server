@@ -485,6 +485,8 @@ pub async fn persist(
 ) -> Result<MediaItem> {
     // As the merge came back, before what it lacked is put back.
     let returned = crate::merge::provenance::Returned::of(&item);
+    // Whether a work held here was refreshing without fault before this.
+    let mut was_well = false;
 
     if let Some(existing_id) = find_existing(state, &item).await?
         && let Some(mut existing) = repo::item::get(&state.db, &existing_id).await?
@@ -493,6 +495,7 @@ pub async fn persist(
         item.created_at = existing.created_at.clone();
         item.is_manual = existing.is_manual;
         item.is_enabled = existing.is_enabled;
+        was_well = existing.refresh_error.is_none();
 
         repo::item::load_children(&state.db, &mut existing).await?;
         keep_title_qualifier(&mut item, &existing, snapshots);
@@ -543,6 +546,11 @@ pub async fn persist(
         &provenance,
     )
     .await?;
+
+    // Refreshed in part, where its refreshes had been going well: told once.
+    if was_well && let Some(error) = &item.refresh_error {
+        webhook::refresh_failed(state, &item.id, Some(&item), error);
+    }
 
     after_write(state, &item.id, snapshots).await
 }
@@ -955,6 +963,9 @@ async fn or_held(
         tracing::warn!(id = %item.id, error = %e, "could not record the failed refresh");
     }
     state.caches.touched(&item.id).await;
+    if item.refresh_error.is_none() {
+        webhook::refresh_failed(state, &item.id, Some(&item), &failure);
+    }
 
     Ok(Some(item))
 }
@@ -1645,6 +1656,7 @@ mod testing {
             &mut config.anilist.upstream,
             &mut config.mal.upstream,
             &mut config.mal.jikan_upstream,
+            &mut config.mal.tenrai_upstream,
             &mut config.fankai.upstream,
             &mut config.fankai_wiki.upstream,
             &mut config.imdb.datasets,

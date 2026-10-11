@@ -186,7 +186,10 @@ impl From<HashError> for crate::error::AppError {
     fn from(e: HashError) -> Self {
         match e {
             HashError::Rejected(why) => Self::BadRequest(why),
-            HashError::Busy => Self::RateLimited,
+            // Every slot stayed taken for as long as it was waited for: come
+            // back after as long again. A slot is no quota over a window, so
+            // `Retry-After` alone.
+            HashError::Busy => Self::RateLimited(crate::error::Throttle::after(HASH_WAIT)),
             HashError::Failed(why) => Self::Internal(anyhow::anyhow!(why)),
         }
     }
@@ -264,6 +267,18 @@ fn hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every hashing slot taken is a 429 that says when to come back, and
+    /// names no quota: a slot is not one.
+    #[test]
+    fn a_busy_hasher_is_told_as_a_wait() {
+        let crate::error::AppError::RateLimited(throttle) =
+            crate::error::AppError::from(HashError::Busy)
+        else {
+            panic!("a busy hasher is a rate limit");
+        };
+        assert_eq!(throttle, crate::error::Throttle::after(HASH_WAIT));
+    }
 
     #[test]
     fn an_invitation_code_is_four_groups_and_survives_being_retyped() {

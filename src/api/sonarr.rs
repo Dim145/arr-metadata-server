@@ -1,23 +1,30 @@
 //! Sonarr compatibility: the Skyhook surface.
 //!
 //! Sonarr builds these URLs from
-//! `https://skyhook.sonarr.tv/v1/tvdb/{route}/{language}/` and cannot be pointed
+//! `https://skyhook.sonarr.tv/v1/tvdb/{route}/{language}/` — Sonarr v5 from
+//! `https://skyhook.sonarr.tv/v2/tvdb/{route}/` — and cannot be pointed
 //! elsewhere, so reaching this server means overriding DNS for that host. See
-//! `docs/integration.md`.
+//! `docs/integration.md`. Both editions are answered here from the one
+//! catalogue: `/v1/` as Sonarr v4 reads it, `/v2/` as v5 does.
 
 use axum::{
-    Json,
+    Extension, Json,
     extract::{Path, Query, State},
 };
 use serde::Deserialize;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::{
+    auth::Identity,
+    db::repo,
     domain::MediaItem,
     error::{AppError, AppResult},
     service::{language, scene, series},
     state::AppState,
-    wire::sonarr::{ShowResource, from_item},
+    wire::{
+        sonarr::{ShowResource, from_item},
+        sonarr_v2::{self, Asked, OwnText, ShowResourceV2},
+    },
 };
 
 /// The tag every route here is filed under in the documentation.
@@ -27,6 +34,8 @@ pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(show))
         .routes(routes!(search))
+        .routes(routes!(show_v2))
+        .routes(routes!(search_v2))
 }
 
 #[derive(Deserialize)]
@@ -42,6 +51,19 @@ struct SearchPath {
 
 #[derive(Deserialize)]
 struct SearchQuery {
+    term: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ShowPathV2 {
+    language: String,
+    tvdb_id: i64,
+    season_type: String,
+}
+
+#[derive(Deserialize)]
+struct SearchQueryV2 {
+    language: Option<String>,
     term: Option<String>,
 }
 
@@ -133,6 +155,132 @@ async fn search(
     Ok(Json(shows))
 }
 
+/// A series by TVDB id, as Sonarr v5 reads it.
+///
+/// What `/v1/` answers, and what v5 reads besides: every language the
+/// catalogue holds the series in, the orders its episodes come in, a
+/// season's title and year. The language is three letters, as Sonarr writes
+/// it — `eng`, `fra` — and the series is answered in it when the catalogue
+/// holds it so, else in the caller's own language (`tmdb.language` for their
+/// key or their address's rule), then in English, then as it is stored; a
+/// code that names no language is read as `eng`. The season type is
+/// `official` or one of the orders `seasonTypes` lists, and the episodes are
+/// numbered by it; any other is answered with the aired order, as Skyhook
+/// answers it.
+#[utoipa::path(
+    get, path = "/v2/tvdb/shows/{language}/{tvdb_id}/{season_type}", tag = TAG,
+    params(
+        ("language" = String, Path, description = "Three-letter language code, as Sonarr writes it: `eng`, `fra`"),
+        ("tvdb_id" = i64, Path, description = "TVDB series id, or a synthesised one"),
+        ("season_type" = String, Path, description = "`official`, or an order of `seasonTypes`: `dvd`, `absolute`…"),
+    ),
+    responses(
+        (status = 200, body = ShowResourceV2),
+        (status = 403, description = "The caller's address is not in the allowlist"),
+        (status = 404, description = "No provider could resolve this id"),
+    ),
+    security(),
+)]
+async fn show_v2(
+    State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
+    Path(ShowPathV2 {
+        language,
+        tvdb_id,
+        season_type,
+    }): Path<ShowPathV2>,
+) -> AppResult<Json<ShowResourceV2>> {
+    let language = language::three_letter(&language);
+    let mut item = series::by_client_id(&state, tvdb_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+
+    // Named before a language is laid over it: the names the series goes by
+    // in its other languages are told from a homonym's too, and the one laid
+    // over carries what tells it.
+    name_for_sonarr(&state, &mut item, tvdb_id).await;
+    let own = OwnText::of(&item, &language::normalize(&state.language(None, None)));
+    language::apply_with_fallback(
+        &state,
+        &mut item,
+        &language,
+        &state.language(identity.client_id(), identity.peer_id()),
+    )
+    .await?;
+    let orders = repo::order::list(&state.db, &item.id).await?;
+
+    state.media.for_clients(&mut item);
+    Ok(Json(sonarr_v2::from_item(
+        &item,
+        &Asked {
+            client_id: tvdb_id,
+            language: &language,
+            season_type: &season_type,
+            own: &own,
+            orders: &orders,
+            with_episodes: true,
+        },
+    )))
+}
+
+/// Search series, as Sonarr v5 reads them: without their episodes, as the
+/// real service answers a search. `term` is as for `/v1/`; Sonarr resolves
+/// `tvdb:` itself and sends `imdb:`, `tmdb:`, `mal:` and `anilist:` here.
+#[utoipa::path(
+    get, path = "/v2/tvdb/search", tag = TAG,
+    params(
+        ("language" = Option<String>, Query, description = "Three-letter language code, as Sonarr writes it; English when left out"),
+        ("term" = Option<String>, Query, description = "Free text, or `prefix:id`"),
+    ),
+    responses(
+        (status = 200, body = Vec<ShowResourceV2>),
+        (status = 403, description = "The caller's address is not in the allowlist"),
+    ),
+    security(),
+)]
+async fn search_v2(
+    State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
+    Query(SearchQueryV2 { language, term }): Query<SearchQueryV2>,
+) -> AppResult<Json<Vec<ShowResourceV2>>> {
+    let language = language::three_letter(language.as_deref().unwrap_or_default());
+    let term = term.unwrap_or_default();
+    let stored = language::normalize(&state.language(None, None));
+    let callers = state.language(identity.client_id(), identity.peer_id());
+
+    let mut items = series::search(&state, &term).await?;
+
+    let mut shows = Vec::with_capacity(items.len());
+    for item in &mut items {
+        // A result Sonarr cannot address is worse than no result: it would
+        // show in the list and then fail on add.
+        let Some(id) = series::client_id(item) else {
+            continue;
+        };
+        name_for_sonarr(&state, item, id).await;
+        let own = OwnText::of(item, &stored);
+        // Only the work's own title here, as for `/v1/`: fetching a season
+        // of episode text for each of ten search results would turn one
+        // search into dozens of calls.
+        language::apply_shallow_with_fallback(&state, item, &language, &callers);
+        let orders = repo::order::list(&state.db, &item.id).await?;
+        state.media.for_clients(item);
+        shows.push(sonarr_v2::from_item(
+            item,
+            &Asked {
+                client_id: id,
+                language: &language,
+                season_type: sonarr_v2::OFFICIAL,
+                own: &own,
+                orders: &orders,
+                with_episodes: false,
+            },
+        ));
+    }
+
+    Ok(Json(shows))
+}
+
 /// The language in the URL, as a tag, or a 400.
 ///
 /// Sonarr always sends one — `en` — so only a caller that is not Sonarr is
@@ -146,7 +294,9 @@ fn asked_in(language: &str) -> AppResult<String> {
 }
 
 /// The title Sonarr is given: told apart from a homonym the way Skyhook tells
-/// it, a locked one as it was locked (see [`series::sonarr_title`]).
+/// it, a locked one as it was locked (see [`series::sonarr_title`]). The
+/// names the series goes by in its other languages, which Sonarr v5 reads,
+/// are told apart the same way: a homonym is one in every language.
 async fn name_for_sonarr(state: &AppState, item: &mut MediaItem, tvdb_id: i64) {
     let locked = item.locked_fields.iter().any(|f| f == "item/title");
     let homonym_year = if !locked
@@ -158,10 +308,304 @@ async fn name_for_sonarr(state: &AppState, item: &mut MediaItem, tvdb_id: i64) {
     } else {
         None
     };
-    item.title = series::sonarr_title(
-        &item.title,
-        locked,
-        item.title_qualifier.as_deref(),
-        homonym_year,
-    );
+    let qualifier = item.title_qualifier.clone();
+    item.title = series::sonarr_title(&item.title, locked, qualifier.as_deref(), homonym_year);
+    for translation in &mut item.translations {
+        if let Some(title) = translation.title.as_deref() {
+            translation.title = Some(series::sonarr_title(
+                title,
+                false,
+                qualifier.as_deref(),
+                homonym_year,
+            ));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        config,
+        db::repo::{
+            child::{blank_episode, blank_season},
+            item::ItemWrite,
+        },
+        domain::{EpisodeOrder, ExternalIds, MediaKind, PlacedEpisode, Translation},
+    };
+
+    /// The whole server on a database in memory, as `native::testing::server`
+    /// builds it, stored in English: what the tests here count on when they
+    /// ask in another language.
+    async fn server() -> AppState {
+        let mut config = config::Config::from_env().expect("a configuration");
+        config.mode = config::Mode::Single;
+        config.database = config::Database {
+            url: "sqlite::memory:".into(),
+            max_connections: 1,
+            acquire_timeout: std::time::Duration::from_secs(5),
+        };
+        config.security.bootstrap_admin = None;
+        config.cache.redis_url = None;
+        config.media.storage = config::MediaStorage::Off;
+        config.clients = None;
+        config.tmdb.api_key = None;
+        config.tmdb.include_adult = false;
+        config.tmdb.language = "en-US".into();
+        config.tvdb.api_key = None;
+        config.tvdb.enabled = false;
+
+        AppState::bootstrap(config).await.expect("a server")
+    }
+
+    fn translation(language: &str, title: &str) -> Translation {
+        Translation {
+            language: language.into(),
+            title: Some(title.into()),
+            overview: None,
+            is_manual: false,
+        }
+    }
+
+    fn placed(tvdb_id: i64, season: i32, number: i32) -> PlacedEpisode {
+        PlacedEpisode {
+            tvdb_id,
+            season_number: season,
+            episode_number: number,
+            absolute_number: None,
+        }
+    }
+
+    /// *Rurouni Kenshin* (2023), stored: two seasons, three episodes, named
+    /// in French and Japanese besides, and a DVD order.
+    async fn stored(state: &AppState) -> MediaItem {
+        let mut work = MediaItem::empty(MediaKind::Series);
+        work.title = "Rurouni Kenshin".into();
+        work.slug = "rurouni-kenshin-2023".into();
+        work.original_title = Some("るろうに剣心 －明治剣客浪漫譚－".into());
+        work.original_language = Some("jpn".into());
+        work.external_ids = ExternalIds {
+            tvdb: Some(416802),
+            tmdb: Some(209867),
+            ..Default::default()
+        };
+        work.translations = vec![
+            translation("fra", "Kenshin le vagabond"),
+            translation("jpn", "るろうに剣心 －明治剣客浪漫譚－"),
+        ];
+        for (number, title, aired) in [(1, "東京編", "2023-07-07"), (2, "京都編", "2024-10-04")]
+        {
+            // As a provider gave them: what is added by hand is kept apart,
+            // and not written with the work.
+            let mut season = blank_season(number);
+            season.is_manual = false;
+            season.title = Some(title.into());
+            season.air_date = Some(aired.into());
+            work.seasons.push(season);
+        }
+        for (season, number, tvdb_id, aired) in [
+            (1, 1, 1001, "2023-07-07"),
+            (1, 2, 1002, "2023-07-14"),
+            (2, 1, 2001, "2024-10-04"),
+        ] {
+            let mut episode = blank_episode(season, number);
+            episode.is_manual = false;
+            episode.title = format!("Episode {tvdb_id}");
+            episode.tvdb_id = Some(tvdb_id);
+            episode.air_date = Some(aired.into());
+            work.episodes.push(episode);
+        }
+        repo::item::upsert(
+            &state.db,
+            ItemWrite {
+                item: &work,
+                replace_children: true,
+            },
+        )
+        .await
+        .expect("stored");
+        repo::order::replace(
+            &state.db,
+            &work.id,
+            &[EpisodeOrder {
+                kind: "dvd".into(),
+                episodes: vec![placed(1002, 1, 1), placed(1001, 1, 2), placed(2001, 2, 1)],
+            }],
+        )
+        .await
+        .expect("the order kept");
+        work
+    }
+
+    async fn asked(
+        state: &AppState,
+        language: &str,
+        tvdb_id: i64,
+        season_type: &str,
+    ) -> AppResult<Json<ShowResourceV2>> {
+        show_v2(
+            State(state.clone()),
+            Extension(Identity::Network(None)),
+            Path(ShowPathV2 {
+                language: language.into(),
+                tvdb_id,
+                season_type: season_type.into(),
+            }),
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn sonarr_v5_is_answered_in_the_language_of_its_address_with_what_v4_lacks() {
+        let state = server().await;
+        stored(&state).await;
+
+        let Json(show) = asked(&state, "fra", 416802, "official")
+            .await
+            .expect("answered");
+        assert_eq!(show.title, "Kenshin le vagabond");
+        assert_eq!(show.language, "fra");
+        assert_eq!(show.original_title, "るろうに剣心 －明治剣客浪漫譚－");
+        assert_eq!(show.original_language.as_deref(), Some("jpn"));
+        assert_eq!(
+            show.translations
+                .iter()
+                .map(|t| t.language.as_str())
+                .collect::<Vec<_>>(),
+            ["eng", "fra", "jpn"]
+        );
+        assert_eq!(
+            show.season_types
+                .iter()
+                .map(|t| t.kind.as_str())
+                .collect::<Vec<_>>(),
+            ["official", "dvd"]
+        );
+        let seasons: Vec<(i32, Option<&str>, Option<i32>)> = show
+            .seasons
+            .iter()
+            .map(|s| (s.season_number, s.title.as_deref(), s.year))
+            .collect();
+        assert_eq!(
+            seasons,
+            [
+                (1, Some("東京編"), Some(2023)),
+                (2, Some("京都編"), Some(2024))
+            ]
+        );
+
+        let sent = serde_json::to_value(&show).unwrap();
+        assert_eq!(sent["episodes"][0]["tvdbShowId"], 416802);
+        assert_eq!(sent["episodes"][0]["metadataShowId"], 416802);
+        assert_eq!(sent["episodes"][0]["tvdbId"], 1001);
+        assert_eq!(sent["episodes"][0]["metadataId"], 1001);
+        assert_eq!(sent["metadataSource"], "tvdb");
+        assert_eq!(sent["seasonTypes"][1]["type"], "dvd");
+        assert_eq!(sent["seasonTypes"][1]["name"], "DVD Order");
+    }
+
+    #[tokio::test]
+    async fn a_series_asked_in_an_order_it_has_is_numbered_by_it_and_otherwise_as_aired() {
+        let state = server().await;
+        stored(&state).await;
+
+        let Json(show) = asked(&state, "eng", 416802, "dvd").await.expect("answered");
+        let numbered: Vec<(i32, i32, Option<i64>)> = show
+            .episodes
+            .as_deref()
+            .unwrap()
+            .iter()
+            .map(|e| (e.season_number, e.episode_number, e.tvdb_id))
+            .collect();
+        assert_eq!(
+            numbered,
+            [(1, 1, Some(1002)), (1, 2, Some(1001)), (2, 1, Some(2001))]
+        );
+        assert!(show.seasons.iter().all(|s| s.title.is_none()));
+
+        // An order the series has not: the aired one, and no error — Sonarr
+        // asks in the type a person chose, and a refusal fails its refresh.
+        let Json(show) = asked(&state, "eng", 416802, "absolute")
+            .await
+            .expect("answered");
+        let numbered: Vec<(i32, i32, Option<i64>)> = show
+            .episodes
+            .as_deref()
+            .unwrap()
+            .iter()
+            .map(|e| (e.season_number, e.episode_number, e.tvdb_id))
+            .collect();
+        assert_eq!(
+            numbered,
+            [(1, 1, Some(1001)), (1, 2, Some(1002)), (2, 1, Some(2001))]
+        );
+        assert_eq!(show.seasons[0].title.as_deref(), Some("東京編"));
+    }
+
+    #[tokio::test]
+    async fn a_language_the_series_is_not_named_in_is_answered_as_stored() {
+        let state = server().await;
+        stored(&state).await;
+
+        // German, which nothing names the series in: the caller's own
+        // language is the one it is stored in, so the stored text; the
+        // German is still listed as what was asked.
+        let Json(show) = asked(&state, "deu", 416802, "official")
+            .await
+            .expect("answered");
+        assert_eq!(show.title, "Rurouni Kenshin");
+        assert_eq!(show.language, "deu");
+
+        // A code that names no language is read as English rather than
+        // refused.
+        let Json(show) = asked(&state, "xx", 416802, "official")
+            .await
+            .expect("answered");
+        assert_eq!(show.language, "eng");
+        assert_eq!(show.title, "Rurouni Kenshin");
+    }
+
+    #[tokio::test]
+    async fn the_search_answers_sonarr_v5_without_episodes() {
+        let state = server().await;
+        stored(&state).await;
+
+        let Json(shows) = search_v2(
+            State(state.clone()),
+            Extension(Identity::Network(None)),
+            Query(SearchQueryV2 {
+                language: Some("fra".into()),
+                term: Some("tvdb:416802".into()),
+            }),
+        )
+        .await
+        .expect("answered");
+        assert_eq!(shows.len(), 1);
+        assert_eq!(shows[0].title, "Kenshin le vagabond");
+        assert_eq!(shows[0].season_types.len(), 2);
+        let sent = serde_json::to_value(&shows[0]).unwrap();
+        assert!(sent.get("episodes").is_none(), "{sent}");
+        assert_eq!(sent["seasons"].as_array().unwrap().len(), 2);
+
+        // No language at all: English.
+        let Json(shows) = search_v2(
+            State(state.clone()),
+            Extension(Identity::Network(None)),
+            Query(SearchQueryV2 {
+                language: None,
+                term: Some("tvdb:416802".into()),
+            }),
+        )
+        .await
+        .expect("answered");
+        assert_eq!(shows[0].language, "eng");
+        assert_eq!(shows[0].title, "Rurouni Kenshin");
+    }
+
+    #[tokio::test]
+    async fn a_series_nobody_holds_is_not_found() {
+        let state = server().await;
+        let refused = asked(&state, "eng", 1, "official").await;
+        assert!(matches!(refused, Err(AppError::NotFound)));
+    }
 }

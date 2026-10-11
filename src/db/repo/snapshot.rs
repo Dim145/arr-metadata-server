@@ -72,6 +72,33 @@ pub async fn fetched(db: &Db, media_id: &str) -> Result<Vec<(String, String)>> {
         .collect()
 }
 
+/// What some providers answered for a work, by provider, as the text it was
+/// kept as: for a reader after a few of its fields, which parses those alone
+/// rather than the whole document — a film's from TMDB runs to a few hundred
+/// kilobytes.
+pub async fn texts(db: &Db, media_id: &str, providers: &[&str]) -> Result<Vec<(String, String)>> {
+    if providers.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let sql = format!(
+        "SELECT provider, payload FROM media_provider_snapshot
+         WHERE media_id = ? AND provider IN ({})",
+        vec!["?"; providers.len()].join(", ")
+    );
+    let mut query = sqlx::query(db.sql(&sql)).bind(media_id);
+    for provider in providers {
+        query = query.bind(*provider);
+    }
+
+    query
+        .fetch_all(db.pool())
+        .await?
+        .iter()
+        .map(|row| Ok((row.text("provider")?, row.text("payload")?)))
+        .collect()
+}
+
 fn map(row: &sqlx::any::AnyRow) -> Result<Snapshot> {
     Ok(Snapshot {
         provider: row.text("provider")?,

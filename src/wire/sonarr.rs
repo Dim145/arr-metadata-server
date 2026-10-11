@@ -279,7 +279,7 @@ pub fn from_item(item: &MediaItem, tvdb_id: i64, language: &str) -> ShowResource
     }
 }
 
-fn image_resource(image: &Image) -> ImageResource {
+pub(crate) fn image_resource(image: &Image) -> ImageResource {
     ImageResource {
         // Sonarr compares these case-insensitively but displays them as given.
         cover_type: capitalize(image.cover_type.as_str()),
@@ -287,7 +287,7 @@ fn image_resource(image: &Image) -> ImageResource {
     }
 }
 
-fn episode_resource(episode: &Episode, tvdb_show_id: i64) -> EpisodeResource {
+pub(crate) fn episode_resource(episode: &Episode, tvdb_show_id: i64) -> EpisodeResource {
     EpisodeResource {
         tvdb_show_id,
         tvdb_id: episode.tvdb_id,
@@ -345,7 +345,7 @@ fn episode_title(title: &str) -> String {
 ///
 /// A date-time gives the day it names in its own zone, the local broadcast
 /// date, which is what Skyhook sends. What is not a day at all is left out.
-fn sonarr_day(value: Option<&str>) -> Option<String> {
+pub(crate) fn sonarr_day(value: Option<&str>) -> Option<String> {
     let value = value?.trim();
     let day = match chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d") {
         Ok(day) => day,
@@ -383,7 +383,7 @@ fn parse_time_of_day(air_time: &str) -> Option<TimeOfDay> {
     })
 }
 
-fn capitalize(s: &str) -> String {
+pub(crate) fn capitalize(s: &str) -> String {
     let mut chars = s.chars();
     match chars.next() {
         Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),

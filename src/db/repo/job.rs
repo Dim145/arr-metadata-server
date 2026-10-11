@@ -76,6 +76,8 @@ pub mod kinds {
     pub const MEDIA_SWEEP: &str = "media.sweep";
     /// The clients' certificate, looked at and renewed when it is time.
     pub const TLS_RENEW: &str = "tls.renew";
+    /// GitHub asked whether a newer release is out.
+    pub const UPDATE_CHECK: &str = "update.check";
 }
 
 #[derive(Clone, Debug, Serialize, ToSchema)]

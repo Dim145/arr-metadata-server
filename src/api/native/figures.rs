@@ -210,6 +210,19 @@ pub struct Health {
     pub sources: Vec<Source>,
     /// The latest runs of the jobs, newest first.
     pub jobs: Vec<Job>,
+    /// A newer release, when the check is on and found one; `null` else.
+    pub update_available: Option<UpdateAvailable>,
+}
+
+/// A release newer than the version running.
+#[derive(Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateAvailable {
+    pub version: String,
+    /// Its page, on GitHub.
+    pub url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub published_at: Option<String>,
 }
 
 /// How the server is: its version and uptime, what it holds, what failed,
@@ -312,6 +325,11 @@ async fn health(
             },
         )
         .await?,
+        update_available: crate::jobs::update_check::newer(&state).map(|release| UpdateAvailable {
+            version: release.version,
+            url: release.url,
+            published_at: release.published_at,
+        }),
     }))
 }
 
@@ -506,6 +524,13 @@ async fn metrics(
             1.0,
         )],
     });
+    // Only while the check is on: off, nobody asked, and 0 would say nothing
+    // newer is out.
+    if crate::jobs::update_check::on(&state) {
+        gauges.push(crate::metrics::update_available(
+            crate::jobs::update_check::newer(&state).is_some(),
+        ));
+    }
 
     Ok((
         [(

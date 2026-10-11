@@ -7,6 +7,13 @@
 
 import type { Dict } from './en'
 
+/**
+ * A participle agreed with TMDB's gender: the feminine for 1, the masculine
+ * for 2, and the inclusive form for anybody else — non-binary, or unknown.
+ */
+const agreed = (gender: number | undefined, feminine: string, masculine: string, both: string) =>
+  gender === 1 ? feminine : gender === 2 ? masculine : both
+
 export const fr: Dict = {
   brand: {
     name: 'Cinémathèque',
@@ -326,6 +333,9 @@ export const fr: Dict = {
     onAir: 'À l’antenne',
     latestEpisode: 'Dernier épisode',
     nextEpisode: 'Prochain épisode',
+    nextUp: 'Prochain épisode :',
+    moreProviders: (n: number) => (n === 1 ? '+1 autre' : `+${n} autres`),
+    fewerProviders: 'en afficher moins',
     collection: 'Dans la même collection',
     alsoKnownAs: 'Autres titres',
     allTitles: (n: number) => `Les ${n} titres`,
@@ -377,6 +387,8 @@ export const fr: Dict = {
     untitled: (n: number) => `Épisode ${n}`,
     noDate: 'Date de diffusion inconnue',
     yourTime: '(heure locale)',
+    availableOn: (when: string) => `Disponible le ${when}`,
+    available: 'Disponible',
     absolute: (n: number) => `N° absolu ${n}`,
     edit: 'Modifier l’épisode',
     aired: 'Diffusion',
@@ -426,12 +438,13 @@ export const fr: Dict = {
     biography: 'Biographie',
     readMore: 'Lire la suite',
     readLess: 'Replier',
-    born: (when: string) => `Né·e le ${when}`,
-    died: (when: string) => `Mort·e le ${when}`,
+    born: (when: string, gender?: number) => `${agreed(gender, 'Née', 'Né', 'Né·e')} le ${when}`,
+    died: (when: string, gender?: number) => `${agreed(gender, 'Morte', 'Mort', 'Mort·e')} le ${when}`,
     at: (age: number) => `à ${age} ans`,
     aged: (age: number) => `${age} ans`,
     in: (place: string) => `à ${place}`,
-    knownFor: (department: string) => `Connu·e pour ${department}`,
+    knownFor: (department: string, gender?: number) =>
+      `${agreed(gender, 'Connue', 'Connu', 'Connu·e')} pour ${department}`,
     department: {
       Acting: 'ses rôles',
       Directing: 'sa réalisation',
@@ -447,7 +460,7 @@ export const fr: Dict = {
       Crew: 'son travail d’équipe',
       Creator: 'ses créations de séries',
     } as Record<string, string>,
-    alsoKnownAs: 'Aussi connu·e sous le nom de',
+    alsoKnownAs: (gender?: number) => `Aussi ${agreed(gender, 'connue', 'connu', 'connu·e')} sous le nom de`,
     portraits: 'Portraits',
     portrait: (name: string, n: number) => `${name}, portrait ${n}`,
     onImdb: 'Sur IMDb',
@@ -460,7 +473,18 @@ export const fr: Dict = {
     title: 'À l’antenne cette semaine',
     titlePast: 'À l’antenne cette semaine-là',
     titleFuture: 'À l’antenne cette semaine-là',
-    count: (n: number) => (n <= 1 ? `${n} épisode` : `${n} épisodes`),
+    count: (episodes: number, releases = 0) =>
+      [
+        episodes || !releases ? (episodes <= 1 ? `${episodes} épisode` : `${episodes} épisodes`) : '',
+        releases ? (releases <= 1 ? `${releases} sortie` : `${releases} sorties`) : '',
+      ]
+        .filter(Boolean)
+        .join(' · '),
+    releaseType: {
+      cinema: 'Sortie en salles',
+      digital: 'Sortie numérique',
+      physical: 'Sortie physique',
+    },
     weeks: 'Semaines',
     previous: 'Semaine précédente',
     thisWeek: 'Cette semaine',
@@ -469,13 +493,13 @@ export const fr: Dict = {
     empty: 'Rien à l’antenne cette semaine.',
     emptyOther: 'Rien au programme cette semaine-là.',
     truncated:
-      'Cette semaine compte plus d’épisodes que le programme n’en liste à la fois : ses derniers jours sont incomplets. Chaque série garde la liste complète sur sa page.',
-    emptyHint: 'Seules les séries de ce catalogue sont listées, aux dates que donnent leurs sources.',
+      'Cette semaine compte plus d’épisodes et de sorties que le programme n’en liste à la fois : ses derniers jours sont incomplets. Chaque œuvre garde la liste complète sur sa page.',
+    emptyHint: 'Seuls les films et les séries de ce catalogue sont listés, aux dates que donnent leurs sources.',
     today: 'Aujourd’hui',
     days: 'Les jours de la semaine',
     nothing: 'Rien ce jour-là.',
     nothingBetween: 'Rien ces jours-là.',
-    note: 'Les heures sont celles de votre fuseau horaire. Un épisode dont aucune source ne connaît l’heure est listé à sa date, sans heure.',
+    note: 'Les heures sont celles de votre fuseau horaire. Un épisode dont aucune source ne connaît l’heure est listé à sa date, sans heure ; un film, au jour de sa sortie.',
     noTime: 'heure inconnue',
     finale: 'Final',
     views: 'Affichage',
@@ -1237,6 +1261,14 @@ export const fr: Dict = {
           'Un Fan-Kai n’est décrit que par Fankai, avec son wiki pour ce dont il est tiré : aucune autre source ne s’y mêle, sinon le remontage serait fondu dans l’anime d’origine.',
       },
       loadFailed: 'Les règles n’ont pas pu être chargées.',
+      reach: {
+        official: 'API officielle',
+        jikan: 'Jikan',
+        tenrai: 'Tenrai',
+        serving: (down: string[], serving: string) =>
+          `${down.join(' et ')} injoignable${down.length > 1 ? 's' : ''}, ${serving} sert`,
+        none: 'MAL : aucune base ne répond',
+      },
     },
     settings: 'Réglages',
     backToSite: 'Retour au catalogue',
@@ -1261,6 +1293,10 @@ export const fr: Dict = {
       instancesLine: (n: number, leader: string | null) => `${n} · ${leader ? `${leader} mène` : 'aucun leader'}`,
       single: 'une seule, en solo',
       healthFailed: 'La santé n’a pas pu être lue pour le moment.',
+      updateOut: (version: string) => `La version ${version} est sortie.`,
+      updatePublished: (when: string) => `Publiée ${when}.`,
+      updateRead: 'Ce qui a changé, sur GitHub',
+      updateDot: (version: string) => `La version ${version} est sortie`,
       locksTitle: 'Les verrous, en fichier',
       locksHint: 'Chaque modification faite à la main, en document JSON à conserver ou à porter dans un autre catalogue. Un verrou nomme son œuvre par les identifiants que le monde partage : il retrouve la même série ou le même film partout où il est présent.',
       locksExport: 'Télécharger les verrous',
@@ -1826,6 +1862,7 @@ export const fr: Dict = {
         'media.store': 'Stocker les médias',
         'media.sweep': 'Nettoyer les médias',
         'tls.renew': 'Renouveler le certificat des clients',
+        'update.check': 'Chercher une nouvelle version',
         'refresh.item': 'Une fiche actualisée',
       } as Record<string, string>,
       about: {
@@ -1837,6 +1874,7 @@ export const fr: Dict = {
         'media.store': 'Chaque image et chaque musique que le catalogue référence et qui n’est pas encore stockée, récupérée maintenant, quelques-unes à la fois. Peut être arrêtée ; le reste se récupère au fil de l’eau.',
         'media.sweep': 'Les médias que plus rien ne référence — une fiche supprimée, une image abandonnée par sa source, un envoi retiré — oubliés et effacés.',
         'tls.renew': 'Le certificat que présente la porte des clients, examiné chaque jour et réémis par l’autorité de ce serveur quand il lui reste moins de trente jours — chargé sans redémarrage.',
+        'update.check': 'La dernière version de ce projet demandée à GitHub, une minute après le démarrage puis chaque jour — une requête anonyme, et seulement si la vérification est activée dans les réglages. Une version plus récente est signalée sur le tableau de bord, et annoncée une fois au webhook.',
       } as Record<string, string>,
       every: (seconds: number) =>
         seconds >= 604_800 && seconds % 604_800 === 0
@@ -1855,6 +1893,7 @@ export const fr: Dict = {
         busy: 'En attente : une tâche qui partage son travail est en cours.',
         media_off: 'Aucun stockage de médias n’est configuré : définissez AMS_MEDIA_STORAGE.',
         no_authority: 'Pas de porte des clients avec un certificat émis ici : définissez AMS_CLIENTS_BIND, sans AMS_CLIENTS_TLS_CERT.',
+        updates_off: 'Coupée : activez « Chercher une nouvelle version » dans les réglages.',
       } as Record<string, string>,
       last: 'Dernier passage',
       never: 'Jamais lancée',
@@ -1915,6 +1954,7 @@ export const fr: Dict = {
         certValid: (until: string) => `Valable jusqu’au ${until} ; rien à faire`,
         synced: (list: string) => `Synchronisée depuis ${list}`,
         noneAnswered: (list: string) => `Aucune réponse de ${list}`,
+        newer: (version: string) => `La version ${version} est sortie`,
       },
     },
     runs: {
@@ -1940,6 +1980,7 @@ export const fr: Dict = {
         'deleted while syncing': 'Supprimée pendant la synchronisation',
         'no provider could resolve it': 'Aucune source ne l’a trouvée',
         'no provider could resolve this entry': 'Aucune source ne l’a trouvée',
+        'nothing newer is out': 'Rien de plus récent n’est sorti',
       } as Record<string, string>,
     },
 
@@ -2082,6 +2123,34 @@ export const fr: Dict = {
       passwordMismatch: 'Les deux saisies ne correspondent pas.',
       passwordWrong: 'Ce n’est pas le mot de passe actuel.',
       loadFailed: 'Les réglages n’ont pas pu être chargés.',
+      webhooks: {
+        lead: 'Ce qui se passe ici, envoyé en JSON à une adresse à vous — Discord, Slack ou tout ce qui prend du JSON — pour les événements cochés ci-dessous.',
+        test: 'Tester',
+        testing: 'Test en cours…',
+        testHint: 'Envoie webhook.test à l’adresse enregistrée, quel que soit ce qui est coché. Rien n’est inscrit au journal.',
+        saveFirst: 'Quittez le champ pour enregistrer l’adresse : le test part vers celle enregistrée.',
+        delivered: (status: number, ms: number) => `Reçu : réponse ${status} en ${ms} ms.`,
+        refused: (status: number, ms: number) => `Atteinte, mais réponse ${status} en ${ms} ms : l’envoi n’a pas été pris.`,
+        unreached: (ms: number) => `Pas atteinte après ${ms} ms.`,
+        notWeb: 'Rien d’envoyé : ce serveur n’envoie qu’à une adresse http ou https qui ne désigne aucune machine à lui.',
+        internal: 'Rien d’envoyé : ce nom désigne une adresse joignable seulement depuis ce serveur.',
+        events: 'Événements',
+        every: 'Tous les événements, y compris ceux ajoutés plus tard',
+        facts: 'Ce qui arrive de soi-même',
+        actions: 'Actions du journal',
+        unknown: (names: string) => `Aussi dans le réglage, inconnus ici et gardés tels quels : ${names}.`,
+        loadFailed: 'Les événements n’ont pas pu être chargés.',
+        fact: {
+          'refresh.failed': 'L’actualisation d’une œuvre a échoué',
+          'media.failed': 'Une image ou une musique a été abandonnée',
+          'update.available': 'Une nouvelle version est sortie',
+        } as Record<string, string>,
+        factHint: {
+          'refresh.failed': 'Une fois, quand une œuvre commence à échouer — pas à chaque essai tant que cela dure.',
+          'media.failed': 'Chaque essai pour la récupérer a échoué.',
+          'update.available': 'Une fois par version, tant que la recherche d’une nouvelle version est active.',
+        } as Record<string, string>,
+      },
     },
   },
   settings: {
@@ -2094,6 +2163,7 @@ export const fr: Dict = {
       adult: 'Œuvres pour adultes',
       sources: 'Sources complémentaires',
       access: 'Ouverture & API',
+      webhooks: 'Webhooks',
       other: 'Tout le reste',
     },
     names: {
@@ -2110,6 +2180,7 @@ export const fr: Dict = {
       'tvmaze.enabled': 'TVmaze, pour les horaires',
       'anilist.enabled': 'AniList, pour les animes',
       'mal.enabled': 'MyAnimeList, pour les animes',
+      'mal.fallback': 'Une autre voie vers MyAnimeList, quand l’une ne répond pas',
       'imdb.enabled': 'Les notes d’IMDb',
       'fankai.enabled': 'Fankai, pour les fan-kai',
       'fankai.wiki': 'Le wiki Fankai, pour l’anime d’origine',
@@ -2128,6 +2199,7 @@ export const fr: Dict = {
       'refresh.batchSize': 'Œuvres par passage',
       'webhooks.url': 'Adresse du webhook',
       'webhooks.events': 'Événements du webhook',
+      'updates.check': 'Chercher une nouvelle version',
       'adult.mode': 'Œuvres pour adultes',
       'adult.clientPolicy': 'Œuvres pour adultes pour ce client',
       'adult.force': 'Ignorer ce que demande le client',
@@ -2146,6 +2218,7 @@ export const fr: Dict = {
       'tvmaze.enabled': 'L’heure exacte de diffusion de chaque épisode, partout où sa date concorde avec celle de TheTVDB — un épisode déplacé sur un autre créneau arrive ainsi à l’heure dans Sonarr. Jamais utilisé pour la numérotation. Sans clé ; ses données sont sous CC BY-SA et créditées sur chaque page.',
       'anilist.enabled': 'La note d’AniList, et les titres romaji et originaux auxquels Radarr compare les sorties de films d’animation japonaise. Tient à jour la liste d’identifiants anime, qui permet aussi aux listes d’import AniList et MyAnimeList de Sonarr de trouver des séries que personne n’a encore ajoutées. Sans clé.',
       'mal.enabled': 'La note et les titres de MyAnimeList — par son API officielle si AMS_MAL_CLIENT_ID est défini, par Jikan sinon, qui ne demande pas de clé mais peut avoir des mois de retard. Utilise la même liste d’identifiants.',
+      'mal.fallback': 'Quand la voie vers MyAnimeList interrogée ne répond pas — pas de connexion, une erreur de sa part, une limite de débit qui dure au-delà de l’attente —, la suivante l’est : Jikan après l’API officielle, puis Tenrai, un autre miroir au schéma de Jikan. Celle qui n’a pas répondu est écartée cinq minutes ; un 404 est une réponse et n’en fait interroger aucune autre. Désactivé, seule la première est interrogée.',
       'imdb.enabled': 'Les notes d’IMDb, téléchargées chaque jour pour les œuvres présentes ici. C’est aussi la note transmise à Sonarr, comme le fait Skyhook. Pour un usage personnel et non commercial uniquement.',
       'fankai.enabled': 'Les productions Fan-Kai, depuis le service de métadonnées de Fankai : chaque anime remonté comme une série, ses arcs comme des saisons et ses films comme des épisodes, numérotés comme Fankai nomme ses fichiers — S02E08 est le huitième film en tout, dans le deuxième arc. Trouvées par leur titre, ou par « fankai: » suivi d’un identifiant, et récupérées seulement à la demande. Sonarr reçoit un identifiant propre à ce serveur, TheTVDB n’en ayant aucun pour elles. Sans clé ; Fankai est crédité sur chaque page. Désactivée, ce qui a été récupéré reste tel quel.',
       'fankai.wiki': 'La page de chaque Fan-Kai sur le wiki de la communauté Fankai, fan-kai.fandom.com : les entrées AniList et MyAnimeList dont il est tiré, et le Fan-Kai qui lui fait suite. La fiche d’un Fan-Kai mène alors à son anime, et celle de l’anime — une fois que Sonarr la détient — à ses Fan-Kai. Un appel par récupération d’un Fan-Kai, et seulement tant que Fankai est actif ; avec AniList actif, le titre, l’année et l’affiche de l’anime viennent de là. Sans clé ; son contenu est sous CC BY-SA et crédité sur chaque page.',
@@ -2154,7 +2227,8 @@ export const fr: Dict = {
       'refresh.intervalSeconds': 'En secondes. Une minute au minimum, une semaine au maximum.',
       'refresh.batchSize': 'Le nombre d’œuvres récupérées à nouveau à chaque réveil du planificateur.',
       'webhooks.url': 'Où ce qui se passe est envoyé, en JSON avec une ligne de contenu à côté — un webhook Discord ou Slack le prend tel quel. Rien n’est envoyé tant que c’est vide.',
-      'webhooks.events': 'Quelles actions du journal sont envoyées : leurs noms séparés par des virgules, tels que le journal les nomme, ou * pour toutes. Au départ, ce qui entre et sort du catalogue. Une connexion refusée est envoyée sans le nom saisi, et l’adresse du webhook elle-même n’est jamais envoyée.',
+      'webhooks.events': 'Quels événements sont envoyés : les actions du journal, et trois choses qui arrivent d’elles-mêmes. Gardés sous leurs noms séparés par des virgules, ou * pour tous. Au départ, ce qui entre et sort du catalogue. Une connexion refusée est envoyée sans le nom saisi, et l’adresse du webhook elle-même n’est jamais envoyée.',
+      'updates.check': 'Une fois par jour, et une minute après le démarrage, ce serveur demande à GitHub sa dernière version, et le tableau de bord signale quand une plus récente est sortie. Ce qui part est une seule requête GET anonyme vers api.github.com, avec le nom et la version que porte chaque requête de ce serveur — rien sur cette instance ni sur ce qu’elle contient. Coupé tant qu’on ne l’active pas.',
       'adult.mode': 'Masquées : personne ne reçoit d’œuvre pour adultes, quoi que demande un client.',
       'adult.clientPolicy': 'Ce que ce client-là reçoit, dans la limite de ce que le serveur autorise déjà.',
       'adult.force': 'Le include_adult du client est écarté et la réponse de ce serveur s’applique à sa place.',
@@ -2388,5 +2462,7 @@ export const fr: Dict = {
     ratingOf: (value: string) => `Noté ${value} sur 10`,
     ratingOn: (value: string, source: string) => `Note ${source} : ${value} sur 10`,
     openWork: (title: string) => `Ouvrir ${title}`,
+    shelfBack: 'Revenir en arrière',
+    shelfOn: 'Voir la suite',
   },
 }

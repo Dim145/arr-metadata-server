@@ -36,13 +36,13 @@ struct Assets;
 /// than fall through to the UI's index page, or a mistyped endpoint would
 /// answer `200 text/html` and confuse every client.
 const API_PREFIXES: &[&str] = &[
-    "/api/", "/v1/", "/3/", "/4/", "/v4/", "/media/", "/health", "/ready",
+    "/api/", "/v1/", "/v2/", "/3/", "/4/", "/v4/", "/media/", "/health", "/ready",
 ];
 
 /// The same roots, as the trailing-slash normalisation leaves `/api/` and
 /// its like: no prefix above matches them any more, and they used to be
 /// answered the interface's page.
-const API_ROOTS: &[&str] = &["/api", "/v1", "/3", "/4", "/v4", "/media"];
+const API_ROOTS: &[&str] = &["/api", "/v1", "/v2", "/3", "/4", "/v4", "/media"];
 
 /// Where Vite puts what it fingerprints. A file there that is not in the
 /// build is a bundle a page from before a deploy still names: a 404 the
@@ -379,6 +379,15 @@ mod tests {
         // "/v1abc" is not under "/v1/", so it belongs to the client router.
         assert!(is_ui_path(&"/v1abc".parse::<Uri>().unwrap()));
         assert!(is_ui_path(&"/apifoo".parse::<Uri>().unwrap()));
+    }
+
+    #[test]
+    fn skyhook_s_second_edition_is_an_api_path() {
+        // Sonarr v5 reads JSON here, and a route it mistypes must be told
+        // so, not handed the interface's page.
+        assert!(is_api_path("/v2/tvdb/shows/eng/81189/official"));
+        assert!(is_api_path("/v2/tvdb/search"));
+        assert!(is_api_path("/v2"));
     }
 
     #[test]

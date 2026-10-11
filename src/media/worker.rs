@@ -165,6 +165,12 @@ async fn fetch_all(
                         origin = %asset.origin,
                         "a medium was given up on: every fetch of it was cut short"
                     );
+                    crate::service::webhook::media_failed(
+                        state,
+                        &asset,
+                        "every fetch of it was cut short",
+                    )
+                    .await;
                     Some(false)
                 }
                 // Another instance got there first, or it was forgotten.
@@ -223,6 +229,11 @@ async fn fetch_one(state: &AppState, asset: &Asset, tries: i32) -> bool {
                 repo::asset::mark_failed(&state.db, &asset.id, error, next.as_deref(), unfit).await
             {
                 tracing::warn!(error = %e, "could not note the failure");
+            }
+            // Its last try spent. One that answered with the wrong thing is
+            // given up on at once, and not told: a dead link is no news.
+            if !unfit && next.is_none() {
+                crate::service::webhook::media_failed(state, asset, error).await;
             }
             false
         }

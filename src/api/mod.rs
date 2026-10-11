@@ -343,6 +343,8 @@ mod tests {
             "/api/v1/jobs/{id}",
             "/api/v1/lists/{key}/sonarr.json",
             "/v1/tvdb/shows/{language}/{tvdb_id}",
+            "/v2/tvdb/shows/{language}/{tvdb_id}/{season_type}",
+            "/v2/tvdb/search",
             "/v1/movie/{tmdb_id}",
             "/v1/list/imdb/{id}",
             "/3/{path}",
@@ -392,6 +394,21 @@ mod tests {
                 .as_object()
                 .is_some_and(|props| props.contains_key("apikey")),
             "the TheTVDB sign-in lost its fields"
+        );
+
+        // Two translations, each its own: Radarr's in PascalCase, Skyhook's
+        // second edition in camelCase.
+        assert!(
+            schemas["TranslationResource"]["properties"]
+                .as_object()
+                .is_some_and(|props| props.contains_key("Language")),
+            "Radarr's translation lost its fields"
+        );
+        assert!(
+            schemas["SkyhookTranslationResource"]["properties"]
+                .as_object()
+                .is_some_and(|props| props.contains_key("language")),
+            "Skyhook's translation lost its fields"
         );
     }
 

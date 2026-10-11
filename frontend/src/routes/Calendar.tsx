@@ -1,6 +1,7 @@
 /**
- * What airs, across every series in the catalogue: the week, as the listings
- * page of a newspaper, or the month at a glance.
+ * What airs and what comes out, across every series and film in the
+ * catalogue: the week, as the listings page of a newspaper, or the month at a
+ * glance.
  *
  * The week is set like a programme: the day in the display face, the time in
  * the margin, the programme beside it. The month is a grid of days, each with
@@ -11,6 +12,8 @@
  * with a known time falls on the day it is on where they are. One with only a
  * date falls on that date, which is where its network placed it; converting a
  * date with no time would move it a day early for everyone west of Greenwich.
+ * A film comes out on a date too — in cinemas, digitally, on disc — and is
+ * listed on it after the day's episodes, having no hour to be placed at.
  */
 
 import { useQuery } from '@tanstack/react-query'
@@ -26,11 +29,17 @@ import * as fmt from '../lib/format'
 import { useI18n } from '../lib/i18n'
 import { airTime, episodeCode, poster } from '../lib/media'
 import { seasonOf, seasonPath, type SeasonRef } from '../lib/seasons'
-import type { Airing, Calendar as CalendarData, Me, MediaItem } from '../lib/types'
+import type { Airing, Calendar as CalendarData, CalendarEntry, Me, MediaItem, Release } from '../lib/types'
 
 type View = 'week' | 'month'
 
-/** How many of a day's episodes the month grid lists before "+ n more". */
+type Episodic = Extract<CalendarEntry, { kind: 'episode' }>
+type Releasing = Extract<CalendarEntry, { kind: 'release' }>
+
+/** What a day lists: its episodes in the order they air, then the films out on it. */
+type Day = { episodes: Episodic[]; releases: Releasing[] }
+
+/** How many of a day's entries the month grid lists before "+ n more". */
 const SHOWN_A_DAY = 3
 
 /** Midnight at the start of the Monday of `date`'s week, local time. */
@@ -85,9 +94,31 @@ function windowOf(start: Date, end: Date): { from: string; to: string } {
   }
 }
 
-/** The day an episode falls on, as the listing files it. */
-function dayOf(airing: Airing): string | undefined {
-  return airTime(airing.episode)?.day
+/** The day an entry falls on, as the listing files it: a film's is its date. */
+function dayOf(entry: CalendarEntry): string | undefined {
+  return entry.kind === 'release' ? entry.date : airTime(entry.episode)?.day
+}
+
+/** How many entries a day lists, of either kind. */
+function sizeOf(day: Day | undefined): number {
+  return (day?.episodes.length ?? 0) + (day?.releases.length ?? 0)
+}
+
+/** A day's entries, as its counter says them: "3 episodes · 1 release". */
+function counted(day: Day | undefined, count: (episodes: number, releases?: number) => string): string {
+  return count(day?.episodes.length ?? 0, day?.releases.length ?? 0)
+}
+
+/** The episodes and the releases of some days, counted apart. */
+function tally(byDay: Map<string, Day>, days: Date[]): { episodes: number; releases: number } {
+  let episodes = 0
+  let releases = 0
+  for (const day of days) {
+    const listed = byDay.get(localDate(day))
+    episodes += listed?.episodes.length ?? 0
+    releases += listed?.releases.length ?? 0
+  }
+  return { episodes, releases }
 }
 
 /** Every day from `start` up to, not including, `end`. */
@@ -99,13 +130,21 @@ function daysBetween(start: Date, end: Date): Date[] {
   return days
 }
 
-/** The episodes of a listing, filed by the day each airs. */
-function filed(listing: CalendarData | undefined): { works: Map<string, MediaItem>; byDay: Map<string, Airing[]> } {
+/**
+ * The entries of a listing, filed by the day each falls on: the episodes in
+ * the order the server gave them, which is the order they air in, and the
+ * films after them.
+ */
+function filed(listing: CalendarData | undefined): { works: Map<string, MediaItem>; byDay: Map<string, Day> } {
   const works = new Map<string, MediaItem>((listing?.works ?? []).map((w) => [w.id, w]))
-  const byDay = new Map<string, Airing[]>()
-  for (const airing of listing?.episodes ?? []) {
-    const day = dayOf(airing)
-    if (day) byDay.set(day, [...(byDay.get(day) ?? []), airing])
+  const byDay = new Map<string, Day>()
+  for (const entry of listing?.entries ?? []) {
+    const day = dayOf(entry)
+    if (!day) continue
+    const listed = byDay.get(day) ?? { episodes: [], releases: [] }
+    if (entry.kind === 'release') listed.releases.push(entry)
+    else listed.episodes.push(entry)
+    byDay.set(day, listed)
   }
   return { works, byDay }
 }
@@ -158,18 +197,19 @@ function Week() {
     days[0] ?? monday,
     days[6] ?? monday,
   )
-  const total = days.reduce((sum, day) => sum + (byDay.get(localDate(day))?.length ?? 0), 0)
+  const counts = tally(byDay, days)
+  const total = counts.episodes + counts.releases
 
   // The week as it is listed: each day with something on, and the quiet days
   // between them run together — except today, which is always its own.
-  type Slot = { day: Date; key: string; entries: Airing[] }
+  type Slot = { day: Date; key: string; listed: Day | undefined }
   type Group = { kind: 'day'; slot: Slot } | { kind: 'gap'; from: Slot; to: Slot }
   const grouped: Group[] = []
   for (const day of days) {
     const key = localDate(day)
-    const slot: Slot = { day, key, entries: byDay.get(key) ?? [] }
+    const slot: Slot = { day, key, listed: byDay.get(key) }
     const last = grouped.at(-1)
-    if (!slot.entries.length) {
+    if (!sizeOf(slot.listed)) {
       // Today never runs together with the days around it: marked, on its
       // own line, so a reader sees where the week stands.
       if (key !== today && last?.kind === 'gap' && last.to.key !== today) last.to = slot
@@ -195,7 +235,7 @@ function Week() {
           </h1>
           <p className="mt-2 font-mono text-sm text-bone-faint tabular-nums">
             {range}
-            {listing.isSuccess ? ` · ${t.calendar.count(total)}` : ''}
+            {listing.isSuccess ? ` · ${t.calendar.count(counts.episodes, counts.releases)}` : ''}
           </p>
           <Extras season={season} me={me.data} />
         </div>
@@ -225,9 +265,10 @@ function Week() {
         <ol aria-label={t.calendar.days} className="rise mb-8 grid grid-cols-7 gap-1 rounded-panel border border-rule bg-ink-raised p-1">
           {days.map((day) => {
             const key = localDate(day)
-            const n = byDay.get(key)?.length ?? 0
+            const listed = byDay.get(key)
+            const n = sizeOf(listed)
             const isToday = key === today
-            const label = `${fmt.dayHeading(day, locale)} · ${n ? t.calendar.count(n) : t.calendar.nothing}`
+            const label = `${fmt.dayHeading(day, locale)} · ${n ? counted(listed, t.calendar.count) : t.calendar.nothing}`
             const cell = cn(
               'flex min-h-14 flex-col items-center justify-center gap-0.5 rounded-card font-mono text-xs tabular-nums transition-colors duration-150',
               isToday ? 'bg-vermillion/12 text-bone' : n ? 'text-bone' : 'text-bone-faint',
@@ -316,7 +357,7 @@ function Week() {
               )
             }
 
-            const { day, key, entries } = group.slot
+            const { day, key, listed } = group.slot
             const isToday = key === today
             return (
               <section
@@ -333,11 +374,18 @@ function Week() {
                 </div>
 
                 <ul className="divide-y divide-rule">
-                  {entries.map((airing) => (
+                  {listed?.episodes.map((airing) => (
                     <Listing
                       key={`${airing.workId}-${airing.episode.id}`}
                       airing={airing}
                       work={works.get(airing.workId)}
+                    />
+                  ))}
+                  {listed?.releases.map((release) => (
+                    <ReleaseListing
+                      key={`${release.workId}-${release.date}`}
+                      release={release}
+                      work={works.get(release.workId)}
                     />
                   ))}
                 </ul>
@@ -411,16 +459,64 @@ function Listing({ airing, work }: { airing: Airing; work?: MediaItem }) {
   )
 }
 
+/**
+ * A film coming out, in the listing: its poster beside its title as a
+ * series' is, the film's mark in the margin where a time would be — a
+ * release has a day, not an hour — and what comes out, a chip each.
+ */
+function ReleaseListing({ release, work }: { release: Release; work?: MediaItem }) {
+  const { t } = useI18n()
+  const art = work ? poster(work) : undefined
+
+  return (
+    <li className="grid grid-cols-[3.75rem_2.75rem_minmax(0,1fr)] items-center gap-4 py-3">
+      <Glyph name="film" className="text-bone-faint" />
+
+      <div className="aspect-2/3 w-full overflow-hidden rounded-card border border-rule bg-ink-high">
+        {art ? (
+          <Artwork
+            url={art}
+            role="card"
+            alt=""
+            className="size-full object-cover"
+            fallback={<Placeholder title={work?.title ?? ''} kind="movie" className="size-full" />}
+          />
+        ) : (
+          <Placeholder title={work?.title ?? ''} kind="movie" className="size-full" />
+        )}
+      </div>
+
+      <div className="min-w-0">
+        <p className="flex flex-wrap items-baseline gap-x-3">
+          <Link
+            to={`/work/${release.workId}`}
+            className="truncate font-display text-lg leading-snug text-bone transition-colors duration-150 hover:text-vermillion"
+          >
+            {work?.title ?? '—'}
+          </Link>
+          {work?.studio ? <span className="text-xs text-bone-faint">{work.studio}</span> : null}
+        </p>
+        <p className="mt-1 flex flex-wrap items-center gap-1.5">
+          {release.releaseTypes.map((type) => (
+            <Chip key={type}>{t.calendar.releaseType[type]}</Chip>
+          ))}
+        </p>
+      </div>
+    </li>
+  )
+}
+
 /* ── The month ────────────────────────────────────────────────────────────── */
 
 /**
  * The month at a glance: a grid of its days, Monday first, the days before
  * and after it that fill the first and last weeks dimmed but drawn — a month
  * that begins on a Thursday does not hide the Monday before. Each day lists
- * what airs on it, a few at most, and leads to its week for the rest.
+ * what airs on it and then what comes out, a few at most, and leads to its
+ * week for the rest.
  *
  * On a phone a grid of text is unreadable at this width; the days carry a
- * mark an episode each, and a tap opens the week at that day.
+ * mark an entry each, and a tap opens the week at that day.
  */
 function Month() {
   const { t, lang, locale } = useI18n()
@@ -445,7 +541,8 @@ function Month() {
   const now = new Date()
   const thisMonth = monthKey(first) === monthKey(now)
   const inMonth = (day: Date) => day.getMonth() === first.getMonth()
-  const total = days.filter(inMonth).reduce((sum, day) => sum + (byDay.get(localDate(day))?.length ?? 0), 0)
+  const counts = tally(byDay, days.filter(inMonth))
+  const total = counts.episodes + counts.releases
 
   const move = (months: number) => {
     const next = new Date(first.getFullYear(), first.getMonth() + months, 1)
@@ -465,7 +562,7 @@ function Month() {
           <Label>{t.calendar.label}</Label>
           <h1 className="mt-2 font-display text-3xl font-medium text-bone first-letter:uppercase sm:text-4xl">{title}</h1>
           <p className="mt-2 font-mono text-sm text-bone-faint tabular-nums">
-            {listing.isSuccess ? t.calendar.count(total) : ' '}
+            {listing.isSuccess ? t.calendar.count(counts.episodes, counts.releases) : ' '}
           </p>
           <Extras season={season} me={me.data} />
         </div>
@@ -506,7 +603,7 @@ function Month() {
         />
       ) : (
         <>
-          {/* Wide: the grid, each day with what airs on it. */}
+          {/* Wide: the grid, each day with what airs and comes out on it. */}
           <div className="rise hidden overflow-hidden rounded-panel border border-rule bg-ink-raised md:block">
             <div aria-hidden className="grid grid-cols-7 border-b border-rule">
               {weekdays.map((day) => (
@@ -518,7 +615,8 @@ function Month() {
             <ol aria-label={t.calendar.monthDays} className="grid grid-cols-7">
               {days.map((day, index) => {
                 const key = localDate(day)
-                const entries = byDay.get(key) ?? []
+                const listed = byDay.get(key)
+                const entries: CalendarEntry[] = [...(listed?.episodes ?? []), ...(listed?.releases ?? [])]
                 const isToday = key === today
                 const outside = !inMonth(day)
                 return (
@@ -543,13 +641,17 @@ function Month() {
                       )}
                     >
                       <span className="sr-only">
-                        {fmt.dayHeading(day, locale)} · {entries.length ? t.calendar.count(entries.length) : t.calendar.nothing}
+                        {fmt.dayHeading(day, locale)} · {entries.length ? counted(listed, t.calendar.count) : t.calendar.nothing}
                       </span>
                       <span aria-hidden>{day.getDate()}</span>
                     </span>
-                    {entries.slice(0, SHOWN_A_DAY).map((airing) => (
-                      <MonthEntry key={`${airing.workId}-${airing.episode.id}`} airing={airing} work={works.get(airing.workId)} />
-                    ))}
+                    {entries.slice(0, SHOWN_A_DAY).map((entry) =>
+                      entry.kind === 'release' ? (
+                        <MonthRelease key={`${entry.workId}-${entry.date}`} release={entry} work={works.get(entry.workId)} />
+                      ) : (
+                        <MonthEntry key={`${entry.workId}-${entry.episode.id}`} airing={entry} work={works.get(entry.workId)} />
+                      ),
+                    )}
                     {entries.length > SHOWN_A_DAY ? (
                       <Link
                         to={weekAddress(day)}
@@ -565,7 +667,7 @@ function Month() {
             </ol>
           </div>
 
-          {/* Narrow: a mark an episode, and the week a tap away. */}
+          {/* Narrow: a mark an entry, and the week a tap away. */}
           <div className="rise rounded-panel border border-rule bg-ink-raised p-2 md:hidden">
             <div aria-hidden className="grid grid-cols-7">
               {weekdays.map((day) => (
@@ -577,10 +679,11 @@ function Month() {
             <ol aria-label={t.calendar.monthDays} className="grid grid-cols-7 gap-y-1">
               {days.map((day) => {
                 const key = localDate(day)
-                const n = byDay.get(key)?.length ?? 0
+                const listed = byDay.get(key)
+                const n = sizeOf(listed)
                 const isToday = key === today
                 const outside = !inMonth(day)
-                const label = `${fmt.dayHeading(day, locale)} · ${n ? t.calendar.count(n) : t.calendar.nothing}`
+                const label = `${fmt.dayHeading(day, locale)} · ${n ? counted(listed, t.calendar.count) : t.calendar.nothing}`
                 const cell = cn(
                   'flex min-h-11 flex-1 flex-col items-center justify-center gap-1 rounded-card font-mono text-xs tabular-nums transition-colors duration-150',
                   isToday ? 'bg-vermillion/12 text-bone' : n && !outside ? 'text-bone' : 'text-bone-faint',
@@ -653,6 +756,36 @@ function MonthEntry({ airing, work }: { airing: Airing; work?: MediaItem }) {
       <span className="truncate">
         <span className="font-mono text-[0.625rem] text-bone-faint tabular-nums">{episodeCode(episode)}</span>{' '}
         <span className="text-bone">{work?.title ?? '—'}</span>
+      </span>
+    </Link>
+  )
+}
+
+/**
+ * A film coming out, in a day's cell: a sliver of its poster, the film's mark
+ * where an episode's code is, its title; what comes out is said in full to
+ * whoever hovers or listens.
+ */
+function MonthRelease({ release, work }: { release: Release; work?: MediaItem }) {
+  const { t } = useI18n()
+  const art = work ? poster(work) : undefined
+  const kinds = release.releaseTypes.map((type) => t.calendar.releaseType[type]).join(' · ')
+
+  return (
+    <Link
+      to={`/work/${release.workId}`}
+      title={`${work?.title ?? ''} · ${kinds}`}
+      className="flex min-w-0 items-center gap-1.5 rounded-card text-xs leading-tight text-bone-dim transition-colors duration-150 hover:text-bone"
+    >
+      <span className="aspect-2/3 w-4 shrink-0 overflow-hidden rounded-xs border border-rule bg-ink-high">
+        {art ? (
+          <Artwork url={art} role="thumb" alt="" className="size-full object-cover" fallback={<span className="block size-full" />} />
+        ) : null}
+      </span>
+      <Glyph name="film" className="size-3 text-bone-faint" />
+      <span className="truncate">
+        <span className="text-bone">{work?.title ?? '—'}</span>
+        <span className="sr-only"> · {kinds}</span>
       </span>
     </Link>
   )

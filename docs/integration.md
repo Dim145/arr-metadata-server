@@ -12,6 +12,11 @@ metadata source. The URLs are compiled into the applications:
 | Yamtrack, Jellyfin's TheTVDB plugin, Kodi's scraper | `api4.thetvdb.com` | the TheTVDB client each bundles |
 | Yamtrack's imports, the anime trackers | `graphql.anilist.co` | the AniList client each bundles |
 
+Sonarr v4 asks `skyhook.sonarr.tv` under `/v1/`, Sonarr v5 under `/v2/` — the
+second edition of the Skyhook API, which carries the languages a series is
+named in and the orders its episodes come in. Both are answered by the same
+surface, and nothing below differs between the two.
+
 So substituting this server is done at the network layer: resolve those
 hostnames to it, and make the client trust the certificate it presents. That is
 the whole technique. Everything below is detail.
@@ -472,6 +477,14 @@ Every client then trusts the old authority again, as it did before step 3.
 Episodes nobody has named yet reach Sonarr as `TBA`, as Skyhook sends them,
 rather than as an empty title Sonarr lists as a row with nothing to click;
 Sonarr rewrites the titles it holds at its next refresh of the series.
+
+A Sonarr v5 asks for a series in the order a person chose for it — the aired
+one, the DVDs', straight through — and is answered in it when the catalogue
+keeps that order for the series (the orders `/api/v1/items/{id}/orders` lists,
+read from TheTVDB when the series is fetched); in the aired order otherwise,
+as Skyhook answers, so that a choice the series has no order for fails
+nothing. It asks in the language it holds for the series, too: see
+*Languages* in the README for what it is answered in.
 
 ---
 

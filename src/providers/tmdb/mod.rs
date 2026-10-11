@@ -413,11 +413,13 @@ impl TmdbClient {
 
     async fn fetch_movie(&self, id: i64, language: &str) -> Result<Option<Value>> {
         let url = format!("{}/movie/{id}", self.base);
+        // The first page of its recommendations rides along in the same call,
+        // so the films Radarr is told go with this one are kept with it.
         let params = [
             ("language", language.to_string()),
             (
                 "append_to_response",
-                "external_ids,credits,release_dates,alternative_titles,keywords,videos,images,translations"
+                "external_ids,credits,release_dates,alternative_titles,keywords,videos,images,translations,recommendations"
                     .to_string(),
             ),
             ("include_image_language", format!("{},null", crate::providers::lang::base_language(language))),
@@ -450,16 +452,6 @@ impl TmdbClient {
 
         let parsed: models::SearchResponse<models::MovieSummary> = Self::typed(&value, "search")?;
         Ok(parsed.results.into_iter().take(limit).collect())
-    }
-
-    pub async fn collection(&self, id: i64) -> Result<Option<models::Collection>> {
-        let url = format!("{}/collection/{id}", self.base);
-        let params = [("language", self.language())];
-
-        match self.fetch(&url, &params).await? {
-            Some(value) => Ok(Some(Self::typed(&value, "collection")?)),
-            None => Ok(None),
-        }
     }
 
     // ─── lists ───────────────────────────────────────────────────────────────

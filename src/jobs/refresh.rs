@@ -625,4 +625,9 @@ async fn mark_failure(state: &AppState, id: &str, item: Option<&MediaItem>, erro
     }
 
     state.caches.touched(id).await;
+
+    // Told when the work starts failing, not at each try while it goes on.
+    if item.is_none_or(|item| item.refresh_error.is_none()) {
+        crate::service::webhook::refresh_failed(state, id, item, &error);
+    }
 }

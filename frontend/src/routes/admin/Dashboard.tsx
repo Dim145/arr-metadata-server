@@ -16,6 +16,7 @@ import {
   EmptyState,
   Glyph,
   Label,
+  Lamp,
   Panel,
   PanelHead,
   Skeleton,
@@ -26,7 +27,16 @@ import { cn } from '../../lib/cn'
 import * as fmt from '../../lib/format'
 import { useI18n } from '../../lib/i18n'
 import { policyLabel, providerName } from '../../lib/labels'
-import type { ItemPage, JobsResponse, Settings, Stats, Health, Locks, LocksImported } from '../../lib/types'
+import type {
+  ItemPage,
+  JobsResponse,
+  Settings,
+  Stats,
+  Health,
+  Locks,
+  LocksImported,
+  UpdateAvailable,
+} from '../../lib/types'
 import { RunStatus } from './Jobs'
 
 export function Dashboard() {
@@ -501,8 +511,10 @@ function HealthPanel() {
             {t.admin.overview.healthFailed}
           </p>
         ) : (
-          // The last runs are the panel above's, with its way to all of them;
-          // said twice on one page they were twice as long to read.
+          <>
+          {health.data.updateAvailable ? <UpdateLine update={health.data.updateAvailable} /> : null}
+          {/* The last runs are the panel above's, with its way to all of them;
+              said twice on one page they were twice as long to read. */}
           <dl className="mt-4 grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
             {(
               [
@@ -523,8 +535,39 @@ function HealthPanel() {
               </div>
             ))}
           </dl>
+          </>
         )}
       </div>
     </Panel>
+  )
+}
+
+/**
+ * A newer release, said in one line at the top of the health: the version,
+ * when it came out, and the way to what changed. Only while the check is on
+ * and found one — the server sends nothing otherwise.
+ */
+function UpdateLine({ update }: { update: UpdateAvailable }) {
+  const { t, locale } = useI18n()
+  const published = update.publishedAt ? fmt.relative(update.publishedAt, locale) : undefined
+
+  return (
+    <p className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-card border border-brass-deep bg-brass/[0.06] px-4 py-1.5 text-sm">
+      <Lamp tone="brass">{t.admin.overview.updateOut(update.version)}</Lamp>
+      {published && update.publishedAt ? (
+        <span className="text-xs text-bone-faint" title={fmt.dateTime(update.publishedAt, locale)}>
+          {t.admin.overview.updatePublished(published)}
+        </span>
+      ) : null}
+      <a
+        href={update.url}
+        target="_blank"
+        rel="noreferrer"
+        className="ml-auto inline-flex min-h-11 items-center gap-1.5 text-vermillion transition-colors duration-150 hover:text-vermillion-bright"
+      >
+        {t.admin.overview.updateRead}
+        <Glyph name="external" className="size-3.5" />
+      </a>
+    </p>
   )
 }

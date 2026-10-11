@@ -13,7 +13,7 @@ import { useI18n } from '../lib/i18n'
 import { fallBackToOriginal, hasSources, headlineRating, poster, sized, type ImageRole } from '../lib/media'
 import { plainClick, useTransitionNavigate } from '../lib/transitions'
 import type { MediaItem, MediaKind } from '../lib/types'
-import { Chip, Glyph } from './ui'
+import { Chip, Glyph, Shelf } from './ui'
 
 /* ── Score ────────────────────────────────────────────────────────────────── */
 
@@ -318,25 +318,27 @@ export function PosterCard({
 /**
  * A row of posters: a shelf that scrolls sideways on a phone, the grid
  * anywhere wider. On the front page two columns of twelve were six screens of
- * one row's worth, three rows deep; a shelf is a row, and the card clipped at
- * the edge says there is more.
+ * one row's worth, three rows deep; a shelf is a row, and it says where it
+ * goes on — the season shelf's fades and arrows — where a clipped card alone
+ * did not when the cut fell between two. A grid has no arrows: it fits.
  */
 export function PosterShelf({ children, label }: { children: React.ReactNode; label?: string }) {
   return (
-    <ul
-      aria-label={label || undefined}
-      className={cn(
-        // Room above and to the left for a card's focus ring, which the
-        // scroller would otherwise cut off.
-        'stagger -mt-2 -mr-4 -ml-2 flex snap-x snap-mandatory scroll-pl-2 gap-4 overflow-x-auto pt-2 pr-4 pb-2 pl-2',
-        'sm:m-0 sm:grid sm:grid-cols-3 sm:gap-x-4 sm:gap-y-7 sm:overflow-visible sm:p-0',
+    <Shelf
+      label={label}
+      // Room above and to the left for a card's focus ring, which the
+      // scroller would otherwise cut off.
+      className="-mt-2 -mr-4 -ml-2 sm:m-0"
+      listClassName={cn(
+        'stagger gap-4 pt-2 pr-4 pb-2 pl-2',
+        'sm:grid sm:grid-cols-3 sm:gap-x-4 sm:gap-y-7 sm:overflow-visible sm:p-0',
         'md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6',
       )}
     >
       {Children.map(children, (child) => (
         <li className="w-[42%] shrink-0 snap-start sm:w-auto">{child}</li>
       ))}
-    </ul>
+    </Shelf>
   )
 }
 

@@ -21,7 +21,8 @@ import { useMe, useTitle, useWork } from '../lib/hooks'
 import { useI18n } from '../lib/i18n'
 import { providerName } from '../lib/labels'
 import { episodeLinks } from '../lib/links'
-import { adjacentEpisodes, airTime, airValue, airsWhen, episodeCode, hasAired, seasonName } from '../lib/media'
+import { adjacentEpisodes, airTime, airValue, episodeCode, hasAired, seasonName } from '../lib/media'
+import { airsWhenOn, releaseDay, releasedNotAired } from '../lib/platforms'
 import type { Episode as EpisodeData, MediaItem } from '../lib/types'
 import { NotFound, Unavailable } from './NotFound'
 
@@ -59,12 +60,17 @@ function Card({ item, episode }: { item: MediaItem; episode: EpisodeData }) {
   // episode is on the next morning in Paris, and dating it the evening before
   // beside a Paris clock time put it on the wrong day.
   const time = airTime(episode)
-  const shown = airValue(time)
+  // A platform's midnight is the day it put the episode up, the same for
+  // every reader, and no clock is shown for it.
+  const released = time !== undefined && releasedNotAired(item.network, time)
+  const shown = time && released ? releaseDay(time) : airValue(time)
   const upcoming = time !== undefined && !hasAired(time)
-  const local = time?.moment ? fmt.clock(time.moment.toISOString(), locale) : undefined
-  const utc = time?.moment
-    ? new Intl.DateTimeFormat(locale, { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' }).format(time.moment)
-    : undefined
+  const local = !released && time?.moment ? fmt.clock(time.moment.toISOString(), locale) : undefined
+  const utc =
+    !released && time?.moment
+      ? new Intl.DateTimeFormat(locale, { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' }).format(time.moment)
+      : undefined
+  const day = fmt.weekdayDate(shown, locale)
   const { before, after } = adjacentEpisodes(item, episode)
   const title = episode.title || t.episode.untitled(episode.episodeNumber)
   const links = episodeLinks(item, episode)
@@ -123,7 +129,7 @@ function Card({ item, episode }: { item: MediaItem; episode: EpisodeData }) {
             {upcoming && time ? (
               <Chip tone="provider">
                 <Glyph name="clock" className="size-3" />
-                {airsWhen(time, locale)}
+                {airsWhenOn(item.network, time, locale)}
               </Chip>
             ) : null}
             {episode.isManual ? (
@@ -135,7 +141,7 @@ function Card({ item, episode }: { item: MediaItem; episode: EpisodeData }) {
           </div>
 
           <p className="mt-4 text-sm text-bone-dim">
-            {fmt.weekdayDate(shown, locale) ?? t.episode.noDate}
+            {day ? (released ? t.episode.availableOn(day) : day) : t.episode.noDate}
             {local ? (
               <>
                 {' · '}
@@ -197,7 +203,9 @@ function Card({ item, episode }: { item: MediaItem; episode: EpisodeData }) {
           <Panel>
             <PanelHead title={t.work.details} />
             <dl className="divide-y divide-rule">
-              <Field label={t.episode.aired}>{fmt.longDate(shown, locale) ?? '—'}</Field>
+              <Field label={released ? t.episode.available : t.episode.aired}>
+                {fmt.longDate(shown, locale) ?? '—'}
+              </Field>
               {local ? (
                 <Field label={t.episode.time}>
                   <span className="tabular-nums">

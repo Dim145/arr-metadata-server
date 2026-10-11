@@ -19,6 +19,7 @@ import {
   Chip,
   Field,
   Glyph,
+  Input,
   Label,
   OnThisPage,
   Panel,
@@ -29,8 +30,15 @@ import {
 import { type GroupId, ServerSettings, groupOf, useRegistry } from '../../components/ScopeSettings'
 import { ApiError, api, query } from '../../lib/api'
 import { cn } from '../../lib/cn'
-import { useI18n } from '../../lib/i18n'
-import type { ExportStarted, JobsResponse, Settings as Config } from '../../lib/types'
+import { useI18n, type Dict } from '../../lib/i18n'
+import type {
+  EffectiveSetting,
+  ExportStarted,
+  JobsResponse,
+  Settings as Config,
+  WebhookEvents,
+  WebhookTest,
+} from '../../lib/types'
 import { PolicyChip } from './Dashboard'
 
 export function Settings() {
@@ -97,6 +105,7 @@ export function Settings() {
         label={t.admin.inPage}
         entries={[
           ...groups.map((group) => ({ id: `settings-${group}`, label: t.settings.groups[group] })),
+          { id: 'settings-webhooks', label: t.settings.groups.webhooks },
           { id: 'settings-runtime', label: t.admin.config.runtime },
           { id: 'settings-policy', label: t.admin.config.policy },
           { id: 'settings-nfo', label: t.admin.config.export },
@@ -107,6 +116,8 @@ export function Settings() {
       />
 
       <ServerSettings delay={40} />
+
+      <Webhooks delay={240} />
 
       <div className="mt-6 grid gap-6 lg:grid-cols-2">
         <Panel id="settings-runtime" className="rise" style={{ animationDelay: '260ms' }}>
@@ -368,6 +379,343 @@ function ClearCache() {
         {clear.isSuccess ? t.admin.config.cacheCleared : t.admin.config.cacheClear}
       </Button>
     </div>
+  )
+}
+
+/* ── The webhook ──────────────────────────────────────────────────────────── */
+
+/** The server's own settings, as the rows above read them: one query, shared. */
+const SERVER_VALUES = ['settings', 'scope', 'server', '-'] as const
+
+/** `*`: every event, those the server grows later included. */
+const EVERY = '*'
+
+/** The names a stored list holds, as written: trimmed, the empty ones dropped. */
+function namesIn(value: string): string[] {
+  return value
+    .split(',')
+    .map((name) => name.trim())
+    .filter(Boolean)
+}
+
+/**
+ * One server setting, written as it changes; the rows above refetch with it.
+ * What the write answers — the server's settings as they stand after it — is
+ * taken at once: a box ticked before the refetch lands would otherwise be
+ * worked out from the list as it was, and undo the one ticked just before.
+ * The boxes wait while a write is under way, so no two answers race.
+ */
+function useServerSetting(key: string) {
+  const queryClient = useQueryClient()
+  const save = useMutation({
+    mutationFn: (value: string) => api.put<EffectiveSetting[]>('/settings/server/-', { key, value }),
+    onSuccess: (written) => {
+      queryClient.setQueryData([...SERVER_VALUES], written)
+      void queryClient.invalidateQueries({ queryKey: [...SERVER_VALUES] })
+    },
+  })
+  // The server answers `{key} {why}`; the key is the field's own name here.
+  const message = save.error instanceof ApiError ? save.error.message : save.error?.message
+  const error = message?.startsWith(`${key} `) ? message.slice(key.length + 1) : message
+  return { save, error }
+}
+
+/**
+ * Where what happens is posted, and which of it.
+ *
+ * The events are ticked rather than typed: the server names every one it can
+ * tell of — the trail's actions and the facts nobody did — and the setting
+ * keeps them as it always has, as names separated by commas. A name it holds
+ * that this server does not know is kept as it is, and said so. The test
+ * goes to the address the server holds, so it waits for the field to be
+ * saved.
+ */
+function Webhooks({ delay }: { delay: number }) {
+  const { t } = useI18n()
+  const w = t.admin.config.webhooks
+
+  const values = useQuery({
+    queryKey: [...SERVER_VALUES],
+    queryFn: () => api.get<EffectiveSetting[]>('/settings/server/-'),
+  })
+  const known = useQuery({
+    queryKey: ['webhooks', 'events'],
+    queryFn: () => api.get<WebhookEvents>('/admin/webhooks/events'),
+    // What the server can tell of only changes when the binary does.
+    staleTime: 60 * 60_000,
+  })
+
+  const value = (key: string) => values.data?.find((setting) => setting.key === key)?.value
+
+  return (
+    <Panel
+      id="settings-webhooks"
+      label={t.settings.groups.webhooks}
+      className="rise mt-6"
+      style={{ animationDelay: `${delay}ms` }}
+    >
+      <PanelHead title={t.settings.groups.webhooks} />
+      <p className="border-b border-rule px-5 py-4 text-sm leading-relaxed text-bone-dim">{w.lead}</p>
+      {values.isPending || known.isPending ? (
+        <div className="space-y-3 p-5">
+          <Skeleton className="h-12 w-full" />
+          <Skeleton className="h-40 w-full" />
+        </div>
+      ) : values.isError || known.isError ? (
+        <p role="alert" className="flex items-center gap-2 px-5 py-4 text-sm text-vermillion">
+          <Glyph name="alert" className="size-4" />
+          {values.isError ? t.settings.loadFailed : w.loadFailed}
+        </p>
+      ) : (
+        <>
+          <WebhookAddress saved={value('webhooks.url') ?? ''} />
+          <WebhookEventList
+            value={value('webhooks.events') ?? known.data.defaults.join(',')}
+            known={known.data}
+          />
+        </>
+      )}
+    </Panel>
+  )
+}
+
+/** What a test came to, in a sentence, and whether it went well. */
+function tested(result: WebhookTest, w: Dict['admin']['config']['webhooks']) {
+  if (result.refused === 'not_web') return { fine: false, text: w.notWeb }
+  if (result.refused === 'internal') return { fine: false, text: w.internal }
+  if (result.status !== undefined) {
+    return result.delivered
+      ? { fine: true, text: w.delivered(result.status, result.millis) }
+      : { fine: false, text: w.refused(result.status, result.millis) }
+  }
+  return { fine: false, text: w.unreached(result.millis) }
+}
+
+/** The address, saved as the field is left, and the test of it. */
+function WebhookAddress({ saved }: { saved: string }) {
+  const { t } = useI18n()
+  const w = t.admin.config.webhooks
+  const key = 'webhooks.url'
+  const id = 'setting-server-webhooks-url'
+  const names: Record<string, string | undefined> = t.settings.names
+  const hints: Record<string, string | undefined> = t.settings.hints
+
+  const [draft, setDraft] = useState(saved)
+  // The stored value moves under the field when a write is refused, or when
+  // another tab saved one.
+  useEffect(() => setDraft(saved), [saved])
+
+  const { save, error } = useServerSetting(key)
+  const test = useMutation({ mutationFn: () => api.post<WebhookTest>('/admin/webhooks/test') })
+
+  const unsaved = draft.trim() !== saved
+  const outcome = test.data ? tested(test.data, w) : undefined
+
+  return (
+    <div className="border-b border-rule px-5 py-4">
+      <label htmlFor={id} className="block text-sm font-medium text-bone">
+        {names[key] ?? key}
+      </label>
+      <p className="mt-0.5 font-mono text-[0.6875rem] text-bone-faint">{key}</p>
+      {hints[key] ? <p className="mt-1.5 max-w-prose text-xs leading-relaxed text-bone-faint">{hints[key]}</p> : null}
+
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <Input
+          id={id}
+          type="url"
+          inputMode="url"
+          autoComplete="off"
+          spellCheck={false}
+          className="min-w-0 flex-1 basis-64"
+          value={draft}
+          disabled={save.isPending}
+          onChange={(event) => {
+            setDraft(event.target.value)
+            if (save.isSuccess || save.isError) save.reset()
+            if (test.data || test.isError) test.reset()
+          }}
+          onBlur={() => {
+            if (draft.trim() !== saved) save.mutate(draft.trim())
+          }}
+          // Enter is how a form is submitted, and this field is not in one.
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') event.currentTarget.blur()
+          }}
+        />
+        <Button
+          onClick={() => test.mutate()}
+          disabled={!saved || unsaved || save.isPending || test.isPending}
+          aria-describedby={`${id}-test`}
+        >
+          {test.isPending ? <Spinner className="size-4" /> : <Glyph name="share" className="size-4" />}
+          {test.isPending ? w.testing : w.test}
+        </Button>
+        {save.isPending ? <Spinner className="size-3.5 text-bone-faint" /> : null}
+        {save.isSuccess ? (
+          <span className="flex items-center gap-1 text-xs text-moss">
+            <Glyph name="check" className="size-3.5" />
+            {t.settings.saved}
+          </span>
+        ) : null}
+      </div>
+
+      <p id={`${id}-test`} className="mt-2 max-w-prose text-xs leading-relaxed text-bone-faint">
+        {saved && unsaved ? w.saveFirst : w.testHint}
+      </p>
+      {/* Always there, so what appears in it is read out. */}
+      <p role="status" className={cn('mt-1 text-xs', outcome?.fine ? 'text-moss' : 'text-vermillion')}>
+        {outcome ? outcome.text : ''}
+        {test.data?.error ? (
+          <span className="mt-0.5 block font-mono break-words text-bone-faint">{test.data.error}</span>
+        ) : null}
+      </p>
+      {test.isError ? (
+        <p role="alert" className="mt-1 text-xs text-vermillion">
+          {test.error.message}
+        </p>
+      ) : null}
+      {error ? (
+        <p role="alert" className="mt-2 flex items-start gap-1.5 text-xs text-vermillion">
+          <Glyph name="alert" className="mt-0.5 size-3.5 shrink-0" />
+          {error}
+        </p>
+      ) : null}
+    </div>
+  )
+}
+
+/**
+ * The events, ticked: `*` above the rest, the facts, then the trail's actions
+ * folded away — forty-odd of them. A box changed is saved at once, as a switch
+ * is; while a write is under way the boxes wait, so two changes never race.
+ */
+function WebhookEventList({ value, known }: { value: string; known: WebhookEvents }) {
+  const { t } = useI18n()
+  const w = t.admin.config.webhooks
+  const key = 'webhooks.events'
+  const says: Record<string, string | undefined> = t.admin.trail.says
+  const hints: Record<string, string | undefined> = t.settings.hints
+
+  const { save, error } = useServerSetting(key)
+
+  const names = namesIn(value)
+  const offered = [...known.facts, ...known.actions]
+  const unknown = names.filter((name) => name !== EVERY && !offered.includes(name))
+  // What was just ticked is shown at once: the boxes follow the stored
+  // value, which only comes back with the write, and a tick that waited for
+  // it read as a tick that did not take.
+  const [pending, setPending] = useState<Set<string> | null>(null)
+  const ticked = pending ?? new Set(names)
+  const every = ticked.has(EVERY)
+  const actionsTicked = known.actions.filter((name) => every || ticked.has(name)).length
+
+  // In the order they are offered; a name this server does not know is kept
+  // where it was, at the end.
+  const settled = { onSettled: () => setPending(null) }
+  const write = (next: Set<string>) => {
+    setPending(next)
+    save.mutate([...offered.filter((name) => next.has(name)), ...unknown].join(','), settled)
+  }
+  const toggle = (name: string, on: boolean) => {
+    const next = new Set(ticked)
+    if (on) next.add(name)
+    else next.delete(name)
+    write(next)
+  }
+  // Every event off is every one named: what was posted goes on being posted,
+  // and each can then be unticked.
+  const toggleEvery = (on: boolean) => {
+    if (!on) {
+      write(new Set(offered))
+      return
+    }
+    setPending(new Set([EVERY]))
+    save.mutate(EVERY, settled)
+  }
+
+  const box = (name: string, label: string, hint?: string) => (
+    <li key={name}>
+      <label className="flex cursor-pointer items-start gap-3 py-1.5 has-[:disabled]:cursor-not-allowed">
+        <input
+          type="checkbox"
+          className="mt-1 size-4 shrink-0 cursor-pointer accent-vermillion disabled:cursor-not-allowed disabled:opacity-60"
+          checked={every || ticked.has(name)}
+          disabled={every || save.isPending}
+          onChange={(event) => toggle(name, event.target.checked)}
+        />
+        <span className="min-w-0">
+          <span className="block text-sm text-bone">{label}</span>
+          <span className="block font-mono text-[0.6875rem] text-bone-faint">{name}</span>
+          {hint ? <span className="mt-0.5 block text-xs leading-relaxed text-bone-faint">{hint}</span> : null}
+        </span>
+      </label>
+    </li>
+  )
+
+  return (
+    <fieldset className="min-w-0 px-5 py-4">
+      <legend className="float-left w-full text-sm font-medium text-bone">{w.events}</legend>
+      <div className="clear-both">
+        <p className="mt-0.5 font-mono text-[0.6875rem] text-bone-faint">{key}</p>
+        {hints[key] ? <p className="mt-1.5 max-w-prose text-xs leading-relaxed text-bone-faint">{hints[key]}</p> : null}
+
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <label className="flex cursor-pointer items-center gap-3 has-[:disabled]:cursor-not-allowed">
+            <input
+              type="checkbox"
+              className="size-4 shrink-0 cursor-pointer accent-vermillion disabled:cursor-not-allowed"
+              checked={every}
+              disabled={save.isPending}
+              onChange={(event) => toggleEvery(event.target.checked)}
+            />
+            <span className="text-sm text-bone">{w.every}</span>
+            <span className="font-mono text-[0.6875rem] text-bone-faint">{EVERY}</span>
+          </label>
+          {save.isPending ? <Spinner className="size-3.5 text-bone-faint" /> : null}
+          {save.isSuccess ? (
+            <span className="flex items-center gap-1 text-xs text-moss">
+              <Glyph name="check" className="size-3.5" />
+              {t.settings.saved}
+            </span>
+          ) : null}
+        </div>
+
+        <fieldset className="mt-4 min-w-0">
+          <legend className="label">{w.facts}</legend>
+          <ul className="mt-1.5">
+            {known.facts.map((name) => box(name, w.fact[name] ?? name, w.factHint[name]))}
+          </ul>
+        </fieldset>
+
+        <details className="group mt-4">
+          <summary className="label flex min-h-11 cursor-pointer list-none items-center gap-2 transition-colors duration-150 hover:text-bone [&::-webkit-details-marker]:hidden">
+            <Glyph name="chevronRight" className="size-3.5 transition-transform duration-150 group-open:rotate-90" />
+            {w.actions}
+            <span className="font-mono tabular-nums normal-case">
+              {actionsTicked}/{known.actions.length}
+            </span>
+          </summary>
+          <fieldset className="min-w-0">
+            <legend className="sr-only">{w.actions}</legend>
+            <ul className="mt-1 grid gap-x-6 sm:grid-cols-2">
+              {known.actions.map((name) => box(name, says[name] ?? name))}
+            </ul>
+          </fieldset>
+        </details>
+
+        {unknown.length ? (
+          <p className="mt-3 max-w-prose text-xs leading-relaxed text-bone-faint">
+            {w.unknown(unknown.join(', '))}
+          </p>
+        ) : null}
+        {error ? (
+          <p role="alert" className="mt-2 flex items-start gap-1.5 text-xs text-vermillion">
+            <Glyph name="alert" className="mt-0.5 size-3.5 shrink-0" />
+            {error}
+          </p>
+        ) : null}
+      </div>
+    </fieldset>
   )
 }
 

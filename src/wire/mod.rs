@@ -7,6 +7,7 @@
 
 pub mod radarr;
 pub mod sonarr;
+pub mod sonarr_v2;
 
 use serde::Deserialize;
 use serde_json::Value;

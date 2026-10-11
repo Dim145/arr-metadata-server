@@ -81,6 +81,8 @@ const PER_CLIENT: &[Scope] = &[Scope::Client, Scope::Peer];
 /// an address to post to is one, a language is not.
 const OPTIONAL: &[&str] = &[
     "webhooks.url",
+    // No event at all: the address kept, and nothing posted to it.
+    "webhooks.events",
     "oidc.issuer",
     "oidc.clientId",
     "oidc.buttonLabel",
@@ -88,6 +90,11 @@ const OPTIONAL: &[&str] = &[
     "oidc.adminValues",
     "oidc.editorValues",
 ];
+
+/// The text settings that may run longer than a line, and how long: every
+/// event a webhook can be told of, named one by one, is several hundred
+/// characters.
+const LONG: &[(&str, usize)] = &[("webhooks.events", 2000)];
 
 pub const REGISTRY: &[Definition] = &[
     // ── Answering ────────────────────────────────────────────────────────────
@@ -159,6 +166,13 @@ pub const REGISTRY: &[Definition] = &[
     },
     Definition {
         key: "mal.enabled",
+        kind: Kind::Bool,
+        scopes: SERVER_ONLY,
+    },
+    Definition {
+        // On by default, unlike the switches around it: the next way into
+        // MyAnimeList, when the one asked does not answer.
+        key: "mal.fallback",
         kind: Kind::Bool,
         scopes: SERVER_ONLY,
     },
@@ -399,10 +413,18 @@ pub const REGISTRY: &[Definition] = &[
         scopes: SERVER_ONLY,
     },
     Definition {
-        // Which actions of the audit trail are posted: their names, separated
-        // by commas, or `*` for every one.
+        // Which events are posted — the actions of the audit trail and the
+        // facts nobody did — by their names, separated by commas, or `*` for
+        // every one.
         key: "webhooks.events",
         kind: Kind::Text,
+        scopes: SERVER_ONLY,
+    },
+    // ── Updates ──────────────────────────────────────────────────────────────
+    Definition {
+        // GitHub asked daily for the latest release; off until turned on.
+        key: "updates.check",
+        kind: Kind::Bool,
         scopes: SERVER_ONLY,
     },
     // ── Adult titles ─────────────────────────────────────────────────────────
@@ -449,9 +471,13 @@ pub fn validate(def: &Definition, value: &str) -> Result<(), String> {
             Err(_) => Err(format!("{value:?} is not a whole number")),
         },
         Kind::Text => {
+            let most = LONG
+                .iter()
+                .find(|(key, _)| *key == def.key)
+                .map_or(200, |(_, most)| *most);
             if value.trim().is_empty() && !OPTIONAL.contains(&def.key) {
                 Err("must not be empty".to_string())
-            } else if value.len() > 200 {
+            } else if value.len() > most {
                 Err("is too long".to_string())
             } else {
                 Ok(())
@@ -523,6 +549,32 @@ mod tests {
         assert!(validate(def("webhooks.url"), "").is_ok());
         assert!(validate(def("webhooks.url"), "https://example.com/hook").is_ok());
         assert!(validate(def("tmdb.language"), "").is_err());
+    }
+
+    #[test]
+    fn the_webhook_s_events_take_every_name_and_none() {
+        let every: Vec<&str> = crate::db::repo::audit::Action::ALL
+            .iter()
+            .map(|a| a.as_str())
+            .chain(
+                crate::service::webhook::Fact::ALL
+                    .iter()
+                    .map(|f| f.as_str()),
+            )
+            .collect();
+        assert!(validate(def("webhooks.events"), &every.join(",")).is_ok());
+        // None at all: the address kept, nothing posted.
+        assert!(validate(def("webhooks.events"), "").is_ok());
+        assert!(validate(def("webhooks.events"), &"x".repeat(2001)).is_err());
+        // Any other text keeps to a line.
+        assert!(validate(def("tmdb.language"), &"x".repeat(201)).is_err());
+    }
+
+    #[test]
+    fn the_update_check_is_the_server_s_and_a_flag() {
+        assert_eq!(def("updates.check").scopes, SERVER_ONLY);
+        assert!(validate(def("updates.check"), "false").is_ok());
+        assert!(validate(def("updates.check"), "daily").is_err());
     }
 
     #[test]

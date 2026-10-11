@@ -23,9 +23,10 @@ pub const EXPORT_NFO: &str = repo::job::kinds::EXPORT_NFO;
 pub const MEDIA_STORE: &str = repo::job::kinds::MEDIA_STORE;
 pub const MEDIA_SWEEP: &str = repo::job::kinds::MEDIA_SWEEP;
 pub const TLS_RENEW: &str = repo::job::kinds::TLS_RENEW;
+pub const UPDATE_CHECK: &str = repo::job::kinds::UPDATE_CHECK;
 
 /// Every task, in the order the page shows them.
-pub const ALL: [&str; 8] = [
+pub const ALL: [&str; 9] = [
     REFRESH_SWEEP,
     REFRESH_ALL,
     IMPORT_ANIME,
@@ -34,6 +35,7 @@ pub const ALL: [&str; 8] = [
     MEDIA_STORE,
     MEDIA_SWEEP,
     TLS_RENEW,
+    UPDATE_CHECK,
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
@@ -94,6 +96,7 @@ fn lock_busy(id: &str) -> bool {
         MEDIA_STORE => crate::media::worker::is_storing(),
         MEDIA_SWEEP => crate::media::worker::is_sweeping(),
         TLS_RENEW => crate::tls::is_renewing(),
+        UPDATE_CHECK => crate::jobs::update_check::is_checking(),
         _ => false,
     }
 }
@@ -203,6 +206,14 @@ async fn state_of(state: &AppState, id: &'static str) -> anyhow::Result<TaskStat
                 (!on).then_some("no_authority"),
             )
         }
+        UPDATE_CHECK => {
+            let on = crate::jobs::update_check::on(state);
+            (
+                if on { Mode::Scheduled } else { Mode::Off },
+                on.then(|| crate::jobs::update_check::EVERY.as_secs() as i64),
+                (!on).then_some("updates_off"),
+            )
+        }
         _ => (Mode::Off, None, None),
     };
 
@@ -238,6 +249,9 @@ async fn state_of(state: &AppState, id: &'static str) -> anyhow::Result<TaskStat
                         (a, b) => a.or(b),
                     }
                 }
+                // Its own schedule says: a minute after the start, then a
+                // day after the last check, whoever asked for it.
+                UPDATE_CHECK => crate::jobs::update_check::next_at(),
                 _ => last
                     .as_ref()
                     .and_then(|job| job.started_at.as_deref())

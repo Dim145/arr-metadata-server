@@ -27,7 +27,6 @@ import {
   adjacentSeasons,
   airTime,
   airValue,
-  airsWhen,
   episodeCode,
   episodesOf,
   hasAired,
@@ -35,6 +34,7 @@ import {
   seasonName,
   seasonNumbers,
 } from '../lib/media'
+import { airsWhenOn, releaseDay, releasedNotAired } from '../lib/platforms'
 import type { Episode, EpisodeOrder, MediaItem, PlacedEpisode } from '../lib/types'
 import { NotFound, Unavailable } from './NotFound'
 
@@ -257,9 +257,11 @@ function SeasonSheet({
           <SeasonStep item={item} number={after} direction="after" suffix={suffix} />
         </div>
         {/* One row, scrolled where it is wider than the screen: wrapped, a
-            phone put the specials alone on a second line. */}
+            phone put the specials alone on a second line. Centred only while
+            it fits: a centred row wider than its room spills off both ends,
+            and a scroller never reaches what spilled off the first. */}
         {numbers.length > 2 ? (
-          <ol className="-mx-4 mt-2 flex items-center gap-1.5 overflow-x-auto px-4 py-1 [scrollbar-width:none] sm:mx-0 sm:justify-center sm:px-0">
+          <ol className="-mx-4 mt-2 flex items-center gap-1.5 overflow-x-auto px-4 py-1 [scrollbar-width:none] sm:mx-0 sm:justify-center-safe sm:px-0">
             {numbers.map((n) => {
               const title = seasonName(item.seasons?.find((s) => s.seasonNumber === n)?.title, n, t.work.season)
               const current = n === number
@@ -378,7 +380,11 @@ function EpisodeEntry({
   const absolute = placed?.absoluteNumber ?? episode.absoluteEpisodeNumber
   const when = airTime(episode)
   const upcoming = when !== undefined && !hasAired(when)
-  const time = when?.moment ? fmt.clock(when.moment.toISOString(), locale) : undefined
+  // A platform's midnight is the day it put the episode up, not an hour it
+  // was on: said as a day, with no clock beside it.
+  const released = when !== undefined && releasedNotAired(item.network, when)
+  const day = fmt.weekdayDate(when && released ? releaseDay(when) : airValue(when), locale)
+  const time = !released && when?.moment ? fmt.clock(when.moment.toISOString(), locale) : undefined
 
   return (
     // An anchor only in the aired order: another order can number two
@@ -416,7 +422,7 @@ function EpisodeEntry({
             {upcoming && when ? (
               <Chip tone="provider">
                 <Glyph name="clock" className="size-3" />
-                {airsWhen(when, locale)}
+                {airsWhenOn(item.network, when, locale)}
               </Chip>
             ) : null}
             {episode.isManual ? (
@@ -433,7 +439,7 @@ function EpisodeEntry({
 
           <p className="mt-1 font-mono text-[0.6875rem] text-bone-faint tabular-nums">
             {[
-              fmt.weekdayDate(airValue(when), locale),
+              released && day ? t.episode.availableOn(day) : day,
               time,
               fmt.runtime(episode.runtime, locale),
               episode.rating?.value ? `★ ${fmt.score(episode.rating.value, locale)}` : undefined,

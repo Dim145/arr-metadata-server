@@ -21,7 +21,7 @@ import { cn } from '../lib/cn'
 import { LANGS, LANGUAGES, useI18n, type Dict } from '../lib/i18n'
 import { ThemeToggle } from './ThemeToggle'
 import { describeIdentity } from '../lib/labels'
-import type { Me, Settings, UsersPage } from '../lib/types'
+import type { Health, Me, Settings, UsersPage } from '../lib/types'
 import { CommandPalette } from './CommandPalette'
 import { PageBoundary } from './PageBoundary'
 import { SignOut } from './SignOut'
@@ -174,6 +174,17 @@ function Sidebar({ me }: { me: Me }) {
     staleTime: 5 * 60_000,
     enabled: me.isAdmin,
   })
+  // A newer release, as the dashboard's health says it: a dot by the version.
+  // Asked of the same query, so the dashboard and this agree; only ever there
+  // when the check for one is on.
+  const health = useQuery({
+    queryKey: ['health'],
+    queryFn: () => api.get<Health>('/admin/health'),
+    staleTime: 5 * 60_000,
+    retry: false,
+    enabled: me.isAdmin,
+  })
+  const update = health.data?.updateAvailable ?? null
 
   // Sign-ups waiting for approval, beside Members: the reason an
   // administrator would open that page today.
@@ -195,8 +206,16 @@ function Sidebar({ me }: { me: Me }) {
           <span className="mt-1.5 flex items-center gap-2">
             <span className="label text-vermillion">{t.admin.title}</span>
             {settings.data ? (
-              <span className="font-mono text-[0.6875rem] text-bone-faint tabular-nums">
+              <span className="inline-flex items-center gap-1.5 font-mono text-[0.6875rem] text-bone-faint tabular-nums">
                 v{settings.data.version}
+                {update ? (
+                  <span
+                    title={t.admin.overview.updateDot(update.version)}
+                    className="size-1.5 shrink-0 rounded-full bg-brass shadow-[0_0_0_3px_color-mix(in_oklab,var(--color-brass)_18%,transparent)]"
+                  >
+                    <span className="sr-only">{t.admin.overview.updateDot(update.version)}</span>
+                  </span>
+                ) : null}
               </span>
             ) : null}
           </span>

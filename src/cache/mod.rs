@@ -611,8 +611,11 @@ fn is_key(key: &str) -> bool {
 /// Attach the server named by the configuration, and keep at it until it
 /// answers: a cache server that starts after this one, or restarts, is
 /// found rather than given up on. Once attached it is pinged, and listened
-/// to for what the other instances forget.
-pub async fn attach(state: crate::state::AppState) {
+/// to for what the other instances forget — both kept by `tasks`, started
+/// again should either end.
+pub async fn attach(state: crate::state::AppState, tasks: crate::jobs::supervise::Supervisor) {
+    use crate::jobs::supervise::Ends;
+
     let Some(url) = state.config.cache.redis_url.clone() else {
         return;
     };
@@ -634,14 +637,19 @@ pub async fn attach(state: crate::state::AppState) {
                     prefix = %redis.prefix,
                     "the cache server is attached: a second tier, shared and kept"
                 );
-                tokio::spawn(redis.clone().heartbeat());
-                let listener = state.clone();
-                tokio::spawn(redis.subscribe(move |message| {
-                    let state = listener.clone();
-                    tokio::spawn(
-                        async move { crate::coord::apply_message(&state, &message).await },
-                    );
-                }));
+                tasks.keep("cache heartbeat", Ends::Never, {
+                    let redis = redis.clone();
+                    move || redis.clone().heartbeat()
+                });
+                tasks.keep("cache channel", Ends::Never, move || {
+                    let listener = state.clone();
+                    redis.clone().subscribe(move |message| {
+                        let state = listener.clone();
+                        tokio::spawn(
+                            async move { crate::coord::apply_message(&state, &message).await },
+                        );
+                    })
+                });
                 return;
             }
             Err(e) => {

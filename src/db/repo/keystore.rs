@@ -23,6 +23,9 @@ pub mod names {
     /// The certificate the authority issued for the clients' door, and its
     /// key, the same way.
     pub const CERT: &str = "tls.cert";
+    /// The newest release the webhook was told of, by its version: told
+    /// once, by whichever instance found it first.
+    pub const UPDATE_TOLD: &str = "update.told";
 }
 
 /// The entry, when there is one.

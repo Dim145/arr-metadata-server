@@ -9,6 +9,7 @@ use crate::{
     auth::Identity,
     error::{AppError, AppResult},
     merge::rules,
+    providers::{mal, names},
     service::gather,
     state::AppState,
 };
@@ -28,6 +29,11 @@ pub struct RankedProvider {
     pub rank: usize,
     /// Switched on and able to answer.
     pub on: bool,
+    /// MyAnimeList's alone: which of its ways in answers, as this instance
+    /// last found them — Jikan passed over while Tenrai serves, or none
+    /// answering.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reach: Option<mal::Reach>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -65,6 +71,7 @@ async fn source_rules(
             id,
             rank: at + 1,
             on: gather::switched_on(&state, id),
+            reach: (id == names::MAL).then(|| state.mal.reach(state.flag("mal.fallback", true))),
         })
         .collect();
 

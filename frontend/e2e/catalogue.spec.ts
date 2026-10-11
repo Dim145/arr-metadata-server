@@ -408,11 +408,14 @@ test.describe('a work', () => {
 
     await page.goto(`/work/${longest!.id}`)
     await expect(page.getByRole('heading', { name: /^(Seasons|Saisons)$/ })).toBeVisible()
-    await expect(page.locator(`main a[href^="/work/${longest!.id}/season/"]:not([href*="/episode/"])`)).toHaveCount(
+    // Below the plate, whose one line on a running series leads to the next
+    // episode and its season too.
+    const record = page.locator('main article > :not(header)')
+    await expect(record.locator(`a[href^="/work/${longest!.id}/season/"]:not([href*="/episode/"])`)).toHaveCount(
       seasons.size,
     )
     // The episode that aired last and the one airing next, and no more.
-    expect(await page.locator(`main a[href*="/episode/"]`).count()).toBeLessThanOrEqual(2)
+    expect(await record.locator(`a[href*="/episode/"]`).count()).toBeLessThanOrEqual(2)
   })
 })
 

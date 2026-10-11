@@ -7,12 +7,99 @@ may change what the API or the configuration means, and says so here.
 
 ## [Unreleased]
 
+### Added
+
+- **Sonarr v5 is served.** It reads the second edition of the Skyhook API —
+  `/v2/tvdb/shows/{language}/{id}/{seasonType}` and `/v2/tvdb/search` —
+  answered from the catalogue beside the first, which Sonarr v4 keeps
+  reading: the same series, with what v5 reads besides. Every language the
+  series is named in (`translations`, its own among them, where Sonarr takes
+  the original title from); the orders its episodes come in (`seasonTypes`:
+  the aired order, then the DVD, absolute, alternate and regional orders
+  TheTVDB keeps for it); a season's title and year — a title that only says
+  the season's number is kept back, as the real service keeps it; and an
+  episode's ids under both names the service and the client use. Asked in an
+  order the series has, the episodes are numbered by it; in one it has not,
+  as they aired, as Skyhook answers. The language is three letters, as Sonarr
+  writes it: the series is answered in it when held so, else in the caller's
+  `tmdb.language`, then in English, then as stored; a code that names no
+  language is read as `eng`. Nothing changes in how `skyhook.sonarr.tv` is
+  resolved. `scripts/e2e-skyhook-v2.sh` sets the real service's second
+  edition beside this server's for a few real series and tells every
+  difference apart as an addition or a failure.
+- The schedule lists the films coming out beside the episodes, on each day
+  one comes out — in cinemas, digitally, on disc; the kinds that fall on one
+  day as one release — in the week with its poster and a chip a kind, in the
+  month's cells after the day's episodes, on the front page's strip, and
+  counted apart: "15 episodes · 2 releases". `GET /api/v1/calendar` answers
+  both in `entries`, earliest first, each with its `kind`; `episodes` stays
+  as it was. `calendar.ics` carries each release as an all-day event named
+  in the language asked — *Interstellar — sortie en salles* — and
+  `airing.atom` an entry for it.
+- Radarr is sent each film's collection and the films recommended with it,
+  as `api.radarr.video` sends them — `Collection` by id and name,
+  `Recommendations` by id and title, twenty at most — on `/v1/movie/{id}`,
+  `/imdb/{id}` and `/bulk`: read from what is held, never fetched for.
+  Radarr's collections fill, and its Discover page has something to offer.
+- MyAnimeList through [Tenrai](https://api.tenrai.org/documentation), a
+  mirror written to Jikan's schema, when Jikan does not answer, and through
+  Jikan when the official API does not: a way in that fails is passed over
+  for five minutes, a 404 asks no other (`mal.fallback`, on;
+  `AMS_TENRAI_UPSTREAM`). The Sources page says which way in serves.
+- The webhook is told of three facts nobody did — `refresh.failed`, once
+  when a work starts failing; `media.failed`, a picture or theme whose every
+  try failed; `update.available` — its events are ticked rather than typed,
+  and its address can be tested from the settings (`POST
+  /api/v1/admin/webhooks/test` posts `webhook.test`).
+- A check for a newer version, off until turned on (`updates.check`): one
+  anonymous GET to GitHub a day, said on the dashboard, by the version in the
+  administration's bar, in the scrape (`ams_update_available`) and to the
+  webhook once per version.
+- A running series says on its plate what airs next — the episode, its day,
+  how far off — and how far its season has got, in the season chart's words.
+  The rows that scroll sideways — a work's seasons, a person's portraits, and
+  on a phone the related, similar and front-page rows — fade at the edge
+  where they go on, with two arrows to walk them.
+- The published image says what it is and where it came from: an SBOM and
+  the build's provenance beside each platform's image in the registry, a
+  keyless signature by digest, GitHub's attestation of the build, and the
+  binary lists its own dependencies for scanners and `cargo audit bin`. A
+  security policy, a contributing guide, a code of conduct, issue forms and a
+  pull request template; Dependabot proposes updates weekly, grouped.
+
 ### Changed
 
+- A 429 says when to come back (`Retry-After`), and for the per-address
+  limit its quota (`RateLimit`, `RateLimit-Policy`).
+- Where to watch shows four services a group, the rest behind a count. On a
+  streaming platform, an episode timed at midnight UTC is "available on" its
+  day, with no clock.
+- A person's page agrees in French with TMDB's gender (`gender` in the API);
+  a biography is set a paragraph to a line, its *emphasis* as emphasis. A
+  keyword wears a link's chip.
+- A film's own calendar lists every release, a day each, under UIDs
+  `release-{id}-{cinema|digital|physical}`: an app subscribed to it replaces
+  its one event once.
+- CI checks the dependency tree with `cargo deny`, audits `Cargo.lock`
+  weekly and whenever it changes, builds with the minimum Rust version, and
+  scans the image with Trivy, reported to code scanning without failing the
+  run.
 - A picture's address, typed or pasted into the picker, is kept as the
   browser reads it: parsed, of `http` or `https`, and written back whole —
   the same address the preview shows. A line that parses as no address, or
   as one of another scheme, is not offered for keeping.
+
+### Fixed
+
+- A background loop that panics or returns is said so and started again,
+  after a wait that doubles up to five minutes, rather than stopping in
+  silence until a restart.
+- `/v1/movie/changed` names the films changed here too — fetched again, a
+  lock put on, changed or lifted — with or without TMDB. The parts of
+  `/v1/movie/collection/{id}` name their collection, which carries its
+  pictures.
+- A long series' row of season numbers scrolls back to its first seasons on
+  a wide screen.
 
 ## [0.7.0] — 2026-10-05
 

@@ -11,12 +11,12 @@
  */
 
 import { useQuery } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { Link, useParams } from 'react-router'
 
 import { ExternalLink } from '../components/elsewhere'
 import { Artwork } from '../components/media'
-import { EmptyState, Glyph, Label, Skeleton } from '../components/ui'
+import { EmptyState, Glyph, Label, Shelf, Skeleton } from '../components/ui'
 import { ApiError, api, query } from '../lib/api'
 import { cn } from '../lib/cn'
 import * as fmt from '../lib/format'
@@ -123,7 +123,7 @@ function Filmography({ person }: { person: PersonData }) {
       {details?.biography ? <Biography text={details.biography} /> : null}
       {details?.alsoKnownAs?.length ? (
         <p className="mt-6 text-sm text-bone-dim">
-          <span className="label mr-2">{t.person.alsoKnownAs}</span>
+          <span className="label mr-2">{t.person.alsoKnownAs(details.gender)}</span>
           <span className="font-mono text-xs text-bone-faint">{details.alsoKnownAs.join(' · ')}</span>
         </p>
       ) : null}
@@ -145,18 +145,24 @@ function Vitals({ details }: { details: PersonDetails }) {
   const died = details.deathday ? fmt.longDate(details.deathday, locale) : undefined
   const age = details.birthday ? ageBetween(details.birthday, details.deathday) : undefined
 
+  // Agreed with the gender TMDB gives, where the language agrees anything.
+  const gender = details.gender
   const lines = [
     born
       ? [
-          t.person.born(born),
+          t.person.born(born, gender),
           details.placeOfBirth ? t.person.in(details.placeOfBirth) : undefined,
           age !== undefined && !details.deathday ? `(${t.person.aged(age)})` : undefined,
         ]
           .filter(Boolean)
           .join(' ')
       : undefined,
-    died ? [t.person.died(died), age !== undefined ? t.person.at(age) : undefined].filter(Boolean).join(' ') : undefined,
-    details.knownFor ? t.person.knownFor(t.person.department[details.knownFor] ?? details.knownFor) : undefined,
+    died
+      ? [t.person.died(died, gender), age !== undefined ? t.person.at(age) : undefined].filter(Boolean).join(' ')
+      : undefined,
+    details.knownFor
+      ? t.person.knownFor(t.person.department[details.knownFor] ?? details.knownFor, gender)
+      : undefined,
   ].filter(Boolean) as string[]
   if (!lines.length) return null
 
@@ -182,7 +188,14 @@ export function ageBetween(from: string, until?: string): number | undefined {
   return years
 }
 
-/** The biography, folded to its first lines until asked for whole. */
+/**
+ * The biography, folded to its first lines until asked for whole.
+ *
+ * TMDB's biographies are plain text with a little markdown left in them: a
+ * title between asterisks, a paragraph to a line. The emphasis is set as
+ * emphasis and each line as a paragraph; nothing else is read as markup, so
+ * a stray asterisk — "5 * 3" — stays a stray asterisk.
+ */
 function Biography({ text }: { text: string }) {
   const { t } = useI18n()
   const [whole, setWhole] = useState(false)
@@ -192,21 +205,63 @@ function Biography({ text }: { text: string }) {
   return (
     <section className="rise mt-8 max-w-prose" style={{ animationDelay: '80ms' }}>
       <Label>{t.person.biography}</Label>
-      <p className={cn('mt-2 text-sm leading-relaxed whitespace-pre-line text-bone-dim', long && !whole && 'line-clamp-6')}>
-        {text}
-      </p>
+      {/* Folded by height rather than by line, which a run of paragraphs
+          does not count the same way in every engine; the fade says where
+          the fold is. */}
+      <div
+        className={cn(
+          'mt-2 space-y-3 text-sm leading-relaxed text-bone-dim',
+          long && !whole && 'max-h-40 overflow-hidden [mask-image:linear-gradient(to_bottom,black_55%,transparent)]',
+        )}
+      >
+        {paragraphs(text).map((paragraph, index) => (
+          <p key={index}>{emphasised(paragraph)}</p>
+        ))}
+      </div>
       {long ? (
         <button
           type="button"
           onClick={() => setWhole((v) => !v)}
           aria-expanded={whole}
-          className="mt-2 text-xs text-vermillion underline-offset-2 hover:underline"
+          className="hit mt-2 min-h-8 cursor-pointer text-xs text-vermillion underline-offset-2 hover:underline"
         >
           {whole ? t.person.readLess : t.person.readMore}
         </button>
       ) : null}
     </section>
   )
+}
+
+/**
+ * The paragraphs of a text, one to a line, however the lines were ended —
+ * a blank line between two is not a paragraph of its own.
+ */
+function paragraphs(text: string): string[] {
+  return text
+    .split(/\r\n?|\n/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean)
+}
+
+/**
+ * Emphasis as markdown writes it: words between asterisks that hug them —
+ * `*Breaking Bad*` — and not a pair of asterisks with spaces inside, which
+ * is arithmetic or a footnote.
+ */
+const EMPHASIS = /\*([^\s*](?:[^*\n]*[^\s*])?)\*/g
+
+/** A paragraph with its `*emphasis*` set as such, and nothing else read. */
+function emphasised(text: string): ReactNode[] {
+  const parts: ReactNode[] = []
+  let last = 0
+  for (const match of text.matchAll(EMPHASIS)) {
+    const at = match.index ?? 0
+    if (at > last) parts.push(text.slice(last, at))
+    parts.push(<em key={at}>{match[1]}</em>)
+    last = at + match[0].length
+  }
+  if (last < text.length) parts.push(text.slice(last))
+  return parts
 }
 
 /** A few portraits, in a row that scrolls sideways. */
@@ -216,14 +271,15 @@ function Portraits({ name, photos }: { name: string; photos: string[] }) {
     <section className="mt-8">
       <Label>{t.person.portraits}</Label>
       {/* Focusable: a row that scrolls must be reachable from the keyboard,
-          and nothing in it is a control. */}
-      <ul
+          and nothing in it is a control but the arrows. */}
+      <Shelf
         tabIndex={0}
-        className="mt-3 flex gap-3 overflow-x-auto rounded-card pb-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-vermillion"
-        aria-label={t.person.portraits}
+        label={t.person.portraits}
+        className="mt-3 -mx-2"
+        listClassName="gap-3 rounded-card px-2 py-1 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-vermillion"
       >
         {photos.map((url, index) => (
-          <li key={url} className="w-20 shrink-0 sm:w-24">
+          <li key={url} className="w-20 shrink-0 snap-start sm:w-24">
             <Artwork
               url={url}
               role="thumb"
@@ -232,7 +288,7 @@ function Portraits({ name, photos }: { name: string; photos: string[] }) {
             />
           </li>
         ))}
-      </ul>
+      </Shelf>
     </section>
   )
 }

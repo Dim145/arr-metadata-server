@@ -34,6 +34,7 @@ pub mod tasks;
 pub mod tls;
 pub mod users;
 pub mod watch;
+pub mod webhooks;
 
 use utoipa_axum::router::OpenApiRouter;
 
@@ -100,6 +101,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(tasks::router())
         .merge(rules::router())
         .merge(media::router())
+        .merge(webhooks::router())
         .merge(auth::authenticated_router())
         .merge(crate::api::audit::router())
 }

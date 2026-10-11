@@ -69,10 +69,14 @@ test.describe('where values come from', () => {
     await expect(page.getByRole('heading', { level: 1, name: 'Sources' })).toBeVisible()
 
     const rules = (await (await page.request.get('/api/v1/sources/rules')).json()) as {
-      providers: { id: string; rank: number }[]
+      providers: { id: string; rank: number; reach?: { bases: { base: string }[]; serving?: string } }[]
       rows: { field: string; suppliers: string[]; authorities?: string[] }[]
     }
     expect(rules.providers.map((p) => p.rank)).toEqual(rules.providers.map((_, i) => i + 1))
+    // MyAnimeList says how it is reached: its ways in, its own API or Jikan first.
+    const mal = rules.providers.find((provider) => provider.id === 'mal')
+    expect(['official', 'jikan']).toContain(mal?.reach?.bases[0]?.base)
+    expect(rules.providers.filter((provider) => provider.reach)).toHaveLength(1)
     const studio = rules.rows.find((row) => row.field === 'studio')
     expect(studio?.authorities).toEqual(['anilist', 'mal'])
     const list = rules.rows.find((row) => row.field === 'episodeList')

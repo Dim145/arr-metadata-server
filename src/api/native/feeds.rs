@@ -1,12 +1,12 @@
 //! Feeds: the schedule as a calendar a phone subscribes to, and what arrives
 //! and airs as feeds a reader follows.
 //!
-//! An iCalendar (RFC 5545) of the episodes airing, in a window measured the
-//! way Sonarr's own feed measures it — days behind and days ahead — and one
-//! per work; Atom (RFC 4287) of the works recently added and of the week's
-//! episodes. Read under the same credentials as the pages they mirror: a
-//! visitor's under public browsing, otherwise a key, which a calendar app can
-//! carry in the query string.
+//! An iCalendar (RFC 5545) of the episodes airing and the films coming out,
+//! in a window measured the way Sonarr's own feed measures it — days behind
+//! and days ahead — and one per work; Atom (RFC 4287) of the works recently
+//! added and of the week's episodes and releases. Read under the same
+//! credentials as the pages they mirror: a visitor's under public browsing,
+//! otherwise a key, which a calendar app can carry in the query string.
 
 use std::{collections::HashMap, net::SocketAddr};
 
@@ -21,7 +21,7 @@ use serde::Deserialize;
 use utoipa::IntoParams;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
-use super::browse::{self, Airing, Calendar};
+use super::browse::{self, Airing, Calendar, CalendarEntry, Release, ReleaseType};
 use crate::{
     auth::{Identity, ip},
     db::repo,
@@ -80,8 +80,10 @@ pub struct LanguageQuery {
 
 /// The schedule as an iCalendar: every episode airing in a window of days
 /// behind and ahead, an event each, timed where a provider knew the time and
-/// all-day otherwise. Subscribe a calendar app to it — as `webcal://` — and
-/// the week's episodes are in it, refreshed as the app sees fit.
+/// all-day otherwise; and every film coming out in it, an all-day event a day
+/// it comes out, named for what comes out — `Interstellar — sortie en
+/// salles`. Subscribe a calendar app to it — as `webcal://` — and the week's
+/// episodes and films are in it, refreshed as the app sees fit.
 #[utoipa::path(
     get, path = "/calendar.ics", tag = TAG,
     params(FeedQuery),
@@ -104,11 +106,9 @@ async fn calendar_ics(
     let origin = origin_of(&state, &headers, peer);
     let works = works_by_id(&calendar);
     let events: Vec<Event> = calendar
-        .episodes
+        .entries
         .iter()
-        .filter_map(|Airing { work_id, episode }| {
-            episode_event(&origin, works.get(work_id.as_str())?, episode)
-        })
+        .filter_map(|entry| event_of(&origin, &works, entry, &language))
         .collect();
 
     Ok(ics_response(
@@ -118,7 +118,8 @@ async fn calendar_ics(
 }
 
 /// One work as a calendar: a series' dated episodes, all of them, or a
-/// film's release day.
+/// film's releases, a day each — the same events the schedule's calendar
+/// carries for it.
 #[utoipa::path(
     get, path = "/items/{id}/calendar.ics", tag = TAG,
     params(("id" = String, Path, description = "The work's id"), LanguageQuery),
@@ -162,7 +163,10 @@ async fn work_ics(
             .filter(|e| e.season_number > 0)
             .filter_map(|e| episode_event(&origin, &item, e))
             .collect(),
-        MediaKind::Movie => release_event(&origin, &item).into_iter().collect(),
+        MediaKind::Movie => browse::releases_of(&item)
+            .iter()
+            .filter_map(|r| release_event(&origin, &item, r, &language))
+            .collect(),
     };
 
     Ok(ics_response(document(&item.title, &events), false))
@@ -235,7 +239,9 @@ async fn added_atom(
     ))
 }
 
-/// The episodes airing from yesterday to a week ahead, as an Atom feed.
+/// The episodes airing and the films coming out from yesterday to a week
+/// ahead, as an Atom feed: an entry an episode, and one a day a film comes
+/// out.
 #[utoipa::path(
     get, path = "/feed/airing.atom", tag = TAG,
     params(LanguageQuery),
@@ -256,32 +262,9 @@ async fn airing_atom(
     let now = now_rfc3339();
     let works = works_by_id(&calendar);
     let entries: Vec<Entry> = calendar
-        .episodes
+        .entries
         .iter()
-        .filter_map(|Airing { work_id, episode }| {
-            let work = works.get(work_id.as_str())?;
-            let event = episode_event(&origin, work, episode)?;
-            // An episode still to come is dated by its work's last change
-            // rather than ahead: a reader may hide what is dated in the
-            // future, and a date that moved every second would never let a
-            // poll be answered "unchanged".
-            let aired = browse::aired_at(episode)?
-                .format("%Y-%m-%dT%H:%M:%SZ")
-                .to_string();
-            let updated = if aired > now {
-                rfc3339(&work.updated_at).unwrap_or_else(|| now.clone())
-            } else {
-                aired
-            };
-            Some(Entry {
-                id: format!("urn:ams:episode:{}", episode.id),
-                title: event.summary,
-                link: event.url,
-                updated,
-                summary: episode.overview.clone(),
-                categories: event.categories,
-            })
-        })
+        .filter_map(|entry| feed_entry(&origin, &works, entry, &language, &now))
         .collect();
     let updated = latest(&entries).unwrap_or(now);
 
@@ -558,28 +541,94 @@ fn episode_event(origin: &str, work: &MediaItem, episode: &Episode) -> Option<Ev
     })
 }
 
-/// A film's release as an all-day event: in cinemas, or failing that its
-/// digital or physical release.
-fn release_event(origin: &str, work: &MediaItem) -> Option<Event> {
-    let day = [
-        &work.in_cinemas,
-        &work.digital_release,
-        &work.physical_release,
-    ]
-    .into_iter()
-    .flatten()
-    .find_map(|d| NaiveDate::parse_from_str(d.get(..10)?, "%Y-%m-%d").ok())?;
+/// A film's release as an all-day event, named for what comes out that day
+/// in the reader's language: `Interstellar — sortie en salles`.
+///
+/// Its UID is the film's and the day's first kind of release, not the day's:
+/// a release a provider or a person moves is the same event, moved, in a
+/// calendar that keeps what it was given.
+fn release_event(
+    origin: &str,
+    work: &MediaItem,
+    release: &Release,
+    language: &str,
+) -> Option<Event> {
+    let day = NaiveDate::parse_from_str(&release.date, "%Y-%m-%d").ok()?;
+    let first = release.release_types.first()?;
 
     Some(Event {
-        uid: format!("release-{}@arr-metadata-server", work.id),
+        uid: format!("release-{}-{}@arr-metadata-server", work.id, first.as_str()),
         stamp: stamp_of(&work.updated_at),
         start: When::Day(day),
         end: When::Day(day + Duration::days(1)),
-        summary: titled(work),
+        summary: format!(
+            "{} — {}",
+            work.title,
+            released(&release.release_types, language)
+        ),
         description: work.overview.clone(),
         url: format!("{origin}/work/{}", work.id),
         categories: work.studio.iter().cloned().collect(),
     })
+}
+
+/// What comes out, as an event is named for it: `cinema and digital
+/// release`, `sortie en salles et numérique`. In French for a reader in
+/// French, in English for every other: the interface's two languages.
+fn released(kinds: &[ReleaseType], language: &str) -> String {
+    let primary = language
+        .trim()
+        .split(['-', '_'])
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let french = matches!(primary.as_str(), "fr" | "fra" | "fre");
+
+    let words: Vec<&str> = kinds
+        .iter()
+        .map(|kind| match (kind, french) {
+            (ReleaseType::Cinema, false) => "cinema",
+            (ReleaseType::Digital, false) => "digital",
+            (ReleaseType::Physical, false) => "physical",
+            (ReleaseType::Cinema, true) => "en salles",
+            (ReleaseType::Digital, true) => "numérique",
+            (ReleaseType::Physical, true) => "physique",
+        })
+        .collect();
+    let and = if french { " et " } else { " and " };
+    let listed = match words.as_slice() {
+        [] => String::new(),
+        [one] => (*one).to_string(),
+        [rest @ .., last] => format!("{}{and}{last}", rest.join(", ")),
+    };
+
+    if french {
+        format!("sortie {listed}")
+    } else {
+        format!("{listed} release")
+    }
+}
+
+/// An entry of the schedule as an event, where its work is listed and it has
+/// a day.
+fn event_of(
+    origin: &str,
+    works: &HashMap<&str, &MediaItem>,
+    entry: &CalendarEntry,
+    language: &str,
+) -> Option<Event> {
+    match entry {
+        CalendarEntry::Episode(airing) => {
+            let Airing { work_id, episode } = airing.as_ref();
+            episode_event(origin, works.get(work_id.as_str())?, episode)
+        }
+        CalendarEntry::Release(release) => release_event(
+            origin,
+            works.get(release.work_id.as_str())?,
+            release,
+            language,
+        ),
+    }
 }
 
 /// The whole document, lines folded and joined as the format requires.
@@ -706,6 +755,59 @@ fn latest(entries: &[Entry]) -> Option<String> {
     entries.iter().map(|e| e.updated.clone()).max()
 }
 
+/// An entry of the schedule as one of the airing feed's: an episode, or a
+/// film's release on a day, under the title its event has.
+///
+/// One still to come is dated by its work's last change rather than ahead: a
+/// reader may hide what is dated in the future, and a date that moved every
+/// second would never let a poll be answered "unchanged".
+fn feed_entry(
+    origin: &str,
+    works: &HashMap<&str, &MediaItem>,
+    entry: &CalendarEntry,
+    language: &str,
+    now: &str,
+) -> Option<Entry> {
+    let (work, at, id, summary) = match entry {
+        CalendarEntry::Episode(airing) => {
+            let Airing { work_id, episode } = airing.as_ref();
+            (
+                *works.get(work_id.as_str())?,
+                browse::aired_at(episode)?,
+                format!("urn:ams:episode:{}", episode.id),
+                episode.overview.clone(),
+            )
+        }
+        CalendarEntry::Release(release) => {
+            let work = *works.get(release.work_id.as_str())?;
+            // As its event's UID is: the film and the day's first kind.
+            let first = release.release_types.first()?;
+            (
+                work,
+                browse::released_at(release)?,
+                format!("urn:ams:release:{}:{}", work.id, first.as_str()),
+                work.overview.clone(),
+            )
+        }
+    };
+    let event = event_of(origin, works, entry, language)?;
+
+    let at = at.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    let updated = if at.as_str() > now {
+        rfc3339(&work.updated_at).unwrap_or_else(|| now.to_string())
+    } else {
+        at
+    };
+    Some(Entry {
+        id,
+        title: event.summary,
+        link: event.url,
+        updated,
+        summary,
+        categories: event.categories,
+    })
+}
+
 fn atom(feed: &Feed<'_>) -> String {
     let mut out = String::from("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n");
     match feed.language {
@@ -779,9 +881,9 @@ fn respond(content_type: &'static str, body: String, truncated: bool) -> Respons
     )
         .into_response();
     if truncated {
-        // The window held more episodes than one answer carries, and the
-        // latest are missing: said here, since neither format has a line
-        // for it that a reader would show.
+        // The window held more episodes, or releases, than one answer
+        // carries, and the latest are missing: said here, since neither
+        // format has a line for it that a reader would show.
         response
             .headers_mut()
             .insert("x-ams-truncated", HeaderValue::from_static("true"));
@@ -876,16 +978,221 @@ mod tests {
     }
 
     #[test]
-    fn a_film_is_its_release_day() {
+    fn a_film_is_an_all_day_event_each_day_it_comes_out() {
         let mut film = MediaItem::empty(MediaKind::Movie);
         film.id = "f1".into();
-        film.title = "Le Parrain".into();
-        film.year = Some(1972);
-        film.digital_release = Some("2016-06-30T00:00:00Z".into());
-        let event = release_event("http://localhost", &film).unwrap();
-        assert_eq!(when("DTSTART", &event.start), "DTSTART;VALUE=DATE:20160630");
-        assert_eq!(event.summary, "Le Parrain (1972)");
-        assert!(release_event("http://localhost", &MediaItem::empty(MediaKind::Movie)).is_none());
+        film.title = "Interstellar".into();
+        film.year = Some(2014);
+        film.studio = Some("Syncopy".into());
+        film.in_cinemas = Some("2014-11-05".into());
+        film.digital_release = Some("2015-03-31T00:00:00Z".into());
+        film.physical_release = Some("2015-03-31".into());
+
+        let releases = browse::releases_of(&film);
+        let events: Vec<Event> = releases
+            .iter()
+            .filter_map(|r| release_event("http://localhost", &film, r, "fr-FR"))
+            .collect();
+        assert_eq!(events.len(), 2, "a day each, not a kind each");
+        assert_eq!(events[0].uid, "release-f1-cinema@arr-metadata-server");
+        assert_eq!(events[0].summary, "Interstellar — sortie en salles");
+        assert_eq!(
+            when("DTSTART", &events[0].start),
+            "DTSTART;VALUE=DATE:20141105"
+        );
+        assert_eq!(when("DTEND", &events[0].end), "DTEND;VALUE=DATE:20141106");
+        assert_eq!(events[0].url, "http://localhost/work/f1");
+        assert_eq!(events[0].categories, ["Syncopy"]);
+        // Two kinds on one day: one event, named for both, after the first.
+        assert_eq!(events[1].uid, "release-f1-digital@arr-metadata-server");
+        assert_eq!(
+            events[1].summary,
+            "Interstellar — sortie numérique et physique"
+        );
+
+        // In English, and in any language the interface does not speak.
+        for language in ["en", "en-GB", "de-DE", ""] {
+            let event = release_event("http://localhost", &film, &releases[1], language).unwrap();
+            assert_eq!(event.summary, "Interstellar — digital and physical release");
+        }
+        let all = [
+            ReleaseType::Cinema,
+            ReleaseType::Digital,
+            ReleaseType::Physical,
+        ];
+        assert_eq!(
+            released(&all, "fr"),
+            "sortie en salles, numérique et physique"
+        );
+        assert_eq!(released(&all, "en"), "cinema, digital and physical release");
+        assert_eq!(released(&all[..1], "fra"), "sortie en salles");
+
+        // A calendar of them: all-day, folded, every line within the limit.
+        let doc = document("Interstellar", &events);
+        assert_eq!(doc.matches("BEGIN:VEVENT\r\n").count(), 2);
+        assert!(doc.contains("\r\nUID:release-f1-cinema@arr-metadata-server\r\n"));
+        assert!(doc.contains("\r\nDTSTART;VALUE=DATE:20150331\r\n"));
+        assert!(doc.contains("\r\nSUMMARY:Interstellar — sortie numérique et physique\r\n"));
+        for line in doc.split("\r\n") {
+            assert!(line.len() <= 75, "{line}");
+        }
+
+        // No day, no release.
+        assert!(browse::releases_of(&MediaItem::empty(MediaKind::Movie)).is_empty());
+    }
+
+    #[test]
+    fn a_release_is_an_entry_of_the_airing_feed() {
+        let mut film = MediaItem::empty(MediaKind::Movie);
+        film.id = "f1".into();
+        film.title = "Dune & co".into();
+        film.overview = Some("Sand.".into());
+        film.updated_at = "2026-09-01T08:00:00Z".into();
+        film.in_cinemas = Some("2026-10-01".into());
+        film.digital_release = Some("2036-10-01".into());
+        let works: HashMap<&str, &MediaItem> = HashMap::from([("f1", &film)]);
+        let releases = browse::releases_of(&film);
+        let entry = |release: &Release, language: &str| {
+            feed_entry(
+                "http://localhost",
+                &works,
+                &CalendarEntry::Release(release.clone()),
+                language,
+                "2026-10-10T12:00:00Z",
+            )
+        };
+
+        let out = entry(&releases[0], "en").unwrap();
+        assert_eq!(out.id, "urn:ams:release:f1:cinema");
+        assert_eq!(out.title, "Dune & co — cinema release");
+        assert_eq!(out.link, "http://localhost/work/f1");
+        assert_eq!(out.updated, "2026-10-01T00:00:00Z");
+        assert_eq!(out.summary.as_deref(), Some("Sand."));
+
+        // Still to come: dated by the film's last change, not ahead.
+        let ahead = entry(&releases[1], "fr").unwrap();
+        assert_eq!(ahead.id, "urn:ams:release:f1:digital");
+        assert_eq!(ahead.title, "Dune & co — sortie numérique");
+        assert_eq!(ahead.updated, "2026-09-01T08:00:00Z");
+
+        let feed = atom(&Feed {
+            origin: "http://localhost",
+            path: "/api/v1/feed/airing.atom",
+            title: "Feed",
+            updated: "2026-10-10T12:00:00Z",
+            language: Some("fr"),
+            entries: &[out, ahead],
+        });
+        assert!(feed.contains("<id>urn:ams:release:f1:cinema</id>"));
+        assert!(feed.contains("<title>Dune &amp; co — cinema release</title>"));
+
+        // A release of a work the window does not list is no entry.
+        let unlisted = feed_entry(
+            "http://localhost",
+            &HashMap::new(),
+            &CalendarEntry::Release(releases[0].clone()),
+            "en",
+            "2026-10-10T12:00:00Z",
+        );
+        assert!(unlisted.is_none());
+    }
+
+    #[tokio::test]
+    async fn the_feeds_carry_the_films_coming_out() {
+        let state = super::super::testing::server().await;
+        let today = Utc::now().date_naive();
+        let day = |d: NaiveDate| d.format("%Y-%m-%d").to_string();
+
+        // In cinemas and digitally today, on disc in months.
+        let mut film = MediaItem::empty(MediaKind::Movie);
+        film.title = "Interstellar".into();
+        film.slug = "interstellar".into();
+        film.in_cinemas = Some(day(today));
+        film.digital_release = Some(day(today));
+        film.physical_release = Some(day(today + Duration::days(200)));
+        repo::item::upsert(
+            &state.db,
+            repo::item::ItemWrite {
+                item: &film,
+                replace_children: true,
+            },
+        )
+        .await
+        .expect("stored");
+
+        let read = async |response: AppResult<Response>| {
+            let body = response.expect("answered").into_body();
+            let bytes = axum::body::to_bytes(body, usize::MAX).await.expect("read");
+            // Unfolded, so a long line is matched whole.
+            String::from_utf8(bytes.to_vec())
+                .expect("text")
+                .replace("\r\n ", "")
+        };
+        let english = || {
+            Query(LanguageQuery {
+                language: Some("en".into()),
+            })
+        };
+
+        let schedule = read(
+            calendar_ics(
+                State(state.clone()),
+                Extension(Identity::Visitor),
+                None,
+                HeaderMap::new(),
+                Query(FeedQuery {
+                    past_days: None,
+                    future_days: None,
+                    language: Some("fr".into()),
+                }),
+            )
+            .await,
+        )
+        .await;
+        assert!(schedule.contains(&format!(
+            "\r\nUID:release-{}-cinema@arr-metadata-server\r\n",
+            film.id
+        )));
+        assert!(schedule.contains("\r\nSUMMARY:Interstellar — sortie en salles et numérique\r\n"));
+        assert!(schedule.contains(&format!(
+            "\r\nDTSTART;VALUE=DATE:{}\r\n",
+            today.format("%Y%m%d")
+        )));
+        assert!(!schedule.contains("-physical@"), "the disc is months away");
+
+        // Its own calendar: every release, the same events.
+        let own = read(
+            work_ics(
+                State(state.clone()),
+                Extension(Identity::Visitor),
+                None,
+                HeaderMap::new(),
+                Path(film.id.clone()),
+                english(),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(own.matches("BEGIN:VEVENT\r\n").count(), 2);
+        assert!(own.contains("\r\nSUMMARY:Interstellar — cinema and digital release\r\n"));
+        assert!(own.contains(&format!(
+            "\r\nUID:release-{}-physical@arr-metadata-server\r\n",
+            film.id
+        )));
+
+        let airing = read(
+            airing_atom(
+                State(state),
+                Extension(Identity::Visitor),
+                None,
+                HeaderMap::new(),
+                english(),
+            )
+            .await,
+        )
+        .await;
+        assert!(airing.contains(&format!("<id>urn:ams:release:{}:cinema</id>", film.id)));
+        assert!(airing.contains("<title>Interstellar — cinema and digital release</title>"));
     }
 
     #[test]

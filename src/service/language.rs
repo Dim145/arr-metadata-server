@@ -108,6 +108,139 @@ pub fn is_known(language: &str) -> bool {
     two_letter(language) != language
 }
 
+/// A language as Sonarr v5 writes one — three letters, `eng`, `fra`, `por`
+/// — read to the key translations are filed under; `eng` for what names no
+/// language the tables know.
+///
+/// Sonarr's own table (`NzbDrone.Core/Parser/IsoLanguages.cs`) spells them
+/// as ISO 639-2/T, the way this server files them, and reads the
+/// bibliographic spellings too, `fre`, `ger`, so a call made by hand in one
+/// of those lands on the same shelf. It writes `por` for Brazil's Portuguese
+/// as for Portugal's, and `spa` for Latin America's Spanish as for Spain's:
+/// one shelf each here too, filled from the region TMDB's catalogue leads
+/// with. Two letters, or a tag with a region, are read as the native API
+/// reads them. What is no language at all, or one no provider has text in,
+/// is answered in English rather than refused: Skyhook refuses no code, and
+/// a 400 here would fail the series' refresh over a setting a person chose.
+pub fn three_letter(raw: &str) -> String {
+    let language = iso_639_2b_to_t(&normalize(raw));
+    if is_known(&language) {
+        language
+    } else {
+        "eng".to_string()
+    }
+}
+
+/// ISO 639-2/B → ISO 639-2/T, for the twenty languages the two spell
+/// differently; every other code is the same in both.
+fn iso_639_2b_to_t(code: &str) -> String {
+    match code {
+        "alb" => "sqi",
+        "arm" => "hye",
+        "baq" => "eus",
+        "bur" => "mya",
+        "chi" => "zho",
+        "cze" => "ces",
+        "dut" => "nld",
+        "fre" => "fra",
+        "geo" => "kat",
+        "ger" => "deu",
+        "gre" => "ell",
+        "ice" => "isl",
+        "mac" => "mkd",
+        "mao" => "mri",
+        "may" => "msa",
+        "per" => "fas",
+        "rum" => "ron",
+        "slo" => "slk",
+        "tib" => "bod",
+        "wel" => "cym",
+        other => other,
+    }
+    .to_string()
+}
+
+/// Whether the work is named in a language: a translation held in it with a
+/// title. The language the work's own text is in is no translation and is
+/// not counted here; the caller knows that one.
+pub fn holds_title(item: &MediaItem, language: &str) -> bool {
+    item.translations.iter().any(|t| {
+        t.language == language
+            && t.title
+                .as_deref()
+                .is_some_and(|title| !title.trim().is_empty())
+    })
+}
+
+/// [`apply`], and the title and overview of another language when the work
+/// is not named in the one asked for: the caller's own (`own`, what the
+/// settings say for them — `tmdb.language` on their key or on their
+/// address's rule), then English, then the one the work is stored in, which
+/// needs nothing laid over it.
+///
+/// For Sonarr v5, which asks in the language a person set for the series
+/// and is answered by Skyhook in that language, then in English, then in
+/// the series' own. A work named in none of them keeps the text it was
+/// fetched in, where the provider fell back to the original title already.
+/// Episode text is fetched and laid over in the language asked for alone,
+/// as [`apply`] does: a season's episodes in one language under a series
+/// named in another is what Skyhook answers too, for a language TheTVDB
+/// holds the episodes in and not the series.
+pub async fn apply_with_fallback(
+    state: &AppState,
+    item: &mut MediaItem,
+    asked: &str,
+    own: &str,
+) -> Result<()> {
+    apply(state, item, asked).await?;
+    fall_back(state, item, asked, own);
+    Ok(())
+}
+
+/// [`apply_with_fallback`] for a list: the work's own title and overview
+/// and no episode text, as [`apply_shallow`].
+pub fn apply_shallow_with_fallback(state: &AppState, item: &mut MediaItem, asked: &str, own: &str) {
+    apply_shallow(state, item, asked);
+    fall_back(state, item, asked, own);
+}
+
+fn fall_back(state: &AppState, item: &mut MediaItem, asked: &str, own: &str) {
+    let stored = normalize(&state.language(None, None));
+    if let Some(next) = fallback_language(&normalize(asked), &normalize(own), &stored, |l| {
+        holds_title(item, l)
+    }) {
+        overlay_item(item, &next);
+    }
+}
+
+/// The language laid over a work not named in the one asked for: the first
+/// of the caller's own and English that names it — unless the one the work
+/// is stored in comes first, whose text is in place already. Nothing when
+/// the one asked for names the work, or is the stored one, or when no
+/// language of the chain names it.
+fn fallback_language(
+    asked: &str,
+    own: &str,
+    stored: &str,
+    names: impl Fn(&str) -> bool,
+) -> Option<String> {
+    if asked.is_empty() || asked == stored || names(asked) {
+        return None;
+    }
+    for next in [own, "eng"] {
+        if next.is_empty() {
+            continue;
+        }
+        if next == stored {
+            return None;
+        }
+        if names(next) {
+            return Some(next.to_string());
+        }
+    }
+    None
+}
+
 /// The language TMDB is asked in, which is also what its answer is kept
 /// under: the one asked for, by its two-letter code — with its region where
 /// it is the language this reader is answered in anyway — or, for a
@@ -585,6 +718,89 @@ const TWO_LETTER_CODES: &[&str] = &[
 mod tests {
     use super::*;
     use crate::domain::{Episode, Translation};
+
+    #[test]
+    fn sonarr_v5s_three_letters_land_on_the_shelf_or_on_english() {
+        // As Sonarr writes them: ISO 639-2/T, which is how text is filed.
+        for (asked, shelf) in [
+            ("eng", "eng"),
+            ("fra", "fra"),
+            ("deu", "deu"),
+            ("jpn", "jpn"),
+            ("zho", "zho"),
+            ("por", "por"),
+            ("spa", "spa"),
+            ("nob", "nob"),
+            ("ces", "ces"),
+        ] {
+            assert_eq!(three_letter(asked), shelf, "{asked}");
+        }
+
+        // The bibliographic spellings Sonarr reads, and the other ways a
+        // caller may write a language: one shelf each.
+        for (asked, shelf) in [
+            ("fre", "fra"),
+            ("ger", "deu"),
+            ("dut", "nld"),
+            ("chi", "zho"),
+            ("cze", "ces"),
+            ("FRA", "fra"),
+            ("fr", "fra"),
+            ("pt-BR", "por"),
+            (" ja ", "jpn"),
+        ] {
+            assert_eq!(three_letter(asked), shelf, "{asked}");
+        }
+
+        // What names no language a provider has text in is answered in
+        // English, not refused: Skyhook refuses nothing here either.
+        for odd in [
+            "",
+            "xx",
+            "qqq",
+            "pob",
+            "../v4",
+            "a-string-the-size-of-a-request",
+        ] {
+            assert_eq!(three_letter(odd), "eng", "{odd:?}");
+        }
+    }
+
+    #[test]
+    fn a_work_not_named_as_asked_is_named_in_the_callers_language_then_in_english() {
+        // What the catalogue holds the work's title in, besides the language
+        // it is stored in.
+        let held = |language: &str| ["fra", "jpn"].contains(&language);
+
+        // Asked in a language the work is named in: that one, nothing else.
+        assert_eq!(fallback_language("fra", "eng", "eng", held), None);
+        // Asked in the language the work is stored in: in place already.
+        assert_eq!(fallback_language("eng", "fra", "eng", held), None);
+
+        // Asked in German, which the work is not named in: the caller's own
+        // language when the work is named in it...
+        assert_eq!(
+            fallback_language("deu", "jpn", "eng", held).as_deref(),
+            Some("jpn")
+        );
+        // ...else English, when the work is named in it and not stored in it...
+        let french_deployment = |language: &str| ["eng", "jpn"].contains(&language);
+        assert_eq!(
+            fallback_language("deu", "ita", "fra", french_deployment).as_deref(),
+            Some("eng")
+        );
+        // ...and the stored text as soon as the chain reaches its language:
+        // nothing laid over, whether or not English would come after.
+        assert_eq!(fallback_language("deu", "eng", "eng", held), None);
+        assert_eq!(fallback_language("deu", "fra", "fra", held), None);
+        // Named in none of them: the stored text too.
+        assert_eq!(fallback_language("deu", "ita", "fra", |_| false), None);
+        // No caller's language to try: straight to English.
+        assert_eq!(
+            fallback_language("deu", "", "fra", french_deployment).as_deref(),
+            Some("eng")
+        );
+    }
 
     #[test]
     fn every_spelling_of_a_language_lands_on_the_same_shelf() {

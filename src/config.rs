@@ -420,11 +420,13 @@ pub struct Anilist {
     pub passthrough: bool,
 }
 
-/// MyAnimeList: its official API when a client id is set, Jikan otherwise.
+/// MyAnimeList: its official API when a client id is set, Jikan otherwise —
+/// and Tenrai, written to Jikan's schema, when the one asked does not answer.
 #[derive(Clone)]
 pub struct Mal {
     pub upstream: String,
     pub jikan_upstream: String,
+    pub tenrai_upstream: String,
     /// Free from myanimelist.net's API settings. Without one, Jikan is used —
     /// an unofficial mirror that serves MAL from its own cache, which can be
     /// weeks old and fails outright when MyAnimeList refuses it.
@@ -437,6 +439,7 @@ impl std::fmt::Debug for Mal {
         f.debug_struct("Mal")
             .field("upstream", &self.upstream)
             .field("jikan_upstream", &self.jikan_upstream)
+            .field("tenrai_upstream", &self.tenrai_upstream)
             .field("client_id", &masked(&self.client_id))
             .field("enabled", &self.enabled)
             .finish()
@@ -835,6 +838,9 @@ impl Config {
                 jikan_upstream: var_or(&["AMS_JIKAN_UPSTREAM"], "https://api.jikan.moe/v4")
                     .trim_end_matches('/')
                     .to_string(),
+                tenrai_upstream: var_or(&["AMS_TENRAI_UPSTREAM"], "https://api.tenrai.org/v1")
+                    .trim_end_matches('/')
+                    .to_string(),
                 client_id: opt(&["AMS_MAL_CLIENT_ID", "MAL_CLIENT_ID"]),
                 enabled: flag(&["AMS_MAL_ENABLED"], false)?,
             },
@@ -1067,7 +1073,12 @@ impl Api {
     /// Which API a request to `surface` at `path` is a call to.
     pub fn of(surface: Surface, path: &str) -> Api {
         match surface {
-            Surface::Arr if path.starts_with("/v1/tvdb") || path == "/v1/scenemapping" => {
+            // Skyhook's two editions, and services.sonarr.tv's list: Sonarr's.
+            Surface::Arr
+                if path.starts_with("/v1/tvdb")
+                    || path.starts_with("/v2/tvdb")
+                    || path == "/v1/scenemapping" =>
+            {
                 Api::Sonarr
             }
             Surface::Arr => Api::Radarr,
@@ -1225,6 +1236,21 @@ fn policy(keys: &[&str], default: SurfacePolicy) -> Result<SurfacePolicy> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn skyhook_s_two_editions_are_sonarr_s_and_the_rest_of_the_door_radarr_s() {
+        assert_eq!(
+            Api::of(Surface::Arr, "/v1/tvdb/shows/en/81189"),
+            Api::Sonarr
+        );
+        assert_eq!(
+            Api::of(Surface::Arr, "/v2/tvdb/shows/eng/81189/official"),
+            Api::Sonarr
+        );
+        assert_eq!(Api::of(Surface::Arr, "/v2/tvdb/search"), Api::Sonarr);
+        assert_eq!(Api::of(Surface::Arr, "/v1/scenemapping"), Api::Sonarr);
+        assert_eq!(Api::of(Surface::Arr, "/v1/movie/603"), Api::Radarr);
+    }
 
     #[test]
     fn a_value_out_of_range_is_refused_naming_its_variable() {

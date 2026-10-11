@@ -23,11 +23,58 @@ interface Episode {
 interface Work {
   id: string
   title: string
+  status?: string
+  network?: string
   episodes?: Episode[]
   credits?: { personName: string; tmdbPersonId?: number }[]
   images?: { coverType: string; seasonNumber?: number | null }[]
   trailerYoutubeId?: string
   externalIds: { tmdb?: number; tvdb?: number; imdb?: string }
+}
+
+/** The reader's own day, `YYYY-MM-DD`: the page counts what has aired from it. */
+function localDay(date = new Date()): string {
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+}
+
+/** When an episode airs, for sorting: the moment, or midnight UTC on its day. */
+function airsAt(episode: Episode): number {
+  const raw = episode.airDateUtc ?? (episode.airDate ? `${episode.airDate}T00:00:00Z` : undefined)
+  const time = raw ? Date.parse(raw) : Number.NaN
+  return Number.isNaN(time) ? Number.POSITIVE_INFINITY : time
+}
+
+/** Whether it has aired, as the page decides it: a moment once past, a day once over. */
+function hasAired(episode: Episode): boolean {
+  const utc = episode.airDateUtc?.trim()
+  if (utc && /^\d{4}-\d{2}-\d{2}T/.test(utc) && !Number.isNaN(Date.parse(utc))) return Date.parse(utc) <= Date.now()
+  const day = [utc, episode.airDate?.trim()].find((v) => v && /^\d{4}-\d{2}-\d{2}$/.test(v))
+  return day !== undefined && day < localDay()
+}
+
+/** `S01E02`, as the page prints it. */
+function codeOf(episode: Episode): string {
+  const two = (n: number) => String(n).padStart(2, '0')
+  return `S${two(episode.seasonNumber)}E${two(episode.episodeNumber)}`
+}
+
+/**
+ * The most popular running series with an episode still to air, and that
+ * episode: the first regular one not yet aired, as the page picks it.
+ */
+async function aRunningSeries(request: APIRequestContext): Promise<{ work: Work; next: Episode } | undefined> {
+  const { items } = await (await request.get('/api/v1/items?kind=series&limit=30')).json()
+  for (const { id } of items as { id: string }[]) {
+    const work = (await (await request.get(`/api/v1/items/${id}`)).json()) as Work
+    if (work.status === 'ended') continue
+    const next = (work.episodes ?? [])
+      .filter((e) => e.seasonNumber > 0 && Number.isFinite(airsAt(e)))
+      .sort((a, b) => airsAt(a) - airsAt(b))
+      .find((e) => !hasAired(e))
+    if (next) return { work, next }
+  }
+  return undefined
 }
 
 /** The kinds the gallery offers, in its order, and how many of each the work has. */
@@ -216,7 +263,7 @@ test.describe('a person', () => {
       await expect(page.getByText(/^(biography|biographie)$/i)).toBeVisible()
     }
     if (person.details.birthday) {
-      await expect(page.getByText(/^(born |né·e le )/i)).toBeVisible()
+      await expect(page.getByText(/^(born |née? le |né·e le )/i)).toBeVisible()
     }
     if (person.details.imdbId) {
       await expect(
@@ -230,6 +277,245 @@ test.describe('a person', () => {
     await expect(
       page.getByRole('heading', { name: /nothing lives at this address|rien à cette adresse/i }),
     ).toBeVisible()
+  })
+})
+
+test.describe('a person, read in French', () => {
+  test.use({ locale: 'fr-FR' })
+
+  test('is written of in the gender TMDB gives, and otherwise in both', async ({ page, request }) => {
+    const work = await aSeries(request)
+    const credit = work?.credits?.find((c) => c.tmdbPersonId)
+    test.skip(!credit, 'no credit carries a TMDB person id')
+
+    const person = await (await request.get(`/api/v1/people/${credit!.tmdbPersonId}?language=fr`)).json()
+    test.skip(!person.details?.birthday, 'TMDB is not configured, or has no birthday for them')
+    const gender: number | undefined = person.details.gender
+    if (gender !== undefined) expect([1, 2, 3]).toContain(gender)
+
+    await page.goto(`/person/${credit!.tmdbPersonId}`)
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText(credit!.personName)
+    // The participle agreed: "Née" for a woman, "Né" for a man, the inclusive
+    // "Né·e" where TMDB says non-binary or nothing.
+    const born = gender === 1 ? /^Née le / : gender === 2 ? /^Né le / : /^Né·e le /
+    await expect(page.getByText(born)).toBeVisible()
+    if (person.details.knownFor) {
+      const known = gender === 1 ? /^Connue pour / : gender === 2 ? /^Connu pour / : /^Connu·e pour /
+      await expect(page.getByText(known)).toBeVisible()
+    }
+    if (person.details.biography) {
+      // A paragraph to a line, not one run of text; a title TMDB wrote *so*
+      // is set as emphasis, and an asterisk with a space inside stays one.
+      const text: string = person.details.biography
+      const biography = page.getByText(/^(biographie)$/i).locator('xpath=following-sibling::div[1]')
+      await expect(biography.locator('p')).toHaveCount(text.split(/\r\n?|\n/).filter((line) => line.trim()).length)
+      await expect(biography.locator('p').first()).toBeVisible()
+      if (/\*[^\s*](?:[^*\n]*[^\s*])?\*/.test(text)) await expect(biography.locator('em').first()).toBeAttached()
+    }
+  })
+})
+
+test.describe('a running series', () => {
+  test('says on its plate what airs next, and how far the season has got', async ({ page, request }) => {
+    const found = await aRunningSeries(request)
+    test.skip(!found, 'no series here has an episode still to air')
+    const { work, next } = found!
+    // Counted as the season's card below counts it.
+    const season = (work.episodes ?? []).filter((e) => e.seasonNumber === next.seasonNumber)
+    const aired = season.filter(hasAired).length
+
+    await page.goto(`/work/${work.id}`)
+    const plate = page.locator('article > header').first()
+    await expect(plate.getByText(/^(next episode:|prochain épisode :)$/i)).toBeVisible()
+
+    // The episode, as the way to its page and named for what it is; the
+    // season's count beside it, as the way to the season's.
+    const episode = plate.locator(
+      `a[href="/work/${work.id}/season/${next.seasonNumber}/episode/${next.episodeNumber}"]`,
+    )
+    await expect(episode).toHaveAccessibleName(pattern(`^(Next episode:|Prochain épisode :)\\s+${codeOf(next)} · `))
+    if (next.title) await expect(episode).toContainText(next.title)
+    // "2 of 8 aired" while the season is under way, "8 episodes" before it
+    // is — the season chart's words.
+    const count = plate.locator(`a[href="/work/${work.id}/season/${next.seasonNumber}"]`)
+    await expect(count).toContainText(
+      aired > 0 && aired < season.length
+        ? pattern(`(${aired} of ${season.length} aired|${aired} sur ${season.length} diffusés?)$`)
+        : pattern(`(${season.length} episodes?|${season.length} épisodes?)$`),
+    )
+    expect(await scrollsSideways(page)).toBe(false)
+  })
+
+  test('that has ended says nothing of a next episode on its plate', async ({ page, request }) => {
+    const { items } = await (await request.get('/api/v1/items?kind=series&limit=30')).json()
+    let ended: Work | undefined
+    for (const { id } of items as { id: string }[]) {
+      const work = (await (await request.get(`/api/v1/items/${id}`)).json()) as Work
+      if (work.status === 'ended') {
+        ended = work
+        break
+      }
+    }
+    test.skip(!ended, 'no series here has ended')
+
+    await page.goto(`/work/${ended!.id}`)
+    await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
+    await expect(page.locator('article > header').getByText(/next episode:|prochain épisode :/i)).toHaveCount(0)
+  })
+})
+
+test.describe('the shelf of seasons', () => {
+  test('says where it goes on, and walks along at the arrows', async ({ page, request }) => {
+    // Enough seasons to overflow a shelf at any width worth supporting: nine
+    // cards are fourteen hundred pixels, and the column beside the facts is
+    // narrower than that on the widest screen the suite uses.
+    const { items } = await (await request.get('/api/v1/items?kind=series&limit=30')).json()
+    let work: Work | undefined
+    for (const { id } of items as { id: string }[]) {
+      const candidate = (await (await request.get(`/api/v1/items/${id}`)).json()) as Work
+      if (new Set((candidate.episodes ?? []).map((e) => e.seasonNumber)).size >= 9) {
+        work = candidate
+        break
+      }
+    }
+    test.skip(!work, 'no series here has enough seasons to overflow the shelf')
+
+    await page.goto(`/work/${work!.id}`)
+    const shelf = page.getByRole('list', { name: /^(seasons|saisons)$/i })
+    await shelf.scrollIntoViewIfNeeded()
+    // From the start, whatever season a running series opened on.
+    await shelf.evaluate((list) => {
+      list.scrollLeft = 0
+    })
+
+    // Where the row is once it has stopped moving: an arrow scrolls smoothly.
+    const resting = () =>
+      shelf.evaluate(async (list) => {
+        let last = -1
+        while (list.scrollLeft !== last) {
+          last = list.scrollLeft
+          await new Promise((settle) => setTimeout(settle, 120))
+        }
+        return last
+      })
+
+    // The arrows of this shelf: on a phone, the shelves of related works have their own.
+    const arrows = page.locator(`button[aria-controls="${await shelf.getAttribute('id')}"]`)
+    const back = arrows.first()
+    const on = arrows.last()
+    await expect(back).toHaveAccessibleName(/^(scroll back|revenir en arrière)$/i)
+    await expect(on).toHaveAccessibleName(/^(scroll forward|voir la suite)$/i)
+    await expect(on).toHaveAttribute('aria-disabled', 'false')
+    await expect(back).toHaveAttribute('aria-disabled', 'true')
+    // Where the row goes on, its edge fades.
+    await expect(shelf.locator('xpath=following-sibling::div[2]')).toHaveCSS('opacity', '1')
+
+    // A keyboard reaches the arrows, and they show themselves to it.
+    await on.focus()
+    await expect(on).toHaveCSS('opacity', '1')
+    await on.press('Enter')
+    await expect.poll(resting).toBeGreaterThan(0)
+    await expect(back).toHaveAttribute('aria-disabled', 'false')
+
+    // And a pointer: the way back, pressed.
+    const moved = await resting()
+    await back.click()
+    await expect.poll(resting).toBeLessThan(moved)
+
+    // Walked to the end, the way on is said to be none, and stays to be pressed.
+    await shelf.evaluate((list) => {
+      list.scrollLeft = list.scrollWidth
+    })
+    await expect(on).toHaveAttribute('aria-disabled', 'true')
+    await expect(on).toBeVisible()
+    expect(await scrollsSideways(page)).toBe(false)
+  })
+})
+
+test.describe('where to watch', () => {
+  test('folds a long list of services to four, and opens it out on request', async ({ page, request }) => {
+    const { items } = await (await request.get('/api/v1/items?limit=40')).json()
+    const groups = ['flatrate', 'free', 'ads', 'rent', 'buy']
+    let found: { id: string; count: number } | undefined
+    for (const { id } of items as { id: string }[]) {
+      const response = await request.get(`/api/v1/items/${id}/watch`)
+      if (response.status() === 503) break
+      if (response.status() !== 200) continue
+      const data = (await response.json()) as Record<string, unknown[]>
+      const group = groups.find((g) => (data[g]?.length ?? 0) > 4)
+      if (group) {
+        found = { id, count: data[group]!.length }
+        break
+      }
+    }
+    test.skip(!found, 'no work here has more than four services in a group, or TMDB is not configured')
+
+    await page.goto(`/work/${found!.id}`)
+    const more = page.getByRole('button', { name: /^\+\d+ (more|autres?)$/ }).first()
+    await expect(more).toBeVisible()
+    await expect(more).toHaveAttribute('aria-expanded', 'false')
+    await expect(more).toHaveText(new RegExp(`^\\+${found!.count - 4} `))
+
+    // Four services and the count, then every one and the way back. The
+    // list is pinned by its place among the lists that fold: once the
+    // button reads "show fewer", a locator by the button's name would walk
+    // on to the next group's "+n more" and its list.
+    const lists = page.locator('ul:has(> li > button[aria-expanded])')
+    const index = await lists.evaluateAll(
+      (uls, button) => uls.findIndex((ul) => ul.contains(button)),
+      await more.elementHandle(),
+    )
+    const list = lists.nth(index)
+    await expect(list.locator(':scope > li')).toHaveCount(5)
+    await more.click()
+    const fewer = list.getByRole('button', { name: /^(show fewer|en afficher moins)$/i })
+    await expect(fewer).toHaveAttribute('aria-expanded', 'true')
+    await expect(list.locator(':scope > li')).toHaveCount(found!.count + 1)
+    await fewer.click()
+    await expect(list.locator(':scope > li')).toHaveCount(5)
+  })
+})
+
+test.describe('a platform’s episode', () => {
+  test('is available on a day rather than aired at midnight', async ({ page, request }) => {
+    // A series on a streaming service whose episodes are timed at midnight
+    // UTC: the platform's release day, which no clock should be made of.
+    // Stranger Things, in the suite's catalogue: filed on 15 July 2016 and
+    // timed at midnight UTC on the 16th, the day the page names.
+    const platforms = /netflix|prime video|amazon|disney\+|apple tv|\bmax\b|paramount\+|crunchyroll|hulu|peacock/i
+    const { items } = await (await request.get('/api/v1/items?kind=series&limit=40')).json()
+    let found: { work: Work; episode: Episode } | undefined
+    for (const { id } of items as { id: string }[]) {
+      const work = (await (await request.get(`/api/v1/items/${id}`)).json()) as Work
+      if (!work.network || !platforms.test(work.network)) continue
+      const episode = work.episodes?.find((e) => e.seasonNumber > 0 && /T00:00(:00(\.0+)?)?Z$/.test(e.airDateUtc ?? ''))
+      if (episode) {
+        found = { work, episode }
+        break
+      }
+    }
+    test.skip(!found, 'no series here is on a platform with an episode timed at midnight UTC')
+    const { work, episode } = found!
+
+    await page.goto(`/work/${work.id}/season/${episode.seasonNumber}/episode/${episode.episodeNumber}`)
+    await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
+    // The day that midnight opens, in the page's own words and its engine's
+    // own calendar — not the date filed beside it, and no clock at all.
+    const day = await page.evaluate(
+      (moment) =>
+        new Intl.DateTimeFormat(document.documentElement.lang === 'fr' ? 'fr-FR' : 'en-GB', {
+          weekday: 'long',
+          day: 'numeric',
+          month: 'long',
+          year: 'numeric',
+          timeZone: 'UTC',
+        }).format(new Date(moment)),
+      episode.airDateUtc!,
+    )
+    await expect(page.getByText(pattern(`^(Available on|Disponible le) ${escaped(day)}$`))).toBeVisible()
+    await expect(page.getByText(/^(available|disponible)$/i)).toBeVisible()
+    await expect(page.getByText(/UTC$/)).toHaveCount(0)
+    await expect(page.getByText(/\(your time\)|\(heure locale\)/)).toHaveCount(0)
   })
 })
 

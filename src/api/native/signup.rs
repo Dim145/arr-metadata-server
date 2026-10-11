@@ -108,6 +108,12 @@ impl Drop for Place {
     }
 }
 
+/// The refusal of a sign-up over the hour's count: come back within the
+/// hour, which is the most a place can take to free.
+fn full_hour() -> AppError {
+    AppError::RateLimited(crate::error::Throttle::after(HOUR))
+}
+
 /// A place, if one is free for this address and for the server.
 fn take_place(ip: Option<IpAddr>, now: Instant, per_address: usize, total: usize) -> Option<Place> {
     take_place_in(&RECENT, ip, now, per_address, total)
@@ -431,7 +437,7 @@ async fn register(
                 state.config.security.signups_per_hour,
                 state.config.security.signups_per_hour_total,
             )
-            .ok_or(AppError::RateLimited)?,
+            .ok_or_else(full_hour)?,
         ),
     };
     // Among several instances the hour's count is kept on the cache server
@@ -440,7 +446,7 @@ async fn register(
         Some(_) => None,
         None => take_shared_place(&state, ip.0)
             .await
-            .map_err(|_| AppError::RateLimited)?,
+            .map_err(|()| full_hour())?,
     };
 
     if repo::user::find_by_username(&state.db, &username)

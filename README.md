@@ -15,8 +15,10 @@ Sonarr's metadata service — and does what both did, from one catalogue.
 
 ## What it does
 
-- **One metadata source for the whole stack.** Sonarr's Skyhook API, Radarr's
-  metadata API and the TMDB v3 API are all served from the same store.
+- **One metadata source for the whole stack.** Sonarr's Skyhook API — its
+  first edition, which Sonarr v4 reads, and its second, which Sonarr v5
+  reads — Radarr's metadata API and the TMDB v3 API are all served from the
+  same store.
 - **Several sources behind it.** TMDB, plus Sonarr's and Radarr's own metadata
   services, merged field by field. They carry what TMDB has no field for: air
   time, TVMaze and AniList ids, absolute episode numbering, certifications by
@@ -57,11 +59,16 @@ Sonarr's metadata service — and does what both did, from one catalogue.
 - **The catalogue in numbers, the server's health, and webhooks.** A public
   page counts what the catalogue holds by decade, genre, network, language
   and score; the administrator's dashboard says what the server is, keeps and
-  did last; and what happens can be posted to a webhook — Discord, Slack or
-  anything that takes JSON — for the actions chosen (`webhooks.url`,
-  `webhooks.events`). To begin with, the actions are what enters and leaves
-  the catalogue: `item.imported`, `item.created`, `item.deleted` and
-  `dataset.imported`; `*` is every one. A failed sign-in is posted without
+  did last — and, when `updates.check` is on, whether a newer release is
+  out, learnt by one anonymous GET to GitHub a day and nothing else; and
+  what happens can be posted to a webhook — Discord, Slack or anything that
+  takes JSON — for the events ticked (`webhooks.url`, `webhooks.events`).
+  To begin with, the events are what enters and leaves the catalogue:
+  `item.imported`, `item.created`, `item.deleted` and `dataset.imported`;
+  `*` is every one. Three facts nobody did are among them: `refresh.failed`,
+  once when a work starts failing; `media.failed`, a picture or theme whose
+  every try failed; `update.available`. *Test*, beside the address, posts
+  `webhook.test` and says what came back. A failed sign-in is posted without
   the name that was typed, and the webhook address itself is never posted.
 - **Related works, and who people are.** What AniList files beside an anime
   — its sequels, prequels, side stories, what it was drawn from — is kept
@@ -108,8 +115,9 @@ Sonarr's metadata service — and does what both did, from one catalogue.
   title, line and poster for whoever unfurls it, while the catalogue is open;
   API answers carry a validator, so a client holding one is told "unchanged"
   rather than sent it again.
-- **Calendars and feeds.** The schedule, and any one work, as an iCalendar a
-  phone subscribes to; what arrives and what airs as Atom feeds.
+- **Calendars and feeds.** The schedule — episodes and film releases — and
+  any one work, as an iCalendar a phone subscribes to; what arrives, airs
+  and comes out as Atom feeds.
 - **`.nfo` export with the artwork beside it**, in the layout Kodi defined and
   Plex's Personal Media agent reads. It is the only route to Plex.
 - **Two interfaces, in English or French.** A catalogue anyone can browse —
@@ -118,7 +126,8 @@ Sonarr's metadata service — and does what both did, from one catalogue.
   choice.
 - **A catalogue to read, not only to feed clients.** Every season and every
   episode has its page, every credited person a filmography of what is held
-  here, and a schedule lists what airs each week in the reader's own timezone.
+  here, and a schedule lists what airs and what comes out each week —
+  episodes in the reader's own timezone, films on the day they come out.
   The list is filtered by genre, years, score, status, language and network,
   and sorted by popularity, score, date, title or when a work arrived — all of
   it kept in the address, so a view can be sent as a link — by the values each
@@ -310,7 +319,7 @@ None needs a key.
 | --- | --- | --- |
 | **TVmaze** | the moment each episode aired | two calls per series fetch |
 | **AniList** | its score, the romaji, native and English titles and synonyms, the main studio, an adult flag — for anime | one call per anime fetch |
-| **MyAnimeList** | its score and titles — for anime; through its own API when `AMS_MAL_CLIENT_ID` is set, through [Jikan](https://jikan.moe) otherwise | one call per anime fetch |
+| **MyAnimeList** | its score and titles — for anime; through its own API when `AMS_MAL_CLIENT_ID` is set, through [Jikan](https://jikan.moe) otherwise, and through [Tenrai](https://api.tenrai.org/documentation), a mirror written to Jikan's schema, when the one asked does not answer (`mal.fallback`, on; `AMS_TENRAI_UPSTREAM`) | one call per anime fetch |
 | **IMDb** | IMDb's rating, for every work with an IMDb id | one download a day |
 | **Fankai** | the Fan-Kai productions — anime recut into films, each as a series with its sagas as seasons — from Fankai's own metadata service | one call per saga, and three more per production fetch |
 | **Wiki Fankai** | for each Fan-Kai, the anime it was cut from and the Fan-Kai that follows it — only while Fankai is on | one call per Fan-Kai fetch |
@@ -587,12 +596,21 @@ curl 'http://localhost:8080/v1/tvdb/shows/fr/81189'       # the Skyhook form
 curl 'http://localhost:8080/api/v1/items/{id}?language=ja'
 ```
 
-One caveat worth knowing before you rely on the per-request form: **Sonarr does
-not use it.** Its request builder sets the language segment to `en` once and
-never changes it, so every Sonarr request arrives as English whatever its own UI
-language says. Per-request language is therefore for the web UI, for anything
-calling this server directly, and for TMDB clients — which do send `language=`
-and get it forwarded. For Sonarr, `AMS_TMDB_LANGUAGE` is the knob.
+One caveat worth knowing before you rely on the per-request form: **Sonarr v4
+does not use it.** Its request builder sets the language segment to `en` once
+and never changes it, so every request from a Sonarr v4 arrives as English
+whatever its own UI language says, and `AMS_TMDB_LANGUAGE` is the knob for it.
+**Sonarr v5 does.** It asks `/v2/tvdb/shows/{language}/{id}/{seasonType}` in
+the language a person set for the series, as three letters (`eng`, `fra`,
+`deu`…), and is answered in that language when the catalogue holds the series
+in it; when it does not, in the language of the answers for that caller
+(`tmdb.language`, on its key or on its address's rule); then in English; then
+as the series is stored. A code that names no language is read as `eng`, as
+Skyhook reads it, rather than refused. Every language the series is named in
+travels with the answer too (`translations`), the series' own among them, which
+is where a Sonarr v5 reads the original title from. Per-request language is
+otherwise for the web UI, for anything calling this server directly, and for
+TMDB clients — which do send `language=` and get it forwarded.
 
 A translation never overwrites a field someone locked. That would undo a rename
 the moment a client asked in another language, which is the one thing locking
@@ -707,8 +725,9 @@ turns passwords back on whatever the settings say.
 
 ### Feeds
 
-The schedule, and one work's dates, as calendars a phone or a desktop
-subscribes to; what arrives and what airs as Atom feeds a reader follows.
+The schedule — episodes and film releases — and one work's dates, as
+calendars a phone or a desktop subscribes to; what arrives, airs and comes
+out as Atom feeds a reader follows.
 Read under the same rule as the pages they mirror: open under public
 browsing, otherwise with a key, which a calendar app carries in the address
 (`?apikey=…`).
@@ -716,9 +735,9 @@ browsing, otherwise with a key, which a calendar app carries in the address
 | Feed | Path |
 |---|---|
 | The schedule: seven days back and twenty-eight ahead unless asked otherwise, at most sixty-two together | `/api/v1/calendar.ics?pastDays=7&futureDays=28&language=fr` |
-| One work: a series' dated episodes, or a film's release day | `/api/v1/items/{id}/calendar.ics` |
+| One work: a series' dated episodes, or a film's releases, a day each | `/api/v1/items/{id}/calendar.ics` |
 | The fifty works most recently added | `/api/v1/feed/added.atom` |
-| The episodes airing from yesterday to a week ahead | `/api/v1/feed/airing.atom` |
+| The episodes airing and the films coming out from yesterday to a week ahead | `/api/v1/feed/airing.atom` |
 
 An episode whose time a provider knew is a timed event, as long as its runtime;
 one with only a date is an all-day event on it. Under public browsing the
@@ -729,7 +748,7 @@ credential, and the addresses take a key as above. Links in a feed point at
 `AMS_PUBLIC_URL` when it is set — set it behind a reverse proxy — otherwise at
 the host and scheme the request came to, as the proxy forwarded them if it is
 among `AMS_TRUSTED_PROXIES`, or as the socket saw them. A window holding more
-episodes than one answer carries is cut short and says so in an
+episodes or releases than one answer carries is cut short and says so in an
 `X-AMS-Truncated` header.
 
 ### Lists
@@ -875,7 +894,9 @@ A few things worth knowing before this is reachable from anywhere:
   proxy's — `Strict-Transport-Security` for a year.
 - **Every surface is rate limited**, the arr and TMDB ones included
   (`AMS_RATE_LIMIT_PER_MINUTE`, 600 by default, per address — an IPv6 address
-  by its /64). Signing in has two brakes of its own: an account that failed
+  by its /64); a refusal says when to come back in `Retry-After`, and the
+  per-address limit its quota in `RateLimit` and `RateLimit-Policy`. Signing
+  in has two brakes of its own: an account that failed
   `AMS_SIGNIN_FAILURES_PER_ACCOUNT` times (10) in fifteen minutes is refused
   without being checked until the window closes, from wherever the attempts
   come; and passwords are checked a few at a time — as many as the machine has
@@ -898,6 +919,11 @@ A few things worth knowing before this is reachable from anywhere:
   A private LAN address is still allowed — a picture mirror at home is a
   reasonable thing to own — unless `AMS_MEDIA_PRIVATE_NETWORKS=false` refuses
   those too.
+- **The webhook's test posts to the one address configured**, an
+  administrator's setting: refused the addresses an image URL is refused —
+  loopback, link-local, the cloud's metadata — and allowed a LAN one, since a
+  relay at home is as reasonable as a picture mirror. What it says back is
+  the status and how long it took, nothing of the body.
 - **`AMS_CORS_ORIGINS` names origins.** `*` is ignored with a warning rather than
   honoured — this server sends credentials, and the two cannot be combined.
 - **`AMS_ALLOWED_HOSTS` names the hostnames this server answers to**, and is the
@@ -930,6 +956,46 @@ root filesystem and every capability dropped. It answers its own health check.
 To put a whole stack behind it — Sonarr, Radarr and Jellyseerr all served from
 here — see [`docs/integration.md`](docs/integration.md) and the runnable
 [`compose.integration.yaml`](compose.integration.yaml).
+
+### Verifying the image
+
+An image published from a tag carries what is needed to check it, so that none
+of it has to be taken on trust:
+
+- **A signature** by digest, made without a key by the publishing workflow
+  (cosign, with the identity GitHub gives that run). One made anywhere else does
+  not verify.
+- **Where it was built**: GitHub's attestation of the build provenance, which
+  ties the digest to the workflow run and the commit.
+- **What it is made of**: an SBOM and BuildKit's provenance for each platform,
+  kept in the registry beside the image. In the image's index they are the
+  `unknown/unknown` entries next to each platform: attestations, not a missing
+  platform.
+- **The crates inside the binary**: it lists its own dependencies
+  (`cargo auditable`), so a scanner finds them in a container that has no
+  package database for Rust.
+
+```bash
+# Signed by this repository's publish workflow, from a tag, and by nothing else:
+cosign verify ghcr.io/dim145/arr-metadata-server:<version> \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp '^https://github\.com/Dim145/arr-metadata-server/\.github/workflows/docker\.yml@refs/tags/v'
+
+# Built where it says, from the commit it says:
+gh attestation verify oci://ghcr.io/dim145/arr-metadata-server:<version> --repo Dim145/arr-metadata-server
+
+# What it is made of, as the registry holds it, per platform:
+docker buildx imagetools inspect ghcr.io/dim145/arr-metadata-server:<version> --format '{{ json .SBOM }}'
+
+# The crates inside the binary, against the advisory database:
+id=$(docker create ghcr.io/dim145/arr-metadata-server:<version>)
+docker cp "$id":/usr/local/bin/arr-metadata-server ./arr-metadata-server && docker rm "$id"
+cargo audit bin ./arr-metadata-server
+```
+
+`<version>` is a tag such as `1.2.3`. Pinning the digest in a compose file
+(`image: ghcr.io/dim145/arr-metadata-server@sha256:…`) is what keeps a check
+true: a tag can be moved to another image, a digest cannot.
 
 ## The clients' door
 

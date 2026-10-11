@@ -438,7 +438,11 @@ async fn from_mal(state: &AppState, id: Option<i64>, kind: MediaKind) -> Asked {
         return Asked::Nothing;
     }
 
-    match state.mal.anime(id, kind).await {
+    match state
+        .mal
+        .anime(id, kind, state.flag("mal.fallback", true))
+        .await
+    {
         Ok(Some((raw, item))) => Asked::answered(Answer::new(names::MAL, raw, item)),
         Ok(None) => Asked::Nothing,
         Err(e) => {
@@ -1517,6 +1521,7 @@ mod tests {
             &mut config.anilist.upstream,
             &mut config.mal.upstream,
             &mut config.mal.jikan_upstream,
+            &mut config.mal.tenrai_upstream,
         ] {
             upstream.clone_from(&at.to_string());
         }

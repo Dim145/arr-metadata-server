@@ -494,6 +494,7 @@ export type TaskId =
   | 'media.store'
   | 'media.sweep'
   | 'tls.renew'
+  | 'update.check'
 
 /** A background task as it stands: when it runs, how it last went. */
 export interface Task {
@@ -506,7 +507,29 @@ export interface Task {
   running?: Job
   cancelable: boolean
   /** Why it cannot run now: `source_off`, `not_configured`, `running`. */
-  blocked?: 'source_off' | 'not_configured' | 'running' | 'busy' | 'media_off' | 'no_authority'
+  blocked?: 'source_off' | 'not_configured' | 'running' | 'busy' | 'media_off' | 'no_authority' | 'updates_off'
+}
+
+/** Every name `webhooks.events` can hold, besides `*`. */
+export interface WebhookEvents {
+  /** What happens on its own: `refresh.failed`, `media.failed`, `update.available`. */
+  facts: string[]
+  /** The audit trail's actions, in the order its filter offers them. */
+  actions: string[]
+  /** What is told while the setting is not set at all. */
+  defaults: string[]
+}
+
+/** What a test post to the webhook's address came to. */
+export interface WebhookTest {
+  delivered: boolean
+  /** What the address answered with, when it answered. */
+  status?: number
+  /** Why it was not reached, naming no address. */
+  error?: string
+  /** Why nothing was sent: `not_web` or `internal`. */
+  refused?: 'not_web' | 'internal'
+  millis: number
 }
 
 export interface JobsResponse {
@@ -659,8 +682,19 @@ export interface SyncOutcome {
 /** What each source gives a work, and which wins. */
 export interface SourceRules {
   /** Every provider, in the order the merge consults them. */
-  providers: { id: string; rank: number; on: boolean }[]
+  providers: { id: string; rank: number; on: boolean; reach?: MalReach }[]
   rows: SourceRule[]
+}
+
+/** One of MyAnimeList's ways in. */
+export type MalBase = 'official' | 'jikan' | 'tenrai'
+
+/** How MyAnimeList is reached, as the server last found it. */
+export interface MalReach {
+  /** The ways in, in the order they are tried; `failedAt` while one is passed over. */
+  bases: { base: MalBase; failedAt?: string }[]
+  /** The one asked next; absent when none answers. */
+  serving?: MalBase
 }
 
 export interface SourceRule {
@@ -885,6 +919,15 @@ export interface Health {
   listsCache: CacheFigures
   sources: { name: string; on: boolean }[]
   jobs: Job[]
+  /** A newer release, when the check is on and found one. */
+  updateAvailable: UpdateAvailable | null
+}
+
+/** A release newer than the version running, and its page on GitHub. */
+export interface UpdateAvailable {
+  version: string
+  url: string
+  publishedAt?: string
 }
 
 export type ListKind = 'series' | 'movie' | 'mixed'
@@ -964,10 +1007,28 @@ export interface Airing {
   episode: Episode
 }
 
+/** How a film reaches the public: the three dates Radarr keeps for one. */
+export type ReleaseType = 'cinema' | 'digital' | 'physical'
+
+/** A film coming out on one day of the window. */
+export interface Release {
+  workId: string
+  /** YYYY-MM-DD: a release has a day, no hour. */
+  date: string
+  /** What comes out that day, cinemas first: two on one day are one release. */
+  releaseTypes: ReleaseType[]
+}
+
+/** One thing the schedule lists: an episode airing, or a film coming out. */
+export type CalendarEntry = ({ kind: 'episode' } & Airing) | ({ kind: 'release' } & Release)
+
 export interface Calendar {
+  /** The episodes alone, as the schedule listed them before it held films. */
   episodes: Airing[]
+  /** Episodes and releases together, earliest first. */
+  entries: CalendarEntry[]
   works: MediaItem[]
-  /** More aired in the window than one answer carries; the latest are missing. */
+  /** More in the window than one answer carries; the latest are missing. */
   truncated: boolean
 }
 
@@ -986,6 +1047,8 @@ export interface PersonDetails {
   placeOfBirth?: string
   /** What TMDB files them under: Acting, Directing, Writing, … */
   knownFor?: string
+  /** As TMDB has it: 1 a woman, 2 a man, 3 non-binary; absent when unknown. */
+  gender?: number
   alsoKnownAs?: string[]
   homepage?: string
   imdbId?: string

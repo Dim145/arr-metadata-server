@@ -446,7 +446,15 @@
   /* ── Motion, refused ──────────────────────────────────────────────────────
      Someone who has asked their system for less movement has asked this
      interface too. Everything still arrives; it simply arrives already there. */
-  @media (prefers-reduced-motion: reduce) {
+  /* A control scrolled into view — by the keyboard, by an anchor, by whoever
+   drives the page — stops short of what sticks to the top: the site's bar,
+   the administration's on a small screen, a page's own row of sections. Else
+   the browser lands it under the bar, where a click reaches the bar instead. */
+:where(main) :where(input, select, textarea, button, a, [tabindex]) {
+  scroll-margin-block-start: 7rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
     *,
     *::before,
     *::after {

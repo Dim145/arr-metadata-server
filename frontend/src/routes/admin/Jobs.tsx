@@ -48,6 +48,7 @@ const TASKS: TaskId[] = [
   'media.store',
   'media.sweep',
   'tls.renew',
+  'update.check',
 ]
 
 /**
@@ -78,6 +79,7 @@ export function describeDetail(detail: string | undefined, t: Dict): string {
   const names = (keys: string | undefined) => (keys ?? '').split(', ').map(providerName).join(', ')
   if ((m = detail.match(/^synced from (.+)$/))) return s.synced(names(m[1]))
   if ((m = detail.match(/^none of (.+) answered$/))) return s.noneAnswered(names(m[1]))
+  if ((m = detail.match(/^(\d+\.\d+\.\d+) is out$/))) return s.newer(m[1] ?? '')
   return t.admin.runs.notes[detail] ?? detail
 }
 

@@ -168,6 +168,33 @@ pub async fn find_id_by_external(
         .map_err(Into::into)
 }
 
+/// The TMDB ids of the films held that changed at `since` or after — an
+/// instant written as [`now`] writes them — switched off or not: written
+/// again, listed again (which a lock put on, changed or lifted asks for, and
+/// IMDb's list rescoring one), or locked since. A lock moves neither
+/// `updated_at` nor `refreshed_at`.
+pub async fn movies_changed_since(db: &Db, since: &str) -> Result<Vec<i64>> {
+    let rows = sqlx::query(db.sql(
+        "SELECT DISTINCT e.value FROM media_external_id e
+           JOIN media_item m ON m.id = e.media_id
+          WHERE e.source = ? AND m.kind = 'movie'
+            AND (m.updated_at >= ? OR m.listed_at >= ?
+                 OR EXISTS (SELECT 1 FROM media_override o
+                             WHERE o.media_id = m.id AND o.updated_at >= ?))",
+    ))
+    .bind(ExternalSource::TmdbMovie.as_str())
+    .bind(since)
+    .bind(since)
+    .bind(since)
+    .fetch_all(db.pool())
+    .await?;
+
+    Ok(rows
+        .iter()
+        .filter_map(|row| row.text("value").ok()?.parse().ok())
+        .collect())
+}
+
 /// A work named in passing — by an audit entry, a job — as a reader knows it.
 #[derive(Clone, Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
@@ -2090,6 +2117,108 @@ pub async fn airing(
     Ok((found, truncated))
 }
 
+/// The most film releases one window answers with: a film out in cinemas
+/// and digitally on two days is two.
+pub const MAX_RELEASING: i64 = 500;
+
+/// Enabled films that come out on a day of `[from, to)` — in cinemas,
+/// digitally or on disc — earliest first, and whether the window held more
+/// than [`MAX_RELEASING`] such releases.
+///
+/// A release has a day and no time, and is counted at midnight UTC on it, as
+/// an episode with only a date is. `from` and `to` are instants written as
+/// `YYYY-MM-DDTHH:MM:SSZ`; a release is stored as a day, or as an instant the
+/// way Radarr writes one, and read by its first ten characters either way.
+///
+/// The films whose release somebody corrected into the window come too,
+/// wherever their stored dates are, as the episodes do in [`airing`]; one
+/// corrected out of it comes by its stored date. The caller applies the
+/// corrections and keeps the releases they leave in the window.
+pub async fn releasing(
+    db: &Db,
+    from: &str,
+    to: &str,
+    include_adult: bool,
+) -> Result<(Vec<String>, bool)> {
+    let adult = if include_adult {
+        ""
+    } else {
+        " AND m.is_adult = 0"
+    };
+
+    // A statement each kind of release, so each is ordered by its own day; a
+    // film is read a second time for a second release in the window. Nothing
+    // indexes these dates: films are few beside episodes, and read from the
+    // index on their kind.
+    let kind = |column: &str| {
+        format!(
+            "SELECT m.id AS media_id, SUBSTR(m.{column}, 1, 10) AS released_on, m.title AS work_title
+             FROM media_item m
+             WHERE m.kind = 'movie' AND m.is_enabled = 1{adult}
+               AND SUBSTR(m.{column}, 1, 10) || 'T00:00:00Z' >= ?
+               AND SUBSTR(m.{column}, 1, 10) || 'T00:00:00Z' < ?"
+        )
+    };
+    let sql = format!(
+        "{} UNION ALL {} UNION ALL {}
+         ORDER BY released_on, work_title, media_id
+         LIMIT ?",
+        kind("in_cinemas"),
+        kind("digital_release"),
+        kind("physical_release"),
+    );
+
+    let rows = sqlx::query(db.sql(&sql))
+        .bind(from)
+        .bind(to)
+        .bind(from)
+        .bind(to)
+        .bind(from)
+        .bind(to)
+        // One more than is answered, to know whether there was more.
+        .bind(MAX_RELEASING + 1)
+        .fetch_all(db.pool())
+        .await?;
+
+    let truncated = rows.len() as i64 > MAX_RELEASING;
+    let mut seen = std::collections::HashSet::new();
+    let mut found = Vec::new();
+    for row in rows.iter().take(MAX_RELEASING as usize) {
+        let id = row.text("media_id")?;
+        if seen.insert(id.clone()) {
+            found.push(id);
+        }
+    }
+
+    // A handful of rows, read from the corrections rather than the films:
+    // those whose day is in the window. A correction is held as JSON, so the
+    // day starts after the quote — `"2026-09-24"` — and `null`, a date
+    // cleared, is no day at all.
+    let moved = sqlx::query(db.sql(&format!(
+        "SELECT DISTINCT o.media_id FROM media_override o
+         JOIN media_item m ON m.id = o.media_id
+         WHERE o.scope = 'item' AND o.field IN ('inCinemas', 'digitalRelease', 'physicalRelease')
+           AND SUBSTR(o.value, 2, 10) || 'T00:00:00Z' >= ?
+           AND SUBSTR(o.value, 2, 10) || 'T00:00:00Z' < ?
+           AND m.kind = 'movie' AND m.is_enabled = 1{adult}
+         LIMIT ?"
+    )))
+    .bind(from)
+    .bind(to)
+    .bind(MAX_RELEASING)
+    .fetch_all(db.pool())
+    .await?;
+
+    for row in &moved {
+        let id = row.text("media_id")?;
+        if seen.insert(id.clone()) {
+            found.push(id);
+        }
+    }
+
+    Ok((found, truncated))
+}
+
 /// One of a person's credits, on an enabled work.
 #[derive(Clone, Debug)]
 pub struct PersonCredit {
@@ -2901,18 +3030,34 @@ pub async fn mark_refreshed(
     next_refresh: Option<&str>,
     error: Option<&str>,
 ) -> Result<()> {
-    sqlx::query(db.sql(
-        "UPDATE media_item
-         SET refreshed_at = ?, refresh_after = ?, refresh_error = ?, updated_at = ?
-         WHERE id = ?",
-    ))
-    .bind(now())
-    .bind(next_refresh)
-    .bind(error)
-    .bind(now())
-    .bind(id)
-    .execute(db.pool())
-    .await?;
+    // A refresh that failed changed nothing: `updated_at` stays, so that
+    // `/v1/movie/changed` does not name the film to Radarr for nothing.
+    let stamp = now();
+    if error.is_some() {
+        sqlx::query(db.sql(
+            "UPDATE media_item
+             SET refreshed_at = ?, refresh_after = ?, refresh_error = ?
+             WHERE id = ?",
+        ))
+        .bind(&stamp)
+        .bind(next_refresh)
+        .bind(error)
+        .bind(id)
+        .execute(db.pool())
+        .await?;
+    } else {
+        sqlx::query(db.sql(
+            "UPDATE media_item
+             SET refreshed_at = ?, refresh_after = ?, refresh_error = NULL, updated_at = ?
+             WHERE id = ?",
+        ))
+        .bind(&stamp)
+        .bind(next_refresh)
+        .bind(&stamp)
+        .bind(id)
+        .execute(db.pool())
+        .await?;
+    }
 
     Ok(())
 }
@@ -4278,6 +4423,98 @@ mod tests {
         // then keeps it in this window.
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].episode.air_date.as_deref(), Some("2027-01-01"));
+    }
+
+    #[tokio::test]
+    async fn the_calendar_reads_the_films_coming_out_in_the_window() {
+        let db = db().await;
+        let week = ("2026-09-21T00:00:00Z", "2026-09-28T00:00:00Z");
+
+        let cinema = stored(&db, |i| {
+            i.title = "In cinemas".into();
+            i.in_cinemas = Some("2026-09-23".into());
+        })
+        .await;
+        // Out long ago in cinemas, then digitally and on disc this week — the
+        // digital day written as Radarr writes one.
+        let at_home = stored(&db, |i| {
+            i.title = "At home".into();
+            i.in_cinemas = Some("2026-05-01".into());
+            i.digital_release = Some("2026-09-22T00:00:00Z".into());
+            i.physical_release = Some("2026-09-26".into());
+        })
+        .await;
+        let long_out = stored(&db, |i| {
+            i.title = "Long out".into();
+            i.in_cinemas = Some("2026-01-05".into());
+        })
+        .await;
+        for (title, enabled, adult) in [("Switched off", false, false), ("For adults", true, true)]
+        {
+            stored(&db, |i| {
+                i.title = title.into();
+                i.in_cinemas = Some("2026-09-23".into());
+                i.is_enabled = enabled;
+                i.is_adult = adult;
+            })
+            .await;
+        }
+        // A series is placed by its episodes, whatever else it was given.
+        stored(&db, |i| {
+            i.kind = MediaKind::Series;
+            i.title = "A series".into();
+            i.in_cinemas = Some("2026-09-23".into());
+        })
+        .await;
+
+        let read = async |from: &str, to: &str, adult: bool| {
+            let (found, truncated) = releasing(&db, from, to, adult).await.expect("read");
+            assert!(!truncated);
+            found
+        };
+
+        // Each film once, by its first release in the window: the 22nd, then
+        // the 23rd. Switched off, for adults, out before: left out.
+        assert_eq!(
+            read(week.0, week.1, false).await,
+            [at_home.id.clone(), cinema.id.clone()]
+        );
+        assert_eq!(read(week.0, week.1, true).await.len(), 3, "and adults' too");
+
+        // A release is at midnight UTC on its day: a window from one second
+        // after misses it, one ending a second after holds it.
+        assert!(read("2026-09-26T00:00:01Z", week.1, false).await.is_empty());
+        assert_eq!(
+            read("2026-09-25T00:00:00Z", "2026-09-26T00:00:01Z", false).await,
+            std::slice::from_ref(&at_home.id)
+        );
+
+        // A digital release set by hand in the window, and a disc set by hand
+        // out of it: the first is read with its stored dates, wherever they
+        // are, for the caller to place; the second has nothing to place.
+        let corrected = async |work: &MediaItem, field: &str, day: &str| {
+            crate::db::repo::override_field::set(
+                &db,
+                &work.id,
+                crate::domain::fields::Scope::Item,
+                field,
+                Some(&serde_json::json!(day)),
+                None,
+            )
+            .await
+            .expect("corrected");
+        };
+        let elsewhere = stored(&db, |i| {
+            i.title = "Out of the week".into();
+            i.in_cinemas = Some("2026-02-02".into());
+        })
+        .await;
+        corrected(&long_out, "digitalRelease", "2026-09-24").await;
+        corrected(&elsewhere, "physicalRelease", "2027-03-01T00:00:00Z").await;
+        assert_eq!(
+            read(week.0, week.1, false).await,
+            [at_home.id.clone(), cinema.id.clone(), long_out.id.clone()]
+        );
     }
 
     #[tokio::test]

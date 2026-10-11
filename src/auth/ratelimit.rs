@@ -30,15 +30,22 @@ use axum::{
     middleware::Next,
     response::Response,
 };
-use governor::{Quota, RateLimiter, clock::DefaultClock, state::keyed::DefaultKeyedStateStore};
+use governor::{
+    Quota, RateLimiter,
+    clock::{Clock as _, DefaultClock},
+    state::keyed::DefaultKeyedStateStore,
+};
 use sha2::{Digest, Sha256};
 
 use crate::{
     auth::{ip, middleware::ClientAddr},
     cache::RedisSlot,
-    error::{AppError, AppResult},
+    error::{AppError, AppResult, Throttle},
     state::AppState,
 };
+
+/// The window an address's quota is counted over.
+const MINUTE: Duration = Duration::from_secs(60);
 
 type Keyed = RateLimiter<IpAddr, DefaultKeyedStateStore<IpAddr>, DefaultClock>;
 
@@ -112,45 +119,60 @@ impl Limiter {
         }
     }
 
-    fn check_local(&self, peer: IpAddr) -> bool {
-        match &self.local {
-            None => true,
-            Some(limiter) => limiter.check_key(&peer).is_ok(),
-        }
-    }
-
-    /// Whether the peer may go on: within the shared window when there is
-    /// one and the server answers, within the memory's bucket otherwise.
-    async fn check(&self, peer: IpAddr) -> bool {
-        if self.local.is_none() {
-            return true;
-        }
+    /// Whether the peer may go on — within the shared window when there is
+    /// one and the server answers, within the memory's bucket otherwise — or
+    /// how long until it may.
+    async fn check(&self, peer: IpAddr) -> Result<(), Duration> {
+        let Some(limiter) = &self.local else {
+            return Ok(());
+        };
         if let Some((slot, prefix)) = &self.shared
             && let Some(redis) = slot.load_full()
         {
-            let minute = crate::cache::now_secs() / 60;
+            let now = crate::cache::now_secs();
+            let minute = now / MINUTE.as_secs();
             let key = format!("{prefix}rl:{peer}:{minute}");
             if let Some(count) = redis.incr_window(&key, WINDOW_TTL).await {
-                return count <= u64::from(self.per_minute);
+                // Spent, the window is the minute: the next one opens it again.
+                return if count <= u64::from(self.per_minute) {
+                    Ok(())
+                } else {
+                    Err(until_window_closes(now, MINUTE))
+                };
             }
         }
-        self.check_local(peer)
+        limiter
+            .check_key(&peer)
+            .map(|_| ())
+            .map_err(|refused| refused.wait_time_from(limiter.clock().now()))
     }
 
-    /// Whether `account` may try a password now: fewer failures in this
-    /// window than the limit. Asked before anything is hashed, so a refused
-    /// attempt costs nothing.
-    pub async fn sign_in_allowed(&self, account: &str) -> bool {
+    /// Whether `account` may try a password now — fewer failures in this
+    /// window than the limit — or how long until its window closes. Asked
+    /// before anything is hashed, so a refused attempt costs nothing.
+    pub async fn sign_in_allowed(&self, account: &str) -> Result<(), Duration> {
         let limit = self.sign_ins.per_account;
         if limit == 0 {
-            return true;
+            return Ok(());
         }
         if let Some((key, redis)) = self.shared_sign_in_key(account)
             && let Some(counts) = redis.mget_u64(std::slice::from_ref(&key)).await
         {
-            return counts.first().copied().unwrap_or_default() < u64::from(limit);
+            return if counts.first().copied().unwrap_or_default() < u64::from(limit) {
+                Ok(())
+            } else {
+                Err(until_window_closes(
+                    crate::cache::now_secs(),
+                    SIGN_IN_WINDOW,
+                ))
+            };
         }
-        self.sign_ins.failures(digest(account), Instant::now()) < limit
+        let (key, now) = (digest(account), Instant::now());
+        if self.sign_ins.failures(key, now) < limit {
+            Ok(())
+        } else {
+            Err(self.sign_ins.closes_in(key, now))
+        }
     }
 
     /// Count a failed sign-in on `account`.
@@ -219,6 +241,17 @@ impl SignIns {
         }
     }
 
+    /// How long until the window counted at `now` closes; nothing when none
+    /// is open.
+    fn closes_in(&self, key: u128, now: Instant) -> Duration {
+        let Ok(counts) = self.counts.lock() else {
+            return Duration::ZERO;
+        };
+        counts.get(&key).map_or(Duration::ZERO, |(_, since)| {
+            SIGN_IN_WINDOW.saturating_sub(now.duration_since(*since))
+        })
+    }
+
     fn fail(&self, key: u128, now: Instant) {
         let Ok(mut counts) = self.counts.lock() else {
             return;
@@ -241,6 +274,14 @@ impl SignIns {
             counts.retain(|_, (_, since)| now.duration_since(*since) < SIGN_IN_WINDOW);
         }
     }
+}
+
+/// How long until a window that started on a multiple of its length, as the
+/// shared counts' keys do, gives way to the next: from `now`, in seconds
+/// since the epoch.
+fn until_window_closes(now: u64, window: Duration) -> Duration {
+    let length = window.as_secs().max(1);
+    Duration::from_secs(length - now % length)
 }
 
 /// What an account is counted under: its name as typed, trimmed and folded
@@ -278,9 +319,13 @@ pub async fn limit(
         })
         .map_or(UNKNOWN_PEER, ip::bucket);
 
-    if !state.limiter.check(peer).await {
+    if let Err(wait) = state.limiter.check(peer).await {
         tracing::warn!(%peer, path = %request.uri().path(), "rate limited");
-        return Err(AppError::RateLimited);
+        return Err(AppError::RateLimited(Throttle::spent(
+            state.limiter.per_minute,
+            MINUTE,
+            wait,
+        )));
     }
 
     Ok(next.run(request).await)
@@ -296,7 +341,7 @@ mod tests {
         let peer = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
 
         for _ in 0..1000 {
-            assert!(limiter.check(peer).await);
+            assert!(limiter.check(peer).await.is_ok());
         }
     }
 
@@ -305,10 +350,10 @@ mod tests {
         let limiter = Limiter::new(3, None, 0);
         let peer = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
 
-        assert!(limiter.check(peer).await);
-        assert!(limiter.check(peer).await);
-        assert!(limiter.check(peer).await);
-        assert!(!limiter.check(peer).await);
+        assert!(limiter.check(peer).await.is_ok());
+        assert!(limiter.check(peer).await.is_ok());
+        assert!(limiter.check(peer).await.is_ok());
+        assert!(limiter.check(peer).await.is_err());
     }
 
     #[tokio::test]
@@ -317,12 +362,12 @@ mod tests {
         let a = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
         let b = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2));
 
-        assert!(limiter.check(a).await);
-        assert!(limiter.check(a).await);
-        assert!(!limiter.check(a).await);
+        assert!(limiter.check(a).await.is_ok());
+        assert!(limiter.check(a).await.is_ok());
+        assert!(limiter.check(a).await.is_err());
 
-        assert!(limiter.check(b).await);
-        assert!(limiter.check(b).await);
+        assert!(limiter.check(b).await.is_ok());
+        assert!(limiter.check(b).await.is_ok());
     }
 
     /// One machine with a /64 to pick from is one peer, whichever address
@@ -333,11 +378,11 @@ mod tests {
         let a: IpAddr = "2001:db8:1:2::1".parse().unwrap();
         let b: IpAddr = "2001:db8:1:2::2".parse().unwrap();
 
-        assert!(limiter.check(ip::bucket(a)).await);
-        assert!(limiter.check(ip::bucket(b)).await);
-        assert!(!limiter.check(ip::bucket(a)).await);
+        assert!(limiter.check(ip::bucket(a)).await.is_ok());
+        assert!(limiter.check(ip::bucket(b)).await.is_ok());
+        assert!(limiter.check(ip::bucket(a)).await.is_err());
         let elsewhere: IpAddr = "2001:db8:1:3::1".parse().unwrap();
-        assert!(limiter.check(ip::bucket(elsewhere)).await);
+        assert!(limiter.check(ip::bucket(elsewhere)).await.is_ok());
     }
 
     /// A shared limiter whose server is not attached counts in memory.
@@ -345,8 +390,8 @@ mod tests {
     async fn without_the_server_the_memory_counts() {
         let limiter = Limiter::new(1, Some((RedisSlot::default(), "ams:".into())), 0);
         let peer = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 3));
-        assert!(limiter.check(peer).await);
-        assert!(!limiter.check(peer).await);
+        assert!(limiter.check(peer).await.is_ok());
+        assert!(limiter.check(peer).await.is_err());
     }
 
     #[tokio::test]
@@ -354,16 +399,56 @@ mod tests {
         let limiter = Limiter::new(0, None, 3);
 
         for _ in 0..3 {
-            assert!(limiter.sign_in_allowed("Admin").await);
+            assert!(limiter.sign_in_allowed("Admin").await.is_ok());
             limiter.sign_in_failed(" admin ").await;
         }
-        assert!(!limiter.sign_in_allowed("ADMIN").await);
+        assert!(limiter.sign_in_allowed("ADMIN").await.is_err());
         // Another account is another count.
-        assert!(limiter.sign_in_allowed("alice").await);
+        assert!(limiter.sign_in_allowed("alice").await.is_ok());
 
         // A sign-in that went through starts the count again.
         limiter.sign_in_succeeded("admin").await;
-        assert!(limiter.sign_in_allowed("admin").await);
+        assert!(limiter.sign_in_allowed("admin").await.is_ok());
+    }
+
+    /// A peer refused is told how long until a request would go through:
+    /// three a minute is one every twenty seconds, once the three are spent.
+    #[tokio::test]
+    async fn a_refusal_says_how_long_to_wait() {
+        let limiter = Limiter::new(3, None, 0);
+        let peer = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 4));
+        for _ in 0..3 {
+            assert!(limiter.check(peer).await.is_ok());
+        }
+        let wait = limiter.check(peer).await.expect_err("refused");
+        assert!(
+            wait > Duration::from_secs(19) && wait <= Duration::from_secs(20),
+            "{wait:?}"
+        );
+    }
+
+    /// An account refused is told when its window closes, from its first
+    /// failure.
+    #[tokio::test]
+    async fn an_account_refused_is_told_when_its_window_closes() {
+        let limiter = Limiter::new(0, None, 1);
+        limiter.sign_in_failed("admin").await;
+        let wait = limiter.sign_in_allowed("admin").await.expect_err("refused");
+        assert!(
+            wait > SIGN_IN_WINDOW - Duration::from_secs(5) && wait <= SIGN_IN_WINDOW,
+            "{wait:?}"
+        );
+    }
+
+    #[test]
+    fn a_shared_window_closes_at_the_next_multiple_of_its_length() {
+        assert_eq!(until_window_closes(120, MINUTE), Duration::from_secs(60));
+        assert_eq!(until_window_closes(121, MINUTE), Duration::from_secs(59));
+        assert_eq!(until_window_closes(179, MINUTE), Duration::from_secs(1));
+        assert_eq!(
+            until_window_closes(900 * 7 + 300, SIGN_IN_WINDOW),
+            Duration::from_secs(600)
+        );
     }
 
     #[test]
@@ -406,6 +491,6 @@ mod tests {
         for _ in 0..100 {
             limiter.sign_in_failed("admin").await;
         }
-        assert!(limiter.sign_in_allowed("admin").await);
+        assert!(limiter.sign_in_allowed("admin").await.is_ok());
     }
 }

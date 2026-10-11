@@ -19,7 +19,9 @@ use crate::{
     error::{AppError, AppResult},
     service::{language, movie},
     state::AppState,
-    wire::radarr::{CollectionResource, MovieResource, from_item},
+    wire::radarr::{
+        Beside, CollectionResource, MovieResource, collection_images, from_item, from_item_beside,
+    },
 };
 
 /// The tag every route here is filed under in the documentation.
@@ -48,7 +50,33 @@ pub fn router() -> OpenApiRouter<AppState> {
 /// the overlay is the title and the synopsis and costs no upstream call. The
 /// works are taken by value because the usual answer is that this caller reads
 /// the language they are already stored in, and then nothing is copied at all.
-fn served(state: &AppState, identity: &Identity, mut items: Vec<MediaItem>) -> Vec<MovieResource> {
+fn served(state: &AppState, identity: &Identity, items: Vec<MediaItem>) -> Vec<MovieResource> {
+    served_with(state, identity, items, &[])
+}
+
+/// [`served`], each film with what goes beside it: the collection it is part
+/// of, which Radarr adds and offers the rest of, and the films recommended
+/// with it, which feed its Discover page. These are the routes Radarr
+/// refreshes its library through; what goes beside is read from what is held
+/// and never fetched — see [`movie::beside`]. A search stays without: its
+/// results are shallow, and Radarr asks for the film again once it is added.
+async fn served_beside(
+    state: &AppState,
+    identity: &Identity,
+    items: Vec<MediaItem>,
+) -> Vec<MovieResource> {
+    let language = state.language(identity.client_id(), identity.peer_id());
+    let beside = movie::beside(state, &items, &language).await;
+
+    served_with(state, identity, items, &beside)
+}
+
+fn served_with(
+    state: &AppState,
+    identity: &Identity,
+    mut items: Vec<MediaItem>,
+    beside: &[Beside],
+) -> Vec<MovieResource> {
     let language = state.language(identity.client_id(), identity.peer_id());
 
     for item in &mut items {
@@ -56,7 +84,14 @@ fn served(state: &AppState, identity: &Identity, mut items: Vec<MediaItem>) -> V
         state.media.for_clients(item);
     }
 
-    items.iter().map(from_item).collect()
+    items
+        .iter()
+        .enumerate()
+        .map(|(at, item)| match beside.get(at) {
+            Some(beside) => from_item_beside(item, beside),
+            None => from_item(item),
+        })
+        .collect()
 }
 
 /// A movie by TMDB id, in Radarr's format.
@@ -79,7 +114,7 @@ async fn by_tmdb(
         .await?
         .ok_or(AppError::NotFound)?;
 
-    let mut answer = served(&state, &identity, vec![item]);
+    let mut answer = served_beside(&state, &identity, vec![item]).await;
 
     Ok(Json(answer.remove(0)))
 }
@@ -102,7 +137,7 @@ async fn by_imdb(
         .into_iter()
         .collect();
 
-    Ok(Json(served(&state, &identity, found)))
+    Ok(Json(served_beside(&state, &identity, found).await))
 }
 
 #[derive(Deserialize)]
@@ -153,7 +188,7 @@ async fn bulk(
 ) -> AppResult<Json<Vec<MovieResource>>> {
     let items = movie::bulk(&state, &tmdb_ids).await?;
 
-    Ok(Json(served(&state, &identity, items)))
+    Ok(Json(served_beside(&state, &identity, items).await))
 }
 
 #[derive(Deserialize)]
@@ -161,13 +196,15 @@ struct ChangedQuery {
     since: Option<String>,
 }
 
-/// TMDB ids changed since a date, which Radarr polls to know what to refetch.
+/// TMDB ids changed since an instant, which Radarr polls to know what to
+/// refetch: those TMDB lists, and the films held here that changed since —
+/// fetched again, or a lock put on, changed or lifted.
 #[utoipa::path(
     get, path = "/v1/movie/changed", tag = TAG,
-    params(("since" = String, Query, description = "A date or timestamp; only the date part is used")),
+    params(("since" = String, Query, description = "An instant — `2026-10-09T11:45:00`, UTC unless an offset says otherwise — or a date. TMDB is asked from its date")),
     responses(
         (status = 200, body = Vec<i64>),
-        (status = 400, description = "`since` was not supplied"),
+        (status = 400, description = "`since` was not supplied, or is no date"),
     ),
     security(),
 )]
@@ -180,14 +217,22 @@ async fn changed(
             "the `since` parameter is required".into(),
         ));
     };
+    let Some(since) = movie::instant(&since) else {
+        return Err(AppError::BadRequest(
+            "`since` is a date, or an instant such as 2026-10-09T11:45:00".into(),
+        ));
+    };
 
-    Ok(Json(movie::changed_since(&state, &since).await?))
+    Ok(Json(movie::changed_since(&state, since).await?))
 }
 
 /// A collection and the movies in it.
 ///
 /// The parts carry search-level detail only: fetching each in full would be
-/// dozens of upstream calls for a list Radarr uses to offer suggestions.
+/// dozens of upstream calls for a list Radarr uses to offer suggestions. Each
+/// names the collection, as api.radarr.video's do: Radarr files a film under
+/// the collection it names, and lists a collection's films by that — parts
+/// sent naming none were filed under none.
 #[utoipa::path(
     get, path = "/v1/movie/collection/{tmdb_id}", tag = TAG,
     params(("tmdb_id" = i64, Path, description = "TMDB collection id")),
@@ -202,16 +247,32 @@ async fn collection(
     Extension(identity): Extension<Identity>,
     Path(tmdb_id): Path<i64>,
 ) -> AppResult<Json<CollectionResource>> {
-    let (name, overview, parts) = movie::collection(&state, tmdb_id)
+    let language = language::tmdb_locale(
+        None,
+        &state.language(identity.client_id(), identity.peer_id()),
+    );
+    let found = movie::collection(&state, tmdb_id, &language)
         .await?
         .ok_or(AppError::NotFound)?;
 
-    Ok(Json(CollectionResource {
-        name,
-        overview,
+    let named = CollectionResource {
+        name: found.name.clone(),
+        overview: None,
         tmdb_id,
         images: Vec::new(),
-        parts: served(&state, &identity, parts),
+        parts: Vec::new(),
+    };
+    let mut parts = served(&state, &identity, found.parts);
+    for part in &mut parts {
+        part.collection = Some(named.clone());
+    }
+
+    Ok(Json(CollectionResource {
+        name: found.name,
+        overview: found.overview,
+        tmdb_id,
+        images: collection_images(found.poster.as_deref(), found.backdrop.as_deref()),
+        parts,
     }))
 }
 

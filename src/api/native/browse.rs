@@ -1,5 +1,5 @@
 //! Reading the catalogue across works: what it can be narrowed by, what airs
-//! when, and who is in it.
+//! and comes out when, and who is in it.
 //!
 //! Visitors may read all three when browsing is public — they are the
 //! catalogue seen from another side, not how the server is run.
@@ -18,7 +18,7 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 use crate::{
     auth::Identity,
     db::repo::{self, item::Facets},
-    domain::{CreditType, Episode, MediaItem},
+    domain::{CreditType, Episode, MediaItem, MediaKind},
     error::{AppError, AppResult},
     providers::tmdb,
     service,
@@ -103,35 +103,91 @@ pub struct CalendarQuery {
     pub from: String,
     /// The instant the window ends, not included. At most 62 days after `from`.
     pub to: String,
-    /// Episode titles in this language, where a translation is held.
+    /// Titles in this language, where a translation is held.
     pub language: Option<String>,
 }
 
 /// One episode of the window, and which of the listed works it belongs to.
-#[derive(Serialize, ToSchema)]
+#[derive(Clone, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Airing {
     pub work_id: String,
     pub episode: Episode,
 }
 
+/// How a film reaches the public: the three dates Radarr keeps for one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum ReleaseType {
+    /// In cinemas: the work's `inCinemas`.
+    Cinema,
+    /// To buy or rent online: its `digitalRelease`.
+    Digital,
+    /// On disc: its `physicalRelease`.
+    Physical,
+}
+
+impl ReleaseType {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Cinema => "cinema",
+            Self::Digital => "digital",
+            Self::Physical => "physical",
+        }
+    }
+}
+
+/// A film coming out on one day of the window, and which of the listed works
+/// it is.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Release {
+    pub work_id: String,
+    /// The day, `YYYY-MM-DD`. A release has no hour: it is placed at midnight
+    /// UTC on its day, as an episode with only a date is.
+    pub date: String,
+    /// What comes out that day, cinemas first. Two on the same day are one
+    /// release, not two.
+    pub release_types: Vec<ReleaseType>,
+}
+
+/// One thing the schedule lists: an episode airing, or a film coming out.
+#[derive(Clone, Serialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum CalendarEntry {
+    /// An episode, as `episodes` lists it. Boxed: an episode is four times
+    /// a release, and a window holds hundreds of either.
+    Episode(Box<Airing>),
+    /// A film's release: in cinemas, digitally, on disc.
+    Release(Release),
+}
+
 #[derive(Serialize, ToSchema)]
 pub struct Calendar {
-    /// Earliest first.
+    /// The episodes alone, earliest first: the schedule as it was answered
+    /// before it held films, kept for whoever reads it so.
     pub episodes: Vec<Airing>,
-    /// Every work the episodes belong to, drawn as a list is: artwork and
+    /// The episodes and the films' releases together, earliest first: an
+    /// episode at its moment, a release at midnight UTC on its day, and of
+    /// two at the same moment the episode first.
+    pub entries: Vec<CalendarEntry>,
+    /// Every work the entries belong to, drawn as a list is: artwork and
     /// scores, no episodes.
     pub works: Vec<MediaItem>,
-    /// The window held more episodes than one answer carries, and the latest
-    /// are missing: ask for a shorter one.
+    /// The window held more episodes, or more releases, than one answer
+    /// carries, and the latest are missing: ask for a shorter one.
     pub truncated: bool,
 }
 
-/// The episodes that air in a window, across every series.
+/// What airs and what comes out in a window: the episodes of every series,
+/// and the films out in cinemas, digitally or on disc.
 ///
-/// By the moment each airs, in UTC — where no provider knew the time, midnight
-/// UTC on its date, which is what Sonarr is given. The window is the caller's
-/// to choose, so a day is the caller's own day wherever it is.
+/// An episode by the moment it airs, in UTC — where no provider knew the
+/// time, midnight UTC on its date, which is what Sonarr is given; a release
+/// by its day, at midnight UTC too, once for each day a film comes out. The
+/// window is the caller's to choose, so a day is the caller's own day
+/// wherever it is. Switched off, or for adults where the reader would not
+/// be shown one, a work is left out of both.
 #[utoipa::path(
     get, path = "/calendar", tag = TAG,
     params(CalendarQuery),
@@ -166,8 +222,9 @@ async fn calendar(
 }
 
 /// The schedule of a window, as the calendar answers it and the feeds repeat
-/// it: every episode airing from `from` to `to`, and the works they belong
-/// to, with the overrides and the reader's language applied.
+/// it: every episode airing from `from` to `to` and every film coming out in
+/// it, and the works they belong to, with the overrides and the reader's
+/// language applied.
 pub(super) async fn window(
     state: &AppState,
     identity: &Identity,
@@ -177,11 +234,17 @@ pub(super) async fn window(
 ) -> AppResult<Calendar> {
     let stamp = |t: chrono::DateTime<chrono::Utc>| t.format("%Y-%m-%dT%H:%M:%SZ").to_string();
     let adult = state.adult_for(identity.client_id(), identity.peer_id(), None);
-    let (airing, truncated) =
+    let (airing, episodes_cut) =
         repo::item::airing(&state.db, &stamp(from), &stamp(to), adult).await?;
+    let (films, releases_cut) =
+        repo::item::releasing(&state.db, &stamp(from), &stamp(to), adult).await?;
 
     let ids: Vec<String> = {
-        let mut ids: Vec<String> = airing.iter().map(|a| a.media_id.clone()).collect();
+        let mut ids: Vec<String> = airing
+            .iter()
+            .map(|a| a.media_id.clone())
+            .chain(films)
+            .collect();
         ids.sort();
         ids.dedup();
         ids
@@ -223,7 +286,8 @@ pub(super) async fn window(
         .map(|w| (w.id.clone(), w.title.to_lowercase()))
         .collect();
 
-    let mut episodes: Vec<Airing> = works
+    let in_window = |t: chrono::DateTime<chrono::Utc>| t >= from && t < to;
+    let mut entries: Vec<CalendarEntry> = works
         .iter_mut()
         .flat_map(|work| {
             let id = work.id.clone();
@@ -235,26 +299,69 @@ pub(super) async fn window(
                 })
         })
         // An override can move an episode out of the window it was found in.
-        .filter(|a| aired_at(&a.episode).is_some_and(|t| t >= from && t < to))
+        .filter(|a| aired_at(&a.episode).is_some_and(in_window))
+        .map(|a| CalendarEntry::Episode(Box::new(a)))
         .collect();
+    // A film's days are read with its corrections laid over, as an
+    // episode's are: one somebody moved is listed where they put it.
+    entries.extend(
+        works
+            .iter()
+            .filter(|w| w.kind == MediaKind::Movie)
+            .flat_map(releases_of)
+            .filter(|r| released_at(r).is_some_and(in_window))
+            .map(CalendarEntry::Release),
+    );
 
     // Overrides may have moved some, so the order is settled here: by the
-    // moment, then the series, then the episode, so a season dropped at once
+    // moment — of an episode and a release at the same one, the episode
+    // first — then the work, then the episode, so a season dropped at once
     // is listed in its own order.
-    episodes.sort_by_cached_key(|a| {
+    entries.sort_by_cached_key(|entry| {
+        let (at, rank, work_id, season, number) = match entry {
+            CalendarEntry::Episode(a) => (
+                aired_at(&a.episode),
+                0,
+                &a.work_id,
+                a.episode.season_number,
+                a.episode.episode_number,
+            ),
+            CalendarEntry::Release(r) => (released_at(r), 1, &r.work_id, 0, 0),
+        };
         (
-            aired_at(&a.episode),
-            titles.get(&a.work_id).cloned().unwrap_or_default(),
-            a.work_id.clone(),
-            a.episode.season_number,
-            a.episode.episode_number,
+            at,
+            rank,
+            titles.get(work_id).cloned().unwrap_or_default(),
+            work_id.clone(),
+            season,
+            number,
         )
     });
 
+    // A work whose every date of the window was moved out of it by hand has
+    // nothing listed, and is not drawn.
+    let listed: std::collections::HashSet<&str> = entries
+        .iter()
+        .map(|entry| match entry {
+            CalendarEntry::Episode(a) => a.work_id.as_str(),
+            CalendarEntry::Release(r) => r.work_id.as_str(),
+        })
+        .collect();
+    works.retain(|w| listed.contains(w.id.as_str()));
+
+    let episodes = entries
+        .iter()
+        .filter_map(|entry| match entry {
+            CalendarEntry::Episode(a) => Some(Airing::clone(a)),
+            CalendarEntry::Release(_) => None,
+        })
+        .collect();
+
     Ok(Calendar {
         episodes,
+        entries,
         works,
-        truncated,
+        truncated: episodes_cut || releases_cut,
     })
 }
 
@@ -283,6 +390,50 @@ pub(super) fn aired_at(episode: &Episode) -> Option<chrono::DateTime<chrono::Utc
                 .map(|t| t.and_utc())
                 .or_else(|| instant(day))
         })
+}
+
+/// A film's releases, a day each, earliest first: one for each distinct day
+/// among its dates in cinemas, digitally and on disc, with every kind that
+/// falls on it.
+///
+/// A date is read by its day, the first ten characters: a provider gives a
+/// day, Radarr an instant at midnight, a correction either. One that reads
+/// as no day is no release.
+pub(super) fn releases_of(work: &MediaItem) -> Vec<Release> {
+    let mut days: Vec<(chrono::NaiveDate, Vec<ReleaseType>)> = Vec::new();
+    for (kind, date) in [
+        (ReleaseType::Cinema, &work.in_cinemas),
+        (ReleaseType::Digital, &work.digital_release),
+        (ReleaseType::Physical, &work.physical_release),
+    ] {
+        let Some(day) = date
+            .as_deref()
+            .and_then(|d| d.trim().get(..10))
+            .and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
+        else {
+            continue;
+        };
+        match days.iter_mut().find(|(d, _)| *d == day) {
+            Some((_, kinds)) => kinds.push(kind),
+            None => days.push((day, vec![kind])),
+        }
+    }
+    days.sort_by_key(|(day, _)| *day);
+    days.into_iter()
+        .map(|(day, release_types)| Release {
+            work_id: work.id.clone(),
+            date: day.format("%Y-%m-%d").to_string(),
+            release_types,
+        })
+        .collect()
+}
+
+/// When a release is, as the calendar compares it: midnight UTC on its day.
+pub(super) fn released_at(release: &Release) -> Option<chrono::DateTime<chrono::Utc>> {
+    chrono::NaiveDate::parse_from_str(&release.date, "%Y-%m-%d")
+        .ok()
+        .and_then(|d| d.and_hms_opt(0, 0, 0))
+        .map(|t| t.and_utc())
 }
 
 // ─── people ──────────────────────────────────────────────────────────────────
@@ -321,6 +472,10 @@ pub struct PersonDetails {
     /// What TMDB files them under: `Acting`, `Directing`, `Writing`, …
     #[serde(skip_serializing_if = "Option::is_none")]
     pub known_for: Option<String>,
+    /// As TMDB has it — 1 a woman, 2 a man, 3 non-binary — for a language
+    /// that agrees its participles. Absent where TMDB does not know.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gender: Option<u8>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub also_known_as: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -516,6 +671,11 @@ fn person_details(raw: &Value) -> PersonDetails {
         deathday: text("deathday"),
         place_of_birth: text("place_of_birth"),
         known_for: text("known_for_department"),
+        gender: raw
+            .get("gender")
+            .and_then(Value::as_u64)
+            .filter(|g| (1..=3).contains(g))
+            .map(|g| g as u8),
         also_known_as: names(raw.get("also_known_as")),
         homepage: text("homepage").filter(|h| h.starts_with("http")),
         imdb_id: text("imdb_id").or_else(|| {
@@ -544,6 +704,7 @@ mod tests {
             "deathday": null,
             "place_of_birth": "Hollywood, Los Angeles, California, USA",
             "known_for_department": "Acting",
+            "gender": 2,
             "also_known_as": ["Bryan Lee Cranston", " ", "Lee Stone"],
             "homepage": "",
             "imdb_id": null,
@@ -559,7 +720,11 @@ mod tests {
             Some("Hollywood, Los Angeles, California, USA")
         );
         assert_eq!(details.known_for.as_deref(), Some("Acting"));
+        assert_eq!(details.gender, Some(2));
         assert_eq!(details.also_known_as, ["Bryan Lee Cranston", "Lee Stone"]);
+        // TMDB's 0 is "not set", which is nothing to agree with.
+        let unknown = person_details(&serde_json::json!({ "gender": 0 }));
+        assert_eq!(unknown.gender, None);
         assert_eq!(details.homepage, None);
         assert_eq!(details.imdb_id.as_deref(), Some("nm0186505"));
         assert_eq!(details.photos.len(), MOST_PHOTOS);
@@ -612,5 +777,229 @@ mod tests {
         // What reads as neither is not in any window.
         episode.air_date = Some("TBA".into());
         assert_eq!(aired_at(&episode), None);
+    }
+
+    #[test]
+    fn a_film_is_a_release_a_day_with_every_kind_that_falls_on_it() {
+        let mut film = MediaItem::empty(MediaKind::Movie);
+        film.id = "f1".into();
+        film.in_cinemas = Some("2014-11-05".into());
+        // Digitally and on disc the same day, the one written as Radarr
+        // writes it: one release, both kinds.
+        film.digital_release = Some("2015-03-31T00:00:00Z".into());
+        film.physical_release = Some(" 2015-03-31".into());
+        let releases = releases_of(&film);
+        assert_eq!(
+            releases,
+            [
+                Release {
+                    work_id: "f1".into(),
+                    date: "2014-11-05".into(),
+                    release_types: vec![ReleaseType::Cinema],
+                },
+                Release {
+                    work_id: "f1".into(),
+                    date: "2015-03-31".into(),
+                    release_types: vec![ReleaseType::Digital, ReleaseType::Physical],
+                },
+            ]
+        );
+        assert_eq!(
+            released_at(&releases[1]),
+            chrono::NaiveDate::from_ymd_opt(2015, 3, 31)
+                .and_then(|d| d.and_hms_opt(0, 0, 0))
+                .map(|t| t.and_utc())
+        );
+
+        // Earliest first, whatever the kind; a year alone, or a word, is no day.
+        film.in_cinemas = Some("2016".into());
+        film.digital_release = Some("TBA".into());
+        film.physical_release = Some("2015-01-02".into());
+        let dates = |film: &MediaItem| {
+            releases_of(film)
+                .into_iter()
+                .map(|r| r.date)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(dates(&film), ["2015-01-02"]);
+        film.in_cinemas = Some("2015-07-01".into());
+        film.digital_release = Some("2015-06-01".into());
+        assert_eq!(dates(&film), ["2015-01-02", "2015-06-01", "2015-07-01"]);
+        assert!(releases_of(&MediaItem::empty(MediaKind::Movie)).is_empty());
+    }
+
+    /// A work as a provider would have left it.
+    async fn stored(
+        state: &AppState,
+        kind: MediaKind,
+        title: &str,
+        adjust: impl FnOnce(&mut MediaItem),
+    ) -> MediaItem {
+        let mut work = MediaItem::empty(kind);
+        work.title = title.into();
+        work.slug = crate::domain::make_slug(title, None);
+        adjust(&mut work);
+        repo::item::upsert(
+            &state.db,
+            repo::item::ItemWrite {
+                item: &work,
+                replace_children: true,
+            },
+        )
+        .await
+        .expect("stored");
+        work
+    }
+
+    /// The schedule's entries, a line each: what, whose, when.
+    fn lines(calendar: &Calendar) -> Vec<String> {
+        calendar
+            .entries
+            .iter()
+            .map(|entry| match entry {
+                CalendarEntry::Episode(a) => format!(
+                    "{} episode {}",
+                    a.work_id,
+                    aired_at(&a.episode)
+                        .map(|t| t.to_rfc3339())
+                        .unwrap_or_default()
+                ),
+                CalendarEntry::Release(r) => format!(
+                    "{} release {} {}",
+                    r.work_id,
+                    r.date,
+                    r.release_types
+                        .iter()
+                        .map(|t| t.as_str())
+                        .collect::<Vec<_>>()
+                        .join("+")
+                ),
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn the_films_coming_out_are_listed_beside_the_episodes() {
+        let state = super::super::testing::server().await;
+        let at = |text: &str| {
+            chrono::DateTime::parse_from_rfc3339(text)
+                .unwrap()
+                .with_timezone(&chrono::Utc)
+        };
+        let (from, to) = (at("2026-11-02T00:00:00Z"), at("2026-11-09T00:00:00Z"));
+
+        // In cinemas and digitally the same day, on disc two days after.
+        let interstellar = stored(&state, MediaKind::Movie, "Interstellar", |w| {
+            w.in_cinemas = Some("2026-11-05".into());
+            w.digital_release = Some("2026-11-05".into());
+            w.physical_release = Some("2026-11-07T00:00:00Z".into());
+        })
+        .await;
+        let dune = stored(&state, MediaKind::Movie, "Dune", |w| {
+            w.in_cinemas = Some("2026-12-18".into());
+        })
+        .await;
+        for (title, enabled, adult) in [("Switched off", false, false), ("For adults", true, true)]
+        {
+            stored(&state, MediaKind::Movie, title, |w| {
+                w.in_cinemas = Some("2026-11-05".into());
+                w.is_enabled = enabled;
+                w.is_adult = adult;
+            })
+            .await;
+        }
+        let dark = stored(&state, MediaKind::Series, "Dark", |w| {
+            let mut episode = crate::db::repo::child::blank_episode(1, 1);
+            episode.is_manual = false;
+            episode.air_date = Some("2026-11-05".into());
+            episode.air_date_utc = Some("2026-11-05T20:00:00Z".into());
+            w.episodes = vec![episode];
+        })
+        .await;
+
+        let calendar = window(&state, &Identity::Visitor, from, to, None)
+            .await
+            .expect("listed");
+        // In one list by the moment: a release at midnight UTC on its day, so
+        // before that evening's episode. Out of the window, switched off, for
+        // adults where they are hidden — as a new server has them: not there.
+        assert_eq!(
+            lines(&calendar),
+            [
+                format!("{} release 2026-11-05 cinema+digital", interstellar.id),
+                format!("{} episode 2026-11-05T20:00:00+00:00", dark.id),
+                format!("{} release 2026-11-07 physical", interstellar.id),
+            ]
+        );
+        assert!(!calendar.truncated);
+        let mut drawn: Vec<&str> = calendar.works.iter().map(|w| w.id.as_str()).collect();
+        drawn.sort_unstable();
+        let mut expected = [interstellar.id.as_str(), dark.id.as_str()];
+        expected.sort_unstable();
+        assert_eq!(drawn, expected);
+
+        // The episodes alone stay where whoever read them before reads them,
+        // in the shape they had; the entries say which kind each is.
+        let json = serde_json::to_value(&calendar).expect("serialised");
+        assert_eq!(json["episodes"].as_array().map(Vec::len), Some(1));
+        assert!(json["episodes"][0].get("kind").is_none());
+        assert_eq!(json["episodes"][0]["workId"], dark.id.as_str());
+        assert_eq!(
+            json["entries"][0],
+            serde_json::json!({
+                "kind": "release",
+                "workId": interstellar.id,
+                "date": "2026-11-05",
+                "releaseTypes": ["cinema", "digital"],
+            })
+        );
+        assert_eq!(json["entries"][1]["kind"], "episode");
+        assert_eq!(json["entries"][1]["episode"]["seasonNumber"], 1);
+
+        // Corrected by hand: Dune brought into the week digitally, the disc
+        // of Interstellar put back into the new year. Each listed where it
+        // was put, for a visitor and an editor alike; the editor is told the
+        // date is locked, the visitor is not.
+        let correct = async |work: &MediaItem, field: &str, day: &str| {
+            repo::override_field::set(
+                &state.db,
+                &work.id,
+                crate::domain::fields::Scope::Item,
+                field,
+                Some(&serde_json::json!(day)),
+                None,
+            )
+            .await
+            .expect("corrected");
+        };
+        correct(&dune, "digitalRelease", "2026-11-08").await;
+        correct(&interstellar, "physicalRelease", "2027-01-10").await;
+
+        for identity in [Identity::Visitor, Identity::Anonymous] {
+            let calendar = window(&state, &identity, from, to, None)
+                .await
+                .expect("listed");
+            assert_eq!(
+                lines(&calendar),
+                [
+                    format!("{} release 2026-11-05 cinema+digital", interstellar.id),
+                    format!("{} episode 2026-11-05T20:00:00+00:00", dark.id),
+                    format!("{} release 2026-11-08 digital", dune.id),
+                ],
+                "{}",
+                identity.label()
+            );
+            let locked = &calendar
+                .works
+                .iter()
+                .find(|w| w.id == dune.id)
+                .expect("drawn")
+                .locked_fields;
+            if identity.can_write() {
+                assert_eq!(locked, &["item/digitalRelease"]);
+            } else {
+                assert!(locked.is_empty(), "{locked:?}");
+            }
+        }
     }
 }

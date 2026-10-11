@@ -333,6 +333,90 @@ pub fn from_item(item: &MediaItem) -> MovieResource {
     }
 }
 
+/// How many films one is sent recommended beside it, at most: a page of
+/// TMDB's. api.radarr.video sends ten.
+pub const MAX_RECOMMENDED: usize = 20;
+
+/// What a film is sent with beside its own record, which holds neither: the
+/// collection it is part of — Radarr adds the collection, and offers its
+/// other films, from this — and the films recommended with it, which feed
+/// Radarr's Discover page. Read from what the providers answered; see
+/// [`crate::service::movie::beside`].
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Beside {
+    pub collection: Option<NamedCollection>,
+    /// By TMDB id and title, the most recommended first.
+    pub recommended: Vec<(i64, String)>,
+}
+
+/// A collection as far as it is known: its TMDB id and its name, and its
+/// pictures' addresses where TMDB gave them.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct NamedCollection {
+    pub tmdb_id: i64,
+    pub name: String,
+    pub poster: Option<String>,
+    pub fanart: Option<String>,
+}
+
+/// [`from_item`], with what goes beside the film.
+///
+/// The collection only when the film is filed under it, and only with a name:
+/// Radarr makes its own record of a collection from the first film that names
+/// it, title and all. The recommendations as api.radarr.video sends them — by
+/// TMDB id and title, of which Radarr keeps the id — once each, never the
+/// film itself, and [`MAX_RECOMMENDED`] at most.
+pub fn from_item_beside(item: &MediaItem, beside: &Beside) -> MovieResource {
+    let mut resource = from_item(item);
+
+    resource.collection = beside
+        .collection
+        .as_ref()
+        .filter(|c| item.collection_tmdb_id == Some(c.tmdb_id))
+        .and_then(|c| {
+            Some(CollectionResource {
+                name: non_empty(Some(&c.name))?,
+                overview: None,
+                tmdb_id: c.tmdb_id,
+                images: collection_images(c.poster.as_deref(), c.fanart.as_deref()),
+                parts: Vec::new(),
+            })
+        });
+
+    let mut seen = std::collections::HashSet::new();
+    resource.recommendations = beside
+        .recommended
+        .iter()
+        .filter(|(tmdb_id, _)| {
+            *tmdb_id > 0 && Some(*tmdb_id) != item.external_ids.tmdb && seen.insert(*tmdb_id)
+        })
+        .take(MAX_RECOMMENDED)
+        .map(|(tmdb_id, title)| RecommendationResource {
+            tmdb_id: *tmdb_id,
+            title: title.trim().to_string(),
+        })
+        .collect();
+
+    resource
+}
+
+/// A collection's poster and background, as Radarr reads a collection's
+/// pictures, where they are known.
+pub fn collection_images(poster: Option<&str>, fanart: Option<&str>) -> Vec<ImageResource> {
+    [
+        (crate::domain::CoverType::Poster, poster),
+        (crate::domain::CoverType::Fanart, fanart),
+    ]
+    .into_iter()
+    .filter_map(|(cover_type, url)| {
+        Some(ImageResource {
+            cover_type: cover_type.as_str().to_string(),
+            url: non_empty(url)?,
+        })
+    })
+    .collect()
+}
+
 /// The title a translation is sent with: its own, or else the one the film goes
 /// by in that language, which is its original title.
 ///
@@ -964,5 +1048,159 @@ mod tests {
             .map(|t| (t.title.as_deref(), t.overview.is_some()))
             .collect();
         assert_eq!(read, [(None, true), (None, true), (Some("Matrix"), false)]);
+    }
+
+    /// What goes beside The Matrix, as api.radarr.video has it.
+    fn beside_the_matrix() -> Beside {
+        Beside {
+            collection: Some(NamedCollection {
+                tmdb_id: 2344,
+                name: "The Matrix Collection".into(),
+                poster: Some(
+                    "https://image.tmdb.org/t/p/original/bV9qTVHTVf0gkW0j7p7M0ILD4pG.jpg".into(),
+                ),
+                fanart: None,
+            }),
+            recommended: vec![
+                (99861, "Avengers: Age of Ultron".into()),
+                (87101, "Terminator Genisys".into()),
+            ],
+        }
+    }
+
+    fn the_matrix() -> MediaItem {
+        let mut it = item();
+        it.title = "The Matrix".into();
+        it.external_ids.tmdb = Some(603);
+        it.collection_tmdb_id = Some(2344);
+        it
+    }
+
+    #[test]
+    fn a_film_is_sent_its_collection_and_recommendations_as_the_upstream_writes_them() {
+        // Radarr adds a film's collection, and offers the rest of it, from
+        // `Collection`; its Discover page is fed from `Recommendations`. Both
+        // went out empty, so Radarr's collections stayed empty.
+        let json =
+            serde_json::to_value(from_item_beside(&the_matrix(), &beside_the_matrix())).unwrap();
+
+        assert_eq!(json["Collection"]["TmdbId"], 2344);
+        assert_eq!(json["Collection"]["Name"], "The Matrix Collection");
+        assert_eq!(json["Collection"]["Images"][0]["CoverType"], "poster");
+        assert_eq!(
+            json["Recommendations"],
+            serde_json::json!([
+                { "TmdbId": 99861, "Title": "Avengers: Age of Ultron" },
+                { "TmdbId": 87101, "Title": "Terminator Genisys" },
+            ])
+        );
+
+        // What is read back is what api.radarr.video would have been read for.
+        let read: MovieResource = serde_json::from_value(json).unwrap();
+        assert_eq!(read.collection.map(|c| c.tmdb_id), Some(2344));
+        assert_eq!(read.recommendations.len(), 2);
+    }
+
+    #[test]
+    fn a_collection_goes_only_with_its_name_and_only_to_its_own_films() {
+        // Radarr makes its record of the collection from the first film that
+        // names it: one without a name is not sent at all.
+        let mut nameless = beside_the_matrix();
+        nameless.collection.as_mut().unwrap().name = "  ".into();
+        assert!(
+            from_item_beside(&the_matrix(), &nameless)
+                .collection
+                .is_none()
+        );
+
+        // What is known of 2344 is not the collection of a film filed under
+        // another one, or under none.
+        let mut elsewhere = the_matrix();
+        elsewhere.collection_tmdb_id = Some(10);
+        assert!(
+            from_item_beside(&elsewhere, &beside_the_matrix())
+                .collection
+                .is_none()
+        );
+        elsewhere.collection_tmdb_id = None;
+        let json =
+            serde_json::to_value(from_item_beside(&elsewhere, &beside_the_matrix())).unwrap();
+        assert!(
+            json.get("Collection")
+                .is_none_or(serde_json::Value::is_null)
+        );
+        // The recommendations go all the same.
+        assert_eq!(json["Recommendations"].as_array().map(Vec::len), Some(2));
+    }
+
+    #[test]
+    fn recommendations_go_once_each_without_the_film_itself_and_twenty_at_most() {
+        let recommended: Vec<(i64, String)> = [
+            (603, "The Matrix".to_string()),
+            (1, "Film 1".to_string()),
+            (1, "Film 1, again".to_string()),
+            (0, "No id".to_string()),
+        ]
+        .into_iter()
+        .chain((2..=30).map(|n| (n, format!("Film {n}"))))
+        .collect();
+
+        let sent = from_item_beside(
+            &the_matrix(),
+            &Beside {
+                collection: None,
+                recommended,
+            },
+        )
+        .recommendations;
+
+        let ids: Vec<i64> = sent.iter().map(|r| r.tmdb_id).collect();
+        assert_eq!(ids, (1..=20).collect::<Vec<i64>>());
+    }
+
+    #[test]
+    fn a_search_result_goes_without_either() {
+        // Search results are shallow: nothing beside them is looked up.
+        let resource = from_item(&the_matrix());
+        assert!(resource.collection.is_none());
+        assert!(resource.recommendations.is_empty());
+    }
+
+    #[test]
+    fn the_upstreams_recommendations_are_read() {
+        // api.radarr.video's Interstellar: no collection, and its
+        // recommendations by id and title.
+        let body = serde_json::json!({
+            "TmdbId": 157336,
+            "Title": "Interstellar",
+            "TitleSlug": "157336",
+            "Year": 2014,
+            "Collection": null,
+            "Recommendations": [
+                { "TmdbId": 687163, "Title": "Project Hail Mary" },
+                { "TmdbId": 299534, "Title": "Avengers: Endgame" }
+            ]
+        });
+
+        let movie: MovieResource = serde_json::from_value(body).expect("reads");
+
+        assert!(movie.collection.is_none());
+        let read: Vec<(i64, &str)> = movie
+            .recommendations
+            .iter()
+            .map(|r| (r.tmdb_id, r.title.as_str()))
+            .collect();
+        assert_eq!(
+            read,
+            [(687163, "Project Hail Mary"), (299534, "Avengers: Endgame")]
+        );
+    }
+
+    #[test]
+    fn a_collections_pictures_are_those_known() {
+        let images = collection_images(Some("https://p.jpg"), Some(" "));
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].cover_type, "poster");
+        assert!(collection_images(None, None).is_empty());
     }
 }

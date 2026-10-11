@@ -3,14 +3,89 @@
 //! Internal causes are logged in full and replaced by a generic message in the
 //! response, so provider URLs, API keys and SQL never reach a client.
 
+use std::time::Duration;
+
 use axum::{
     Json,
-    http::StatusCode,
+    http::{HeaderName, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
 use serde::Serialize;
 
 pub type AppResult<T> = std::result::Result<T, AppError>;
+
+/// What a refusal for going too fast tells the caller: when a request would
+/// be let through again, and — where the limit is a quota over a window —
+/// that quota, as the `RateLimit` and `RateLimit-Policy` fields of the IETF
+/// httpapi draft say it. Without one, `Retry-After` alone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Throttle {
+    /// How long until a request would be let through.
+    pub retry_after: Duration,
+    /// The quota that was spent, when the limit is one.
+    pub quota: Option<Quota>,
+}
+
+/// A number of requests a window lets through.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Quota {
+    pub requests: u32,
+    pub window: Duration,
+}
+
+/// The fields the draft names, lower-cased as the wire carries them.
+const RATELIMIT: HeaderName = HeaderName::from_static("ratelimit");
+const RATELIMIT_POLICY: HeaderName = HeaderName::from_static("ratelimit-policy");
+
+impl Throttle {
+    /// Come back after `wait`; no quota to tell of.
+    pub const fn after(wait: Duration) -> Self {
+        Self {
+            retry_after: wait,
+            quota: None,
+        }
+    }
+
+    /// Come back after `wait`: the `requests` a `window` lets through are
+    /// spent.
+    pub const fn spent(requests: u32, window: Duration, wait: Duration) -> Self {
+        Self {
+            retry_after: wait,
+            quota: Some(Quota { requests, window }),
+        }
+    }
+
+    /// The wait in whole seconds, rounded up and never nought: told `0`, a
+    /// client comes straight back into the same refusal.
+    fn seconds(&self) -> u64 {
+        let whole = self.retry_after.as_secs() + u64::from(self.retry_after.subsec_nanos() > 0);
+        whole.max(1)
+    }
+
+    /// The fields a refusal carries. `t`, when it is there, is the wait
+    /// `Retry-After` gives: the draft asks that a client told both is never
+    /// told to come back before the window it was refused in is over.
+    fn headers(&self) -> Vec<(HeaderName, HeaderValue)> {
+        let seconds = self.seconds();
+        let mut headers = vec![(header::RETRY_AFTER, HeaderValue::from(seconds))];
+        if let Some(quota) = self.quota {
+            let window = quota.window.as_secs().max(1);
+            let fields = [
+                (RATELIMIT, format!("\"default\";r=0;t={seconds}")),
+                (
+                    RATELIMIT_POLICY,
+                    format!("\"default\";q={};w={window}", quota.requests),
+                ),
+            ];
+            for (name, value) in fields {
+                if let Ok(value) = HeaderValue::try_from(value) {
+                    headers.push((name, value));
+                }
+            }
+        }
+        headers
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
@@ -45,8 +120,10 @@ pub enum AppError {
     #[error("this server has no TMDB API key configured")]
     ProviderNotConfigured,
 
+    /// Too many requests: when to come back, and the quota spent where the
+    /// limit is one.
     #[error("too many requests")]
-    RateLimited,
+    RateLimited(Throttle),
 
     /// This server called a hostname that resolves back to itself.
     #[error("this request came from this server; an upstream provider resolves to it")]
@@ -85,7 +162,7 @@ impl AppError {
             Self::Disabled { .. } => StatusCode::SERVICE_UNAVAILABLE,
             Self::UpstreamUnavailable(_) => StatusCode::BAD_GATEWAY,
             Self::ProviderNotConfigured => StatusCode::SERVICE_UNAVAILABLE,
-            Self::RateLimited => StatusCode::TOO_MANY_REQUESTS,
+            Self::RateLimited(_) => StatusCode::TOO_MANY_REQUESTS,
             Self::LoopDetected => StatusCode::LOOP_DETECTED,
             Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
@@ -103,7 +180,7 @@ impl AppError {
             Self::Refused { code, .. } | Self::Disabled { code, .. } => code,
             Self::UpstreamUnavailable(_) => "upstream_unavailable",
             Self::ProviderNotConfigured => "provider_not_configured",
-            Self::RateLimited => "rate_limited",
+            Self::RateLimited(_) => "rate_limited",
             Self::LoopDetected => "loop_detected",
             Self::Internal(_) => "internal",
         }
@@ -122,7 +199,7 @@ impl AppError {
             | Self::Refused { .. }
             | Self::Disabled { .. }
             | Self::ProviderNotConfigured
-            | Self::RateLimited
+            | Self::RateLimited(_)
             | Self::LoopDetected => self.to_string(),
             // These wrap a cause that may name hosts, queries or credentials.
             Self::UpstreamUnavailable(_) => "upstream provider unavailable".into(),
@@ -167,7 +244,11 @@ impl IntoResponse for AppError {
             message: self.public_message(),
         };
 
-        (status, Json(body)).into_response()
+        let mut response = (status, Json(body)).into_response();
+        if let Self::RateLimited(throttle) = &self {
+            response.headers_mut().extend(throttle.headers());
+        }
+        response
     }
 }
 
@@ -234,5 +315,52 @@ mod tests {
         // What the client is told does not change: generic, as before.
         assert_eq!(failed.public_message(), "upstream provider unavailable");
         assert_eq!(internal.public_message(), "internal server error");
+    }
+
+    fn field<'a>(response: &'a Response, name: &str) -> Option<&'a str> {
+        response
+            .headers()
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+    }
+
+    #[test]
+    fn a_spent_quota_says_when_to_come_back_and_what_the_quota_is() {
+        let response = AppError::RateLimited(Throttle::spent(
+            600,
+            Duration::from_secs(60),
+            Duration::from_millis(11_200),
+        ))
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        // Whole seconds, rounded up: told 11, a client would be early.
+        assert_eq!(field(&response, "retry-after"), Some("12"));
+        assert_eq!(field(&response, "ratelimit"), Some("\"default\";r=0;t=12"));
+        assert_eq!(
+            field(&response, "ratelimit-policy"),
+            Some("\"default\";q=600;w=60")
+        );
+    }
+
+    #[test]
+    fn a_limit_without_a_window_says_when_alone() {
+        let response =
+            AppError::RateLimited(Throttle::after(Duration::from_secs(5))).into_response();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(field(&response, "retry-after"), Some("5"));
+        assert_eq!(field(&response, "ratelimit"), None);
+        assert_eq!(field(&response, "ratelimit-policy"), None);
+
+        // Never nought, which would send the client straight back.
+        let response = AppError::RateLimited(Throttle::after(Duration::ZERO)).into_response();
+        assert_eq!(field(&response, "retry-after"), Some("1"));
+        let response =
+            AppError::RateLimited(Throttle::after(Duration::from_millis(100))).into_response();
+        assert_eq!(field(&response, "retry-after"), Some("1"));
+
+        // And nothing of the kind on any other refusal.
+        let response = AppError::Forbidden.into_response();
+        assert_eq!(field(&response, "retry-after"), None);
     }
 }

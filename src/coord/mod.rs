@@ -564,25 +564,27 @@ fn is_id(text: &str) -> bool {
 /// missed: a minute.
 const RECONCILE_ROUNDS: u32 = 12;
 
-/// Keep the lease, the announcement and the counters current for as long
-/// as the process runs — the lease on a task of its own, since it must be
-/// kept on time whatever else takes long; the leader also closes the runs
-/// of instances that are gone, and every instance reads the media index
+/// Keep the lease for as long as the process runs: a loop of its own, since
+/// it must be kept on time whatever else takes long. Nothing to do alone.
+pub async fn keep_lease(state: AppState) {
+    if !state.coord.is_multi() {
+        return;
+    }
+    loop {
+        state.coord.keep_lead().await;
+        tokio::time::sleep(TICK).await;
+    }
+}
+
+/// Keep the announcement and the counters current for as long as the
+/// process runs — the lease is [`keep_lease`]'s; the leader also closes the
+/// runs of instances that are gone, and every instance reads the media index
 /// again now and then, and every minute what the channel may have missed
 /// (see [`reconcile`]). Nothing to do alone.
 pub async fn run(state: AppState) {
     if !state.coord.is_multi() {
         return;
     }
-    tokio::spawn({
-        let state = state.clone();
-        async move {
-            loop {
-                state.coord.keep_lead().await;
-                tokio::time::sleep(TICK).await;
-            }
-        }
-    });
     let mut rounds = 0u32;
     loop {
         state.coord.announce(&state).await;

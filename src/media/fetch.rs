@@ -81,8 +81,16 @@ pub async fn download(state: &AppState, url: &str, kind: Kind) -> Result<Fetched
         .header(reqwest::header::ACCEPT, accept)
         .send()
         .await
-        .context(UNREACHED)
-        .map_err(Failure::Passing)?;
+        // Said without the address: reqwest writes the whole of it into the
+        // error, query and all, and the query of a picture's address may be
+        // a signed token — the worker's note of this failure reaches the
+        // webhook.
+        .map_err(|e| {
+            Failure::Passing(anyhow::anyhow!(
+                "{UNREACHED}: {}",
+                crate::providers::describe_request_error(&e)
+            ))
+        })?;
     // The body of an answer that is not the file is never read: nothing in
     // it is wanted, and it is not bounded the way the file is.
     let status = response.status();

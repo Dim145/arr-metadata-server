@@ -1,14 +1,19 @@
 //! Movie resolution, for Radarr's surface and the native API.
 
-use anyhow::Result;
-use futures::future::join_all;
+use anyhow::{Context, Result};
+use bytes::Bytes;
+use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
+use futures::{StreamExt as _, future::join_all};
+use serde::Deserialize;
+use serde_json::Value;
 
 use crate::{
     db::repo,
     domain::{ExternalSource, MediaItem, MediaKind},
-    providers::tmdb::map as tmdb_map,
+    providers::{names, tmdb, tmdb::map as tmdb_map},
     service::{FETCHING, Found, cached_search, gather, ids, local, or_held, persist},
     state::AppState,
+    wire::radarr::{Beside, NamedCollection},
 };
 
 /// How many titles a single bulk request may ask for.
@@ -218,29 +223,318 @@ pub async fn search(state: &AppState, term: &str, year: Option<i32>) -> Result<V
     .await
 }
 
-/// A collection and the movies in it.
+/// A collection and the movies in it, as Radarr is told of it.
+pub struct Collection {
+    pub name: String,
+    pub overview: Option<String>,
+    /// Its pictures' addresses, where TMDB has them.
+    pub poster: Option<String>,
+    pub backdrop: Option<String>,
+    pub parts: Vec<MediaItem>,
+}
+
+/// A collection and the movies in it, in `language`, a TMDB locale.
 ///
 /// The parts come back as search-level detail: fetching each in full would be
 /// dozens of upstream calls for a list Radarr only uses to offer suggestions.
+/// TMDB's record is kept a day, under the key the catalogue's own collection
+/// pages keep it under: either one asking warms it for the other, and for the
+/// films of the collection that Radarr is sent.
 pub async fn collection(
     state: &AppState,
     tmdb_id: i64,
-) -> Result<Option<(String, Option<String>, Vec<MediaItem>)>> {
+    language: &str,
+) -> Result<Option<Collection>> {
     if !state.tmdb.is_configured() {
         return Ok(None);
     }
 
-    let Some(collection) = state.tmdb.collection(tmdb_id).await? else {
-        return Ok(None);
+    let key = collection_key(tmdb_id, language);
+    let raw = match cached(state, &key).await {
+        Some(raw) => raw,
+        None => {
+            // Kept as `null` where TMDB has no such collection, as the
+            // catalogue's pages keep it.
+            let raw = state
+                .tmdb
+                .collection_raw(tmdb_id, language)
+                .await?
+                .unwrap_or(Value::Null);
+            state
+                .caches
+                .lists
+                .insert(key, Bytes::from(serde_json::to_vec(&raw)?))
+                .await;
+            raw
+        }
     };
+    if raw.is_null() {
+        return Ok(None);
+    }
 
-    let parts = collection
-        .parts
+    let collection: tmdb::models::Collection =
+        serde_json::from_value(raw).context("could not interpret the TMDB collection response")?;
+
+    Ok(Some(Collection {
+        name: collection.name,
+        overview: collection.overview.filter(|o| !o.trim().is_empty()),
+        poster: collection.poster_path.as_deref().map(tmdb::image_url),
+        backdrop: collection.backdrop_path.as_deref().map(tmdb::image_url),
+        parts: collection
+            .parts
+            .iter()
+            .map(tmdb_map::movie_summary_to_item)
+            .collect(),
+    }))
+}
+
+/// The key TMDB's record of a collection is kept under in the lists' cache,
+/// in a TMDB locale: one copy for the catalogue's collection pages and for
+/// Radarr.
+pub fn collection_key(tmdb_id: i64, language: &str) -> String {
+    format!("collection:{tmdb_id}:{language}")
+}
+
+/// The key what TMDB recommends beside a work is kept under in the lists'
+/// cache, once the editor has asked for it.
+pub fn suggestions_key(kind: MediaKind, tmdb_id: i64) -> String {
+    format!("suggest:{}:{tmdb_id}", kind.as_str())
+}
+
+/// A document kept in the lists' cache, where it is.
+async fn cached(state: &AppState, key: &str) -> Option<Value> {
+    let bytes = state.caches.lists.get(key).await?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+// ─── what goes beside a film ─────────────────────────────────────────────────
+
+/// How many films' snapshots are read at once, where what goes beside them is
+/// not known yet: Radarr refreshes a list a hundred films at a time.
+const BESIDE_AT_ONCE: usize = 8;
+
+/// What goes beside each of `items` as Radarr is sent them, in their order —
+/// see [`Beside`] — from what is held: the providers' answers for the film as
+/// they were kept, and what TMDB told the catalogue's own pages since. Never
+/// fetched: Radarr refreshes its library through these routes, and what a
+/// film suggests is not worth a call to TMDB per film. `language` is the
+/// caller's, as the settings have it.
+pub async fn beside(state: &AppState, items: &[MediaItem], language: &str) -> Vec<Beside> {
+    let locale = crate::service::language::tmdb_locale(None, language);
+
+    // Made before they are run, rather than by a closure the stream keeps:
+    // the handlers awaiting this did not compile around one, its `FnOnce`
+    // not general enough for the lifetimes it borrows.
+    let each: Vec<_> = items
         .iter()
-        .map(tmdb_map::movie_summary_to_item)
+        .map(|item| beside_one(state, item, &locale))
         .collect();
 
-    Ok(Some((collection.name, collection.overview, parts)))
+    futures::stream::iter(each)
+        .buffered(BESIDE_AT_ONCE)
+        .collect()
+        .await
+}
+
+async fn beside_one(state: &AppState, item: &MediaItem, locale: &str) -> Beside {
+    let Some(tmdb_id) = item.external_ids.tmdb else {
+        return Beside::default();
+    };
+    let mut beside = kept_beside(state, item).await;
+
+    // TMDB's own record of the collection, in the caller's language, where
+    // the catalogue's pages or Radarr asked for it lately: the snapshot's is
+    // in the language the works are stored in, and as old as the film's.
+    if let Some(collection) = item.collection_tmdb_id
+        && let Some(named) = cached(state, &collection_key(collection, locale))
+            .await
+            .and_then(|record| named_collection(collection, &record))
+    {
+        beside.collection = Some(named);
+    }
+
+    // A film whose snapshots recommend nothing — taken before TMDB's
+    // recommendations came with the film, Radarr's service not asked — is
+    // sent what the editor had TMDB suggest for it.
+    if beside.recommended.is_empty()
+        && let Some(suggested) = cached(state, &suggestions_key(MediaKind::Movie, tmdb_id)).await
+    {
+        beside.recommended = tmdb_recommended(&suggested);
+    }
+
+    beside
+}
+
+/// What a film's own snapshots say goes beside it, kept a day under the work
+/// and the moment it was last written: a refresh writes new snapshots, and
+/// moves that moment.
+async fn kept_beside(state: &AppState, item: &MediaItem) -> Beside {
+    let key = format!("radarr:beside:{}:{}", item.id, item.updated_at);
+    if let Some(bytes) = state.caches.lists.get(&key).await
+        && let Ok(kept) = serde_json::from_slice::<Beside>(&bytes)
+    {
+        return kept;
+    }
+
+    let texts =
+        match repo::snapshot::texts(&state.db, &item.id, &[names::TMDB, names::RADARR]).await {
+            Ok(texts) => texts,
+            Err(e) => {
+                // What a film suggests is not worth failing it over.
+                tracing::warn!(
+                    id = %item.id,
+                    error = format_args!("{e:#}"),
+                    "could not read what goes beside a film"
+                );
+                return Beside::default();
+            }
+        };
+
+    let beside = from_snapshots(item.collection_tmdb_id, &texts);
+    if let Ok(bytes) = serde_json::to_vec(&beside) {
+        state.caches.lists.insert(key, Bytes::from(bytes)).await;
+    }
+    beside
+}
+
+/// The little of TMDB's record of a film that goes beside it. The rest of the
+/// document is passed over, not read.
+#[derive(Deserialize)]
+struct TmdbBeside {
+    belongs_to_collection: Option<Value>,
+    recommendations: Option<Value>,
+}
+
+/// The same of api.radarr.video's.
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct RadarrBeside {
+    collection: Option<Value>,
+    recommendations: Option<Value>,
+}
+
+/// What a film's snapshots, by provider, say goes beside it: TMDB's, and
+/// Radarr's service's — which republishes TMDB's — for what TMDB's does not
+/// say. A collection only where it is `collection`, the one the film is
+/// filed under.
+fn from_snapshots(collection: Option<i64>, texts: &[(String, String)]) -> Beside {
+    let text = |provider: &str| {
+        texts
+            .iter()
+            .find(|(p, _)| p == provider)
+            .map(|(_, text)| text.as_str())
+    };
+    let tmdb = text(names::TMDB).and_then(|t| serde_json::from_str::<TmdbBeside>(t).ok());
+    let radarr = text(names::RADARR).and_then(|t| serde_json::from_str::<RadarrBeside>(t).ok());
+
+    let collection = collection.and_then(|wanted| {
+        let from_tmdb = tmdb
+            .as_ref()
+            .and_then(|t| t.belongs_to_collection.as_ref())
+            .and_then(|c| named_collection(wanted, c));
+        from_tmdb.or_else(|| {
+            radarr
+                .as_ref()
+                .and_then(|r| r.collection.as_ref())
+                .and_then(|c| radarr_collection(wanted, c))
+        })
+    });
+
+    let recommended = tmdb
+        .as_ref()
+        .and_then(|t| t.recommendations.as_ref())
+        .map(tmdb_recommended)
+        .filter(|found| !found.is_empty())
+        .or_else(|| {
+            radarr
+                .as_ref()
+                .and_then(|r| r.recommendations.as_ref())
+                .map(radarr_recommended)
+        })
+        .unwrap_or_default();
+
+    Beside {
+        collection,
+        recommended,
+    }
+}
+
+/// A collection as TMDB writes one — whole, or as a film's
+/// `belongs_to_collection` — when it is `wanted`, and named.
+fn named_collection(wanted: i64, record: &Value) -> Option<NamedCollection> {
+    if record.get("id").and_then(Value::as_i64) != Some(wanted) {
+        return None;
+    }
+    let text = |field: &str| {
+        record
+            .get(field)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+    };
+
+    Some(NamedCollection {
+        tmdb_id: wanted,
+        name: text("name")?.to_string(),
+        poster: text("poster_path").map(tmdb::image_url),
+        fanart: text("backdrop_path").map(tmdb::image_url),
+    })
+}
+
+/// api.radarr.video's `Collection`, when it is `wanted`: an id and a name.
+fn radarr_collection(wanted: i64, record: &Value) -> Option<NamedCollection> {
+    if record.get("TmdbId").and_then(Value::as_i64) != Some(wanted) {
+        return None;
+    }
+    let name = record
+        .get("Name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|n| !n.is_empty())?;
+
+    Some(NamedCollection {
+        tmdb_id: wanted,
+        name: name.to_string(),
+        poster: None,
+        fanart: None,
+    })
+}
+
+/// TMDB's recommendations — a page of them, as a film's record carries them,
+/// or its results alone, as the editor's suggestions are kept — by id and
+/// title. Those TMDB marks adult are left out: whoever is sent them may not
+/// be allowed adult titles.
+fn tmdb_recommended(found: &Value) -> Vec<(i64, String)> {
+    let results = found.get("results").unwrap_or(found);
+    results
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|entry| !entry.get("adult").and_then(Value::as_bool).unwrap_or(false))
+        .filter_map(|entry| {
+            let title = entry
+                .get("title")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            Some((entry.get("id")?.as_i64()?, title.to_string()))
+        })
+        .collect()
+}
+
+/// api.radarr.video's `Recommendations`, by `TmdbId` and `Title`.
+fn radarr_recommended(found: &Value) -> Vec<(i64, String)> {
+    found
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| {
+            let title = entry
+                .get("Title")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            Some((entry.get("TmdbId")?.as_i64()?, title.to_string()))
+        })
+        .collect()
 }
 
 pub async fn popular(state: &AppState) -> Result<Vec<MediaItem>> {
@@ -271,16 +565,58 @@ pub async fn trending(state: &AppState) -> Result<Vec<MediaItem>> {
     .await
 }
 
-/// TMDB ids changed since `since`, which Radarr polls to know what to refetch.
-pub async fn changed_since(state: &AppState, since: &str) -> Result<Vec<i64>> {
-    if !state.tmdb.is_configured() {
-        return Ok(Vec::new());
+/// TMDB ids changed since `since`, which Radarr polls to know what to refetch:
+/// those TMDB lists, and the films held here that changed since — fetched
+/// again, a lock put on, changed or lifted, IMDb's rating moved.
+///
+/// Radarr's scheduled refresh fetches again what this names and, once it
+/// names anything, only that: a film locked here, unchanged at TMDB, waited
+/// for a refresh by hand. Without a TMDB key, or with TMDB not answering, the
+/// films held here are named all the same.
+pub async fn changed_since(state: &AppState, since: DateTime<Utc>) -> Result<Vec<i64>> {
+    let mut listed = Vec::new();
+    if state.tmdb.is_configured() {
+        // TMDB wants a bare date.
+        let date = since.date_naive().format("%Y-%m-%d").to_string();
+        match state.tmdb.changed_ids(MediaKind::Movie, &date).await {
+            Ok(ids) => listed = ids,
+            Err(e) => tracing::warn!(
+                error = format_args!("{e:#}"),
+                "TMDB's changed films could not be listed; those changed here are named alone"
+            ),
+        }
     }
 
-    // TMDB wants a bare date; Radarr sends a full timestamp.
-    let date = since.split('T').next().unwrap_or(since);
+    let held = repo::item::movies_changed_since(&state.db, &crate::db::to_rfc3339(since)).await?;
 
-    state.tmdb.changed_ids(MediaKind::Movie, date).await
+    Ok(merged(listed, held))
+}
+
+/// The instant `since` names: as Radarr writes it — `2026-10-09T11:45:00`,
+/// in UTC without saying so — with an offset, or a bare date, from midnight
+/// UTC.
+pub fn instant(since: &str) -> Option<DateTime<Utc>> {
+    let since = since.trim();
+    if let Ok(at) = DateTime::parse_from_rfc3339(since) {
+        return Some(at.with_timezone(&Utc));
+    }
+    if let Ok(at) = NaiveDateTime::parse_from_str(since, "%Y-%m-%dT%H:%M:%S%.f") {
+        return Some(at.and_utc());
+    }
+    NaiveDate::parse_from_str(since, "%Y-%m-%d")
+        .ok()
+        .and_then(|day| day.and_hms_opt(0, 0, 0))
+        .map(|at| at.and_utc())
+}
+
+/// Every id of `first`, then those of `then` not in it, each once.
+fn merged(first: Vec<i64>, then: Vec<i64>) -> Vec<i64> {
+    let mut seen = std::collections::HashSet::new();
+    first
+        .into_iter()
+        .chain(then)
+        .filter(|id| seen.insert(*id))
+        .collect()
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -375,7 +711,7 @@ async fn from_radarr(
 mod tests {
     use super::*;
     use crate::{
-        domain::ExternalIds,
+        domain::{ExternalIds, fields::Scope},
         service::{
             served_as_held,
             testing::{overdue, server},
@@ -464,5 +800,299 @@ mod tests {
                 .is_some()
         );
         assert!(nowhere.asked() > 0, "the providers were asked");
+    }
+
+    // ─── what goes beside a film ─────────────────────────────────────────────
+
+    /// The Matrix, as TMDB answers for it: its collection, and a page of
+    /// recommendations, one of them marked adult.
+    fn the_matrix_at_tmdb() -> Value {
+        serde_json::json!({
+            "id": 603,
+            "title": "The Matrix",
+            "belongs_to_collection": {
+                "id": 2344,
+                "name": "The Matrix Collection",
+                "poster_path": "/bV9qTVHTVf0gkW0j7p7M0ILD4pG.jpg",
+                "backdrop_path": null
+            },
+            "credits": { "cast": [{ "name": "Keanu Reeves" }] },
+            "recommendations": {
+                "page": 1,
+                "results": [
+                    { "id": 604, "title": "The Matrix Reloaded", "adult": false },
+                    { "id": 1, "title": "Not for everyone", "adult": true },
+                    { "id": 605, "title": "The Matrix Revolutions" }
+                ],
+                "total_pages": 2
+            }
+        })
+    }
+
+    /// The Matrix, as api.radarr.video answers for it.
+    fn the_matrix_at_radarr() -> Value {
+        serde_json::json!({
+            "TmdbId": 603,
+            "Title": "The Matrix",
+            "Collection": {
+                "TmdbId": 2344,
+                "Name": "The Matrix Collection",
+                "Images": null,
+                "Parts": null
+            },
+            "Recommendations": [{ "TmdbId": 99861, "Title": "Avengers: Age of Ultron" }]
+        })
+    }
+
+    fn texts(answers: &[(&str, Value)]) -> Vec<(String, String)> {
+        answers
+            .iter()
+            .map(|(provider, answer)| (provider.to_string(), answer.to_string()))
+            .collect()
+    }
+
+    fn recommended(beside: &Beside) -> Vec<i64> {
+        beside.recommended.iter().map(|(id, _)| *id).collect()
+    }
+
+    /// A film held, filed under `collection`, with what its providers said.
+    async fn held_with(
+        state: &AppState,
+        tmdb: i64,
+        collection: Option<i64>,
+        answers: &[(&str, Value)],
+    ) -> MediaItem {
+        let mut film = MediaItem::empty(MediaKind::Movie);
+        film.title = format!("Film {tmdb}");
+        film.slug = format!("film-{tmdb}");
+        film.external_ids = ExternalIds {
+            tmdb: Some(tmdb),
+            ..Default::default()
+        };
+        film.collection_tmdb_id = collection;
+        repo::item::upsert(
+            &state.db,
+            repo::item::ItemWrite {
+                item: &film,
+                replace_children: true,
+            },
+        )
+        .await
+        .expect("stored");
+        for (provider, answer) in answers {
+            repo::snapshot::put(&state.db, &film.id, provider, answer, None)
+                .await
+                .expect("kept");
+        }
+        film
+    }
+
+    #[test]
+    fn what_goes_beside_a_film_is_read_from_its_providers_answers() {
+        let both = texts(&[
+            ("tmdb", the_matrix_at_tmdb()),
+            ("radarr", the_matrix_at_radarr()),
+        ]);
+
+        let found = from_snapshots(Some(2344), &both);
+        let collection = found.collection.clone().expect("its collection");
+        assert_eq!(
+            (collection.tmdb_id, collection.name.as_str()),
+            (2344, "The Matrix Collection")
+        );
+        assert!(
+            collection
+                .poster
+                .is_some_and(|p| p.ends_with("/bV9qTVHTVf0gkW0j7p7M0ILD4pG.jpg"))
+        );
+        // TMDB's, without the one it marks adult.
+        assert_eq!(recommended(&found), [604, 605]);
+
+        // Kept before TMDB's recommendations came with the film: Radarr's
+        // service's, which republishes them.
+        let mut older = the_matrix_at_tmdb();
+        older
+            .as_object_mut()
+            .expect("an object")
+            .remove("recommendations");
+        let found = from_snapshots(
+            Some(2344),
+            &texts(&[("tmdb", older), ("radarr", the_matrix_at_radarr())]),
+        );
+        assert_eq!(recommended(&found), [99861]);
+        assert!(found.collection.is_some());
+
+        // Radarr's service names the collection where TMDB was not asked.
+        let found = from_snapshots(Some(2344), &texts(&[("radarr", the_matrix_at_radarr())]));
+        assert_eq!(
+            found.collection.map(|c| c.name).as_deref(),
+            Some("The Matrix Collection")
+        );
+
+        // A film filed under no collection, or another, is given none of these.
+        assert!(from_snapshots(None, &both).collection.is_none());
+        assert!(from_snapshots(Some(10), &both).collection.is_none());
+        // Nothing kept, or nothing that reads: nothing beside.
+        assert_eq!(from_snapshots(Some(2344), &[]), Beside::default());
+        assert_eq!(
+            from_snapshots(Some(2344), &[("tmdb".into(), "{".into())]),
+            Beside::default()
+        );
+    }
+
+    #[tokio::test]
+    async fn what_goes_beside_a_film_is_read_from_the_store_and_never_fetched() {
+        let (state, nowhere) = server().await;
+        let matrix = held_with(&state, 603, Some(2344), &[("tmdb", the_matrix_at_tmdb())]).await;
+        let lone = held_with(&state, 129, None, &[]).await;
+
+        let found = beside(&state, &[matrix.clone(), lone.clone()], "en-US").await;
+        assert_eq!(found[0].collection.as_ref().map(|c| c.tmdb_id), Some(2344));
+        assert_eq!(recommended(&found[0]), [604, 605]);
+        assert_eq!(found[1], Beside::default());
+
+        // TMDB's own record of the collection, kept by the catalogue's pages
+        // in the caller's language, names it in that language.
+        let record =
+            serde_json::json!({ "id": 2344, "name": "Matrix - Saga", "poster_path": "/fr.jpg" });
+        state
+            .caches
+            .lists
+            .insert(
+                collection_key(2344, "fr-FR"),
+                Bytes::from(serde_json::to_vec(&record).expect("written")),
+            )
+            .await;
+        let in_french = beside(&state, std::slice::from_ref(&matrix), "fr-FR").await;
+        assert_eq!(
+            in_french[0].collection.as_ref().map(|c| c.name.as_str()),
+            Some("Matrix - Saga")
+        );
+
+        // A film whose snapshots recommend nothing is sent what the editor
+        // had TMDB suggest for it.
+        let suggested = serde_json::json!([{ "id": 128, "title": "Princess Mononoke" }]);
+        state
+            .caches
+            .lists
+            .insert(
+                suggestions_key(MediaKind::Movie, 129),
+                Bytes::from(serde_json::to_vec(&suggested).expect("written")),
+            )
+            .await;
+        let found = beside(&state, &[lone], "en-US").await;
+        assert_eq!(recommended(&found[0]), [128]);
+
+        assert_eq!(nowhere.asked(), 0, "no provider was asked");
+    }
+
+    // ─── what changed ────────────────────────────────────────────────────────
+
+    #[test]
+    fn since_is_read_as_radarr_writes_it() {
+        let at = |since: &str| instant(since).map(crate::db::to_rfc3339);
+
+        // Rounded to the hour, a quarter before, without its zone.
+        assert_eq!(
+            at("2026-10-09T11:45:00").as_deref(),
+            Some("2026-10-09T11:45:00.000Z")
+        );
+        assert_eq!(
+            at("2026-10-09T13:45:00.250+02:00").as_deref(),
+            Some("2026-10-09T11:45:00.250Z")
+        );
+        assert_eq!(
+            at("2026-10-09").as_deref(),
+            Some("2026-10-09T00:00:00.000Z")
+        );
+        assert_eq!(at("yesterday"), None);
+        assert_eq!(at("2026-10-09T25:00:00"), None);
+    }
+
+    #[test]
+    fn what_tmdb_lists_comes_first_and_each_once() {
+        assert_eq!(
+            merged(vec![603, 129, 603], vec![129, 329865]),
+            [603, 129, 329865]
+        );
+        assert_eq!(merged(Vec::new(), vec![329865]), [329865]);
+    }
+
+    #[tokio::test]
+    async fn the_films_changed_here_are_named_beside_those_tmdb_lists() {
+        // TMDB has a key here, and does not answer: what changed here is
+        // named all the same.
+        let (state, nowhere) = server().await;
+        let since = Utc::now() - chrono::TimeDelta::hours(1);
+        let long_ago = crate::db::to_rfc3339(Utc::now() - chrono::TimeDelta::days(2));
+
+        // Fetched again a moment ago.
+        due(&state, "The Matrix", 603, "tt0133093").await;
+        let untouched = due(&state, "Spirited Away", 129, "tt0245429").await;
+        let locked = due(&state, "Arrival", 329865, "tt2543164").await;
+        let unlocked = due(&state, "Dune", 438631, "tt1160419").await;
+        for film in [&untouched, &locked, &unlocked] {
+            sqlx::query(
+                state
+                    .db
+                    .sql("UPDATE media_item SET updated_at = ? WHERE id = ?"),
+            )
+            .bind(&long_ago)
+            .bind(&film.id)
+            .execute(state.db.pool())
+            .await
+            .expect("written two days ago");
+        }
+
+        // A lock put on since moves neither `updated_at` nor `refreshed_at`.
+        let title = |text: &str| Some(serde_json::json!(text));
+        repo::override_field::set(
+            &state.db,
+            &locked.id,
+            Scope::Item,
+            "title",
+            title("Premier Contact").as_ref(),
+            Some("test"),
+        )
+        .await
+        .expect("locked");
+
+        // One put on two days ago and lifted since leaves no lock behind: the
+        // work is listed again.
+        repo::override_field::set(
+            &state.db,
+            &unlocked.id,
+            Scope::Item,
+            "title",
+            title("Dune : première partie").as_ref(),
+            Some("test"),
+        )
+        .await
+        .expect("locked");
+        sqlx::query(
+            state
+                .db
+                .sql("UPDATE media_override SET updated_at = ? WHERE media_id = ?"),
+        )
+        .bind(&long_ago)
+        .bind(&unlocked.id)
+        .execute(state.db.pool())
+        .await
+        .expect("locked two days ago");
+        repo::override_field::unset(&state.db, &unlocked.id, Scope::Item, "title")
+            .await
+            .expect("lifted");
+        crate::service::listing::after_write(&state, &unlocked.id).await;
+
+        let mut changed = changed_since(&state, since).await.expect("answered");
+        changed.sort_unstable();
+        assert_eq!(changed, [603, 329865, 438631]);
+        assert!(nowhere.asked() > 0, "TMDB was asked");
+
+        // Nothing changed after now.
+        let later = changed_since(&state, Utc::now() + chrono::TimeDelta::minutes(1))
+            .await
+            .expect("answered");
+        assert!(later.is_empty(), "{later:?}");
     }
 }

@@ -22,7 +22,13 @@ use tower_http::{
     trace::TraceLayer,
 };
 
-use crate::{api, state::AppState};
+use crate::{
+    api, coord, jobs,
+    jobs::supervise::{Ends, Supervisor},
+    media,
+    state::AppState,
+    tls,
+};
 
 /// Largest request body accepted anywhere, but for an upload: the only
 /// sizeable one otherwise is a bulk movie lookup, which is a list of
@@ -37,18 +43,34 @@ pub async fn serve(state: AppState) -> Result<()> {
         head: state.config.server.header_read_timeout,
     };
 
+    // The loops that run for as long as the process does, kept: one that
+    // panics or returns when it should not is said so and started again.
+    let tasks = Supervisor::new();
+    let keep = Keep {
+        tasks: &tasks,
+        state: &state,
+    };
     // Always started: whether it sweeps is a setting it re-reads, so turning
     // refresh on no longer needs a restart.
-    tokio::spawn(crate::jobs::refresh::run(state.clone()));
-    tokio::spawn(crate::jobs::datasets::run(state.clone()));
-    tokio::spawn(crate::jobs::listing::run(state.clone()));
-    // The media in line, fetched; the media nobody points at, swept.
-    tokio::spawn(crate::media::worker::run(state.clone()));
-    tokio::spawn(crate::media::worker::run_sweeps(state.clone()));
-    // The cache server, attached when it answers and listened to.
-    tokio::spawn(crate::cache::attach(state.clone()));
+    keep.run("refresh scheduler", Ends::Never, jobs::refresh::run);
+    keep.run("dataset imports", Ends::Never, jobs::datasets::run);
+    keep.run("listing", Ends::Never, jobs::listing::run);
+    // Whether it asks is a setting too, off until somebody turns it on.
+    keep.run("update check", Ends::Never, jobs::update_check::run);
+    // The media in line, fetched; the media nobody points at, swept. Neither
+    // has anything to do without a store.
+    keep.run("media worker", Ends::WhenDone, media::worker::run);
+    keep.run("media sweeps", Ends::WhenDone, media::worker::run_sweeps);
+    // The cache server, attached when it answers and listened to: its
+    // heartbeat and its channel are kept too, once it does.
+    tasks.keep("cache server", Ends::WhenDone, {
+        let (state, tasks) = (state.clone(), tasks.clone());
+        move || crate::cache::attach(state.clone(), tasks.clone())
+    });
     // Among several instances: the lead kept or taken, this one announced.
-    tokio::spawn(crate::coord::run(state.clone()));
+    // Alone, neither has anything to do.
+    keep.run("lease", Ends::WhenDone, coord::keep_lease);
+    keep.run("announcements", Ends::WhenDone, coord::run);
 
     // Sonarr builds its URLs from `.../v1/tvdb/{route}/{language}/` — with a
     // trailing slash — and its hostname is compiled in, so there is no way to
@@ -106,7 +128,7 @@ pub async fn serve(state: AppState) -> Result<()> {
                     tracing::error!(error = %e, "the clients' listener failed");
                 }
             });
-            tokio::spawn(crate::tls::run_renewals(state.clone()));
+            keep.run("certificate renewals", Ends::WhenDone, tls::run_renewals);
             Some((handle, task))
         }
         None => None,
@@ -142,8 +164,11 @@ pub async fn serve(state: AppState) -> Result<()> {
         let doors: Vec<_> = std::iter::once(handle.clone())
             .chain(clients_door.as_ref().map(|(door, _)| door.clone()))
             .collect();
+        let tasks = tasks.clone();
         async move {
             shutdown_signal().await;
+            // What ends from here on is the stop's doing: not started again.
+            tasks.stop();
             for door in doors {
                 door.graceful_shutdown(Some(DRAIN));
             }
@@ -168,6 +193,12 @@ pub async fn serve(state: AppState) -> Result<()> {
         tracing::warn!(error = %e, "the clients' listener did not end cleanly");
     }
 
+    // The loops are ended before the database is closed, so what one holds
+    // is handed back rather than waited for.
+    if tokio::time::timeout(DRAIN, tasks.shutdown()).await.is_err() {
+        tracing::warn!("the background tasks did not all end in time");
+    }
+
     // Given the drain's time to have its connections handed back: a job
     // holding one must not keep the process up until it is killed.
     if tokio::time::timeout(DRAIN, state.db.close()).await.is_err() {
@@ -178,6 +209,22 @@ pub async fn serve(state: AppState) -> Result<()> {
 
 /// How long in-flight requests are given to finish once a stop is asked.
 const DRAIN: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// What keeps the loops that take the state and nothing else, as most do.
+struct Keep<'a> {
+    tasks: &'a Supervisor,
+    state: &'a AppState,
+}
+
+impl Keep<'_> {
+    fn run<Fut>(&self, name: &'static str, ends: Ends, run: fn(AppState) -> Fut)
+    where
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
+        let state = self.state.clone();
+        self.tasks.keep(name, ends, move || run(state.clone()));
+    }
+}
 
 /// What every answer of the interface's door goes through, inside out: the
 /// name it was addressed to, CORS, the body limit, compression, the timeout,
