@@ -1,0 +1,73 @@
+# Dependabot, every Monday: the minor and patch updates of an ecosystem arrive
+# together in one pull request, and each major update in a pull request of its
+# own. A major is the update that can break the build, and it should not hold
+# the others back.
+#
+# A release is left a week before one is proposed. A package that was taken
+# over, or published with something in it that should not be there, is nearly
+# always noticed and pulled within days, and nothing here needs a release the
+# hour it appears. One setting for every ecosystem, since Docker and GitHub
+# Actions have no cooldown per kind of release. A security update is not held
+# back by it: that comes as soon as there is a fix.
+#
+# What decides whether one of these pull requests can be merged is ci.yml: the
+# build, the tests, the lints, the minimum Rust version, `cargo deny`.
+#
+# The labels are the ones Dependabot creates itself; a label the repository does
+# not have is ignored.
+version: 2
+
+updates:
+  # Cargo.toml pins most crates in full, so an update changes the manifest and
+  # the lockfile together. Before 1.0 a crate's minor release is its breaking
+  # one: it travels in the group below, and can fail it.
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+    groups:
+      cargo-minor-and-patch:
+        update-types: [minor, patch]
+    labels: [dependencies, rust]
+
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+    groups:
+      npm-minor-and-patch:
+        update-types: [minor, patch]
+    labels: [dependencies, javascript]
+
+  # The base images in the Dockerfile.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+    groups:
+      docker-minor-and-patch:
+        update-types: [minor, patch]
+    labels: [dependencies, docker]
+
+  # The actions are pinned by commit, with the version in a comment: Dependabot
+  # moves both.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+    groups:
+      actions-minor-and-patch:
+        update-types: [minor, patch]
+    labels: [dependencies, github_actions]

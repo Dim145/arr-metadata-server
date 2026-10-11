@@ -1,0 +1,83 @@
+# cargo-deny's settings: the licences the dependency tree may carry, where its
+# crates may come from, what may appear in it twice, and which advisories are
+# known and set aside. ci.yml runs it; by hand:
+#
+#   cargo install --locked cargo-deny
+#   cargo deny check
+#
+# A failing check is a decision to take, not an obstacle: the answer is a line
+# here with the reason beside it, or a different dependency — never a looser
+# rule to get past it.
+
+[graph]
+# What is built: the container image is Linux, on both architectures, and the
+# server is developed on macOS. A crate that only a Windows or a WebAssembly
+# build would pull in is in none of them, and would add duplicates and licences
+# nobody ships.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+]
+
+[advisories]
+# The advisory .cargo/audit.toml sets aside, for the same reason; keep the two
+# in step.
+ignore = [
+    # RUSTSEC-2023-0071, the Marvin attack on `rsa`: a timing side channel in
+    # RSA private-key operations. `rsa` comes in through `openidconnect`, which
+    # uses it only to verify an identity provider's signature with the
+    # provider's public key; this server holds no RSA private key, so there is
+    # nothing for the timing to recover. No fixed release of `rsa` exists.
+    { id = "RUSTSEC-2023-0071", reason = "rsa only verifies a provider's signature with its public key here; the server holds no RSA private key for the timing to recover, and no fixed release exists" },
+]
+
+[licenses]
+# The licences the project is content to carry. A crate offered under several
+# (`MIT OR Apache-2.0`) needs only one of them listed, and a licence that is not
+# listed is refused: a new one arriving with an update is for a person to decide,
+# and to add here beside the crate that brought it.
+#
+# Checked against Cargo.lock: every crate built for the targets above is covered
+# (the tree is almost all `MIT OR Apache-2.0`; Unicode-3.0, BSD-3-Clause, ISC,
+# Zlib, BSL-1.0 and CDLA-Permissive-2.0 are each the only licence of at least
+# one crate). Unicode-DFS-2016, MPL-2.0, OpenSSL and Apache-2.0 with the LLVM
+# exception are carried by none of them today: they are accepted ahead of time,
+# the way an older or newer release of a crate may bring them.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Zlib",
+    "MPL-2.0",
+    "OpenSSL",
+    "CC0-1.0",
+    "BSL-1.0",
+    "CDLA-Permissive-2.0",
+]
+# The list is a policy, not an inventory: a licence nothing carries yet is not
+# something to warn about.
+unused-allowed-license = "allow"
+
+[bans]
+# A crate twice in the tree is a longer build and a bigger binary. It is said
+# and not refused: most of them are a dependency's own dependency, waiting for
+# its next release.
+multiple-versions = "warn"
+# `*` as a requirement asks for whatever is newest, which pins nothing.
+wildcards = "deny"
+
+[sources]
+# crates.io and nothing else: a crate from a git repository or from another
+# registry is one whose publication nobody else has seen, and the lockfile has
+# none today.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

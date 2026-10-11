@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Ask a question, or talk an idea over
+    url: https://github.com/Dim145/arr-metadata-server/discussions
+    about: Questions about running the server, and ideas that have no shape yet, are for the discussions.
+  - name: Report a security vulnerability
+    url: https://github.com/Dim145/arr-metadata-server/security/advisories/new
+    about: Privately, through GitHub. Please do not open a public issue for a security problem.

@@ -1,0 +1,47 @@
+# Reads Cargo.lock against the RustSec advisory database. This is the part of
+# the supply chain that changes without anybody touching the repository: an
+# advisory is published about a crate that has sat in the lockfile for months.
+# So it runs every Monday as well as when the lockfile changes.
+#
+# What may be ignored, and why, is in .cargo/audit.toml, which cargo-audit reads
+# on its own: there is no list of advisories here to keep in step with it. A
+# vulnerability fails the run. A warning — a crate that is unmaintained, or was
+# yanked — is printed and does not: there is often nothing to do about one on
+# the day it appears.
+name: Audit
+
+on:
+  schedule:
+    - cron: '17 6 * * 1'
+  push:
+    branches: [main]
+    paths:
+      - Cargo.lock
+      - .cargo/audit.toml
+      - .github/workflows/audit.yml
+  pull_request:
+    paths:
+      - Cargo.lock
+      - .cargo/audit.toml
+      - .github/workflows/audit.yml
+  workflow_dispatch:
+
+# Reading the repository is all it does.
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Advisories
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
+        with:
+          tool: cargo-audit
+
+      - name: Audit Cargo.lock
+        run: cargo audit

@@ -22,12 +22,21 @@ FROM rust:1.98-trixie AS server
 
 WORKDIR /src
 
+# `cargo auditable` writes the list of crates a binary was built from into the
+# binary itself. That is how a scanner, or `cargo audit bin`, can say what is
+# inside a container that has no package database for Rust, and how the SBOM
+# the registry keeps beside the image lists them. Installed ahead of everything
+# that changes, so that it is compiled once and the layer kept; the version is
+# named because this runs in every build, and `--locked` keeps its own
+# dependencies to the ones it was released with.
+RUN cargo install --locked --version 0.7.7 cargo-auditable
+
 # Compile the dependency tree against a stub so it caches independently of the
 # application sources, which change far more often.
 COPY Cargo.toml Cargo.lock build.rs ./
 RUN mkdir -p src \
  && echo 'fn main() {}' > src/main.rs \
- && cargo build --release --locked \
+ && cargo auditable build --release --locked \
  && rm -rf src
 
 COPY src/ ./src/
@@ -39,9 +48,14 @@ COPY --from=ui /ui/dist/ ./frontend/dist/
 
 # `touch` defeats the stale mtime left by the stub build.
 RUN touch src/main.rs build.rs \
- && cargo build --release --locked \
+ && cargo auditable build --release --locked \
  && strip target/release/arr-metadata-server \
  && mkdir -p /out/data
+
+# The dependency list has to have come through the strip above: without it the
+# image would say nothing about what is inside, and nothing would complain.
+RUN readelf -S target/release/arr-metadata-server | grep -q '\.dep-v0' \
+ || { echo 'the dependency list (.dep-v0) is not in the binary' >&2; exit 1; }
 
 
 # ── 3. Runtime ───────────────────────────────────────────────────────────────

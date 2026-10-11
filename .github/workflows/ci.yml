@@ -93,10 +93,59 @@ jobs:
         working-directory: frontend
         run: npm run build
 
+  # `rust-version` in Cargo.toml promises that 1.94 builds this, and nothing
+  # else ever tries it: a dependency, or a newer language feature, can break the
+  # promise without anyone noticing. The ref of the action is the toolchain it
+  # installs, so when the promise moves, this moves with it.
+  msrv:
+    name: Minimum Rust version
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install the declared minimum
+        uses: dtolnay/rust-toolchain@b31b393ee3a9000c6a2886412d0787436f5b6d2d # 1.94
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Check
+        run: cargo check --locked --all-targets
+
+  # The dependency tree as a whole: the licences it is under, where its crates
+  # come from, what is in it twice, and which of it has a known advisory. The
+  # first three change only when somebody changes the dependencies, so they fail
+  # the run. Advisories are published whenever their authors like, not when a
+  # pull request is, and failing on one here would turn every open pull request
+  # red for something none of them did: they are reported, and it is audit.yml
+  # — when Cargo.lock changes, and every week — that fails on one.
+  deny:
+    name: Dependencies (${{ matrix.checks }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        checks:
+          - bans licenses sources
+          - advisories
+    continue-on-error: ${{ matrix.checks == 'advisories' }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check ${{ matrix.checks }}
+
   image:
     name: Container image
     runs-on: ubuntu-latest
     needs: [backend, frontend]
+    # The one job that may write to code scanning, for the scan of the image
+    # below. Naming a permission replaces the workflow's, so `contents` again.
+    permissions:
+      contents: read
+      security-events: write
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -137,3 +186,35 @@ jobs:
           docker exec ci /usr/local/bin/arr-metadata-server healthcheck
 
           docker rm -f ci
+
+      # What the image carries that is known to be vulnerable and has a fix: the
+      # packages of the distroless base, and the crates inside the binary, which
+      # lists them itself (`cargo auditable`, in the Dockerfile). Reported, not
+      # enforced: the first scan is what shows how much there is to clear, and a
+      # gate on a list nobody has read only gets switched off. Once it comes back
+      # clean, `exit-code: '1'` makes it one.
+      #
+      # Only on a push, and only on GitHub: code scanning is GitHub's, and a
+      # pull request from a fork, or from Dependabot, is given a token that
+      # cannot write to it.
+      - name: Scan the image
+        id: trivy
+        if: ${{ github.event_name == 'push' && github.server_url == 'https://github.com' }}
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: arr-metadata-server:ci
+          format: sarif
+          output: trivy-results.sarif
+          severity: HIGH,CRITICAL
+          # Without this the severities above would not apply to the SARIF,
+          # which lists everything by default.
+          limit-severities-for-sarif: true
+          ignore-unfixed: true
+          exit-code: '0'
+
+      - name: Send the findings to code scanning
+        if: ${{ steps.trivy.conclusion == 'success' }}
+        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy-image
