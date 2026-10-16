@@ -558,6 +558,11 @@ may change what the API or the configuration means, and says so here.
   unauthenticated ServerHello downgrading later key exchanges). The web UI's
   build takes source-map-js 1.2.2 (GHSA-68fv-2mgg-jv7q); nothing of it is
   shipped.
+- `cargo audit` and `cargo deny` set aside RUSTSEC-2026-0367 to -0369, in
+  `zip`'s extraction: `zip` 8 serves only the build of the Swagger UI, from
+  an archive vendored in a crate Cargo.lock pins by checksum, written out
+  without the functions at fault. No `utoipa-swagger-ui` takes the fixed
+  `zip` 9 yet.
 
 ## [0.7.0] — 2026-10-05
 

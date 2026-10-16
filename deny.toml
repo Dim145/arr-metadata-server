@@ -31,6 +31,11 @@ ignore = [
     # provider's public key; this server holds no RSA private key, so there is
     # nothing for the timing to recover. No fixed release of `rsa` exists.
     { id = "RUSTSEC-2023-0071", reason = "rsa only verifies a provider's signature with its public key here; the server holds no RSA private key for the timing to recover, and no fixed release exists" },
+    # RUSTSEC-2026-0367, -0368 and -0369, in `zip`'s extraction: see
+    # .cargo/audit.toml.
+    { id = "RUSTSEC-2026-0367", reason = "zip 8 only serves utoipa-swagger-ui's build script, which opens the Swagger UI vendored in a crate pinned by checksum and writes its files itself; utoipa-swagger-ui 10.0.1, the latest, cannot take the fixed zip 9" },
+    { id = "RUSTSEC-2026-0368", reason = "zip 8 only serves utoipa-swagger-ui's build script, which never calls ZipArchive::extract and confines each path by enclosed_name; utoipa-swagger-ui 10.0.1, the latest, cannot take the fixed zip 9" },
+    { id = "RUSTSEC-2026-0369", reason = "zip 8 only serves utoipa-swagger-ui's build script, which never calls ZipArchive::extract or ZipStreamReader::extract; utoipa-swagger-ui 10.0.1, the latest, cannot take the fixed zip 9" },
 ]
 
 [licenses]
