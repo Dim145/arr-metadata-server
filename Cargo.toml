@@ -130,7 +130,7 @@ serde_urlencoded = "0.7"
 # Reads back the XML the feeds and the `.nfo` documents are written as, so a
 # test says they are well-formed rather than that they look it; the version
 # the object store already brings.
-quick-xml = "0.41"
+quick-xml = "0.42"
 
 [profile.release]
 opt-level = 3
