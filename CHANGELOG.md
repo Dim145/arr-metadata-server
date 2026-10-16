@@ -552,6 +552,12 @@ may change what the API or the configuration means, and says so here.
   `HTTP_PROXY`, through the resolver that refuses loopback, link-local and
   cloud-metadata addresses (a home network's own are fine), and a redirect
   is not followed: an address that answers 3xx has moved.
+- rustls 0.23.46, for RUSTSEC-2026-0346 (a session's `Debug` showed its TLS
+  secrets), -0347 (data sent on after an ECH rejection), -0348 (a compressed
+  certificate inflated to 1 GiB before authentication) and -0349 (an
+  unauthenticated ServerHello downgrading later key exchanges). The web UI's
+  build takes source-map-js 1.2.2 (GHSA-68fv-2mgg-jv7q); nothing of it is
+  shipped.
 
 ## [0.7.0] — 2026-10-05
 

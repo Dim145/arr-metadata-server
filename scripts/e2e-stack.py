@@ -28,7 +28,8 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-import xml.etree.ElementTree as ET
+# Plex's answers only, and none with a document type: see plex_xml.
+import xml.etree.ElementTree as ET  # nosemgrep: python.lang.security.use-defused-xml.use-defused-xml
 
 # ── What the stack is made of ──────────────────────────────────────────────
 
@@ -948,16 +949,25 @@ def phase_seed(R, stack):
 # ── Plex ───────────────────────────────────────────────────────────────────
 
 
+def plex_xml(out):
+    """An answer of Plex's, read as XML when it is XML. A document type — the
+    way in for entities, which no answer of Plex's carries — is refused
+    rather than read."""
+    if out.strip()[:1] != b"<":
+        return out
+    if b"<!DOCTYPE" in out or b"<!ENTITY" in out:
+        raise RuntimeError("Plex answered with a document type, which is not read")
+    return ET.fromstring(out)
+
+
 def plex_get(base, path, headers=None, timeout=60):
     """Plex answers XML unless asked otherwise."""
-    out = http("GET", base + path, headers=headers, timeout=timeout, raw=True)
-    return ET.fromstring(out) if out.strip()[:1] == b"<" else out
+    return plex_xml(http("GET", base + path, headers=headers, timeout=timeout, raw=True))
 
 
 def plex_post(base, path, params, timeout=120):
     query = urllib.parse.urlencode(params, quote_via=urllib.parse.quote)
-    out = http("POST", f"{base}{path}?{query}", timeout=timeout, raw=True)
-    return ET.fromstring(out) if out.strip()[:1] == b"<" else out
+    return plex_xml(http("POST", f"{base}{path}?{query}", timeout=timeout, raw=True))
 
 
 def eventually(fetch, done, wait=90, every=3):

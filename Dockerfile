@@ -54,8 +54,10 @@ RUN touch src/main.rs build.rs \
 
 # The dependency list has to have come through the strip above: without it the
 # image would say nothing about what is inside, and nothing would complain.
-RUN readelf -S target/release/arr-metadata-server | grep -q '\.dep-v0' \
- || { echo 'the dependency list (.dep-v0) is not in the binary' >&2; exit 1; }
+RUN readelf -S target/release/arr-metadata-server > /tmp/sections \
+ && if ! grep -q '\.dep-v0' /tmp/sections; then \
+      echo 'the dependency list (.dep-v0) is not in the binary' >&2; exit 1; \
+    fi
 
 
 # ── 3. Runtime ───────────────────────────────────────────────────────────────
