@@ -504,27 +504,22 @@ pub(super) fn releases_of(work: &MediaItem) -> Vec<Release> {
 
 /// A film's days as a reader in `country` has them: its first in cinemas,
 /// digitally and on disc there, wherever its releases there give one and
-/// nobody fixed that date by hand; its own dates otherwise.
+/// nobody fixed that date by hand; its own dates otherwise. The Plex provider
+/// reads a film's day by the same rule (`release_day`, in `wire/plex.rs`).
 pub(super) fn in_country(work: &mut MediaItem, country: &str) {
     let days = work.days_in(country);
-    let free = |work: &MediaItem, field: &str| {
-        !work
-            .locked_fields
-            .iter()
-            .any(|locked| locked.strip_prefix("item/") == Some(field))
-    };
     if let Some(day) = days.cinema
-        && free(work, "inCinemas")
+        && !work.is_locked("inCinemas")
     {
         work.in_cinemas = Some(day);
     }
     if let Some(day) = days.digital
-        && free(work, "digitalRelease")
+        && !work.is_locked("digitalRelease")
     {
         work.digital_release = Some(day);
     }
     if let Some(day) = days.physical
-        && free(work, "physicalRelease")
+        && !work.is_locked("physicalRelease")
     {
         work.physical_release = Some(day);
     }

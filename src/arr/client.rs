@@ -16,11 +16,11 @@
 //! no Sonarr or Radarr is ever at stays refused, whichever way it is written
 //! or resolved: the link-local block a cloud parks its metadata service in,
 //! the other clouds' metadata addresses, multicast, "this network". A redirect
-//! is followed only on the host first asked, where the key was meant to go;
-//! to another, it is an error, and the key goes nowhere else. These requests
-//! go direct, whatever `HTTP_PROXY` says: a proxy would resolve the name out
-//! of this resolver's sight, and a Sonarr on the network does not sit behind
-//! the way out to the internet.
+//! is followed only at the origin first asked — its scheme, host and port —
+//! where the key was meant to go; to another, it is an error, and the key
+//! goes nowhere else. These requests go direct, whatever `HTTP_PROXY` says: a
+//! proxy would resolve the name out of this resolver's sight, and a Sonarr on
+//! the network does not sit behind the way out to the internet.
 
 use std::{net::IpAddr, sync::OnceLock, time::Duration};
 
@@ -120,7 +120,7 @@ const SHORT: Duration = Duration::from_secs(15);
 /// and picture of each, from a Sonarr on a small machine.
 const LONG: Duration = Duration::from_secs(120);
 
-/// How many redirects one call follows, on its own host.
+/// How many redirects one call follows, at its own origin.
 const MAX_REDIRECTS: usize = 5;
 
 /// One of them, as this server reaches it: where, and with which key.
@@ -286,7 +286,7 @@ impl Connection {
             .timeout(SHORT)
             .send()
             .await
-            .map_err(|e| anyhow!(crate::providers::describe_request_error(&e)))?;
+            .map_err(|e| failed(&e))?;
         let answer = self.read(response, "command").await?;
         Ok(answer.get("id").and_then(Value::as_i64))
     }
@@ -300,7 +300,7 @@ impl Connection {
             .timeout(timeout)
             .send()
             .await
-            .map_err(|e| anyhow!(crate::providers::describe_request_error(&e)))?;
+            .map_err(|e| failed(&e))?;
         self.read(response, path).await
     }
 
@@ -335,6 +335,37 @@ impl Connection {
                 bail!("{} answered {status}: {said}", self.app.name())
             }
         }
+    }
+}
+
+/// A call that got no answer, for want of a connection or of time: nobody is
+/// there, as against an address that answered and said no. What a caller with
+/// many calls to make stops at, rather than ask each in turn of one that does
+/// not answer — and wait out each one's timeout.
+#[derive(Debug)]
+pub struct Unanswered(String);
+
+impl std::fmt::Display for Unanswered {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Unanswered {}
+
+/// Whether a call failed for want of an answer: see [`Unanswered`].
+pub fn unanswered(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<Unanswered>().is_some()
+}
+
+/// A request that could not be made, in words that name no address — and as
+/// [`Unanswered`] when it was never connected or ran out of time.
+fn failed(e: &reqwest::Error) -> anyhow::Error {
+    let said = crate::providers::describe_request_error(e);
+    if e.is_connect() || e.is_timeout() {
+        anyhow::Error::new(Unanswered(said))
+    } else {
+        anyhow!(said)
     }
 }
 
@@ -455,8 +486,13 @@ fn builder() -> reqwest::ClientBuilder {
         }))
 }
 
-/// Whether a redirect to `next` is followed, `hops` requests in: on the host
-/// first asked, by http or https, five at most.
+/// Whether a redirect to `next` is followed, `hops` requests in: at the origin
+/// first asked — its scheme, host and port — by http or https, five at most.
+///
+/// Not on the host alone: another port of it is another service, and another
+/// scheme is a connection of another kind. The key travels in a header
+/// reqwest does not know for a credential, and so does not strip: it goes
+/// wherever the request is sent on to.
 fn redirect(first: Option<&url::Url>, next: &url::Url, hops: usize) -> Result<(), &'static str> {
     if hops > MAX_REDIRECTS {
         return Err("too many redirects");
@@ -465,8 +501,8 @@ fn redirect(first: Option<&url::Url>, next: &url::Url, hops: usize) -> Result<()
         return Err("redirected to something other than http or https");
     }
     match first {
-        Some(first) if first.host_str() == next.host_str() => Ok(()),
-        _ => Err("redirected to another host, where the API key is not sent"),
+        Some(first) if crate::outbound::same_origin(first.as_str(), next.as_str()) => Ok(()),
+        _ => Err("redirected to another origin, where the API key is not sent"),
     }
 }
 
@@ -607,13 +643,29 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_redirect_stays_on_the_host_first_asked() {
+    fn a_redirect_stays_at_the_origin_first_asked() {
         let url = |text: &str| url::Url::parse(text).unwrap();
         let first = url("http://sonarr:8989/api/v3/system/status");
         assert!(redirect(Some(&first), &url("http://sonarr:8989/sonarr/api/v3/x"), 1).is_ok());
-        // To https on the same host: the key goes where it was meant to.
-        assert!(redirect(Some(&first), &url("https://sonarr/api/v3/x"), 1).is_ok());
-        assert!(redirect(Some(&first), &url("http://elsewhere:8989/api/v3/x"), 1).is_err());
+        // A port left out is the scheme's own, and written out is the same.
+        let plain = url("http://sonarr/api/v3/system/status");
+        assert!(redirect(Some(&plain), &url("http://sonarr:80/api/v3/x"), 1).is_ok());
+        // Another host, and on the same host another scheme or another port:
+        // another service, which the key was not given for. An upgrade to
+        // https is one too: the address is set again where it is https.
+        for elsewhere in [
+            "http://elsewhere:8989/api/v3/x",
+            "https://sonarr/api/v3/x",
+            "https://sonarr:8989/api/v3/x",
+            "http://sonarr:9696/api/v3/x",
+            "http://sonarr.elsewhere:8989/api/v3/x",
+        ] {
+            let why = redirect(Some(&first), &url(elsewhere), 1);
+            assert!(
+                why.is_err_and(|why| why.contains("another origin")),
+                "{elsewhere}"
+            );
+        }
         assert!(redirect(Some(&first), &url("file:///etc/passwd"), 1).is_err());
         assert!(
             redirect(
@@ -622,6 +674,42 @@ pub(crate) mod tests {
                 MAX_REDIRECTS + 1
             )
             .is_err()
+        );
+    }
+
+    /// The wire as well as the rule: a Sonarr whose answer is a redirect to
+    /// another port of its own host — another service — is not followed, and
+    /// the key it was asked with never arrives there.
+    #[tokio::test]
+    async fn a_redirect_to_another_port_of_the_host_carries_no_key() {
+        // Another service on the same host, which keeps what it is sent.
+        let (elsewhere, seen) = stand_in(Arc::new(|_: &Seen| (200, "[]".into()))).await;
+
+        let redirector = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let at = format!("http://{}", redirector.local_addr().unwrap());
+        let to = format!("{elsewhere}/api/v3/series?tvdbId=81189");
+        tokio::spawn(async move {
+            while let Ok((mut connection, _)) = redirector.accept().await {
+                let mut head = [0u8; 4096];
+                let _ = connection.read(&mut head).await;
+                let reply = format!(
+                    "HTTP/1.1 302 Found\r\nLocation: {to}\r\nContent-Length: 0\r\n\
+                     Connection: close\r\n\r\n"
+                );
+                let _ = connection.write_all(reply.as_bytes()).await;
+                let _ = connection.shutdown().await;
+            }
+        });
+
+        let connection = Connection::new(App::Sonarr, &at, "sonarr-key-0001").unwrap();
+        let error = connection
+            .find(81189)
+            .await
+            .expect_err("a redirect to another service is an error");
+        assert!(format!("{error:#}").contains("another origin"), "{error:#}");
+        assert!(
+            seen.lock().is_empty(),
+            "the other service was never asked, key or none"
         );
     }
 

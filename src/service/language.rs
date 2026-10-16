@@ -161,15 +161,32 @@ fn iso_639_2b_to_t(code: &str) -> String {
 }
 
 /// Whether the work is named in a language: a translation held in it with a
-/// title. The language the work's own text is in is no translation and is
-/// not counted here; the caller knows that one.
+/// title, or a title somebody wrote for it. The language the work's own text
+/// is in is no translation and is not counted here; the caller knows that
+/// one.
 pub fn holds_title(item: &MediaItem, language: &str) -> bool {
-    item.translations.iter().any(|t| {
-        t.language == language
-            && t.title
-                .as_deref()
-                .is_some_and(|title| !title.trim().is_empty())
-    })
+    written(item, "title", language).is_some()
+        || item.translations.iter().any(|t| {
+            t.language == language
+                && t.title
+                    .as_deref()
+                    .is_some_and(|title| !title.trim().is_empty())
+        })
+}
+
+/// What somebody wrote for the work's `title` or `overview` in one language
+/// — a lock made in that language alone — when it says something. One made
+/// in every language is the work's own text already, and its path is among
+/// the locked fields as that.
+fn written<'a>(item: &'a MediaItem, field: &str, language: &str) -> Option<&'a str> {
+    if language.is_empty() {
+        return None;
+    }
+    item.locked_texts
+        .iter()
+        .find(|t| t.scope == "item" && t.field == field && t.language == language)
+        .and_then(|t| t.value.as_deref())
+        .filter(|text| !text.trim().is_empty())
 }
 
 /// [`apply`], and the title and overview of another language when the work
@@ -185,7 +202,9 @@ pub fn holds_title(item: &MediaItem, language: &str) -> bool {
 /// Episode text is fetched and laid over in the language asked for alone,
 /// as [`apply`] does: a season's episodes in one language under a series
 /// named in another is what Skyhook answers too, for a language TheTVDB
-/// holds the episodes in and not the series.
+/// holds the episodes in and not the series. A title or an overview somebody
+/// wrote for the language laid is what the work is given in it, over its
+/// translation, and is said locked as it is for the language asked.
 pub async fn apply_with_fallback(
     state: &AppState,
     item: &mut MediaItem,
@@ -210,7 +229,26 @@ fn fall_back(state: &AppState, item: &mut MediaItem, asked: &str, own: &str) {
         holds_title(item, l)
     }) {
         overlay_item(item, &next);
+        claim(item, &next);
     }
+}
+
+/// Say locked, as the work is now served, the title and the overview
+/// somebody wrote for the language it was laid from. [`fields::mark`] said
+/// which texts are locked for the language asked, and counted the others as
+/// another language's (`item/title@eng`); a text laid from the language fallen
+/// back to is that language's, and the one this answer carries. What the
+/// language asked had locked stays as it was.
+fn claim(item: &mut MediaItem, language: &str) {
+    for field in ["title", "overview"] {
+        let path = format!("item/{field}");
+        if written(item, field, language).is_some() && !locked(item, &path) {
+            item.locked_fields
+                .retain(|held| *held != format!("{path}@{language}"));
+            item.locked_fields.push(path);
+        }
+    }
+    item.locked_fields.sort_unstable();
 }
 
 /// The language laid over a work not named in the one asked for: the first
@@ -432,17 +470,27 @@ pub fn apply_shallow(state: &AppState, item: &mut MediaItem, requested: &str) {
     fields::lay(item, &language);
 }
 
-/// Replace the work's own title and overview from a stored translation.
+/// Replace the work's own title and overview from a stored translation — or
+/// by what somebody wrote for the language, which a provider's text does not
+/// outrank, whether or not [`fields::fold_translations`] has carried it into
+/// the translation yet.
 fn overlay_item(item: &mut MediaItem, language: &str) {
-    let Some(translation) = item.translations.iter().find(|t| t.language == language) else {
-        return;
-    };
+    let translation = item.translations.iter().find(|t| t.language == language);
 
-    let title = translation.title.clone().filter(|t| !t.trim().is_empty());
-    let overview = translation
-        .overview
-        .clone()
-        .filter(|o| !o.trim().is_empty());
+    let title = written(item, "title", language)
+        .map(str::to_string)
+        .or_else(|| {
+            translation
+                .and_then(|t| t.title.clone())
+                .filter(|t| !t.trim().is_empty())
+        });
+    let overview = written(item, "overview", language)
+        .map(str::to_string)
+        .or_else(|| {
+            translation
+                .and_then(|t| t.overview.clone())
+                .filter(|o| !o.trim().is_empty())
+        });
 
     if let Some(title) = title
         && !locked(item, "item/title")
@@ -806,6 +854,42 @@ mod tests {
         }
     }
 
+    /// Every language Sonarr 5 can ask in, as its own table spells them
+    /// (`NzbDrone.Core/Parser/IsoLanguages.cs`, 5.0.0.2635, which added
+    /// Azerbaijani, Uzbek, Malay, Urdu, Romansh, Georgian and Irish to
+    /// version 4's list): a series set to any of them is answered in it, not
+    /// in English because the code is one this server does not know.
+    #[test]
+    fn every_language_sonarr_5_asks_in_has_a_shelf() {
+        let version_4s = [
+            "eng", "fra", "spa", "deu", "ita", "dan", "nld", "jpn", "isl", "zho", "rus", "pol",
+            "vie", "swe", "nor", "nob", "fin", "tur", "por", "ell", "kor", "hun", "heb", "lit",
+            "ces", "ara", "hin", "bul", "mal", "ukr", "slk", "tha", "ron", "lav", "fas", "cat",
+            "hrv", "srp", "bos", "est", "tam", "ind", "mkd", "slv",
+        ];
+        let added_in_5 = ["aze", "uzb", "msa", "urd", "roh", "kat", "gle"];
+        for code in version_4s.iter().chain(&added_in_5) {
+            assert_eq!(three_letter(code), *code, "{code} is answered in English");
+        }
+        // Their two-letter spellings, as the native API reads them, land on
+        // the same shelf.
+        for (two, three) in [
+            ("az", "aze"),
+            ("uz", "uzb"),
+            ("ms", "msa"),
+            ("ur", "urd"),
+            ("rm", "roh"),
+            ("ka", "kat"),
+            ("ga", "gle"),
+        ] {
+            assert_eq!(three_letter(two), three, "{two}");
+        }
+        // And the bibliographic spellings of the new ones that have two:
+        // Georgian's and Malay's.
+        assert_eq!(three_letter("geo"), "kat");
+        assert_eq!(three_letter("may"), "msa");
+    }
+
     #[test]
     fn a_work_not_named_as_asked_is_named_in_the_callers_language_then_in_english() {
         // What the catalogue holds the work's title in, besides the language
@@ -1004,6 +1088,166 @@ mod tests {
 
         assert_eq!(item.title, "Breaking Bad", "translated");
         assert_eq!(item.overview.as_deref(), Some("Mine."), "locked");
+    }
+
+    /// A text a person locked, as the store hands it over.
+    fn lock(field: &str, language: Option<&str>, text: &str) -> fields::Override {
+        fields::Override {
+            scope: "item".into(),
+            field: field.into(),
+            language: language.map(str::to_string),
+            value: Some(serde_json::Value::String(text.into())),
+            updated_at: "2026-10-16T00:00:00.000Z".into(),
+            updated_by: None,
+        }
+    }
+
+    /// A work as a request for it in `asked` is given it, by a caller whose
+    /// own language is `own`, on a catalogue kept in English: read with its
+    /// locks, as the store reads it, and fallen back from the language asked.
+    async fn served_in(locks: &[fields::Override], asked: &str, own: &str) -> MediaItem {
+        let (state, _) = crate::service::testing::server().await;
+        let mut item = item_with_translation();
+        // What TMDB calls it in French, which a lock outranks.
+        item.translations[0].title = Some("Breaking Bad (TMDB)".into());
+        fields::apply_in(&mut item, locks, "eng").expect("read");
+        apply_shallow_with_fallback(&state, &mut item, asked, own);
+        item
+    }
+
+    #[tokio::test]
+    async fn a_title_locked_for_the_language_a_work_falls_back_to_is_the_one_it_is_given() {
+        // Asked in German, which names the work nowhere, by a caller who is
+        // answered in French: the work's title is TMDB's French one...
+        let item = served_in(&[], "deu", "fr-FR").await;
+        assert_eq!(item.title, "Breaking Bad (TMDB)");
+        assert_eq!(item.overview.as_deref(), Some("Un professeur et un élève."));
+
+        // ...unless somebody wrote one for French, which is then the one — and
+        // is said locked, as it is when French is what is asked for.
+        let item = served_in(
+            &[lock(
+                "title",
+                Some("fra"),
+                "Breaking Bad (la version verrouillée)",
+            )],
+            "deu",
+            "fr-FR",
+        )
+        .await;
+        assert_eq!(item.title, "Breaking Bad (la version verrouillée)");
+        assert_eq!(item.overview.as_deref(), Some("Un professeur et un élève."));
+        assert_eq!(item.locked_fields, ["item/title"]);
+
+        // A text written for another language than the one fallen back to is
+        // not French's to read.
+        let item = served_in(
+            &[lock("title", Some("jpn"), "ブレイキング・バッド")],
+            "deu",
+            "fr-FR",
+        )
+        .await;
+        assert_eq!(item.title, "Breaking Bad (TMDB)");
+        assert_eq!(item.locked_fields, ["item/title@jpn"]);
+
+        // What was written for the language asked stands over the one fallen
+        // back to, field by field: its overview, with the title French's own.
+        let item = served_in(
+            &[
+                lock("overview", Some("deu"), "Ein Lehrer und ein Schüler."),
+                lock(
+                    "title",
+                    Some("fra"),
+                    "Breaking Bad (la version verrouillée)",
+                ),
+            ],
+            "deu",
+            "fr-FR",
+        )
+        .await;
+        assert_eq!(item.title, "Breaking Bad (la version verrouillée)");
+        assert_eq!(
+            item.overview.as_deref(),
+            Some("Ein Lehrer und ein Schüler.")
+        );
+        assert_eq!(item.locked_fields, ["item/overview", "item/title"]);
+    }
+
+    /// A title somebody wrote for French, on a work whose locks have not been
+    /// carried into its translations yet: what `fold_translations` does at
+    /// every read, and what the fallback is not to depend on.
+    fn written_in_french() -> MediaItem {
+        let mut item = item_with_translation();
+        item.translations[0].title = Some("Breaking Bad (TMDB)".into());
+        item.locked_texts = vec![fields::LockedText {
+            scope: "item".into(),
+            field: "title".into(),
+            language: "fra".into(),
+            value: Some("Breaking Bad (la version verrouillée)".into()),
+        }];
+        // As asked in German leaves it: French's, counted and not claimed.
+        item.locked_fields = vec!["item/title@fra".into()];
+        item
+    }
+
+    #[test]
+    fn a_title_written_for_a_language_names_the_work_in_it_and_outranks_a_translation() {
+        let mut item = written_in_french();
+        assert!(holds_title(&item, "fra"));
+        assert!(!holds_title(&item, "deu"), "German's title is blank");
+        assert!(!holds_title(&item, ""), "no language is none's");
+
+        // The written title over TMDB's, and TMDB's overview, nobody having
+        // written one.
+        overlay_item(&mut item, "fra");
+        assert_eq!(item.title, "Breaking Bad (la version verrouillée)");
+        assert_eq!(item.overview.as_deref(), Some("Un professeur et un élève."));
+
+        // In a language it holds no translation of at all, it is named all
+        // the same, by what was written.
+        let mut bare = written_in_french();
+        bare.translations.clear();
+        assert!(holds_title(&bare, "fra"));
+        overlay_item(&mut bare, "fra");
+        assert_eq!(bare.title, "Breaking Bad (la version verrouillée)");
+        assert_eq!(
+            bare.overview.as_deref(),
+            Some("A teacher and a student."),
+            "the text it is stored in stands"
+        );
+
+        // What was claimed for the language asked is not given up for it.
+        let mut asked = written_in_french();
+        asked.title = "Mon Titre".into();
+        asked.locked_fields = vec!["item/title".into()];
+        overlay_item(&mut asked, "fra");
+        assert_eq!(asked.title, "Mon Titre");
+    }
+
+    #[test]
+    fn the_texts_laid_from_the_language_fallen_back_to_are_said_locked() {
+        let mut item = written_in_french();
+        item.locked_texts.push(fields::LockedText {
+            scope: "item".into(),
+            field: "overview".into(),
+            language: "deu".into(),
+            value: Some("Ein Lehrer und ein Schüler.".into()),
+        });
+        // Asked in German: its overview is claimed, French's title is not.
+        item.locked_fields = vec!["item/overview".into(), "item/title@fra".into()];
+
+        claim(&mut item, "fra");
+        assert_eq!(item.locked_fields, ["item/overview", "item/title"]);
+
+        // What the language asked had locked stays as it was, a text of the
+        // language fallen back to written or not.
+        item.locked_fields = vec!["item/title".into()];
+        claim(&mut item, "fra");
+        assert_eq!(item.locked_fields, ["item/title"]);
+        let mut none = item_with_translation();
+        none.locked_fields = vec!["item/overview@fra".into()];
+        claim(&mut none, "fra");
+        assert_eq!(none.locked_fields, ["item/overview@fra"]);
     }
 
     #[test]

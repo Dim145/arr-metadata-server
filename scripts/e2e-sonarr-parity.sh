@@ -13,7 +13,8 @@
 #   cargo build && TMDB_API_KEY=… TVDB_API_KEY=… ./scripts/e2e-sonarr-parity.sh
 #   KEEP=1 …    # leave both containers and the work directory behind
 #   SERIES="412806 433637" …    # other TVDB ids
-#   SONARR_IMAGE=… …    # another Sonarr: a v5 build, once one is published
+#   SONARR_IMAGE=lscr.io/linuxserver/sonarr:develop-version-5.0.0.2635 …
+#                       # a Sonarr 5: linuxserver.io's develop tags follow v5
 #
 # The server answers in AMS_TMDB_LANGUAGE (fr-FR here), as a French
 # deployment does: its French titles are the ones searched with.

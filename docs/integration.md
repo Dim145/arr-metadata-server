@@ -432,6 +432,13 @@ Sonarr shows the titles on the series' page, with `arr-metadata-server` beside
 each one it got from here; **System › Tasks › Update Scene Mapping** takes them
 at once, and `/api/v3/parse?title=…` says which series a release name goes to.
 
+Each mapping carries an identifier of its own, `mappingId` (`ams-` and
+twenty-four hexadecimal digits, the same for a series and a title on every
+answer). Sonarr 5 keeps its scene mappings by it — it updates the ones it holds,
+deletes the ones no longer listed, and skips a mapping that has none, with a
+warning in its log — where Sonarr 4 clears and fills its table and reads no such
+field. The real service's own are `s-` and twenty-four digits.
+
 ### Upgrading a server that is already running
 
 The certificate of a server set up before a name existed — `services.sonarr.tv`
@@ -533,7 +540,9 @@ recorded responses:
 | Client | Version | What was checked |
 |---|---|---|
 | Sonarr | 4.x (linuxserver) | lookup, add, 71 episodes imported, refresh picking up a locked title, network and episode title |
-| Radarr | 6.4 | lookup, add, 26 credits stored, certification, refresh picking up a locked title, studio and runtime |
+| Sonarr | 5.0.0.2635 (linuxserver `develop-version-5.0.0.2635`) | lookup by text, `tvdb:`, `tmdb:`, `imdb:`; add with French as the metadata language (title, overview and the episode titles in French), in the DVD order, with the seasons' own titles; refresh picking up a locked title; a release named by a title added here taken for its series |
+| Radarr | 6.4 | lookup, add, 26 credits stored, certification, refresh picking up a locked title, studio and runtime; 6.4.4: collection, recommendations |
+| Plex Media Server | 1.43.4 (`plexinc/pms-docker`) | the provider added over Plex's own API, an agent made of it, libraries of films and series, the scan: the film, the series, its season and its episodes with the catalogue's titles, summaries and pictures |
 | Jellyseerr | latest | `/3/movie`, `/3/tv`, `/3/search/movie` and `/3/configuration` relayed, with local overrides applied |
 | Yamtrack | latest | signed in to TheTVDB with a key issued here through its own provider, read a series and an episode with the titles locked here written in, placed the series by its TMDB id, queried AniList through its request helper with the locked title written in — all by the services' names, in TLS, trusting the authority |
 
@@ -573,6 +582,35 @@ the real services behind the relays, starts a Yamtrack container that resolves
 appended to its trust bundle, and runs Yamtrack's own TheTVDB provider and
 request helper inside it. It needs Docker, a built binary, a free port 443,
 the internet, and this server's TheTVDB and TMDB keys in the environment.
+
+[`scripts/e2e-stack.sh`](../scripts/e2e-stack.sh) runs all of it at once, with
+the real software and no stand-in: the server from the tree's binary on a
+catalogue of its own, and in Docker
+([`compose.e2e-stack.yaml`](../compose.e2e-stack.yaml)) Sonarr 4, Sonarr 5, Radarr
+and a Plex Media Server, each resolving `skyhook.sonarr.tv`,
+`services.sonarr.tv` and `api.radarr.video` to this host and trusting the
+authority. It searches and adds real series and films and compares
+what the clients hold with what the server serves; adds a series in French and in
+its DVD order on Sonarr 5; locks a title and finds it in each client after a
+refresh; connects the server to them and finds the command a lock sends in their
+history of commands; seeds a new, empty catalogue from their libraries; and has
+Plex add this server as a metadata provider, make an agent of it, scan a film and
+a series and show what the catalogue holds. `PHASES="sonarr5"` runs a part of it,
+`KEEP=1` leaves the containers behind. It needs Docker, python3, a built binary
+(`BUILD=1` builds it), a free port 443, the internet, and `TMDB_API_KEY` and
+`TVDB_API_KEY` (read from the environment or from `.env.local`, and handed to the
+server alone). `radarr.servarr.com`, Radarr's own services host (its updates),
+carries no metadata and is left alone, as it should be in a deployment.
+
+Plex's own API needs no token on a server nobody has claimed, and the script uses
+none: the provider, the agent and the libraries are made as a user makes them in
+Settings › Metadata Agents. Against a server that is claimed, which refuses a call
+without a token from a network it does not allow without authorization, the plex
+checks say they were skipped and what to allow: Settings › Network › *List of IP
+addresses and networks that are allowed without auth* (or `PLEX_ALLOWED_NETWORKS`
+at the container's first start; `PLEX_CLAIM`, a token from
+<https://plex.tv/claim>, claims the server as the user's own at that same first
+start).
 
 ---
 

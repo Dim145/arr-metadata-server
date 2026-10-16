@@ -374,6 +374,34 @@ pub async fn due(
     Ok(rows.iter().map(delivery).collect::<Result<_, _>>()?)
 }
 
+/// The deliveries of one destination to send now, as [`due`] takes them and
+/// in the same order, at most `limit`: what is put off, all of it, once its
+/// address has been found not to answer.
+pub async fn due_of(
+    db: &Db,
+    destination_id: &str,
+    most_attempts: i32,
+    claim_cutoff: &str,
+    limit: i64,
+) -> Result<Vec<Delivery>> {
+    let rows = sqlx::query(db.sql(&format!(
+        "SELECT {DELIVERY_COLUMNS} FROM webhook_delivery
+         WHERE destination_id = ? AND status = 'pending' AND attempts < ?
+           AND next_attempt_at <= ?
+           AND (claimed_at IS NULL OR claimed_at < ?)
+         ORDER BY next_attempt_at, id
+         LIMIT ?"
+    )))
+    .bind(destination_id)
+    .bind(most_attempts)
+    .bind(now())
+    .bind(claim_cutoff)
+    .bind(limit.max(1))
+    .fetch_all(db.pool())
+    .await?;
+    Ok(rows.iter().map(delivery).collect::<Result<_, _>>()?)
+}
+
 /// When the next delivery falls due, of those [`due`] would take once their
 /// time comes: what the worker sleeps until.
 pub async fn next_due(db: &Db, most_attempts: i32, claim_cutoff: &str) -> Result<Option<String>> {

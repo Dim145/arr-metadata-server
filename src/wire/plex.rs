@@ -1596,13 +1596,34 @@ fn content_rating(item: &MediaItem, country: Option<&str>) -> Option<String> {
 /// The day a film came out in the country asked — in cinemas, else online,
 /// else on disc — or, where its releases there are not known, the day the
 /// catalogue holds.
+///
+/// A date somebody fixed by hand is the film's in every country, as the site
+/// reads a film's days by country (`in_country`, in `api/native/browse.rs`):
+/// it stands where the country's releases would give one, and no day they
+/// give comes in its place.
 fn release_day(item: &MediaItem, country: Option<&str>) -> Option<String> {
-    country
-        .map(|c| item.days_in(c))
-        .and_then(|days| days.cinema.or(days.digital).or(days.physical))
-        .or_else(|| day(item.in_cinemas.as_deref()))
-        .or_else(|| day(item.digital_release.as_deref()))
-        .or_else(|| day(item.physical_release.as_deref()))
+    let own = || {
+        day(item.in_cinemas.as_deref())
+            .or_else(|| day(item.digital_release.as_deref()))
+            .or_else(|| day(item.physical_release.as_deref()))
+    };
+    let Some(country) = country else {
+        return own();
+    };
+
+    let there = item.days_in(country);
+    // One kind's day: what was fixed, if it was; else what the country gives.
+    let of_kind = |field: &str, fixed: &Option<String>, given: Option<String>| {
+        if item.is_locked(field) {
+            day(fixed.as_deref())
+        } else {
+            given
+        }
+    };
+    of_kind("inCinemas", &item.in_cinemas, there.cinema)
+        .or_else(|| of_kind("digitalRelease", &item.digital_release, there.digital))
+        .or_else(|| of_kind("physicalRelease", &item.physical_release, there.physical))
+        .or_else(own)
 }
 
 /// The day an episode of the season first aired.
@@ -1975,6 +1996,82 @@ mod tests {
         film.content_rating_country = Some("US".into());
         film.content_rating = Some("R".into());
         assert_eq!(content_rating(&film, None).as_deref(), Some("R"));
+    }
+
+    #[test]
+    fn a_release_day_fixed_by_hand_is_the_film_s_in_every_country() {
+        use crate::domain::{CountryRelease, ReleaseKind};
+
+        let release = |country: &str, kind: ReleaseKind, date: &str| CountryRelease {
+            country: country.into(),
+            release_type: Some(kind),
+            date: Some(date.into()),
+            certification: None,
+            note: None,
+            source: None,
+        };
+        let mut film = MediaItem::empty(MediaKind::Movie);
+        film.title = "The Matrix".into();
+        film.external_ids.tmdb = Some(603);
+        film.in_cinemas = Some("1999-03-31T00:00:00Z".into());
+        film.digital_release = Some("2000-06-01".into());
+        film.releases = vec![
+            release("FR", ReleaseKind::Theatrical, "1999-06-23"),
+            release("FR", ReleaseKind::Digital, "2001-03-01"),
+        ];
+        let drawn_in = |film: &MediaItem, country: &'static str| {
+            let drawn = Drawn {
+                country: Some(country),
+                ..drawn("eng")
+            };
+            let sent = serde_json::to_value(movie(film, &Work::of(film), &drawn)).unwrap();
+            sent["originallyAvailableAt"].as_str().unwrap().to_string()
+        };
+
+        // Nothing fixed: the country's day where its releases give one, the
+        // catalogue's where they do not, and when no country is asked.
+        assert_eq!(
+            release_day(&film, Some("FR")).as_deref(),
+            Some("1999-06-23")
+        );
+        assert_eq!(
+            release_day(&film, Some("DE")).as_deref(),
+            Some("1999-03-31")
+        );
+        assert_eq!(release_day(&film, None).as_deref(), Some("1999-03-31"));
+        assert_eq!(drawn_in(&film, "FR"), "1999-06-23");
+
+        // The day in cinemas fixed by hand is the film's, whichever country
+        // is asked: what France's releases say does not come in its place.
+        film.in_cinemas = Some("1999-04-01".into());
+        film.locked_fields = vec!["item/inCinemas".into()];
+        assert_eq!(
+            release_day(&film, Some("FR")).as_deref(),
+            Some("1999-04-01")
+        );
+        assert_eq!(
+            release_day(&film, Some("DE")).as_deref(),
+            Some("1999-04-01")
+        );
+        assert_eq!(release_day(&film, None).as_deref(), Some("1999-04-01"));
+        assert_eq!(drawn_in(&film, "FR"), "1999-04-01");
+
+        // It holds the date it names and no other: the digital day fixed
+        // leaves the country's day in cinemas first.
+        film.locked_fields = vec!["item/digitalRelease".into()];
+        assert_eq!(
+            release_day(&film, Some("FR")).as_deref(),
+            Some("1999-06-23")
+        );
+
+        // Fixed as none, it is none: the next kind the country gives stands,
+        // and the day the catalogue holds does not come back.
+        film.in_cinemas = None;
+        film.locked_fields = vec!["item/inCinemas".into()];
+        assert_eq!(
+            release_day(&film, Some("FR")).as_deref(),
+            Some("2001-03-01")
+        );
     }
 
     #[test]

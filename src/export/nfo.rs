@@ -33,6 +33,10 @@ fn escape(text: &str) -> String {
             // XML 1.0 forbids most control characters outright; a stray one in
             // provider data would make the whole document unparsable.
             c if (c as u32) < 0x20 && c != '\t' && c != '\n' && c != '\r' => {}
+            // And the two code points that are no characters: a string may
+            // hold them, a document may not. The feeds and the Kometa file
+            // leave them out too.
+            '\u{FFFE}' | '\u{FFFF}' => {}
             c => out.push(c),
         }
     }
@@ -546,6 +550,24 @@ mod tests {
             escape("keep\ttabs\nand newlines"),
             "keep\ttabs\nand newlines"
         );
+    }
+
+    #[test]
+    fn the_two_code_points_xml_does_not_admit_are_left_out_of_a_document() {
+        // A Rust string may hold U+FFFE and U+FFFF and an XML 1.0 document
+        // may not: one in a provider's title was written as it came, and a
+        // strict reader refused the whole file.
+        assert_eq!(escape("a\u{FFFE}b\u{FFFF}c"), "abc");
+        // Their neighbours stay.
+        assert_eq!(escape("\u{FFFD}\u{10000}"), "\u{FFFD}\u{10000}");
+
+        let mut item = series();
+        item.title = "Break\u{FFFE}ing Bad".into();
+        item.overview = Some("A teacher\u{FFFF}.".into());
+        let nfo = for_item(&item);
+        assert!(nfo.contains("<title>Breaking Bad</title>"), "{nfo}");
+        assert!(nfo.contains("<plot>A teacher.</plot>"), "{nfo}");
+        assert!(!nfo.contains(['\u{FFFE}', '\u{FFFF}']));
     }
 
     #[test]

@@ -41,6 +41,7 @@ use std::{
 
 use anyhow::{Context as _, Result, bail};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use unicode_normalization::UnicodeNormalization as _;
 use unicode_properties::general_category::{
     GeneralCategory, GeneralCategoryGroup, UnicodeGeneralCategory as _,
@@ -269,15 +270,47 @@ pub struct Addition {
     pub search_title: String,
 }
 
+/// What the real list calls a mapping's season when it holds for every one.
+const EVERY_SEASON: i64 = -1;
+
+/// What every `mappingId` this server writes begins with. The real service's
+/// are `s-` and twenty-four hexadecimal digits; none of them begins so.
+const MAPPING_ID_PREFIX: &str = "ams-";
+
 impl Addition {
+    /// The mapping's identifier, which Sonarr 5 keeps its list by: a mapping
+    /// it holds is updated in place by it, one no longer listed is deleted
+    /// by it, and one that has none is skipped (`Scene mapping with missing
+    /// MappingId found for … skipping`) — every title this catalogue adds
+    /// was dropped by Sonarr 5.0.0.2635 before it had one. Sonarr 4 reads no
+    /// such field and passes over it.
+    ///
+    /// The same for the same series and title on every answer, so that Sonarr
+    /// updates what it holds instead of deleting and inserting again, and a
+    /// title is its own mapping whatever another is searched with.
+    pub fn mapping_id(&self) -> String {
+        let mut digest = Sha256::new();
+        digest.update(self.tvdb_id.to_be_bytes());
+        digest.update(EVERY_SEASON.to_be_bytes());
+        digest.update(self.title.as_bytes());
+        let hex: String = digest
+            .finalize()
+            .iter()
+            .take(12)
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        format!("{MAPPING_ID_PREFIX}{hex}")
+    }
+
     /// As the list writes it. `season` -1 is every season, as Sonarr's own
     /// mappings for a whole series say.
     pub fn to_json(&self) -> Value {
         json!({
+            "mappingId": self.mapping_id(),
             "tvdbId": self.tvdb_id,
             "title": self.title,
             "searchTitle": self.search_title,
-            "season": -1,
+            "season": EVERY_SEASON,
             "comment": COMMENT,
         })
     }
@@ -1156,5 +1189,71 @@ mod tests {
         assert_eq!(json["searchTitle"], "Title");
         assert_eq!(json["season"], -1);
         assert_eq!(json["comment"], COMMENT);
+    }
+
+    /// Sonarr 5 (`SceneMappingService.UpdateMappings`, 5.0.0.2635) keeps the
+    /// list by `mappingId` and skips a mapping without one: the real list's
+    /// are `s-` and twenty-four hexadecimal digits, and ours must be there,
+    /// stable, and nobody else's.
+    #[test]
+    fn a_mapping_has_the_identifier_sonarr_5_keeps_its_list_by() {
+        let mapping = |tvdb_id: i64, title: &str, search_title: &str| Addition {
+            tvdb_id,
+            title: title.into(),
+            search_title: search_title.into(),
+        };
+        let one = mapping(412806, "Presque mariés, loin d'être amoureux", "Fuufu Ijou");
+        let id = one.to_json()["mappingId"]
+            .as_str()
+            .expect("a mappingId")
+            .to_string();
+
+        // Twenty-four hexadecimal digits, as the real list's, and a prefix of
+        // its own.
+        let digits = id.strip_prefix("ams-").expect("a prefix of its own");
+        assert_eq!(digits.len(), 24, "{id}");
+        assert!(digits.bytes().all(|b| b.is_ascii_hexdigit()), "{id}");
+        assert!(!id.starts_with("s-"));
+
+        // The same on every answer, whatever it is searched with: Sonarr
+        // updates the mapping it holds, and does not delete it and insert
+        // another.
+        assert_eq!(one.to_json()["mappingId"], id.as_str());
+        assert_eq!(
+            mapping(412806, "Presque mariés, loin d'être amoureux", "Another").mapping_id(),
+            id
+        );
+
+        // One for each series and each title: a mapping Sonarr holds under
+        // another's identifier would be overwritten by it.
+        assert_ne!(
+            mapping(412806, "Presque mariés", "Fuufu Ijou").mapping_id(),
+            id
+        );
+        assert_ne!(
+            mapping(412807, "Presque mariés, loin d'être amoureux", "Fuufu Ijou").mapping_id(),
+            id
+        );
+    }
+
+    /// Every mapping an answer adds carries one, and no two share it.
+    #[test]
+    fn every_title_added_is_a_mapping_of_its_own() {
+        let held = [
+            series(1, "Anime", &["Un Titre"], &["Another Name", "A Third Name"]),
+            series(2, "Live Action", &[], &["Fourth Name"]),
+        ];
+        let listed: Vec<Value> = additions(&held, &[])
+            .iter()
+            .map(Addition::to_json)
+            .collect();
+        assert!(listed.len() >= 4, "{listed:?}");
+        let mut ids: Vec<&str> = listed
+            .iter()
+            .map(|m| m["mappingId"].as_str().expect("a mappingId"))
+            .collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), listed.len(), "{listed:?}");
     }
 }

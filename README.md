@@ -774,10 +774,12 @@ The addresses are on each list's page, with a button to copy them. They are
 read under the same rule as the page: open under public browsing, otherwise
 with a key appended (`?apikey=…` — that spelling, which Sonarr's and Radarr's
 logs redact; `api_key` works too but would be logged). A private list answers
-nobody but a caller who may write, so importing one takes a write-scoped key:
-make the list public instead where a client's key should not be able to edit
-the catalogue. The whole list API is under `/api/v1/lists` and in the OpenAPI
-document.
+only whoever maintains the catalogue: an editor or an administrator, in person
+or through a key of theirs — a key limited to the `read` scope will do, so
+importing one asks for no key that could edit the catalogue — and a key that
+belongs to nobody, only with the `write` scope. Make the list public instead
+where neither is wanted. The whole list API is under `/api/v1/lists` and in
+the OpenAPI document.
 
 ### What is a setting, and what is not
 

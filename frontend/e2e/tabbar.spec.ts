@@ -124,11 +124,15 @@ test.describe('the bar along the foot of a phone', () => {
     await page.goto('/')
     await expect(page.locator('a[href^="/work/"]').first()).toBeVisible()
 
-    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
-    const footer = (await page.getByRole('contentinfo').boundingBox())!
-    const strip = (await bar(page).boundingBox())!
-    // The last pixel of the page is above the first of the bar.
-    expect(footer.y + footer.height).toBeLessThanOrEqual(strip.y + 1)
+    // The page grows as its rows arrive, each by a request of its own: it is
+    // scrolled to its foot again until, grown to its length, the last pixel
+    // of the page is above the first of the bar.
+    await expect(async () => {
+      await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
+      const footer = (await page.getByRole('contentinfo').boundingBox())!
+      const strip = (await bar(page).boundingBox())!
+      expect(footer.y + footer.height).toBeLessThanOrEqual(strip.y + 1)
+    }).toPass({ timeout: 10_000 })
   })
 
   test('does not scroll sideways, and meets WCAG 2.1 AA with the sheet open', async ({ page }) => {

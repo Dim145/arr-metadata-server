@@ -434,6 +434,16 @@ impl MediaItem {
         }
         days
     }
+
+    /// Whether somebody fixed this field of the work itself by hand: `item/`
+    /// and its name as the registry spells it — `inCinemas`, `title` — is
+    /// among its locked fields. A lock is final: what a provider, or a
+    /// country's releases, say of the field is not put in its place.
+    pub fn is_locked(&self, field: &str) -> bool {
+        self.locked_fields
+            .iter()
+            .any(|locked| locked.strip_prefix("item/") == Some(field))
+    }
 }
 
 /// A film's first day in a country in each of the ways Radarr keeps.

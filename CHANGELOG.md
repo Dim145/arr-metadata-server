@@ -98,16 +98,18 @@ may change what the API or the configuration means, and says so here.
   for a series, else by IMDb id, else by title and year, carrying only what
   was locked — titles, summary, tagline, first release, rating, studio,
   genres, the chosen poster and background, a series' seasons and episodes.
-  `language=` asks for another language's locked texts. It needs a key that
-  may write; the settings page offers it as a download.
+  `language=` asks for another language's locked texts. It needs an editor's
+  or an administrator's key — one limited to reading will do; the settings
+  page offers it as a download.
 - A selection is served as a text file of identifiers for Kometa's "Text
   File" builder — `/api/v1/lists/{key}/ids.txt`, a work a line, `tmdb:949`
   for a film, `tvdb:348303` for a series, the title after a `#`, and
   `?kind=movie` or `?kind=series` for the works one Kometa library holds —
   and as an Atom feed (`feed.atom`), the latest added first, each work dated
   by the day it joined. Both are read as the selection's page is, a private
-  selection being a key's, and their addresses are on the selection's page
-  and in its editor beside Sonarr's and Radarr's.
+  selection being an editor's or an administrator's — through a key of
+  theirs that only reads, too — and their addresses are on the selection's
+  page and in its editor beside Sonarr's and Radarr's.
 - A selection has a cover, chosen in the administration among the
   backgrounds of its works or by any picture's address, with the dialog
   every other picture is chosen with. It is shown above the selection on the
@@ -126,7 +128,7 @@ may change what the API or the configuration means, and says so here.
   the log. A test asks each who it is (`/api/v3/system/status`) and says its
   version, or why it did not answer. A private network and this very machine
   are reached; link-local and cloud-metadata addresses are refused, and a
-  redirect to another host is never followed, so the key goes nowhere else.
+  redirect to another origin is never followed, so the key goes nowhere else.
 - With `arr.pushRefresh` on (off by default), a correction made here reaches
   Sonarr and Radarr at once: a lock put on a work, a season or an episode,
   changed or taken off, an edit of its seasons or episodes, a sync, or a
@@ -331,6 +333,20 @@ may change what the API or the configuration means, and says so here.
   page that settles it, and a figure of nought is no line. Each counts the
   works the list it leads to shows, those switched off among them, and adult
   titles as the server's policy has them.
+- `scripts/e2e-stack.sh` runs the whole stack end to end with the real
+  software, from the tree's own binary on a catalogue of its own:
+  Sonarr 4, Sonarr 5 (a pre-release, 5.0.0.2635), Radarr and a Plex Media
+  Server in Docker (`compose.e2e-stack.yaml`), each resolving
+  `skyhook.sonarr.tv`, `services.sonarr.tv` and `api.radarr.video` to the
+  server and trusting its authority. It searches and adds real series and
+  films, compares seasons, episodes, classifications and collections with
+  what the server serves, adds a series in French and in its DVD order on
+  Sonarr 5, locks a title and sees it in each client after a refresh,
+  connects the server to Sonarr and Radarr and finds the command a lock
+  sends in their history, seeds an empty catalogue from their libraries,
+  and has Plex add the provider, make an agent of it and scan a film and a
+  series. Plex's own API needs no token on a server nobody has claimed; the
+  script uses none and documents the two ways to a claimed one.
 
 ### Changed
 
@@ -464,12 +480,61 @@ may change what the API or the configuration means, and says so here.
 - A migration added between two builds is read into the binary.
   `cargo build` and `cargo test` went on with the schema from before it
   until something else in the crate changed.
+- Plex is given the day in cinemas a person fixed, whichever country it asks
+  in (`X-Plex-Country`, `tmdb.watchRegion`): the day that country's releases
+  give came in its place, and a lock on the date did nothing there. The day
+  online and the day on disc are read the same way.
+- A picture sent up and chosen as a selection's cover is kept when it is
+  taken off the work it was sent for, and by the sweep. A cover did not count
+  as naming it, so the picture was deleted and the selection shown without
+  one.
+- A destination that does not answer no longer holds up the others. An
+  address that times out, or is never connected, is posted to once, and what
+  else is due to it is put off as that try was, each delivery by its own
+  schedule; one destination is posted to a delivery at a time, in the order
+  they are owed. Four posts at once, fifteen seconds each, kept every other
+  destination waiting behind a dead address.
+- A Sonarr or a Radarr that does not answer is asked once when works are to
+  be told of it, not once for each: the first is written down as failed, the
+  rest wait for the next pass, and the log says so once. It had a timeout, a
+  failed row and a warning for every work.
+- A title or an overview somebody wrote for the language Sonarr 5 or Plex
+  fall back to is the one they are given, and is said locked, as it is for
+  the language asked; the fallback no longer takes the translations to have
+  been made to carry the locks already.
+- A selection's cover is refused at an `http://` address, and says why: the
+  site loads no picture over http, so the cover was kept and shown as a gap.
+- A `.nfo` leaves out U+FFFE and U+FFFF, as the feeds and the Kometa file do:
+  a title carrying one made the whole document unreadable to a strict XML
+  reader.
+- Sonarr 5 takes this catalogue's titles into its scene mappings. Each
+  mapping the server adds to `services.sonarr.tv`'s list now carries a
+  `mappingId` — `ams-` and twenty-four hexadecimal digits, the same for the
+  same series and title on every answer. Sonarr 5.0.0.2635 keeps its list by
+  that field and skipped, with a warning, every mapping without one: all of
+  this catalogue's. Sonarr 4 reads no such field. Found by running a real
+  Sonarr 5 against the server.
+- A series asked for in a language whose translation has an overview and no
+  title — TMDB leaves the name out where it is the one the series already
+  goes by, as Breaking Bad's and Stranger Things' in French — is listed in
+  that language among its `translations` for Sonarr 5, under the title the
+  answer gives. The entry was left out, and the overview with it, where the
+  real Skyhook lists one.
 
 ### Security
 
 - A key kept for your own Sonarr or Radarr goes to the address it was given
   with and to no other: a test or a save at another scheme, host or port
   needs the key typed again, and an address removed takes its key along.
+- A redirect from your own Sonarr or Radarr is followed only to the same
+  origin — scheme, host and port — and so is one from MyAnimeList's client.
+  Another port or another scheme of the same host was followed, with the key
+  (`X-Api-Key`, `X-MAL-CLIENT-ID`) along.
+- Kometa's metadata file, and the text file and the feed of a private
+  selection, are read with a key limited to reading when it is an editor's or
+  an administrator's: the address given to a tool no longer has to carry a key
+  that could edit the catalogue. A key of the server's still needs the write
+  scope, and a member's key has no such reading to lend.
 - A token kept for an ntfy or Gotify destination goes to no other server and
   no other kind of destination unless it is given again, and a Standard
   Webhooks receiver at a new address is given a signing secret of its own.

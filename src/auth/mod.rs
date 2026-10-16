@@ -71,6 +71,23 @@ impl Identity {
         }
     }
 
+    /// Whether this identity may read what is kept from readers — a selection
+    /// left private, the corrections locked on the works — as against change
+    /// it: whoever may write, and a key limited to the `read` scope that
+    /// belongs to an editor or an administrator. A tool that only reads —
+    /// Kometa, an import list — is given its key in the address it fetches,
+    /// and is not to be handed one that could edit the catalogue. A key that
+    /// belongs to nobody has no role to read by, and needs the `write` scope.
+    pub fn can_read_private(&self) -> bool {
+        self.can_write()
+            || matches!(
+                self,
+                Self::Client(c)
+                    if c.scopes.iter().any(|s| s == "read")
+                        && c.owner.is_some_and(|(role, _)| role >= Role::Editor)
+            )
+    }
+
     /// Whether this identity may manage clients, users and settings.
     pub fn is_admin(&self) -> bool {
         match self {
@@ -138,5 +155,67 @@ impl Identity {
             Self::Network(rule) => rule.as_deref(),
             _ => None,
         }
+    }
+}
+
+/// What the tests of the guards, and of the routes behind them, build an
+/// identity from.
+#[cfg(test)]
+pub(crate) mod testing {
+    use super::*;
+    use crate::db::repo::user::Status;
+
+    /// A key with these scopes — as they stand once its owner's role has
+    /// capped them — and, when it is a person's, that person's role.
+    pub fn key(scopes: &[&str], owner: Option<Role>) -> Identity {
+        Identity::Client(Box::new(ApiClient {
+            id: "key".into(),
+            name: "Kometa".into(),
+            key_prefix: "ams_test".into(),
+            scopes: scopes.iter().map(|s| (*s).to_string()).collect(),
+            is_enabled: true,
+            expires_at: None,
+            created_at: "2026-10-16T00:00:00.000Z".into(),
+            last_used_at: None,
+            last_used_ip: None,
+            note: None,
+            owner_id: owner.map(|_| "owner".to_string()),
+            owner_name: owner.map(|_| "alice".to_string()),
+            owner: owner.map(|role| (role, Status::Active)),
+        }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{testing::key, *};
+
+    #[test]
+    fn a_key_that_only_reads_reads_what_its_editor_or_administrator_does() {
+        // An editor's or an administrator's key limited to reading: what a
+        // tool that fetches an address is given, and it reads what is kept
+        // from readers without being able to change any of it.
+        for role in [Role::Editor, Role::Admin] {
+            let reads = key(&["read"], Some(role));
+            assert!(reads.can_read_private(), "{role}");
+            assert!(!reads.can_write(), "{role}");
+        }
+
+        // A member's has no such reading to lend; nor has one that belongs to
+        // nobody, with no role to read by.
+        assert!(!key(&["read"], Some(Role::Member)).can_read_private());
+        assert!(!key(&["read"], None).can_read_private());
+        // A key whose owner's role took every scope from it is none either.
+        assert!(!key(&[], Some(Role::Editor)).can_read_private());
+
+        // As before, a key that may write reads, owned or not.
+        assert!(key(&["read", "write"], None).can_read_private());
+        assert!(key(&["read", "write"], Some(Role::Editor)).can_read_private());
+        assert!(key(&["write"], Some(Role::Editor)).can_read_private());
+
+        // Nobody who presented nothing reads it, unless authentication is off.
+        assert!(!Identity::Visitor.can_read_private());
+        assert!(!Identity::Network(Some("lan".into())).can_read_private());
+        assert!(Identity::Anonymous.can_read_private());
     }
 }

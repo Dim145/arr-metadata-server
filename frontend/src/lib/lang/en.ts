@@ -1057,7 +1057,7 @@ export const en = {
       saveFailed: 'The list could not be saved.',
       cover: 'Cover',
       coverHint:
-        'The picture the selection is shown with, on the selections page and at the head of its own: one of its works’ backgrounds, or any picture by its address.',
+        'The picture the selection is shown with, on the selections page and at the head of its own: one of its works’ backgrounds, or any picture by its https address — the site loads no picture over http.',
       coverNone: 'No cover: the selection is shown by its words alone.',
       coverChoose: 'Choose a cover',
       coverChange: 'Change the cover',
@@ -1069,7 +1069,7 @@ export const en = {
     exports: {
       kometaTitle: 'Kometa metadata files',
       kometaBody:
-        'What has been locked here, as a file Kometa applies to a Plex library, so that the corrections stay whatever Plex’s own agent finds: films are matched by TMDB id, series by TheTVDB id. Only what was corrected by hand is written. Name the file under metadata_files of the library, or give its address with a key that may write.',
+        'What has been locked here, as a file Kometa applies to a Plex library, so that the corrections stay whatever Plex’s own agent finds: films are matched by TMDB id, series by TheTVDB id. Only what was corrected by hand is written. Name the file under metadata_files of the library, or give its address with an editor’s or an administrator’s key: one limited to reading will do.',
       kometaMovies: 'Films',
       kometaSeries: 'Series',
       kometaFile: (kind: string) => `Download the metadata file for the ${kind}`,
@@ -1207,7 +1207,7 @@ export const en = {
     arrPage: {
       lead: 'Your own Sonarr and Radarr, reached the other way: told at once when a work changes here, rather than at their next refresh twelve hours on, and read to fill the catalogue before they are pointed at this server.',
       connectionHint:
-        'The address it answers at, as this server reaches it — with its URL base if it has one — and its API key, from Settings › General in Sonarr or Radarr. A private network and this machine are reached; a redirect to another host is not followed.',
+        'The address it answers at, as this server reaches it — with its URL base if it has one — and its API key, from Settings › General in Sonarr or Radarr. A private network and this machine are reached; a redirect to another origin — another scheme, host or port — is not followed.',
       address: 'Address',
       key: 'API key',
       keySet: 'A key is kept',

@@ -1,0 +1,118 @@
+# The end-to-end stack, with the real software: Sonarr 4, Sonarr 5 and Radarr —
+# and, under the `plex` profile, a Plex Media Server — each reaching the
+# metadata server the way a deployment's clients do: by the names it has
+# compiled in, in TLS, trusting the authority the server made.
+#
+# Not meant to be started by hand. scripts/e2e-stack.sh starts the server
+# first, on the host, with the binary of the tree and a catalogue of its own,
+# then this file with the variables below (the authority's file, the images,
+# the ports); it drives the clients and removes everything it made.
+#
+# Why the server is not in here: the stack tests the tree, and the tree is the
+# binary `cargo build` made — not an image somebody has to rebuild first.
+#
+# How the clients reach it: every name below resolves to `host-gateway`, the
+# host as the containers see it, where the server's clients' door listens on
+# 443 — Sonarr calls skyhook.sonarr.tv on 443 and nothing else. The authority
+# is mounted as a file and installed by docker/trust-ca.sh before the service
+# starts (the linuxserver.io images do not rebuild their trust bundle on
+# their own). Every /config is a Docker volume, never a bind mount of the
+# host's: a SQLite database on a macOS bind mount can come back "malformed".
+#
+# radarr.servarr.com, Radarr's own services host (its updates, its notices),
+# is left to resolve as it does anywhere: it carries no metadata, the server
+# does not answer for it, and a deployment has no reason to point it here.
+
+name: ams-e2e-stack
+
+x-metadata-names: &metadata-names
+  - "skyhook.sonarr.tv:host-gateway"
+  - "services.sonarr.tv:host-gateway"
+  - "api.radarr.video:host-gateway"
+  # The address the server gives its pictures under (AMS_PUBLIC_URL), and the
+  # one Plex is given for its provider.
+  - "host.docker.internal:host-gateway"
+
+services:
+  sonarr4:
+    image: ${SONARR4_IMAGE:-lscr.io/linuxserver/sonarr:latest}
+    container_name: ams-e2e-sonarr4
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: UTC
+    volumes:
+      - sonarr4-config:/config
+      - ${AMS_E2E_CA:?the authority's file, made by scripts/e2e-stack.sh}:/usr/local/share/ca-certificates/arr-metadata.crt:ro
+      - ./docker/trust-ca.sh:/custom-cont-init.d/10-trust-arr-metadata-ca:ro
+    extra_hosts: *metadata-names
+    ports:
+      - "127.0.0.1:${SONARR4_PORT:-18989}:8989"
+
+  # The second pre-release line: linuxserver.io's `develop-version-…` tags
+  # follow Sonarr's `develop` branch, which is v5 (v4 lives on v4-develop).
+  sonarr5:
+    image: ${SONARR5_IMAGE:-lscr.io/linuxserver/sonarr:develop-version-5.0.0.2635}
+    container_name: ams-e2e-sonarr5
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: UTC
+    volumes:
+      - sonarr5-config:/config
+      - ${AMS_E2E_CA:?the authority's file, made by scripts/e2e-stack.sh}:/usr/local/share/ca-certificates/arr-metadata.crt:ro
+      - ./docker/trust-ca.sh:/custom-cont-init.d/10-trust-arr-metadata-ca:ro
+    extra_hosts: *metadata-names
+    ports:
+      - "127.0.0.1:${SONARR5_PORT:-18990}:8989"
+
+  radarr:
+    image: ${RADARR_IMAGE:-lscr.io/linuxserver/radarr:latest}
+    container_name: ams-e2e-radarr
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: UTC
+    volumes:
+      - radarr-config:/config
+      - ${AMS_E2E_CA:?the authority's file, made by scripts/e2e-stack.sh}:/usr/local/share/ca-certificates/arr-metadata.crt:ro
+      - ./docker/trust-ca.sh:/custom-cont-init.d/10-trust-arr-metadata-ca:ro
+    extra_hosts: *metadata-names
+    ports:
+      - "127.0.0.1:${RADARR_PORT:-17878}:7878"
+
+  # Plex Media Server 1.43 or later: the first to take a custom metadata
+  # provider. Only with `--profile plex`.
+  #
+  # Plex is not reconfigured from here: it is given the provider, an agent
+  # and two libraries over its own API, by scripts/e2e-stack.py. That API
+  # answers without a token on a server nobody has claimed yet — and on a
+  # claimed one only from the networks the server allows without
+  # authorization (PLEX_ALLOWED_NETWORKS, read at the first start, or
+  # Settings › Network › "List of IP addresses and networks that are allowed
+  # without auth"). PLEX_CLAIM — a token from https://plex.tv/claim, good for
+  # four minutes — claims the server at its first start, as the user's own.
+  plex:
+    profiles: ["plex"]
+    image: ${PLEX_IMAGE:-plexinc/pms-docker:latest}
+    container_name: ams-e2e-plex
+    hostname: ams-e2e-plex
+    environment:
+      TZ: UTC
+      PLEX_UID: "1000"
+      PLEX_GID: "1000"
+      PLEX_CLAIM: ${PLEX_CLAIM:-}
+      ALLOWED_NETWORKS: ${PLEX_ALLOWED_NETWORKS:-}
+    volumes:
+      - plex-config:/config
+      # The few small videos scripts/e2e-stack.sh makes, named as Plex wants.
+      - ${AMS_E2E_MEDIA:-/var/empty}:/media:ro
+    extra_hosts: *metadata-names
+    ports:
+      - "127.0.0.1:${PLEX_PORT:-32400}:32400"
+
+volumes:
+  sonarr4-config:
+  sonarr5-config:
+  radarr-config:
+  plex-config:

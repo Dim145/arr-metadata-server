@@ -214,15 +214,17 @@ pub struct KometaQuery {
 /// what Plex's agent found, on every run.
 ///
 /// Name it under `metadata_files` of the library — as a file saved from here,
-/// or by this address with `?apikey=` and a key that may write, which is what
-/// asking for it takes.
+/// or by this address with `?apikey=` and the key of an editor or an
+/// administrator, which is what asking for it takes: a key limited to the
+/// `read` scope will do, since Kometa only reads. A key that belongs to nobody
+/// needs the `write` scope.
 #[utoipa::path(
     get, path = "/export/kometa.yml", tag = TAG,
     params(KometaQuery),
     responses(
         (status = 200, description = "A Kometa metadata file", content_type = "application/yaml"),
         (status = 400, description = "kind is neither movie nor series, or language is not a language"),
-        (status = 403, description = "The caller may not write"),
+        (status = 403, description = "The caller is no editor or administrator, in person or through a key of theirs, and has no key that may write"),
     ),
 )]
 async fn kometa_yml(
@@ -230,7 +232,7 @@ async fn kometa_yml(
     Extension(identity): Extension<Identity>,
     Query(query): Query<KometaQuery>,
 ) -> AppResult<Response> {
-    if !identity.can_write() {
+    if !identity.can_read_private() {
         return Err(AppError::Forbidden);
     }
     let kind = match query.kind.as_deref().map(str::trim) {
@@ -895,6 +897,41 @@ mod tests {
         repo::override_field::clear(&state.db, &work.id)
             .await
             .expect("unlocked");
+    }
+
+    #[tokio::test]
+    async fn the_kometa_file_is_given_to_a_key_that_only_reads_when_its_owner_could_write() {
+        use crate::{auth::testing::key, db::repo::user::Role};
+
+        let state = super::super::testing::server().await;
+        let heat = stored(&state, MediaKind::Movie, "Heat", Some(949), None).await;
+        lock(&state, &heat, "title", serde_json::json!("Heat (the cut)")).await;
+
+        // What Kometa carries in its address: the key of an editor or of an
+        // administrator, limited to reading, which cannot change anything.
+        for role in [Role::Editor, Role::Admin] {
+            let reads = key(&["read"], Some(role));
+            assert!(!reads.can_write(), "{role}");
+            let (headers, file) = answered(ask(&state, reads, Some("movie"), None)).await;
+            assert_eq!(headers["x-ams-works"], "1", "{role}");
+            assert!(file.contains("Heat (the cut)"), "{role}");
+        }
+
+        // A member's key reads the catalogue and no more; a key of the
+        // server's that only reads has no owner whose role it could read by.
+        for refused in [key(&["read"], Some(Role::Member)), key(&["read"], None)] {
+            assert!(matches!(
+                ask(&state, refused, Some("movie"), None).await,
+                Err(AppError::Forbidden)
+            ));
+        }
+
+        // And a key that may write is given it, as it always was.
+        assert!(
+            ask(&state, key(&["read", "write"], None), Some("movie"), None)
+                .await
+                .is_ok()
+        );
     }
 
     #[tokio::test]

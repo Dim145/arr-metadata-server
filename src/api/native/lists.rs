@@ -97,8 +97,8 @@ pub struct CuratedListRequest {
     pub is_public: Option<bool>,
     /// The picture the selection is shown with, by its address — a
     /// provider's, which the catalogue holds a copy of or not, or any
-    /// `http(s)://` address a browser can load. Empty, it is taken away;
-    /// left out, it stays.
+    /// `https://` address: the site's pages load no picture over `http://`.
+    /// Empty, it is taken away; left out, it stays.
     pub cover: Option<String>,
     /// The members of a hand-made list, in order; left as they are when
     /// absent.
@@ -646,15 +646,18 @@ async fn counted_for(
     Ok(())
 }
 
-/// A list this caller may read: any, for one who maintains them; a public
-/// one otherwise, a private one being no list at all to a reader.
+/// A list this caller may read: any, for one who maintains them — who may
+/// write, or reads with the key of an editor or an administrator, which an
+/// import list or a feed reader is given in its address and which need not
+/// be able to write; a public one otherwise, a private one being no list at
+/// all to a reader.
 pub(super) async fn visible(
     state: &AppState,
     identity: &Identity,
     key: &str,
 ) -> AppResult<CuratedList> {
     let list = find(state, key).await?.ok_or(AppError::NotFound)?;
-    if !list.is_public && !identity.can_write() {
+    if !list.is_public && !identity.can_read_private() {
         return Err(AppError::NotFound);
     }
     Ok(list)
@@ -701,18 +704,28 @@ impl Checked {
 }
 
 /// A cover as a list may keep it: the address of a picture a browser loads,
-/// `http(s)://`, or an upload's `upload:` origin, which the copy kept is
+/// `https://`, or an upload's `upload:` origin, which the copy kept is
 /// served for. Nothing a browser would run — `javascript:`, a `data:` page —
 /// and no address that is not one: no space, no control character.
+///
+/// Not `http://`: the site's policy lets a page load a picture from its own
+/// origin and over https, and from nowhere else (`img-src`, in `web.rs`), so a
+/// cover at an http address would be kept, offered and shown as a gap on every
+/// page that carries it.
 fn check_cover(text: &str) -> AppResult<Option<String>> {
     let text = text.trim();
     if text.is_empty() {
         return Ok(None);
     }
-    let web = text.starts_with("https://") || text.starts_with("http://");
-    if !(web || text.starts_with("upload:")) {
+    if text.starts_with("http://") {
         return Err(AppError::BadRequest(
-            "a cover is a picture's address: http:// or https://".into(),
+            "a cover's address is an https:// one: the site's pages load no picture over http://"
+                .into(),
+        ));
+    }
+    if !(text.starts_with("https://") || text.starts_with("upload:")) {
+        return Err(AppError::BadRequest(
+            "a cover is a picture's address: https://".into(),
         ));
     }
     if text.chars().count() > COVER_LIMIT
@@ -1321,7 +1334,7 @@ mod tests {
 
         for fine in [
             " https://image.tmdb.org/t/p/w1280/b.jpg ",
-            "http://films.example/b.png",
+            "https://films.example:8443/b.png",
             "upload:0f3a",
         ] {
             let checked = check_with(fine, None).unwrap();
@@ -1338,6 +1351,45 @@ mod tests {
         ] {
             assert!(check_with(bad, None).is_err(), "{bad:?}");
         }
+    }
+
+    /// The site's policy loads a picture over https and from its own origin,
+    /// and a browser blocks the rest: a cover at an http address is refused
+    /// where it is set, saying why — not kept, to be shown as a gap.
+    #[test]
+    fn a_cover_over_http_is_refused_for_the_policy_would_block_it() {
+        let mut said = request(Some("Autumn"), Some(ListMode::Manual), None);
+        for http in [
+            "http://films.example/b.png",
+            " http://image.tmdb.org/t/p/original/a.jpg ",
+        ] {
+            said.cover = Some(http.to_string());
+            let Err(AppError::BadRequest(why)) = check(&said, None) else {
+                panic!("{http:?} was kept");
+            };
+            assert!(
+                why.contains("https://") && why.contains("http://"),
+                "it says which address is wanted and which is not: {why}"
+            );
+        }
+
+        // A list that holds one already keeps it until a cover is said: only
+        // what is set is checked.
+        let mut current = a_list();
+        current.cover = Some("http://films.example/old.png".into());
+        said.cover = None;
+        assert_eq!(
+            check(&said, Some(&current)).unwrap().cover.as_deref(),
+            Some("http://films.example/old.png")
+        );
+        // And can be taken away, or replaced by one that loads.
+        said.cover = Some(String::new());
+        assert_eq!(check(&said, Some(&current)).unwrap().cover, None);
+        said.cover = Some("https://films.example/new.png".into());
+        assert_eq!(
+            check(&said, Some(&current)).unwrap().cover.as_deref(),
+            Some("https://films.example/new.png")
+        );
     }
 
     /// The body of an answer, read as text.
@@ -1442,6 +1494,60 @@ mod tests {
         )
         .await;
         assert!(matches!(refused, Err(AppError::NotFound)));
+    }
+
+    #[tokio::test]
+    async fn a_private_list_is_read_by_a_key_that_only_reads_when_its_owner_could_write() {
+        use crate::{auth::testing::key, db::repo::user::Role};
+
+        let state = super::super::testing::server().await;
+        let mut heat = work(MediaKind::Movie, "Heat");
+        heat.external_ids.tmdb = Some(949);
+        let heat = stored(&state, heat).await;
+        repo::list::create(
+            &state.db,
+            ListFields {
+                slug: "private",
+                name: "Private",
+                description: None,
+                kind: ListKind::Movie,
+                mode: ListMode::Manual,
+                filter: None,
+                is_public: false,
+                cover: None,
+            },
+            Some(std::slice::from_ref(&heat.id)),
+        )
+        .await
+        .expect("created");
+
+        let ask = |who: Identity| {
+            ids_txt(
+                State(state.clone()),
+                Extension(who),
+                Path("private".into()),
+                Query(IdsQuery { kind: None }),
+            )
+        };
+
+        // What an import list or Kometa carries in its address: the key of an
+        // editor or of an administrator, limited to reading.
+        for role in [Role::Editor, Role::Admin] {
+            let reads = key(&["read"], Some(role));
+            assert!(!reads.can_write(), "{role}");
+            let body = read(ask(reads).await.expect("answered")).await;
+            assert_eq!(entries(&body), ["tmdb:949  # Heat"], "{role}");
+        }
+
+        // A member's key reads what a visitor does, which is no such list;
+        // nor does a key of the server's that only reads, with no owner whose
+        // role it could read by.
+        for refused in [key(&["read"], Some(Role::Member)), key(&["read"], None)] {
+            assert!(matches!(ask(refused).await, Err(AppError::NotFound)));
+        }
+
+        // And a key that may write reads it, as it always did.
+        assert!(ask(key(&["read", "write"], None)).await.is_ok());
     }
 
     #[tokio::test]

@@ -636,10 +636,10 @@ pub async fn held_stems(db: &Db) -> Result<HashSet<String>> {
 
 /// Every place an address is named from: a work's pictures and its
 /// seasons', an episode's still, a cast's photographs, a relation's poster,
-/// a work's theme — and any locked value, on any work, that is the address
-/// itself, or with `by_path`, one that is the path of its bytes here: a
-/// lock can name a picture another work holds, and one written before locks
-/// were filed by their origin names it by its path.
+/// a work's theme, a selection's cover — and any locked value, on any work,
+/// that is the address itself, or with `by_path`, one that is the path of its
+/// bytes here: a lock can name a picture another work holds, and one written
+/// before locks were filed by their origin names it by its path.
 fn naming(by_path: bool) -> String {
     let mut sql = String::from(
         "EXISTS (SELECT 1 FROM media_image i WHERE i.url = ?)
@@ -647,6 +647,7 @@ fn naming(by_path: bool) -> String {
          OR EXISTS (SELECT 1 FROM media_credit c WHERE c.image = ?)
          OR EXISTS (SELECT 1 FROM media_relation r WHERE r.image = ?)
          OR EXISTS (SELECT 1 FROM media_item m WHERE m.theme_music = ?)
+         OR EXISTS (SELECT 1 FROM curated_list l WHERE l.cover = ?)
          OR EXISTS (SELECT 1 FROM media_override o WHERE o.value = ?)",
     );
     if by_path {
@@ -655,10 +656,10 @@ fn naming(by_path: bool) -> String {
     sql
 }
 
-/// What [`naming`] is asked with: the address, five times; as a locked
+/// What [`naming`] is asked with: the address, six times; as a locked
 /// value holds it, in JSON; and the path of its bytes, when it has any.
 fn naming_binds(origin: &str, key: Option<&str>) -> Result<Vec<String>> {
-    let mut binds = vec![origin.to_string(); 5];
+    let mut binds = vec![origin.to_string(); 6];
     binds.push(serde_json::to_string(origin)?);
     if let Some(key) = key {
         let stem = crate::media::file::stem_of(key);
@@ -687,8 +688,8 @@ pub async fn delete_unless_referenced(db: &Db, asset: &Asset) -> Result<bool> {
 /// The rows no work points at any more, among those older than
 /// `created_before` — an upload's row is written a moment before the
 /// picture or the lock that points at it: every column an address can sit
-/// in is looked through, and the locked values a caller passes — those are
-/// JSON, and read in Rust.
+/// in is looked through, a selection's cover among them, and the locked
+/// values a caller passes — those are JSON, and read in Rust.
 pub async fn unreferenced(
     db: &Db,
     locked: &HashSet<String>,
@@ -701,7 +702,8 @@ pub async fn unreferenced(
            AND NOT EXISTS (SELECT 1 FROM media_episode e WHERE e.image = a.origin)
            AND NOT EXISTS (SELECT 1 FROM media_credit c WHERE c.image = a.origin)
            AND NOT EXISTS (SELECT 1 FROM media_relation r WHERE r.image = a.origin)
-           AND NOT EXISTS (SELECT 1 FROM media_item m WHERE m.theme_music = a.origin)"
+           AND NOT EXISTS (SELECT 1 FROM media_item m WHERE m.theme_music = a.origin)
+           AND NOT EXISTS (SELECT 1 FROM curated_list l WHERE l.cover = a.origin)"
     )))
     .bind(created_before)
     .fetch_all(db.pool())
@@ -1035,11 +1037,18 @@ mod tests {
     }
 
     /// The one check made before an upload is deleted: a picture of any
-    /// work, a theme, a lock on any work — by the upload's own name, or by
-    /// the path of its bytes here — keeps it; nothing left naming it, it goes.
+    /// work, a theme, a selection's cover, a lock on any work — by the
+    /// upload's own name, or by the path of its bytes here — keeps it; nothing
+    /// left naming it, it goes.
     #[tokio::test]
     async fn an_upload_is_kept_while_anything_names_it() {
-        use crate::{db::repo::override_field, domain::fields::Scope};
+        use crate::{
+            db::repo::{
+                list::{self, ListFields, ListKind, ListMode},
+                override_field,
+            },
+            domain::fields::Scope,
+        };
         use serde_json::Value;
 
         let db = db().await;
@@ -1094,6 +1103,47 @@ mod tests {
             .execute(db.pool())
             .await
             .unwrap();
+
+        // A selection's cover, which keeps the address it was chosen by: the
+        // upload, taken off the work it was made for, stays the cover. The
+        // sweep does not offer the row either.
+        let covered = list::create(
+            &db,
+            ListFields {
+                slug: "covered",
+                name: "Covered",
+                description: None,
+                kind: ListKind::Mixed,
+                mode: ListMode::Manual,
+                filter: None,
+                is_public: true,
+                cover: Some(origin),
+            },
+            None,
+        )
+        .await
+        .unwrap();
+        kept("a cover").await;
+        assert!(
+            unreferenced(&db, &HashSet::new(), LATER)
+                .await
+                .unwrap()
+                .is_empty(),
+            "a cover names it for the sweep too"
+        );
+        sqlx::query(db.sql("UPDATE curated_list SET cover = NULL WHERE id = ?"))
+            .bind(&covered.id)
+            .execute(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(
+            unreferenced(&db, &HashSet::new(), LATER)
+                .await
+                .unwrap()
+                .len(),
+            1,
+            "the cover taken away, nothing names it"
+        );
 
         // A lock on a work, by the upload's name: an episode's still, a
         // season's chosen poster, the work's background or theme.

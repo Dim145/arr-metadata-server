@@ -22,7 +22,9 @@
 //! is due at once is one command for each of the two, every work's id in it.
 //! Each instance tells of the changes made on it, from a loop of its own,
 //! kept like the others; what came of each work is written down for the
-//! page, and a failure is said in the log.
+//! page, and a failure is said in the log. An app that does not answer at all
+//! is asked once, not once for each work: the works not yet told of wait for
+//! the next pass.
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
@@ -33,7 +35,7 @@ use std::{
 use serde_json::{Map, Value};
 
 use super::{
-    client::{App, Connection},
+    client::{App, Connection, unanswered},
     history::{self, Outcome, Told},
 };
 use crate::{
@@ -337,6 +339,9 @@ struct Target {
     title: String,
     client_id: Option<i64>,
     reasons: Vec<String>,
+    /// The same reasons, as the queue names them: what a work that could not
+    /// be told of yet is offered again for.
+    kinds: Vec<Reason>,
 }
 
 /// Tell each app of its works: found there one by one, then asked to read
@@ -367,6 +372,7 @@ pub async fn send(state: &AppState, due: Vec<(String, Vec<Reason>)>) {
             title: item.title,
             client_id,
             reasons: reasons.iter().map(|r| r.as_str().to_string()).collect(),
+            kinds: reasons,
         });
     }
 
@@ -384,13 +390,21 @@ pub async fn send(state: &AppState, due: Vec<(String, Vec<Reason>)>) {
     }
 }
 
+/// Tell one app of its works: each found there, then every one found asked to
+/// read again in one command.
+///
+/// An app that does not answer — nobody connects, or it takes too long — is
+/// asked once, not once for each work, each waiting out the same timeout and
+/// each with a line in the log: the work that found out is written down as
+/// failed, and the rest are offered again, to be told at the next pass.
 async fn tell(state: &AppState, connection: &Connection, targets: Vec<Target>) {
     let app = connection.app;
     // Each row as written, with what came of it.
     let mut rows: Vec<(Target, Option<i64>, Outcome, Option<String>)> = Vec::new();
     let mut found: Vec<(Target, i64)> = Vec::new();
 
-    for target in targets {
+    let mut targets = targets.into_iter();
+    while let Some(target) = targets.next() {
         let Some(client_id) = target.client_id else {
             let why = format!("no id {} could know it by", app.name());
             rows.push((target, None, Outcome::Absent, Some(why)));
@@ -399,6 +413,28 @@ async fn tell(state: &AppState, connection: &Connection, targets: Vec<Target>) {
         match connection.find(client_id).await {
             Ok(Some(held)) => found.push((target, held.id)),
             Ok(None) => rows.push((target, None, Outcome::Absent, None)),
+            Err(e) if unanswered(&e) => {
+                // Those already found are put back too: the command that
+                // would tell of them goes to the address that just did not
+                // answer.
+                let why = crate::providers::clip(&format!("{e:#}"), 300);
+                let mut back: Vec<Target> = found.drain(..).map(|(target, _)| target).collect();
+                back.extend(targets.by_ref());
+                tracing::warn!(
+                    app = app.as_str(),
+                    id = %target.id,
+                    error = %why,
+                    waiting = back.len(),
+                    "nobody answered; the works not yet told of wait for the next pass"
+                );
+                rows.push((target, None, Outcome::Failed, Some(why)));
+                for target in back {
+                    for reason in target.kinds {
+                        offer(state, &target.id, reason);
+                    }
+                }
+                break;
+            }
             Err(e) => {
                 let why = crate::providers::clip(&format!("{e:#}"), 300);
                 tracing::warn!(app = app.as_str(), id = %target.id, error = %why, "could not find a work to tell of");
@@ -745,5 +781,174 @@ mod tests {
         let before = seen.lock().len();
         send(&state, vec![(SERIES.to_string(), vec![Reason::Lock])]).await;
         assert_eq!(seen.lock().len(), before);
+    }
+
+    const SECOND: &str = "0192aa52-8f62-7cc3-a1f1-6a1b2c3d4e61";
+    const THIRD: &str = "0192aa52-8f62-7cc3-a1f1-6a1b2c3d4e62";
+
+    /// A series held here, by the id it is served under.
+    async fn series(state: &AppState, id: &str, title: &str, tvdb: i64) {
+        let mut item = MediaItem::empty(MediaKind::Series);
+        item.id = id.into();
+        item.title = title.into();
+        item.slug = crate::domain::make_slug(title, None);
+        item.created_at = crate::db::now();
+        item.updated_at = crate::db::now();
+        item.external_ids = ExternalIds {
+            tvdb: Some(tvdb),
+            ..Default::default()
+        };
+        crate::db::repo::item::upsert(
+            &state.db,
+            crate::db::repo::item::ItemWrite {
+                item: &item,
+                replace_children: true,
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    /// Counts what this module logs as a warning on the thread that set it up,
+    /// while it lives: what a test says "once" with.
+    struct Warnings {
+        count: Arc<std::sync::atomic::AtomicUsize>,
+        _kept: tracing::subscriber::DefaultGuard,
+    }
+
+    struct CountWarnings(Arc<std::sync::atomic::AtomicUsize>);
+
+    impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for CountWarnings {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            let at = event.metadata();
+            if *at.level() == tracing::Level::WARN && at.target().ends_with("arr::push") {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+    }
+
+    impl Warnings {
+        fn counted() -> Self {
+            use tracing_subscriber::layer::SubscriberExt as _;
+
+            let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let subscriber = tracing_subscriber::registry().with(CountWarnings(Arc::clone(&count)));
+            Self {
+                count,
+                _kept: tracing::subscriber::set_default(subscriber),
+            }
+        }
+
+        fn so_far(&self) -> usize {
+            self.count.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    /// The reasons a work waits in the queue for, if it waits there.
+    fn waits_for(id: &str) -> Option<Vec<Reason>> {
+        QUEUE
+            .waiting
+            .lock()
+            .works
+            .get(id)
+            .map(|pending| pending.reasons.iter().copied().collect())
+    }
+
+    /// What the queue of this process keeps is every test's: each one leaves
+    /// its own works out of it.
+    fn forget(ids: &[&str]) {
+        QUEUE
+            .waiting
+            .lock()
+            .works
+            .retain(|id, _| !ids.contains(&id.as_str()));
+    }
+
+    #[tokio::test]
+    async fn a_sonarr_nobody_answers_is_asked_once_and_the_rest_wait_for_the_next_pass() {
+        let (state, _) = setting_up().await;
+        // An address nothing listens at: a port that was free a moment ago.
+        let closed = {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            format!("http://{}", listener.local_addr().unwrap())
+        };
+        state
+            .settings
+            .set(Scope::Server, "", "arr.sonarrUrl", &closed, None)
+            .await
+            .unwrap();
+        series(&state, SECOND, "Better Call Saul", 273_181).await;
+        series(&state, THIRD, "Dark", 334_551).await;
+
+        let warnings = Warnings::counted();
+        send(
+            &state,
+            vec![
+                (SERIES.to_string(), vec![Reason::Lock]),
+                (SECOND.to_string(), vec![Reason::Edit]),
+                (THIRD.to_string(), vec![Reason::Lock, Reason::Sync]),
+            ],
+        )
+        .await;
+
+        // The first to find out is written down as failed; the others were
+        // never looked for, and are not.
+        let pushes = history::latest(&state.db, 10).await.unwrap();
+        assert_eq!(pushes.len(), 1, "{pushes:?}");
+        assert_eq!(pushes[0].outcome, "failed");
+        assert_eq!(pushes[0].media_id.as_deref(), Some(SERIES));
+        assert!(
+            pushes[0]
+                .detail
+                .as_deref()
+                .is_some_and(|why| why.contains("could not connect")),
+            "{pushes:?}"
+        );
+        // They wait for the next pass, for what they were told of.
+        assert_eq!(waits_for(SERIES), None, "the failed one is not put back");
+        assert_eq!(waits_for(SECOND), Some(vec![Reason::Edit]));
+        assert_eq!(waits_for(THIRD), Some(vec![Reason::Lock, Reason::Sync]));
+        // One line in the log, not one for each work.
+        assert_eq!(warnings.so_far(), 1);
+
+        forget(&[SERIES, SECOND, THIRD]);
+    }
+
+    #[tokio::test]
+    async fn a_sonarr_that_answers_no_is_asked_for_each_work_and_none_is_put_back() {
+        let (state, _) = setting_up().await;
+        let (refusing, asked) = stand_in(Arc::new(|_: &Seen| (401, String::new()))).await;
+        state
+            .settings
+            .set(Scope::Server, "", "arr.sonarrUrl", &refusing, None)
+            .await
+            .unwrap();
+        series(&state, SECOND, "Better Call Saul", 273_181).await;
+
+        let warnings = Warnings::counted();
+        send(
+            &state,
+            vec![
+                (SERIES.to_string(), vec![Reason::Lock]),
+                (SECOND.to_string(), vec![Reason::Edit]),
+            ],
+        )
+        .await;
+
+        // An address that answers refused the key, whichever work asks: each
+        // is looked for and written down, and waiting would change nothing.
+        assert_eq!(asked.lock().len(), 2);
+        let pushes = history::latest(&state.db, 10).await.unwrap();
+        assert_eq!(pushes.len(), 2);
+        assert!(pushes.iter().all(|push| push.outcome == "failed"));
+        assert_eq!(waits_for(SERIES), None);
+        assert_eq!(waits_for(SECOND), None);
+        assert_eq!(warnings.so_far(), 2);
+
+        forget(&[SERIES, SECOND]);
     }
 }

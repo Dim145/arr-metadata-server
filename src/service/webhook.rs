@@ -14,9 +14,12 @@
 //! nothing, and a restart loses nothing owed. One that is not taken is tried
 //! again five seconds later, then five minutes, half an hour, two hours,
 //! five, ten and ten, and given up on after its eighth try; an address that
-//! answers 410 Gone is switched off, and says why. What was told is kept
-//! thirty days — the newest thousand of each destination — for the
-//! Notifications page to show and replay.
+//! answers 410 Gone is switched off, and says why. An address that does not
+//! answer at all — it times out, or no connection is made — is asked once for
+//! everything due to it, and the rest is put off as that try was, so that it
+//! holds up nobody else's. What was told is kept thirty days — the newest
+//! thousand of each destination — for the Notifications page to show and
+//! replay.
 //!
 //! Two things the trail holds are not passed on. The name typed into a
 //! failed sign-in was typed by whoever came to the door, with no credential
@@ -140,7 +143,8 @@ const CLAIM_STALE: Duration = Duration::from_secs(120);
 /// How many deliveries are taken from the line at a time.
 const BATCH: i64 = 16;
 
-/// How many are sent at once.
+/// How many destinations are sent to at once: to each, one delivery at a
+/// time, in the order they are owed.
 const AT_ONCE: usize = 4;
 
 /// How long the worker sleeps when nothing rings and nothing falls due:
@@ -655,8 +659,30 @@ async fn until_next(state: &AppState) -> Duration {
     }
 }
 
-/// Send the next few due, a few at a time. How many were taken.
+/// What posts: the client, and in a test something that never leaves the
+/// machine.
+trait Poster: Sync {
+    fn post(&self, post: &kinds::Post) -> impl std::future::Future<Output = Outcome> + Send;
+}
+
+impl Poster for reqwest::Client {
+    async fn post(&self, post: &kinds::Post) -> Outcome {
+        send(self, post).await
+    }
+}
+
+/// What a delivery put off says of itself: the address it is owed to had
+/// just failed to answer.
+const SET_ASIDE: &str = "not sent: the address had just failed to answer another delivery, and is \
+                         left alone until this one's next try";
+
+/// Send the next few due: a destination's deliveries one after another, a few
+/// destinations at a time. How many were taken.
 async fn batch(state: &AppState) -> anyhow::Result<usize> {
+    batch_with(state, &state.webhooks.client).await
+}
+
+async fn batch_with(state: &AppState, poster: &impl Poster) -> anyhow::Result<usize> {
     let cutoff = claim_cutoff();
     let due = repo::webhook::due(&state.db, MOST_ATTEMPTS, &cutoff, BATCH).await?;
     if due.is_empty() {
@@ -668,27 +694,124 @@ async fn batch(state: &AppState) -> anyhow::Result<usize> {
         .map(|d| (d.id.clone(), d))
         .collect();
 
-    let taken = futures::stream::iter(due)
-        .filter_map(|delivery| {
-            let destination = destinations.get(&delivery.destination_id).cloned();
-            std::future::ready(destination.map(|d| (delivery, d)))
-        })
-        .map(|(delivery, destination)| deliver(state, &cutoff, delivery, destination))
+    // Each destination's deliveries in a line of their own, in the order they
+    // are owed; those of a destination switched off meanwhile are not sent.
+    let mut lines: Vec<(Destination, Vec<Delivery>)> = Vec::new();
+    for delivery in due {
+        let Some(destination) = destinations.get(&delivery.destination_id) else {
+            continue;
+        };
+        match lines.iter_mut().find(|(held, _)| held.id == destination.id) {
+            Some((_, owed)) => owed.push(delivery),
+            None => lines.push((destination.clone(), vec![delivery])),
+        }
+    }
+
+    let taken = futures::stream::iter(lines)
+        .map(|(destination, owed)| line(state, poster, &cutoff, destination, owed))
         .buffer_unordered(AT_ONCE)
-        .filter(|taken| std::future::ready(*taken))
-        .count()
+        .fold(0, |taken, line| std::future::ready(taken + line))
         .await;
     Ok(taken)
 }
 
-/// Take one delivery, try it, and write how it went: whether it was this
-/// worker's to take.
+/// One destination's deliveries, one after another in the order they are
+/// owed. How many were taken.
+///
+/// An address that does not answer — it times out, or no connection can be
+/// made — is asked once. What else is due to it is then put off as that try
+/// was, rather than sent in its turn to wait out the same timeout: the worker
+/// is not held by an address that is down, nor are the destinations beside it
+/// kept waiting.
+async fn line(
+    state: &AppState,
+    poster: &impl Poster,
+    cutoff: &str,
+    destination: Destination,
+    owed: Vec<Delivery>,
+) -> usize {
+    let mut taken = 0;
+    for delivery in owed {
+        match deliver(state, poster, cutoff, delivery, &destination, None).await {
+            Tried::Another => {}
+            Tried::Done => taken += 1,
+            Tried::Silent => {
+                taken += 1 + set_aside(state, poster, cutoff, &destination).await;
+                break;
+            }
+        }
+    }
+    taken
+}
+
+/// Put off every delivery of a destination that is due, as a try that got no
+/// answer is: each one's try is counted and each waits the pause its own
+/// schedule gives it. An address that is down so falls back through the
+/// pauses with all it is owed at once, and costs the worker one timeout a
+/// pause, not one a delivery. How many were put off.
+async fn set_aside(
+    state: &AppState,
+    poster: &impl Poster,
+    cutoff: &str,
+    destination: &Destination,
+) -> usize {
+    let owed = match repo::webhook::due_of(
+        &state.db,
+        &destination.id,
+        MOST_ATTEMPTS,
+        cutoff,
+        MOST_PENDING,
+    )
+    .await
+    {
+        Ok(owed) => owed,
+        Err(e) => {
+            tracing::warn!(error = %e, "could not read what else is owed to an address that did not answer");
+            return 0;
+        }
+    };
+    let held = Outcome::Unsent {
+        why: SET_ASIDE.to_string(),
+    };
+    let mut put_off = 0;
+    for delivery in owed {
+        let tried = deliver(state, poster, cutoff, delivery, destination, Some(&held)).await;
+        if matches!(tried, Tried::Done) {
+            put_off += 1;
+        }
+    }
+    if put_off > 0 {
+        let host = acceptable(&destination.url).unwrap_or_default();
+        tracing::warn!(
+            destination = %destination.name, host, put_off,
+            "the address did not answer: what else is owed to it is put off, as that try was"
+        );
+    }
+    put_off
+}
+
+/// How taking a delivery went.
+enum Tried {
+    /// Another worker's to take.
+    Another,
+    /// Taken, and how it went is written.
+    Done,
+    /// Taken, and the address did not answer: it timed out, or no connection
+    /// could be made.
+    Silent,
+}
+
+/// Take one delivery, try it, and write how it went. With `held`, it is not
+/// sent: the try is counted and written as that outcome says, for a delivery
+/// put off after another did not get an answer.
 async fn deliver(
     state: &AppState,
+    poster: &impl Poster,
     cutoff: &str,
     delivery: Delivery,
-    destination: Destination,
-) -> bool {
+    destination: &Destination,
+    held: Option<&Outcome>,
+) -> Tried {
     let attempt = delivery.attempts + 1;
     let now = Utc::now();
     // Due again then, should the server stop before the try comes back.
@@ -706,17 +829,21 @@ async fn deliver(
     .await
     {
         Ok(true) => {}
-        Ok(false) => return false,
+        Ok(false) => return Tried::Another,
         Err(e) => {
             tracing::warn!(error = %e, "could not take a delivery");
-            return false;
+            return Tried::Another;
         }
     }
 
-    let outcome = match prepare(&destination, &delivery) {
-        Ok(post) => send(&state.webhooks.client, &post).await,
-        Err(why) => Outcome::Unsent { why },
+    let outcome = match held {
+        Some(held) => held.clone(),
+        None => match prepare(destination, &delivery) {
+            Ok(post) => poster.post(&post).await,
+            Err(why) => Outcome::Unsent { why },
+        },
     };
+    let silent = matches!(outcome, Outcome::Unreached { .. });
     let verdict = verdict(attempt, &outcome, Utc::now());
     match repo::webhook::settle(&state.db, &delivery.id, &state.instance, &verdict.settled).await {
         Ok(true) => {}
@@ -726,7 +853,10 @@ async fn deliver(
         ),
         Err(e) => tracing::warn!(error = %e, "could not write how a delivery went"),
     }
-    report(&destination, &delivery, attempt, &verdict);
+    // A delivery put off is told of once, with the rest, by whoever put it off.
+    if held.is_none() {
+        report(destination, &delivery, attempt, &verdict);
+    }
 
     if verdict.gone {
         if let Err(e) = repo::webhook::switch_off(&state.db, &destination.id, GONE).await {
@@ -736,7 +866,7 @@ async fn deliver(
             tracing::warn!(error = %e, "the destinations could not be read");
         }
     }
-    true
+    if silent { Tried::Silent } else { Tried::Done }
 }
 
 /// The post a delivery is sent as, now: its destination's kind, address and
@@ -1725,6 +1855,192 @@ mod tests {
             !repo::webhook::enqueue(&state.db, &hook.id, "msg_4", "x.y", "{}", 3)
                 .await
                 .unwrap()
+        );
+    }
+
+    /// Posts nothing: each address answers as `answer` says of it, and what
+    /// was asked of each is kept.
+    struct Canned {
+        answer: fn(&str) -> Outcome,
+        asked: parking_lot::Mutex<Vec<String>>,
+    }
+
+    impl Canned {
+        fn new(answer: fn(&str) -> Outcome) -> Self {
+            Self {
+                answer,
+                asked: parking_lot::Mutex::new(Vec::new()),
+            }
+        }
+
+        /// How many posts went to the addresses that name this host.
+        fn asked_of(&self, host: &str) -> usize {
+            self.asked
+                .lock()
+                .iter()
+                .filter(|url| url.contains(host))
+                .count()
+        }
+    }
+
+    impl Poster for Canned {
+        async fn post(&self, post: &kinds::Post) -> Outcome {
+            self.asked.lock().push(post.url.clone());
+            (self.answer)(&post.url)
+        }
+    }
+
+    /// An address that is down: nothing answers, and the try runs out of time.
+    fn down_or_taken(url: &str) -> Outcome {
+        if url.contains("down.example.com") {
+            Outcome::Unreached {
+                why: "timed out".into(),
+                took: TIMEOUT,
+            }
+        } else {
+            answered(204)
+        }
+    }
+
+    /// A destination at an address of its own, told of everything.
+    async fn reached_at(state: &AppState, name: &str, url: &str) -> Destination {
+        repo::webhook::create(
+            &state.db,
+            &NewDestination {
+                name,
+                kind: "json",
+                url,
+                secret: None,
+                events: &names(&["*"]),
+                enabled: true,
+            },
+        )
+        .await
+        .expect("a destination")
+    }
+
+    /// `n` things that happen, each owed to every destination there is.
+    async fn happen(state: &AppState, n: usize) {
+        state.webhooks.reload(&state.db).await.expect("read");
+        for event in 0..n {
+            let target = format!("work-{event}");
+            notify(state, happening(Action::ItemCreated, Some(&target), None)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn an_address_that_does_not_answer_is_asked_once_and_the_rest_owed_to_it_is_put_off() {
+        let state = crate::api::native::testing::server().await;
+        let down = reached_at(&state, "down", "https://down.example.com/in").await;
+        let up = reached_at(&state, "up", "https://up.example.com/in").await;
+        happen(&state, 5).await;
+
+        let poster = Canned::new(down_or_taken);
+        let taken = batch_with(&state, &poster).await.expect("a batch");
+
+        // The address that does not answer was posted to once, not for each
+        // of the five; the other, for each of its.
+        assert_eq!(poster.asked_of("down.example.com"), 1);
+        assert_eq!(poster.asked_of("up.example.com"), 5);
+        assert_eq!(taken, 10);
+
+        // All five of the first wait for their next try, each with its try
+        // counted: one with what went wrong, the others with why they were
+        // not sent.
+        let (owed, _) = repo::webhook::log(&state.db, &down.id, 10, 0)
+            .await
+            .unwrap();
+        assert_eq!(owed.len(), 5);
+        for delivery in &owed {
+            assert_eq!(delivery.status, Status::Pending, "{delivery:?}");
+            assert_eq!(delivery.attempts, 1, "{delivery:?}");
+            assert!(
+                delivery
+                    .next_attempt_at
+                    .as_deref()
+                    .is_some_and(|at| at > db::now().as_str()),
+                "{delivery:?}"
+            );
+        }
+        let said: Vec<&str> = owed
+            .iter()
+            .filter_map(|d| d.last_error.as_deref())
+            .collect();
+        assert_eq!(said.iter().filter(|s| **s == "timed out").count(), 1);
+        assert_eq!(said.iter().filter(|s| **s == SET_ASIDE).count(), 4);
+
+        // The other was told everything.
+        let (told, _) = repo::webhook::log(&state.db, &up.id, 10, 0).await.unwrap();
+        assert_eq!(told.len(), 5);
+        assert!(told.iter().all(|d| d.status == Status::Delivered));
+    }
+
+    #[tokio::test]
+    async fn all_an_address_that_does_not_answer_is_owed_is_put_off_at_once_and_the_others_come_next()
+     {
+        let state = crate::api::native::testing::server().await;
+        let down = reached_at(&state, "down", "https://down.example.com/in").await;
+        // More than a batch is owed to it, before the other destination is
+        // there at all, and then one thing is owed to both.
+        happen(&state, BATCH as usize + 4).await;
+        let up = reached_at(&state, "up", "https://up.example.com/in").await;
+        happen(&state, 1).await;
+        // What it is owed has waited longest, whatever the clock's grain.
+        sqlx::query(state.db.sql(
+            "UPDATE webhook_delivery SET next_attempt_at = '2000-01-01T00:00:00.000Z'
+             WHERE destination_id = ?",
+        ))
+        .bind(&down.id)
+        .execute(state.db.pool())
+        .await
+        .unwrap();
+
+        let poster = Canned::new(down_or_taken);
+        // A batch is the oldest few that are due, which are all the first's:
+        // it is asked once, and everything it is owed — what the batch did
+        // not take too — is put off.
+        let taken = batch_with(&state, &poster).await.expect("a batch");
+        assert_eq!(taken, BATCH as usize + 5);
+        assert_eq!(poster.asked_of("down.example.com"), 1);
+        assert_eq!(poster.asked_of("up.example.com"), 0);
+        let (owed, total) = repo::webhook::log(&state.db, &down.id, 200, 0)
+            .await
+            .unwrap();
+        assert_eq!(total, BATCH + 5);
+        assert!(
+            owed.iter()
+                .all(|d| d.status == Status::Pending && d.attempts == 1),
+            "{owed:?}"
+        );
+
+        // So the next batch is the other's, and the first is not asked again.
+        let taken = batch_with(&state, &poster).await.expect("a batch");
+        assert_eq!(taken, 1);
+        assert_eq!(poster.asked_of("down.example.com"), 1);
+        assert_eq!(poster.asked_of("up.example.com"), 1);
+        let (told, _) = repo::webhook::log(&state.db, &up.id, 10, 0).await.unwrap();
+        assert_eq!(told[0].status, Status::Delivered);
+    }
+
+    #[tokio::test]
+    async fn an_address_that_answers_no_is_asked_for_each_of_its_deliveries() {
+        let state = crate::api::native::testing::server().await;
+        let refusing = reached_at(&state, "refusing", "https://refusing.example.com/in").await;
+        happen(&state, 3).await;
+
+        // Answered, and refused, in no time: not an address to leave alone.
+        // Each delivery is tried on its own account and waits its own pause.
+        let poster = Canned::new(|_| answered(503));
+        let taken = batch_with(&state, &poster).await.expect("a batch");
+        assert_eq!(taken, 3);
+        assert_eq!(poster.asked_of("refusing.example.com"), 3);
+        let (owed, _) = repo::webhook::log(&state.db, &refusing.id, 10, 0)
+            .await
+            .unwrap();
+        assert!(
+            owed.iter()
+                .all(|d| d.status == Status::Pending && d.last_status == Some(503)),
+            "{owed:?}"
         );
     }
 

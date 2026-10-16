@@ -192,9 +192,10 @@ impl AppState {
         let upstreams = std::sync::Arc::new(configured_hosts(&config));
         let http = outbound_client(&upstreams, Redirects::Anywhere)?;
         // MyAnimeList's client id travels in a header of its own, which a
-        // redirect to another host would carry along: reqwest strips only
+        // redirect to another origin — another host, but another port or
+        // scheme of the same one too — would carry along: reqwest strips only
         // the ones it knows for credentials.
-        let mal_http = outbound_client(&upstreams, Redirects::SameHost)?;
+        let mal_http = outbound_client(&upstreams, Redirects::SameOrigin)?;
 
         let slot = crate::cache::RedisSlot::default();
         let caches = Caches::new(&config.cache, slot.clone());
@@ -997,9 +998,17 @@ impl AppState {
 enum Redirects {
     /// To any host the guard does not refuse.
     Anywhere,
-    /// Only on the host first asked: a credential in a header of the
-    /// provider's own goes nowhere else.
-    SameHost,
+    /// Only at the origin first asked — its scheme, host and port: a
+    /// credential in a header of the provider's own goes nowhere else, and
+    /// not to another service of the same host.
+    SameOrigin,
+}
+
+/// Whether a redirect to `next` leaves the origin the request was first made
+/// to. The first request is the one a redirect is judged against, however
+/// many hops it has made; with none on record, nothing is known to stay.
+fn leaves_origin(first: Option<&url::Url>, next: &url::Url) -> bool {
+    first.is_none_or(|first| !crate::outbound::same_origin(first.as_str(), next.as_str()))
 }
 
 /// The client every provider, dataset, relay to TMDB and webhook is asked
@@ -1031,12 +1040,8 @@ fn outbound_client(
             configured: std::sync::Arc::clone(upstreams),
         }))
         .redirect(reqwest::redirect::Policy::custom(move |attempt| {
-            if redirects == Redirects::SameHost
-                && attempt
-                    .previous()
-                    .first()
-                    .and_then(|first| first.host_str())
-                    != attempt.url().host_str()
+            if redirects == Redirects::SameOrigin
+                && leaves_origin(attempt.previous().first(), attempt.url())
             {
                 return attempt.stop();
             }
@@ -1199,6 +1204,45 @@ mod allowlist_tests {
             &nets(&["172.16.0.0/12", "10.0.0.0/8"]),
         ));
         assert!(same_networks(&[], &[]));
+    }
+}
+
+#[cfg(test)]
+mod redirect_tests {
+    use super::leaves_origin;
+
+    fn url(text: &str) -> url::Url {
+        url::Url::parse(text).unwrap()
+    }
+
+    #[test]
+    fn a_header_of_a_providers_own_goes_to_the_origin_it_was_sent_to_and_no_other() {
+        let first = url("https://api.myanimelist.net/v2/anime/1");
+
+        // The same origin, wherever its path leads; a port left out is the
+        // scheme's own, and written out is the same.
+        assert!(!leaves_origin(
+            Some(&first),
+            &url("https://api.myanimelist.net/v2/anime/2")
+        ));
+        assert!(!leaves_origin(
+            Some(&first),
+            &url("https://api.myanimelist.net:443/v2/anime/2")
+        ));
+
+        // Another host — or the same host at another scheme or port, which
+        // is another service — is not where the client id was meant to go.
+        for elsewhere in [
+            "https://elsewhere.example/v2/anime/1",
+            "https://api.myanimelist.net.elsewhere.example/v2/anime/1",
+            "http://api.myanimelist.net/v2/anime/1",
+            "https://api.myanimelist.net:8443/v2/anime/1",
+        ] {
+            assert!(leaves_origin(Some(&first), &url(elsewhere)), "{elsewhere}");
+        }
+
+        // With no first request on record, nothing is known to stay.
+        assert!(leaves_origin(None, &first));
     }
 }
 

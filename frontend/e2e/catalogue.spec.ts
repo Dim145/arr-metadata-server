@@ -703,6 +703,10 @@ test.describe('the register', () => {
       await page.getByLabel(/search titles|chercher un titre/i).fill(title)
       const row = page.locator(`tr[data-work="${id}"]`)
       await expect(row).toBeVisible()
+      // The search answered, and not the register as it opened, which may
+      // hold the work too: its answer, arriving after a click, would draw
+      // the row anew, and the focus with it.
+      await expect(page.locator('tr[data-work]')).toHaveCount(1)
 
       // Four marks, each said in words: no poster, an overview, no IMDb id,
       // and nothing to refresh a work entered by hand from.

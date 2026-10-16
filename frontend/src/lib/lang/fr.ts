@@ -1066,7 +1066,7 @@ export const fr: Dict = {
       saveFailed: 'La liste n’a pas pu être enregistrée.',
       cover: 'Couverture',
       coverHint:
-        'L’image qui accompagne la sélection, sur la page des sélections et en tête de la sienne : un fond d’une de ses œuvres, ou n’importe quelle image par son adresse.',
+        'L’image qui accompagne la sélection, sur la page des sélections et en tête de la sienne : un fond d’une de ses œuvres, ou n’importe quelle image par son adresse https — le site ne charge aucune image en http.',
       coverNone: 'Pas de couverture : la sélection se présente par ses seuls mots.',
       coverChoose: 'Choisir une couverture',
       coverChange: 'Changer la couverture',
@@ -1078,7 +1078,7 @@ export const fr: Dict = {
     exports: {
       kometaTitle: 'Fichiers de métadonnées Kometa',
       kometaBody:
-        'Ce qui a été verrouillé ici, sous la forme d’un fichier que Kometa applique à une bibliothèque Plex, pour que les corrections tiennent quoi que trouve l’agent de Plex : les films sont appariés par identifiant TMDB, les séries par identifiant TheTVDB. Seul ce qui a été corrigé à la main est écrit. Nommez le fichier sous metadata_files de la bibliothèque, ou donnez son adresse avec une clé qui peut écrire.',
+        'Ce qui a été verrouillé ici, sous la forme d’un fichier que Kometa applique à une bibliothèque Plex, pour que les corrections tiennent quoi que trouve l’agent de Plex : les films sont appariés par identifiant TMDB, les séries par identifiant TheTVDB. Seul ce qui a été corrigé à la main est écrit. Nommez le fichier sous metadata_files de la bibliothèque, ou donnez son adresse avec une clé d’éditeur ou d’administrateur : une clé limitée à la lecture suffit.',
       kometaMovies: 'Films',
       kometaSeries: 'Séries',
       kometaFile: (kind: string) => `Télécharger le fichier de métadonnées des ${kind}`,
@@ -1216,7 +1216,7 @@ export const fr: Dict = {
     arrPage: {
       lead: 'Vos propres Sonarr et Radarr, joints dans l’autre sens : prévenus aussitôt qu’une œuvre change ici, plutôt qu’à leur prochain rafraîchissement douze heures plus tard, et lus pour remplir le catalogue avant d’être tournés vers ce serveur.',
       connectionHint:
-        'L’adresse à laquelle il répond, telle que ce serveur la joint — avec sa base d’URL s’il en a une — et sa clé d’API, dans Settings › General de Sonarr ou de Radarr. Un réseau privé et cette machine sont joints ; une redirection vers un autre hôte n’est pas suivie.',
+        'L’adresse à laquelle il répond, telle que ce serveur la joint — avec sa base d’URL s’il en a une — et sa clé d’API, dans Settings › General de Sonarr ou de Radarr. Un réseau privé et cette machine sont joints ; une redirection vers une autre origine — autre schéma, autre hôte ou autre port — n’est pas suivie.',
       address: 'Adresse',
       key: 'Clé d’API',
       keySet: 'Une clé est gardée',

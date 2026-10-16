@@ -643,10 +643,11 @@ pub async fn run_sweeps(state: AppState) {
 
 /// Forget what nobody points at any more, and delete what nobody names.
 ///
-/// A row goes when no work's rows hold its address and no locked value does
-/// — asked again as it is deleted, since something may have come to name it
-/// since the list was read — once it has had its hour: an upload's row is
-/// written a moment before what points at it. Its file goes with it unless
+/// A row goes when no work's rows hold its address, no selection has it for
+/// its cover and no locked value does — asked again as it is deleted, since
+/// something may have come to name it since the list was read — once it has
+/// had its hour: an upload's row is written a moment before what points at
+/// it. Its file goes with it unless
 /// another row holds the same bytes. Then the store is listed, and a file
 /// no row names — one whose row was lost between the put and the write,
 /// say — goes too, once it has had its hour: asked again just before it

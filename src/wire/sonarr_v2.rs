@@ -240,7 +240,12 @@ pub fn from_item(item: &MediaItem, asked: &Asked<'_>) -> ShowResourceV2 {
         .as_deref()
         .map(language::normalize)
         .filter(|l| !l.is_empty());
-    let translations = translations(item, asked.own, original_language.as_deref());
+    let translations = translations(
+        item,
+        asked.own,
+        asked.language,
+        original_language.as_deref(),
+    );
     // A title locked in every language is the work's name in each of them,
     // its own among them, and not the name it was made under: that is the
     // original title it carries, as a source gave it or as it was locked.
@@ -308,30 +313,40 @@ pub fn from_item(item: &MediaItem, asked: &Asked<'_>) -> ShowResourceV2 {
 ///
 /// The translations held, each under its three-letter code and only when
 /// it names the work: a title in no language is nothing to Sonarr, which
-/// drops the entry. The work's own text counts as one, under the language
-/// it is stored in, when no translation is held in that language. And the
-/// work's original language has an entry whenever a title for it is known
-/// — the provider's original title, where no translation is held — because
-/// that entry is where Sonarr reads the original title from.
+/// drops the entry. One in the language asked that has an overview and no
+/// title — TMDB leaves the name out where it is the one the work already
+/// goes by, as Breaking Bad's in French — is listed under the title the
+/// answer gives, which is the work's name in that language. The work's own
+/// text counts as one, under the language it is stored in, when no
+/// translation is held in that language. And the work's original language
+/// has an entry whenever a title for it is known — the provider's original
+/// title, where no translation is held — because that entry is where Sonarr
+/// reads the original title from.
 fn translations(
     item: &MediaItem,
     own: &OwnText,
+    asked_language: &str,
     original_language: Option<&str>,
 ) -> Vec<TranslationResource> {
     let mut held: BTreeMap<String, TranslationResource> = BTreeMap::new();
 
     for translation in &item.translations {
         let code = language::normalize(&translation.language);
-        let Some(title) = non_empty(translation.title.as_deref()) else {
-            continue;
-        };
         if code.is_empty() {
             continue;
         }
+        let overview = non_empty(translation.overview.as_deref());
+        let Some(title) = non_empty(translation.title.as_deref()).or_else(|| {
+            (code == asked_language && overview.is_some())
+                .then(|| non_empty(Some(item.title.as_str())))
+                .flatten()
+        }) else {
+            continue;
+        };
         held.entry(code.clone()).or_insert(TranslationResource {
             language: code,
             title,
-            overview: non_empty(translation.overview.as_deref()),
+            overview,
         });
     }
 
@@ -817,6 +832,48 @@ mod tests {
         });
         let show = from_item(&it, &asked(&own, &[], OFFICIAL));
         assert!(show.translations.iter().all(|t| t.language != "ita"));
+    }
+
+    #[test]
+    fn the_language_asked_is_listed_when_only_its_overview_is_held() {
+        // TMDB leaves a translation's name out where it is the name the
+        // series already goes by: an overview in French, and no title.
+        let mut it = series();
+        for french in it.translations.iter_mut().filter(|t| t.language == "fra") {
+            french.title = None;
+        }
+        let own = own(&it);
+        let show = from_item(&it, &asked(&own, &[], OFFICIAL));
+
+        // Asked in French, the series is named in French by the title the
+        // answer gives, with the overview held in French.
+        let french = show
+            .translations
+            .iter()
+            .find(|t| t.language == "fra")
+            .expect("the language asked is listed");
+        assert_eq!(french.title, show.title);
+        assert_eq!(
+            french.overview.as_deref(),
+            Some("Un vagabond au sabre inversé.")
+        );
+
+        // In another language than the one asked, an overview names nothing.
+        it.translations.push(Translation {
+            language: "ita".into(),
+            title: None,
+            overview: Some("Un vagabondo.".into()),
+            is_manual: false,
+        });
+        let show = from_item(&it, &asked(&own, &[], OFFICIAL));
+        assert!(show.translations.iter().all(|t| t.language != "ita"));
+
+        // Nor does a translation with neither, in the language asked.
+        for french in it.translations.iter_mut().filter(|t| t.language == "fra") {
+            french.overview = None;
+        }
+        let show = from_item(&it, &asked(&own, &[], OFFICIAL));
+        assert!(show.translations.iter().all(|t| t.language != "fra"));
     }
 
     #[test]

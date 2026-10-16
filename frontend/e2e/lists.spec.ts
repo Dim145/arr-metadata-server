@@ -349,11 +349,22 @@ test.describe('curated lists', () => {
     const name = `E2E cover ${Date.now()}`
     const list = await createList(page.request, { name, kind: 'mixed', mode: 'manual', isPublic: true })
     try {
-      // A picture of this very server, which the site's own origin lets load.
-      const cover = new URL('/icon-512.png', page.url()).href
+      // A picture at an https address, which is what the site's pages load a
+      // picture over: this server's own icon, answered here at an address of
+      // its own, so that the spec needs no network.
+      const cover = 'https://covers.e2e.example/cover.png'
+      const picture = await (await page.request.get('/icon-512.png')).body()
+      await page.route(cover, (route) => route.fulfill({ contentType: 'image/png', body: picture }))
 
-      // Not the address of a picture: refused, and the list as it was.
-      for (const bad of ['javascript:alert(1)', 'data:image/png;base64,AAAA', '/media/not-an-address.jpg', 'https://films.example/a b.png']) {
+      // Not the address of a picture, or one the site would not load — over
+      // http: refused, and the list as it was.
+      for (const bad of [
+        'javascript:alert(1)',
+        'data:image/png;base64,AAAA',
+        '/media/not-an-address.jpg',
+        'https://films.example/a b.png',
+        'http://films.example/cover.png',
+      ]) {
         expect((await page.request.put(`/api/v1/lists/${list.id}`, { data: { cover: bad } })).status(), bad).toBe(400)
       }
       expect(((await (await page.request.get(`/api/v1/lists/${list.id}`)).json()).list as List).cover ?? null).toBeNull()
