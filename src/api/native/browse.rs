@@ -1072,7 +1072,10 @@ mod tests {
         correct(&dune, "digitalRelease", "2026-11-08").await;
         correct(&interstellar, "physicalRelease", "2027-01-10").await;
 
-        for identity in [Identity::Visitor, Identity::Anonymous] {
+        for (who, identity) in [
+            ("a visitor", Identity::Visitor),
+            ("anybody, with authentication off", Identity::Anonymous),
+        ] {
             let calendar = window(&state, &identity, from, to, None)
                 .await
                 .expect("listed");
@@ -1083,8 +1086,7 @@ mod tests {
                     format!("{} episode 2026-11-05T20:00:00+00:00", dark.id),
                     format!("{} release 2026-11-08 digital", dune.id),
                 ],
-                "{}",
-                identity.label()
+                "{who}"
             );
             let locked = &calendar
                 .works

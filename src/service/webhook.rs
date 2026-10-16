@@ -2434,7 +2434,7 @@ mod tests {
             refused
                 .as_ref()
                 .is_err_and(|why| why.contains("another server or another kind")),
-            "{refused:?}"
+            "kept, or refused for another reason"
         );
         assert_eq!(
             next_secret(

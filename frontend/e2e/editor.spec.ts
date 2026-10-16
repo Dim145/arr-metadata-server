@@ -678,7 +678,7 @@ test.describe('a season’s air dates, moved together', () => {
 
     try {
       await page.goto(`/admin/catalogue/${series!.id}?tab=people`)
-      const row = page.locator(`#credits li[data-credit="${credit.personName.replace(/"/g, '\\"')}"]`).first()
+      const row = page.locator(`#credits li[data-credit="${credit.personName.replace(/["\\]/g, '\\$&')}"]`).first()
       await row.getByRole('button', { name: pattern(credit.personName) }).filter({ hasText: /^(hide|masquer)$/i }).click()
 
       // Hidden: still listed here, marked, and served to nobody.

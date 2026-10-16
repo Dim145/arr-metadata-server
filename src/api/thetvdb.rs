@@ -2378,9 +2378,15 @@ mod relayed {
         assert_eq!(status, StatusCode::UNAUTHORIZED);
         // Its scheme in capitals, or behind a token of their own: refused
         // all the same.
-        for written in [format!("BEARER {key}"), format!("Bearer their-token {key}")] {
+        for (how, written) in [
+            ("its scheme in capitals", format!("BEARER {key}")),
+            (
+                "behind a token of theirs",
+                format!("Bearer their-token {key}"),
+            ),
+        ] {
             let (status, refusal) = written_as(&state, "/v4/series/81189/extended", &written).await;
-            assert_eq!(status, StatusCode::UNAUTHORIZED, "{written}");
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "{how}");
             assert_eq!(refusal["error"], json!("own_key_required"));
         }
         assert!(stand_in.asked_at("/v4/series/81189/extended").is_empty());

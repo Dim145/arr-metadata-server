@@ -171,6 +171,13 @@ A token kept for an ntfy or Gotify destination goes to no other server and no ot
 kind of destination unless it is given again, and a Standard Webhooks receiver at a
 new address is given a signing secret of its own.
 
+An `http://` address is accepted, for a service on your own network, and is posted
+to in clear: the body, and the token of an ntfy or Gotify destination in its
+header, can be read on the way. Give an `https://` address to anything the post
+has to cross a network you do not trust to reach. A Standard Webhooks signature
+gives nothing of its secret away, but the body it signs travels in clear all the
+same.
+
 ## API
 
 All of it for administrators, under `/api/v1`, and in the OpenAPI document:

@@ -1193,7 +1193,7 @@ fn checked_by_hand(mut request: CreateRequest, kind: MediaKind) -> AppResult<Cre
         )));
     }
 
-    let mut genres: Vec<String> = Vec::with_capacity(request.genres.len());
+    let mut genres: Vec<String> = Vec::new();
     for genre in request.genres.iter().map(|g| g.trim()) {
         if !genres
             .iter()

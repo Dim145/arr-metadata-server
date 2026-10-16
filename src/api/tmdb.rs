@@ -1267,14 +1267,14 @@ fn take_crew(crew: &mut Vec<Value>, withheld: &Withheld) -> bool {
         };
         if let Some(Value::Array(jobs)) = member.get_mut("jobs") {
             let before = jobs.len();
-            jobs.retain(|job| !job.get("job").is_some_and(&hidden));
+            jobs.retain(|job| !job.get("job").is_some_and(hidden));
             if jobs.len() == before {
                 return true;
             }
             taken = true;
             return !jobs.is_empty();
         }
-        if member.get("job").is_some_and(&hidden) {
+        if member.get("job").is_some_and(hidden) {
             taken = true;
             return false;
         }
