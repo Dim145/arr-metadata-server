@@ -9,6 +9,10 @@ services:
     image: ghcr.io/dim145/arr-metadata-server:latest
     container_name: arr-metadata-server
     restart: unless-stopped
+    # A stop takes up to fifteen seconds — the doors drain, then the background
+    # tasks end, then the database's connections are handed back, five each —
+    # and `docker stop` gives ten before it kills what is left.
+    stop_grace_period: 20s
 
     environment:
       AMS_BIND_ADDRESS: 0.0.0.0:8080

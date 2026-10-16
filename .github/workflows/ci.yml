@@ -68,6 +68,56 @@ jobs:
         run: |
           ./scripts/smoke.sh "postgres://ams:ams@127.0.0.1:5432/ams"
 
+  # `cargo test` above runs on SQLite alone, and the two engines disagree where
+  # nothing in Rust checks: SQLite ignores what a bind is typed as and
+  # PostgreSQL does not, which is how a missing rating once stored nothing and
+  # a SUM came back as a type no driver here reads. So the tests that open a
+  # database run again against a PostgreSQL, each on a database of its own
+  # that is made for it and dropped with it (src/db/testing.rs), and so does
+  # the one that says the two migration sets build the same schema
+  # (src/db/parity.rs), which needs both engines.
+  #
+  # Named by module path: `db::` alone would take `tvdb::` and `tmdb::` with
+  # it. A module whose tests open a database through src/db/testing.rs joins
+  # the list when it is written.
+  test-postgres:
+    name: Tests on PostgreSQL
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: ams
+          POSTGRES_PASSWORD: ams
+          POSTGRES_DB: ams
+          # As compose.postgres.yaml starts it: a collation of its own rather
+          # than the host's, which is what the order of an index follows.
+          POSTGRES_INITDB_ARGS: --locale-provider=icu --icu-locale=und-x-icu
+        options: >-
+          --health-cmd "pg_isready -U ams"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    env:
+      # A test makes a database on this server and drops it again, so the user
+      # has to be allowed to; the container's own is.
+      AMS_TEST_DATABASE_URL: postgres://ams:ams@127.0.0.1:5432/ams
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install the toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Test
+        run: 'cargo test --locked -- db::repo:: db::parity:: db::testing::'
+
   frontend:
     name: Web UI
     runs-on: ubuntu-latest
@@ -92,6 +142,197 @@ jobs:
       - name: Build
         working-directory: frontend
         run: npm run build
+
+  # The interface as a visitor and an administrator meet it: the Rust binary,
+  # serving the interface built beside it, driven by the Playwright suite in
+  # frontend/e2e. The suite reads a catalogue it does not make — the providers
+  # fill one, through scripts/e2e-seed.sh — so the job needs a TMDB key and a
+  # TheTVDB one, as the repository secrets TMDB_API_KEY and TVDB_API_KEY
+  # (FANARTTV_API_KEY adds the artwork, and may be left out). A pull request
+  # from a fork is given no secrets, nor is Dependabot's: the job says so and
+  # stands aside there, rather than fail for something nobody's change did.
+  #
+  # The administrator is made for the run: a name and a password drawn here,
+  # given to the server and to the suite alike, and kept out of the log.
+  e2e:
+    name: End-to-end tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    services:
+      # The cache's second tier, which the cache spec reads back; the server is
+      # pointed at it below. Without one that spec checks the memory tier alone.
+      cache:
+        image: valkey/valkey:8-alpine
+        options: >-
+          --health-cmd "valkey-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+    steps:
+      # Said before anything is fetched or built, so that a run without the keys
+      # costs a few seconds. A secret cannot be tested in an `if`, which is why
+      # it is an environment variable here, and why the answer is an output.
+      - name: Look for the provider keys
+        id: keys
+        env:
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+          TVDB_API_KEY: ${{ secrets.TVDB_API_KEY }}
+        run: |
+          if [ -n "$TMDB_API_KEY" ] && [ -n "$TVDB_API_KEY" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=End-to-end tests skipped::TMDB_API_KEY and TVDB_API_KEY are repository secrets, and this run was not given them (a pull request from a fork is not)."
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.keys.outputs.present == 'true'
+
+      - name: Install the toolchain
+        if: steps.keys.outputs.present == 'true'
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: steps.keys.outputs.present == 'true'
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: steps.keys.outputs.present == 'true'
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install the web UI's dependencies
+        if: steps.keys.outputs.present == 'true'
+        working-directory: frontend
+        run: npm ci --no-audit --no-fund
+
+      # The binary serves the interface from frontend/dist, so that is built
+      # first: without it the build below embeds a placeholder page.
+      - name: Build the web UI
+        if: steps.keys.outputs.present == 'true'
+        working-directory: frontend
+        run: npm run build
+
+      # The crate stays a debug build and its dependencies do not. Hashing a
+      # password with argon2, and making the thumbnails the media worker keeps
+      # of every picture the catalogue holds, are a fraction of their speed
+      # unoptimized, and every administrator test signs in while the worker is
+      # at it: on a runner this small that would be the suite's slowness, not
+      # the interface's.
+      - name: Build the server
+        if: steps.keys.outputs.present == 'true'
+        run: cargo build --locked --config 'profile.dev.package."*".opt-level = 2'
+
+      - name: Install the browser
+        if: steps.keys.outputs.present == 'true'
+        working-directory: frontend
+        run: ./node_modules/.bin/playwright install --with-deps chromium
+
+      - name: Make this run's administrator
+        if: steps.keys.outputs.present == 'true'
+        run: |
+          password="$(openssl rand -hex 24)"
+          echo "::add-mask::${password}"
+          {
+            echo "E2E_DIR=${RUNNER_TEMP}/e2e"
+            echo "AMS_E2E_USER=e2e-$(openssl rand -hex 4)"
+            echo "AMS_E2E_PASSWORD=${password}"
+          } >> "$GITHUB_ENV"
+
+      # What the suite expects of the server (frontend/playwright.config.ts and
+      # frontend/e2e/README.md): a public site, the limits lifted that one
+      # address would otherwise meet, a public URL for the sign-in through an
+      # identity provider to come back to, a store for the media, a door for
+      # the clients, and the cache's second tier. In the background, its log
+      # kept for the step that shows it when something failed.
+      - name: Start the server
+        if: steps.keys.outputs.present == 'true'
+        env:
+          AMS_TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+          AMS_TVDB_API_KEY: ${{ secrets.TVDB_API_KEY }}
+          AMS_FANART_API_KEY: ${{ secrets.FANARTTV_API_KEY }}
+          # The sources a new database has switched off — each is a party the
+          # server would talk to, and that is the operator's call — and that
+          # the suite's catalogue was made with on: a Fan-Kai cannot be
+          # imported without Fan-Kai, nor an anime's relations read without
+          # AniList and MyAnimeList.
+          AMS_FANKAI_ENABLED: 'true'
+          AMS_FANKAI_WIKI_ENABLED: 'true'
+          AMS_ANILIST_ENABLED: 'true'
+          AMS_MAL_ENABLED: 'true'
+          AMS_TVMAZE_ENABLED: 'true'
+          AMS_IMDB_ENABLED: 'true'
+        run: |
+          mkdir -p "$E2E_DIR/media" "$E2E_DIR/tls"
+          AMS_DATABASE_URL="sqlite://$E2E_DIR/e2e.db?mode=rwc" \
+          AMS_BIND_ADDRESS=127.0.0.1:8479 \
+          AMS_PUBLIC_URL=http://127.0.0.1:8479 \
+          AMS_PUBLIC_BROWSE=true \
+          AMS_RATE_LIMIT_PER_MINUTE=6000 \
+          AMS_SIGNUPS_PER_HOUR=1000 \
+          AMS_SIGNUPS_PER_HOUR_TOTAL=1000 \
+          AMS_CLIENTS_BIND=127.0.0.1:8443 \
+          AMS_TLS_DIR="$E2E_DIR/tls" \
+          AMS_REDIS_URL=redis://127.0.0.1:6379 \
+          AMS_MEDIA_STORAGE=filesystem \
+          AMS_MEDIA_DIR="$E2E_DIR/media" \
+          AMS_ADMIN_USERNAME="$AMS_E2E_USER" \
+          AMS_ADMIN_PASSWORD="$AMS_E2E_PASSWORD" \
+            nohup ./target/debug/arr-metadata-server > "$E2E_DIR/server.log" 2>&1 &
+
+          for _ in $(seq 1 90); do
+            curl -sf -o /dev/null http://127.0.0.1:8479/health && break
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:8479/ready | grep -q '"database":true'
+
+      - name: Fill the catalogue
+        if: steps.keys.outputs.present == 'true'
+        run: ./scripts/e2e-seed.sh
+
+      # The suite's own projects, in its own order: what runs at the width of a
+      # desktop, then what changes how the whole server answers — a private
+      # site, an API switched off — alone, once nothing else is running. The
+      # phone-width project runs the same specs again at 375 pixels; it is not
+      # run here.
+      - name: Run the interface tests
+        if: steps.keys.outputs.present == 'true'
+        working-directory: frontend
+        env:
+          PLAYWRIGHT_HTML_OPEN: never
+        run: ./node_modules/.bin/playwright test --project desktop --reporter=line,html
+
+      - name: Run the tests that change the whole server
+        if: steps.keys.outputs.present == 'true'
+        working-directory: frontend
+        env:
+          PLAYWRIGHT_HTML_OPEN: never
+        run: ./node_modules/.bin/playwright test --project server-wide --no-deps --reporter=line,html
+
+      # What the server said, in the log of the run, where a secret it might
+      # have named is masked. The artifact below holds the browser's side only.
+      - name: Show the server's log
+        if: ${{ failure() && steps.keys.outputs.present == 'true' }}
+        run: |
+          echo "::group::server.log"
+          cat "$E2E_DIR/server.log" || true
+          echo "::endgroup::"
+
+      - name: Keep the report and the traces
+        if: ${{ failure() && steps.keys.outputs.present == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: playwright-report
+          path: |
+            frontend/playwright-report
+            frontend/test-results
+          if-no-files-found: ignore
+          retention-days: 7
 
   # `rust-version` in Cargo.toml promises that 1.94 builds this, and nothing
   # else ever tries it: a dependency, or a newer language feature, can break the
