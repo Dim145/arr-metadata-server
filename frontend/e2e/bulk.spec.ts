@@ -60,4 +60,101 @@ test.describe('bulk actions', () => {
       await page.request.delete(`/api/v1/lists/${list.id}`)
     }
   })
+
+  /**
+   * Two works made by hand for the purpose, one per project, found by their
+   * name and selected whole; removed at the end.
+   */
+  async function twoWorks(page: Page, project: string) {
+    const stamp = `E2E masse ${project} ${Date.now()}`
+    const ids: string[] = []
+    for (const n of [1, 2]) {
+      const created = await page.request.post('/api/v1/items', {
+        data: { kind: 'series', title: `${stamp} ${n}`, genres: ['Drama'] },
+      })
+      expect(created.status()).toBe(201)
+      ids.push(((await created.json()) as { id: string }).id)
+    }
+    await page.goto('/admin/catalogue')
+    await page.getByLabel(/search titles|chercher un titre/i).fill(stamp)
+    await expect(page.locator('tr[data-work]')).toHaveCount(2)
+    return ids
+  }
+
+  const bar = (page: Page) => page.getByRole('region', { name: /(selected|sélectionnée)/i })
+  const selectBoth = (page: Page) => page.getByRole('checkbox', { name: /select every|sélectionner toutes/i }).check()
+
+  test('a field is given to every work of the selection, each its own lock, and the lock is lifted again', async ({
+    page,
+  }, info) => {
+    test.slow()
+    await signIn(page)
+    const ids = await twoWorks(page, info.project.name)
+    const work = async (id: string) =>
+      (await (await page.request.get(`/api/v1/items/${id}`)).json()) as { status?: string; genres: string[] }
+    const locked = async (id: string, field: string) =>
+      ((await (await page.request.get(`/api/v1/items/${id}/overrides`)).json()) as { scope: string; field: string }[]).some(
+        (lock) => lock.scope === 'item' && lock.field === field,
+      )
+
+    // The field, what to do with it, and a value: said before it is done.
+    const change = async (field: string, action: RegExp, value: string | undefined, said: RegExp) => {
+      await selectBoth(page)
+      await bar(page).getByRole('button', { name: /change a field|modifier un champ/i }).click()
+      const dialog = page.getByRole('dialog')
+      await dialog.getByLabel(/^(field|champ)$/i).selectOption(field)
+      // The radio sits under its label, which is what a finger presses.
+      await dialog.getByText(action).click()
+      if (value !== undefined) await dialog.getByLabel(/^(value|valeur|genre)$/i).fill(value)
+      await dialog.getByRole('button', { name: /^(apply to|appliquer à) 2 /i }).click()
+      await expect(dialog).toBeHidden()
+      await expect(bar(page).getByRole('status')).toHaveText(said)
+    }
+
+    try {
+      await change('status', /^(set to|fixer à)$/i, 'ended', /^(done for 2|fait pour 2)\.$/i)
+      for (const id of ids) {
+        expect((await work(id)).status).toBe('ended')
+        expect(await locked(id, 'status')).toBe(true)
+      }
+
+      // A genre added is added once: asked again, both already have it.
+      await change('genres', /^(add a genre|ajouter un genre)$/i, 'Mystery', /^(done for 2|fait pour 2)\.$/i)
+      await change('genres', /^(add a genre|ajouter un genre)$/i, 'mystery', /(2 already so|2 déjà à jour)/i)
+      await change('genres', /^(take a genre off|retirer un genre)$/i, 'Drama', /^(done for 2|fait pour 2)\.$/i)
+      for (const id of ids) expect((await work(id)).genres).toEqual(['Mystery'])
+
+      // Handed back: the lock is gone from each.
+      await change('status', /^(lift the lock|lever le verrou)$/i, undefined, /^(done for 2|fait pour 2)\.$/i)
+      for (const id of ids) expect(await locked(id, 'status')).toBe(false)
+    } finally {
+      for (const id of ids) await page.request.delete(`/api/v1/items/${id}`)
+    }
+  })
+
+  test('asking the sources again passes over a work that has none', async ({ page }, info) => {
+    await signIn(page)
+    const ids = await twoWorks(page, info.project.name)
+
+    try {
+      await selectBoth(page)
+      await bar(page).getByRole('button', { name: /ask the sources again|réinterroger les sources/i }).click()
+      const dialog = page.getByRole('dialog')
+      const source = dialog.getByRole('checkbox').first()
+      await expect(source.or(dialog.getByText(/no source is switched on|aucune source n’est activée/i))).toBeVisible()
+      test.skip((await dialog.getByRole('checkbox').count()) === 0, 'no source is switched on')
+
+      await source.check()
+      // Entered by hand, neither has a source to be asked: nothing is sent.
+      let asked = false
+      page.on('request', (request) => {
+        if (/\/api\/v1\/items\/[^/]+\/(sync|provenance)$/.test(request.url())) asked = true
+      })
+      await dialog.getByRole('button', { name: /^(ask|interroger) 1 source/i }).click()
+      await expect(bar(page).getByRole('status')).toHaveText(/(2 passed over|2 laissées de côté)/i)
+      expect(asked).toBe(false)
+    } finally {
+      for (const id of ids) await page.request.delete(`/api/v1/items/${id}`)
+    }
+  })
 })

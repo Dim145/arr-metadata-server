@@ -101,18 +101,7 @@ pub async fn delete(db: &Db, name: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    async fn db() -> Db {
-        let db = Db::connect(&crate::config::Database {
-            url: "sqlite::memory:".into(),
-            max_connections: 1,
-            acquire_timeout: std::time::Duration::from_secs(5),
-        })
-        .await
-        .unwrap();
-        db.migrate().await.unwrap();
-        db
-    }
+    use crate::db::testing::db;
 
     #[tokio::test]
     async fn the_first_writer_wins_and_a_put_overwrites() {

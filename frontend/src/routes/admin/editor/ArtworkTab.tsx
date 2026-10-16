@@ -10,7 +10,9 @@
  *
  * A manual image survives every refresh; a provider's cannot be removed here
  * at all, because it would simply come back and read as the delete having
- * failed. So the remove control exists only where it means something.
+ * failed. So the remove control exists only where it means something. A
+ * provider's is hidden instead — a lock the next refresh keeps — and stays
+ * on the table, faded, with "hidden" in brass, to be shown again.
  */
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -92,7 +94,16 @@ export function ArtworkTab({ work, onChanged }: { work: MediaItem; onChanged: ()
   const [addKind, setAddKind] = useState<string>('poster')
   const [addLanguage, setAddLanguage] = useState('')
 
-  const own = (work.images ?? []).filter((image) => image.seasonNumber === undefined || image.seasonNumber === null)
+  // A source's picture is hidden rather than removed, and shown again from
+  // here: a lock on its address, set from the picture as it is read.
+  const hide = useMutation({
+    mutationFn: ({ id, hidden }: { id: string; hidden: boolean }) => api.patch(`/items/${work.id}/images/${id}`, { hidden }),
+    onSuccess: done,
+  })
+  const isOwn = (image: Image) => image.seasonNumber === undefined || image.seasonNumber === null
+  const hiddenOwn = (work.hidden?.images ?? []).filter(isOwn)
+  const hiddenIds = new Set(hiddenOwn.map((image) => image.id))
+  const own = [...(work.images ?? []).filter(isOwn), ...hiddenOwn]
   // The seasons' pictures are counted, not shown: their panels are where they are decided.
   const seasonal = (work.seasons ?? []).reduce((n, season) => n + seasonImages(work, season.seasonNumber).length, 0)
   const kinds = [...KINDS.filter((k) => own.some((image) => image.coverType === k)), ...[...new Set(own.map((image) => image.coverType))].filter((k) => !KINDS.includes(k))]
@@ -110,12 +121,17 @@ export function ArtworkTab({ work, onChanged }: { work: MediaItem; onChanged: ()
     // Chosen, and no longer listed by its sources: kept for the choice,
     // with no row of its own to delete.
     const keptForChoice = image.id.startsWith('chosen-')
+    const isHidden = hiddenIds.has(image.id)
     return (
       <ArtCard
         key={image.id}
         image={image}
         kept={kept}
         primary={primary}
+        hidden={isHidden}
+        // The one chosen to lead with is shown whatever is hidden: unchosen first.
+        onHide={image.isManual || keptForChoice || primary ? undefined : () => hide.mutate({ id: image.id, hidden: !isHidden })}
+        hiding={hide.isPending && hide.variables?.id === image.id}
         caption={
           keptForChoice
             ? c.primaryKept
@@ -126,7 +142,7 @@ export function ArtworkTab({ work, onChanged }: { work: MediaItem; onChanged: ()
                 : hostOf(image.url)
         }
         star={
-          field ? (
+          field && !isHidden ? (
             <IconButton
               glyph="star"
               pressed={primary}
@@ -159,9 +175,15 @@ export function ArtworkTab({ work, onChanged }: { work: MediaItem; onChanged: ()
         <Glyph name="star" className="mt-0.5 size-3.5 shrink-0 text-brass" />
         <span>{c.primaryHint}</span>
       </p>
-      {forget.isError || choose.isError ? (
+      {forget.isError || choose.isError || hide.isError ? (
         <p role="alert" className="mt-3 text-xs text-vermillion">
-          {(forget.error ?? choose.error)?.message || t.common.actionFailed}
+          {(forget.error ?? choose.error ?? hide.error)?.message || t.common.actionFailed}
+        </p>
+      ) : null}
+      {own.some((image) => !image.isManual) ? (
+        <p className="mt-2 flex items-start gap-1.5 text-xs leading-relaxed text-bone-faint">
+          <Glyph name="lock" className="mt-0.5 size-3.5 shrink-0 text-brass" />
+          <span>{c.hiddenHint}</span>
         </p>
       ) : null}
 
@@ -298,6 +320,9 @@ function ArtCard({
   image,
   kept,
   primary,
+  hidden = false,
+  onHide,
+  hiding = false,
   caption,
   star,
   onForget,
@@ -307,6 +332,10 @@ function ArtCard({
   image: Image
   kept?: WorkMedium
   primary: boolean
+  /** A source's picture a person hid: faded, marked, and shown again from here. */
+  hidden?: boolean
+  onHide?: () => void
+  hiding?: boolean
   caption: string
   star: React.ReactNode
   onForget?: () => void
@@ -323,9 +352,10 @@ function ArtCard({
 
   return (
     <li
+      data-hidden={hidden || undefined}
       className={cn(
         'overflow-hidden rounded-panel border bg-ink-raised transition-colors duration-150',
-        primary ? 'border-brass' : image.isManual ? 'border-brass-deep' : 'border-rule hover:border-rule-bright',
+        primary ? 'border-brass' : image.isManual || hidden ? 'border-brass-deep' : 'border-rule hover:border-rule-bright',
       )}
     >
       <div className={cn('relative bg-ink-high', wide ? (image.coverType === 'banner' ? 'aspect-[758/140]' : 'aspect-video') : 'aspect-2/3')}>
@@ -334,7 +364,7 @@ function ArtCard({
             url={image.url}
             role={isDrawn(image.coverType) ? 'logo' : wide ? 'still' : 'card'}
             alt=""
-            className={cn('size-full', isDrawn(image.coverType) ? 'object-contain p-3' : 'object-cover')}
+            className={cn('size-full', isDrawn(image.coverType) ? 'object-contain p-3' : 'object-cover', hidden && 'opacity-40 grayscale')}
           />
         ) : (
           <div className="grid size-full place-items-center">
@@ -353,6 +383,12 @@ function ArtCard({
               {c.yours}
             </Chip>
           ) : null}
+          {hidden ? (
+            <Chip tone="manual" className="bg-ink/85">
+              <Glyph name="lock" className="size-3" />
+              {c.hidden}
+            </Chip>
+          ) : null}
           <Kept medium={kept} />
         </div>
       </div>
@@ -362,6 +398,9 @@ function ArtCard({
         </span>
         <span className="flex shrink-0 items-center">
           {star}
+          {onHide ? (
+            <IconButton glyph={hidden ? 'unlock' : 'lock'} label={hidden ? c.showAgain : c.hide} pressed={hidden} busy={hiding} onClick={onHide} />
+          ) : null}
           {onForget ? <IconButton glyph="cloud" label={c.forgetCopy} busy={forgetting} onClick={onForget} /> : null}
           {onRemove ? <IconButton glyph="trash" tone="danger" label={t.common.delete} onClick={onRemove} /> : null}
         </span>

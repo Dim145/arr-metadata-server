@@ -12,7 +12,7 @@
 //! Written only. What this server reads from the real Skyhook is still its
 //! first edition: see `providers::skyhook`.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 
 use serde::Serialize;
 use utoipa::ToSchema;
@@ -21,13 +21,19 @@ use super::sonarr::{
     self, ActorResource, AlternativeTitleResource, ImageResource, RatingResource, TimeOfDay,
 };
 use crate::{
-    domain::{Episode, EpisodeOrder, MediaItem, PlacedEpisode, Season, lead_images},
-    service::{ids, language},
+    domain::{Episode, EpisodeOrder, MediaItem, Season, lead_images},
+    service::{
+        ids,
+        language,
+        // Where an order places the episodes is the same for every client
+        // that numbers them by one; see `service::orders`.
+        orders::{named as order_named, placements},
+    },
 };
 
 /// What Skyhook calls the aired order: the one every series has, and the
 /// one answered for a type the series has no order of.
-pub const OFFICIAL: &str = "official";
+pub const OFFICIAL: &str = crate::service::orders::AIRED;
 
 /// A series as Sonarr v5 reads one.
 #[derive(Clone, Debug, Serialize, ToSchema)]
@@ -235,8 +241,14 @@ pub fn from_item(item: &MediaItem, asked: &Asked<'_>) -> ShowResourceV2 {
         .map(language::normalize)
         .filter(|l| !l.is_empty());
     let translations = translations(item, asked.own, original_language.as_deref());
+    // A title locked in every language is the work's name in each of them,
+    // its own among them, and not the name it was made under: that is the
+    // original title it carries, as a source gave it or as it was locked.
+    let renamed = crate::domain::fields::text_lock(item, "item", "title", "").is_some()
+        || item.locked_fields.iter().any(|f| f == "item/originalTitle");
     let original_title = original_language
         .as_deref()
+        .filter(|_| !renamed)
         .and_then(|code| translations.iter().find(|t| t.language == code))
         .map(|t| t.title.clone())
         .or_else(|| item.original_title.clone().filter(|t| !t.trim().is_empty()))
@@ -397,21 +409,6 @@ fn order_name(kind: &str) -> String {
     }
 }
 
-/// The order a season type names among those the work has. None for the
-/// aired order, and none for a type the work has no order of: that one is
-/// answered with the aired order, as Skyhook answers it, rather than
-/// refused — Sonarr asks in the type a person chose, and an error here
-/// would fail the series' refresh.
-fn order_named<'a>(orders: &'a [EpisodeOrder], season_type: &str) -> Option<&'a EpisodeOrder> {
-    let wanted = season_type.trim();
-    if wanted.eq_ignore_ascii_case(OFFICIAL) {
-        return None;
-    }
-    orders
-        .iter()
-        .find(|order| order.kind.eq_ignore_ascii_case(wanted) && !order.episodes.is_empty())
-}
-
 /// The seasons and episodes as they aired: the work's own. Every season
 /// number once, whatever the seasons were merged from — Sonarr threw on a
 /// number it met twice — and a season the episodes name that no season row
@@ -501,32 +498,6 @@ fn placed(
     }
 
     (seasons.into_values().collect(), episodes)
-}
-
-/// The work's episodes placed in one of its other orders, each with the
-/// aired episode it stands for. A place that names an episode the work no
-/// longer has is left out; a place given twice is kept once — Sonarr threw
-/// on a season and number it met twice.
-fn placements<'a>(
-    item: &'a MediaItem,
-    order: &'a EpisodeOrder,
-) -> Vec<(&'a PlacedEpisode, &'a Episode)> {
-    let by_tvdb: HashMap<i64, &Episode> = item
-        .episodes
-        .iter()
-        .filter_map(|episode| Some((episode.tvdb_id?, episode)))
-        .collect();
-
-    let mut seen = HashSet::new();
-    order
-        .episodes
-        .iter()
-        .filter_map(|place| {
-            let episode = *by_tvdb.get(&place.tvdb_id)?;
-            seen.insert((place.season_number, place.episode_number))
-                .then_some((place, episode))
-        })
-        .collect()
 }
 
 fn episode_resource(episode: &Episode, client_id: i64) -> EpisodeResourceV2 {
@@ -625,7 +596,7 @@ fn non_empty(text: Option<&str>) -> Option<String> {
 /// then be said twice. The real service sends nothing for those, and so
 /// does this one: one word and the season's number, in whatever language,
 /// or the few words the specials go by, name nothing.
-fn own_season_title(title: Option<&str>, number: i32) -> Option<String> {
+pub(crate) fn own_season_title(title: Option<&str>, number: i32) -> Option<String> {
     let title = non_empty(title)?;
     let said = title.trim_end_matches(|c: char| c.is_ascii_digit());
     let digits = &title[said.len()..];
@@ -660,7 +631,7 @@ mod tests {
     use super::*;
     use crate::{
         db::repo::child::{blank_episode, blank_season},
-        domain::{CoverType, ExternalIds, Image, MediaKind, Translation},
+        domain::{CoverType, ExternalIds, Image, MediaKind, PlacedEpisode, Translation},
     };
 
     fn translation(language: &str, title: &str, overview: Option<&str>) -> Translation {

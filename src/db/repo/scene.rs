@@ -70,17 +70,21 @@ pub async fn series_titles(db: &Db) -> Result<Vec<SeriesTitles>> {
         );
     }
 
-    // A locked title is the one every client is served, Sonarr included.
+    // A locked title is the one every client is served, Sonarr included. One
+    // locked in a language alone is the series' name in it, in place of the
+    // translation's: laid once the translations are read, below.
     let rows = sqlx::query(db.sql(
-        "SELECT o.media_id, o.field, o.value FROM media_override o \
+        "SELECT o.media_id, o.field, o.language, o.value FROM media_override o \
          JOIN media_item i ON i.id = o.media_id \
          WHERE i.kind = 'series' AND o.scope = 'item' \
          AND o.field IN ('title', 'originalTitle')",
     ))
     .fetch_all(db.pool())
     .await?;
+    let mut named_in: Vec<(String, String, String)> = Vec::new();
     for row in rows {
-        let Some(series) = by_id.get_mut(&row.text("media_id")?) else {
+        let media_id = row.text("media_id")?;
+        let Some(series) = by_id.get_mut(&media_id) else {
             continue;
         };
         let value = row
@@ -90,6 +94,13 @@ pub async fn series_titles(db: &Db) -> Result<Vec<SeriesTitles>> {
             .as_ref()
             .and_then(serde_json::Value::as_str)
             .map(str::to_string);
+        let language = row.opt_text("language")?.unwrap_or_default();
+        if !language.is_empty() {
+            if let Some(text) = text.filter(|t| !t.trim().is_empty()) {
+                named_in.push((media_id, language, text));
+            }
+            continue;
+        }
         match row.text("field")?.as_str() {
             "title" => {
                 if let Some(text) = text.filter(|t| !t.trim().is_empty()) {
@@ -125,10 +136,16 @@ pub async fn series_titles(db: &Db) -> Result<Vec<SeriesTitles>> {
         }
     }
 
+    // Not one a source gave and a person hid: a wrong name matches the wrong
+    // releases. Named as the lock names it, by its language and its text.
     let rows = sqlx::query(db.sql(
         "SELECT a.media_id, a.language, a.title FROM media_alternative_title a \
          JOIN media_item i ON i.id = a.media_id \
-         WHERE i.kind = 'series' ORDER BY a.media_id, a.title",
+         WHERE i.kind = 'series' \
+         AND (a.is_manual = 1 OR NOT EXISTS (SELECT 1 FROM media_override o \
+              WHERE o.media_id = a.media_id AND o.field = 'hidden' AND o.language = '' \
+              AND o.scope = 'alternativeTitle:' || COALESCE(a.language, '') || ':' || a.title)) \
+         ORDER BY a.media_id, a.title",
     ))
     .fetch_all(db.pool())
     .await?;
@@ -154,6 +171,12 @@ pub async fn series_titles(db: &Db) -> Result<Vec<SeriesTitles>> {
         };
         if let Some(series) = by_id.get_mut(&row.text("media_id")?) {
             series.translated.push((row.text("language")?, title));
+        }
+    }
+    for (media_id, language, title) in named_in {
+        if let Some(series) = by_id.get_mut(&media_id) {
+            series.translated.retain(|(code, _)| *code != language);
+            series.translated.push((language, title));
         }
     }
 

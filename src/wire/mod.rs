@@ -3,8 +3,10 @@
 //! Each submodule owns one client's vocabulary and converts in both directions:
 //! canonical → wire to answer a request, wire → canonical to absorb a fallback
 //! response from the real upstream. Keeping both directions together means the
-//! field mapping is stated once.
+//! field mapping is stated once. Plex's is written only: it is a client, never
+//! a source.
 
+pub mod plex;
 pub mod radarr;
 pub mod sonarr;
 pub mod sonarr_v2;

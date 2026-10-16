@@ -8,8 +8,9 @@
 use crate::{
     db::{new_id, now},
     domain::{
-        AlternativeTitle, CoverType, Credit, CreditType, Episode, ExternalIds, Image, MediaItem,
-        MediaKind, Rating, RatingValue, Season, Translation, make_slug,
+        AlternativeTitle, CountryRelease, CoverType, Credit, CreditType, Episode, ExternalIds,
+        Image, MediaItem, MediaKind, Rating, RatingValue, ReleaseKind, Season, Translation,
+        make_slug,
     },
     providers::{
         lang::{iso_639_1_to_3, iso_3166_2_to_3},
@@ -17,22 +18,32 @@ use crate::{
     },
 };
 
-/// Cast members kept per work. Sonarr shows a handful; the full list for a long
-/// running series runs to hundreds of rows with no consumer.
-const MAX_CAST: usize = 25;
+/// Cast members kept per work when nothing says otherwise: where the
+/// `tmdb.castLimit` setting starts. Sonarr shows a handful; the full list for
+/// a long-running series runs to hundreds of rows with no consumer.
+pub const DEFAULT_CAST: usize = 25;
+
+/// The most `tmdb.castLimit` keeps: every one is a row, and a portrait to fetch.
+pub const MAX_CAST: usize = 200;
+
+/// Writers, and producers, kept of each: a film's crew names a dozen of
+/// either, and a page shows a few.
+const MAX_CREW: usize = 6;
 
 /// Region preferred when a provider offers per-country data.
 const PREFERRED_REGION: &str = "US";
 
 // ─── series ──────────────────────────────────────────────────────────────────
 
-pub fn tv_to_item(tv: &models::Tv, seasons: &[models::Season]) -> MediaItem {
+/// A series, keeping `cast` of its actors.
+pub fn tv_to_item(tv: &models::Tv, seasons: &[models::Season], cast: usize) -> MediaItem {
     let mut item = MediaItem::empty(MediaKind::Series);
 
     item.title = tv.name.clone();
     item.is_adult = tv.adult.unwrap_or(false);
     item.original_title = non_empty(tv.original_name.as_deref());
     item.overview = non_empty(tv.overview.as_deref());
+    item.tagline = non_empty(tv.tagline.as_deref());
     item.homepage = non_empty(tv.homepage.as_deref());
     item.status =
         Some(series_status(tv.status.as_deref(), tv.first_air_date.as_deref()).to_string());
@@ -52,9 +63,25 @@ pub fn tv_to_item(tv: &models::Tv, seasons: &[models::Season]) -> MediaItem {
         .first()
         .map(|c| c.name.clone())
         .or_else(|| item.network.clone());
+    item.production_companies = names_once(tv.production_companies.iter().map(|c| c.name.as_str()));
+    // Where it was made, or else where it comes from: TMDB leaves the first
+    // empty for many a series it knows the second of.
+    item.production_countries = country_codes(
+        tv.production_countries
+            .iter()
+            .map(|c| c.iso_3166_1.as_str()),
+    );
+    if item.production_countries.is_empty() {
+        item.production_countries = country_codes(tv.origin_country.iter().map(String::as_str));
+    }
     let (rating, rating_country) = content_rating(tv.content_ratings.as_ref());
     item.content_rating = rating;
     item.content_rating_country = rating_country;
+    item.releases = tv
+        .content_ratings
+        .as_ref()
+        .map(|r| ratings_by_country(&r.results))
+        .unwrap_or_default();
     item.popularity = tv.popularity;
     item.genres = tv.genres.iter().map(|g| g.name.clone()).collect();
     item.keywords = tv
@@ -74,6 +101,7 @@ pub fn tv_to_item(tv: &models::Tv, seasons: &[models::Season]) -> MediaItem {
             .and_then(|e| e.imdb_id.as_deref())
             .and_then(crate::domain::ids::normalize_imdb_id),
         tvrage: tv.external_ids.as_ref().and_then(|e| e.tvrage_id),
+        wikidata: wikidata(tv.external_ids.as_ref()),
         ..Default::default()
     };
 
@@ -83,7 +111,7 @@ pub fn tv_to_item(tv: &models::Tv, seasons: &[models::Season]) -> MediaItem {
         tv.backdrop_path.as_deref(),
         tv.images.as_ref(),
     );
-    item.credits = cast(tv.credits.as_ref());
+    item.credits = credits(tv.credits.as_ref(), &tv.created_by, cast);
     item.alternative_titles = tv
         .alternative_titles
         .as_ref()
@@ -209,13 +237,15 @@ fn episodes(seasons: &[models::Season]) -> Vec<Episode> {
 
 // ─── movie ───────────────────────────────────────────────────────────────────
 
-pub fn movie_to_item(movie: &models::Movie) -> MediaItem {
+/// A film, keeping `cast` of its actors.
+pub fn movie_to_item(movie: &models::Movie, cast: usize) -> MediaItem {
     let mut item = MediaItem::empty(MediaKind::Movie);
 
     item.title = movie.title.clone();
     item.is_adult = movie.adult.unwrap_or(false);
     item.original_title = non_empty(movie.original_title.as_deref());
     item.overview = non_empty(movie.overview.as_deref());
+    item.tagline = non_empty(movie.tagline.as_deref());
     item.homepage = non_empty(movie.homepage.as_deref());
     item.original_language = movie.original_language.as_deref().map(iso_639_1_to_3);
     item.original_country = movie
@@ -226,6 +256,14 @@ pub fn movie_to_item(movie: &models::Movie) -> MediaItem {
     item.year = year_of(movie.release_date.as_deref());
     item.popularity = movie.popularity;
     item.studio = movie.production_companies.first().map(|c| c.name.clone());
+    item.production_companies =
+        names_once(movie.production_companies.iter().map(|c| c.name.as_str()));
+    item.production_countries = country_codes(
+        movie
+            .production_countries
+            .iter()
+            .map(|c| c.iso_3166_1.as_str()),
+    );
     item.genres = movie.genres.iter().map(|g| g.name.clone()).collect();
     item.keywords = movie
         .keywords
@@ -254,6 +292,11 @@ pub fn movie_to_item(movie: &models::Movie) -> MediaItem {
     item.digital_release = releases.digital;
     item.content_rating = releases.certification;
     item.content_rating_country = releases.certification_country;
+    item.releases = movie
+        .release_dates
+        .as_ref()
+        .map(|all| releases_by_country(&all.results))
+        .unwrap_or_default();
 
     item.external_ids = ExternalIds {
         tmdb: Some(movie.id),
@@ -268,6 +311,7 @@ pub fn movie_to_item(movie: &models::Movie) -> MediaItem {
             })
             .and_then(crate::domain::ids::normalize_imdb_id),
         tvdb: movie.external_ids.as_ref().and_then(|e| e.tvdb_id),
+        wikidata: wikidata(movie.external_ids.as_ref()),
         ..Default::default()
     };
 
@@ -277,7 +321,7 @@ pub fn movie_to_item(movie: &models::Movie) -> MediaItem {
         movie.backdrop_path.as_deref(),
         movie.images.as_ref(),
     );
-    item.credits = cast(movie.credits.as_ref());
+    item.credits = credits(movie.credits.as_ref(), &[], cast);
     item.alternative_titles = movie
         .alternative_titles
         .as_ref()
@@ -393,7 +437,100 @@ fn release_dates(movie: &models::Movie) -> Releases {
     out
 }
 
+/// Every release TMDB lists, country by country, as it lists them: a
+/// country's premieres, runs and copies, each with its day, its rating and
+/// its note. A row with neither a day nor a rating says nothing, and one
+/// given twice is kept once.
+fn releases_by_country(blocks: &[models::ReleaseDates]) -> Vec<CountryRelease> {
+    let mut out: Vec<CountryRelease> = Vec::new();
+
+    for block in blocks {
+        let Some(country) = country_code(&block.iso_3166_1) else {
+            continue;
+        };
+        for entry in &block.release_dates {
+            let release = CountryRelease {
+                country: country.clone(),
+                release_type: entry.release_type.and_then(ReleaseKind::from_tmdb),
+                date: non_empty(entry.release_date.as_deref()).map(|d| trim_to_date(&d)),
+                certification: non_empty(entry.certification.as_deref()),
+                note: non_empty(entry.note.as_deref()),
+                source: Some(crate::providers::names::TMDB.to_string()),
+            };
+            if (release.date.is_some() || release.certification.is_some())
+                && !out.contains(&release)
+            {
+                out.push(release);
+            }
+        }
+    }
+
+    out
+}
+
+/// A series' ratings, one a country, as TMDB lists them.
+fn ratings_by_country(ratings: &[models::ContentRating]) -> Vec<CountryRelease> {
+    let mut out: Vec<CountryRelease> = Vec::new();
+
+    for rating in ratings {
+        let (Some(country), Some(certification)) = (
+            country_code(&rating.iso_3166_1),
+            non_empty(Some(&rating.rating)),
+        ) else {
+            continue;
+        };
+        if out.iter().any(|r| r.country == country) {
+            continue;
+        }
+        out.push(CountryRelease {
+            country,
+            release_type: None,
+            date: None,
+            certification: Some(certification),
+            note: None,
+            source: Some(crate::providers::names::TMDB.to_string()),
+        });
+    }
+
+    out
+}
+
 // ─── shared helpers ──────────────────────────────────────────────────────────
+
+/// A country as TMDB codes it, ISO 3166-1 alpha-2, in upper case; nothing
+/// for what is not one.
+fn country_code(raw: &str) -> Option<String> {
+    let code = raw.trim().to_ascii_uppercase();
+    (code.len() == 2 && code.bytes().all(|b| b.is_ascii_uppercase())).then_some(code)
+}
+
+/// Countries, each once, in the order given.
+fn country_codes<'a>(codes: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for code in codes.into_iter().filter_map(country_code) {
+        if !out.contains(&code) {
+            out.push(code);
+        }
+    }
+    out
+}
+
+/// Names, each once whatever its case, the blank ones left out.
+fn names_once<'a>(names: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for name in names.into_iter().map(str::trim).filter(|n| !n.is_empty()) {
+        if !out.iter().any(|kept| kept.eq_ignore_ascii_case(name)) {
+            out.push(name.to_string());
+        }
+    }
+    out
+}
+
+/// Wikidata's item for the work, as TMDB files it beside its own ids.
+fn wikidata(ids: Option<&models::ExternalIds>) -> Option<String> {
+    ids.and_then(|e| e.wikidata_id.as_deref())
+        .and_then(crate::domain::ids::wikidata_item)
+}
 
 fn non_empty(s: Option<&str>) -> Option<String> {
     s.map(str::trim).filter(|s| !s.is_empty()).map(String::from)
@@ -617,49 +754,140 @@ fn artwork(
     out
 }
 
-fn cast(credits: Option<&models::Credits>) -> Vec<Credit> {
-    let Some(credits) = credits else {
-        return Vec::new();
-    };
-
+/// The cast, the first `limit` of it, then the crew.
+fn credits(
+    credits: Option<&models::Credits>,
+    creators: &[models::Creator],
+    limit: usize,
+) -> Vec<Credit> {
     let mut out: Vec<Credit> = credits
-        .cast
-        .iter()
-        .take(MAX_CAST)
-        .enumerate()
-        .map(|(i, member)| Credit {
-            id: new_id(),
-            credit_type: CreditType::Actor,
-            person_name: member.name.clone(),
-            character_name: non_empty(member.character.as_deref()),
-            image: member.profile_path.as_deref().map(image_url),
-            tmdb_person_id: member.id,
-            credit_tmdb_id: member.credit_id.clone(),
-            sort_order: member.order.unwrap_or(i as i32),
-            is_manual: false,
+        .map(|credits| {
+            credits
+                .cast
+                .iter()
+                .take(limit.clamp(1, MAX_CAST))
+                .enumerate()
+                .map(|(i, member)| Credit {
+                    id: new_id(),
+                    credit_type: CreditType::Actor,
+                    person_name: member.name.clone(),
+                    character_name: non_empty(member.character.as_deref()),
+                    image: member.profile_path.as_deref().map(image_url),
+                    tmdb_person_id: member.id,
+                    credit_tmdb_id: member.credit_id.clone(),
+                    sort_order: member.order.unwrap_or(i as i32),
+                    is_manual: false,
+                })
+                .collect()
         })
-        .collect();
+        .unwrap_or_default();
 
-    // Radarr shows a director; Sonarr ignores crew entirely.
-    out.extend(
-        credits
-            .crew
-            .iter()
-            .filter(|c| c.job.as_deref() == Some("Director"))
-            .take(3)
-            .enumerate()
-            .map(|(i, member)| Credit {
-                id: new_id(),
-                credit_type: CreditType::Director,
-                person_name: member.name.clone(),
-                character_name: None,
-                image: member.profile_path.as_deref().map(image_url),
-                tmdb_person_id: member.id,
-                credit_tmdb_id: member.credit_id.clone(),
-                sort_order: i as i32,
-                is_manual: false,
-            }),
-    );
+    out.extend(crew(credits.map_or(&[][..], |c| &c.crew), creators));
+    out
+}
+
+/// Who made the work behind the camera: its directors, whoever created a
+/// series, its writers, then its producers — numbered on from one another,
+/// so a page that lists the crew in its order lists them so.
+///
+/// Each person once a kind, with the job TMDB gives them first, `Screenplay`
+/// or `Novel`, where Radarr and the NFO read the kind alone. Radarr shows a
+/// director and a writer; Sonarr ignores the crew entirely.
+fn crew(members: &[models::CrewMember], creators: &[models::Creator]) -> Vec<Credit> {
+    struct Member<'a> {
+        id: Option<i64>,
+        credit_id: Option<&'a String>,
+        name: &'a str,
+        profile: Option<&'a str>,
+    }
+
+    let mut out: Vec<Credit> = Vec::new();
+    let mut add = |kind: CreditType, job: &str, member: Member<'_>| -> bool {
+        let name = member.name.trim();
+        let same = |c: &Credit| {
+            c.credit_type == kind
+                && match (c.tmdb_person_id, member.id) {
+                    (Some(a), Some(b)) => a == b,
+                    _ => c.person_name == name,
+                }
+        };
+        if name.is_empty() || out.iter().any(same) {
+            return false;
+        }
+        out.push(Credit {
+            id: new_id(),
+            credit_type: kind,
+            person_name: name.to_string(),
+            character_name: Some(job.to_string()),
+            image: member.profile.map(image_url),
+            tmdb_person_id: member.id,
+            credit_tmdb_id: member.credit_id.cloned(),
+            sort_order: i32::try_from(out.len()).unwrap_or(i32::MAX),
+            is_manual: false,
+        });
+        true
+    };
+    fn of(m: &models::CrewMember) -> Member<'_> {
+        Member {
+            id: m.id,
+            credit_id: m.credit_id.as_ref(),
+            name: &m.name,
+            profile: m.profile_path.as_deref(),
+        }
+    }
+
+    for member in members
+        .iter()
+        .filter(|c| c.job.as_deref() == Some("Director"))
+        .take(3)
+    {
+        add(CreditType::Director, "Director", of(member));
+    }
+    for creator in creators.iter().take(MAX_CREW) {
+        add(
+            CreditType::Writer,
+            "Creator",
+            Member {
+                id: creator.id,
+                credit_id: creator.credit_id.as_ref(),
+                name: &creator.name,
+                profile: creator.profile_path.as_deref(),
+            },
+        );
+    }
+    // TMDB's writing department — a screenplay, a story, the novel — and
+    // its producers proper, not the executive ones a series lists by the
+    // dozen.
+    let mut writers = 0;
+    for member in members
+        .iter()
+        .filter(|c| c.department.as_deref() == Some("Writing"))
+    {
+        if writers == MAX_CREW {
+            break;
+        }
+        let job = member
+            .job
+            .as_deref()
+            .map(str::trim)
+            .filter(|j| !j.is_empty())
+            .unwrap_or("Writer");
+        if add(CreditType::Writer, job, of(member)) {
+            writers += 1;
+        }
+    }
+    let mut producers = 0;
+    for member in members
+        .iter()
+        .filter(|c| c.job.as_deref() == Some("Producer"))
+    {
+        if producers == MAX_CREW {
+            break;
+        }
+        if add(CreditType::Producer, "Producer", of(member)) {
+            producers += 1;
+        }
+    }
 
     out
 }
@@ -1063,6 +1291,7 @@ mod tests {
         let item = super::tv_to_item(
             &serde_json::from_str(include_str!("fixtures/tv.json")).unwrap(),
             &[serde_json::from_str(include_str!("fixtures/season.json")).unwrap()],
+            DEFAULT_CAST,
         );
         assert_eq!(item.runtime, Some(45));
     }
@@ -1103,7 +1332,7 @@ mod fixtures {
 
     #[test]
     fn a_series_document_maps_to_the_canonical_model() {
-        let item = tv_to_item(&tv(), &[season()]);
+        let item = tv_to_item(&tv(), &[season()], DEFAULT_CAST);
 
         assert_eq!(item.kind, MediaKind::Series);
         assert_eq!(item.title, "Breaking Bad");
@@ -1122,7 +1351,7 @@ mod fixtures {
 
     #[test]
     fn external_ids_are_lifted_out_of_the_appended_block() {
-        let item = tv_to_item(&tv(), &[]);
+        let item = tv_to_item(&tv(), &[], DEFAULT_CAST);
 
         assert_eq!(item.external_ids.tmdb, Some(1396));
         assert_eq!(item.external_ids.tvdb, Some(81189));
@@ -1134,14 +1363,16 @@ mod fixtures {
     fn the_us_content_rating_is_preferred() {
         // The fixture lists GB first; US is what Sonarr expects to see.
         assert_eq!(
-            tv_to_item(&tv(), &[]).content_rating.as_deref(),
+            tv_to_item(&tv(), &[], DEFAULT_CAST)
+                .content_rating
+                .as_deref(),
             Some("TV-MA")
         );
     }
 
     #[test]
     fn episodes_carry_dates_titles_and_ratings() {
-        let item = tv_to_item(&tv(), &[season()]);
+        let item = tv_to_item(&tv(), &[season()], DEFAULT_CAST);
         assert_eq!(item.episodes.len(), 3);
 
         let first = &item.episodes[0];
@@ -1165,7 +1396,7 @@ mod fixtures {
     #[test]
     fn an_unaired_episode_keeps_its_place_without_inventing_data() {
         // TMDB lists announced episodes with empty strings and zero votes.
-        let item = tv_to_item(&tv(), &[season()]);
+        let item = tv_to_item(&tv(), &[season()], DEFAULT_CAST);
         let third = &item.episodes[2];
 
         assert_eq!(third.episode_number, 3);
@@ -1180,7 +1411,7 @@ mod fixtures {
 
     #[test]
     fn seasons_carry_their_own_poster() {
-        let item = tv_to_item(&tv(), &[]);
+        let item = tv_to_item(&tv(), &[], DEFAULT_CAST);
         assert_eq!(item.seasons.len(), 2);
 
         let specials = &item.seasons[0];
@@ -1192,7 +1423,7 @@ mod fixtures {
 
     #[test]
     fn cast_and_directors_are_separated() {
-        let item = tv_to_item(&tv(), &[]);
+        let item = tv_to_item(&tv(), &[], DEFAULT_CAST);
 
         let actors: Vec<_> = item
             .credits
@@ -1218,7 +1449,7 @@ mod fixtures {
 
     #[test]
     fn a_movie_document_maps_to_the_canonical_model() {
-        let item = movie_to_item(&movie());
+        let item = movie_to_item(&movie(), DEFAULT_CAST);
 
         assert_eq!(item.kind, MediaKind::Movie);
         assert_eq!(item.title, "Arrival");
@@ -1232,7 +1463,7 @@ mod fixtures {
 
     #[test]
     fn release_dates_are_split_by_type_from_the_us_block() {
-        let item = movie_to_item(&movie());
+        let item = movie_to_item(&movie(), DEFAULT_CAST);
 
         // Type 3 is theatrical, 4 digital, 5 physical. Type 1 (premiere) is not
         // a release date and must not become inCinemas.
@@ -1262,7 +1493,7 @@ mod fixtures {
         }))
         .unwrap();
 
-        let item = movie_to_item(&m);
+        let item = movie_to_item(&m, DEFAULT_CAST);
 
         // A limited run before the wide one is still the first time in cinemas.
         assert_eq!(item.in_cinemas.as_deref(), Some("1999-10-14"));
@@ -1272,7 +1503,7 @@ mod fixtures {
 
     #[test]
     fn empty_translations_are_dropped() {
-        let item = movie_to_item(&movie());
+        let item = movie_to_item(&movie(), DEFAULT_CAST);
 
         // The fixture has three: one full, one title-only, one empty.
         assert_eq!(item.translations.len(), 2);
@@ -1286,7 +1517,7 @@ mod fixtures {
 
     #[test]
     fn a_mapped_series_survives_the_trip_to_sonarrs_wire_format() {
-        let item = tv_to_item(&tv(), &[season()]);
+        let item = tv_to_item(&tv(), &[season()], DEFAULT_CAST);
         let resource = sonarr::from_item(&item, 81189, "en");
 
         assert_eq!(resource.tvdb_id, 81189);
@@ -1329,7 +1560,7 @@ mod fixtures {
                 episode(3, "Épisode 3"),
             ],
         }];
-        let item = tv_to_item(&tv(), &seasons);
+        let item = tv_to_item(&tv(), &seasons, DEFAULT_CAST);
 
         let stored: Vec<&str> = item.episodes.iter().map(|e| e.title.as_str()).collect();
         assert_eq!(stored, ["Cette île qui flotte dans le ciel", "", ""]);
@@ -1344,7 +1575,7 @@ mod fixtures {
 
     #[test]
     fn a_mapped_movie_survives_the_trip_to_radarrs_wire_format() {
-        let item = movie_to_item(&movie());
+        let item = movie_to_item(&movie(), DEFAULT_CAST);
         let resource = radarr::from_item(&item);
 
         assert_eq!(resource.tmdb_id, 329865);
@@ -1353,11 +1584,32 @@ mod fixtures {
         assert_eq!(resource.year, 2016);
         assert_eq!(resource.status.as_deref(), Some("released"));
         assert_eq!(resource.in_cinema.as_deref(), Some("2016-11-11"));
-        assert_eq!(resource.certifications.len(), 1);
+        // Every country's rating, each its own, for Radarr to pick its own.
+        let sent: Vec<(&str, &str)> = resource
+            .certifications
+            .iter()
+            .map(|c| (c.country.as_str(), c.certification.as_str()))
+            .collect();
+        assert_eq!(
+            sent,
+            [("DE", "12"), ("FR", "TP"), ("GB", "12A"), ("US", "PG-13")]
+        );
 
         let credits = resource.credits.unwrap();
         assert_eq!(credits.cast.len(), 2);
-        assert_eq!(credits.crew.len(), 1);
+        // The director and the writer, with the jobs TMDB gives them.
+        let crew: Vec<(Option<&str>, Option<&str>)> = credits
+            .crew
+            .iter()
+            .map(|c| (c.job.as_deref(), c.department.as_deref()))
+            .collect();
+        assert_eq!(
+            crew,
+            [
+                (Some("Director"), Some("Directing")),
+                (Some("Screenplay"), Some("Writing"))
+            ]
+        );
         // Radarr rejects a credit without this.
         assert!(credits.cast.iter().all(|c| !c.credit_id.is_empty()));
         assert!(credits.crew.iter().all(|c| !c.credit_id.is_empty()));
@@ -1366,7 +1618,7 @@ mod fixtures {
     #[test]
     fn the_wire_forms_serialise_without_losing_required_fields() {
         let series = serde_json::to_value(sonarr::from_item(
-            &tv_to_item(&tv(), &[season()]),
+            &tv_to_item(&tv(), &[season()], DEFAULT_CAST),
             81189,
             "en",
         ))
@@ -1376,9 +1628,310 @@ mod fixtures {
         assert!(series["episodes"].as_array().unwrap().len() == 3);
 
         // Radarr's own service answers in PascalCase; Sonarr's Skyhook does not.
-        let film = serde_json::to_value(radarr::from_item(&movie_to_item(&movie()))).unwrap();
+        let film = serde_json::to_value(radarr::from_item(&movie_to_item(&movie(), DEFAULT_CAST)))
+            .unwrap();
         assert_eq!(film["TmdbId"], 329865);
         assert_eq!(film["TitleSlug"], "arrival-2016");
         assert_eq!(film["PhysicalRelease"], "2017-02-14");
+    }
+
+    #[test]
+    fn every_country_s_releases_are_kept_with_their_ratings_and_notes() {
+        let item = movie_to_item(&movie(), DEFAULT_CAST);
+        // The record's own dates and rating are still the American ones.
+        assert_eq!(item.in_cinemas.as_deref(), Some("2016-11-11"));
+        assert_eq!(item.content_rating.as_deref(), Some("PG-13"));
+        assert!(
+            item.releases
+                .iter()
+                .all(|r| r.source.as_deref() == Some("tmdb"))
+        );
+
+        let france: Vec<_> = item.releases.iter().filter(|r| r.country == "FR").collect();
+        assert_eq!(france.len(), 3);
+        assert_eq!(france[0].release_type, Some(ReleaseKind::Theatrical));
+        assert_eq!(france[0].date.as_deref(), Some("2016-12-07"));
+        assert_eq!(france[0].certification.as_deref(), Some("TP"));
+        assert_eq!(france[1].release_type, Some(ReleaseKind::Digital));
+        assert_eq!(france[1].note.as_deref(), Some("VOD"));
+
+        // As a reader in each country has it.
+        assert_eq!(item.certification_in("FR"), Some("TP"));
+        assert_eq!(
+            item.certification_in("GB"),
+            Some("12A"),
+            "the cinemas' rating, not the disc's"
+        );
+        assert_eq!(item.certification_in("US"), Some("PG-13"));
+        assert_eq!(item.certification_in("JP"), None);
+        let france = item.days_in("FR");
+        assert_eq!(france.cinema.as_deref(), Some("2016-12-07"));
+        assert_eq!(france.digital.as_deref(), Some("2017-04-07"));
+        assert_eq!(france.physical.as_deref(), Some("2017-04-12"));
+        // A festival's showing is not a release in cinemas.
+        assert_eq!(item.days_in("GB").cinema.as_deref(), Some("2016-11-10"));
+        assert_eq!(item.days_in("JP"), crate::domain::ReleaseDays::default());
+    }
+
+    #[test]
+    fn what_tmdb_sends_beside_the_rest_is_kept() {
+        let film = movie_to_item(&movie(), DEFAULT_CAST);
+        assert_eq!(film.tagline.as_deref(), Some("Why are they here?"));
+        assert_eq!(film.production_countries, ["US"]);
+        assert_eq!(film.production_companies, ["21 Laps Entertainment"]);
+        assert_eq!(film.external_ids.wikidata.as_deref(), Some("Q21062142"));
+
+        let series = tv_to_item(&tv(), &[], DEFAULT_CAST);
+        assert_eq!(series.external_ids.wikidata.as_deref(), Some("Q1079"));
+        // No country of production listed: the one it comes from.
+        assert_eq!(series.production_countries, ["US"]);
+        let rated: Vec<(&str, Option<&str>)> = series
+            .releases
+            .iter()
+            .map(|r| (r.country.as_str(), r.certification.as_deref()))
+            .collect();
+        assert_eq!(rated, [("GB", Some("15")), ("US", Some("TV-MA"))]);
+        assert!(series.releases.iter().all(|r| r.release_type.is_none()));
+    }
+
+    /// TMDB's own example of `/tv/{id}` and `/tv/{id}/content_ratings`.
+    #[test]
+    fn a_series_keeps_its_creators_countries_companies_and_every_rating() {
+        let tv: models::Tv = serde_json::from_value(serde_json::json!({
+            "id": 1399,
+            "name": "Game of Thrones",
+            "first_air_date": "2011-04-17",
+            "tagline": "Winter Is Coming",
+            "origin_country": ["US"],
+            "created_by": [
+                { "id": 9813, "credit_id": "5256c8c219c2956ff604858a", "name": "David Benioff",
+                  "gender": 2, "profile_path": "/xvNN5huL0X8yJ7h3IZfGG4O2zBD.jpg" },
+                { "id": 228068, "credit_id": "552e611e9251413fea000901", "name": "D.B. Weiss",
+                  "gender": 2, "profile_path": "/2RMejaT793U9KRk2IEbFfteQntE.jpg" }
+            ],
+            "networks": [{ "id": 49, "name": "HBO" }],
+            "production_companies": [
+                { "id": 76043, "logo_path": "/9RO2vbQ67otPrBLXCaC8UMp3Qat.png", "name": "Revolution Sun Studios", "origin_country": "US" },
+                { "id": 12525, "logo_path": null, "name": "Television 360", "origin_country": "" },
+                { "id": 5820, "logo_path": null, "name": "Generator Entertainment", "origin_country": "GB" },
+                { "id": 12526, "logo_path": null, "name": "Bighead Littlehead", "origin_country": "" }
+            ],
+            "production_countries": [
+                { "iso_3166_1": "GB", "name": "United Kingdom" },
+                { "iso_3166_1": "US", "name": "United States of America" }
+            ],
+            "content_ratings": { "id": 1399, "results": [
+                { "descriptors": [], "iso_3166_1": "DE", "rating": "16" },
+                { "descriptors": [], "iso_3166_1": "AU", "rating": "R18+" },
+                { "descriptors": [], "iso_3166_1": "FR", "rating": "16" },
+                { "descriptors": [], "iso_3166_1": "US", "rating": "TV-MA" },
+                { "descriptors": [], "iso_3166_1": "CA", "rating": "18+" },
+                { "descriptors": [], "iso_3166_1": "RU", "rating": "18+" },
+                { "descriptors": [], "iso_3166_1": "KR", "rating": "19" },
+                { "descriptors": [], "iso_3166_1": "GB", "rating": "18" },
+                { "descriptors": [], "iso_3166_1": "BR", "rating": "16" },
+                { "descriptors": [], "iso_3166_1": "NL", "rating": "16" },
+                { "descriptors": [], "iso_3166_1": "PT", "rating": "18" },
+                { "descriptors": [], "iso_3166_1": "HU", "rating": "18" },
+                { "descriptors": [], "iso_3166_1": "ES", "rating": "18" },
+                { "descriptors": [], "iso_3166_1": "SG", "rating": "R21" },
+                { "descriptors": [], "iso_3166_1": "IN", "rating": "A" },
+                { "descriptors": [], "iso_3166_1": "MX", "rating": "C" }
+            ] }
+        }))
+        .expect("TMDB's example");
+
+        let item = tv_to_item(&tv, &[], DEFAULT_CAST);
+        assert_eq!(item.tagline.as_deref(), Some("Winter Is Coming"));
+        assert_eq!(item.production_countries, ["GB", "US"]);
+        assert_eq!(
+            item.production_companies,
+            [
+                "Revolution Sun Studios",
+                "Television 360",
+                "Generator Entertainment",
+                "Bighead Littlehead"
+            ]
+        );
+        assert_eq!(item.studio.as_deref(), Some("Revolution Sun Studios"));
+
+        let creators: Vec<(&str, Option<&str>, Option<&str>)> = item
+            .credits
+            .iter()
+            .filter(|c| c.credit_type == CreditType::Writer)
+            .map(|c| {
+                (
+                    c.person_name.as_str(),
+                    c.character_name.as_deref(),
+                    c.credit_tmdb_id.as_deref(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            creators,
+            [
+                (
+                    "David Benioff",
+                    Some("Creator"),
+                    Some("5256c8c219c2956ff604858a")
+                ),
+                (
+                    "D.B. Weiss",
+                    Some("Creator"),
+                    Some("552e611e9251413fea000901")
+                )
+            ]
+        );
+
+        // Sixteen countries, each its own; the record's is the American one.
+        assert_eq!(item.releases.len(), 16);
+        assert_eq!(item.content_rating.as_deref(), Some("TV-MA"));
+        assert_eq!(item.certification_in("FR"), Some("16"));
+        assert_eq!(item.certification_in("KR"), Some("19"));
+        let certifications = item.certifications();
+        assert_eq!(certifications.len(), 16);
+        assert_eq!(certifications[0], ("AU".to_string(), "R18+".to_string()));
+    }
+
+    /// Shaped as TMDB answers `credits`: the director, the writing
+    /// department, a producer — and the rest of the crew, which is not kept.
+    #[test]
+    fn the_crew_is_directors_creators_writers_then_producers() {
+        let document: models::Credits = serde_json::from_value(serde_json::json!({
+            "cast": [],
+            "crew": [
+                { "id": 4, "credit_id": "e", "name": "Shawn Levy", "job": "Producer", "department": "Production" },
+                { "id": 1, "credit_id": "a", "name": "Denis Villeneuve", "job": "Director", "department": "Directing" },
+                { "id": 2, "credit_id": "b", "name": "Eric Heisserer", "job": "Screenplay", "department": "Writing" },
+                { "id": 3, "credit_id": "c", "name": "Ted Chiang", "job": "Novel", "department": "Writing" },
+                { "id": 2, "credit_id": "d", "name": "Eric Heisserer", "job": "Executive Producer", "department": "Production" },
+                { "id": 5, "credit_id": "f", "name": "Jóhann Jóhannsson", "job": "Original Music Composer", "department": "Sound" },
+                { "id": 2, "credit_id": "g", "name": "Eric Heisserer", "job": "Story", "department": "Writing" }
+            ]
+        }))
+        .unwrap();
+
+        let kept: Vec<(CreditType, String, Option<String>, i32)> =
+            credits(Some(&document), &[], DEFAULT_CAST)
+                .into_iter()
+                .map(|c| (c.credit_type, c.person_name, c.character_name, c.sort_order))
+                .collect();
+        let crew = |kind, name: &str, job: &str, order| {
+            (kind, name.to_string(), Some(job.to_string()), order)
+        };
+        assert_eq!(
+            kept,
+            [
+                crew(CreditType::Director, "Denis Villeneuve", "Director", 0),
+                crew(CreditType::Writer, "Eric Heisserer", "Screenplay", 1),
+                crew(CreditType::Writer, "Ted Chiang", "Novel", 2),
+                crew(CreditType::Producer, "Shawn Levy", "Producer", 3),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_cast_is_cut_where_the_setting_says() {
+        let mut film = movie();
+        let cast: Vec<serde_json::Value> = (0..40)
+            .map(|n| {
+                serde_json::json!({
+                    "id": n,
+                    "credit_id": format!("c{n}"),
+                    "name": format!("Actor {n}"),
+                    "order": n
+                })
+            })
+            .collect();
+        film.credits =
+            serde_json::from_value(serde_json::json!({ "cast": cast, "crew": [] })).unwrap();
+        let actors = |limit: usize| {
+            movie_to_item(&film, limit)
+                .credits
+                .iter()
+                .filter(|c| c.credit_type == CreditType::Actor)
+                .count()
+        };
+
+        assert_eq!(actors(DEFAULT_CAST), 25);
+        assert_eq!(actors(3), 3);
+        assert_eq!(actors(1_000), 40, "no more than there are");
+        assert_eq!(actors(0), 1, "one at the least");
+    }
+
+    #[test]
+    fn a_mapped_film_s_document_names_its_tagline_countries_and_companies() {
+        let mut film = movie_to_item(&movie(), DEFAULT_CAST);
+        film.production_companies
+            .push("FilmNation Entertainment".into());
+        film.production_countries.push("CA".into());
+
+        let nfo = crate::export::nfo::for_item(&film);
+        assert!(
+            nfo.contains("<tagline>Why are they here?</tagline>"),
+            "{nfo}"
+        );
+        assert!(nfo.contains("<country>United States of America</country>"));
+        assert!(nfo.contains("<country>Canada</country>"));
+        assert_eq!(
+            nfo.matches("<studio>21 Laps Entertainment</studio>")
+                .count(),
+            1,
+            "the studio once"
+        );
+        assert!(nfo.contains("<studio>FilmNation Entertainment</studio>"));
+    }
+
+    #[test]
+    fn a_country_tmdb_dates_without_a_rating_takes_radarr_s() {
+        use crate::merge::{Contribution, combine};
+
+        let mut tmdb = movie_to_item(&movie(), DEFAULT_CAST);
+        // TMDB lists the French release without its rating.
+        for release in tmdb.releases.iter_mut().filter(|r| r.country == "FR") {
+            release.certification = None;
+        }
+        let rated = |country: &str, rating: &str| CountryRelease {
+            country: country.into(),
+            release_type: None,
+            date: None,
+            certification: Some(rating.into()),
+            note: None,
+            source: Some("radarr".into()),
+        };
+        let mut radarr = MediaItem::empty(MediaKind::Movie);
+        radarr.releases = vec![rated("FR", "TP"), rated("JP", "G"), rated("US", "R")];
+
+        let merged = combine(
+            vec![
+                Contribution {
+                    provider: "tmdb".into(),
+                    item: tmdb,
+                },
+                Contribution {
+                    provider: "radarr".into(),
+                    item: radarr,
+                },
+            ],
+            &["tmdb".to_string(), "radarr".to_string()],
+        )
+        .expect("merged");
+
+        assert_eq!(merged.certification_in("FR"), Some("TP"));
+        assert_eq!(
+            merged.days_in("FR").cinema.as_deref(),
+            Some("2016-12-07"),
+            "the days stay TMDB's"
+        );
+        assert_eq!(
+            merged.certification_in("JP"),
+            Some("G"),
+            "a country TMDB has nothing of"
+        );
+        assert_eq!(
+            merged.certification_in("US"),
+            Some("PG-13"),
+            "a country TMDB rated keeps its rating"
+        );
     }
 }

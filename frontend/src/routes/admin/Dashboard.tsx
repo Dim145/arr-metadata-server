@@ -1,14 +1,17 @@
 /**
- * What this server holds, and what it has been doing.
+ * What this server holds, what it has been doing, and what is left to do.
  *
- * The figures are the subject and everything else is caption. The locked-field
- * count gets the largest of them because it is the only number here that says
- * whether anyone is curating this catalogue or merely running it — the rest
- * grow on their own as clients ask for things.
+ * What is left to do comes first: a list of errands, each a way into the
+ * catalogue filtered to what it counts or into the page that settles it, and
+ * nothing at all for a count of nought. The figures are caption — the series
+ * and the films, which grow on their own as clients ask for things, the keys,
+ * the trail. The locked fields are counted too, and small: they say whether
+ * anyone is curating this catalogue or merely running it, but a zero there is
+ * no fault, and it was the largest thing on the page, in brass.
  */
 
 import { useQuery } from '@tanstack/react-query'
-import { useRef, useState } from 'react'
+import { useId, useRef, useState } from 'react'
 import { Link } from 'react-router'
 
 import {
@@ -25,10 +28,11 @@ import {
 import { ApiError, api, query } from '../../lib/api'
 import { cn } from '../../lib/cn'
 import * as fmt from '../../lib/format'
-import { useI18n } from '../../lib/i18n'
+import { useMe } from '../../lib/hooks'
+import { useI18n, type Dict } from '../../lib/i18n'
 import { policyLabel, providerName } from '../../lib/labels'
 import type {
-  ItemPage,
+  Errands,
   JobsResponse,
   Settings,
   Stats,
@@ -41,6 +45,7 @@ import { RunStatus } from './Jobs'
 
 export function Dashboard() {
   const { t } = useI18n()
+  const me = useMe()
 
   const stats = useQuery({ queryKey: ['stats'], queryFn: () => api.get<Stats>('/stats') })
   const settings = useQuery({
@@ -61,11 +66,15 @@ export function Dashboard() {
         </p>
       </header>
 
+      {/* The list of errands is the administrator's: it counts the keys and the
+          media, which an editor is not told of. */}
+      {me.data?.isAdmin ? <ToDo /> : null}
+
       {stats.isPending ? (
-        <div className="grid gap-px overflow-hidden rounded-panel border border-rule bg-rule sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid grid-cols-2 gap-px overflow-hidden rounded-panel border border-rule bg-rule sm:grid-cols-3 lg:grid-cols-5">
           {Array.from({ length: 5 }, (_, index) => (
-            <div key={index} className="bg-ink-raised p-5">
-              <Skeleton className="h-20 w-full" />
+            <div key={index} className={cn('bg-ink-raised p-5', index === 4 && 'col-span-2 lg:col-span-1')}>
+              <Skeleton className="h-16 w-full" />
             </div>
           ))}
         </div>
@@ -75,14 +84,7 @@ export function Dashboard() {
           {t.admin.overview.statsFailed}
         </p>
       ) : (
-        <div className="rise grid gap-px overflow-hidden rounded-panel border border-rule bg-rule sm:grid-cols-2 lg:grid-cols-4">
-          <Metric
-            className="sm:col-span-2 lg:row-span-2"
-            label={t.stats.lockedFields}
-            value={stats.data.overrides}
-            hint={t.stats.lockedHint}
-            big
-          />
+        <div className="rise grid grid-cols-2 gap-px overflow-hidden rounded-panel border border-rule bg-rule sm:grid-cols-3 lg:grid-cols-5">
           <Metric label={t.stats.series} value={stats.data.series} />
           <Metric label={t.stats.films} value={stats.data.movies} />
           <Metric label={t.stats.clients} value={stats.data.clients} />
@@ -92,10 +94,17 @@ export function Dashboard() {
             hint={t.stats.changesRecorded}
             to="/admin/audit"
           />
+          {/* Last, and quiet: the cell that fills the row's end, two wide where
+              the row is short of it. */}
+          <Metric
+            className="col-span-2 lg:col-span-1"
+            label={t.stats.lockedFields}
+            value={stats.data.overrides}
+            hint={t.stats.lockedHint}
+            quiet
+          />
         </div>
       )}
-
-      <Failing />
 
       <div className="mt-6 grid items-start gap-6 lg:grid-cols-2">
         <RecentRuns />
@@ -119,32 +128,25 @@ function Metric({
   label,
   value,
   hint,
-  big,
+  quiet,
   to,
   className,
 }: {
   label: string
   value: number
   hint?: string
-  big?: boolean
+  /** A figure that is context rather than news: smaller, and a tier dimmer. */
+  quiet?: boolean
   to?: string
   className?: string
 }) {
   const { locale } = useI18n()
 
   return (
-    <div
-      className={cn(
-        'flex flex-col gap-3 bg-ink-raised px-5 py-5',
-        // The hero cell is two rows tall; centring keeps the figure at the eye
-        // rather than stranding it at the bottom of a void. The others start at
-        // the top, so every figure in a row sits at the same height — pushed to
-        // the bottom, a figure with a caption under it rode higher than its
-        // neighbour without one.
-        big ? 'justify-center' : 'justify-start',
-        className,
-      )}
-    >
+    // Every figure starts at the top, so every one in a row sits at the same
+    // height — pushed to the bottom, a figure with a caption under it rode
+    // higher than its neighbour without one.
+    <div className={cn('flex flex-col justify-start gap-3 bg-ink-raised px-5 py-5', className)}>
       {to ? (
         <Link
           to={to}
@@ -163,10 +165,7 @@ function Metric({
         <p
           className={cn(
             'font-display leading-none tabular-nums',
-            // Brass, which is what a lock is everywhere else on this side.
-            // In vermillion the largest thing on the dashboard was a red zero:
-            // the colour of an error, on the one figure least likely to be one.
-            big ? 'text-6xl text-brass sm:text-7xl' : 'text-4xl text-bone',
+            quiet ? 'text-3xl text-bone-dim' : 'text-4xl text-bone',
           )}
         >
           {fmt.count(value, locale)}
@@ -177,38 +176,137 @@ function Metric({
   )
 }
 
-/**
- * The works whose last refresh failed, when there are any.
- *
- * Said only when it is true: a banner that is always there, reading zero, is
- * one nobody reads on the day it says something.
- */
-function Failing() {
-  const { t, locale } = useI18n()
+/** One errand: where it leads, how it is said, and how many there are of it. */
+interface Errand {
+  key: string
+  to: string
+  glyph: GlyphName
+  /** A failure rather than a gap: drawn in the accent. */
+  urgent?: boolean
+  count: number
+  text: (shown: string) => string
+}
 
-  // Enabled works only: a disabled one is never refreshed again, so its last
-  // error would hold the banner up for good.
-  const failing = useQuery({
-    queryKey: ['items', 'refresh-failed', 'count'],
-    queryFn: () => api.get<ItemPage>(`/items${query({ refreshFailed: true, limit: 1 })}`),
+/** The errands that are true, in the order they are worth doing. */
+function errandLines(todo: Errands, k: Dict['admin']['overview']): Errand[] {
+  const all: Errand[] = [
+    {
+      key: 'failing',
+      // The address the catalogue reads, not the API's own parameter.
+      to: '/admin/catalogue?refreshFailed=1',
+      glyph: 'alert',
+      urgent: true,
+      count: todo.refreshFailed,
+      text: (shown) => k.failing(shown, todo.refreshFailed),
+    },
+    {
+      key: 'poster',
+      to: '/admin/catalogue?missing=poster',
+      glyph: 'image',
+      count: todo.noPoster,
+      text: (shown) => k.todoNoPoster(shown, todo.noPoster),
+    },
+    {
+      key: 'overview',
+      to: '/admin/catalogue?missing=overview',
+      glyph: 'journal',
+      count: todo.noOverview,
+      text: (shown) => k.todoNoOverview(shown, todo.noOverview),
+    },
+    {
+      key: 'imdb',
+      to: '/admin/catalogue?missing=imdb',
+      glyph: 'link',
+      count: todo.noImdb,
+      text: (shown) => k.todoNoImdb(shown, todo.noImdb),
+    },
+    {
+      key: 'refresh',
+      to: '/admin/catalogue?missing=refresh',
+      glyph: 'refresh',
+      count: todo.neverRefreshed,
+      text: (shown) => k.todoNeverRefreshed(shown, todo.neverRefreshed),
+    },
+    {
+      key: 'keys',
+      to: '/admin/clients',
+      glyph: 'key',
+      count: todo.expiringKeys,
+      text: (shown) => k.todoKeys(shown, todo.expiringKeys, todo.keyHorizonDays),
+    },
+    {
+      key: 'media',
+      to: '/admin/media',
+      glyph: 'download',
+      urgent: true,
+      count: todo.failedMedia,
+      text: (shown) => k.todoMedia(shown, todo.failedMedia),
+    },
+  ]
+  return all.filter((errand) => errand.count > 0)
+}
+
+/**
+ * What there is to do.
+ *
+ * A line for each thing that is true — works whose last refresh failed, works
+ * with no poster, no synopsis, no IMDb identifier, works never refreshed, keys
+ * about to lapse, media given up on — each the way into the catalogue filtered
+ * to those works, or into the page that settles it. A figure of nought is not
+ * a line: a list that is always there, reading zero, is one nobody reads on
+ * the day it says something. With nothing left, it says so once, as a thing
+ * that is true too.
+ */
+function ToDo() {
+  const { t, locale } = useI18n()
+  const k = t.admin.overview
+
+  const todo = useQuery({
+    queryKey: ['admin', 'todo'],
+    queryFn: () => api.get<Errands>('/admin/todo'),
     refetchInterval: 60_000,
   })
 
-  const total = failing.data?.total ?? 0
-  if (!total) return null
+  const lines = todo.data ? errandLines(todo.data, k) : []
 
   return (
-    <Link
-      to="/admin/catalogue?refreshFailed=1"
-      className="rise mt-6 flex items-center gap-3 rounded-panel border border-vermillion-deep bg-vermillion/[0.06] px-5 py-4 text-sm text-bone transition-colors duration-150 hover:bg-vermillion/10"
-    >
-      <Glyph name="alert" className="size-4 shrink-0 text-vermillion" />
-      <span className="flex-1">{t.admin.overview.failing(fmt.count(total, locale), total)}</span>
-      <span className="label inline-flex items-center gap-1">
-        {t.admin.overview.seeThem}
-        <Glyph name="chevronRight" className="size-3" />
-      </span>
-    </Link>
+    <Panel label={k.todoTitle} className="rise mb-6">
+      <PanelHead title={k.todoTitle} />
+      {todo.isPending ? (
+        <div className="space-y-2 p-4">
+          <Skeleton className="h-8 w-full" />
+          <Skeleton className="h-8 w-4/5" />
+        </div>
+      ) : todo.isError ? (
+        <p className="px-5 py-4 text-sm text-bone-faint">{k.todoLoadFailed}</p>
+      ) : lines.length === 0 ? (
+        <p className="flex items-center gap-2 px-5 py-4 text-sm text-bone-dim">
+          <Glyph name="check" className="size-4 shrink-0 text-moss" />
+          {k.todoNothing}
+        </p>
+      ) : (
+        <ul className="divide-y divide-rule">
+          {lines.map((line) => (
+            <li key={line.key}>
+              <Link
+                to={line.to}
+                className="group flex min-h-12 items-center gap-3 px-5 py-2 text-sm transition-colors duration-150 hover:bg-ink-high"
+              >
+                <Glyph
+                  name={line.glyph}
+                  className={cn('size-4 shrink-0', line.urgent ? 'text-vermillion' : 'text-bone-faint')}
+                />
+                <span className="min-w-0 flex-1 text-bone">{line.text(fmt.count(line.count, locale))}</span>
+                <Glyph
+                  name="chevronRight"
+                  className="size-3.5 shrink-0 text-bone-faint transition-colors duration-150 group-hover:text-vermillion"
+                />
+              </Link>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Panel>
   )
 }
 
@@ -331,9 +429,29 @@ export function PolicyChip({ policy }: { policy: string }) {
   )
 }
 
-/** The one idea an operator has to hold to use the rest of this side. */
+/** Where it is kept whether the explanation is folded: in this browser, and nowhere else. */
+const LOCKING_KEY = 'ams.dashboard.locking'
+
+/** Unfolded until the reader has folded it: the first visit is the one it is for. */
+function lockingOpen(): boolean {
+  try {
+    return localStorage.getItem(LOCKING_KEY) !== 'folded'
+  } catch {
+    // Private browsing, or storage disabled: shown, as on a first visit.
+    return true
+  }
+}
+
+/**
+ * The one idea an operator has to hold to use the rest of this side.
+ *
+ * Worth reading once and then in the way, on a page opened every day: so it
+ * folds to its title, and stays folded where the reader left it.
+ */
 function Locking() {
   const { t } = useI18n()
+  const [open, setOpen] = useState(lockingOpen)
+  const body = useId()
 
   const lines: [GlyphName, string, string][] = [
     ['cloud', 'text-slate', t.admin.overview.lockingProviders],
@@ -341,17 +459,47 @@ function Locking() {
     ['unlock', 'text-bone-faint', t.admin.overview.lockingUnlock],
   ]
 
+  const toggle = () => {
+    const next = !open
+    setOpen(next)
+    try {
+      localStorage.setItem(LOCKING_KEY, next ? 'open' : 'folded')
+    } catch {
+      // Remembered for this visit only.
+    }
+  }
+
   return (
     <Panel className="rise lg:col-span-2" style={{ animationDelay: '160ms' }}>
-      <PanelHead title={t.admin.overview.lockingTitle} />
-      <div className="grid gap-5 px-5 py-5 sm:grid-cols-3">
-        {lines.map(([glyph, tone, text]) => (
-          <p key={glyph} className="flex gap-3 text-sm leading-relaxed text-bone-dim">
-            <Glyph name={glyph} className={cn('mt-0.5 size-4 shrink-0', tone)} />
-            <span>{text}</span>
-          </p>
-        ))}
-      </div>
+      <h2 className="m-0">
+        <button
+          type="button"
+          onClick={toggle}
+          aria-expanded={open}
+          aria-controls={body}
+          className={cn(
+            'flex min-h-12 w-full cursor-pointer items-center justify-between gap-4 px-5 py-3 text-left',
+            'transition-colors duration-150 hover:bg-ink-high',
+            open && 'border-b border-rule',
+          )}
+        >
+          <span className="label">{t.admin.overview.lockingTitle}</span>
+          <Glyph
+            name="chevronDown"
+            className={cn('size-3.5 shrink-0 text-bone-faint transition-transform duration-200', open && 'rotate-180')}
+          />
+        </button>
+      </h2>
+      {open ? (
+        <div id={body} className="grid gap-5 px-5 py-5 sm:grid-cols-3">
+          {lines.map(([glyph, tone, text]) => (
+            <p key={glyph} className="flex gap-3 text-sm leading-relaxed text-bone-dim">
+              <Glyph name={glyph} className={cn('mt-0.5 size-4 shrink-0', tone)} />
+              <span>{text}</span>
+            </p>
+          ))}
+        </div>
+      ) : null}
     </Panel>
   )
 }

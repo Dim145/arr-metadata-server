@@ -113,6 +113,14 @@ async fn put(
             write.key
         )));
     }
+    // Sonarr's and Radarr's addresses are checked as addresses there, before
+    // they are kept: `PUT /admin/arr`.
+    if write.key.starts_with("arr.") {
+        return Err(AppError::BadRequest(format!(
+            "{} is set on the Sonarr & Radarr page",
+            write.key
+        )));
+    }
 
     // A value refused is the caller's (400); a database that failed is the
     // server's (500), logged rather than handed back as a driver's message.

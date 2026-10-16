@@ -22,9 +22,10 @@ use utoipa::IntoParams;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
 use super::browse::{self, Airing, Calendar, CalendarEntry, Release, ReleaseType};
+use super::lists::{self, Audience};
 use crate::{
     auth::{Identity, ip},
-    db::repo,
+    db::repo::{self, list::ListMode},
     domain::{Episode, MediaItem, MediaKind},
     error::{AppError, AppResult},
     service,
@@ -45,7 +46,7 @@ const MAX_DAYS: i64 = 62;
 const ADDED: i64 = 50;
 
 /// The socket a request came from, as the listener recorded it.
-type Peer = Option<Extension<ConnectInfo<SocketAddr>>>;
+pub(crate) type Peer = Option<Extension<ConnectInfo<SocketAddr>>>;
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -53,6 +54,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(work_ics))
         .routes(routes!(added_atom))
         .routes(routes!(airing_atom))
+        .routes(routes!(list_atom))
 }
 
 #[derive(Deserialize, IntoParams)]
@@ -231,6 +233,8 @@ async fn added_atom(
             origin: &origin,
             path: "/api/v1/feed/added.atom",
             title: "Cinémathèque — recently added",
+            subtitle: None,
+            page: "/",
             updated: &updated,
             language: language_tag(&language).as_deref(),
             entries: &entries,
@@ -273,11 +277,102 @@ async fn airing_atom(
             origin: &origin,
             path: "/api/v1/feed/airing.atom",
             title: "Cinémathèque — on the air",
+            subtitle: None,
+            page: "/",
             updated: &updated,
             language: language_tag(&language).as_deref(),
             entries: &entries,
         }),
         calendar.truncated,
+    ))
+}
+
+/// The works of a selection as an Atom feed, the ones that joined it most
+/// recently first: each is dated by the day it was added to the selection —
+/// or, for a selection composed by a filter, whose members are whatever
+/// matches and have no such day, by the day the catalogue received it.
+/// Readable as the selection's page is: open under public browsing,
+/// otherwise with a key, which a feed reader can carry in the query string.
+#[utoipa::path(
+    get, path = "/lists/{key}/feed.atom", tag = lists::TAG,
+    params(("key" = String, Path, description = "The list's slug, or its id"), LanguageQuery),
+    responses(
+        (status = 200, description = "An Atom feed, as application/atom+xml"),
+        (status = 404, description = "No such list, or none this caller may see"),
+    ),
+)]
+async fn list_atom(
+    State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
+    peer: Peer,
+    headers: HeaderMap,
+    Path(key): Path<String>,
+    Query(query): Query<LanguageQuery>,
+) -> AppResult<Response> {
+    let list = lists::visible(&state, &identity, &key).await?;
+    let language = language_for(&state, &identity, query.language.as_deref());
+    let (works, _) =
+        lists::resolve(&state, &identity, &list, Some(&language), Audience::Reader).await?;
+
+    let joined: HashMap<String, String> = match list.mode {
+        ListMode::Manual => repo::list::members_joined(&state.db, &list.id)
+            .await?
+            .into_iter()
+            .collect(),
+        ListMode::Filter => HashMap::new(),
+    };
+
+    let origin = origin_of(&state, &headers, peer);
+    let now = now_rfc3339();
+    let mut entries: Vec<Entry> = works
+        .iter()
+        .map(|work| {
+            let day = joined.get(&work.id).unwrap_or(&work.created_at);
+            Entry {
+                // The selection's own: the same work in two selections is two
+                // entries, which a reader that tells entries apart by id
+                // across feeds would otherwise take for one.
+                id: format!("urn:ams:list:{}:work:{}", list.id, work.id),
+                title: titled(work),
+                link: format!("{origin}/work/{}", work.id),
+                updated: rfc3339(day)
+                    .filter(|at| *at <= now)
+                    .unwrap_or_else(|| now.clone()),
+                summary: work.overview.clone(),
+                categories: work.genres.clone(),
+            }
+        })
+        .collect();
+    // Most recent first; works that joined together stay in the list's order.
+    entries.sort_by(|a, b| b.updated.cmp(&a.updated));
+
+    // The selection's own changes count too — a new name is news to a reader
+    // — and an empty selection is dated by them, not by the minute it was
+    // asked for, which would never let a poll be answered "unchanged".
+    let changed = rfc3339(&list.updated_at).filter(|at| *at <= now);
+    let updated = [latest(&entries), changed]
+        .into_iter()
+        .flatten()
+        .max()
+        .unwrap_or(now);
+    let subtitle = list
+        .description
+        .as_deref()
+        .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|text| !text.is_empty());
+
+    Ok(atom_response(
+        atom(&Feed {
+            origin: &origin,
+            path: &format!("/api/v1/lists/{}/feed.atom", list.slug),
+            title: &format!("Cinémathèque — {}", list.name),
+            subtitle: subtitle.as_deref(),
+            page: &format!("/lists/{}", list.slug),
+            updated: &updated,
+            language: language_tag(&language).as_deref(),
+            entries: &entries,
+        }),
+        false,
     ))
 }
 
@@ -337,8 +432,9 @@ fn language_tag(raw: &str) -> Option<String> {
 
 /// Where this request's feed points: the public address, or the one the
 /// request came to, as the proxy forwarded it if the peer is one the operator
-/// trusts — the same rule the client address follows.
-fn origin_of(state: &AppState, headers: &HeaderMap, peer: Peer) -> String {
+/// trusts — the same rule the client address follows. Plex's provider takes
+/// its pictures' addresses from here too.
+pub(crate) fn origin_of(state: &AppState, headers: &HeaderMap, peer: Peer) -> String {
     let forwarded = ip::is_trusted_peer(
         peer.map(|Extension(ConnectInfo(addr))| addr),
         &state.config.server.trusted_proxies,
@@ -745,6 +841,10 @@ struct Feed<'a> {
     origin: &'a str,
     path: &'a str,
     title: &'a str,
+    /// What the feed is, in a line, where the page it mirrors has said so.
+    subtitle: Option<&'a str>,
+    /// The page the feed mirrors, by its path: the site's, or a selection's.
+    page: &'a str,
     updated: &'a str,
     language: Option<&'a str>,
     entries: &'a [Entry],
@@ -819,9 +919,15 @@ fn atom(feed: &Feed<'_>) -> String {
     }
     let (origin, path) = (xml(feed.origin), xml(feed.path));
     out.push_str(&format!("  <title>{}</title>\n", xml(feed.title)));
+    if let Some(subtitle) = feed.subtitle {
+        out.push_str(&format!("  <subtitle>{}</subtitle>\n", xml(subtitle)));
+    }
     out.push_str(&format!("  <id>{origin}{path}</id>\n"));
     out.push_str(&format!("  <link rel=\"self\" href=\"{origin}{path}\"/>\n"));
-    out.push_str(&format!("  <link rel=\"alternate\" href=\"{origin}/\"/>\n"));
+    out.push_str(&format!(
+        "  <link rel=\"alternate\" href=\"{origin}{}\"/>\n",
+        xml(feed.page)
+    ));
     out.push_str(&format!("  <updated>{}</updated>\n", xml(feed.updated)));
     // A feed must name an author, or every entry must; the catalogue is
     // the author of its own listings.
@@ -1079,6 +1185,8 @@ mod tests {
             origin: "http://localhost",
             path: "/api/v1/feed/airing.atom",
             title: "Feed",
+            subtitle: None,
+            page: "/",
             updated: "2026-10-10T12:00:00Z",
             language: Some("fr"),
             entries: &[out, ahead],
@@ -1218,10 +1326,14 @@ mod tests {
             origin: "http://localhost",
             path: "/api/v1/feed/added.atom",
             title: "Feed",
+            subtitle: Some("A <few> & more"),
+            page: "/lists/a-b",
             updated: "2026-09-25T10:00:00Z",
             language: Some("fr"),
             entries: &entries,
         });
+        assert!(feed.contains("<subtitle>A &lt;few&gt; &amp; more</subtitle>"));
+        assert!(feed.contains("<link rel=\"alternate\" href=\"http://localhost/lists/a-b\"/>"));
         assert!(feed.contains("<feed xmlns=\"http://www.w3.org/2005/Atom\" xml:lang=\"fr\">"));
         assert!(feed.contains("<author><name>Cinémathèque</name></author>"));
         assert!(feed.contains("<title>Tom &amp; Jerry &lt;3</title>"));
@@ -1236,6 +1348,158 @@ mod tests {
         assert!(language_tag("f").is_none());
         assert!(language_tag("fr\"><x").is_none());
         assert!(language_tag("").is_none());
+    }
+
+    /// A film, stored.
+    async fn film(state: &AppState, title: &str, overview: Option<&str>) -> MediaItem {
+        let mut work = MediaItem::empty(MediaKind::Movie);
+        work.title = title.into();
+        work.slug = crate::domain::make_slug(title, None);
+        work.overview = overview.map(str::to_string);
+        work.genres = vec!["Crime & Co".into()];
+        repo::item::upsert(
+            &state.db,
+            repo::item::ItemWrite {
+                item: &work,
+                replace_children: true,
+            },
+        )
+        .await
+        .expect("stored");
+        work
+    }
+
+    #[tokio::test]
+    async fn a_selection_is_a_valid_feed_of_its_works_the_latest_added_first() {
+        use crate::{
+            db::repo::list::{ListFields, ListKind},
+            export::xml,
+        };
+
+        let state = super::super::testing::server().await;
+        let heat = film(&state, "Heat", None).await;
+        let ronin = film(&state, "Ronin & Co", Some("A <spy> & a car.")).await;
+        let alien = film(&state, "Alien <3", None).await;
+
+        let fields = |slug, name, description, is_public| ListFields {
+            slug,
+            name,
+            description,
+            kind: ListKind::Movie,
+            mode: ListMode::Manual,
+            filter: None,
+            is_public,
+            cover: None,
+        };
+        let list = repo::list::create(
+            &state.db,
+            fields("autumn", "Autumn <2026>", Some("Line one\nline two"), true),
+            Some(&[heat.id.clone(), ronin.id.clone(), alien.id.clone()]),
+        )
+        .await
+        .expect("created");
+        // The days they joined, which are not the order they are listed in.
+        for (work, day) in [
+            (&heat, "2026-01-01T00:00:00.000Z"),
+            (&ronin, "2026-03-01T00:00:00.000Z"),
+            (&alien, "2026-02-01T00:00:00.000Z"),
+        ] {
+            sqlx::query(state.db.sql(
+                "UPDATE curated_list_item SET added_at = ? WHERE list_id = ? AND media_id = ?",
+            ))
+            .bind(day)
+            .bind(&list.id)
+            .bind(&work.id)
+            .execute(state.db.pool())
+            .await
+            .expect("dated");
+        }
+
+        let ask = |key: &str| {
+            list_atom(
+                State(state.clone()),
+                Extension(Identity::Visitor),
+                None,
+                HeaderMap::new(),
+                Path(key.to_string()),
+                Query(LanguageQuery {
+                    language: Some("en".into()),
+                }),
+            )
+        };
+        let response = ask("autumn").await.expect("answered");
+        assert_eq!(
+            response.headers()[header::CONTENT_TYPE],
+            "application/atom+xml; charset=utf-8"
+        );
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read");
+        let body = String::from_utf8(body.to_vec()).expect("text");
+
+        // Read back by a parser: a feed, with what Atom requires of one.
+        let elements = xml::read(&body);
+        assert_eq!(
+            xml::texts(&elements, "feed/title"),
+            ["Cinémathèque — Autumn <2026>"]
+        );
+        assert_eq!(
+            xml::texts(&elements, "feed/subtitle"),
+            ["Line one line two"]
+        );
+        assert_eq!(xml::texts(&elements, "feed/author/name"), ["Cinémathèque"]);
+        let id = |work: &MediaItem| format!("urn:ams:list:{}:work:{}", list.id, work.id);
+        // The latest added first, whatever the order of the list.
+        assert_eq!(
+            xml::texts(&elements, "feed/entry/id"),
+            [id(&ronin), id(&alien), id(&heat)]
+        );
+        assert_eq!(
+            xml::texts(&elements, "feed/entry/title"),
+            ["Ronin & Co", "Alien <3", "Heat"]
+        );
+        assert_eq!(
+            xml::texts(&elements, "feed/entry/updated"),
+            [
+                "2026-03-01T00:00:00Z",
+                "2026-02-01T00:00:00Z",
+                "2026-01-01T00:00:00Z"
+            ]
+        );
+        assert_eq!(
+            xml::texts(&elements, "feed/entry/summary"),
+            ["A <spy> & a car."]
+        );
+        let category = xml::at(&elements, "feed/entry/category");
+        assert_eq!(category[0].attribute("term"), Some("Crime & Co"));
+        // Where it points: its own address, the selection's page, each work's.
+        let links: Vec<(&str, &str)> = xml::at(&elements, "feed/link")
+            .into_iter()
+            .map(|e| (e.attribute("rel").unwrap(), e.attribute("href").unwrap()))
+            .collect();
+        assert_eq!(
+            links,
+            [
+                ("self", "http://localhost/api/v1/lists/autumn/feed.atom"),
+                ("alternate", "http://localhost/lists/autumn")
+            ]
+        );
+        assert_eq!(
+            xml::at(&elements, "feed/entry/link")[0].attribute("href"),
+            Some(format!("http://localhost/work/{}", ronin.id).as_str())
+        );
+        // The feed is as recent as the selection's last change, at least.
+        assert!(xml::texts(&elements, "feed/updated")[0] >= "2026-03-01T00:00:00Z");
+
+        // A private selection is a reader's no selection at all.
+        repo::list::create(&state.db, fields("draft", "Draft", None, false), None)
+            .await
+            .expect("created");
+        assert!(matches!(ask("draft").await, Err(AppError::NotFound)));
+        assert!(matches!(
+            ask("no-such-selection").await,
+            Err(AppError::NotFound)
+        ));
     }
 
     #[test]

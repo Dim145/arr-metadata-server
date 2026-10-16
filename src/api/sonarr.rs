@@ -310,11 +310,26 @@ async fn name_for_sonarr(state: &AppState, item: &mut MediaItem, tvdb_id: i64) {
     };
     let qualifier = item.title_qualifier.clone();
     item.title = series::sonarr_title(&item.title, locked, qualifier.as_deref(), homonym_year);
-    for translation in &mut item.translations {
+    // A name locked in a language, or in every one, is given as it was
+    // locked there too.
+    let locked_in: Vec<bool> = item
+        .translations
+        .iter()
+        .map(|t| {
+            crate::domain::fields::text_lock(
+                item,
+                "item",
+                "title",
+                &language::normalize(&t.language),
+            )
+            .is_some()
+        })
+        .collect();
+    for (translation, locked) in item.translations.iter_mut().zip(locked_in) {
         if let Some(title) = translation.title.as_deref() {
             translation.title = Some(series::sonarr_title(
                 title,
-                false,
+                locked,
                 qualifier.as_deref(),
                 homonym_year,
             ));
@@ -607,5 +622,140 @@ mod tests {
         let state = server().await;
         let refused = asked(&state, "eng", 1, "official").await;
         assert!(matches!(refused, Err(AppError::NotFound)));
+    }
+
+    /// Locks for the series, in a language or in every one, read afresh.
+    async fn locked(state: &AppState, id: &str, locks: &[(&str, &str, &str, &str)]) {
+        for (scope, field, language, value) in locks {
+            repo::override_field::set_in(
+                &state.db,
+                id,
+                scope,
+                field,
+                language,
+                Some(&serde_json::json!(value)),
+                None,
+            )
+            .await
+            .expect("locked");
+        }
+        state.caches.touched(id).await;
+    }
+
+    /// A title locked in French alone is the series' name for a Sonarr that
+    /// asks in French — its title, its French translation, an episode's —
+    /// and for nobody else; an overview locked in every language beats every
+    /// translation; and the original title stays the one it was made under.
+    #[tokio::test]
+    async fn a_text_locked_in_one_language_is_sonarrs_in_that_one_alone() {
+        let state = server().await;
+        let work = stored(&state).await;
+        locked(
+            &state,
+            &work.id,
+            &[
+                ("item", "title", "fra", "Kenshin, en français"),
+                ("item", "overview", "", "Partout pareil."),
+                ("episode:1x1", "title", "fra", "Le premier"),
+            ],
+        )
+        .await;
+
+        // Sonarr v5, in French.
+        let Json(french) = asked(&state, "fra", 416802, "official")
+            .await
+            .expect("answered");
+        assert_eq!(french.title, "Kenshin, en français");
+        assert_eq!(french.overview.as_deref(), Some("Partout pareil."));
+        assert_eq!(french.original_title, "るろうに剣心 －明治剣客浪漫譚－");
+        let named = |language: &str| {
+            french
+                .translations
+                .iter()
+                .find(|t| t.language == language)
+                .cloned()
+                .expect("held")
+        };
+        assert_eq!(named("fra").title, "Kenshin, en français");
+        assert_eq!(named("fra").overview.as_deref(), Some("Partout pareil."));
+        assert_eq!(named("jpn").title, "るろうに剣心 －明治剣客浪漫譚－");
+        assert_eq!(
+            named("jpn").overview.as_deref(),
+            Some("Partout pareil."),
+            "a lock in every language beats every translation"
+        );
+        assert_eq!(named("eng").title, "Rurouni Kenshin");
+        let episodes = french.episodes.as_deref().expect("its episodes");
+        assert_eq!(episodes[0].title, "Le premier");
+        assert_eq!(episodes[1].title, "Episode 1002");
+
+        // In English, the language it is stored in: none of French's.
+        let Json(english) = asked(&state, "eng", 416802, "official")
+            .await
+            .expect("answered");
+        assert_eq!(english.title, "Rurouni Kenshin");
+        assert_eq!(english.overview.as_deref(), Some("Partout pareil."));
+        assert_eq!(
+            english.episodes.as_deref().expect("its episodes")[0].title,
+            "Episode 1001"
+        );
+
+        // Sonarr v4 asking in French: the same as v5.
+        let Json(v4) = show(
+            State(state.clone()),
+            Path(ShowPath {
+                language: "fr".into(),
+                tvdb_id: 416802,
+            }),
+        )
+        .await
+        .expect("answered");
+        assert_eq!(v4.title, "Kenshin, en français");
+        assert_eq!(v4.overview.as_deref(), Some("Partout pareil."));
+        assert_eq!(v4.episodes[0].title, "Le premier");
+    }
+
+    /// Locked in French and in every language, the title is French's own in
+    /// French and the one of every language anywhere else — over the
+    /// translation each language holds, and over the stored title — while
+    /// the original title Sonarr is given stays the one it was made under.
+    #[tokio::test]
+    async fn a_lock_in_a_language_beats_one_in_every_language_there_and_both_beat_translations() {
+        let state = server().await;
+        let work = stored(&state).await;
+        locked(
+            &state,
+            &work.id,
+            &[
+                ("item", "title", "", "Kenshin"),
+                ("item", "title", "fra", "Kenshin, en français"),
+            ],
+        )
+        .await;
+
+        let Json(french) = asked(&state, "fra", 416802, "official")
+            .await
+            .expect("answered");
+        assert_eq!(french.title, "Kenshin, en français");
+
+        let Json(japanese) = asked(&state, "jpn", 416802, "official")
+            .await
+            .expect("answered");
+        assert_eq!(japanese.title, "Kenshin", "the translation is beaten");
+        assert_eq!(japanese.original_title, "るろうに剣心 －明治剣客浪漫譚－");
+        let title_in = |language: &str| {
+            japanese
+                .translations
+                .iter()
+                .find(|t| t.language == language)
+                .map(|t| t.title.clone())
+        };
+        assert_eq!(title_in("fra").as_deref(), Some("Kenshin, en français"));
+        assert_eq!(title_in("jpn").as_deref(), Some("Kenshin"));
+
+        let Json(english) = asked(&state, "eng", 416802, "official")
+            .await
+            .expect("answered");
+        assert_eq!(english.title, "Kenshin");
     }
 }

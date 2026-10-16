@@ -6,7 +6,7 @@ import { expect, test } from '@playwright/test'
  */
 test.describe('the theme', () => {
   test('the lamp switches the page to daylight, and it stays lit', async ({ page, isMobile }) => {
-    test.skip(isMobile, 'the lamp is in the menu at this width')
+    test.skip(isMobile, 'the lamp is in the sheet of the bottom bar at this width: see tabbar.spec.ts')
     await page.goto('/')
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
 

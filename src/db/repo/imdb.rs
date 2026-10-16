@@ -151,18 +151,11 @@ pub async fn wanted(db: &Db) -> Result<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config;
+    use crate::db::testing::db;
 
     #[tokio::test]
     async fn ratings_are_replaced_and_read_back() {
-        let db = Db::connect(&config::Database {
-            url: "sqlite::memory:".into(),
-            max_connections: 1,
-            acquire_timeout: std::time::Duration::from_secs(5),
-        })
-        .await
-        .unwrap();
-        db.migrate().await.unwrap();
+        let db = db().await;
 
         let rating = |tconst: &str, rating: f64, votes: i64| Rating {
             tconst: tconst.into(),

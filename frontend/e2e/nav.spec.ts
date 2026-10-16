@@ -9,7 +9,7 @@ import { escaped, pattern } from './support/regex'
  */
 test.describe('the browse tab and its panel', () => {
   test.beforeEach(({ isMobile }) => {
-    test.skip(isMobile, 'the tabs are behind the menu at this width')
+    test.skip(isMobile, 'the tabs are along the foot of the screen at this width')
   })
 
   test('the bar lists one way in, not three', async ({ page }) => {
@@ -88,23 +88,25 @@ test.describe('the browse tab and its panel', () => {
   })
 })
 
-test.describe('the menu on a phone', () => {
-  test('lists the series, the films and the collections beneath the catalogue', async ({ page, isMobile }) => {
-    test.skip(!isMobile, 'the bar has the tab at this width')
+test.describe('the sheet on a phone', () => {
+  // The tabs are the bar along the foot of the screen (see tabbar.spec.ts);
+  // what its four places leave out is in the sheet its last one opens.
+  const more = /^(more|plus)$/i
+
+  test('lists the collections and the figures, which the bar has no place for', async ({ page, isMobile }) => {
+    test.skip(!isMobile, 'the bar has the tabs at this width')
     await page.goto('/')
-    await page.getByRole('button', { name: /^(menu)$/i }).click()
-    const drawer = page.getByRole('navigation', { name: /^(browse|parcourir)$/i }).last()
-    await expect(drawer.getByRole('link', { name: /^(series|séries)$/i })).toBeVisible()
-    await expect(drawer.getByRole('link', { name: /^(films)$/i })).toBeVisible()
-    await expect(drawer.getByRole('link', { name: /^(collections)$/i })).toBeVisible()
+    await page.getByRole('button', { name: more }).click()
+    const sheet = page.getByRole('dialog', { name: more })
+    await expect(sheet.getByRole('link', { name: /^(collections)$/i })).toBeVisible()
+    await expect(sheet.getByRole('link', { name: /^(in numbers|en chiffres)$/i })).toBeVisible()
   })
 
   test('and the collections in it lead to a page of their own', async ({ page, isMobile }) => {
-    test.skip(!isMobile, 'the bar has the tab at this width')
+    test.skip(!isMobile, 'the bar has the tabs at this width')
     await page.goto('/')
-    await page.getByRole('button', { name: /^(menu)$/i }).click()
-    const drawer = page.getByRole('navigation', { name: /^(browse|parcourir)$/i }).last()
-    await drawer.getByRole('link', { name: /^(collections)$/i }).click()
+    await page.getByRole('button', { name: more }).click()
+    await page.getByRole('dialog', { name: more }).getByRole('link', { name: /^(collections)$/i }).click()
     await expect(page).toHaveURL(/\/collections$/)
     await expect(page.getByRole('heading', { level: 1 })).toHaveText(/^(the sagas|les sagas)$/i)
   })

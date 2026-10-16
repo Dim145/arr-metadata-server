@@ -350,6 +350,11 @@ pub struct MeResponse {
     /// whether an address handed to a calendar app or a feed reader, which
     /// carries none, will answer.
     pub public_browse: bool,
+    /// The country this caller is answered for, ISO 3166-1 alpha-2: the
+    /// `tmdb.watchRegion` setting as it stands for it, else its language's.
+    /// What a work's page dates and rates it by, and where it is watched.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub region: Option<String>,
 }
 
 /// The signed-in person, as the interface needs them on every page.
@@ -391,6 +396,7 @@ async fn me(
             has_password: u.has_password,
         }),
         public_browse: state.public_site(),
+        region: state.watch_region(identity.client_id(), identity.peer_id()),
     })
 }
 

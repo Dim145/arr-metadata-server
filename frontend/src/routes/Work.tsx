@@ -41,6 +41,17 @@ import * as fmt from '../lib/format'
 import { jobLabel, languageName, providerName, statusLabel, titleOrigin } from '../lib/labels'
 import { useI18n } from '../lib/i18n'
 import {
+  REGION_KEY,
+  certificationIn,
+  cinemaDayIn,
+  countryCode,
+  countryName,
+  otherCountries,
+  pickedRegion,
+  readerRegion,
+  releasesIn,
+} from '../lib/releases'
+import {
   airTime,
   airValue,
   airsWhen,
@@ -60,13 +71,29 @@ import {
   seasonNumbers,
   seasonPoster,
 } from '../lib/media'
-import type { Credit, Episode, ItemPage, MediaItem, CuratedLists, Relation, WhereToWatch, Similar } from '../lib/types'
+import type {
+  CountryRelease,
+  Credit,
+  Episode,
+  ItemPage,
+  MediaItem,
+  CuratedLists,
+  Relation,
+  WhereToWatch,
+  Similar,
+} from '../lib/types'
 import { NotFound, Unavailable } from './NotFound'
 
 export function Work() {
   const { id = '' } = useParams()
   const work = useWork(id)
+  const me = useMe()
+  const { locale } = useI18n()
   useTitle(work.data?.title)
+  // The country picked to see where the work is watched, kept in this
+  // browser: the one its dates and its rating are read for too.
+  const [picked, setPicked] = useState<string | undefined>(pickedRegion)
+  const region = readerRegion(me.data, locale, picked)
 
   // Noted as opened, for the shelf of recent works and the palette's list.
   useEffect(() => {
@@ -87,7 +114,7 @@ export function Work() {
     // Keyed by the work, so moving from one to another starts every section
     // afresh: the gallery's tab and the lists opened out were the last one's.
     <article key={item.id} className="pb-8">
-      <Plate item={item} />
+      <Plate item={item} region={region} />
 
       {/* The facts sit beside the page on a wide screen, and straight after the
           synopsis on a phone: status, dates, network and identifiers are what
@@ -100,8 +127,9 @@ export function Work() {
         </div>
 
         <aside className="space-y-6 lg:col-start-2 lg:row-span-2 lg:row-start-1">
-          <Record item={item} />
-          <WhereToWatch item={item} />
+          <Record item={item} region={region} />
+          <Releases item={item} region={region} />
+          <WhereToWatch item={item} picked={picked} onPick={setPicked} />
           <Ratings item={item} />
           <Identifiers item={item} />
         </aside>
@@ -122,7 +150,7 @@ export function Work() {
 
 /* ── The plate ────────────────────────────────────────────────────────────── */
 
-function Plate({ item }: { item: MediaItem }) {
+function Plate({ item, region }: { item: MediaItem; region: string }) {
   const { t, lang, locale } = useI18n()
   const me = useMe()
   // A calendar app carries no credential, so the subscription is offered only
@@ -142,6 +170,12 @@ function Plate({ item }: { item: MediaItem }) {
   const sheet = poster(item)
   const rating = headlineRating(item.ratings)
   const maker = item.network ?? item.studio
+  const rated = rated_in(item, region)
+  // What AniList calls the entry, where it says more than series or film.
+  const format =
+    item.format && !(item.kind === 'series' && item.format === 'TV') && !(item.kind === 'movie' && item.format === 'MOVIE')
+      ? (t.work.format[item.format] ?? item.format)
+      : undefined
 
   return (
     <header className="relative mx-[calc(50%-50vw)] w-screen">
@@ -206,7 +240,22 @@ function Plate({ item }: { item: MediaItem }) {
                 {item.kind === 'series' ? t.nav.series : t.nav.films}
               </Chip>
               {item.isManual ? <Provenance manual label={t.work.manualEntry} /> : null}
-              {item.contentRating ? <Chip>{item.contentRating}</Chip> : null}
+              {format ? <Chip>{format}</Chip> : null}
+              {rated ? (
+                <Chip>
+                  {/* The reader's country's, else the record's own with the
+                      country it is of. */}
+                  <span aria-hidden>
+                    {rated.certification}
+                    {rated.country && rated.country !== region ? ` · ${rated.country}` : ''}
+                  </span>
+                  <span className="sr-only">
+                    {rated.country
+                      ? t.work.ratedIn(rated.certification, countryName(rated.country, locale))
+                      : rated.certification}
+                  </span>
+                </Chip>
+              ) : null}
             </div>
 
             {/* Title and year at one size, told apart by weight — the move every
@@ -226,6 +275,12 @@ function Plate({ item }: { item: MediaItem }) {
 
             {item.originalTitle && item.originalTitle !== item.title ? (
               <p className="mt-1.5 text-sm text-bone-faint italic">{item.originalTitle}</p>
+            ) : null}
+
+            {item.tagline ? (
+              <p className="mt-2.5 max-w-[60ch] font-display text-base leading-snug text-bone-dim sm:text-lg">
+                {item.tagline}
+              </p>
             ) : null}
 
             <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-3">
@@ -349,7 +404,15 @@ function Plate({ item }: { item: MediaItem }) {
 /* ── Sections ─────────────────────────────────────────────────────────────── */
 
 function Synopsis({ item }: { item: MediaItem }) {
-  const { t, lang } = useI18n()
+  const { t, lang, locale } = useI18n()
+  // One line a job, its people together: "Production" once, not six times.
+  const jobs: { label: string; names: string[] }[] = []
+  for (const person of crew(item.credits, 24)) {
+    const label = jobLabel(person.characterName ?? person.creditType, lang)
+    const job = jobs.find((j) => j.label === label)
+    if (!job) jobs.push({ label, names: [person.personName] })
+    else if (!job.names.includes(person.personName)) job.names.push(person.personName)
+  }
 
   return (
     <section>
@@ -362,12 +425,12 @@ function Synopsis({ item }: { item: MediaItem }) {
         <p className="text-sm text-bone-faint italic">{t.work.noOverview}</p>
       )}
 
-      {crew(item.credits).length ? (
+      {jobs.length ? (
         <dl className="mt-8 grid gap-x-8 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
-          {crew(item.credits, 6).map((person) => (
-            <div key={person.id}>
-              <dt className="label">{jobLabel(person.characterName ?? person.creditType, lang)}</dt>
-              <dd className="mt-0.5 text-sm text-bone">{person.personName}</dd>
+          {jobs.slice(0, 6).map((job) => (
+            <div key={job.label}>
+              <dt className="label">{job.label}</dt>
+              <dd className="mt-0.5 text-sm text-bone">{fmt.list(job.names, locale)}</dd>
             </div>
           ))}
         </dl>
@@ -1225,31 +1288,42 @@ function AlsoKnownAs({ item }: { item: MediaItem }) {
 
 /* ── The record ───────────────────────────────────────────────────────────── */
 
-function Record({ item }: { item: MediaItem }) {
+function Record({ item, region }: { item: MediaItem; region: string }) {
   const { t, locale } = useI18n()
+  // A film's day in the reader's country's cinemas, where it is known.
+  const local = item.kind === 'movie' ? cinemaDayIn(item, region) : undefined
+  const rated = rated_in(item, region)
+  const companies = (item.productionCompanies ?? []).filter((c) => c.trim())
+  // A list that only says the studio again says nothing.
+  const onlyStudio =
+    companies.length === 1 && companies[0]!.toLocaleLowerCase(locale) === item.studio?.toLocaleLowerCase(locale)
+  const countries = (item.productionCountries ?? []).map((code) => countryName(code, locale))
 
-  const rows: [string, string | undefined][] = [
+  const rows: [string, string | undefined, string?][] = [
     [t.work.status, statusLabel(item.status, t)],
     [
       item.kind === 'series' ? t.work.firstAired : t.work.released,
-      fmt.longDate(item.firstAired ?? item.inCinemas, locale),
+      fmt.longDate(item.kind === 'series' ? item.firstAired : (local ?? item.inCinemas), locale),
+      local ? countryName(region, locale) : undefined,
     ],
     [t.work.lastAired, item.kind === 'series' ? fmt.longDate(item.lastAired, locale) : undefined],
     [t.work.runtime, fmt.runtime(item.runtime, locale)],
     [t.work.network, item.network],
     [t.work.studio, item.studio],
-    [t.work.certification, item.contentRating],
+    [t.work.companies, onlyStudio || !companies.length ? undefined : fmt.list(companies, locale)],
+    [t.work.countries, countries.length ? fmt.list(countries, locale) : undefined],
+    [t.work.certification, rated?.certification, rated?.country ? countryName(rated.country, locale) : undefined],
     [t.work.originalLanguage, languageName(item.originalLanguage, locale)],
   ]
 
-  const present = rows.filter((row): row is [string, string] => Boolean(row[1]))
+  const present = rows.filter((row): row is [string, string, string?] => Boolean(row[1]))
 
   return (
     <Panel>
       <PanelHead title={t.work.details} />
       <dl className="divide-y divide-rule">
-        {present.map(([label, value]) => (
-          <Field key={label} label={label}>
+        {present.map(([label, value, hint]) => (
+          <Field key={label} label={label} hint={hint}>
             {value}
           </Field>
         ))}
@@ -1260,6 +1334,93 @@ function Record({ item }: { item: MediaItem }) {
           {item.genres.map((genre) => (
             <Genre key={genre} name={genre} to={`/browse?genre=${encodeURIComponent(genre)}`} />
           ))}
+        </div>
+      ) : null}
+    </Panel>
+  )
+}
+
+/**
+ * The rating a reader is shown, and the country it is of: their own
+ * country's, else the record's own — another country's, said so.
+ */
+function rated_in(item: MediaItem, region: string): { certification: string; country?: string } | undefined {
+  const own = certificationIn(item, region)
+  if (own) return { certification: own, country: region }
+  const kept = item.contentRating?.trim()
+  return kept ? { certification: kept, country: countryCode(item.contentRatingCountry) } : undefined
+}
+
+/**
+ * When the work came out in each country, and the rating it carries there:
+ * the reader's country, then every other a press away — a film shown in
+ * forty countries is forty lines nobody came for.
+ */
+function Releases({ item, region }: { item: MediaItem; region: string }) {
+  const { t, locale } = useI18n()
+  const [all, setAll] = useState(false)
+  if (!item.releases?.length) return null
+
+  const name = countryName(region, locale)
+  const own = releasesIn(item, region).filter((r) => r.date)
+  const rating = certificationIn(item, region)
+  const others = otherCountries(item, region, locale)
+  const kind = (release: CountryRelease) =>
+    release.releaseType ? (t.work.releaseKind[release.releaseType] ?? release.releaseType) : t.work.released
+
+  const title = item.kind === 'movie' ? t.work.releases : t.work.certifications
+
+  return (
+    <Panel label={title}>
+      <PanelHead title={title} />
+      <p className="label px-5 pt-3.5">{name}</p>
+      {rating || own.length ? (
+        <dl className="divide-y divide-rule">
+          {rating ? <Field label={t.work.certification}>{rating}</Field> : null}
+          {own.map((release, index) => (
+            <Field key={`${release.releaseType}-${release.date}-${index}`} label={kind(release)} hint={release.note}>
+              {fmt.longDate(release.date, locale)}
+            </Field>
+          ))}
+        </dl>
+      ) : (
+        <p className="px-5 py-2.5 text-sm text-bone-faint">
+          {item.kind === 'movie' ? t.work.noneIn(name) : t.work.unratedIn(name)}
+        </p>
+      )}
+      {others.length ? (
+        <div className="border-t border-rule px-5 py-2">
+          <button
+            type="button"
+            aria-expanded={all}
+            aria-controls={`releases-${item.id}`}
+            onClick={() => setAll(!all)}
+            className="inline-flex min-h-11 cursor-pointer items-center gap-1.5 text-sm text-bone-dim transition-colors duration-150 hover:text-bone"
+          >
+            <Glyph name="chevronRight" className={cn('size-3.5 transition-transform duration-150 motion-reduce:transition-none', all && 'rotate-90')} />
+            {all ? t.work.fewerCountries : t.work.otherCountries(others.length)}
+          </button>
+          {all ? (
+            <ul id={`releases-${item.id}`} className="divide-y divide-rule pb-2">
+              {others.map((code) => {
+                const rated = certificationIn(item, code)
+                const days = releasesIn(item, code).filter((r) => r.date)
+                return (
+                  <li key={code} className="py-2.5">
+                    <div className="flex items-baseline justify-between gap-3">
+                      <span className="text-sm text-bone">{countryName(code, locale)}</span>
+                      {rated ? <span className="font-mono text-xs text-bone-dim">{rated}</span> : null}
+                    </div>
+                    {days.length ? (
+                      <p className="mt-0.5 text-xs leading-relaxed text-bone-faint">
+                        {days.map((release) => `${kind(release)} ${fmt.shortDate(release.date, locale)}`).join(' · ')}
+                      </p>
+                    ) : null}
+                  </li>
+                )
+              })}
+            </ul>
+          ) : null}
         </div>
       ) : null}
     </Panel>
@@ -1426,8 +1587,6 @@ function WorkSkeleton() {
 
 /* ── Where to watch ───────────────────────────────────────────────────────── */
 
-const REGION_KEY = 'ams.watchRegion'
-
 /**
  * How many services a group shows before the rest wait behind a count: a
  * film for rent is on twenty, and the panel was a column of logos.
@@ -1440,8 +1599,18 @@ const FOLDED_PROVIDERS = 4
  * the reader's own setting, then the language's; any other TMDB knows of
  * can be picked. Absent altogether where there is no TMDB key, or nothing.
  */
-function WhereToWatch({ item }: { item: MediaItem }) {
+function WhereToWatch({
+  item,
+  picked,
+  onPick,
+}: {
+  item: MediaItem
+  /** The country the reader picked here, if they did. */
+  picked: string | undefined
+  onPick: (code: string | undefined) => void
+}) {
   const { t, locale } = useI18n()
+  const region = picked
   // The groups opened out past their first four, by name.
   const [opened, setOpened] = useState<ReadonlySet<string>>(() => new Set())
   const toggle = (group: string) =>
@@ -1452,16 +1621,8 @@ function WhereToWatch({ item }: { item: MediaItem }) {
     })
   // The country picked last time, kept in this browser alone: a reader abroad
   // picks it once, not on every page.
-  const [region, setRegion] = useState<string | undefined>(() => {
-    try {
-      const stored = localStorage.getItem(REGION_KEY)
-      return stored && /^[A-Z]{2}$/.test(stored) ? stored : undefined
-    } catch {
-      return undefined
-    }
-  })
   const pick = (code: string) => {
-    setRegion(code)
+    onPick(code)
     try {
       localStorage.setItem(REGION_KEY, code)
     } catch {
@@ -1484,9 +1645,9 @@ function WhereToWatch({ item }: { item: MediaItem }) {
       } catch {
         // Nothing kept, nothing to forget.
       }
-      setRegion(undefined)
+      onPick(undefined)
     }
-  }, [region, watch.error])
+  }, [region, watch.error, onPick])
   if (!watch.data) return null
   const data = watch.data
   const groups = (['flatrate', 'free', 'ads', 'rent', 'buy'] as const).filter((group) => data[group].length)

@@ -181,6 +181,59 @@ test.describe('the relays', () => {
     }
   })
 
+  test('each relay says whose key it asks with; with each client’s own, a key issued here is refused', async ({
+    page,
+    browser,
+  }) => {
+    const issued = await page.request.post('/api/v1/clients', { data: { name: unique('tmdbkey'), scopes: ['read'] } })
+    expect(issued.status(), await issued.text()).toBe(201)
+    const { key, id } = (await issued.json()) as { key: string; id: string }
+    const bare = await browser.newContext()
+    try {
+      await page.goto('/admin/access')
+      const choice = page.getByRole('radiogroup', { name: /whose key the tmdb relay|avec quelle clé le relais tmdb/i })
+      await expect(choice.getByRole('radio', { name: /server’s key|clé du serveur/i })).toBeChecked()
+      await choice.getByText(/each client’s own|celle de chaque client/i).click()
+      await expect(choice.getByRole('radio', { name: /each client’s own|celle de chaque client/i })).toBeChecked()
+      await expect(page.getByText(/refused with a 401|refusée par un 401/i).first()).toBeVisible()
+
+      // Read back with the policy the guard applies: a key is no use there.
+      const access = (await (await page.request.get('/api/v1/admin/access')).json()) as {
+        apis: { api: string; policy: string }[]
+        relayCredentials: { api: string; credential: string; configuredPolicy: string }[]
+      }
+      const tmdb = access.relayCredentials.find((r) => r.api === 'tmdb')
+      expect(tmdb?.credential).toBe('client')
+      if (tmdb?.configuredPolicy === 'apikey') {
+        expect(access.apis.find((x) => x.api === 'tmdb')?.policy).toBe('allowlist')
+      }
+
+      // A key issued here: refused before TMDB is asked, saying why — where
+      // the suite's address is listed at all. Whatever the header wraps it
+      // in: a scheme in capitals, another scheme, beside a token of their own.
+      const refused = await bare.request.get(`/3/movie/550?api_key=${key}`)
+      expect([401, 403]).toContain(refused.status())
+      if (refused.status() === 401) {
+        expect(((await refused.json()) as { error: string }).error).toBe('own_key_required')
+        for (const authorization of [`BEARER ${key}`, `Token ${key}`, `Bearer their-own-token ${key}`]) {
+          const wrapped = await bare.request.get('/3/movie/550', { headers: { authorization } })
+          expect(wrapped.status(), authorization.split(' ')[0]).toBe(401)
+          expect(((await wrapped.json()) as { error: string }).error).toBe('own_key_required')
+        }
+      }
+    } finally {
+      await setting(page.request, 'tmdb.relayCredential', 'server')
+      await bare.close()
+      await page.request.delete(`/api/v1/clients/${id}`)
+    }
+    await page.reload()
+    await expect(
+      page
+        .getByRole('radiogroup', { name: /whose key the tmdb relay|avec quelle clé le relais tmdb/i })
+        .getByRole('radio', { name: /server’s key|clé du serveur/i }),
+    ).toBeChecked()
+  })
+
   test('the interface’s door keeps its page at the root: AniList is reached by its name alone', async ({ page }) => {
     const root = await page.request.post('/', { data: { query: '{ Media(id: 1) { id } }' } })
     expect(root.headers()['content-type'] ?? '').not.toContain('application/json')

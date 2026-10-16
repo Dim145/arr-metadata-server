@@ -41,6 +41,7 @@ const TABLES: &[&str] = &[
     "media_alternative_title",
     "media_rating",
     "media_translation",
+    "media_release",
     "media_episode_translation",
     "media_language_fetch",
     // People before their keys: a key names its owner.
@@ -53,6 +54,12 @@ const TABLES: &[&str] = &[
     // What each run did to each work, after the runs.
     "job_entry",
     "audit_log",
+    // What was told to the operator's Sonarr and Radarr lately.
+    "arr_push",
+    // Where what happens is told, then what is owed and was told to each:
+    // what still waits is sent from the new database.
+    "webhook_destination",
+    "webhook_delivery",
     // The media kept: its rows only — the files stay in the store they
     // were put in, which both databases can be pointed at.
     "media_asset",

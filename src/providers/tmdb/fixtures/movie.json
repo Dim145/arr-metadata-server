@@ -85,13 +85,63 @@
   "release_dates": {
     "results": [
       {
+        "iso_3166_1": "DE",
+        "release_dates": [
+          {
+            "certification": "12",
+            "iso_639_1": "",
+            "release_date": "2016-11-24T00:00:00.000Z",
+            "type": 3
+          }
+        ]
+      },
+      {
         "iso_3166_1": "FR",
+        "release_dates": [
+          {
+            "certification": "TP",
+            "iso_639_1": "",
+            "release_date": "2016-12-07T00:00:00.000Z",
+            "type": 3
+          },
+          {
+            "certification": "",
+            "iso_639_1": "",
+            "release_date": "2017-04-07T00:00:00.000Z",
+            "type": 4,
+            "note": "VOD"
+          },
+          {
+            "certification": "",
+            "iso_639_1": "",
+            "release_date": "2017-04-12T00:00:00.000Z",
+            "type": 5,
+            "note": "DVD, Blu-Ray & 4K UHD"
+          }
+        ]
+      },
+      {
+        "iso_3166_1": "GB",
         "release_dates": [
           {
             "certification": "",
             "iso_639_1": "",
-            "release_date": "2016-12-07T00:00:00.000Z",
+            "release_date": "2016-10-10T00:00:00.000Z",
+            "type": 1,
+            "note": "BFI London Film Festival"
+          },
+          {
+            "certification": "12A",
+            "iso_639_1": "",
+            "release_date": "2016-11-10T00:00:00.000Z",
             "type": 3
+          },
+          {
+            "certification": "12",
+            "iso_639_1": "",
+            "release_date": "2017-03-20T00:00:00.000Z",
+            "type": 5,
+            "note": "DVD & Blu-ray"
           }
         ]
       },

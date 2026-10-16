@@ -16,7 +16,20 @@ import { Link, useSearchParams } from 'react-router'
 import { ExternalLink } from '../../../components/elsewhere'
 import { Placement, finaleLabel } from '../../../components/episodes'
 import { Artwork } from '../../../components/media'
-import { Button, Chip, FormField, Glyph, Input, Panel, PanelHead, Provenance, Segmented, Textarea } from '../../../components/ui'
+import {
+  Button,
+  Chip,
+  Dialog,
+  FormField,
+  Glyph,
+  Input,
+  Panel,
+  PanelHead,
+  Provenance,
+  Segmented,
+  Spinner,
+  Textarea,
+} from '../../../components/ui'
 import { api } from '../../../lib/api'
 import { cn } from '../../../lib/cn'
 import * as fmt from '../../../lib/format'
@@ -76,6 +89,10 @@ export function SeasonsTab({
   )
   const [filter, setFilter] = useState<Filter>('all')
   const [picking, setPicking] = useState<Picking | null>(null)
+  // The season's dates moved together: a dialog that starts afresh each time
+  // it opens, and stays mounted while it closes so the focus goes back.
+  const [shifting, setShifting] = useState(false)
+  const [shiftings, setShiftings] = useState(0)
   const orders = useOrders(work.id)
   const { ask, dialog } = useRemove(work, onChanged)
   const p = e.picker
@@ -335,6 +352,19 @@ export function SeasonsTab({
                   <Glyph name="reel" className="size-4" />
                   {s.seasonPage}
                 </Link>
+                <Button
+                  size="sm"
+                  variant="quiet"
+                  disabled={!episodes.some(isDated)}
+                  title={episodes.some(isDated) ? undefined : s.shift.none}
+                  onClick={() => {
+                    setShiftings((n) => n + 1)
+                    setShifting(true)
+                  }}
+                >
+                  <Glyph name="calendar" className="size-4" />
+                  {s.shift.open}
+                </Button>
                 {meta?.isManual ? (
                   <Button size="sm" variant="quiet" onClick={() => ask({ path: `seasons/${season}`, label: name })}>
                     <Glyph name="trash" className="size-4" />
@@ -458,6 +488,17 @@ export function SeasonsTab({
 
       {dialog}
 
+      <ShiftDates
+        key={`shift-${season}-${shiftings}`}
+        open={shifting}
+        work={work}
+        name={name}
+        episodes={episodes}
+        lockable={lockable}
+        onClose={() => setShifting(false)}
+        onChanged={onChanged}
+      />
+
       {/* One picker for the tab: the season's poster or an episode's still,
           whichever was asked for last. */}
       {picking?.for === 'episode' ? (
@@ -492,6 +533,214 @@ export function SeasonsTab({
         />
       )}
     </div>
+  )
+}
+
+/* ── A season's dates, moved together ─────────────────────────────────────── */
+
+/** The furthest a season's dates are moved at once: ten years, either way. */
+const SHIFT_MOST = 3650
+
+/** Whether an episode has a date to move. */
+const isDated = (episode: Episode) => Boolean(episode.airDate || episode.airDateUtc)
+
+/** An instant `days` × 24 hours on — or back: in UTC a day is always that long. */
+function shiftInstant(value: string | undefined, days: number): string | undefined {
+  if (!value) return undefined
+  const at = Date.parse(value)
+  if (Number.isNaN(at)) return undefined
+  return new Date(at + days * 86_400_000).toISOString().replace(/\.000Z$/, 'Z')
+}
+
+/** A day `days` on — or back — in the calendar, in the form the field holds it: a day, or an instant. */
+function shiftDay(value: string | undefined, days: number): string | undefined {
+  const day = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value ?? '')
+  if (!day) return shiftInstant(value, days)
+  return new Date(Date.UTC(Number(day[1]), Number(day[2]) - 1, Number(day[3]) + days)).toISOString().slice(0, 10)
+}
+
+/**
+ * Every episode of a season moved by the same number of days — a season that
+ * a channel pushed back a week, a broadcast that ran a day late abroad: the
+ * day each aired and, where it is held, the instant. Each date is locked at
+ * its new value, episode by episode, as an edit by hand would lock it, and
+ * what changes is laid out before anything does.
+ */
+function ShiftDates({
+  open,
+  work,
+  name,
+  episodes,
+  lockable,
+  onClose,
+  onChanged,
+}: {
+  open: boolean
+  work: MediaItem
+  name: string
+  episodes: Episode[]
+  lockable: boolean
+  onClose: () => void
+  onChanged: () => void
+}) {
+  const { t, locale } = useI18n()
+  const s = t.admin.editor.seasonsTab.shift
+  const [days, setDays] = useState('7')
+  const [tried, setTried] = useState(false)
+  const [progress, setProgress] = useState<{ at: number; total: number } | null>(null)
+  const [report, setReport] = useState<{ text: string; failures: string[] } | null>(null)
+
+  // The minus sign some keyboards type is the hyphen's.
+  const typed = days.trim().replace('−', '-')
+  const valid = /^-?\d{1,4}$/.test(typed) && Number(typed) !== 0 && Math.abs(Number(typed)) <= SHIFT_MOST
+  const steps = valid ? Number(typed) : 0
+  const plan = episodes.filter(isDated).map((episode) => ({
+    episode,
+    airDate: shiftDay(episode.airDate, steps),
+    airDateUtc: shiftInstant(episode.airDateUtc, steps),
+  }))
+  const dayOf = (episode: Pick<Episode, 'airDate' | 'airDateUtc'>) => episode.airDate ?? episode.airDateUtc
+  const busy = progress !== null
+
+  const apply = async () => {
+    setTried(true)
+    if (!valid || !plan.length) return
+    setReport(null)
+    setProgress({ at: 0, total: plan.length })
+    let done = 0
+    const failures: string[] = []
+    const queue = [...plan]
+    // Each episode its own requests, four episodes at a time: one refused
+    // keeps the others from nothing, and each date is its own line in the
+    // audit trail.
+    const worker = async () => {
+      for (let next = queue.shift(); next !== undefined; next = queue.shift()) {
+        const scope = `episode:${next.episode.seasonNumber}x${next.episode.episodeNumber}`
+        try {
+          if (next.airDate) {
+            await api.put(`/items/${work.id}/overrides`, { scope, field: 'airDate', value: next.airDate })
+          }
+          if (next.airDateUtc) {
+            await api.put(`/items/${work.id}/overrides`, { scope, field: 'airDateUtc', value: next.airDateUtc })
+          }
+          done += 1
+        } catch (error) {
+          failures.push(`${episodeCode(next.episode)} — ${error instanceof Error ? error.message : t.common.actionFailed}`)
+        }
+        setProgress((now) => (now ? { ...now, at: now.at + 1 } : now))
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(4, plan.length) }, worker))
+    setProgress(null)
+    setReport({ text: failures.length ? s.failed(done, failures.length) : s.done(done), failures })
+    onChanged()
+  }
+
+  return (
+    <Dialog
+      open={open}
+      size="lg"
+      title={s.title(name)}
+      onClose={() => {
+        if (!busy) onClose()
+      }}
+      footer={
+        report ? (
+          <Button onClick={onClose}>{s.close}</Button>
+        ) : (
+          <>
+            <Button disabled={busy} onClick={onClose}>
+              {t.common.cancel}
+            </Button>
+            <Button type="submit" form="shift-dates" variant="primary" disabled={busy || !plan.length}>
+              {busy ? <Spinner className="size-4" /> : <Glyph name="calendar" className="size-4" />}
+              {s.apply(plan.length)}
+            </Button>
+          </>
+        )
+      }
+    >
+      <form
+        id="shift-dates"
+        noValidate
+        className="space-y-4"
+        onSubmit={(event) => {
+          event.preventDefault()
+          void apply()
+        }}
+      >
+        <div className="max-w-48">
+          <FormField label={s.days} htmlFor="shift-days" error={tried && !valid ? s.invalid : undefined}>
+            <Input
+              id="shift-days"
+              inputMode="numeric"
+              value={days}
+              disabled={busy || report !== null}
+              aria-invalid={tried && !valid ? true : undefined}
+              aria-describedby="shift-days-hint"
+              onChange={(event) => setDays(event.target.value)}
+            />
+          </FormField>
+        </div>
+        <p id="shift-days-hint" className="text-xs leading-relaxed text-bone-faint">
+          {s.daysHint} {lockable ? s.locks : s.edits}
+        </p>
+      </form>
+
+      {report ? (
+        <div className="mt-4 space-y-2">
+          <p role="status" className="text-sm text-bone">
+            {report.text}
+          </p>
+          {report.failures.length ? (
+            <ul className="space-y-1 text-xs text-vermillion">
+              {report.failures.map((failure) => (
+                <li key={failure}>{failure}</li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : progress ? (
+        <p className="mt-4 font-mono text-xs text-bone-dim tabular-nums">
+          {s.applying(progress.at, progress.total)}
+        </p>
+      ) : plan.length ? (
+        <table className="mt-4 w-full border-collapse text-left text-sm">
+          <caption className="label mb-2 text-left">{s.preview}</caption>
+          <thead>
+            <tr className="border-b border-rule">
+              <th scope="col" className="label py-2 pr-3 font-normal">
+                {s.episode}
+              </th>
+              <th scope="col" className="label py-2 pr-3 font-normal">
+                {s.now}
+              </th>
+              <th scope="col" className="label py-2 font-normal">
+                {s.after}
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {plan.map(({ episode, airDate, airDateUtc }) => (
+              <tr key={episode.id} className="border-b border-rule last:border-0">
+                <th scope="row" className="py-2 pr-3 font-normal text-bone">
+                  <span className="font-mono text-xs text-bone-faint tabular-nums">{episodeCode(episode)}</span>{' '}
+                  <span className="break-words">{episode.title || t.episode.untitled(episode.episodeNumber)}</span>
+                </th>
+                <td className="py-2 pr-3 font-mono text-xs whitespace-nowrap text-bone-dim tabular-nums">
+                  {fmt.shortDate(dayOf(episode), locale)}
+                </td>
+                <td className="py-2 font-mono text-xs whitespace-nowrap text-bone tabular-nums">
+                  {valid ? fmt.shortDate(airDate ?? airDateUtc, locale) : '—'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <p className="mt-4 text-sm text-bone-faint">{s.none}</p>
+      )}
+    </Dialog>
   )
 }
 

@@ -29,6 +29,9 @@ const CLOSED = [
   '/api/v1/settings',
   '/api/v1/jobs',
   '/api/v1/audit',
+  // Where what happens is told, and what was: masked addresses, but the
+  // server's.
+  '/api/v1/admin/notifications',
   '/api/v1/clients',
   '/api/v1/fields',
   // What TMDB lists for a season is asked of TMDB, on this server's key: for
@@ -168,10 +171,11 @@ test.describe('a visitor with no credential', () => {
   test('is offered a way in rather than an admin link', async ({ page }) => {
     await page.goto('/')
 
-    // On a phone the way in is inside the menu; see catalogue.spec.ts.
-    const menu = page.getByRole('button', { name: /^(menu)$/i })
-    if (await menu.isVisible()) {
-      await menu.click()
+    // On a phone the way in is inside the sheet of the bar along the foot of
+    // the screen; see catalogue.spec.ts.
+    const more = page.getByRole('button', { name: /^(more|plus)$/i })
+    if (await more.isVisible()) {
+      await more.click()
     }
 
     await expect(page.getByRole('link', { name: /sign in|se connecter/i })).toBeVisible()

@@ -14,7 +14,7 @@ use anyhow::Result;
 
 use crate::{
     db::repo,
-    domain::{MediaItem, MediaKind},
+    domain::{MediaItem, MediaKind, fields},
     providers::{
         lang::{base_language, iso_639_1_to_3},
         tmdb::models::Season,
@@ -266,7 +266,32 @@ pub fn tmdb_locale(asked: Option<&str>, own: &str) -> String {
 
 /// Whether this is the language the entity is already stored in.
 fn is_default(state: &AppState, language: &str) -> bool {
-    normalize(&state.language(None, None)) == language
+    stored(state) == language
+}
+
+/// The key of the language the catalogue keeps its works in — `fra` for
+/// `fr-FR` — which a work is served in when no other is asked for: what a
+/// text locked in that language is laid over when the work is read (see
+/// [`crate::domain::fields::apply_in`]).
+pub fn stored(state: &AppState) -> String {
+    normalize(&state.language(None, None))
+}
+
+/// Lay over a work the texts a person locked for the language an answer is
+/// in — in that language, else in every language — and say them locked:
+/// after it, `locked_fields` names `item/title` when the title is locked for
+/// that language, and the work's fields hold what was locked. For an answer
+/// that is in the language already, a relay's: what it writes over the
+/// service's own text. Nothing to do for the stored language, which the
+/// work is read in. Fetches nothing and lays no translation.
+pub fn lay_locks(state: &AppState, item: &mut MediaItem, requested: &str) {
+    let language = normalize(requested);
+    fields::fold_translations(item);
+    if language.is_empty() || is_default(state, &language) {
+        return;
+    }
+    fields::mark(item, &language);
+    fields::lay(item, &language);
 }
 
 /// Overlay `item` with the requested language, fetching it if we have not yet.
@@ -281,6 +306,7 @@ fn is_default(state: &AppState, language: &str) -> bool {
 /// [`MOST_LANGUAGES`] tried for the work since its last refresh.
 pub async fn apply(state: &AppState, item: &mut MediaItem, requested: &str) -> Result<()> {
     let language = normalize(requested);
+    fields::fold_translations(item);
 
     if language.is_empty() || is_default(state, &language) {
         return Ok(());
@@ -312,11 +338,15 @@ pub async fn apply(state: &AppState, item: &mut MediaItem, requested: &str) -> R
         }
     }
 
+    // What is locked for the language decides what a translation may take,
+    // then is laid over whatever it took.
+    fields::mark(item, &language);
     overlay_item(item, &language);
 
     if item.kind == MediaKind::Series {
         overlay_episodes(state, item, &language).await?;
     }
+    fields::lay(item, &language);
 
     Ok(())
 }
@@ -355,12 +385,16 @@ pub async fn apply_stored_many(
     requested: &str,
 ) -> Result<()> {
     let language = normalize(requested);
+    for item in items.iter_mut() {
+        fields::fold_translations(item);
+    }
 
     if language.is_empty() || is_default(state, &language) {
         return Ok(());
     }
 
     for item in items.iter_mut() {
+        fields::mark(item, &language);
         overlay_item(item, &language);
     }
 
@@ -375,6 +409,7 @@ pub async fn apply_stored_many(
         if let Some(texts) = held.remove(&item.id) {
             overlay_texts(item, &texts);
         }
+        fields::lay(item, &language);
     }
 
     Ok(())
@@ -386,12 +421,15 @@ pub async fn apply_stored_many(
 /// which is right for one detail view and wrong for ten search results.
 pub fn apply_shallow(state: &AppState, item: &mut MediaItem, requested: &str) {
     let language = normalize(requested);
+    fields::fold_translations(item);
 
     if language.is_empty() || is_default(state, &language) {
         return;
     }
 
+    fields::mark(item, &language);
     overlay_item(item, &language);
+    fields::lay(item, &language);
 }
 
 /// Replace the work's own title and overview from a stored translation.
@@ -419,12 +457,14 @@ fn overlay_item(item: &mut MediaItem, language: &str) {
     }
 }
 
-/// Whether a person has claimed this field.
+/// Whether a person has claimed this field for the language being laid.
 ///
 /// A lock is final. Translating over it would mean a work someone renamed goes
 /// back to the provider's name the moment a client asks in another language —
 /// exactly what locking exists to prevent. Somebody who wants a different name
-/// per language locks that language's field too.
+/// per language locks the field in that language: [`fields::mark`] says
+/// beforehand which fields are locked for it, and [`fields::lay`] lays the
+/// locks once the translation is in.
 fn locked(item: &MediaItem, path: &str) -> bool {
     item.locked_fields.iter().any(|f| f == path)
 }

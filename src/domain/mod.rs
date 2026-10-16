@@ -110,6 +110,15 @@ pub struct MediaItem {
     /// none. The Sonarr surface gives it back, as Skyhook does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title_qualifier: Option<String>,
+    /// The line the work is sold on, under its title — *Why are they here?* —
+    /// as TMDB has it in the language the catalogue is stored in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tagline: Option<String>,
+    /// What AniList calls the entry the work is: `TV`, `TV_SHORT`, `MOVIE`,
+    /// `SPECIAL`, `OVA`, `ONA` or `MUSIC`. A series or a film says too little
+    /// of an anime: an OVA is filed here as one or the other.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub popularity: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -119,6 +128,14 @@ pub struct MediaItem {
     pub genres: Vec<String>,
     #[serde(default)]
     pub keywords: Vec<String>,
+    /// Every country the work was made in, ISO 3166-1 alpha-2 in upper case
+    /// — `US`, `GB` — in the order TMDB lists them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub production_countries: Vec<String>,
+    /// Every company that made it, in the order TMDB lists them. The studio
+    /// is the first of them, or the one an anime source names instead.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub production_companies: Vec<String>,
 
     pub external_ids: ExternalIds,
 
@@ -158,9 +175,15 @@ pub struct MediaItem {
     /// catalogue holds it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub relations: Vec<Relation>,
+    /// When the work came out in each country, and the rating it carries
+    /// there: a country's, whole, from the first source that has any.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub releases: Vec<CountryRelease>,
 
     /// Fields carrying a manual override, as `scope/field` paths. The web UI
-    /// renders a lock next to each of these.
+    /// renders a lock next to each of these. A text locked in another
+    /// language than the one served is `scope/field@fra`; a lock on a child
+    /// the sources gave is named as [`fields::Child`] names it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub locked_fields: Vec<String>,
     /// The poster and the background a person chose to lead with, by image
@@ -168,6 +191,15 @@ pub struct MediaItem {
     /// the locks when the work is read; none by default.
     #[serde(default, skip_serializing_if = "PrimaryImages::is_empty")]
     pub primary_images: PrimaryImages,
+    /// The texts a person locked, each in one language or in every one: what
+    /// the language the work is served in lays over it. Set from the locks
+    /// when the work is read.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub locked_texts: Vec<fields::LockedText>,
+    /// What the sources gave and a person hid: kept apart for whoever
+    /// maintains the catalogue, served to nobody.
+    #[serde(default, skip_serializing_if = "fields::Hidden::is_empty")]
+    pub hidden: fields::Hidden,
 }
 
 /// The images a person chose, by id among the work's own.
@@ -258,10 +290,14 @@ impl MediaItem {
             trailer_youtube_id: None,
             theme_music: None,
             title_qualifier: None,
+            tagline: None,
+            format: None,
             popularity: None,
             collection_tmdb_id: None,
             genres: Vec::new(),
             keywords: Vec::new(),
+            production_countries: Vec::new(),
+            production_companies: Vec::new(),
             external_ids: ExternalIds::default(),
             is_manual: false,
             is_enabled: true,
@@ -279,8 +315,11 @@ impl MediaItem {
             ratings: Vec::new(),
             translations: Vec::new(),
             relations: Vec::new(),
+            releases: Vec::new(),
             locked_fields: Vec::new(),
             primary_images: PrimaryImages::default(),
+            locked_texts: Vec::new(),
+            hidden: fields::Hidden::default(),
         }
     }
 
@@ -309,6 +348,207 @@ impl MediaItem {
             .find(|r| r.source == "imdb")
             .or_else(|| real().min_by_key(|r| std::cmp::Reverse(r.votes.unwrap_or(0))))
     }
+
+    /// The rating the work carries in a country, by its ISO 3166-1 alpha-2
+    /// code: the one its record holds when that is the country's — a person
+    /// may have locked it — else the first its releases there give, in
+    /// cinemas before anything else.
+    pub fn certification_in(&self, country: &str) -> Option<&str> {
+        let blank = |s: &&str| s.trim().is_empty();
+        if self
+            .content_rating_country
+            .as_deref()
+            .is_some_and(|c| c.eq_ignore_ascii_case(country))
+            && let Some(own) = self.content_rating.as_deref().filter(|s| !blank(s))
+        {
+            return Some(own.trim());
+        }
+        // Of two of the same kind, the earlier: the first run's rating, not
+        // a re-release's.
+        self.releases
+            .iter()
+            .filter(|r| r.country.eq_ignore_ascii_case(country))
+            .filter_map(|r| {
+                let certification = r.certification.as_deref().filter(|s| !blank(s))?;
+                let day = r.date.as_deref().unwrap_or("~");
+                Some(((ReleaseKind::rank(r.release_type), day), certification))
+            })
+            .min_by_key(|(order, _)| *order)
+            .map(|(_, certification)| certification.trim())
+    }
+
+    /// One rating a country, by country code in order: what Radarr is sent,
+    /// to pick its own country's from. The record's own counts for its
+    /// country, as [`Self::certification_in`] says.
+    pub fn certifications(&self) -> Vec<(String, String)> {
+        let mut countries: Vec<String> = self
+            .releases
+            .iter()
+            .map(|r| r.country.to_ascii_uppercase())
+            .chain(
+                self.content_rating_country
+                    .as_deref()
+                    .map(str::to_ascii_uppercase),
+            )
+            .filter(|c| !c.trim().is_empty())
+            .collect();
+        countries.sort_unstable();
+        countries.dedup();
+        countries
+            .into_iter()
+            .filter_map(|country| {
+                let certification = self.certification_in(&country)?.to_string();
+                Some((country, certification))
+            })
+            .collect()
+    }
+
+    /// The first day the work came out in a country in each of the three
+    /// ways Radarr keeps — in cinemas, digitally, on disc — as its releases
+    /// there say. The earliest of each: a re-release does not move a film
+    /// forward, here any more than in the record's own dates.
+    pub fn days_in(&self, country: &str) -> ReleaseDays {
+        let mut days = ReleaseDays::default();
+        for release in self
+            .releases
+            .iter()
+            .filter(|r| r.country.eq_ignore_ascii_case(country))
+        {
+            let Some(day) = release
+                .date
+                .as_deref()
+                .and_then(|d| d.trim().get(..10))
+                .filter(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").is_ok())
+            else {
+                continue;
+            };
+            let slot = match release.release_type {
+                Some(kind) if kind.in_cinemas() => &mut days.cinema,
+                Some(ReleaseKind::Digital) => &mut days.digital,
+                Some(ReleaseKind::Physical) => &mut days.physical,
+                _ => continue,
+            };
+            if slot.as_deref().is_none_or(|kept| day < kept) {
+                *slot = Some(day.to_string());
+            }
+        }
+        days
+    }
+}
+
+/// A film's first day in a country in each of the ways Radarr keeps.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ReleaseDays {
+    pub cinema: Option<String>,
+    pub digital: Option<String>,
+    pub physical: Option<String>,
+}
+
+/// How a work came out in a country, as TMDB tells its releases apart.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum ReleaseKind {
+    /// A first showing — a festival, a gala — before it is out.
+    Premiere,
+    /// In a few cinemas.
+    Limited,
+    /// In cinemas.
+    Theatrical,
+    /// To buy or rent online.
+    Digital,
+    /// On disc.
+    Physical,
+    /// On television.
+    Tv,
+}
+
+impl ReleaseKind {
+    /// TMDB's code for it: 1 a premiere, 2 a limited run, 3 cinemas,
+    /// 4 digital, 5 physical, 6 television.
+    pub const fn from_tmdb(code: i32) -> Option<Self> {
+        match code {
+            1 => Some(Self::Premiere),
+            2 => Some(Self::Limited),
+            3 => Some(Self::Theatrical),
+            4 => Some(Self::Digital),
+            5 => Some(Self::Physical),
+            6 => Some(Self::Tv),
+            _ => None,
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Premiere => "premiere",
+            Self::Limited => "limited",
+            Self::Theatrical => "theatrical",
+            Self::Digital => "digital",
+            Self::Physical => "physical",
+            Self::Tv => "tv",
+        }
+    }
+
+    /// Whether it puts the work in cinemas, as Radarr counts a release:
+    /// a limited run is one, a festival's premiere is not.
+    pub const fn in_cinemas(self) -> bool {
+        matches!(self, Self::Limited | Self::Theatrical)
+    }
+
+    /// Whose rating stands for a country's when it lists several: the one
+    /// it was given for cinemas, then one given without a release — a
+    /// series', Radarr's — then a premiere's, then the rest.
+    const fn rank(kind: Option<Self>) -> u8 {
+        match kind {
+            Some(Self::Theatrical) => 0,
+            Some(Self::Limited) => 1,
+            None => 2,
+            Some(Self::Premiere) => 3,
+            Some(Self::Digital) => 4,
+            Some(Self::Physical) => 5,
+            Some(Self::Tv) => 6,
+        }
+    }
+}
+
+impl FromStr for ReleaseKind {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim() {
+            "premiere" => Ok(Self::Premiere),
+            "limited" => Ok(Self::Limited),
+            "theatrical" => Ok(Self::Theatrical),
+            "digital" => Ok(Self::Digital),
+            "physical" => Ok(Self::Physical),
+            "tv" => Ok(Self::Tv),
+            other => anyhow::bail!("unknown release type: {other}"),
+        }
+    }
+}
+
+/// What a work was given in one country: a day it came out there and how,
+/// the rating it carries there, or both.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CountryRelease {
+    /// ISO 3166-1 alpha-2, upper case: `FR`, `US`.
+    pub country: String,
+    /// How it came out there; none for a rating given without a release —
+    /// a series' ratings, and Radarr's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release_type: Option<ReleaseKind>,
+    /// The day, `YYYY-MM-DD`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub date: Option<String>,
+    /// The rating there: `TP`, `PG-13`, `12A`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub certification: Option<String>,
+    /// What TMDB notes beside it: a festival, a service, a re-release.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    /// The source it came from: `tmdb`, `tvdb`, `radarr`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]

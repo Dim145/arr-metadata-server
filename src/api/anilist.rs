@@ -158,9 +158,11 @@ pub async fn relay(State(state): State<AppState>, request: Request) -> AppResult
         .await
         .map_err(|_| AppError::PayloadTooLarge("a GraphQL query is a few kilobytes".into()))?;
 
-    // The caller's own AniList token travels; a key of this server does not.
+    // The caller's own AniList token travels; a key of this server does not
+    // — as the token, nor anywhere else in the header that would carry it.
     let theirs = relay::bearer(&parts.headers)
         .filter(|token| !secrets::is_issued_here(token))
+        .filter(|_| !relay::authorization_carries_key_issued_here(&parts.headers))
         .and_then(|_| parts.headers.get(header::AUTHORIZATION).cloned());
 
     // What AniList answered last time, for a query anybody may ask: one

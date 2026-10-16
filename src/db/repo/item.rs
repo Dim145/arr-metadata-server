@@ -36,7 +36,8 @@ const ITEM_COLUMNS: &str = "
     content_rating, content_rating_country, homepage, trailer_youtube_id, theme_music, title_qualifier,
     popularity, genres, keywords,
     collection_tmdb_id, is_manual, is_enabled, is_adult, created_at, updated_at,
-    refreshed_at, refresh_after, refresh_error
+    refreshed_at, refresh_after, refresh_error,
+    tagline, format, production_countries, production_companies
 ";
 
 fn map_item(row: &sqlx::any::AnyRow) -> Result<MediaItem> {
@@ -69,10 +70,14 @@ fn map_item(row: &sqlx::any::AnyRow) -> Result<MediaItem> {
         trailer_youtube_id: row.opt_text("trailer_youtube_id")?,
         theme_music: row.opt_text("theme_music")?,
         title_qualifier: row.opt_text("title_qualifier")?,
+        tagline: row.opt_text("tagline")?,
+        format: row.opt_text("format")?,
         popularity: row.opt_real("popularity")?,
         collection_tmdb_id: row.opt_big("collection_tmdb_id")?,
         genres: row.text_list("genres")?,
         keywords: row.text_list("keywords")?,
+        production_countries: row.text_list("production_countries")?,
+        production_companies: row.text_list("production_companies")?,
         external_ids: ExternalIds::default(),
         is_manual: row.flag("is_manual")?,
         is_adult: row.flag("is_adult").unwrap_or(false),
@@ -90,8 +95,11 @@ fn map_item(row: &sqlx::any::AnyRow) -> Result<MediaItem> {
         ratings: Vec::new(),
         translations: Vec::new(),
         relations: Vec::new(),
+        releases: Vec::new(),
         locked_fields: Vec::new(),
         primary_images: Default::default(),
+        locked_texts: Vec::new(),
+        hidden: Default::default(),
     })
 }
 
@@ -315,6 +323,7 @@ pub async fn load_children(db: &Db, item: &mut MediaItem) -> Result<()> {
         load_translations(db, &item.id),
         load_relations(db, &item.id),
     )?;
+    item.releases = super::release::load(db, &item.id).await?;
 
     // Season-scoped images belong on their season, not on the work.
     let (season_images, item_images): (Vec<Image>, Vec<Image>) =
@@ -1052,6 +1061,15 @@ pub struct Query {
     pub min_rating: Option<f64>,
     /// Works whose last refresh failed.
     pub refresh_failed: bool,
+    /// Works lacking every one of these: the gaps the administration's
+    /// register is narrowed to, and its to-do list counts.
+    pub missing: Vec<Missing>,
+    /// The language the catalogue keeps its works in, as a lock is filed
+    /// under it (`fra`): a work's overview is the one locked in that
+    /// language, else the one locked in every language, as it is read. What
+    /// the overview gap goes by; left out, a lock counts only in every
+    /// language.
+    pub stored_language: Option<String>,
     pub sort: Sort,
     /// `None` is the sort's own direction: A to Z for titles, highest,
     /// newest or most popular first for the rest.
@@ -1087,6 +1105,103 @@ impl std::str::FromStr for Sort {
                 "unknown sort {other:?}: expected popularity, rating, release, title, added or refreshed"
             )),
         }
+    }
+}
+
+/// A gap in a work's record, as the administration's register narrows to it
+/// and its to-do list counts it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Missing {
+    /// No poster of its own: none from a source, none chosen by hand.
+    Poster,
+    /// No overview in the language it is stored in — none given, or one
+    /// cleared by hand, in that language or in every one.
+    Overview,
+    /// No IMDb identifier, which IMDb's rating and the clients' links need.
+    Imdb,
+    /// Never refreshed, although it has an identifier to be refreshed by. A
+    /// work entered by hand is never refreshed, and is not one of these.
+    Refresh,
+}
+
+impl Missing {
+    pub const ALL: [Missing; 4] = [Self::Poster, Self::Overview, Self::Imdb, Self::Refresh];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Poster => "poster",
+            Self::Overview => "overview",
+            Self::Imdb => "imdb",
+            Self::Refresh => "refresh",
+        }
+    }
+
+    /// What a row of `media_item` lacking it meets, and how many times the
+    /// language the catalogue is stored in is bound in it — the overview's
+    /// alone; the words are the same on both engines. A lock in every
+    /// language counts, and one in the stored language, which is the text the
+    /// work is read with and over the other; one in another language is its
+    /// readers' alone, and the stored record is what everybody else is given.
+    fn condition(self) -> (&'static str, usize) {
+        let words = match self {
+            // A poster of the work's own — a season's is the season's — or one
+            // chosen by hand, which its lock brings back when the sources no
+            // longer list it.
+            Self::Poster => {
+                r"(NOT EXISTS (SELECT 1 FROM media_image i
+                               WHERE i.media_id = media_item.id AND i.cover_type = 'poster'
+                                 AND i.season_number IS NULL)
+                   AND NOT EXISTS (SELECT 1 FROM media_override o
+                                   WHERE o.media_id = media_item.id AND o.scope = 'item'
+                                     AND o.field = 'primaryPoster' AND o.language = ''
+                                     AND o.value IS NOT NULL AND o.value <> 'null'))"
+            }
+            // The overview served in the stored language: the lock made in it
+            // where there is one, else the one made in every language —
+            // cleared, either is an empty one — and the sources' otherwise.
+            Self::Overview => {
+                return (
+                    r#"(EXISTS (SELECT 1 FROM media_override o
+                               WHERE o.media_id = media_item.id AND o.scope = 'item'
+                                 AND o.field = 'overview'
+                                 AND (o.language = ?
+                                      OR (o.language = ''
+                                          AND NOT EXISTS (
+                                              SELECT 1 FROM media_override l
+                                              WHERE l.media_id = media_item.id
+                                                AND l.scope = 'item' AND l.field = 'overview'
+                                                AND l.language = ?)))
+                                 AND (o.value IS NULL OR o.value IN ('null', '""')))
+                       OR (COALESCE(TRIM(media_item.overview), '') = ''
+                           AND NOT EXISTS (SELECT 1 FROM media_override o
+                                           WHERE o.media_id = media_item.id AND o.scope = 'item'
+                                             AND o.field = 'overview'
+                                             AND o.language IN ('', ?))))"#,
+                    3,
+                );
+            }
+            Self::Imdb => {
+                r"NOT EXISTS (SELECT 1 FROM media_external_id e
+                              WHERE e.media_id = media_item.id AND e.source = 'imdb')"
+            }
+            Self::Refresh => {
+                r"(media_item.refreshed_at IS NULL AND media_item.is_manual = 0
+                   AND EXISTS (SELECT 1 FROM media_external_id e
+                               WHERE e.media_id = media_item.id))"
+            }
+        };
+        (words, 0)
+    }
+}
+
+impl std::str::FromStr for Missing {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::ALL
+            .into_iter()
+            .find(|gap| gap.as_str() == s)
+            .ok_or_else(|| format!("unknown gap {s:?}: expected poster, overview, imdb or refresh"))
     }
 }
 
@@ -1356,6 +1471,14 @@ pub async fn load_artwork(db: &Db, items: &mut [MediaItem]) -> Result<()> {
         let mut own = images.remove(&item.id).unwrap_or_default();
         // SQL ordered by the cover type's name; a card wants the poster first.
         own.sort_by_key(|i| (i.cover_type.priority(), i.sort_order));
+        // A picture a source gave and a person hid is none of the work's: as
+        // its locks have it, applied before this as every list applies them.
+        own.retain(|i| {
+            i.is_manual
+                || !item
+                    .locked_fields
+                    .contains(&format!("image:{}/hidden", i.url))
+        });
 
         item.images = own;
         item.ratings = ratings.remove(&item.id).unwrap_or_default();
@@ -1691,6 +1814,21 @@ fn narrow(
 
     if q.refresh_failed {
         sql.push_str(" AND refresh_error IS NOT NULL");
+    }
+
+    // Each gap narrows further: asked for a poster and an overview, the list
+    // is of the works lacking both. Before the text search, which ends the
+    // statement early on SQLite.
+    for gap in &q.missing {
+        let (condition, binds) = gap.condition();
+        sql.push_str(" AND ");
+        sql.push_str(condition);
+        // Empty, it matches the locks in every language alone.
+        let stored = q.stored_language.clone().unwrap_or_default();
+        for _ in 0..binds {
+            args.add(stored.clone())
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+        }
     }
 
     if !q.include_adult {
@@ -2251,14 +2389,28 @@ pub async fn person_credits(
         .fetch_all(db.pool())
         .await?;
 
-    rows.iter()
+    let found = rows
+        .iter()
         .map(|row| {
             Ok(PersonCredit {
                 media_id: row.text("media_id")?,
                 credit: map_credit(row)?,
             })
         })
-        .collect()
+        .collect::<Result<Vec<_>>>()?;
+
+    // As each work's locks have the credit: hidden there, it is not one of
+    // the person's here; corrected, it is played as corrected.
+    let works: Vec<String> = found.iter().map(|c| c.media_id.clone()).collect();
+    let locks = super::override_field::list_for_many(db, &works).await?;
+    Ok(found
+        .into_iter()
+        .filter_map(|PersonCredit { media_id, credit }| {
+            let locked = locks.get(&media_id).map(Vec::as_slice).unwrap_or_default();
+            let credit = crate::domain::fields::edit_credit(credit, locked)?;
+            Some(PersonCredit { media_id, credit })
+        })
+        .collect())
 }
 
 // ─── writes ──────────────────────────────────────────────────────────────────
@@ -2465,11 +2617,17 @@ async fn upsert_row(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaItem) ->
             popularity, genres, keywords, collection_tmdb_id, is_manual, is_enabled, is_adult,
             created_at, updated_at, refreshed_at, refresh_after, refresh_error,
             listed_title, listed_year, listed_genres, listed_keywords, listed_network,
-            listed_studio, listed_status, listed_language, listed_release, listed_score
+            listed_studio, listed_status, listed_language, listed_release, listed_score,
+            tagline, format, production_countries, production_companies
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                   ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                  ?, ?, ?, ?)
         ON CONFLICT (id) DO UPDATE SET
+            tagline = excluded.tagline,
+            format = excluded.format,
+            production_countries = excluded.production_countries,
+            production_companies = excluded.production_companies,
             kind = excluded.kind,
             slug = excluded.slug,
             title = excluded.title,
@@ -2566,6 +2724,10 @@ async fn upsert_row(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaItem) ->
         .bind(&listed.language)
         .bind(&listed.release)
         .bind(listed.score)
+        .bind(&item.tagline)
+        .bind(&item.format)
+        .bind(text_list(&item.production_countries))
+        .bind(text_list(&item.production_companies))
         .execute(&mut **tx)
         .await
         .context("failed to write media_item")?;
@@ -2914,6 +3076,9 @@ async fn replace_children(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaIt
         .context("failed to write translation")?;
     }
 
+    // Wholly the providers', like the ratings: replaced, never merged.
+    super::release::replace(db, tx, &item.id, &item.releases).await?;
+
     Ok(())
 }
 
@@ -3070,24 +3235,14 @@ mod tests {
         domain::{CoverType, ExternalIds, RatingValue},
     };
 
-    /// A real database, in memory, with the real migrations applied.
-    ///
-    /// These queries are built by hand and bound positionally, so a column added
-    /// to the list without a matching placeholder compiles cleanly and fails at
-    /// runtime — which is how `34 values for 35 columns` reached a running
-    /// server. A round trip through an actual engine is what catches that.
-    async fn db() -> Db {
-        let db = Db::connect(&config::Database {
-            url: "sqlite::memory:".into(),
-            max_connections: 1,
-            acquire_timeout: std::time::Duration::from_secs(5),
-        })
-        .await
-        .expect("in-memory database");
-
-        db.migrate().await.expect("migrations");
-        db
-    }
+    // A real database with the real migrations applied: SQLite in memory, or
+    // the PostgreSQL `AMS_TEST_DATABASE_URL` names.
+    //
+    // These queries are built by hand and bound positionally, so a column added
+    // to the list without a matching placeholder compiles cleanly and fails at
+    // runtime — which is how `34 values for 35 columns` reached a running
+    // server. A round trip through an actual engine is what catches that.
+    use crate::db::testing::{db, sqlite};
 
     fn sample() -> MediaItem {
         let mut item = MediaItem::empty(MediaKind::Movie);
@@ -3257,7 +3412,10 @@ mod tests {
         // off `ix_media_item_popular` — and a text search reads the table,
         // because walking either index for it measured four times slower on a
         // term that matched nothing.
-        let db = db().await;
+        //
+        // SQLite's, whatever engine the other tests run on: the plan is read
+        // with its own `EXPLAIN QUERY PLAN`, and means nothing to PostgreSQL's.
+        let db = sqlite().await;
 
         let one_kind = plan(
             &db,

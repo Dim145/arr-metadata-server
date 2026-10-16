@@ -77,6 +77,14 @@ pub async fn guard_anilist(
     authorize(state, Surface::Anilist, request, next).await
 }
 
+pub async fn guard_plex(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> AppResult<Response> {
+    authorize(state, Surface::Plex, request, next).await
+}
+
 /// Whether a request is a TheTVDB client signing in: `POST /v4/login`, its
 /// key in the body and nothing in the headers. The relay reads the key there
 /// and judges it — see `api::thetvdb::login` — so the guard asks nothing of
@@ -208,7 +216,9 @@ async fn identify(
         return Err(switched_off(Api::Native));
     }
 
-    let identity = match state.config.policy_for(surface) {
+    // A relay asked with each client's own key reads a key policy as the
+    // address list: a key issued here is refused there.
+    let identity = match crate::api::relay::policy(state, surface) {
         SurfacePolicy::Open => Identity::Anonymous,
 
         SurfacePolicy::Allowlist => {
@@ -326,9 +336,9 @@ async fn identify(
     // here rather than in each handler, so that an endpoint added later is
     // closed to members until it is listed, as it is to visitors.
     //
-    // The other surfaces are the operator's: Sonarr's and Radarr's stand in
-    // for services that store what they are asked about, and the relays spend
-    // the operator's quotas — with sign-ups open, a member is anybody.
+    // The other surfaces are the operator's: Sonarr's, Radarr's and Plex's
+    // answer services that store what they are asked about, and the relays
+    // spend the operator's quotas — with sign-ups open, a member is anybody.
     if identity.is_member() {
         match surface {
             Surface::Native if !member_may(request.method(), request.uri().path()) => {
@@ -337,7 +347,7 @@ async fn identify(
             relay if relay.is_relay() && !state.relay_for_members() => {
                 return Err(members_kept_out());
             }
-            Surface::Arr => return Err(AppError::Forbidden),
+            Surface::Arr | Surface::Plex => return Err(AppError::Forbidden),
             _ => {}
         }
     }
@@ -365,6 +375,7 @@ fn switched_off(api: Api) -> AppError {
                 Api::Native => "native",
                 Api::Tvdb => "TheTVDB",
                 Api::Anilist => "AniList",
+                Api::Plex => "Plex",
             }
         ),
     }
@@ -584,7 +595,14 @@ fn browsable(method: &axum::http::Method, path: &str) -> bool {
                 [key] => !key.is_empty(),
                 [key, shape] => {
                     !key.is_empty()
-                        && matches!(*shape, "sonarr.json" | "radarr.json" | "stevenlu.json")
+                        && matches!(
+                            *shape,
+                            "sonarr.json"
+                                | "radarr.json"
+                                | "stevenlu.json"
+                                | "ids.txt"
+                                | "feed.atom"
+                        )
                 }
                 _ => false,
             }
@@ -680,17 +698,10 @@ fn extract_key(headers: &HeaderMap, query: Option<&str>) -> Option<String> {
         }
     }
 
-    if let Some(value) = headers
-        .get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        && let Some(token) = value
-            .strip_prefix("Bearer ")
-            .or_else(|| value.strip_prefix("bearer "))
-    {
-        let token = token.trim();
-        if !token.is_empty() {
-            return Some(token.to_string());
-        }
+    // The scheme whatever its case, as HTTP reads it and as the relays read
+    // it: a key a relay takes for ours is one the guard judges as ours.
+    if let Some(token) = crate::api::relay::bearer(headers) {
+        return Some(token);
     }
 
     let query = query?;
@@ -917,7 +928,14 @@ mod browse_tests {
         assert!(allowed("/api/v1/lists/autumn-2026"));
         assert!(allowed("/api/v1/lists/autumn-2026/sonarr.json"));
         assert!(allowed("/api/v1/lists/autumn-2026/radarr.json"));
+        assert!(allowed("/api/v1/lists/autumn-2026/ids.txt"));
+        assert!(allowed("/api/v1/lists/autumn-2026/feed.atom"));
         assert!(!allowed("/api/v1/lists/autumn-2026/items"));
+        assert!(!allowed("/api/v1/lists/autumn-2026/ids.txt/x"));
+        assert!(!allowed("/api/v1/lists//ids.txt"));
+        // The Kometa metadata file is made of the locks, which stay behind a
+        // credential.
+        assert!(!allowed("/api/v1/export/kometa.yml"));
         assert!(!allowed("/api/v1/lists//sonarr.json"));
         assert!(allowed(&format!("/api/v1/items/{id}/lists")));
         assert!(allowed(&format!("/api/v1/items/{id}/watch")));

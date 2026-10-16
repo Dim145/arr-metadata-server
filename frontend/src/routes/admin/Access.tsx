@@ -30,7 +30,7 @@ import { api } from '../../lib/api'
 import { cn } from '../../lib/cn'
 import { relative } from '../../lib/format'
 import { useI18n } from '../../lib/i18n'
-import type { AccessReport, AccountRole, ApiName, Registration } from '../../lib/types'
+import type { AccessReport, AccountRole, ApiName, Registration, RelayCredentialState } from '../../lib/types'
 
 const REGISTRATIONS: Registration[] = ['closed', 'invite', 'approval', 'open']
 
@@ -267,6 +267,26 @@ export function Access() {
               disabled={write.isPending || !relaysOn}
             />
           </div>
+          {/* Whose key each relay asks its service with: the operator's,
+              who answers for that use, or each client's own. The locks are
+              written in either way. */}
+          <section aria-labelledby="relay-credentials" className="space-y-5 border-t border-rule px-5 py-4">
+            <div>
+              <p id="relay-credentials" className="text-sm font-medium text-bone">
+                {a.credential.title}
+              </p>
+              <p className="mt-1 max-w-prose text-xs leading-relaxed text-bone-faint">{a.credential.lead}</p>
+            </div>
+            {access.relayCredentials.map((relay) => (
+              <RelayCredential
+                key={relay.api}
+                relay={relay}
+                rules={access.allowlistRules}
+                disabled={write.isPending}
+                onChange={(value) => set(`${relay.api}.relayCredential`, value)}
+              />
+            ))}
+          </section>
           <div className="space-y-2 border-t border-rule px-5 py-4 text-xs leading-relaxed text-bone-faint">
             <p>{a.offNote}</p>
             <p>
@@ -375,6 +395,55 @@ function Consequence({ children }: { children: React.ReactNode }) {
     <p className="mt-4 max-w-prose border-l-2 border-rule-bright pl-4 text-sm leading-relaxed text-bone-dim">
       {children}
     </p>
+  )
+}
+
+/** The service a relay asks, by name. */
+const SERVICES: Record<RelayCredentialState['api'], string> = { tmdb: 'TMDB', tvdb: 'TheTVDB' }
+
+/**
+ * One relay's choice of key, and what it changes said under it: what stands
+ * in the way of it — no key of the server's own to stand in with — and what
+ * comes with it — the listed addresses guarding the relay in a key's place.
+ */
+function RelayCredential({
+  relay,
+  rules,
+  disabled,
+  onChange,
+}: {
+  relay: RelayCredentialState
+  rules: number
+  disabled: boolean
+  onChange: (value: RelayCredentialState['credential']) => void
+}) {
+  const { t } = useI18n()
+  const a = t.admin.access
+  const c = a.credential
+  const service = SERVICES[relay.api]
+
+  return (
+    <div className="grid gap-x-6 gap-y-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-start">
+      <div className="min-w-0">
+        <span className="block text-sm text-bone">{a.apis[relay.api]}</span>
+        <Consequence>{c.consequence[relay.credential](service)}</Consequence>
+        {relay.credential === 'server' && !relay.operatorKey ? <Caution>{c.noKey[relay.api]}</Caution> : null}
+        {relay.credential === 'client' && relay.configuredPolicy === 'apikey' ? (
+          <Caution>{c.byAddress[relay.api](a.rules(rules))}</Caution>
+        ) : null}
+      </div>
+      <Segmented
+        label={c.label(a.apis[relay.api])}
+        value={relay.credential}
+        options={(['server', 'client'] as const).map((value) => ({ value, label: c.options[value] }))}
+        onChange={onChange}
+        disabled={disabled}
+        // Who answers to the service for every call is no choice to
+        // stumble on with an arrow key.
+        deliberate
+        className="justify-self-start max-sm:flex max-sm:w-full max-sm:flex-col max-sm:rounded-card"
+      />
+    </div>
   )
 }
 

@@ -208,13 +208,17 @@ tvdb -o /dev/null -H "Authorization: Bearer ${TOKEN}" "$TVDB_DOOR/v4/series/${TV
 [ "$(asked_count /v4/series/${TVDB_ID}/extended)" = "1" ] || fail "TheTVDB was asked again"
 ok
 
-step "the aired order's episodes take the locked episode title; the translation takes the locked name"
+step "the aired order's episodes take the locked episode title; a French translation keeps TheTVDB's name"
 tvdb -H "Authorization: Bearer ${TOKEN}" "$TVDB_DOOR/v4/series/${TVDB_ID}/episodes/official/eng" \
   | py 'eps = json.load(sys.stdin)["data"]["episodes"]; assert eps[0]["name"] == "Upstream E1", eps[0]; assert eps[1]["name"] == "Locked Episode Title", eps[1]' \
   || fail "the episodes were not patched as expected"
+# The catalogue is kept in English here (no AMS_TMDB_LANGUAGE): a name locked
+# in every language is the catalogue's own, written into the documents in
+# English — the English translation takes it, further down — and TheTVDB's
+# French stands.
 tvdb -H "Authorization: Bearer ${TOKEN}" "$TVDB_DOOR/v4/series/${TVDB_ID}/translations/fra" \
-  | py 'd = json.load(sys.stdin)["data"]; assert d["name"] == "Locked Series Title", d; assert d["language"] == "fra"' \
-  || fail "the translation was not patched as expected"
+  | py 'd = json.load(sys.stdin)["data"]; assert d["name"] == "Upstream Name", d; assert d["language"] == "fra"' \
+  || fail "the French translation took the name locked in every language"
 ok
 
 step "a key in the query authenticates too, and is not handed on"
@@ -277,6 +281,34 @@ ANSWER=$(tvdb -w '\n%{http_code}' -H "Authorization: Bearer ${TOKEN}" "$TVDB_DOO
 printf '%s' "$ANSWER" | grep -q surface_disabled || fail "not the switched-off refusal"
 curl -fsS -b "$COOKIES" -o /dev/null -X PUT "$BASE/api/v1/settings/server/-" \
   -H 'content-type: application/json' -d '{"key":"api.tvdb","value":"true"}'
+ok
+
+# ── TheTVDB, with each client's own key ───────────────────────────────────
+echo "TheTVDB relay, tvdb.relayCredential=client"
+
+step "a key issued here is refused, saying why; a client's own key and token travel as they came"
+curl -fsS -b "$COOKIES" -o /dev/null -X PUT "$BASE/api/v1/settings/server/-" \
+  -H 'content-type: application/json' -d '{"key":"tvdb.relayCredential","value":"client"}'
+asked_reset
+ANSWER=$(tvdb -w '\n%{http_code}' -X POST "$TVDB_DOOR/v4/login" -H 'content-type: application/json' -d "{\"apikey\":\"${KEY}\"}")
+[ "${ANSWER##*$'\n'}" = "401" ] || fail "expected 401 for a key issued here, got ${ANSWER##*$'\n'}"
+printf '%s' "${ANSWER%$'\n'*}" | grep -q own_key_required || fail "not the refusal that says why: $ANSWER"
+code=$(tvdb -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${KEY}" "$TVDB_DOOR/v4/series/${TVDB_ID}")
+[ "$code" = "401" ] || fail "expected 401 for a key issued here as a token, got $code"
+[ "$(asked_count /v4/)" = "0" ] || fail "TheTVDB was asked for a key issued here"
+OWN=$(tvdb -X POST "$TVDB_DOOR/v4/login" -H 'content-type: application/json' -d '{"apikey":"their-tvdb-key"}' \
+  | py 'print(json.load(sys.stdin)["data"]["token"])') \
+  || fail "TheTVDB's token was not handed back"
+[ "$OWN" = "fake-token-for-their-tvdb-key" ] || fail "not TheTVDB's token: $OWN"
+tvdb -H "Authorization: Bearer ${OWN}" "$TVDB_DOOR/v4/series/${TVDB_ID}/extended" \
+  | py 'd = json.load(sys.stdin)["data"]; assert d["name"] == "Locked Series Title", d' \
+  || fail "the record was not patched for a client with its own token"
+[ "$(asked_last /v4/series authorization)" = "\"Bearer ${OWN}\"" ] || fail "their token did not travel: $(asked_last /v4/series authorization)"
+curl -fsS -b "$COOKIES" "$BASE/api/v1/admin/access" \
+  | py 'r = {c["api"]: c for c in json.load(sys.stdin)["relayCredentials"]}; assert r["tvdb"]["credential"] == "client", r' \
+  || fail "the access page does not say whose key the relay asks with"
+curl -fsS -b "$COOKIES" -o /dev/null -X PUT "$BASE/api/v1/settings/server/-" \
+  -H 'content-type: application/json' -d '{"key":"tvdb.relayCredential","value":"server"}'
 ok
 
 # ── AniList, under the default policy: by address ─────────────────────────

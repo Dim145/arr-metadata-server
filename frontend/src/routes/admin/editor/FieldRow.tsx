@@ -16,6 +16,11 @@
  * genre in its colour, an address as a link, a still as the picture — and the
  * stored form beside it in the register's hand, for whoever has to match it
  * against a release log.
+ *
+ * A text — a title, an overview — is shown in the language "Show in" names,
+ * and may be locked in that language alone: the row finds its lock in that
+ * language first (`locks.tsx`), says which language a lock is in, and asks,
+ * when it is edited, whether the edit is for this language or for every one.
  */
 
 import { useMutation } from '@tanstack/react-query'
@@ -32,11 +37,12 @@ import {
   Input,
   Label,
   Provenance,
+  Segmented,
   Spinner,
   Textarea,
   Toggle,
 } from '../../../components/ui'
-import { api } from '../../../lib/api'
+import { api, query } from '../../../lib/api'
 import { cn } from '../../../lib/cn'
 import * as fmt from '../../../lib/format'
 import { useI18n, type Dict } from '../../../lib/i18n'
@@ -44,7 +50,18 @@ import { languageName, statusLabel, titleOrigin } from '../../../lib/labels'
 import { trailerPage } from '../../../lib/links'
 import type { FieldDef, Override, ValueSource } from '../../../lib/types'
 
+import { codeOf, lockOf, shelfOf, useEditorLocks } from './locks'
 import { hostOf } from './shared'
+
+/** A language a lock is kept under, named as a reader of `locale` writes it within a phrase: `français`, `French`. */
+function spoken(shelf: string, locale: string): string {
+  const code = codeOf(shelf)
+  try {
+    return new Intl.DisplayNames([locale], { type: 'language' }).of(code) ?? code
+  } catch {
+    return code
+  }
+}
 
 /** The types whose shape is worth saying under the name: what to type. */
 const HINTED = new Set(['date', 'dateTime', 'timeOfDay', 'textList', 'integer', 'float', 'boolean', 'ids'])
@@ -61,7 +78,7 @@ export function FieldRow({
   scope = 'item',
   def,
   value,
-  lock,
+  lock: found,
   origin,
   traced = false,
   labelled = true,
@@ -73,6 +90,7 @@ export function FieldRow({
   scope?: string
   def: FieldDef
   value: unknown
+  /** The field's lock, as the caller found it; a text's is found again in the language shown. */
   lock?: Override
   /** Who gave the value, when the last merge said. */
   origin?: ValueSource
@@ -86,13 +104,29 @@ export function FieldRow({
 }) {
   const { t, locale } = useI18n()
   const [editing, setEditing] = useState(false)
+  const locks = useEditorLocks()
+  const lock = lockOf(locks, scope, def.name, found)
+  const textual = locks?.translated.includes(def.name) ?? false
+  // The language an edit of this text may be kept to: the one shown, or —
+  // shown as stored — the one its lock is in, the language it is stored in.
+  const shelf = textual ? (locks?.language ? shelfOf(locks.language) : (lock?.language ?? '')) : ''
 
   const unlock = useMutation({
-    mutationFn: () => api.delete(`/items/${itemId}/overrides/${encodeURIComponent(scope)}/${def.name}`),
+    mutationFn: () =>
+      api.delete(
+        `/items/${itemId}/overrides/${encodeURIComponent(scope)}/${def.name}${query({ language: lock?.language })}`,
+      ),
     onSuccess: onChanged,
   })
 
   const locked = lock !== undefined
+  const lockLabel = lock?.language
+    ? t.admin.editor.lockedIn(spoken(lock.language, locale))
+    : shelf && locked
+      ? t.admin.editor.lockedEverywhere
+      : lock?.updatedAt
+        ? t.admin.editor.lockedOn(fmt.relative(lock.updatedAt, locale) ?? '')
+        : t.admin.editor.locked
   const given = hasValue(def, value)
   const note = traced ? originNote(def.name, origin, { hasValue: given, locked }, t, locale) : null
   // A long text, or a row whose panel names it: the value runs the width,
@@ -144,6 +178,9 @@ export function FieldRow({
               scope={scope}
               def={def}
               value={value}
+              shelf={shelf}
+              // An edit of a lock in every language stays one, unless asked.
+              alone={!(locked && !lock?.language)}
               onDone={() => {
                 setEditing(false)
                 onChanged()
@@ -168,10 +205,15 @@ export function FieldRow({
           <div className="col-start-2 row-start-1 flex shrink-0 flex-wrap items-center justify-end gap-2 sm:col-start-auto sm:row-start-auto">
             {locked ? (
               <>
-                <Provenance
-                  manual
-                  label={lock?.updatedAt ? t.admin.editor.lockedOn(fmt.relative(lock.updatedAt, locale) ?? '') : t.admin.editor.locked}
-                />
+                <Provenance manual label={lockLabel} />
+                {/* A text locked in every language is edited from here too:
+                    in the language shown, to lock it there alone. */}
+                {shelf && !lock?.language ? (
+                  <Button size="sm" variant="quiet" onClick={() => (onEdit ? onEdit() : setEditing(true))}>
+                    <Glyph name="pencil" className="size-4" />
+                    {t.common.edit}
+                  </Button>
+                ) : null}
                 <Button
                   size="sm"
                   onClick={() => unlock.mutate()}
@@ -390,6 +432,8 @@ function Editor({
   scope,
   def,
   value,
+  shelf,
+  alone,
   onDone,
   onCancel,
 }: {
@@ -397,15 +441,26 @@ function Editor({
   scope: string
   def: FieldDef
   value: unknown
+  /** The language a text may be locked in alone (`fra`), or empty: every language, as for any other field. */
+  shelf: string
+  /** Whether the edit is for that language alone, until the person says otherwise. */
+  alone: boolean
   onDone: () => void
   onCancel: () => void
 }) {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   const [draft, setDraft] = useState(() => readable(value, t))
+  const [reach, setReach] = useState<'alone' | 'every'>(shelf && alone ? 'alone' : 'every')
   const inputId = `field-${scope.replace(/\W/g, '-')}-${def.name}`
 
   const save = useMutation({
-    mutationFn: (parsed: unknown) => api.put(`/items/${itemId}/overrides`, { scope, field: def.name, value: parsed }),
+    mutationFn: (parsed: unknown) =>
+      api.put(`/items/${itemId}/overrides`, {
+        scope,
+        field: def.name,
+        value: parsed,
+        language: shelf && reach === 'alone' ? shelf : undefined,
+      }),
     onSuccess: onDone,
   })
 
@@ -491,6 +546,25 @@ function Editor({
             </li>
           ))}
         </ul>
+      ) : null}
+
+      {/* A text shown in a language: for that one alone, or for every one.
+          A reader of the language is given a lock made in it first. */}
+      {shelf ? (
+        <div className="flex flex-col gap-1.5">
+          <Segmented<'alone' | 'every'>
+            label={t.admin.editor.reach}
+            value={reach}
+            onChange={setReach}
+            options={[
+              { value: 'alone', label: t.admin.editor.thisLanguageOnly(spoken(shelf, locale)) },
+              { value: 'every', label: t.admin.editor.everyLanguage },
+            ]}
+          />
+          <p className="text-xs leading-relaxed text-bone-faint">
+            {reach === 'alone' ? t.admin.editor.reachAlone : t.admin.editor.reachEvery}
+          </p>
+        </div>
       ) : null}
 
       <div className="flex flex-wrap items-center gap-2">

@@ -24,8 +24,8 @@ pub mod provenance;
 pub mod rules;
 
 use crate::domain::{
-    AlternativeTitle, CoverType, Episode, ExternalIds, Image, MediaItem, Rating, Season,
-    Translation,
+    AlternativeTitle, CountryRelease, CoverType, Episode, ExternalIds, Image, MediaItem, Rating,
+    Season, Translation,
 };
 
 /// What one provider had to say.
@@ -268,6 +268,8 @@ fn fold(into: &mut MediaItem, other: MediaItem) {
     fill(&mut into.homepage, other.homepage);
     fill(&mut into.trailer_youtube_id, other.trailer_youtube_id);
     fill(&mut into.theme_music, other.theme_music);
+    fill(&mut into.tagline, other.tagline);
+    fill(&mut into.format, other.format);
 
     if into.title.trim().is_empty() {
         into.title = other.title;
@@ -287,9 +289,16 @@ fn fold(into: &mut MediaItem, other: MediaItem) {
     if into.genres.is_empty() {
         into.genres = other.genres;
     }
-    if into.keywords.is_empty() {
-        into.keywords = other.keywords;
+    // Every source's, gathered: AniList's tags say what TMDB's keywords do
+    // not, and taken whole they were gone the moment TMDB answered.
+    union_keywords(&mut into.keywords, other.keywords);
+    if into.production_countries.is_empty() {
+        into.production_countries = other.production_countries;
     }
+    if into.production_companies.is_empty() {
+        into.production_companies = other.production_companies;
+    }
+    union_releases(&mut into.releases, other.releases);
 
     // Believed from whichever provider says so. A work only one source knows
     // is adult — AniList, for most of what it flags — must not be served as
@@ -413,6 +422,7 @@ pub(crate) fn merge_ids(into: &mut ExternalIds, other: ExternalIds) {
     into.tvmaze = into.tvmaze.or(other.tvmaze);
     into.tvrage = into.tvrage.or(other.tvrage);
     into.trakt = into.trakt.or(other.trakt);
+    into.wikidata = into.wikidata.take().or(other.wikidata);
 
     for id in other.mal {
         if !into.mal.contains(&id) {
@@ -483,6 +493,61 @@ fn union_ratings(into: &mut Vec<Rating>, other: Vec<Rating>) {
             into.push(rating);
         }
     }
+}
+
+/// Every source's keywords, each once whatever its case: TMDB writes
+/// `kaiju` where AniList writes `Kaiju`, and the first spelling stays.
+fn union_keywords(into: &mut Vec<String>, other: Vec<String>) {
+    for keyword in other {
+        let keyword = keyword.trim();
+        if keyword.is_empty() {
+            continue;
+        }
+        let lower = keyword.to_lowercase();
+        if !into.iter().any(|kept| kept.trim().to_lowercase() == lower) {
+            into.push(keyword.to_string());
+        }
+    }
+}
+
+/// A country's releases come whole from the first source that lists any for
+/// it, as a language's translation does — two sources' days for the same
+/// country cannot be told apart from two releases. A later source's rating
+/// fills a country the first gave days without one: TMDB lists a release in
+/// France with no rating where Radarr has it.
+fn union_releases(into: &mut Vec<CountryRelease>, other: Vec<CountryRelease>) {
+    let held = |into: &[CountryRelease], country: &str| {
+        into.iter().any(|r| r.country.eq_ignore_ascii_case(country))
+    };
+    let rated = |into: &[CountryRelease], country: &str| {
+        into.iter().any(|r| {
+            r.country.eq_ignore_ascii_case(country)
+                && r.certification
+                    .as_deref()
+                    .is_some_and(|c| !c.trim().is_empty())
+        })
+    };
+
+    let mut added: Vec<CountryRelease> = Vec::new();
+    for release in other {
+        if !held(into, &release.country) {
+            added.push(release);
+        } else if release
+            .certification
+            .as_deref()
+            .is_some_and(|c| !c.trim().is_empty())
+            && !rated(into, &release.country)
+            && !rated(&added, &release.country)
+        {
+            added.push(CountryRelease {
+                release_type: None,
+                date: None,
+                note: None,
+                ..release
+            });
+        }
+    }
+    into.extend(added);
 }
 
 fn union_translations(into: &mut Vec<Translation>, other: Vec<Translation>) {

@@ -3,8 +3,9 @@
 //!
 //! Declared rather than worked out, because what a provider *can* give is a
 //! property of its mapping, not of the works this server happens to hold. The
-//! order is not declared: it is the configured priority, so the table always
-//! says what the next merge will do.
+//! order is not declared: it is the `sources.priority` setting, which the merge
+//! reads each time it runs, so the table always says what the next merge will
+//! do.
 
 use serde::Serialize;
 use utoipa::ToSchema;
@@ -157,6 +158,8 @@ const LINES: &[Line] = &[
         &[TMDB, TVDB, SKYHOOK, RADARR, ANILIST, MAL, FANKAI],
     ),
     line(Identity, "translations", Union, &[TMDB, TVDB, RADARR]),
+    line(Identity, "tagline", First, &[TMDB]),
+    line(Identity, "productionCountries", Whole, &[TMDB]),
     // Airing and release
     only(
         line(Release, "aired", First, &[TMDB, TVDB, SKYHOOK, FANKAI]),
@@ -194,8 +197,15 @@ const LINES: &[Line] = &[
     line(
         Classification,
         "keywords",
-        Whole,
+        Union,
         &[TMDB, RADARR, ANILIST, FANKAI],
+    ),
+    line(Classification, "format", First, &[ANILIST]),
+    line(
+        Classification,
+        "countryReleases",
+        Union,
+        &[TMDB, TVDB, RADARR],
     ),
     line(
         Classification,
@@ -216,6 +226,7 @@ const LINES: &[Line] = &[
         line(People, "studio", First, &[TMDB, RADARR, ANILIST, MAL]),
         STUDIO_AUTHORITIES,
     ),
+    line(People, "productionCompanies", Whole, &[TMDB]),
     line(
         People,
         "images",
@@ -288,6 +299,34 @@ pub struct Laid {
     /// When it applies to one kind of work only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub only: Option<MediaKind>,
+}
+
+/// A priority as the `sources.priority` setting holds it — providers by name,
+/// most trusted first, separated by commas — read and checked: each a name
+/// the merge knows, none twice, at least one. Whatever it leaves out comes
+/// after, as [`order`] puts it.
+pub fn parse_priority(text: &str) -> Result<Vec<String>, String> {
+    let mut names: Vec<String> = Vec::new();
+    for name in text
+        .split(',')
+        .map(|n| n.trim().to_ascii_lowercase())
+        .filter(|n| !n.is_empty())
+    {
+        if !PROVIDERS.contains(&name.as_str()) {
+            return Err(format!(
+                "names no provider called {name:?}: the providers are {}",
+                PROVIDERS.join(", ")
+            ));
+        }
+        if names.contains(&name) {
+            return Err(format!("names {name} twice"));
+        }
+        names.push(name);
+    }
+    if names.is_empty() {
+        return Err("names no provider".into());
+    }
+    Ok(names)
 }
 
 /// Every provider in the order the merge consults them: the configured
@@ -382,6 +421,30 @@ mod tests {
         let order = order(&["tvdb".to_string()]);
         assert_eq!(order[0], "tvdb");
         assert_eq!(order.len(), PROVIDERS.len());
+    }
+
+    #[test]
+    fn a_priority_written_as_a_setting_is_read_back_and_checked() {
+        // As the Sources page writes it, and as somebody types it.
+        let read = parse_priority(" TVDB, tmdb ,,skyhook").expect("read");
+        assert_eq!(read, ["tvdb", "tmdb", "skyhook"]);
+        assert_eq!(order(&read)[..3], ["tvdb", "tmdb", "skyhook"]);
+        assert_eq!(order(&read).len(), PROVIDERS.len());
+
+        let everyone = PROVIDERS.join(",");
+        assert_eq!(
+            parse_priority(&everyone).expect("read").len(),
+            PROVIDERS.len()
+        );
+
+        // A name the merge does not know, one named twice, or none at all.
+        assert!(parse_priority("tmdb,imdb").unwrap_err().contains("imdb"));
+        assert!(
+            parse_priority("tmdb,tvdb,tmdb")
+                .unwrap_err()
+                .contains("twice")
+        );
+        assert!(parse_priority(" , ").is_err());
     }
 
     #[test]

@@ -151,6 +151,22 @@ pub fn names_internal_host(url: &str) -> bool {
     }
 }
 
+/// Whether two addresses are at one origin — the same scheme, host and port,
+/// a port left out being the one its scheme takes — and so reach the same
+/// service. What a credential kept for one address is held to: a Sonarr's
+/// key, a Gotify server's token goes to the origin it was given for and to no
+/// other. An address that cannot be read is at no origin, and shares none.
+pub fn same_origin(a: &str, b: &str) -> bool {
+    match (url::Url::parse(a.trim()), url::Url::parse(b.trim())) {
+        (Ok(a), Ok(b)) => {
+            let (a, b) = (a.origin(), b.origin());
+            // An opaque origin — `mailto:`, `data:` — is unique to itself.
+            a.is_tuple() && a == b
+        }
+        _ => false,
+    }
+}
+
 /// Whether every address this URL's host resolves to is one worth refusing.
 ///
 /// Answered just before the fetch, because a name that resolved to a public
@@ -420,6 +436,32 @@ mod tests {
         ] {
             assert!(!is_internal(fine.parse().unwrap()), "{fine} is fine");
         }
+    }
+
+    #[test]
+    fn an_origin_is_a_scheme_a_host_and_a_port() {
+        // Another path, the port a scheme takes written out, a host in
+        // capitals: the same service.
+        assert!(same_origin(
+            "http://sonarr:8989",
+            " http://Sonarr:8989/sonarr/ "
+        ));
+        assert!(same_origin(
+            "https://push.example.de",
+            "https://push.example.de:443/x"
+        ));
+        // Another host, port or scheme: another service.
+        for other in [
+            "http://radarr:8989",
+            "http://sonarr:8990",
+            "https://sonarr:8989",
+            "http://sonarr.attacker.example:8989",
+        ] {
+            assert!(!same_origin("http://sonarr:8989", other), "{other}");
+        }
+        // What is no address shares no origin, not even with itself.
+        assert!(!same_origin("sonarr:8989", "sonarr:8989"));
+        assert!(!same_origin("", "http://sonarr:8989"));
     }
 
     #[test]

@@ -517,9 +517,12 @@ async fn store(state: &AppState, gathered: Gathered) -> Result<Option<MediaItem>
         hand_back(&mut contributions, &failed, stored, provenance);
     }
 
-    let views = views_of(state, &contributions);
+    // The order as it stands now, read once: who gave what is said by the
+    // same order the merge folds by, whatever is changed meanwhile.
+    let priority = state.provider_priority();
+    let views = views_of(&priority, &contributions);
 
-    let Some(mut merged) = merge::combine(contributions, &state.config.provider_priority) else {
+    let Some(mut merged) = merge::combine(contributions, &priority) else {
         return Ok(None);
     };
     let provenance = merge::provenance::attribute(&merged, &views);
@@ -593,7 +596,7 @@ async fn held_before(state: &AppState, answers: &[Answer]) -> Option<(MediaItem,
 
     // Its identifiers as the merge will make them: in priority order, the
     // first of each kind.
-    let priority = &state.config.provider_priority;
+    let priority = &state.provider_priority();
     let rank = |provider: &str| {
         priority
             .iter()
@@ -726,8 +729,7 @@ fn keep_adult(merged: &mut MediaItem, stored: &MediaItem, failed: &[Failure]) {
 
 /// Each answer taken apart before the merge consumes them, in the order the
 /// merge folds them in, to say afterwards who gave what.
-fn views_of(state: &AppState, contributions: &[Contribution]) -> Vec<merge::provenance::View> {
-    let priority = &state.config.provider_priority;
+fn views_of(priority: &[String], contributions: &[Contribution]) -> Vec<merge::provenance::View> {
     let rank = |provider: &str| {
         priority
             .iter()
@@ -885,7 +887,7 @@ pub fn askable(
     // Whoever numbers the episodes, by the rule the sync keeps the list by,
     // when it can be asked now.
     let numbering = merge::provenance::numbering_of(stored, provenance).filter(|n| answers(n));
-    let priority = &state.config.provider_priority;
+    let priority = &state.provider_priority();
     let rank = |p: &str| priority.iter().position(|q| q == p).unwrap_or(usize::MAX);
     let fillers: Vec<&'static str> = FILLS_EPISODES
         .iter()
@@ -1025,13 +1027,14 @@ pub async fn resync(
 
     // Who gave what is said of the providers alone: the stored work beneath
     // them is not one.
-    let views = views_of(state, &contributions);
+    let priority = state.provider_priority();
+    let views = views_of(&priority, &contributions);
     contributions.push(Contribution {
         provider: merge::provenance::STORED.into(),
         item: merge::provenance::leftover(stored, &answered),
     });
 
-    let Some(merged) = merge::combine(contributions, &state.config.provider_priority) else {
+    let Some(merged) = merge::combine(contributions, &priority) else {
         return Ok(ResyncOutcome::NoneAnswered);
     };
     if merged.title.trim().is_empty() {
@@ -1221,7 +1224,8 @@ async fn series_from_tmdb(state: &AppState, tmdb_id: Option<i64>) -> Asked {
 
     let (seasons, unanswered) = state.tmdb.tv_seasons(tmdb_id, &numbers).await;
 
-    let mut answer = Answer::new(names::TMDB, raw, tmdb_map::tv_to_item(&tv, &seasons));
+    let item = tmdb_map::tv_to_item(&tv, &seasons, state.cast_limit());
+    let mut answer = Answer::new(names::TMDB, raw, item);
     answer.unanswered_seasons = unanswered;
     Asked::answered(answer)
 }
@@ -1247,7 +1251,7 @@ async fn skyhook_answer(state: &AppState, tvdb_id: Option<i64>) -> Asked {
         Ok(Some((raw, show))) => Asked::answered(Answer::new(
             names::SKYHOOK,
             raw,
-            wire::sonarr::to_item(&show),
+            crate::providers::skyhook::to_item(&show),
         )),
         Ok(None) => Asked::Nothing,
         Err(e) => {
@@ -1391,7 +1395,7 @@ async fn movie_from_tmdb(state: &AppState, tmdb_id: Option<i64>) -> Asked {
         Ok(Some((raw, movie))) => Asked::answered(Answer::new(
             names::TMDB,
             raw,
-            tmdb_map::movie_to_item(&movie),
+            tmdb_map::movie_to_item(&movie, state.cast_limit()),
         )),
         Ok(None) => Asked::Nothing,
         Err(e) => {

@@ -41,6 +41,9 @@ pub struct FieldRegistry {
     pub item: &'static [fields::FieldDef],
     pub season: &'static [fields::FieldDef],
     pub episode: &'static [fields::FieldDef],
+    /// The fields a lock may hold in one language alone, wherever a scope
+    /// has them: its texts.
+    pub translated: &'static [&'static str],
 }
 
 /// Which fields are editable, and what type each holds.
@@ -56,6 +59,7 @@ async fn field_registry() -> Json<FieldRegistry> {
         item: fields::ITEM_FIELDS,
         season: fields::SEASON_FIELDS,
         episode: fields::EPISODE_FIELDS,
+        translated: fields::TRANSLATED,
     })
 }
 
@@ -268,8 +272,10 @@ async fn settings(
         auth_disabled: state.config.security.auth_disabled,
         public_browse: state.public_site(),
         native_policy: policy_name(state.config.policy_for(Surface::Native)),
-        tmdb_policy: policy_name(state.config.policy_for(Surface::Tmdb)),
-        tvdb_policy: policy_name(state.config.policy_for(Surface::Tvdb)),
+        // As the guard applies them: a relay asked with each client's own
+        // key is guarded by the address list.
+        tmdb_policy: policy_name(crate::api::relay::policy(&state, Surface::Tmdb)),
+        tvdb_policy: policy_name(crate::api::relay::policy(&state, Surface::Tvdb)),
         anilist_policy: policy_name(state.config.policy_for(Surface::Anilist)),
         arr_policy: policy_name(state.config.policy_for(Surface::Arr)),
         further_sources,

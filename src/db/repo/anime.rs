@@ -144,19 +144,7 @@ fn map(row: &sqlx::any::AnyRow) -> Result<Entry> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config;
-
-    async fn db() -> Db {
-        let db = Db::connect(&config::Database {
-            url: "sqlite::memory:".into(),
-            max_connections: 1,
-            acquire_timeout: std::time::Duration::from_secs(5),
-        })
-        .await
-        .unwrap();
-        db.migrate().await.unwrap();
-        db
-    }
+    use crate::db::testing::db;
 
     fn entry(mal: i64, tvdb: Option<i64>, movie: Option<i64>) -> Entry {
         Entry {

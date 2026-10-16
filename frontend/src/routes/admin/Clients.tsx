@@ -9,7 +9,7 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { type MouseEvent as ReactMouseEvent, useEffect, useRef, useState } from 'react'
 
 import {
   Button,
@@ -21,6 +21,7 @@ import {
   IconButton,
   Input,
   Label,
+  Lamp,
   Panel,
   PanelHead,
   Skeleton,
@@ -28,6 +29,7 @@ import {
   TableScroll,
   Td,
   Th,
+  Toggle,
   Tr,
 } from '../../components/ui'
 import { NetworkAccess } from '../../components/NetworkAccess'
@@ -36,7 +38,7 @@ import { api } from '../../lib/api'
 import { cn } from '../../lib/cn'
 import * as fmt from '../../lib/format'
 import { useI18n } from '../../lib/i18n'
-import type { ApiClient } from '../../lib/types'
+import type { AccessReport, ApiClient, Settings } from '../../lib/types'
 
 type Asking = { client: ApiClient; what: 'revoke' | 'disable' }
 
@@ -271,9 +273,13 @@ export function Clients() {
         )}
       </Panel>
 
+      {/* Plex is let in by its address too, so the panel that tells how to
+          give Plex this server sits right above the list it leads to. */}
+      <PlexPanel />
+
       {/* The address list belongs on this page, not a page of its own: a key
           and an allowed address are the same decision said two ways, and
-          Sonarr and Radarr can only make it the second way. */}
+          Sonarr, Radarr and Plex can only make it the second way. */}
       <div className="mt-6">
         <NetworkAccess />
       </div>
@@ -330,6 +336,157 @@ export function Clients() {
         onClose={() => setTuning(null)}
       />
     </div>
+  )
+}
+
+/**
+ * Plex's provider: the address to paste into Plex, the switch that answers
+ * it, and what letting Plex in takes.
+ *
+ * The address is the public one when the deployment names it — what a Plex
+ * elsewhere on the network reaches — else the one this page was opened at.
+ * Plex presents no credential to a provider, so the decision that lets it in
+ * is the list of allowed addresses just below; the panel says so and leads
+ * there, to the field an address is typed in.
+ */
+function PlexPanel() {
+  const { t } = useI18n()
+  const p = t.admin.plex
+  const queryClient = useQueryClient()
+  const field = useRef<HTMLInputElement>(null)
+  // What the copy button last did: copied, or left the address selected for
+  // the reader to copy where the clipboard is out of reach — a plain-HTTP
+  // page on a LAN address, which is where this panel is usually read.
+  const [copied, setCopied] = useState<'done' | 'manual' | null>(null)
+
+  const settings = useQuery({
+    queryKey: ['settings'],
+    queryFn: () => api.get<Settings>('/settings'),
+    staleTime: 5 * 60_000,
+  })
+  const access = useQuery({
+    queryKey: ['admin', 'access'],
+    queryFn: () => api.get<AccessReport>('/admin/access'),
+  })
+
+  const write = useMutation({
+    mutationFn: (on: boolean) => api.put('/settings/server/-', { key: 'api.plex', value: String(on) }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['admin', 'access'] })
+      void queryClient.invalidateQueries({ queryKey: ['settings'] })
+    },
+  })
+
+  useEffect(() => {
+    if (copied !== 'done') return
+    const timer = setTimeout(() => setCopied(null), 2_000)
+    return () => clearTimeout(timer)
+  }, [copied])
+
+  const base = (settings.data?.publicUrl ?? window.location.origin).replace(/\/+$/, '')
+  const address = `${base}/plex`
+  const plex = access.data?.apis.find((x) => x.api === 'plex')
+  const open = plex?.policy === 'open'
+
+  const copy = async () => {
+    try {
+      if (!navigator.clipboard) throw new Error('no clipboard')
+      await navigator.clipboard.writeText(address)
+      setCopied('done')
+    } catch {
+      field.current?.focus()
+      field.current?.select()
+      setCopied('manual')
+    }
+  }
+
+  // To the field of the list below that an address is typed in, without the
+  // glide for whoever asked for less motion.
+  const toList = (event: ReactMouseEvent<HTMLAnchorElement>) => {
+    const target = document.getElementById('network-cidr')
+    if (!target) return
+    event.preventDefault()
+    const still = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    target.scrollIntoView({ behavior: still ? 'auto' : 'smooth', block: 'center' })
+    target.focus({ preventScroll: true })
+  }
+
+  return (
+    <Panel label={p.title} className="rise mt-6" style={{ animationDelay: '120ms' }}>
+      <PanelHead
+        title={p.title}
+        action={plex ? <Lamp tone={plex.enabled ? 'moss' : 'faint'}>{plex.enabled ? p.on : p.off}</Lamp> : undefined}
+      />
+      <div className="space-y-4 p-5">
+        <p className="max-w-prose text-sm leading-relaxed text-bone-dim">{p.lead}</p>
+
+        <div>
+          <label htmlFor="plex-address" className="label mb-1.5 block">
+            {p.address}
+          </label>
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              id="plex-address"
+              ref={field}
+              readOnly
+              value={address}
+              onFocus={(event) => event.currentTarget.select()}
+              className="min-h-11 min-w-0 flex-1 rounded-card border border-rule bg-ink px-3 font-mono text-sm text-bone"
+            />
+            <Button onClick={() => void copy()}>
+              <Glyph name={copied === 'done' ? 'check' : 'copy'} className="size-4" />
+              {copied === 'done' ? p.copied : p.copy}
+            </Button>
+          </div>
+          {copied === 'manual' ? (
+            <p role="status" className="mt-2 text-xs text-bone-dim">
+              {p.copyManual}
+            </p>
+          ) : null}
+        </div>
+
+        <div className="flex items-center justify-between gap-4 rounded-card border border-rule bg-ink px-4 py-1.5">
+          <div className="min-w-0">
+            <span className="block text-sm text-bone">{p.toggle}</span>
+            {plex ? (
+              <span className="block text-xs leading-relaxed text-bone-faint">
+                {plex.enabled ? p.calls(plex.served, plex.refused) : p.offHint}
+              </span>
+            ) : null}
+          </div>
+          <Toggle
+            id="plex-switch"
+            checked={plex?.enabled ?? false}
+            label={p.toggle}
+            onChange={(next) => write.mutate(next)}
+            disabled={!plex || write.isPending}
+          />
+        </div>
+        {write.isError ? (
+          <p role="alert" className="flex items-center gap-2 text-xs text-vermillion">
+            <Glyph name="alert" className="size-3.5" />
+            {write.error.message}
+          </p>
+        ) : null}
+
+        <p className="flex items-start gap-2 text-sm leading-relaxed text-bone">
+          <Glyph name="shield" className="mt-0.5 size-4 shrink-0 text-brass" />
+          <span>
+            {open ? p.openPolicy : p.credential}{' '}
+            {open ? null : (
+              <a
+                href="#network-cidr"
+                onClick={toList}
+                className="text-vermillion underline-offset-4 hover:text-vermillion-bright hover:underline"
+              >
+                {p.toList}
+              </a>
+            )}
+          </span>
+        </p>
+        <p className="max-w-prose text-xs leading-relaxed text-bone-faint">{p.localOnly}</p>
+      </div>
+    </Panel>
   )
 }
 

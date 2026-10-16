@@ -35,6 +35,7 @@ import { seasonNumbers } from '../../../lib/media'
 import type { FieldDef, FieldRegistry, MediaItem, MediaKind, Override, ProvenanceReport, Snapshot, SyncSource, WorkProvenance } from '../../../lib/types'
 
 import { FieldRow, hasValue } from './FieldRow'
+import { lockOf, useEditorLocks } from './locks'
 import { Count, Empty, LockBadge } from './shared'
 
 /** Worth offering without asking the server which translations it holds. */
@@ -101,7 +102,15 @@ export function RecordTab({
   const [otherOpen, setOtherOpen] = useState(false)
   const [viewing, setViewing] = useState<string | null>(null)
 
-  const locks = useMemo(() => new Map(overrides.filter((o) => o.scope === 'item').map((o) => [o.field, o])), [overrides])
+  // The work's own locks in every language; a text's is found again in the
+  // language shown, as its row finds it.
+  const everywhere = useMemo(
+    () => new Map(overrides.filter((o) => o.scope === 'item' && !o.language).map((o) => [o.field, o])),
+    [overrides],
+  )
+  const editorLocks = useEditorLocks()
+  const lockFor = (name: string) => lockOf(editorLocks, 'item', name, everywhere.get(name))
+  const locks = { has: (name: string) => lockFor(name) !== undefined }
   const provenance = report?.provenance
   const traced = provenance !== undefined
   const fieldNames = useMemo(() => new Set(registry.item.map((def) => def.name)), [registry])
@@ -135,7 +144,7 @@ export function RecordTab({
         itemId={work.id}
         def={def}
         value={record[def.name]}
-        lock={locks.get(def.name)}
+        lock={everywhere.get(def.name)}
         origin={provenance?.fields?.[def.name]}
         // The slug is made here, from the title and the year.
         traced={traced && def.name !== 'slug'}
@@ -277,7 +286,13 @@ export function RecordTab({
             </dl>
           </Panel>
 
-          <Maintenance work={work} allLocks={overrides.length} deeperLocks={overrides.length - locks.size} onChanged={onChanged} />
+          <Maintenance
+            work={work}
+            allLocks={overrides.length}
+            deeperLocks={overrides.filter((o) => o.scope.startsWith('season:') || o.scope.startsWith('episode:')).length}
+            givenLocks={overrides.filter((o) => o.scope.startsWith('credit:') || o.scope.startsWith('image:') || o.scope.startsWith('alternativeTitle:')).length}
+            onChanged={onChanged}
+          />
 
           <RulesPanel />
         </div>
@@ -308,11 +323,14 @@ function Maintenance({
   work,
   allLocks,
   deeperLocks,
+  givenLocks,
   onChanged,
 }: {
   work: MediaItem
   allLocks: number
   deeperLocks: number
+  /** The locks on what the sources gave: a credit, a picture or a title hidden or corrected. */
+  givenLocks: number
   onChanged: () => void
 }) {
   const { t } = useI18n()
@@ -403,6 +421,7 @@ function Maintenance({
       >
         {e.unlockAllBody}
         {deeperLocks > 0 ? <p className="mt-3 text-sm text-brass">{e.unlockAllDeeper(deeperLocks)}</p> : null}
+        {givenLocks > 0 ? <p className="mt-3 text-sm text-brass">{e.unlockAllGiven(givenLocks)}</p> : null}
         {unlockAll.isError ? (
           <p role="alert" className="mt-3 text-sm text-vermillion">
             {unlockAll.error.message || t.common.actionFailed}

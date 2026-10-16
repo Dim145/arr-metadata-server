@@ -13,6 +13,8 @@ export interface ExternalIds {
   trakt?: number
   /** Fankai's id, for a Fan-Kai production. */
   fankai?: number
+  /** Wikidata's item, `Q1079`, as TMDB files it. */
+  wikidata?: string
 }
 
 export interface Rating {
@@ -145,6 +147,23 @@ export interface Translation {
   isManual: boolean
 }
 
+/** How a work came out in a country, as TMDB tells its releases apart. */
+export type ReleaseKind = 'premiere' | 'limited' | 'theatrical' | 'digital' | 'physical' | 'tv'
+
+/** What a work was given in one country: a day it came out there and how, its rating there, or both. */
+export interface CountryRelease {
+  /** ISO 3166-1 alpha-2, upper case: `FR`. */
+  country: string
+  /** None for a rating given without a release: a series', Radarr's. */
+  releaseType?: ReleaseKind
+  /** `YYYY-MM-DD`. */
+  date?: string
+  certification?: string
+  /** A festival, a service, a re-release. */
+  note?: string
+  source?: string
+}
+
 export interface MediaItem {
   id: string
   kind: MediaKind
@@ -175,11 +194,19 @@ export interface MediaItem {
   themeMusic?: string
   /** What TheTVDB adds to a homonym's name — `2023`, `US` — and Sonarr is given back. */
   titleQualifier?: string
+  /** The line under the title, as TMDB gives it. */
+  tagline?: string
+  /** What AniList calls the entry: `TV`, `TV_SHORT`, `MOVIE`, `SPECIAL`, `OVA`, `ONA`, `MUSIC`. */
+  format?: string
   popularity?: number
   collectionTmdbId?: number
   isAdult?: boolean
   genres: string[]
   keywords: string[]
+  /** Every country it was made in, ISO 3166-1 alpha-2. */
+  productionCountries?: string[]
+  /** Every company that made it, the studio among them. */
+  productionCompanies?: string[]
   externalIds: ExternalIds
   isManual: boolean
   isEnabled: boolean
@@ -196,9 +223,22 @@ export interface MediaItem {
   ratings?: Rating[]
   translations?: Translation[]
   relations?: Relation[]
+  /** When it came out in each country, and its rating there. */
+  releases?: CountryRelease[]
+  /** `scope/field` for what is locked as the work is served; `scope/field@fra` for a text locked in another language only. */
   lockedFields?: string[]
   /** The poster and the background a person chose to lead with, by image id; none by default. */
   primaryImages?: { poster?: string; fanart?: string }
+  /** What the sources gave and a person hid: told to whoever maintains the catalogue, served to nobody. */
+  hidden?: HiddenChildren
+}
+
+/** What a person hid of what the sources gave a work. */
+export interface HiddenChildren {
+  credits?: Credit[]
+  /** The work's own and its seasons'. */
+  images?: Image[]
+  alternativeTitles?: AlternativeTitle[]
 }
 
 export type FieldType =
@@ -223,11 +263,16 @@ export interface FieldRegistry {
   item: FieldDef[]
   season: FieldDef[]
   episode: FieldDef[]
+  /** The fields a lock may hold in one language alone: the texts. */
+  translated?: string[]
 }
 
 export interface Override {
+  /** `item`, `season:3`, `episode:3x7` — or a child a source gave: `credit:actor:tmdb:17419`. */
   scope: string
   field: string
+  /** The language a text is locked in alone, as translations are filed (`fra`); absent for every language. */
+  language?: string
   value: unknown | null
   updatedAt: string
   updatedBy?: string
@@ -368,6 +413,54 @@ export interface OidcTest {
   discovery?: OidcDiscovery
 }
 
+/** The operator's own Sonarr or Radarr, which this server reaches the other way. */
+export type ArrApp = 'sonarr' | 'radarr'
+
+/** One of the two, as set: the key is never sent back, only whether one is kept. */
+export interface ArrConnection {
+  app: ArrApp
+  /** The address set, or empty. */
+  url: string
+  keySet: boolean
+  /** An address and a key both set. */
+  ready: boolean
+}
+
+/** One work told to Sonarr or Radarr, and how it went. */
+export interface ArrPush {
+  id: string
+  at: string
+  app: ArrApp
+  mediaId?: string
+  title?: string
+  /** The id the work is served under: TheTVDB's, a synthetic one, TMDB's. */
+  clientId?: number
+  /** Its own id there, when it holds the work. */
+  arrId?: number
+  outcome: 'sent' | 'absent' | 'failed'
+  /** Why it was told: `lock`, `edit`, `sync`, `refresh`. */
+  reasons: string[]
+  /** The command it went in, or what went wrong. */
+  detail?: string
+}
+
+/** The Sonarr & Radarr page: both connections, the switch, what was told lately. */
+export interface ArrConfiguration {
+  sonarr: ArrConnection
+  radarr: ArrConnection
+  pushRefresh: boolean
+  /** Works changed and not told yet, on the instance that answered. */
+  waiting: number
+  pushes: ArrPush[]
+}
+
+/** What the test button found: who answered, or why nobody did. */
+export interface ArrTest {
+  ok: boolean
+  status?: { appName: string; version: string; instanceName?: string }
+  error?: string
+}
+
 /** What the provider's discovery document said. */
 export interface OidcDiscovery {
   issuer: string
@@ -416,7 +509,7 @@ export interface IssuedInvitation {
   link?: string
 }
 
-export type ApiName = 'sonarr' | 'radarr' | 'tmdb' | 'native' | 'tvdb' | 'anilist'
+export type ApiName = 'sonarr' | 'radarr' | 'plex' | 'tmdb' | 'native' | 'tvdb' | 'anilist'
 export type SurfacePolicyName = 'apikey' | 'allowlist' | 'open'
 
 export interface ApiState {
@@ -441,12 +534,25 @@ export interface AccessReport {
   /** Since when the counters count, among several instances; absent alone (since the start). */
   countedSince?: string
   apis: ApiState[]
+  /** Whose key each relay that takes one asks its service with. */
+  relayCredentials: RelayCredentialState[]
   pending: number
   invitations: number
   places: number
   allowlistRules: number
   serverKeys: number
   personalKeys: number
+}
+
+/** Whose key a relay asks its service with (`tmdb.relayCredential`, `tvdb.relayCredential`). */
+export interface RelayCredentialState {
+  api: 'tmdb' | 'tvdb'
+  /** `server`: this server's key in the client's place; `client`: the client's own, as it came. */
+  credential: 'server' | 'client'
+  /** This server holds a key of the service's own to stand in with. */
+  operatorKey: boolean
+  /** What the deployment asks of a caller, before `client` reads a key policy as the listed addresses. */
+  configuredPolicy: SurfacePolicyName
 }
 
 export interface AuditEntry {
@@ -495,6 +601,7 @@ export type TaskId =
   | 'media.sweep'
   | 'tls.renew'
   | 'update.check'
+  | 'arr.seed'
 
 /** A background task as it stands: when it runs, how it last went. */
 export interface Task {
@@ -507,29 +614,101 @@ export interface Task {
   running?: Job
   cancelable: boolean
   /** Why it cannot run now: `source_off`, `not_configured`, `running`. */
-  blocked?: 'source_off' | 'not_configured' | 'running' | 'busy' | 'media_off' | 'no_authority' | 'updates_off'
+  blocked?: 'source_off' | 'not_configured' | 'running' | 'busy' | 'media_off' | 'no_authority' | 'updates_off' | 'arr_off'
 }
 
-/** Every name `webhooks.events` can hold, besides `*`. */
+/** Every event a destination can be told of, besides `*`. */
 export interface WebhookEvents {
   /** What happens on its own: `refresh.failed`, `media.failed`, `update.available`. */
   facts: string[]
   /** The audit trail's actions, in the order its filter offers them. */
   actions: string[]
-  /** What is told while the setting is not set at all. */
+  /** What a new destination is told of, until other events are ticked. */
   defaults: string[]
+  /** The kinds of destination, in the order they are offered. */
+  kinds: WebhookKind[]
 }
 
-/** What a test post to the webhook's address came to. */
+/** How a destination is posted to. */
+export type WebhookKind = 'standard' | 'json' | 'discord' | 'slack' | 'ntfy' | 'gotify' | 'apprise'
+
+/** What a test post to a destination came to. */
 export interface WebhookTest {
   delivered: boolean
   /** What the address answered with, when it answered. */
   status?: number
-  /** Why it was not reached, naming no address. */
+  /** Why it was not reached, or what it said when it refused, naming no address. */
   error?: string
-  /** Why nothing was sent: `not_web` or `internal`. */
-  refused?: 'not_web' | 'internal'
+  /** Why nothing was sent: `not_web`, `internal`, or `unsent` — the post could not be made. */
+  refused?: 'not_web' | 'internal' | 'unsent'
   millis: number
+}
+
+/** Where what happens is told: never its secret, its address masked past the host. */
+export interface WebhookDestination {
+  id: string
+  name: string
+  kind: WebhookKind
+  /** The scheme, host and port, the rest masked. */
+  address: string
+  /** Whether a signing secret or a token is kept. */
+  secretSet: boolean
+  /** The signing secret just made: in the answer that made it, and nowhere else. */
+  secret?: string
+  /** The events it is told of; `*` for every one. */
+  events: string[]
+  enabled: boolean
+  /** Why the server switched it off: an address that answered 410 Gone. */
+  disabledReason?: string
+  disabledAt?: string
+  createdAt: string
+  updatedAt: string
+  deliveries: { pending: number; delivered: number; failed: number }
+}
+
+/** A destination to make, or what to change of one: each field left out stays. */
+export interface WebhookDestinationInput {
+  name?: string
+  kind?: WebhookKind
+  /** Left out or empty on a change, the address kept stays. */
+  address?: string
+  /** An ntfy or Gotify token: left out, the one kept stays; empty, it is removed. */
+  token?: string
+  events?: string[]
+  enabled?: boolean
+}
+
+/** One thing told, as a delivery keeps it. */
+export interface WebhookMessage {
+  event: string
+  actor?: string | null
+  target?: string | null
+  detail?: string | null
+  at: string
+}
+
+/** One event owed to a destination, and how its tries went. */
+export interface WebhookDelivery {
+  id: string
+  event: string
+  status: 'pending' | 'delivered' | 'failed'
+  /** The tries made, of the eight it gets. */
+  attempts: number
+  /** When it is tried next, while it waits. */
+  nextAttemptAt?: string
+  lastStatus?: number
+  lastError?: string
+  durationMs?: number
+  replayOf?: string
+  told?: WebhookMessage
+  createdAt: string
+  updatedAt: string
+  deliveredAt?: string
+}
+
+export interface WebhookDeliveries {
+  deliveries: WebhookDelivery[]
+  total: number
 }
 
 export interface JobsResponse {
@@ -545,7 +724,8 @@ export interface JobEntry {
   /** Its title and kind when the run took it. */
   title?: string
   kind?: MediaKind
-  outcome: 'ok' | 'failed' | 'skipped'
+  /** `imported` is the seed's: a work of Sonarr's or Radarr's library fetched for the first time. */
+  outcome: 'ok' | 'failed' | 'skipped' | 'imported'
   /** One of the fixed notes the interface knows, or the error as the provider said it. */
   note?: string
   createdAt: string
@@ -620,6 +800,8 @@ export interface Me {
   publicBrowse: boolean
   /** The signed-in person, when this is a session rather than a key. */
   user?: SessionUser
+  /** The country this reader is answered for, ISO 3166-1 alpha-2: where to watch, release dates, ratings. */
+  region?: string
 }
 
 export interface Snapshot {
@@ -681,8 +863,10 @@ export interface SyncOutcome {
 
 /** What each source gives a work, and which wins. */
 export interface SourceRules {
-  /** Every provider, in the order the merge consults them. */
+  /** Every provider, in the order the merge consults them: the `sources.priority` setting. */
   providers: { id: string; rank: number; on: boolean; reach?: MalReach }[]
+  /** Every provider in the order the server started with, AMS_PROVIDER_PRIORITY's: what the order goes back to. */
+  defaultOrder: string[]
   rows: SourceRule[]
 }
 
@@ -930,6 +1114,22 @@ export interface UpdateAvailable {
   publishedAt?: string
 }
 
+/**
+ * What there is to do, counted: the dashboard's list of errands. Each of the
+ * works' figures is what the admin catalogue lists under the matching filter.
+ */
+export interface Errands {
+  refreshFailed: number
+  noPoster: number
+  noOverview: number
+  noImdb: number
+  neverRefreshed: number
+  /** Keys, still on, that stop working within `keyHorizonDays`. */
+  expiringKeys: number
+  keyHorizonDays: number
+  failedMedia: number
+}
+
 export type ListKind = 'series' | 'movie' | 'mixed'
 export type ListMode = 'manual' | 'filter'
 
@@ -956,6 +1156,8 @@ export interface CuratedList {
   slug: string
   name: string
   description?: string
+  /** The picture the selection is shown with: the copy kept, where there is one, else its address. */
+  cover?: string
   kind: ListKind
   mode: ListMode
   filter?: ListFilter
@@ -979,6 +1181,8 @@ export interface CuratedListPage {
 export interface CuratedListRequest {
   name: string
   description?: string
+  /** An address; empty, it takes the cover away, and left out it stays. */
+  cover?: string
   kind: ListKind
   mode: ListMode
   filter?: ListFilter
@@ -1023,8 +1227,9 @@ export interface Release {
 export type CalendarEntry = ({ kind: 'episode' } & Airing) | ({ kind: 'release' } & Release)
 
 export interface Calendar {
-  /** The episodes alone, as the schedule listed them before it held films. */
-  episodes: Airing[]
+  // The server still sends `episodes`, the episodes alone, for whoever read
+  // the schedule before it held films; it is deprecated and this site reads
+  // `entries` alone, so it is not declared here.
   /** Episodes and releases together, earliest first. */
   entries: CalendarEntry[]
   works: MediaItem[]
@@ -1124,6 +1329,12 @@ export interface EffectiveSetting {
   /** The scope the value came from, which is `server` unless this one set it. */
   source: SettingScope
   overridden: boolean
+  /**
+   * What a server setting began as, before anybody changed it: what a change
+   * is measured against and a reversal goes back to. Absent for a secret, for
+   * a scope narrower than the server's, and for a setting that begins unset.
+   */
+  default?: string
 }
 
 /** A work a provider has, before this server holds it. */

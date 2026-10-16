@@ -6,10 +6,9 @@ use futures::future::join_all;
 use crate::{
     db::repo,
     domain::{ExternalSource, MediaItem, MediaKind},
-    providers::{names, tmdb::map as tmdb_map},
+    providers::{names, skyhook, tmdb::map as tmdb_map},
     service::{FETCHING, Found, cached_search, gather, held, ids, load, local, or_held, persist},
     state::AppState,
-    wire::sonarr,
 };
 
 /// Resolve a series by the id Sonarr asked for.
@@ -90,11 +89,11 @@ async fn fetch_by_tvdb_id(state: &AppState, tvdb_id: i64) -> Result<Option<Media
         match state.skyhook.show(tvdb_id).await {
             // Nameless, it would be a row nothing could be listed by; with
             // other providers, one of them names it (`gather::store`).
-            Ok(Some((_, show))) if show.title.trim().is_empty() => {
+            Ok(Some((_, show))) if show.title().trim().is_empty() => {
                 tracing::warn!(tvdb_id, "Skyhook named nothing; not storing its answer");
             }
             Ok(Some((raw, show))) => {
-                let item = sonarr::to_item(&show);
+                let item = skyhook::to_item(&show);
                 let provenance = crate::merge::provenance::single(names::SKYHOOK, &item);
                 let snapshots = vec![(names::SKYHOOK.to_string(), raw)];
                 let stored = persist(state, item, &snapshots, provenance, None).await?;
@@ -321,7 +320,7 @@ pub async fn search(state: &AppState, term: &str) -> Result<Vec<MediaItem>> {
             match state.skyhook.search(term).await {
                 Ok(shows) => {
                     for show in shows.iter().take(state.search_limit()) {
-                        results.push(sonarr::to_item(show));
+                        results.push(skyhook::to_item(show));
                     }
                 }
                 Err(e) => {
@@ -406,7 +405,7 @@ pub async fn search_at(state: &AppState, source: &str, term: &str) -> Result<Vec
             .await?
             .iter()
             .take(limit)
-            .map(sonarr::to_item)
+            .map(skyhook::to_item)
             .collect()),
         names::FANKAI => state.fankai.search(term, limit).await,
         _ => Ok(Vec::new()),

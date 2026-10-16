@@ -3,8 +3,8 @@
 //! A registry of its own rather than a crate: a few counters and histograms
 //! with fixed labels, added to without a lock and read in one pass, and the
 //! text format is four lines a metric. Requests are counted by the surface
-//! they land on — Sonarr's, Radarr's, the TMDB relay, the native API, the
-//! interface — and the calls made upstream by the provider asked, each with
+//! they land on — Sonarr's, Radarr's, Plex's provider, the TMDB relay, the
+//! native API, the interface — and the calls made upstream by the provider asked, each with
 //! how long it took. What the catalogue holds, what the caches keep and what
 //! the jobs did are read off the state when the scrape comes.
 
@@ -19,8 +19,8 @@ use axum::{extract::Request, middleware::Next, response::Response};
 /// liveness probes are a surface of their own, so a monitor does not count
 /// as readers; so are the media kept, and the authority's files a client
 /// fetches to trust this server.
-pub const SURFACES: [&str; 10] = [
-    "sonarr", "radarr", "tmdb", "tvdb", "anilist", "native", "media", "ca", "probe", "ui",
+pub const SURFACES: [&str; 11] = [
+    "sonarr", "radarr", "plex", "tmdb", "tvdb", "anilist", "native", "media", "ca", "probe", "ui",
 ];
 
 /// The providers asked upstream, in the order they are counted.
@@ -139,6 +139,8 @@ pub fn surface_of(path: &str) -> usize {
         "sonarr"
     } else if path.starts_with("/v1/") {
         "radarr"
+    } else if path == "/plex" || path.starts_with("/plex/") {
+        "plex"
     } else if path.starts_with("/3/") || path.starts_with("/4/") {
         "tmdb"
     } else if path.starts_with("/v4/") || path == "/v4" {
@@ -322,6 +324,12 @@ mod tests {
         assert_eq!(SURFACES[surface_of("/v1/tvdb/search/en")], "sonarr");
         assert_eq!(SURFACES[surface_of("/v1/movie/550")], "radarr");
         assert_eq!(SURFACES[surface_of("/v1/search")], "radarr");
+        assert_eq!(SURFACES[surface_of("/plex")], "plex");
+        assert_eq!(
+            SURFACES[surface_of("/plex/library/metadata/matches")],
+            "plex"
+        );
+        assert_eq!(SURFACES[surface_of("/plexus")], "ui");
         assert_eq!(SURFACES[surface_of("/3/tv/1396")], "tmdb");
         assert_eq!(SURFACES[surface_of("/4/list/1")], "tmdb");
         assert_eq!(SURFACES[surface_of("/api/v1/items")], "native");

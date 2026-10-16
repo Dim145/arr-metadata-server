@@ -2,8 +2,9 @@
 //! open, who may sign up, and which APIs answer, how and how much.
 //!
 //! The answers themselves are settings (`site.access`, `registration.*`,
-//! `api.*`, `keys.maxPerUser`) and are changed through `/settings/server/-`
-//! like any other. This reads them back together with what they govern.
+//! `api.*`, `keys.maxPerUser`, `tmdb.relayCredential`,
+//! `tvdb.relayCredential`) and are changed through `/settings/server/-` like
+//! any other. This reads them back together with what they govern.
 
 use axum::{Extension, Json, extract::State};
 use serde::Serialize;
@@ -11,7 +12,10 @@ use utoipa::ToSchema;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::{
-    api::native::{figures, meta},
+    api::{
+        native::{figures, meta},
+        relay,
+    },
     auth::Identity,
     config::{Api, Surface},
     db::repo::{self, user::Role},
@@ -32,11 +36,32 @@ pub struct ApiState {
     /// Whether an administrator left it on.
     pub enabled: bool,
     /// What it asks of a caller: `apikey`, `allowlist` or `open`. Set by the
-    /// deployment's environment, not here.
+    /// deployment's environment, not here — except that a relay asked with
+    /// each client's own key asks for a listed address where the
+    /// environment says a key.
     pub policy: &'static str,
     /// Calls answered and refused since the server started.
     pub served: u64,
     pub refused: u64,
+}
+
+/// Whose key a relay asks its service with (`tmdb.relayCredential`,
+/// `tvdb.relayCredential`), and what stands around that choice.
+#[derive(Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RelayCredentialState {
+    /// `tmdb` or `tvdb`.
+    pub api: Api,
+    /// `server`: this server's key in place of the client's. `client`: the
+    /// client's own, as it came.
+    pub credential: &'static str,
+    /// Whether this server holds a key of the service's own to stand in
+    /// with: without one, `server` answers 503.
+    pub operator_key: bool,
+    /// What the environment asks of a caller (`AMS_TMDB_AUTH`,
+    /// `AMS_TVDB_AUTH`), before the choice above reads a key policy as the
+    /// address list.
+    pub configured_policy: &'static str,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -63,6 +88,8 @@ pub struct Access {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub counted_since: Option<String>,
     pub apis: Vec<ApiState>,
+    /// Whose key each relay that takes one asks its service with.
+    pub relay_credentials: Vec<RelayCredentialState>,
     /// Accounts waiting for an administrator.
     pub pending: i64,
     /// Invitations still usable, and the accounts they may still open.
@@ -103,6 +130,7 @@ async fn access(
             Api::Tvdb => Surface::Tvdb,
             Api::Anilist => Surface::Anilist,
             Api::Native => Surface::Native,
+            Api::Plex => Surface::Plex,
         };
         let (served, refused) = match &shared {
             Some(redis) => {
@@ -116,11 +144,28 @@ async fn access(
         apis.push(ApiState {
             api,
             enabled: state.api_on(api),
-            policy: meta::policy_name(state.config.policy_for(surface)),
+            policy: meta::policy_name(relay::policy(&state, surface)),
             served,
             refused,
         });
     }
+
+    let relay_credentials = [
+        (
+            Api::Tmdb,
+            Surface::Tmdb,
+            state.config.tmdb.api_key.is_some(),
+        ),
+        (Api::Tvdb, Surface::Tvdb, state.tvdb.is_configured()),
+    ]
+    .into_iter()
+    .map(|(api, surface, operator_key)| RelayCredentialState {
+        api,
+        credential: relay::credential(&state, surface).as_str(),
+        operator_key,
+        configured_policy: meta::policy_name(state.config.policy_for(surface)),
+    })
+    .collect();
 
     let (invitations, places) = repo::invitation::count_usable(&state.db).await?;
     let keys = repo::client::list(&state.db, repo::client::Owner::Any).await?;
@@ -149,6 +194,7 @@ async fn access(
             None => None,
         },
         apis,
+        relay_credentials,
         pending: repo::user::counts(&state.db).await?.pending,
         invitations,
         places,

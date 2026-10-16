@@ -195,8 +195,41 @@ const PATHS = {
       <path d="M5.6 7.1 10.4 4.4M5.6 8.9l4.8 2.7" />
     </>
   ),
+  // Where what happens is told: the notifications' destinations.
+  bell: (
+    <>
+      <path d="M4 11V7a4 4 0 0 1 8 0v4l1.3 1.5H2.7Z" />
+      <path d="M6.7 14a1.5 1.5 0 0 0 2.6 0" />
+    </>
+  ),
   shuffle: (
     <path d="M2.5 4.5h2.1c.9 0 1.7.4 2.3 1.1l4.2 4.8c.6.7 1.4 1.1 2.3 1.1h.1M2.5 11.5h2.1c.9 0 1.7-.4 2.3-1.1l.7-.8M8.4 6.4l.7-.8c.6-.7 1.4-1.1 2.3-1.1h.1M11.5 2.5l2 2-2 2M11.5 9.5l2 2-2 2" />
+  ),
+
+  /* The bar along the foot of a phone, and the catalogue's two ways of being
+     laid out: a house for the front page, the posters' grid, a quarter of a
+     year for the season chart, and three dots for what does not fit. */
+  home: <path d="M2.5 7.6 8 3l5.5 4.6M4 6.6v6.6h8V6.6M6.7 13.2V9.6h2.6v3.6" />,
+  grid: (
+    <>
+      <rect x="2.5" y="2.5" width="4.5" height="4.5" rx="1" />
+      <rect x="9" y="2.5" width="4.5" height="4.5" rx="1" />
+      <rect x="2.5" y="9" width="4.5" height="4.5" rx="1" />
+      <rect x="9" y="9" width="4.5" height="4.5" rx="1" />
+    </>
+  ),
+  seasons: (
+    <>
+      <circle cx="8" cy="8" r="5.8" />
+      <path d="M8 8V2.2M8 8h5.8" />
+    </>
+  ),
+  more: (
+    <>
+      <circle cx="3.5" cy="8" r="0.8" />
+      <circle cx="8" cy="8" r="0.8" />
+      <circle cx="12.5" cy="8" r="0.8" />
+    </>
   ),
 } as const
 

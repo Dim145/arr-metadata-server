@@ -55,6 +55,7 @@ const ID_SOURCES: { key: keyof ExternalIds; list?: boolean }[] = [
   { key: 'tvrage' },
   { key: 'trakt' },
   { key: 'fankai' },
+  { key: 'wikidata' },
   { key: 'mal', list: true },
   { key: 'anilist', list: true },
 ]
@@ -75,8 +76,8 @@ function idsOf(drafts: Record<string, string>): { ids: ExternalIds; error?: stri
   for (const { key, list } of ID_SOURCES) {
     const text = (drafts[key] ?? '').trim()
     if (!text) continue
-    if (key === 'imdb') {
-      ids.imdb = text
+    if (key === 'imdb' || key === 'wikidata') {
+      ids[key] = text
       continue
     }
     // Whole numbers and nothing after them: `parseInt` read "81189x" as 81189

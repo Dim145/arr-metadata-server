@@ -2,18 +2,20 @@
 //! maintains it, and what Sonarr and Radarr import from them.
 //!
 //! A list is read as its page is — open under public browsing, otherwise with
-//! a credential — and served in three more shapes: Sonarr's custom list
-//! (`title`, `tvdbId`), Radarr's custom list (TMDB's result shape, `id` being
-//! the TMDB id) and the StevenLu shape Radarr also reads (`title`,
-//! `imdb_id`). Point an import list at one and the selection becomes what
-//! that client adds on its own.
+//! a credential — and served in more shapes: Sonarr's custom list (`title`,
+//! `tvdbId`), Radarr's custom list (TMDB's result shape, `id` being the TMDB
+//! id), the StevenLu shape Radarr also reads (`title`, `imdb_id`), a text
+//! file of identifiers for Kometa's "Text File" builder, and an Atom feed
+//! (see [`super::feeds`]). Point an import list at one and the selection
+//! becomes what that client adds on its own.
 
 use std::collections::{HashMap, HashSet};
 
 use axum::{
     Extension, Json,
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{HeaderValue, StatusCode, header},
+    response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -31,7 +33,7 @@ use crate::{
         audit::Action,
         list::{CuratedList, ListFields, ListFilter, ListKind, ListMode},
     },
-    domain::{MediaItem, MediaKind, make_slug},
+    domain::{MediaItem, MediaKind, ids::normalize_imdb_id, make_slug},
     error::{AppError, AppResult},
     service,
     state::AppState,
@@ -46,6 +48,9 @@ const MAX_ITEMS: i64 = 500;
 const NAME_LIMIT: usize = 120;
 const DESCRIPTION_LIMIT: usize = 2000;
 const FIELD_LIMIT: usize = 200;
+/// The longest address a cover may have: more than any provider's picture
+/// has, and no more than a row should be asked to hold for one.
+const COVER_LIMIT: usize = 2048;
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -55,6 +60,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(sonarr_json))
         .routes(routes!(radarr_json))
         .routes(routes!(stevenlu_json))
+        .routes(routes!(ids_txt))
         .routes(routes!(holding))
 }
 
@@ -89,6 +95,11 @@ pub struct CuratedListRequest {
     pub mode: Option<ListMode>,
     pub filter: Option<ListFilter>,
     pub is_public: Option<bool>,
+    /// The picture the selection is shown with, by its address — a
+    /// provider's, which the catalogue holds a copy of or not, or any
+    /// `http(s)://` address a browser can load. Empty, it is taken away;
+    /// left out, it stays.
+    pub cover: Option<String>,
     /// The members of a hand-made list, in order; left as they are when
     /// absent.
     pub items: Option<Vec<String>>,
@@ -108,6 +119,15 @@ pub struct PageQuery {
     pub language: Option<String>,
 }
 
+#[derive(Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct IdsQuery {
+    /// `movie` or `series`: only the works of that kind. A Kometa library
+    /// holds one kind, so a list of both is asked for once for each; left
+    /// out, every work of the list is written.
+    pub kind: Option<String>,
+}
+
 // ─── reading ─────────────────────────────────────────────────────────────────
 
 /// Every list — the public ones, for a reader who does not maintain them.
@@ -121,6 +141,7 @@ async fn list(
 ) -> AppResult<Json<CuratedLists>> {
     let mut lists = repo::list::list(&state.db, !identity.can_write()).await?;
     counted_for(&state, &identity, &mut lists).await?;
+    shown(&state, &mut lists);
     Ok(Json(CuratedLists { lists }))
 }
 
@@ -148,6 +169,7 @@ async fn detail(
         Audience::Reader
     };
     let (items, total) = resolve(&state, &identity, &list, language.as_deref(), audience).await?;
+    shown(&state, std::slice::from_mut(&mut list));
     Ok(Json(CuratedListPage { list, items, total }))
 }
 
@@ -178,6 +200,7 @@ async fn holding(
     }
     let mut lists = repo::list::holding(&state.db, &item.id, !identity.can_write()).await?;
     counted_for(&state, &identity, &mut lists).await?;
+    shown(&state, &mut lists);
     Ok(Json(CuratedLists { lists }))
 }
 
@@ -234,6 +257,49 @@ async fn stevenlu_json(
     Ok(Json(stevenlu_list(&items)))
 }
 
+/// The list as a text file of identifiers, as Kometa's "Text File" builder
+/// reads one: a work a line, `tmdb:` for a film's TMDB id, `tvdb:` for a
+/// series' TheTVDB id, a bare `tt…` for an IMDb id, and after a `#` the
+/// title, for whoever reads the file. In the list's order, which the builder
+/// keeps for a collection ordered as the source is.
+#[utoipa::path(
+    get, path = "/lists/{key}/ids.txt", tag = TAG,
+    params(("key" = String, Path, description = "The list's slug, or its id"), IdsQuery),
+    responses(
+        (status = 200, description = "A work a line: `tmdb:949  # Heat (1995)`", content_type = "text/plain"),
+        (status = 400, description = "`kind` is neither movie nor series"),
+        (status = 404, description = "No such list, or none this caller may see"),
+    ),
+)]
+async fn ids_txt(
+    State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
+    Path(key): Path<String>,
+    Query(query): Query<IdsQuery>,
+) -> AppResult<Response> {
+    let kind = match query.kind.as_deref().map(str::trim) {
+        None | Some("") => None,
+        Some("movie") => Some(MediaKind::Movie),
+        Some("series") => Some(MediaKind::Series),
+        Some(_) => {
+            return Err(AppError::BadRequest(
+                "kind is movie or series: a Kometa library holds one of them".into(),
+            ));
+        }
+    };
+    let list = visible(&state, &identity, &key).await?;
+    let (items, _) = resolve(&state, &identity, &list, None, Audience::Reader).await?;
+
+    Ok((
+        [(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("text/plain; charset=utf-8"),
+        )],
+        kometa_ids(&list, &items, kind),
+    )
+        .into_response())
+}
+
 fn sonarr_list(items: &[MediaItem]) -> Vec<Value> {
     items
         .iter()
@@ -260,6 +326,68 @@ fn stevenlu_list(items: &[MediaItem]) -> Vec<Value> {
         .collect()
 }
 
+/// The identifier Kometa is given for a work, written so that it cannot be
+/// taken for another kind's: Kometa reads a bare number as the TMDB id of a
+/// film in a movie library and the TheTVDB id of a series in a show library —
+/// the two kinds' numbers are not each other's — so each line says which id it
+/// is, and a list of both kinds is asked for once for each library.
+///
+/// A film is named by TMDB, then IMDb. A series is named by TheTVDB, which a
+/// show library reads it by, then by IMDb, which no film shares, and last by
+/// TMDB. Nothing, for a work none of these name.
+fn kometa_id(work: &MediaItem) -> Option<String> {
+    let ids = &work.external_ids;
+    let imdb = || ids.imdb.as_deref().and_then(normalize_imdb_id);
+    let tmdb = || ids.tmdb.map(|id| format!("tmdb:{id}"));
+
+    match work.kind {
+        MediaKind::Movie => tmdb().or_else(imdb),
+        MediaKind::Series => ids
+            .tvdb
+            .map(|id| format!("tvdb:{id}"))
+            .or_else(imdb)
+            .or_else(tmdb),
+    }
+}
+
+/// A text as one line of a comment: its whitespace and control characters
+/// run into single spaces, so that nothing in a title can start a new line.
+fn one_line(text: &str) -> String {
+    text.split(|c: char| c.is_whitespace() || c.is_control())
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The text file of a list for Kometa's "Text File" builder: a header in
+/// comments, which the builder skips, then a work a line, titled after a `#`.
+/// `kind` keeps the works of one kind, as a library of that kind reads them.
+fn kometa_ids(list: &CuratedList, items: &[MediaItem], kind: Option<MediaKind>) -> String {
+    let lines: Vec<(String, &MediaItem)> = items
+        .iter()
+        .filter(|work| kind.is_none_or(|kind| work.kind == kind))
+        .filter_map(|work| Some((kometa_id(work)?, work)))
+        .collect();
+
+    let mut out = format!("# {}\n", one_line(&list.name));
+    out.push_str(
+        "# For Kometa's Text File builder: tmdb: is a film's TMDB id, tvdb: a series' TheTVDB id, tt… an IMDb id.\n",
+    );
+    if kind.is_none() && list.kind == ListKind::Mixed {
+        out.push_str(
+            "# This selection holds films and series. A library holds one kind: ask for ?kind=movie or ?kind=series.\n",
+        );
+    }
+    for (id, work) in lines {
+        let title = match work.year {
+            Some(year) => format!("{} ({year})", work.title),
+            None => work.title.clone(),
+        };
+        out.push_str(&format!("{id}  # {}\n", one_line(&title)));
+    }
+    out
+}
+
 // ─── composing ───────────────────────────────────────────────────────────────
 
 /// Create a list. Nothing is written until everything in the request has
@@ -269,7 +397,7 @@ fn stevenlu_list(items: &[MediaItem]) -> Vec<Value> {
     request_body = CuratedListRequest,
     responses(
         (status = 201, body = CuratedList),
-        (status = 400, description = "A name is missing or too long, the filter is not one, or a member is not in the catalogue"),
+        (status = 400, description = "A name is missing or too long, the filter is not one, the cover is not a picture's address, or a member is not in the catalogue"),
         (status = 403, description = "The caller may not write"),
         (status = 409, description = "Another list took that name at the same moment"),
     ),
@@ -278,9 +406,10 @@ async fn create(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
     ip: ClientIp,
-    Json(request): Json<CuratedListRequest>,
+    Json(mut request): Json<CuratedListRequest>,
 ) -> AppResult<(StatusCode, Json<CuratedList>)> {
     require_write(&identity)?;
+    unkept(&state, &mut request);
     let checked = check(&request, None)?;
     let members = match &request.items {
         Some(ids) if checked.mode == ListMode::Manual => Some(existing(&state, ids).await?),
@@ -289,7 +418,7 @@ async fn create(
     let slug = free_slug(&state, &checked.name).await?;
 
     // The list and its members together, or neither.
-    let list = repo::list::create(&state.db, checked.fields(&slug), members.as_deref())
+    let mut list = repo::list::create(&state.db, checked.fields(&slug), members.as_deref())
         .await
         .map_err(|e| conflict_or_internal(e, &checked.name))?;
 
@@ -306,6 +435,7 @@ async fn create(
     )
     .await;
 
+    shown(&state, std::slice::from_mut(&mut list));
     Ok((StatusCode::CREATED, Json(list)))
 }
 
@@ -317,7 +447,7 @@ async fn create(
     request_body = CuratedListRequest,
     responses(
         (status = 200, body = CuratedList),
-        (status = 400, description = "A name is too long, the filter is not one, or a member is not in the catalogue"),
+        (status = 400, description = "A name is too long, the filter is not one, the cover is not a picture's address, or a member is not in the catalogue"),
         (status = 403, description = "The caller may not write"),
         (status = 404, description = "No such list"),
     ),
@@ -327,9 +457,10 @@ async fn update(
     Extension(identity): Extension<Identity>,
     ip: ClientIp,
     Path(key): Path<String>,
-    Json(request): Json<CuratedListRequest>,
+    Json(mut request): Json<CuratedListRequest>,
 ) -> AppResult<Json<CuratedList>> {
     require_write(&identity)?;
+    unkept(&state, &mut request);
     let current = find(&state, &key).await?.ok_or(AppError::NotFound)?;
     let checked = check(&request, Some(&current))?;
     // A list composed by a filter has no members of its own: any it had are
@@ -352,7 +483,7 @@ async fn update(
     if !written {
         return Err(AppError::NotFound);
     }
-    let list = repo::list::get(&state.db, &current.id)
+    let mut list = repo::list::get(&state.db, &current.id)
         .await?
         .ok_or(AppError::NotFound)?;
 
@@ -369,6 +500,7 @@ async fn update(
     )
     .await;
 
+    shown(&state, std::slice::from_mut(&mut list));
     Ok(Json(list))
 }
 
@@ -400,7 +532,7 @@ async fn set_items(
     }
     let members = existing(&state, &request.items).await?;
     repo::list::set_members(&state.db, &current.id, &members).await?;
-    let list = repo::list::get(&state.db, &current.id)
+    let mut list = repo::list::get(&state.db, &current.id)
         .await?
         .ok_or(AppError::NotFound)?;
 
@@ -416,6 +548,7 @@ async fn set_items(
     )
     .await;
 
+    shown(&state, std::slice::from_mut(&mut list));
     Ok(Json(list))
 }
 
@@ -467,11 +600,36 @@ fn require_write(identity: &Identity) -> AppResult<()> {
 }
 
 /// A list by id, or failing that by slug.
-async fn find(state: &AppState, key: &str) -> AppResult<Option<CuratedList>> {
+pub(super) async fn find(state: &AppState, key: &str) -> AppResult<Option<CuratedList>> {
     if let Some(list) = repo::list::get(&state.db, key).await? {
         return Ok(Some(list));
     }
     Ok(repo::list::by_slug(&state.db, key).await?)
+}
+
+/// The covers of some lists as their readers are given them: the copy this
+/// server keeps of the picture where there is one — a path the site follows
+/// whatever name it was reached by — else the address it was given by. An
+/// upload that is no longer kept has none a reader could follow, and so no
+/// cover.
+fn shown(state: &AppState, lists: &mut [CuratedList]) {
+    for list in lists {
+        if let Some(cover) = list.cover.take() {
+            let served = state.media.localized(&cover);
+            list.cover = (!served.starts_with("upload:")).then_some(served);
+        }
+    }
+}
+
+/// A cover that came back as it was given — a path to a copy kept, which is
+/// what the site shows a cover by — put back to the address the copy was
+/// fetched from. The list keeps the address, not the path: the copy may be
+/// forgotten, or the picture kept somewhere else, and the address is still
+/// the picture's.
+fn unkept(state: &AppState, request: &mut CuratedListRequest) {
+    if let Some(cover) = request.cover.as_mut() {
+        *cover = state.media.unlocalize(cover.trim());
+    }
 }
 
 /// The hand-made lists' counts as this reader is shown them: of the members
@@ -490,7 +648,11 @@ async fn counted_for(
 
 /// A list this caller may read: any, for one who maintains them; a public
 /// one otherwise, a private one being no list at all to a reader.
-async fn visible(state: &AppState, identity: &Identity, key: &str) -> AppResult<CuratedList> {
+pub(super) async fn visible(
+    state: &AppState,
+    identity: &Identity,
+    key: &str,
+) -> AppResult<CuratedList> {
     let list = find(state, key).await?.ok_or(AppError::NotFound)?;
     if !list.is_public && !identity.can_write() {
         return Err(AppError::NotFound);
@@ -520,6 +682,7 @@ struct Checked {
     mode: ListMode,
     filter: Option<ListFilter>,
     is_public: bool,
+    cover: Option<String>,
 }
 
 impl Checked {
@@ -532,8 +695,34 @@ impl Checked {
             mode: self.mode,
             filter: self.filter.as_ref(),
             is_public: self.is_public,
+            cover: self.cover.as_deref(),
         }
     }
+}
+
+/// A cover as a list may keep it: the address of a picture a browser loads,
+/// `http(s)://`, or an upload's `upload:` origin, which the copy kept is
+/// served for. Nothing a browser would run — `javascript:`, a `data:` page —
+/// and no address that is not one: no space, no control character.
+fn check_cover(text: &str) -> AppResult<Option<String>> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Ok(None);
+    }
+    let web = text.starts_with("https://") || text.starts_with("http://");
+    if !(web || text.starts_with("upload:")) {
+        return Err(AppError::BadRequest(
+            "a cover is a picture's address: http:// or https://".into(),
+        ));
+    }
+    if text.chars().count() > COVER_LIMIT
+        || text.chars().any(|c| c.is_whitespace() || c.is_control())
+    {
+        return Err(AppError::BadRequest(format!(
+            "a cover's address is at most {COVER_LIMIT} characters, with no space in it"
+        )));
+    }
+    Ok(Some(text.to_string()))
 }
 
 fn check(request: &CuratedListRequest, current: Option<&CuratedList>) -> AppResult<Checked> {
@@ -571,6 +760,11 @@ fn check(request: &CuratedListRequest, current: Option<&CuratedList>) -> AppResu
         .is_public
         .or(current.map(|c| c.is_public))
         .unwrap_or(true);
+    // Said, it is checked — and an empty one takes it away; left out, it stays.
+    let cover = match &request.cover {
+        Some(text) => check_cover(text)?,
+        None => current.and_then(|c| c.cover.clone()),
+    };
     let filter = match mode {
         ListMode::Filter => {
             let filter = request
@@ -606,6 +800,7 @@ fn check(request: &CuratedListRequest, current: Option<&CuratedList>) -> AppResu
         mode,
         filter,
         is_public,
+        cover,
     })
 }
 
@@ -727,6 +922,8 @@ fn filter_query(filter: &ListFilter, adult: bool, kind: ListKind) -> AppResult<r
         collection: filter.collection,
         min_rating: filter.min_rating,
         refresh_failed: false,
+        missing: Vec::new(),
+        stored_language: None,
         sort,
         descending: filter.descending,
         limit: filter.limit.unwrap_or(100),
@@ -737,20 +934,20 @@ fn filter_query(filter: &ListFilter, adult: bool, kind: ListKind) -> AppResult<r
 /// Who a list is resolved for: a reader, shown what a reader may see, or
 /// whoever maintains it, shown every member.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Audience {
+pub(super) enum Audience {
     Reader,
     Maintainer,
 }
 
-/// The works of a list, drawn as a list is.
-async fn resolve(
+/// The works of a list as the store holds them — no artwork, no overrides —
+/// in the list's own order, for a reader who may be shown adult works or
+/// not (`adult`), or whoever maintains the list.
+async fn members(
     state: &AppState,
-    identity: &Identity,
     list: &CuratedList,
-    language: Option<&str>,
+    adult: bool,
     audience: Audience,
-) -> AppResult<(Vec<MediaItem>, i64)> {
-    let adult = state.adult_for(identity.client_id(), identity.peer_id(), None);
+) -> AppResult<Vec<MediaItem>> {
     let mut items = match list.mode {
         ListMode::Manual => {
             let ids = repo::list::member_ids(&state.db, &list.id).await?;
@@ -782,6 +979,26 @@ async fn resolve(
             ListKind::Mixed => {}
         }
     }
+    Ok(items)
+}
+
+/// The works of a list an export of the whole catalogue would hold: those
+/// switched on and not for adults, in the list's order. What the `.nfo`
+/// documents of one selection are written for.
+pub(super) async fn exportable(state: &AppState, list: &CuratedList) -> AppResult<Vec<MediaItem>> {
+    members(state, list, false, Audience::Reader).await
+}
+
+/// The works of a list, drawn as a list is.
+pub(super) async fn resolve(
+    state: &AppState,
+    identity: &Identity,
+    list: &CuratedList,
+    language: Option<&str>,
+    audience: Audience,
+) -> AppResult<(Vec<MediaItem>, i64)> {
+    let adult = state.adult_for(identity.client_id(), identity.peer_id(), None);
+    let mut items = members(state, list, adult, audience).await?;
 
     service::apply_overrides(state, &mut items).await?;
     repo::item::load_artwork(&state.db, &mut items).await?;
@@ -824,6 +1041,7 @@ mod tests {
             mode,
             filter,
             is_public: None,
+            cover: None,
             items: None,
         }
     }
@@ -841,6 +1059,7 @@ mod tests {
                 ..Default::default()
             }),
             is_public: false,
+            cover: None,
             item_count: 0,
             created_at: String::new(),
             updated_at: String::new(),
@@ -1000,5 +1219,290 @@ mod tests {
         let json = serde_json::to_value(&filter).unwrap();
         assert_eq!(json, json!({ "genres": [], "sort": "rating", "limit": 24 }));
         assert!(json.get("descending").is_none());
+    }
+
+    #[test]
+    fn kometa_is_given_each_work_by_the_id_its_kind_is_read_by() {
+        let mut heat = work(MediaKind::Movie, "Heat");
+        heat.year = Some(1995);
+        heat.external_ids.tmdb = Some(949);
+        heat.external_ids.tvdb = Some(1);
+        heat.external_ids.imdb = Some("tt0113277".into());
+        // A film without a TMDB id is named by IMDb, never by a TheTVDB id.
+        let mut ronin = work(MediaKind::Movie, "Ronin");
+        ronin.external_ids.tvdb = Some(55);
+        ronin.external_ids.imdb = Some("0207992".into());
+        let mut dark = work(MediaKind::Series, "Dark");
+        dark.external_ids.tvdb = Some(348_303);
+        dark.external_ids.tmdb = Some(70_523);
+        // A series: TheTVDB, then IMDb, which no film shares, then TMDB.
+        let mut only_imdb = work(MediaKind::Series, "Imdb only");
+        only_imdb.external_ids.imdb = Some("tt0000002".into());
+        only_imdb.external_ids.tmdb = Some(5);
+        let mut only_tmdb = work(MediaKind::Series, "Tmdb only");
+        only_tmdb.external_ids.tmdb = Some(6);
+        let nameless = work(MediaKind::Series, "Nameless");
+
+        assert_eq!(kometa_id(&heat).as_deref(), Some("tmdb:949"));
+        assert_eq!(kometa_id(&ronin).as_deref(), Some("tt0207992"));
+        assert_eq!(kometa_id(&dark).as_deref(), Some("tvdb:348303"));
+        assert_eq!(kometa_id(&only_imdb).as_deref(), Some("tt0000002"));
+        assert_eq!(kometa_id(&only_tmdb).as_deref(), Some("tmdb:6"));
+        assert_eq!(kometa_id(&nameless), None);
+
+        let mut list = a_list();
+        list.name = "Autumn\n2026".into();
+        list.kind = ListKind::Mixed;
+        let items = [heat, dark, nameless, ronin];
+
+        // Both kinds, in the list's order, the nameless one left out; and a
+        // line that says a library holds one kind.
+        let all = kometa_ids(&list, &items, None);
+        assert!(all.starts_with("# Autumn 2026\n# For Kometa's Text File builder"));
+        assert!(all.contains("ask for ?kind=movie or ?kind=series"));
+        assert_eq!(
+            entries(&all),
+            [
+                "tmdb:949  # Heat (1995)",
+                "tvdb:348303  # Dark",
+                "tt0207992  # Ronin"
+            ]
+        );
+
+        // One kind: what a library of that kind reads, and no advice.
+        let films = kometa_ids(&list, &items, Some(MediaKind::Movie));
+        assert_eq!(
+            entries(&films),
+            ["tmdb:949  # Heat (1995)", "tt0207992  # Ronin"]
+        );
+        assert!(!films.contains("?kind="));
+        let shows = kometa_ids(&list, &items, Some(MediaKind::Series));
+        assert_eq!(entries(&shows), ["tvdb:348303  # Dark"]);
+        // A list of one kind needs no advice either.
+        list.kind = ListKind::Series;
+        assert!(!kometa_ids(&list, &items, None).contains("?kind="));
+    }
+
+    /// The lines of a text file that name a work: not the comments above them.
+    fn entries(text: &str) -> Vec<&str> {
+        text.lines().filter(|l| !l.starts_with('#')).collect()
+    }
+
+    #[test]
+    fn a_title_cannot_start_a_line_of_the_text_file() {
+        let mut odd = work(MediaKind::Movie, "Two\nlines # and a hash\r\u{7}");
+        odd.external_ids.tmdb = Some(1);
+        let text = kometa_ids(&a_list(), &[odd], None);
+        let line = text.lines().last().unwrap();
+        assert_eq!(line, "tmdb:1  # Two lines # and a hash");
+        // Every line is a comment or an identifier and its comment.
+        for line in text.lines() {
+            assert!(line.starts_with('#') || line.starts_with("tmdb:"), "{line}");
+        }
+    }
+
+    #[test]
+    fn a_cover_is_the_address_of_a_picture_a_browser_loads() {
+        let mut said = request(Some("Autumn"), None, None);
+        let check_with = |cover: &str, current: Option<&CuratedList>| {
+            let mut said = request(Some("Autumn"), Some(ListMode::Manual), None);
+            said.cover = Some(cover.to_string());
+            check(&said, current)
+        };
+
+        // Left out, it is not touched; said empty, it is taken away.
+        let mut current = a_list();
+        current.cover = Some("https://image.tmdb.org/t/p/original/a.jpg".into());
+        let kept = check(&said, Some(&current)).unwrap();
+        assert_eq!(kept.cover.as_deref(), current.cover.as_deref());
+        said.cover = Some("  ".into());
+        assert_eq!(check(&said, Some(&current)).unwrap().cover, None);
+        assert_eq!(check(&said, None).unwrap().cover, None);
+
+        for fine in [
+            " https://image.tmdb.org/t/p/w1280/b.jpg ",
+            "http://films.example/b.png",
+            "upload:0f3a",
+        ] {
+            let checked = check_with(fine, None).unwrap();
+            assert_eq!(checked.cover.as_deref(), Some(fine.trim()));
+        }
+        for bad in [
+            "javascript:alert(1)",
+            "data:image/png;base64,AAAA",
+            "//films.example/b.png",
+            "/media/0f3a.jpg",
+            "https://films.example/a b.png",
+            "https://films.example/\n.png",
+            &format!("https://films.example/{}", "x".repeat(COVER_LIMIT)),
+        ] {
+            assert!(check_with(bad, None).is_err(), "{bad:?}");
+        }
+    }
+
+    /// The body of an answer, read as text.
+    async fn read(response: Response) -> String {
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read");
+        String::from_utf8(bytes.to_vec()).expect("text")
+    }
+
+    /// A work, stored.
+    async fn stored(state: &AppState, mut work: MediaItem) -> MediaItem {
+        work.slug = make_slug(&work.title, None);
+        repo::item::upsert(
+            &state.db,
+            repo::item::ItemWrite {
+                item: &work,
+                replace_children: true,
+            },
+        )
+        .await
+        .expect("stored");
+        work
+    }
+
+    #[tokio::test]
+    async fn the_text_file_is_served_as_a_list_is_read() {
+        let state = super::super::testing::server().await;
+        let mut heat = work(MediaKind::Movie, "Heat");
+        heat.external_ids.tmdb = Some(949);
+        let heat = stored(&state, heat).await;
+        let mut dark = work(MediaKind::Series, "Dark");
+        dark.external_ids.tvdb = Some(348_303);
+        let dark = stored(&state, dark).await;
+
+        let list = repo::list::create(
+            &state.db,
+            ListFields {
+                slug: "picks",
+                name: "Picks",
+                description: None,
+                kind: ListKind::Mixed,
+                mode: ListMode::Manual,
+                filter: None,
+                is_public: true,
+                cover: None,
+            },
+            Some(&[dark.id.clone(), heat.id.clone()]),
+        )
+        .await
+        .expect("created");
+
+        let ask = |kind: Option<&str>| {
+            ids_txt(
+                State(state.clone()),
+                Extension(Identity::Visitor),
+                Path(list.slug.clone()),
+                Query(IdsQuery {
+                    kind: kind.map(str::to_string),
+                }),
+            )
+        };
+
+        let response = ask(None).await.expect("answered");
+        assert_eq!(
+            response.headers()[header::CONTENT_TYPE],
+            "text/plain; charset=utf-8"
+        );
+        let body = read(response).await;
+        // In the list's own order, which is not the catalogue's.
+        assert_eq!(entries(&body), ["tvdb:348303  # Dark", "tmdb:949  # Heat"]);
+
+        let films = read(ask(Some("movie")).await.expect("answered")).await;
+        assert_eq!(entries(&films), ["tmdb:949  # Heat"]);
+        assert!(matches!(
+            ask(Some("anime")).await,
+            Err(AppError::BadRequest(_))
+        ));
+
+        // A private list is a reader's no list at all, whatever the shape.
+        repo::list::create(
+            &state.db,
+            ListFields {
+                slug: "private",
+                name: "Private",
+                description: None,
+                kind: ListKind::Mixed,
+                mode: ListMode::Manual,
+                filter: None,
+                is_public: false,
+                cover: None,
+            },
+            None,
+        )
+        .await
+        .expect("created");
+        let refused = ids_txt(
+            State(state.clone()),
+            Extension(Identity::Visitor),
+            Path("private".into()),
+            Query(IdsQuery { kind: None }),
+        )
+        .await;
+        assert!(matches!(refused, Err(AppError::NotFound)));
+    }
+
+    #[tokio::test]
+    async fn a_work_keeps_the_day_it_joined_through_every_save() {
+        let state = super::super::testing::server().await;
+        let first = stored(&state, work(MediaKind::Movie, "First")).await;
+        let second = stored(&state, work(MediaKind::Movie, "Second")).await;
+        let third = stored(&state, work(MediaKind::Movie, "Third")).await;
+
+        let list = repo::list::create(
+            &state.db,
+            ListFields {
+                slug: "joined",
+                name: "Joined",
+                description: None,
+                kind: ListKind::Movie,
+                mode: ListMode::Manual,
+                filter: None,
+                is_public: true,
+                cover: Some("https://image.tmdb.org/t/p/original/c.jpg"),
+            },
+            Some(&[first.id.clone(), second.id.clone()]),
+        )
+        .await
+        .expect("created");
+        assert_eq!(
+            list.cover.as_deref(),
+            Some("https://image.tmdb.org/t/p/original/c.jpg")
+        );
+        let before: HashMap<String, String> = repo::list::members_joined(&state.db, &list.id)
+            .await
+            .unwrap()
+            .into_iter()
+            .collect();
+
+        // A third work joins, the others are moved: each of the first two
+        // is dated as it was, and only the third by the save.
+        tokio::time::sleep(std::time::Duration::from_millis(15)).await;
+        repo::list::set_members(
+            &state.db,
+            &list.id,
+            &[third.id.clone(), second.id.clone(), first.id.clone()],
+        )
+        .await
+        .unwrap();
+        let after = repo::list::members_joined(&state.db, &list.id)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            after.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(),
+            [third.id.as_str(), second.id.as_str(), first.id.as_str()]
+        );
+        for (id, at) in &after {
+            match before.get(id) {
+                Some(was) => assert_eq!(at, was, "{id} kept the day it joined"),
+                None => assert!(
+                    at > before.get(&first.id).unwrap(),
+                    "the work that joined is dated by the save"
+                ),
+            }
+        }
     }
 }

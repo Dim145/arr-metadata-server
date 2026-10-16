@@ -91,6 +91,13 @@ pub struct ListQuery {
     /// and anybody else is answered as if it had not been asked.
     #[serde(default)]
     pub refresh_failed: bool,
+    /// Only works lacking these, comma-separated: `poster` — no poster of
+    /// their own, nor one chosen by hand — `overview` — no overview in the
+    /// language they are stored in — `imdb` — no IMDb identifier — and
+    /// `refresh` — never refreshed, though they have an identifier to be
+    /// refreshed by. Several narrow together: `poster,overview` lists the works
+    /// lacking both. For those who may edit the catalogue, as `refreshFailed`.
+    pub missing: Option<String>,
     /// `popularity` (the default), `rating`, `release`, `title`, `added` or
     /// `refreshed`.
     pub sort: Option<String>,
@@ -166,6 +173,7 @@ pub(super) fn to_query(
         ("keyword", &query.keyword),
         ("status", &query.status),
         ("network", &query.network),
+        ("missing", &query.missing),
     ] {
         if text
             .as_deref()
@@ -202,9 +210,27 @@ pub(super) fn to_query(
         }
     }
 
-    // Which works are switched off, and which failed their last refresh, is for
-    // whoever maintains the catalogue — the editors' screens ask for both — and
-    // not for a visitor, who is answered as if the flags had not been sent.
+    // A gap the register does not know is refused whoever asks, each named
+    // once however often it is.
+    let mut missing: Vec<repo::item::Missing> = Vec::new();
+    for name in query
+        .missing
+        .as_deref()
+        .unwrap_or("")
+        .split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    {
+        let gap = name.parse().map_err(AppError::BadRequest)?;
+        if !missing.contains(&gap) {
+            missing.push(gap);
+        }
+    }
+
+    // Which works are switched off, which failed their last refresh and what
+    // their records lack is for whoever maintains the catalogue — the editors'
+    // screens ask for all three — and not for a visitor, who is answered as if
+    // the flags had not been sent.
     let maintains = identity.can_write();
 
     Ok(repo::item::Query {
@@ -229,6 +255,10 @@ pub(super) fn to_query(
         collection: query.collection,
         min_rating: query.min_rating,
         refresh_failed: query.refresh_failed && maintains,
+        missing: if maintains { missing } else { Vec::new() },
+        // An overview locked in the language the works are kept in is the
+        // one they are read with: no gap.
+        stored_language: Some(service::language::stored(state)),
         sort,
         descending,
         limit: query.limit.unwrap_or(50),
@@ -413,16 +443,16 @@ pub struct CreateRequest {
 
 /// Create an entry by hand.
 ///
-/// The result is marked manual, which exempts it from the refresh scheduler and
-/// protects its children from being replaced. If external ids are supplied it
-/// still becomes refreshable — a manual entry can be a stub that later fills in
-/// from a provider without losing what was typed.
+/// The result is marked manual: no refresh, sync or schedule touches it, and
+/// its children are never replaced. Its external ids are what the clients find
+/// it by — Sonarr by its TheTVDB id, Radarr by its TMDB one — and what its
+/// links lead to; one another entry already goes by is refused.
 #[utoipa::path(
     post, path = "/items", tag = TAG,
     request_body = CreateRequest,
     responses(
         (status = 201, description = "Created", body = MediaItem),
-        (status = 400, description = "The kind or title was not usable"),
+        (status = 400, description = "A field was not usable: the kind, a blank or overlong title, a day that is not one, a status the kind does not have, a year, a runtime or an identifier out of shape"),
         (status = 403, description = "The caller may not write"),
         (status = 409, description = "Another entry already claims one of the external ids"),
     ),
@@ -440,14 +470,14 @@ async fn create(
         .parse()
         .map_err(|e: anyhow::Error| AppError::BadRequest(e.to_string()))?;
 
-    let title = request.title.trim();
+    let title = request.title.trim().to_string();
     if title.is_empty() {
         return Err(AppError::BadRequest("title must not be empty".into()));
     }
-    checked_by_hand(&request)?;
+    let request = checked_by_hand(request, kind)?;
 
     let mut item = MediaItem::empty(kind);
-    item.title = title.to_string();
+    item.title = title.clone();
     item.year = request.year;
     item.overview = request.overview;
     item.status = request.status;
@@ -459,7 +489,7 @@ async fn create(
     item.genres = request.genres;
     item.external_ids = request.external_ids;
     item.is_manual = true;
-    item.slug = unique_slug(&state, kind, title, request.year).await?;
+    item.slug = unique_slug(&state, kind, &title, request.year).await?;
 
     // An identifier another work goes by is refused where it is written, in
     // the work's own transaction: checked beforehand, two entries made at once
@@ -1061,14 +1091,84 @@ async fn snapshots(
 /// entered by hand with.
 const MOST_BY_HAND: usize = 50;
 
+/// The longest title a work is entered by hand with, and the longest overview.
+const TITLE_MOST: usize = 500;
+const OVERVIEW_MOST: usize = 20_000;
+
+/// The years a work is entered by hand in: four digits, from before the first
+/// film to well past anything announced.
+const YEARS: std::ops::RangeInclusive<i32> = 1800..=2200;
+
+/// The longest a work entered by hand runs, in minutes: a few days, which the
+/// longest films ever shown fall well short of.
+const RUNTIME_MOST: i32 = 10_000;
+
 /// What a work entered by hand says, checked as the same fields are when
-/// they are locked by hand: a day as a day — one typed in as "TBA" was
-/// stored, served, and failed in Sonarr — a runtime that is not negative,
+/// they are locked by hand, and tidied: a day as a day — one typed in as
+/// "TBA" was stored, served, and failed in Sonarr — a status the clients
+/// know, a runtime that is not negative, identifiers each in its own shape,
 /// and lists of a sane length. Thousands of AniList ids were one bound value
 /// each in the statement that looks for a work's Fan-Kai cut, which failed
 /// past the engine's limit and left the work without its links.
-fn checked_by_hand(request: &CreateRequest) -> AppResult<()> {
+///
+/// Text is trimmed and a blank one dropped, a status is spelt as the clients
+/// spell it, and a genre named twice is kept once: what the form sends is
+/// what an interface would send, not what a client must be served.
+fn checked_by_hand(mut request: CreateRequest, kind: MediaKind) -> AppResult<CreateRequest> {
     use crate::domain::fields::{self, Scope};
+
+    let tidy = |text: Option<String>| text.map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+    request.overview = tidy(request.overview);
+    request.status = tidy(request.status);
+    request.first_aired = tidy(request.first_aired);
+    request.in_cinemas = tidy(request.in_cinemas);
+    request.network = tidy(request.network);
+    request.studio = tidy(request.studio);
+
+    if request.title.trim().chars().count() > TITLE_MOST {
+        return Err(AppError::BadRequest(format!(
+            "a title is at most {TITLE_MOST} characters"
+        )));
+    }
+    if request
+        .overview
+        .as_ref()
+        .is_some_and(|o| o.chars().count() > OVERVIEW_MOST)
+    {
+        return Err(AppError::BadRequest(format!(
+            "an overview is at most {OVERVIEW_MOST} characters"
+        )));
+    }
+    for (what, text) in [("network", &request.network), ("studio", &request.studio)] {
+        if text
+            .as_ref()
+            .is_some_and(|t| t.chars().count() > FILTER_TEXT)
+        {
+            return Err(AppError::BadRequest(format!(
+                "{what} is at most {FILTER_TEXT} characters"
+            )));
+        }
+    }
+    if request.year.is_some_and(|y| !YEARS.contains(&y)) {
+        return Err(AppError::BadRequest(format!(
+            "a year is between {} and {}",
+            YEARS.start(),
+            YEARS.end()
+        )));
+    }
+    if let Some(asked) = request.status.take() {
+        let known = statuses(kind);
+        let status = known
+            .iter()
+            .find(|s| s.eq_ignore_ascii_case(&asked))
+            .ok_or_else(|| {
+                AppError::BadRequest(format!(
+                    "a {kind}'s status is one of {}, not {asked:?}",
+                    known.join(", ")
+                ))
+            })?;
+        request.status = Some((*status).to_string());
+    }
 
     let check = |field: &str, value: Option<&String>| -> AppResult<()> {
         match value {
@@ -1084,28 +1184,80 @@ fn checked_by_hand(request: &CreateRequest) -> AppResult<()> {
     check("firstAired", request.first_aired.as_ref())?;
     check("inCinemas", request.in_cinemas.as_ref())?;
 
-    if request.runtime.is_some_and(|r| r < 0) {
-        return Err(AppError::BadRequest(
-            "a runtime is a number of minutes, not negative".into(),
-        ));
+    if request
+        .runtime
+        .is_some_and(|r| !(0..=RUNTIME_MOST).contains(&r))
+    {
+        return Err(AppError::BadRequest(format!(
+            "a runtime is a number of minutes, from 0 to {RUNTIME_MOST}"
+        )));
     }
-    if request.genres.len() > MOST_BY_HAND
-        || request
-            .genres
+
+    let mut genres: Vec<String> = Vec::with_capacity(request.genres.len());
+    for genre in request.genres.iter().map(|g| g.trim()) {
+        if !genres
             .iter()
-            .any(|g| g.trim().is_empty() || g.chars().count() > FILTER_TEXT)
+            .any(|kept| kept.to_lowercase() == genre.to_lowercase())
+        {
+            genres.push(genre.to_string());
+        }
+    }
+    if genres.len() > MOST_BY_HAND
+        || genres
+            .iter()
+            .any(|g| g.is_empty() || g.chars().count() > FILTER_TEXT)
     {
         return Err(AppError::BadRequest(format!(
             "at most {MOST_BY_HAND} genres, each of one to {FILTER_TEXT} characters"
         )));
     }
-    let ids = &request.external_ids;
+    request.genres = genres;
+
+    let ids = &mut request.external_ids;
     if ids.mal.len() > MOST_BY_HAND || ids.anilist.len() > MOST_BY_HAND {
         return Err(AppError::BadRequest(format!(
             "at most {MOST_BY_HAND} MyAnimeList and {MOST_BY_HAND} AniList entries"
         )));
     }
-    Ok(())
+    // A number is a provider's, and none of theirs is nought or below; an
+    // IMDb identifier is `tt` and its digits, which every client's link and
+    // IMDb's ratings are looked up by.
+    let numbers = [
+        ids.tmdb, ids.tvdb, ids.tvmaze, ids.tvrage, ids.trakt, ids.fankai,
+    ];
+    if numbers.into_iter().flatten().any(|n| n <= 0)
+        || ids.mal.iter().chain(&ids.anilist).any(|n| *n <= 0)
+    {
+        return Err(AppError::BadRequest(
+            "an identifier is a whole number above zero".into(),
+        ));
+    }
+    if let Some(imdb) = ids.imdb.take() {
+        let imdb = imdb.trim().to_ascii_lowercase();
+        if !is_imdb(&imdb) {
+            return Err(AppError::BadRequest(format!(
+                "an IMDb identifier is tt and seven to ten digits, not {imdb:?}"
+            )));
+        }
+        ids.imdb = Some(imdb);
+    }
+    Ok(request)
+}
+
+/// The statuses a work may be given by hand, as its clients spell them:
+/// Sonarr's for a series, Radarr's for a film.
+fn statuses(kind: MediaKind) -> &'static [&'static str] {
+    match kind {
+        MediaKind::Series => &["continuing", "ended", "upcoming", "deleted"],
+        MediaKind::Movie => &["tba", "announced", "inCinemas", "released", "deleted"],
+    }
+}
+
+/// `tt` and seven to ten digits: an IMDb title's identifier.
+fn is_imdb(id: &str) -> bool {
+    id.strip_prefix("tt").is_some_and(|digits| {
+        (7..=10).contains(&digits.len()) && digits.bytes().all(|b| b.is_ascii_digit())
+    })
 }
 
 fn require_write(identity: &Identity) -> AppResult<()> {
@@ -1147,4 +1299,267 @@ async fn unique_slug(
     Err(AppError::Conflict(format!(
         "too many entries already share the slug {base:?}"
     )))
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::http::Uri;
+    use serde_json::{Value, json};
+
+    use super::*;
+    use crate::{
+        db::repo::{child::blank_image, item::ItemWrite, override_field},
+        domain::{CoverType, fields::Scope},
+    };
+
+    /// Authentication switched off: an administrator, as far as a guard asks.
+    fn admin() -> Extension<Identity> {
+        Extension(Identity::Anonymous)
+    }
+
+    /// A film its providers filled in full — a poster of its own, an overview,
+    /// an IMDb identifier, refreshed — changed by `adjust`, and stored.
+    async fn stored(
+        state: &AppState,
+        n: i64,
+        title: &str,
+        adjust: impl FnOnce(&mut MediaItem),
+    ) -> String {
+        let mut item = MediaItem::empty(MediaKind::Movie);
+        item.title = title.into();
+        item.overview = Some("Said in full.".into());
+        item.refreshed_at = Some(crate::db::now());
+        item.external_ids = ExternalIds {
+            tmdb: Some(1_000 + n),
+            imdb: Some(format!("tt{:07}", 1_000 + n)),
+            ..Default::default()
+        };
+        let mut poster = blank_image(
+            CoverType::Poster,
+            format!("https://example.invalid/{n}.jpg"),
+        );
+        poster.is_manual = false;
+        item.images = vec![poster];
+        adjust(&mut item);
+        item.slug = make_slug(&item.title, None);
+
+        repo::item::upsert(
+            &state.db,
+            ItemWrite {
+                item: &item,
+                replace_children: true,
+            },
+        )
+        .await
+        .expect("stored");
+        item.id
+    }
+
+    /// The titles a list asks for, sorted: the order is not what is checked.
+    async fn titles(
+        state: &AppState,
+        identity: Extension<Identity>,
+        asked: &str,
+    ) -> AppResult<Vec<String>> {
+        let uri: Uri = format!("/items?includeDisabled=true&limit=100&{asked}")
+            .parse()
+            .expect("an address");
+        let Query(query) = Query::<ListQuery>::try_from_uri(&uri).expect("a query");
+        let response = list(State(state.clone()), identity, Query(query)).await?;
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("a body");
+        let page: Value = serde_json::from_slice(&body).expect("JSON");
+        let mut titles: Vec<String> = page["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .map(|item| item["title"].as_str().expect("a title").to_string())
+            .collect();
+        titles.sort();
+        Ok(titles)
+    }
+
+    #[tokio::test]
+    async fn the_register_narrows_to_what_a_record_lacks() {
+        let state = crate::api::native::testing::server().await;
+
+        stored(&state, 1, "Complete", |_| {}).await;
+        stored(&state, 2, "No poster", |w| w.images.clear()).await;
+        // A season's poster is the season's: the work still has none.
+        stored(&state, 3, "Season poster only", |w| {
+            w.kind = MediaKind::Series;
+            w.images[0].season_number = Some(1);
+        })
+        .await;
+        let chosen = stored(&state, 4, "Chosen poster", |w| w.images.clear()).await;
+        override_field::set(
+            &state.db,
+            &chosen,
+            Scope::Item,
+            "primaryPoster",
+            Some(&json!("https://example.invalid/chosen.jpg")),
+            None,
+        )
+        .await
+        .expect("chosen");
+        stored(&state, 5, "No overview", |w| w.overview = None).await;
+        let cleared = stored(&state, 6, "Cleared overview", |_| {}).await;
+        override_field::set(&state.db, &cleared, Scope::Item, "overview", None, None)
+            .await
+            .expect("cleared");
+        let typed = stored(&state, 7, "Overview by hand", |w| w.overview = None).await;
+        override_field::set(
+            &state.db,
+            &typed,
+            Scope::Item,
+            "overview",
+            Some(&json!("Typed in.")),
+            None,
+        )
+        .await
+        .expect("typed");
+        // Written for the readers of one language only: everybody else is
+        // still given none.
+        let french = stored(&state, 13, "Overview in French only", |w| w.overview = None).await;
+        override_field::set_in(
+            &state.db,
+            &french,
+            "item",
+            "overview",
+            "fra",
+            Some(&json!("Écrit pour les lecteurs français.")),
+            None,
+        )
+        .await
+        .expect("written in French");
+        stored(&state, 8, "No IMDb", |w| w.external_ids.imdb = None).await;
+        stored(&state, 9, "Never refreshed", |w| w.refreshed_at = None).await;
+        // Never refreshed either, and never to be: entered by hand, or with
+        // nothing to be refreshed by.
+        stored(&state, 10, "Entered by hand", |w| {
+            w.is_manual = true;
+            w.refreshed_at = None;
+        })
+        .await;
+        stored(&state, 11, "Nothing to refresh by", |w| {
+            w.refreshed_at = None;
+            w.external_ids = ExternalIds::default();
+        })
+        .await;
+        stored(&state, 12, "Bare", |w| {
+            w.images.clear();
+            w.overview = None;
+        })
+        .await;
+
+        let narrowed = |asked: &'static str| titles(&state, admin(), asked);
+        assert_eq!(
+            narrowed("missing=poster").await.expect("listed"),
+            ["Bare", "No poster", "Season poster only"]
+        );
+        assert_eq!(
+            narrowed("missing=overview").await.expect("listed"),
+            [
+                "Bare",
+                "Cleared overview",
+                "No overview",
+                "Overview in French only"
+            ]
+        );
+        assert_eq!(
+            narrowed("missing=imdb").await.expect("listed"),
+            ["No IMDb", "Nothing to refresh by"]
+        );
+        assert_eq!(
+            narrowed("missing=refresh").await.expect("listed"),
+            ["Never refreshed"]
+        );
+        // Several narrow together, each named once however often it is.
+        assert_eq!(
+            narrowed("missing=poster,overview").await.expect("listed"),
+            ["Bare"]
+        );
+        assert_eq!(
+            narrowed("missing=%20poster%20,poster,")
+                .await
+                .expect("listed"),
+            ["Bare", "No poster", "Season poster only"]
+        );
+        // With a text search, which ends the statement early on SQLite.
+        assert_eq!(
+            narrowed("missing=poster&term=poster")
+                .await
+                .expect("listed"),
+            ["No poster", "Season poster only"]
+        );
+
+        // A gap the register does not know is refused.
+        assert!(matches!(
+            narrowed("missing=trailer").await,
+            Err(AppError::BadRequest(_))
+        ));
+
+        // A visitor is answered as if nothing had been asked.
+        let seen = titles(&state, Extension(Identity::Visitor), "missing=poster")
+            .await
+            .expect("listed");
+        assert!(seen.contains(&"Complete".to_string()), "{seen:?}");
+        assert_eq!(seen.len(), 13);
+    }
+
+    #[test]
+    fn an_entry_by_hand_is_checked_and_tidied() {
+        let asked = |body: Value| -> AppResult<CreateRequest> {
+            let request: CreateRequest = serde_json::from_value(body).expect("a request");
+            let kind = request.kind.parse().expect("a kind");
+            checked_by_hand(request, kind)
+        };
+
+        // The twelve fields, as the form sends them.
+        let tidied = asked(json!({
+            "kind": "series",
+            "title": "L’Atelier",
+            "year": 2031,
+            "overview": "  Une restauratrice.  ",
+            "status": "Ended",
+            "runtime": 42,
+            "firstAired": "2031-03-02",
+            "inCinemas": " ",
+            "network": " Arte ",
+            "studio": "",
+            "genres": ["Drama", " drama", "Mystery"],
+            "externalIds": {"tvdb": 81189, "tmdb": 1396, "imdb": "TT0903747"},
+        }))
+        .expect("checked");
+        assert_eq!(tidied.overview.as_deref(), Some("Une restauratrice."));
+        assert_eq!(tidied.status.as_deref(), Some("ended"));
+        assert_eq!(tidied.in_cinemas, None);
+        assert_eq!(tidied.network.as_deref(), Some("Arte"));
+        assert_eq!(tidied.studio, None);
+        assert_eq!(tidied.genres, ["Drama", "Mystery"]);
+        assert_eq!(tidied.external_ids.imdb.as_deref(), Some("tt0903747"));
+
+        // A film's status is Radarr's.
+        let film =
+            asked(json!({"kind": "movie", "title": "x", "status": "incinemas"})).expect("checked");
+        assert_eq!(film.status.as_deref(), Some("inCinemas"));
+
+        for refused in [
+            json!({"kind": "series", "title": "x", "status": "released"}),
+            json!({"kind": "movie", "title": "x", "status": "airing"}),
+            json!({"kind": "movie", "title": "x", "year": 99}),
+            json!({"kind": "movie", "title": "x", "runtime": -1}),
+            json!({"kind": "movie", "title": "x", "inCinemas": "TBA"}),
+            json!({"kind": "movie", "title": "x", "externalIds": {"tmdb": 0}}),
+            json!({"kind": "movie", "title": "x", "externalIds": {"imdb": "nm0000001"}}),
+            json!({"kind": "movie", "title": "x", "genres": [" "]}),
+            json!({"kind": "movie", "title": "x".repeat(501)}),
+        ] {
+            assert!(
+                matches!(asked(refused.clone()), Err(AppError::BadRequest(_))),
+                "{refused} was let through"
+            );
+        }
+    }
 }

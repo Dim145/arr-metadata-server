@@ -8,7 +8,10 @@
 //!
 //! Editing a child's *fields* is a different operation and goes through
 //! `media_override`, which works the same whether the row came from a provider
-//! or from a person.
+//! or from a person. So does hiding or correcting a credit, an image or an
+//! alternative title a provider gave: a lock names it by what it is, and
+//! outlasts the row a refresh writes again. A credit added by hand is
+//! corrected here, in its row.
 
 use anyhow::Result;
 
@@ -223,6 +226,43 @@ pub async fn add_credit(db: &Db, media_id: &str, credit: &Credit) -> Result<Stri
     Ok(id)
 }
 
+/// Correct a credit added by hand, in its own row: the character it is
+/// played as (`Some(None)` for none), its place among the others. One a
+/// source gave is corrected by a lock instead, which outlasts its row; no
+/// refresh touches this one. False when no such credit was added by hand.
+pub async fn edit_credit(
+    db: &Db,
+    media_id: &str,
+    credit_id: &str,
+    character: Option<Option<&str>>,
+    order: Option<i32>,
+) -> Result<bool> {
+    if !is_manual(db, "media_credit", media_id, credit_id).await? {
+        return Ok(false);
+    }
+
+    if let Some(character) = character {
+        sqlx::query(
+            db.sql("UPDATE media_credit SET character_name = ? WHERE id = ? AND media_id = ?"),
+        )
+        .bind(character)
+        .bind(credit_id)
+        .bind(media_id)
+        .execute(db.pool())
+        .await?;
+    }
+    if let Some(order) = order {
+        sqlx::query(db.sql("UPDATE media_credit SET sort_order = ? WHERE id = ? AND media_id = ?"))
+            .bind(order)
+            .bind(credit_id)
+            .bind(media_id)
+            .execute(db.pool())
+            .await?;
+    }
+
+    Ok(true)
+}
+
 pub async fn remove_credit(db: &Db, media_id: &str, credit_id: &str) -> Result<bool> {
     if !is_manual(db, "media_credit", media_id, credit_id).await? {
         return Ok(false);
@@ -350,22 +390,12 @@ pub fn blank_credit(credit_type: CreditType, person_name: String) -> Credit {
 mod tests {
     use super::*;
     use crate::{
-        config,
-        db::repo::item::{self, ItemWrite},
+        db::{
+            repo::item::{self, ItemWrite},
+            testing::db,
+        },
         domain::{MediaItem, MediaKind},
     };
-
-    async fn db() -> Db {
-        let db = Db::connect(&config::Database {
-            url: "sqlite::memory:".into(),
-            max_connections: 1,
-            acquire_timeout: std::time::Duration::from_secs(5),
-        })
-        .await
-        .unwrap();
-        db.migrate().await.unwrap();
-        db
-    }
 
     /// A series holding one provider season and one provider episode.
     async fn series(db: &Db) -> MediaItem {

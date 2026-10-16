@@ -25,6 +25,10 @@ use crate::{auth::ip, error::AppError, state::AppState};
 pub struct ClientIp(pub Option<IpAddr>, Option<IpAddr>);
 
 impl ClientIp {
+    /// No address at all: a handler called by a test, not by a request.
+    #[cfg(test)]
+    pub const NONE: Self = Self(None, None);
+
     pub fn as_text(&self) -> Option<String> {
         match (self.0, self.1) {
             (Some(ip), _) => Some(ip.to_string()),

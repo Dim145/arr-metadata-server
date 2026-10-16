@@ -23,8 +23,8 @@ use crate::{
     config,
     db::{new_id, now},
     domain::{
-        CoverType, Episode, EpisodeOrder, ExternalIds, Image, MediaItem, MediaKind, PlacedEpisode,
-        Season, Translation, make_slug,
+        CountryRelease, CoverType, Episode, EpisodeOrder, ExternalIds, Image, MediaItem, MediaKind,
+        PlacedEpisode, Season, Translation, make_slug,
     },
 };
 
@@ -896,7 +896,8 @@ fn to_item(series: &SeriesExtended, language: &str) -> MediaItem {
     item.content_rating_country = None;
 
     // Content ratings arrive per country, in alpha-3; the wire layer wants
-    // alpha-2 uppercase, and the US entry is the one clients key on.
+    // alpha-2 uppercase, and the US entry is the one clients key on. Every
+    // country's is kept besides, for a reader or a Radarr of another.
     if let Some(rating) = series
         .content_ratings
         .iter()
@@ -906,6 +907,7 @@ fn to_item(series: &SeriesExtended, language: &str) -> MediaItem {
         item.content_rating = non_empty(Some(&rating.name));
         item.content_rating_country = alpha3_to_alpha2(&rating.country);
     }
+    item.releases = ratings_by_country(&series.content_ratings);
 
     // TheTVDB's `score` is not taken as a rating. It is a popularity figure —
     // 3 776 757 for Breaking Bad — on no scale a rating is read on, and filed as
@@ -1117,45 +1119,34 @@ fn absolute(path: &str) -> String {
 
 /// TVDB reports rating countries in alpha-3; clients match on alpha-2.
 fn alpha3_to_alpha2(code: &str) -> Option<String> {
-    let pairs = [
-        ("usa", "US"),
-        ("gbr", "GB"),
-        ("can", "CA"),
-        ("aus", "AU"),
-        ("nzl", "NZ"),
-        ("irl", "IE"),
-        ("fra", "FR"),
-        ("deu", "DE"),
-        ("esp", "ES"),
-        ("ita", "IT"),
-        ("nld", "NL"),
-        ("bel", "BE"),
-        ("swe", "SE"),
-        ("nor", "NO"),
-        ("dnk", "DK"),
-        ("fin", "FI"),
-        ("prt", "PT"),
-        ("bra", "BR"),
-        ("mex", "MX"),
-        ("arg", "AR"),
-        ("jpn", "JP"),
-        ("kor", "KR"),
-        ("chn", "CN"),
-        ("ind", "IN"),
-        ("rus", "RU"),
-        ("pol", "PL"),
-        ("cze", "CZ"),
-        ("hun", "HU"),
-        ("rou", "RO"),
-        ("tur", "TR"),
-        ("isr", "IL"),
-        ("zaf", "ZA"),
-    ];
+    crate::providers::lang::iso_3166_3_to_2(code).map(str::to_string)
+}
 
-    pairs
-        .iter()
-        .find(|(three, _)| *three == code.to_ascii_lowercase())
-        .map(|(_, two)| (*two).to_string())
+/// Every country's rating, once a country, in the order TheTVDB lists them:
+/// one of a country this server cannot name is left out rather than filed
+/// under a guess.
+fn ratings_by_country(ratings: &[ContentRating]) -> Vec<CountryRelease> {
+    let mut out: Vec<CountryRelease> = Vec::new();
+    for rating in ratings {
+        let (Some(country), Some(certification)) = (
+            alpha3_to_alpha2(&rating.country),
+            non_empty(Some(&rating.name)),
+        ) else {
+            continue;
+        };
+        if out.iter().any(|r| r.country == country) {
+            continue;
+        }
+        out.push(CountryRelease {
+            country,
+            release_type: None,
+            date: None,
+            certification: Some(certification),
+            note: None,
+            source: Some(crate::providers::names::TVDB.to_string()),
+        });
+    }
+    out
 }
 
 fn non_empty(value: Option<&str>) -> Option<String> {
@@ -1545,6 +1536,39 @@ mod tests {
         assert_eq!(status(Some("Continuing")), "continuing");
         assert_eq!(status(Some("Upcoming")), "upcoming");
         assert_eq!(status(None), "continuing");
+    }
+
+    #[test]
+    fn every_country_s_rating_is_kept_in_alpha_2() {
+        let item = to_item(&fixture(), "eng");
+        let rated: Vec<(&str, Option<&str>)> = item
+            .releases
+            .iter()
+            .map(|r| (r.country.as_str(), r.certification.as_deref()))
+            .collect();
+        assert_eq!(rated, [("GB", Some("18")), ("US", Some("TV-MA"))]);
+        assert!(
+            item.releases
+                .iter()
+                .all(|r| r.source.as_deref() == Some("tvdb") && r.release_type.is_none())
+        );
+        assert_eq!(item.certification_in("GB"), Some("18"));
+
+        // A country this server cannot name is left out, and one rated
+        // twice keeps its first.
+        let rating = |country: &str, name: &str| ContentRating {
+            country: country.into(),
+            name: name.into(),
+        };
+        let kept = ratings_by_country(&[
+            rating("xyz", "X"),
+            rating("fra", "-12"),
+            rating("fra", "-16"),
+            rating("deu", " "),
+        ]);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].country, "FR");
+        assert_eq!(kept[0].certification.as_deref(), Some("-12"));
     }
 
     #[test]

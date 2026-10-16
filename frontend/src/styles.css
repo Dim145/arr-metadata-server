@@ -363,8 +363,35 @@
     }
   }
 
+  /* A sheet coming up from the foot of the screen: the same rise as any
+     entrance, a little longer, so it reads as arriving from below. */
+  @keyframes sheet {
+    from {
+      opacity: 0;
+      transform: translate3d(0, 1.5rem, 0);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
   .rise {
     animation: rise 0.42s var(--ease-out-soft) both;
+  }
+
+  .sheet-in {
+    animation: sheet 0.26s var(--ease-out-soft) both;
+  }
+
+  /* A long list of rows costs layout for every one of them, on screen or not.
+     The browser may leave out what is far from the viewport, as long as it is
+     told roughly how tall a row is (`--row`) — and remembers the real height
+     of any it has drawn. Paint is contained too, so a row keeps its focus ring
+     inside its own box. */
+  .skip-offscreen {
+    content-visibility: auto;
+    contain-intrinsic-block-size: auto var(--row, 9rem);
   }
 
   .fade-in {
@@ -452,6 +479,9 @@
    the browser lands it under the bar, where a click reaches the bar instead. */
 :where(main) :where(input, select, textarea, button, a, [tabindex]) {
   scroll-margin-block-start: 7rem;
+  /* And short of the bar that stands along the foot of a phone, which would
+     otherwise cover whatever the keyboard brought up from below. */
+  scroll-margin-block-end: 5rem;
 }
 
 @media (prefers-reduced-motion: reduce) {

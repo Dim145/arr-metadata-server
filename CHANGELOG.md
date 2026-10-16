@@ -49,8 +49,8 @@ may change what the API or the configuration means, and says so here.
 - The webhook is told of three facts nobody did — `refresh.failed`, once
   when a work starts failing; `media.failed`, a picture or theme whose every
   try failed; `update.available` — its events are ticked rather than typed,
-  and its address can be tested from the settings (`POST
-  /api/v1/admin/webhooks/test` posts `webhook.test`).
+  and each destination can be tested from the Notifications page, which
+  posts it `webhook.test`.
 - A check for a newer version, off until turned on (`updates.check`): one
   anonymous GET to GitHub a day, said on the dashboard, by the version in the
   administration's bar, in the scrape (`ams_update_available`) and to the
@@ -66,6 +66,271 @@ may change what the API or the configuration means, and says so here.
   binary lists its own dependencies for scanners and `cargo audit bin`. A
   security policy, a contributing guide, a code of conduct, issue forms and a
   pull request template; Dependabot proposes updates weekly, grouped.
+- Plex can take its metadata from this server. Plex Media Server 1.43 and
+  later accept a custom metadata provider, and this server is one, at
+  `/plex` on the interface's door: add `{your address}/plex` in Plex under
+  Settings, Metadata Agents, make an agent of it, and choose it in a
+  library's advanced settings. Films and series are served, seasons and
+  episodes included: what is locked here is what Plex shows, in the language
+  Plex names (`X-Plex-Language`, else the caller's `tmdb.language`, else
+  English), with the rating and release day of `X-Plex-Country`.
+- A file Plex scans is matched by an id Plex gives — this provider's own, or
+  an IMDb, TMDB or TheTVDB id, the old agents' `com.plexapp.agents.*` among
+  them — then by title and year, among the works the catalogue holds and
+  then through the search Sonarr's and Radarr's lookups use. A match by title
+  fetches nothing, and one by id follows a few of the ids given, each once —
+  for a caller who may not see works for adults, among the works the
+  catalogue holds alone; the work Plex then asks for is fetched and kept. A
+  series
+  offers the orders the catalogue keeps for it (`SeasonType`) and is laid
+  out in the one Plex asks for (`episodeOrder`); the pictures kept here are
+  given under `AMS_PUBLIC_URL`, or the host Plex called.
+- A Plex panel on the Keys & network page gives the address to paste, with a
+  copy button, the switch that answers Plex (`api.plex`, on by default) and
+  a reminder that Plex sends no credential: its server's address must be on
+  the list of allowed addresses just below. `AMS_PLEX_AUTH` sets what the
+  provider asks for, as `AMS_ARR_AUTH` does for Sonarr's and Radarr's routes
+  (`allowlist` by default); the Opening & APIs page lists the provider, and
+  `ams_http_requests_total` counts it under `surface="plex"`.
+- `GET /api/v1/export/kometa.yml?kind=movie` (or `series`) writes what is
+  locked here as a Kometa metadata file, to correct a Plex library: an entry
+  for each work with a lock, matched by TMDB id for a film and TheTVDB id
+  for a series, else by IMDb id, else by title and year, carrying only what
+  was locked — titles, summary, tagline, first release, rating, studio,
+  genres, the chosen poster and background, a series' seasons and episodes.
+  `language=` asks for another language's locked texts. It needs a key that
+  may write; the settings page offers it as a download.
+- A selection is served as a text file of identifiers for Kometa's "Text
+  File" builder — `/api/v1/lists/{key}/ids.txt`, a work a line, `tmdb:949`
+  for a film, `tvdb:348303` for a series, the title after a `#`, and
+  `?kind=movie` or `?kind=series` for the works one Kometa library holds —
+  and as an Atom feed (`feed.atom`), the latest added first, each work dated
+  by the day it joined. Both are read as the selection's page is, a private
+  selection being a key's, and their addresses are on the selection's page
+  and in its editor beside Sonarr's and Radarr's.
+- A selection has a cover, chosen in the administration among the
+  backgrounds of its works or by any picture's address, with the dialog
+  every other picture is chosen with. It is shown above the selection on the
+  selections' page, at the head of its own page, and as its preview where it
+  is shared (`cover` on `PUT /api/v1/lists/{key}`: empty, it takes it away;
+  left out, it stays).
+- The `.nfo` export can be asked for one selection's works alone
+  (`POST /api/v1/export/nfo?list=<slug or id>`, with a button in the
+  selection's editor). A film that belongs to a TMDB collection carries
+  `<set>`, as Kodi reads it, so that a library groups its films; a season
+  with a title of its own is a `<namedseason>` in the series' document, and
+  its poster a `<thumb>` of that season.
+- Your own Sonarr and Radarr can be connected the other way, on a new Sonarr
+  & Radarr page (`/admin/arr`, administrators): the address each answers at
+  and its API key, which is written once, never shown again and kept out of
+  the log. A test asks each who it is (`/api/v3/system/status`) and says its
+  version, or why it did not answer. A private network and this very machine
+  are reached; link-local and cloud-metadata addresses are refused, and a
+  redirect to another host is never followed, so the key goes nowhere else.
+- With `arr.pushRefresh` on (off by default), a correction made here reaches
+  Sonarr and Radarr at once: a lock put on a work, a season or an episode,
+  changed or taken off, an edit of its seasons or episodes, a sync, or a
+  refresh that changed what the work is served as asks Sonarr (for a series)
+  or Radarr (for a film) to read it again, rather than at its own refresh
+  twelve hours on. A burst of changes is one command, ten seconds after the
+  last of them; a refresh that found everything as it was tells nobody. What
+  was sent lately, and how it went, is listed on the page.
+- A new task, *Seed from Sonarr and Radarr* (`arr.seed`, by hand on the
+  Tasks page or on the new page), reads every series Sonarr holds and every
+  film Radarr holds and imports what is missing the way the import page
+  does, one work after another, gently. A work held already is passed over,
+  so it can run again at any time and fetch only what came since, and it can
+  be stopped; each work is written down in the run as imported, already held
+  or not found.
+- Renumbered episodes are told. When a refresh or a sync finds that TheTVDB
+  moved episodes of a series — a season cut in two, absolute numbers
+  shifted — the audit trail says so (`item.renumbered`), with how many moved
+  and the first of them (`S01E05 → S02E01`), and a notification destination
+  can be told of it. A numbering kept because TheTVDB did not answer moves
+  nothing, and an episode added or gone is no move.
+- The TMDB and TheTVDB relays can hand each client's own key on instead of
+  the server's: *Whose key the relays ask with*, on Opening & APIs
+  (`tmdb.relayCredential`, `tvdb.relayCredential`: `server`, the default, as
+  the relays always did, or `client`). With `client` the server's key is
+  never used; a key issued here is refused with a `401` before the service
+  is asked; nothing asked with a client's key is kept for another; and where
+  `AMS_TMDB_AUTH` or `AMS_TVDB_AUTH` asks for a key, the listed addresses
+  guard the relay instead. The locks apply either way.
+- The TMDB relay writes the locks into more of TMDB's documents: a season
+  (`/3/tv/{id}/season/{n}`) — its name, overview, date and poster, and its
+  episodes' titles, overviews, dates, runtimes and stills — one episode, and
+  the results of `/3/search`, `/3/trending` and `/3/discover` — each
+  result's title, overview, date and pictures, for every work of the page
+  the catalogue holds with a lock. A regular episode is paired by its
+  numbers, a special by the TMDB id the catalogue gave it, and neither when
+  the catalogue knows it under another TMDB id.
+- The TheTVDB relay writes the locks into more of its documents: the
+  translations a record carries when they are asked for
+  (`meta=translations`), with an entry added for the catalogue's language
+  and for each language a text was locked in alone where TheTVDB has none,
+  as Jellyfin's plugin reads them; a season's record (`/v4/seasons/{id}`,
+  `/extended`) and the seasons a series lists; the episodes a record carries
+  (`meta=episodes`); and a page of a series' episodes in any of its orders,
+  which is what Seerr's TheTVDB option reads.
+- Webhooks and other notifications get a page of their own, Notifications
+  (`/admin/notifications`): any number of destinations, each with the events
+  ticked for it, a test and a log. A destination is a Standard Webhooks
+  receiver, Discord, Slack, ntfy, Gotify, Apprise or JSON, as before. Each
+  is told what is ticked for it — the audit trail's actions and the three
+  facts nobody does (`refresh.failed`, `media.failed`, `update.available`) —
+  or every event with `*`; changes to destinations are in the audit trail
+  too (`notification.created`, `.updated`, `.deleted`).
+- A Standard Webhooks destination is posted `{type, timestamp, data}` with
+  the `webhook-id`, `webhook-timestamp` and `webhook-signature` headers the
+  specification defines: `v1,` and the base64 HMAC-SHA256 of
+  `{id}.{timestamp}.{body}` under a `whsec_` secret the server makes, shown
+  once when the destination is saved and made anew on request. The
+  `webhook-id` is the event's, the same for every try and every replay, so a
+  receiver can drop one it has already handled.
+- An event is written down for each destination that wants it before
+  anything is sent, and a worker of its own sends it: a slow or failing
+  destination costs the action nothing, and a restart loses nothing owed.
+  What is not taken is tried again after 5 seconds, 5 minutes, 30 minutes, 2
+  hours, then 5, 10 and 10 hours — longer when the address asks so with
+  `Retry-After` — and given up on after the eighth try; `410 Gone` switches
+  the destination off, and the page says why. A destination with a thousand
+  deliveries waiting is owed no more until it catches up.
+- Each destination has a log: every delivery with its event, what came of
+  it — the status answered, or why the address could not be reached, and how
+  long it took — its tries and its next one. A delivered or given-up one can
+  be replayed, under the same `webhook-id`. The log is kept thirty days, the
+  newest thousand of each destination.
+- A title, an overview or a tagline — of a work, a season or an episode —
+  can be locked for the readers of one language alone. A work served in a
+  language is given what was locked in that language, else what was locked
+  in every language, else the translation, else the text it is stored in: by
+  the native API, Sonarr, Radarr and the `.nfo`, and by the relays as
+  *Changed* below says.
+  `PUT /api/v1/items/{id}/overrides` takes `language` (`fr`, `fr-FR` and
+  `fra` are one); in the editor, a field shown in a language through *Show
+  in* asks whether an edit is for this language alone or for every one.
+- A credit, a picture or an alternative title a source gave can be hidden
+  rather than removed, and a credit's character and place corrected. Each is
+  a lock naming what it holds by what it is — a credit by the person's TMDB
+  id (or name) and role, a picture by its address, a title by its text and
+  language — so it holds through every refresh, and a hidden one is in no
+  answer: Sonarr, Radarr, the `.nfo`, the site, the lists of people,
+  pictures and other titles the TMDB and TheTVDB relays hand on. The People
+  & titles and
+  Artwork tabs hide, show and correct each row in place; a locks document
+  holding such a lock is version 2, and version 1 still imports.
+- The administration's catalogue says what each record lacks. Every row
+  leads with its poster and carries four marks — a poster, an overview, an
+  IMDb id, a first refresh — said in words to the pointer and a screen
+  reader, struck through where missing. Four filters — *No poster*, *No
+  overview*, *No IMDb id*, *Never refreshed* — narrow the list together and
+  are kept in the address (`/admin/catalogue?missing=poster`);
+  `GET /api/v1/items?missing=poster,overview` lists the works lacking both,
+  for those who may edit the catalogue.
+- A row's actions — refresh, enable or disable, delete, the public page, the
+  editor — are behind one button, which fits a phone, where they used to be
+  in the editor only.
+- Rows ticked in the administration's catalogue can be given one field at
+  once with *Change a field…*: the original language, the status, the
+  network, the studio, the adult flag or the content rating set to one
+  value, a genre added or taken off, or the lock on any of them lifted. Each
+  work is its own request and its own line in the audit trail; a sentence
+  says first what is about to happen, and the run ends with how many were
+  done, left as they were, passed over or refused, and why.
+- *Ask the sources again…*, on the same rows, asks some of the sources
+  switched on about each work they describe, as the editor's sync does for
+  one: the other sources keep their last answer, and a work entered by hand
+  or never refreshed in full is passed over.
+- The editor's seasons tab shifts every dated episode of a season by a
+  number of days — a season pushed back a week — with the episodes, their
+  dates now and after, laid out before anything is done. The day each aired
+  and its broadcast instant move together, and each is locked at its new
+  value.
+- An entry by hand takes every field the server does. The form asks for the
+  status, the runtime, the first aired or in-cinemas day, the network, the
+  studio, the genres and the IMDb id beside the title, year, overview and
+  the TMDB and TheTVDB ids, and says what is wrong beside each field before
+  anything is sent. The server checks the same: a status the kind does not
+  have, a year not between 1800 and 2200, a runtime past 10,000 minutes, an
+  identifier of nought or an IMDb id not shaped `tt` and seven to ten digits
+  is refused with a `400`.
+- The order of the sources is a setting, `sources.priority`, put in order on
+  the Sources page: a source moves a rank with its arrows, or is dragged
+  onto another's place, and the matrix's columns follow. Every refresh
+  merges the sources in that order, so a work takes a new order at its next
+  one; *Back to the starting order* restores the one the server started
+  with, and `GET /api/v1/sources/rules` gives it as `defaultOrder`.
+- How long a work keeps before it is refreshed is a setting:
+  `refresh.ttlContinuing` for a running series or a film not out yet,
+  `refresh.ttlEnded` for an ended series or a released film, in seconds, on
+  the Settings page beside the other refresh settings. The scheduler reads
+  them each time it schedules a work.
+- Release dates and ratings are kept country by country. Every country TMDB
+  lists for a film is kept — each premiere, run in cinemas, digital and
+  physical release, with its day, its rating and TMDB's note (a festival, a
+  service) — and every rating TMDB and TheTVDB give a series, where only one
+  of each was kept (`releases` on a work in the native API). Radarr is sent
+  every country's certification, as api.radarr.video sends them, and takes
+  the one of the country it is set to. Filled in as each work is next
+  refreshed.
+- A work's page dates and rates it for its reader. The plate shows the
+  rating of the reader's country, and a new panel, *Releases* for a film and
+  *Certifications* for a series, lists that country's days and rating, every
+  other country a press away. The reader's country is the one picked under
+  *Where to watch*, else `tmdb.watchRegion` as set for them, else the
+  language's own; where it has none, the record's own rating is shown with
+  the country it is of.
+- The schedule places a film on its reader's day. In `/calendar`, the week,
+  the month, `calendar.ics` and the airing feed, a film comes out on the day
+  it comes out in the reader's country — in cinemas, digitally, on disc —
+  where that is known, and on its own dates otherwise; a date fixed by hand
+  stays where it was put. `GET /api/v1/calendar` takes `region` to ask for
+  another country.
+- The tagline, the countries and the companies are kept. TMDB's tagline is
+  shown under the title; every country a work was made in and every company
+  that made it are kept, where only the first of each was. They are on the
+  work's page and in its NFO (`<tagline>`, a `<country>` each, a `<studio>`
+  each), and all four can be locked in the editor.
+- A work keeps TMDB's writers (the screenplay, the story, the novel), a
+  series' creators and a film's producers beside its directors, each with
+  the job TMDB gives them; Radarr is sent those jobs, and the page names
+  each job once with its people. How many of TMDB's actors a work keeps is a
+  setting, `tmdb.castLimit`: 25 as before, up to 200.
+- TMDB's Wikidata item is kept as an identifier, linked from the page and
+  editable among the others. The format AniList gives an entry — OVA, ONA,
+  TV shorts, special, music video — is shown on the page as a chip where it
+  says more than *series* or *film*.
+- The site has a bar along the foot of a phone's screen — Home, Browse,
+  Schedule, Seasons and More — where a thumb rests, in place of a menu
+  button at the top that took two gestures to change section. The place the
+  reader is in is marked by a rule as well as a colour, and *More* opens a
+  sheet with what the four leave out: the collections, the selections while
+  there is one, the figures, the lamp, the language, and the account or the
+  way in. The page keeps room under its own end for the bar, the footer
+  included.
+- The browse page lists as well as it grids. A switch beside the order lays
+  the results out as rows — a small poster, the title, the year and the
+  kind, the score, the status, three genres at most, two lines of synopsis —
+  each with the one link, which is the whole row. `?view=list` is a link to
+  it; what the reader chose last is remembered in the browser for an address
+  that says nothing, and clearing the filters keeps the view. A long list is
+  not laid out until it is scrolled to.
+- The settings page can be searched. A setting is found by its title, its
+  key or a word of what explains it, accents and ligatures folded (*oeuvres*
+  finds *œuvres*), and the index of the page follows what is left. A setting
+  changed from what it began as is marked *Modified*, says what that was,
+  and goes back to it in one press; *Changed only* lists those. What the
+  server was started with — its version, its database, its public address,
+  the policy at each door — is a section of its own at the foot of the page.
+  `GET /api/v1/settings/server/-` carries each setting's `default`.
+- The dashboard opens on what there is to do (`GET /api/v1/admin/todo`):
+  works whose last refresh failed, with no poster, no synopsis, no IMDb
+  identifier, or never refreshed; API keys that lapse within fourteen days;
+  pictures and themes given up on. Each line leads into the catalogue
+  filtered to those works (`/admin/catalogue?missing=poster`) or into the
+  page that settles it, and a figure of nought is no line. Each counts the
+  works the list it leads to shows, those switched off among them, and adult
+  titles as the server's policy has them.
 
 ### Changed
 
@@ -88,6 +353,84 @@ may change what the API or the configuration means, and says so here.
   browser reads it: parsed, of `http` or `https`, and written back whole —
   the same address the preview shows. A line that parses as no address, or
   as one of another scheme, is not offered for keeping.
+- The TMDB and TheTVDB relays write a text locked for one language alone
+  (*this language only* in the editor, `language` on the API) into the
+  documents in that language. A text locked in every language — every lock
+  made before this version — is written only into those in the catalogue's
+  language, as the TMDB relay did: a German Jellyseerr is still answered
+  TMDB's own German. TheTVDB's relay, which wrote it into a translation in
+  any language, does the same now.
+- The webhook settings are gone: at the first start of this version,
+  `webhooks.url` and `webhooks.events` become a destination of the
+  Notifications page — *Webhook*, of the kind *JSON, as before* (`json`),
+  with the same address, events and body — if an address was set and no
+  destination exists, and are then removed; the settings API refuses them as
+  unknown. `POST /api/v1/admin/webhooks/test` goes too, in favour of
+  `POST /api/v1/admin/notifications/{id}/test`, one test per destination;
+  `GET /api/v1/admin/webhooks/events` stays.
+- A title locked in every language is every language's name for the work in
+  the lists of translations Sonarr and Radarr read as well. The original
+  title Sonarr v5 is given stays the one the work was made under, or a
+  locked original title.
+- The pictures beside the `.nfo` documents go by the names Kodi and Plex
+  both read. Where the two differ — a season's poster (`season01-poster.jpg`
+  for Kodi, `season01.jpg` for Plex) and an episode's still
+  (`S01E01-thumb.jpg`, `S01E01.jpg`) — the picture is written once and the
+  second name is a hard link to it, the same bytes on the disk; a disk that
+  cannot link, a network share or FAT, is given a copy.
+- Skyhook is read in its second edition, the one Sonarr v5 reads
+  (`/v2/tvdb/shows/eng/{id}/official`, `/v2/tvdb/search`), and in its first
+  only when the second answers with an error: a series it holds now brings
+  every language TheTVDB names it in, each season's own title and the title
+  in the series' own language. Episode ids are read under either name the
+  editions use (`tvdbId` or `metadataId`), so a mirror of this server is
+  read as well as the real service.
+- `AMS_PROVIDER_PRIORITY`, `AMS_REFRESH_CONTINUING_TTL` and
+  `AMS_REFRESH_ENDED_TTL` only give `sources.priority`,
+  `refresh.ttlContinuing` and `refresh.ttlEnded` their first value, as
+  `AMS_REFRESH_INTERVAL` does for its setting: once a setting exists, the
+  variable is not read again. The two intervals are held to the settings'
+  ranges at start — a minute to a year for the first, a minute to ten years
+  for the second — and a value outside them stops the server, naming the
+  variable.
+- AniList's tags stay beside TMDB's keywords. Keywords are gathered from
+  every source, each once whatever its case, where the first source with any
+  gave the whole list, so AniList's tags went the moment TMDB answered.
+- A rating from Radarr's service is filed under the United States when it
+  has one there, rather than under the first country it lists, which was
+  Argentina.
+- `episodes` in `GET /api/v1/calendar` is deprecated: it repeats the
+  episodes `entries` lists beside the films, the site no longer reads it,
+  and a later version will drop it.
+- CI runs the Playwright suite: a job builds the interface and the server,
+  starts it on a new SQLite database, fills the catalogue with
+  `scripts/e2e-seed.sh` — the 32 works the suite was written against,
+  imported the way the Discover page does — and runs the desktop project and
+  the server-wide specs. A failed run keeps Playwright's report and prints
+  the server's log. It needs `TMDB_API_KEY` and `TVDB_API_KEY` as repository
+  secrets (`FANARTTV_API_KEY` adds the artwork) and stands aside, saying so,
+  on a run given none, a fork's pull request.
+- CI runs the tests that open a database against PostgreSQL as well as
+  SQLite, each on a database of its own, and with them a test that says the
+  two migration sets build the same schema — tables, columns, keys, indexes,
+  foreign keys, the values a `CHECK` allows, triggers. What the engines
+  differ in on purpose (SQLite's FTS5 search table, PostgreSQL's `pg_trgm`
+  indexes) is listed in the test with its reason, and fails it once it stops
+  being true.
+- Every compose file gives the server twenty seconds to stop
+  (`stop_grace_period: 20s`): a stop takes up to fifteen — the doors drain,
+  the background tasks end, the database's connections are handed back, five
+  seconds each — and `docker stop` waits ten before it kills.
+- The tasks page's history is a page at a time — fifty runs, and *Load
+  more* — read under the day each ran on (*Today*, *Yesterday*, then the
+  date), with a day's failures counted beside its name, instead of a hundred
+  runs in one block after which the older ones were gone. *Failures only* at
+  its head asks for those, and a history with nothing failed says so.
+- The dashboard counts the locked fields last and small, among the other
+  figures, instead of as the largest thing on the page. The explanation of
+  locking folds to its title and stays folded where the reader left it, and
+  the banner of failed refreshes is the first line of the list of what there
+  is to do.
 
 ### Fixed
 
@@ -100,6 +443,50 @@ may change what the API or the configuration means, and says so here.
   pictures.
 - A long series' row of season numbers scrolls back to its first seasons on
   a wide screen.
+- A season's poster was never written beside the `.nfo` documents: the
+  export looked for the seasons' pictures among the work's own, so no season
+  poster was written and no season thumb named in the series' document. The
+  specials' poster is named `season-specials-poster`, as Kodi and Plex name
+  it, and not `season00-poster`, which neither reads.
+- A `.nfo` marks exactly one identifier as the default, the one Plex's NFO
+  agent builds a work's identity from. A series known by IMDb alone, a film
+  known by TheTVDB or Fankai alone and an episode known by TMDB alone had
+  none.
+- A work added to a hand-made selection keeps the day it joined through
+  every later save; each save used to date every member afresh.
+- The form for an entry by hand no longer says that an external identifier
+  makes the entry refreshable, which an entry made by hand never is. It says
+  what the identifiers are for: what Sonarr and Radarr find the entry by,
+  and where its links lead.
+- Radarr's crew is no longer filed as cast. A film made from Radarr's
+  service alone listed its composer and its editor among the actors; its
+  directors, writers and producers are kept, and the rest left out.
+- A migration added between two builds is read into the binary.
+  `cargo build` and `cargo test` went on with the schema from before it
+  until something else in the crate changed.
+
+### Security
+
+- A key kept for your own Sonarr or Radarr goes to the address it was given
+  with and to no other: a test or a save at another scheme, host or port
+  needs the key typed again, and an address removed takes its key along.
+- A token kept for an ntfy or Gotify destination goes to no other server and
+  no other kind of destination unless it is given again, and a Standard
+  Webhooks receiver at a new address is given a signing secret of its own.
+- The Plex provider reads a match only from a body sent as
+  `application/json`, follows a few of the ids it names, each once, and
+  fetches and keeps nothing for a caller who may not see works for adults.
+- With each client's own key relayed, a key issued here is refused wherever
+  `Authorization` carries it, whatever its scheme or case, and is never
+  handed on beside a client's own token.
+- A notification destination's address is never shown whole — the API and
+  the page show its scheme, host and port, since the token of a Discord,
+  Slack or ntfy address is in its path — and signing secrets and tokens are
+  write-only; none is written to the log, and the audit trail names a
+  destination, never its address or token. Webhooks are posted without
+  `HTTP_PROXY`, through the resolver that refuses loopback, link-local and
+  cloud-metadata addresses (a home network's own are fine), and a redirect
+  is not followed: an address that answers 3xx has moved.
 
 ## [0.7.0] — 2026-10-05
 

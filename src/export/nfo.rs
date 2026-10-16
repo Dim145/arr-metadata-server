@@ -57,8 +57,26 @@ fn tag_num<T: std::fmt::Display>(out: &mut String, name: &str, value: Option<T>)
 
 const HEADER: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n";
 
-/// The document for a work: `<tvshow>` or `<movie>`.
+/// The collection a film belongs to, as Kodi's `<set>` names it: the same
+/// name in every film of the collection is what puts them together.
+pub struct Collection<'a> {
+    pub name: &'a str,
+    pub overview: Option<&'a str>,
+}
+
+/// The document for a work that is in no collection, or whose collection is
+/// not asked about: what the tests of the document read. The export goes by
+/// [`for_item_in`].
+#[cfg(test)]
 pub fn for_item(item: &MediaItem) -> String {
+    for_item_in(item, None)
+}
+
+/// The document for a work: `<tvshow>` or `<movie>` — a film's with the
+/// collection it belongs to, when its name is known: TMDB gives the catalogue
+/// the collection's number, and the name is a second question to ask it, so the
+/// caller that has it hands it in.
+pub fn for_item_in(item: &MediaItem, collection: Option<&Collection<'_>>) -> String {
     let root = match item.kind {
         MediaKind::Series => "tvshow",
         MediaKind::Movie => "movie",
@@ -73,6 +91,7 @@ pub fn for_item(item: &MediaItem) -> String {
     tag(&mut out, "sorttitle", item.sort_title.as_deref());
     tag(&mut out, "plot", item.overview.as_deref());
     tag(&mut out, "outline", item.overview.as_deref());
+    tag(&mut out, "tagline", item.tagline.as_deref());
     tag_num(&mut out, "year", item.year);
     tag_num(&mut out, "runtime", item.runtime);
     tag(&mut out, "mpaa", item.content_rating.as_deref());
@@ -91,11 +110,47 @@ pub fn for_item(item: &MediaItem) -> String {
         }
     }
 
+    // Every company that made it beside the studio already written, and
+    // every country it was made in, named as Kodi's own scraper names them.
+    let written = [item.studio.as_deref(), item.network.as_deref()];
+    for company in &item.production_companies {
+        let again = written
+            .iter()
+            .flatten()
+            .any(|w| w.trim().eq_ignore_ascii_case(company.trim()));
+        if !again {
+            tag(&mut out, "studio", Some(company));
+        }
+    }
+    for country in &item.production_countries {
+        let name = crate::providers::lang::country_name(country).unwrap_or(country);
+        tag(&mut out, "country", Some(name));
+    }
+
     for genre in &item.genres {
         tag(&mut out, "genre", Some(genre));
     }
     for keyword in &item.keywords {
         tag(&mut out, "tag", Some(keyword));
+    }
+
+    if item.kind == MediaKind::Movie
+        && let Some(collection) = collection
+        && !collection.name.trim().is_empty()
+    {
+        // The form Kodi has read since Jarvis: a name, and what the
+        // collection is about. The plain `<set>Name</set>` it reads too is
+        // the older one, which says no more.
+        out.push_str("  <set>\n");
+        let _ = writeln!(out, "    <name>{}</name>", escape(collection.name.trim()));
+        if let Some(overview) = collection.overview.map(str::trim).filter(|o| !o.is_empty()) {
+            let _ = writeln!(out, "    <overview>{}</overview>", escape(overview));
+        }
+        out.push_str("  </set>\n");
+    }
+
+    if item.kind == MediaKind::Series {
+        season_titles(&mut out, item);
     }
 
     unique_ids(&mut out, item);
@@ -157,14 +212,16 @@ pub fn for_episode(item: &MediaItem, episode: &Episode) -> String {
         let _ = writeln!(out, "  <thumb>{}</thumb>", escape(url));
     }
 
-    if let Some(id) = episode.tvdb_id {
-        let _ = writeln!(
-            out,
-            "  <uniqueid type=\"tvdb\" default=\"true\">{id}</uniqueid>"
-        );
-    }
-    if let Some(id) = episode.tmdb_id {
-        let _ = writeln!(out, "  <uniqueid type=\"tmdb\">{id}</uniqueid>");
+    // The episode's own ids, TheTVDB's first: one of them, and only one, is
+    // the default — an episode known by TMDB alone is known by it.
+    let ids = [("tvdb", episode.tvdb_id), ("tmdb", episode.tmdb_id)];
+    for (index, (kind, id)) in ids
+        .iter()
+        .filter_map(|(kind, id)| Some((*kind, (*id)?)))
+        .enumerate()
+    {
+        let default = if index == 0 { " default=\"true\"" } else { "" };
+        let _ = writeln!(out, "  <uniqueid type=\"{kind}\"{default}>{id}</uniqueid>");
     }
 
     out.push_str("</episodedetails>\n");
@@ -174,22 +231,38 @@ pub fn for_episode(item: &MediaItem, episode: &Episode) -> String {
 fn unique_ids(out: &mut String, item: &MediaItem) {
     let ids = &item.external_ids;
 
-    // Exactly one id must be marked default, and it should be the one the
-    // client's own agent keys on.
-    let primary = match item.kind {
-        MediaKind::Series => ids
-            .tvdb
-            .map(|_| "tvdb")
-            .or(ids.tmdb.map(|_| "tmdb"))
-            .or(ids.fankai.map(|_| "fankai")),
-        MediaKind::Movie => ids
-            .tmdb
-            .map(|_| "tmdb")
-            .or(ids.imdb.as_ref().map(|_| "imdb")),
-    };
+    // In the order they are written.
+    let mut known: Vec<(&str, String)> = Vec::new();
+    if let Some(v) = ids.tvdb {
+        known.push(("tvdb", v.to_string()));
+    }
+    if let Some(v) = ids.tmdb {
+        known.push(("tmdb", v.to_string()));
+    }
+    if let Some(v) = &ids.imdb {
+        known.push(("imdb", v.clone()));
+    }
+    if let Some(v) = ids.fankai {
+        known.push(("fankai", v.to_string()));
+    }
 
-    let mut emit = |kind: &str, value: String| {
-        let default = if Some(kind) == primary {
+    // Exactly one id is marked default — both Kodi, which takes the first
+    // that is, and Plex's NFO agent, which builds the work's identity from
+    // it, read it so — and it should be the one the client's own agent keys
+    // on. Failing that, the first the work has: a series known by IMDb alone
+    // is known by it, and one with no default is known by none.
+    let preferred: &[&str] = match item.kind {
+        MediaKind::Series => &["tvdb", "tmdb", "fankai"],
+        MediaKind::Movie => &["tmdb", "imdb"],
+    };
+    let primary = preferred
+        .iter()
+        .find(|kind| known.iter().any(|(k, _)| k == *kind))
+        .copied()
+        .or_else(|| known.first().map(|(kind, _)| *kind));
+
+    for (kind, value) in &known {
+        let default = if Some(*kind) == primary {
             " default=\"true\""
         } else {
             ""
@@ -197,21 +270,67 @@ fn unique_ids(out: &mut String, item: &MediaItem) {
         let _ = writeln!(
             out,
             "  <uniqueid type=\"{kind}\"{default}>{}</uniqueid>",
-            escape(&value)
+            escape(value)
         );
-    };
+    }
+}
 
-    if let Some(v) = ids.tvdb {
-        emit("tvdb", v.to_string());
+/// The word for a season in the languages the catalogue's providers name
+/// them in: what they fall back on, as a title, when a season has none.
+const SEASON_WORDS: &[&str] = &[
+    "season",
+    "series",
+    "saison",
+    "staffel",
+    "temporada",
+    "stagione",
+    "seizoen",
+    "säsong",
+    "sæson",
+    "sesong",
+    "kausi",
+    "sezon",
+    "сезон",
+];
+
+/// Whether a season's title is no more than its number said in words —
+/// `Season 3`, `Saison 03`, `Specials` — which a media server writes for
+/// itself, in the reader's language, and which an English one would
+/// overwrite. Only the words providers fall back on: a *Part 1* is a title.
+fn is_numbered(title: &str, number: i32) -> bool {
+    let lower = title.trim().to_lowercase();
+    let mut words = lower.split_whitespace();
+    match (words.next(), words.next(), words.next()) {
+        // `Season 3`, `Saison 03`, `Staffel 3`.
+        (Some(word), Some(given), None) => {
+            SEASON_WORDS.contains(&word) && given.parse::<i32>().is_ok_and(|n| n == number)
+        }
+        // The season of the specials, as it is called when nothing else is
+        // said of it.
+        (Some("specials"), None, None) => number == 0,
+        _ => false,
     }
-    if let Some(v) = ids.tmdb {
-        emit("tmdb", v.to_string());
-    }
-    if let Some(v) = &ids.imdb {
-        emit("imdb", v.clone());
-    }
-    if let Some(v) = ids.fankai {
-        emit("fankai", v.to_string());
+}
+
+/// The titles of seasons that have one, as `<namedseason>`: what a season is
+/// called beside its number — *Book One: Water* — which Kodi shows and the
+/// numbered title a provider falls back on is not.
+fn season_titles(out: &mut String, item: &MediaItem) {
+    for season in &item.seasons {
+        let Some(title) = season
+            .title
+            .as_deref()
+            .map(str::trim)
+            .filter(|title| !title.is_empty() && !is_numbered(title, season.season_number))
+        else {
+            continue;
+        };
+        let _ = writeln!(
+            out,
+            "  <namedseason number=\"{}\">{}</namedseason>",
+            season.season_number,
+            escape(title)
+        );
     }
 }
 
@@ -275,6 +394,24 @@ fn artwork(out: &mut String, item: &MediaItem) {
             _ => {}
         }
     }
+
+    // A season's own pictures are kept on the season, not among the work's:
+    // the first of its posters — the one chosen, where one was — is what
+    // Kodi shows for it.
+    for season in &item.seasons {
+        if let Some(poster) = season
+            .images
+            .iter()
+            .find(|image| image.cover_type == CoverType::Poster)
+        {
+            let _ = writeln!(
+                out,
+                "  <thumb aspect=\"poster\" type=\"season\" season=\"{}\">{}</thumb>",
+                season.season_number,
+                escape(&poster.url)
+            );
+        }
+    }
 }
 
 fn write_credit(out: &mut String, credit: &Credit) {
@@ -319,7 +456,10 @@ pub fn episode_relative_path(item: &MediaItem, episode: &Episode) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{ExternalIds, Image, Rating, RatingValue};
+    use crate::{
+        domain::{ExternalIds, Image, Rating, RatingValue},
+        export::xml,
+    };
 
     fn series() -> MediaItem {
         let mut item = MediaItem::empty(MediaKind::Series);
@@ -548,5 +688,301 @@ mod tests {
         movie.kind = MediaKind::Movie;
         movie.slug = "arrival-2016".into();
         assert_eq!(relative_path(&movie), "movies/arrival-2016/movie.nfo");
+    }
+
+    /// The `type`s of a document's identifiers, and which of them is default.
+    fn identifiers(nfo: &str, root: &str) -> Vec<(String, bool)> {
+        let elements = xml::read(nfo);
+        xml::at(&elements, &format!("{root}/uniqueid"))
+            .into_iter()
+            .map(|e| {
+                (
+                    format!("{}={}", e.attribute("type").unwrap_or("?"), e.text),
+                    e.attribute("default") == Some("true"),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_work_is_given_exactly_one_default_identifier_whatever_it_is_known_by() {
+        let known = |kind: MediaKind, ids: ExternalIds| {
+            let mut item = MediaItem::empty(kind);
+            item.title = "W".into();
+            item.external_ids = ids;
+            let root = if kind == MediaKind::Movie {
+                "movie"
+            } else {
+                "tvshow"
+            };
+            identifiers(&for_item(&item), root)
+        };
+        let defaults = |all: &[(String, bool)]| all.iter().filter(|(_, d)| *d).count();
+
+        // A series by TheTVDB, a film by TMDB: what their agents key on.
+        let full = ExternalIds {
+            tvdb: Some(1),
+            tmdb: Some(2),
+            imdb: Some("tt3".into()),
+            fankai: Some(4),
+            ..Default::default()
+        };
+        let series = known(MediaKind::Series, full.clone());
+        assert_eq!(defaults(&series), 1);
+        assert_eq!(
+            series[0],
+            ("tvdb=1".to_string(), true),
+            "the series' own, first"
+        );
+        let film = known(MediaKind::Movie, full);
+        assert_eq!(defaults(&film), 1);
+        assert!(film.contains(&("tmdb=2".to_string(), true)));
+
+        // Known by nothing a client's agent keys on: by the first it has.
+        let imdb_only = ExternalIds {
+            imdb: Some("tt3".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            known(MediaKind::Series, imdb_only),
+            [("imdb=tt3".to_string(), true)]
+        );
+        let tvdb_only = ExternalIds {
+            tvdb: Some(9),
+            ..Default::default()
+        };
+        assert_eq!(
+            known(MediaKind::Movie, tvdb_only),
+            [("tvdb=9".to_string(), true)]
+        );
+        let fankai_only = ExternalIds {
+            fankai: Some(12),
+            ..Default::default()
+        };
+        assert_eq!(
+            known(MediaKind::Movie, fankai_only),
+            [("fankai=12".to_string(), true)]
+        );
+        // Known by nothing, no identifier at all — and no default.
+        assert!(known(MediaKind::Movie, ExternalIds::default()).is_empty());
+    }
+
+    #[test]
+    fn an_episode_is_given_one_default_identifier_too() {
+        let item = series();
+        let episode_ids = |tvdb: Option<i64>, tmdb: Option<i64>| {
+            let mut episode = crate::db::repo::child::blank_episode(1, 1);
+            episode.tvdb_id = tvdb;
+            episode.tmdb_id = tmdb;
+            identifiers(&for_episode(&item, &episode), "episodedetails")
+        };
+
+        assert_eq!(
+            episode_ids(Some(5), Some(6)),
+            [("tvdb=5".to_string(), true), ("tmdb=6".to_string(), false)]
+        );
+        // TMDB alone is the default; it was none.
+        assert_eq!(episode_ids(None, Some(6)), [("tmdb=6".to_string(), true)]);
+        assert_eq!(episode_ids(Some(5), None), [("tvdb=5".to_string(), true)]);
+        assert!(episode_ids(None, None).is_empty());
+    }
+
+    #[test]
+    fn a_film_of_a_collection_is_put_in_its_set() {
+        let mut film = series();
+        film.kind = MediaKind::Movie;
+        let collection = Collection {
+            name: "Alien & Predator <Collection>",
+            overview: Some("Xenomorphs,\nmostly."),
+        };
+
+        let nfo = for_item_in(&film, Some(&collection));
+        let elements = xml::read(&nfo);
+        assert_eq!(
+            xml::texts(&elements, "movie/set/name"),
+            ["Alien & Predator <Collection>"]
+        );
+        assert_eq!(
+            xml::texts(&elements, "movie/set/overview"),
+            ["Xenomorphs,\nmostly."]
+        );
+
+        // Without an overview, a name alone; with no name, no set.
+        let nameless = for_item_in(
+            &film,
+            Some(&Collection {
+                name: "  ",
+                overview: Some("x"),
+            }),
+        );
+        assert!(!nameless.contains("<set>"));
+        let bare = for_item_in(
+            &film,
+            Some(&Collection {
+                name: "Heat",
+                overview: None,
+            }),
+        );
+        assert!(bare.contains("<set>\n    <name>Heat</name>\n  </set>"));
+        assert!(!bare.contains("<overview>"));
+        assert!(!for_item(&film).contains("<set>"));
+
+        // A series belongs to no collection, whatever it is handed.
+        let show = for_item_in(&series(), Some(&collection));
+        assert!(!show.contains("<set>"));
+    }
+
+    #[test]
+    fn a_season_with_a_title_of_its_own_is_named() {
+        let mut item = series();
+        let season = |number: i32, title: Option<&str>| crate::domain::Season {
+            id: format!("s{number}"),
+            season_number: number,
+            title: title.map(str::to_string),
+            overview: None,
+            air_date: None,
+            tmdb_id: None,
+            tvdb_id: None,
+            is_manual: false,
+            images: Vec::new(),
+            primary_images: Default::default(),
+        };
+        item.seasons = vec![
+            season(0, Some("Specials")),
+            season(1, Some("Book One: Water & Fire")),
+            season(2, Some("Season 2")),
+            season(3, Some("Saison 03")),
+            // A title that says a number is still a title when it is not
+            // the season's own word for it.
+            season(4, Some("Part 4")),
+            season(5, Some("  ")),
+            season(6, None),
+            season(7, Some("Season 8")),
+        ];
+
+        let elements = xml::read(&for_item(&item));
+        let named: Vec<(&str, &str)> = xml::at(&elements, "tvshow/namedseason")
+            .into_iter()
+            .map(|e| (e.attribute("number").unwrap(), e.text.as_str()))
+            .collect();
+        assert_eq!(
+            named,
+            [
+                ("1", "Book One: Water & Fire"),
+                ("4", "Part 4"),
+                ("7", "Season 8")
+            ]
+        );
+
+        // A film has seasons of no kind.
+        let mut film = item.clone();
+        film.kind = MediaKind::Movie;
+        assert!(!for_item(&film).contains("namedseason"));
+    }
+
+    #[test]
+    fn a_numbered_title_is_what_a_media_server_writes_for_itself() {
+        assert!(is_numbered("Season 3", 3));
+        assert!(is_numbered("saison 03", 3));
+        assert!(is_numbered("  STAFFEL 12  ", 12));
+        assert!(is_numbered("Сезон 2", 2));
+        assert!(is_numbered("Specials", 0));
+        assert!(!is_numbered("Specials", 1));
+        assert!(!is_numbered("Season 3", 4));
+        assert!(!is_numbered("Season", 1));
+        assert!(!is_numbered("Season Three", 3));
+        assert!(!is_numbered("Part 1", 1));
+        assert!(!is_numbered("The Final Season 3", 3));
+        assert!(!is_numbered("", 1));
+    }
+
+    #[test]
+    fn a_seasons_poster_is_a_thumb_of_that_season() {
+        let mut item = series();
+        let poster = |id: &str, url: &str| Image {
+            id: id.into(),
+            season_number: None,
+            cover_type: CoverType::Poster,
+            url: url.into(),
+            language: None,
+            sort_order: 0,
+            source: None,
+            is_manual: false,
+        };
+        let mut season = crate::domain::Season {
+            id: "s1".into(),
+            season_number: 1,
+            title: None,
+            overview: None,
+            air_date: None,
+            tmdb_id: None,
+            tvdb_id: None,
+            is_manual: false,
+            images: vec![
+                poster("a", "https://example.invalid/s1.jpg?a=1&b=2"),
+                poster("b", "https://example.invalid/s1-other.jpg"),
+            ],
+            primary_images: Default::default(),
+        };
+        item.seasons = vec![season.clone()];
+        season.season_number = 0;
+        season.images = vec![poster("c", "https://example.invalid/s0.jpg")];
+        item.seasons.insert(0, season);
+
+        let elements = xml::read(&for_item(&item));
+        let thumbs: Vec<(&str, &str, &str)> = xml::at(&elements, "tvshow/thumb")
+            .into_iter()
+            .filter(|e| e.attribute("type") == Some("season"))
+            .map(|e| {
+                (
+                    e.attribute("season").unwrap(),
+                    e.attribute("aspect").unwrap(),
+                    e.text.as_str(),
+                )
+            })
+            .collect();
+        // One a season — the first, which is the one chosen where one was —
+        // and the query string survived the escaping.
+        assert_eq!(
+            thumbs,
+            [
+                ("0", "poster", "https://example.invalid/s0.jpg"),
+                ("1", "poster", "https://example.invalid/s1.jpg?a=1&b=2"),
+            ]
+        );
+    }
+
+    #[test]
+    fn what_is_written_is_xml_whatever_the_providers_said() {
+        let mut item = series();
+        item.title = "Tom & Jerry <the \"movie\"> ]]> 🎬".into();
+        item.overview = Some("Line one\u{7}\nLine two & <b>bold</b>".into());
+        item.genres = vec!["Kids & Family".into()];
+        item.credits[0].person_name = "Zoë \"Z\" <Z>".into();
+        item.credits[0].character_name = Some("&amp;".into());
+
+        let elements = xml::read(&for_item(&item));
+        assert_eq!(
+            xml::texts(&elements, "tvshow/title"),
+            ["Tom & Jerry <the \"movie\"> ]]> 🎬"]
+        );
+        assert_eq!(
+            xml::texts(&elements, "tvshow/plot"),
+            ["Line one\nLine two & <b>bold</b>"]
+        );
+        assert_eq!(
+            xml::texts(&elements, "tvshow/actor/name"),
+            ["Zoë \"Z\" <Z>"]
+        );
+        assert_eq!(xml::texts(&elements, "tvshow/actor/role"), ["&amp;"]);
+        assert_eq!(xml::texts(&elements, "tvshow/genre"), ["Kids & Family"]);
+
+        let mut episode = crate::db::repo::child::blank_episode(1, 2);
+        episode.title = "<Pilot> & \"more\"".into();
+        let elements = xml::read(&for_episode(&item, &episode));
+        assert_eq!(
+            xml::texts(&elements, "episodedetails/title"),
+            ["<Pilot> & \"more\""]
+        );
     }
 }

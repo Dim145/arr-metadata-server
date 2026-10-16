@@ -1,5 +1,5 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
-import { pattern } from './support/regex'
+import { escaped, pattern } from './support/regex'
 
 /**
  * Curated lists: composed by whoever maintains the catalogue, shown on the
@@ -23,6 +23,7 @@ interface List {
   name: string
   mode: 'manual' | 'filter'
   isPublic: boolean
+  cover?: string | null
   itemCount: number
   filter?: { descending?: boolean; sort?: string }
 }
@@ -59,6 +60,13 @@ async function deleteList(request: APIRequestContext, id: string) {
 
 const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
+/** The lines of a text file that name a work: not the comments, nor what is said after a `#`. */
+const named = (text: string) =>
+  text
+    .split('\n')
+    .filter((line) => line.trim() && !line.startsWith('#'))
+    .map((line) => line.split('#')[0]!.trim())
+
 test.describe('curated lists', () => {
   test.skip(
     !USERNAME || !PASSWORD,
@@ -66,7 +74,7 @@ test.describe('curated lists', () => {
   )
 
   test('the way to the selections is offered only while there is one to show', async ({ page }, info) => {
-    // The bar's tabs are a laptop's; a phone keeps them behind its menu.
+    // The bar's tabs are a laptop's; a phone has its own along the foot of the screen.
     test.skip(info.project.name !== 'desktop', 'the bar is read at a laptop’s width')
     await signIn(page)
     const { lists } = (await (await page.request.get('/api/v1/lists')).json()) as { lists: unknown[] }
@@ -125,6 +133,43 @@ test.describe('curated lists', () => {
       expect(radarr).toEqual([{ id: movie!.externalIds.tmdb, title: movie!.title }])
       const stevenlu = await (await page.request.get(`/api/v1/lists/${list.slug}/stevenlu.json`)).json()
       expect(stevenlu).toEqual(movie!.externalIds.imdb ? [{ title: movie!.title, imdb_id: movie!.externalIds.imdb }] : [])
+
+      // Kometa's text file: a series by TheTVDB id, a film by TMDB's, in the list's own
+      // order — and, since a library holds one kind and a number means a film in one and
+      // a series in the other, the one kind a library reads when it is asked for.
+      const ids = await page.request.get(`/api/v1/lists/${list.slug}/ids.txt`)
+      expect(ids.status()).toBe(200)
+      expect(ids.headers()['content-type']).toContain('text/plain')
+      expect(named(await ids.text())).toEqual([`tvdb:${series!.externalIds.tvdb}`, `tmdb:${movie!.externalIds.tmdb}`])
+      const films = await (await page.request.get(`/api/v1/lists/${list.slug}/ids.txt?kind=movie`)).text()
+      expect(named(films)).toEqual([`tmdb:${movie!.externalIds.tmdb}`])
+      const shows = await (await page.request.get(`/api/v1/lists/${list.slug}/ids.txt?kind=series`)).text()
+      expect(named(shows)).toEqual([`tvdb:${series!.externalIds.tvdb}`])
+      expect((await page.request.get(`/api/v1/lists/${list.slug}/ids.txt?kind=anime`)).status()).toBe(400)
+
+      // The Atom feed: valid XML, an entry a work, each named by the selection and the work.
+      const atom = await page.request.get(`/api/v1/lists/${list.slug}/feed.atom`)
+      expect(atom.status()).toBe(200)
+      expect(atom.headers()['content-type']).toContain('application/atom+xml')
+      const feed = await page.evaluate((xml) => {
+        const doc = new DOMParser().parseFromString(xml, 'application/xml')
+        return {
+          error: doc.querySelector('parsererror')?.textContent ?? null,
+          title: doc.querySelector('feed > title')?.textContent ?? null,
+          entries: [...doc.getElementsByTagName('entry')].map((entry) => ({
+            id: entry.getElementsByTagName('id')[0]?.textContent,
+            updated: entry.getElementsByTagName('updated')[0]?.textContent,
+          })),
+        }
+      }, await atom.text())
+      expect(feed.error).toBeNull()
+      expect(feed.title).toContain(list.name)
+      expect(feed.entries.map((entry) => entry.id).sort()).toEqual(
+        [`urn:ams:list:${list.id}:work:${movie!.id}`, `urn:ams:list:${list.id}:work:${series!.id}`].sort(),
+      )
+      // Newest first.
+      const stamps = feed.entries.map((entry) => entry.updated!)
+      expect(stamps).toEqual([...stamps].sort().reverse())
 
       // The page holds them in the list's own order, and takes a new one.
       const detail = await (await page.request.get(`/api/v1/lists/${list.slug}`)).json()
@@ -226,6 +271,8 @@ test.describe('curated lists', () => {
         const anon = context.request
         expect((await anon.get(`/api/v1/lists/${list.slug}`)).status()).toBe(404)
         expect((await anon.get(`/api/v1/lists/${list.slug}/sonarr.json`)).status()).toBe(404)
+        expect((await anon.get(`/api/v1/lists/${list.slug}/ids.txt`)).status()).toBe(404)
+        expect((await anon.get(`/api/v1/lists/${list.slug}/feed.atom`)).status()).toBe(404)
         expect((await anon.get(`/api/v1/lists/${list.id}`)).status()).toBe(404)
         const listed = await (await anon.get('/api/v1/lists')).json()
         expect(listed.lists.some((l: List) => l.id === list.id)).toBe(false)
@@ -265,6 +312,9 @@ test.describe('curated lists', () => {
       // The addresses a client imports from: the series' shape, not the films'.
       await expect(page.getByText(`/api/v1/lists/${list.slug}/sonarr.json`)).toBeVisible()
       await expect(page.getByText(`/api/v1/lists/${list.slug}/radarr.json`)).toHaveCount(0)
+      // Kometa's text file and the feed, whichever kind the selection holds.
+      await expect(page.getByText(`/api/v1/lists/${list.slug}/ids.txt`)).toBeVisible()
+      await expect(page.getByText(`/api/v1/lists/${list.slug}/feed.atom`)).toBeVisible()
 
       // A browser that refuses the clipboard is told so, and the page carries on.
       await page.evaluate(() => {
@@ -286,6 +336,57 @@ test.describe('curated lists', () => {
       await expect(page.locator('#edit-name')).toHaveValue(name)
       await expect(page.locator('#list-editor')).toContainText(series!.title)
       await expect(page.locator('#list-editor')).toContainText(`/api/v1/lists/${list.slug}/sonarr.json`)
+      await expect(page.locator('#list-editor')).toContainText(`/api/v1/lists/${list.slug}/ids.txt`)
+      // And a way to write the selection's documents alone.
+      await expect(page.locator('#list-editor').getByRole('button', { name: /write the documents|écrire les documents/i })).toBeVisible()
+    } finally {
+      await deleteList(page.request, list.id)
+    }
+  })
+
+  test('a selection’s cover is chosen, shown on the site, kept through other changes, and taken away', async ({ page }) => {
+    await signIn(page)
+    const name = `E2E cover ${Date.now()}`
+    const list = await createList(page.request, { name, kind: 'mixed', mode: 'manual', isPublic: true })
+    try {
+      // A picture of this very server, which the site's own origin lets load.
+      const cover = new URL('/icon-512.png', page.url()).href
+
+      // Not the address of a picture: refused, and the list as it was.
+      for (const bad of ['javascript:alert(1)', 'data:image/png;base64,AAAA', '/media/not-an-address.jpg', 'https://films.example/a b.png']) {
+        expect((await page.request.put(`/api/v1/lists/${list.id}`, { data: { cover: bad } })).status(), bad).toBe(400)
+      }
+      expect(((await (await page.request.get(`/api/v1/lists/${list.id}`)).json()).list as List).cover ?? null).toBeNull()
+
+      const set = await page.request.put(`/api/v1/lists/${list.id}`, { data: { cover } })
+      expect(set.status()).toBe(200)
+      expect(((await set.json()) as List).cover).toBe(cover)
+      // A change that says nothing of it leaves it.
+      const described = await page.request.put(`/api/v1/lists/${list.id}`, { data: { description: 'With a cover.' } })
+      expect(((await described.json()) as List).cover).toBe(cover)
+
+      // On the page of the selections, above its words; at the head of its own page.
+      await page.goto('/lists')
+      const card = page.getByRole('link', { name: pattern(escaped(name)) })
+      await expect(card.locator('img')).toHaveAttribute('src', cover)
+      await expect(card.locator('img')).toBeVisible()
+      await page.goto(`/lists/${list.slug}`)
+      const head = page.locator('main img').first()
+      await expect(head).toHaveAttribute('src', cover)
+      await expect(head).toBeVisible()
+
+      // In the editor, which can change it and take it away.
+      await page.goto('/admin/lists')
+      await page.getByRole('button', { name }).first().click()
+      await expect(page.locator('#list-editor').getByRole('button', { name: /change the cover|changer la couverture/i })).toBeVisible()
+      await page.locator('#list-editor').getByRole('button', { name: /remove the cover|retirer la couverture/i }).click()
+      await expect(page.locator('#list-editor').getByRole('button', { name: /choose a cover|choisir une couverture/i })).toBeVisible()
+      expect(((await (await page.request.get(`/api/v1/lists/${list.id}`)).json()).list as List).cover ?? null).toBeNull()
+
+      // Said empty, it is taken away; the API says so by saying nothing.
+      await page.request.put(`/api/v1/lists/${list.id}`, { data: { cover } })
+      const cleared = await page.request.put(`/api/v1/lists/${list.id}`, { data: { cover: '' } })
+      expect(((await cleared.json()) as List).cover ?? null).toBeNull()
     } finally {
       await deleteList(page.request, list.id)
     }

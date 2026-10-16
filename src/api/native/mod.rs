@@ -6,6 +6,7 @@
 
 pub mod access;
 pub mod account;
+pub mod arr;
 pub mod auth;
 pub mod browse;
 pub mod cache;
@@ -32,6 +33,7 @@ pub mod settings;
 pub mod signup;
 pub mod tasks;
 pub mod tls;
+pub mod todo;
 pub mod users;
 pub mod watch;
 pub mod webhooks;
@@ -97,8 +99,10 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(users::router())
         .merge(invitations::router())
         .merge(access::router())
+        .merge(arr::router())
         .merge(oidc::router())
         .merge(tasks::router())
+        .merge(todo::router())
         .merge(rules::router())
         .merge(media::router())
         .merge(webhooks::router())

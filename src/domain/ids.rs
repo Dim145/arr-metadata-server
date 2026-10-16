@@ -28,6 +28,8 @@ pub enum ExternalSource {
     /// Fankai's id for a Fan-Kai production — a recut TheTVDB and TMDB list
     /// nothing of, so it is the one id such a work has.
     Fankai,
+    /// Wikidata's item for the work, `Q…`, as TMDB files it.
+    Wikidata,
 }
 
 impl ExternalSource {
@@ -44,6 +46,7 @@ impl ExternalSource {
         Self::TraktShow,
         Self::TraktMovie,
         Self::Fankai,
+        Self::Wikidata,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -60,6 +63,7 @@ impl ExternalSource {
             Self::TraktShow => "trakt_show",
             Self::TraktMovie => "trakt_movie",
             Self::Fankai => "fankai",
+            Self::Wikidata => "wikidata",
         }
     }
 
@@ -124,6 +128,9 @@ pub struct ExternalIds {
     /// Fankai's id, for a Fan-Kai production; see `providers::fankai`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fankai: Option<i64>,
+    /// Wikidata's item, `Q1079`: a way to the work, never one to fetch it by.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wikidata: Option<String>,
 }
 
 impl ExternalIds {
@@ -144,6 +151,7 @@ impl ExternalIds {
             ExternalSource::AniList => self.anilist.extend(as_int()),
             ExternalSource::TraktShow | ExternalSource::TraktMovie => self.trakt = as_int(),
             ExternalSource::Fankai => self.fankai = as_int(),
+            ExternalSource::Wikidata => self.wikidata = wikidata_item(value),
         }
     }
 
@@ -182,11 +190,15 @@ impl ExternalIds {
         if let Some(v) = self.fankai {
             out.push((ExternalSource::Fankai, v.to_string()));
         }
+        if let Some(v) = &self.wikidata {
+            out.push((ExternalSource::Wikidata, v.clone()));
+        }
 
         out
     }
 
     /// True when at least one id exists, which is what makes an entry refreshable.
+    /// Wikidata's is not counted: no source is asked anything by it.
     pub fn is_empty(&self) -> bool {
         self.tmdb.is_none()
             && self.tvdb.is_none()
@@ -198,6 +210,17 @@ impl ExternalIds {
             && self.trakt.is_none()
             && self.fankai.is_none()
     }
+}
+
+/// A Wikidata item as Wikidata writes it, `Q1079`, from that, a lower-case
+/// `q`, or the item's address; nothing from anything else.
+pub fn wikidata_item(raw: &str) -> Option<String> {
+    let s = raw.trim().trim_end_matches('/');
+    let s = s.rsplit('/').next().unwrap_or(s);
+    let digits = s.strip_prefix('Q').or_else(|| s.strip_prefix('q'))?;
+
+    (!digits.is_empty() && digits.len() <= 12 && digits.bytes().all(|b| b.is_ascii_digit()))
+        .then(|| format!("Q{digits}"))
 }
 
 /// Normalise an IMDb id to its canonical `tt0000000` form.
@@ -287,6 +310,33 @@ mod tests {
             ids.rows(MediaKind::Movie),
             vec![(ExternalSource::TmdbMovie, "42".to_string())]
         );
+    }
+
+    #[test]
+    fn a_wikidata_item_is_kept_as_wikidata_writes_it() {
+        assert_eq!(wikidata_item("Q1079").as_deref(), Some("Q1079"));
+        assert_eq!(wikidata_item(" q1079 ").as_deref(), Some("Q1079"));
+        assert_eq!(
+            wikidata_item("https://www.wikidata.org/wiki/Q21062142").as_deref(),
+            Some("Q21062142")
+        );
+        assert_eq!(wikidata_item("P31"), None);
+        assert_eq!(wikidata_item("Q"), None);
+        assert_eq!(wikidata_item(""), None);
+
+        // Stored and read back as any other id, and no reason to refresh.
+        let ids = ExternalIds {
+            wikidata: Some("Q1079".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            ids.rows(MediaKind::Series),
+            vec![(ExternalSource::Wikidata, "Q1079".to_string())]
+        );
+        let mut read = ExternalIds::default();
+        read.apply(ExternalSource::Wikidata, "Q1079");
+        assert_eq!(read, ids);
+        assert!(ids.is_empty());
     }
 
     #[test]

@@ -100,22 +100,12 @@ fn rank(kind: &str) -> (usize, String) {
 mod tests {
     use super::*;
     use crate::{
-        config,
-        db::repo::item::{self, ItemWrite},
+        db::{
+            repo::item::{self, ItemWrite},
+            testing::db,
+        },
         domain::{MediaItem, MediaKind},
     };
-
-    async fn db() -> Db {
-        let db = Db::connect(&config::Database {
-            url: "sqlite::memory:".into(),
-            max_connections: 1,
-            acquire_timeout: std::time::Duration::from_secs(5),
-        })
-        .await
-        .expect("in-memory database");
-        db.migrate().await.expect("migrations");
-        db
-    }
 
     fn placed(tvdb_id: i64, season: i32, number: i32) -> PlacedEpisode {
         PlacedEpisode {

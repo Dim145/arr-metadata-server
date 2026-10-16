@@ -771,18 +771,7 @@ pub async fn troubled(db: &Db, limit: i64) -> Result<Vec<Asset>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    async fn db() -> Db {
-        let db = Db::connect(&crate::config::Database {
-            url: "sqlite::memory:".into(),
-            max_connections: 1,
-            acquire_timeout: std::time::Duration::from_secs(5),
-        })
-        .await
-        .unwrap();
-        db.migrate().await.unwrap();
-        db
-    }
+    use crate::db::testing::db;
 
     const LATER: &str = "2999-01-01T00:00:00.000Z";
     const SHA: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";

@@ -4,12 +4,13 @@
  * Above, one card per task — what it is for, when it runs, how its last run
  * went, when the next one comes — with the button to run it now, and to stop
  * the one long task that can stop. Below, the history: one row per run rather
- * than per work, filtered by task, outcome, and whether the schedule or a
- * person started it. Both are polled while something runs, and otherwise
- * left alone.
+ * than per work, a page at a time and under the day each ran on, filtered by
+ * task, outcome, and whether the schedule or a person started it — with the
+ * failures one press away at its head, since they are what it is opened for.
+ * Both are polled while something runs, and otherwise left alone.
  */
 
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Fragment, useState } from 'react'
 import { Link } from 'react-router'
 
@@ -49,6 +50,7 @@ const TASKS: TaskId[] = [
   'media.sweep',
   'tls.renew',
   'update.check',
+  'arr.seed',
 ]
 
 /**
@@ -80,6 +82,10 @@ export function describeDetail(detail: string | undefined, t: Dict): string {
   if ((m = detail.match(/^synced from (.+)$/))) return s.synced(names(m[1]))
   if ((m = detail.match(/^none of (.+) answered$/))) return s.noneAnswered(names(m[1]))
   if ((m = detail.match(/^(\d+\.\d+\.\d+) is out$/))) return s.newer(m[1] ?? '')
+  // The seeding from Sonarr and Radarr: what was there, what came in, what
+  // could not be found or failed, of how many.
+  if ((m = detail.match(/^(\d+) already here, (\d+) imported, (\d+) not found, (\d+) failed, of (\d+)$/)))
+    return s.seeded(...(m.slice(1, 6).map(Number) as [number, number, number, number, number]))
   return t.admin.runs.notes[detail] ?? detail
 }
 
@@ -166,7 +172,7 @@ function TaskCard({ task, delay }: { task: Task; delay: number }) {
   const last = task.last && !task.running ? task.last : undefined
 
   return (
-    <Panel label={k.names[task.id]} className="rise flex flex-col" style={{ animationDelay: `${delay}ms` }}>
+    <Panel id={`task-${task.id}`} label={k.names[task.id]} className="rise flex flex-col" style={{ animationDelay: `${delay}ms` }}>
       <div className="border-b border-rule px-5 py-4">
         <h2 className="font-display text-xl leading-tight text-bone">{k.names[task.id]}</h2>
         <Chip tone={task.mode === 'off' ? 'neutral' : 'provider'} className="mt-2">
@@ -282,6 +288,9 @@ function TaskCard({ task, delay }: { task: Task; delay: number }) {
 
 /* ── The history ──────────────────────────────────────────────────────────── */
 
+/** How many runs a page of the history holds: the next page is a press away. */
+const PAGE = 50
+
 function History({ polling }: { polling: boolean }) {
   const { t, locale } = useI18n()
   const k = t.admin.tasks
@@ -289,12 +298,29 @@ function History({ polling }: { polling: boolean }) {
   const [status, setStatus] = useState('')
   const [by, setBy] = useState('')
 
-  const jobs = useQuery({
-    queryKey: ['jobs', kind, status, by],
-    queryFn: () => api.get<JobsResponse>(`/jobs${query({ kind, status, by, limit: 100 })}`),
-    placeholderData: (previous) => previous,
-    refetchInterval: polling ? 3_000 : 20_000,
+  const jobs = useInfiniteQuery({
+    queryKey: ['jobs', 'history', kind, status, by],
+    // Each page from where the last one ended, counted in what is loaded: a
+    // run that begins meanwhile pushes the rest down, and the next page asks
+    // for what follows what is already here.
+    queryFn: ({ pageParam }) =>
+      api.get<JobsResponse>(`/jobs${query({ kind, status, by, limit: PAGE, offset: pageParam })}`),
+    initialPageParam: 0,
+    getNextPageParam: (last, pages) => {
+      const loaded = pages.reduce((sum, page) => sum + page.jobs.length, 0)
+      return loaded < last.total ? loaded : undefined
+    },
+    placeholderData: keepPreviousData,
+    // Followed while it is the newest that are on screen. Somebody who has
+    // dug into the older pages is reading, not watching — and a poll would
+    // ask for every page they opened.
+    refetchInterval: (state) => ((state.state.data?.pages.length ?? 1) > 1 ? false : polling ? 3_000 : 20_000),
   })
+
+  const runs = jobs.data?.pages.flatMap((page) => page.jobs) ?? []
+  const total = jobs.data?.pages.at(-1)?.total
+  const failedOnly = status === 'failed'
+  const filtered = Boolean(kind || status || by)
 
   return (
     <Panel label={k.history} className="rise mt-8 overflow-hidden" style={{ animationDelay: '240ms' }}>
@@ -302,11 +328,30 @@ function History({ polling }: { polling: boolean }) {
         title={k.history}
         action={
           <span className="flex items-center gap-3">
-            {jobs.isFetching ? <Spinner className="size-3.5 text-bone-faint" /> : null}
-            <span className="font-mono text-xs text-bone-faint tabular-nums">{fmt.count(jobs.data?.total, locale)}</span>
+            {jobs.isFetching && !jobs.isFetchingNextPage ? <Spinner className="size-3.5 text-bone-faint" /> : null}
+            <span className="font-mono text-xs text-bone-faint tabular-nums">{fmt.count(total, locale)}</span>
           </span>
         }
       />
+      <div className="border-b border-rule px-5 py-3">
+        {/* The failures, first: what the history is opened for, and a
+            sentence's worth of work to find among a screenful of runs that
+            went well. */}
+        <button
+          type="button"
+          aria-pressed={failedOnly}
+          onClick={() => setStatus(failedOnly ? '' : 'failed')}
+          className={cn(
+            'inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-full border px-4 text-sm font-medium transition-colors duration-150',
+            failedOnly
+              ? 'border-vermillion-deep bg-vermillion/10 text-vermillion'
+              : 'border-rule-bright text-bone-dim hover:border-vermillion-deep hover:text-vermillion',
+          )}
+        >
+          <Glyph name="alert" className="size-4" />
+          {k.failuresOnly}
+        </button>
+      </div>
       <div className="grid gap-3 border-b border-rule px-5 py-3 sm:grid-cols-3">
         <div className="grid gap-1">
           <label htmlFor="history-task" className="label">
@@ -356,13 +401,69 @@ function History({ polling }: { polling: boolean }) {
           <Glyph name="alert" className="size-4" />
           {t.admin.runs.loadFailed}
         </p>
-      ) : jobs.data.jobs.length === 0 ? (
-        <EmptyState title={t.admin.runs.empty} hint={t.admin.runs.emptyHint} />
+      ) : runs.length === 0 ? (
+        filtered ? (
+          // Nothing failing is the good answer, and says so as one.
+          <EmptyState
+            title={failedOnly && !kind && !by ? k.noFailures : k.noMatch}
+            hint={failedOnly && !kind && !by ? k.noFailuresHint : k.noMatchHint}
+          />
+        ) : (
+          <EmptyState title={t.admin.runs.empty} hint={t.admin.runs.emptyHint} />
+        )
       ) : (
-        <JobTable jobs={jobs.data.jobs} />
+        <>
+          <JobTable jobs={runs} />
+          {jobs.hasNextPage ? (
+            <div className="flex flex-col items-center gap-2 border-t border-rule px-5 py-6">
+              <Button onClick={() => void jobs.fetchNextPage()} disabled={jobs.isFetchingNextPage}>
+                {jobs.isFetchingNextPage ? <Spinner className="size-4" /> : null}
+                {k.loadMore}
+              </Button>
+              <span className="font-mono text-xs text-bone-faint tabular-nums">
+                {fmt.count(runs.length, locale)} {t.common.of} {fmt.count(total, locale)}
+              </span>
+            </div>
+          ) : null}
+        </>
       )}
     </Panel>
   )
+}
+
+/**
+ * Runs under the day they were started on, the newest day first, as the
+ * reader's own calendar draws it. The runs arrive newest first, so a day is
+ * a stretch of them and one pass groups them.
+ */
+function byDay(jobs: Job[]): { day: string; jobs: Job[] }[] {
+  const groups: { day: string; jobs: Job[] }[] = []
+  for (const job of jobs) {
+    const created = new Date(job.createdAt)
+    // A date nobody could read is still a run: under a heading of its own.
+    const day = Number.isNaN(created.getTime()) ? '' : fmt.localDay(created)
+    const last = groups.at(-1)
+    if (last?.day === day) last.jobs.push(job)
+    else groups.push({ day, jobs: [job] })
+  }
+  return groups
+}
+
+/** `Today`, `Yesterday`, then `Monday 5 October` — with the year once it is not this one's. */
+function dayLabel(day: string, locale: string): string {
+  if (!day) return '—'
+  const [year, month, date] = day.split('-').map(Number) as [number, number, number]
+  const now = new Date()
+  const ago = Math.round(
+    (Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()) - Date.UTC(year, month - 1, date)) / 86_400_000,
+  )
+  const words =
+    ago === 0 || ago === 1
+      ? new Intl.RelativeTimeFormat(locale, { numeric: 'auto' }).format(-ago, 'day')
+      : year === now.getFullYear()
+        ? fmt.dayHeading(new Date(year, month - 1, date), locale)
+        : (fmt.weekdayDate(day, locale) ?? day)
+  return words.charAt(0).toLocaleUpperCase(locale) + words.slice(1)
 }
 
 /** How long a run took, or has been going. */
@@ -420,6 +521,7 @@ export function JobTable({ jobs }: { jobs: Job[] }) {
 
   const who = (job: Job) =>
     !job.triggeredBy ? k.schedule : job.triggeredBy === 'unknown' ? k.someone : describeIdentity(job.triggeredBy, t).name
+  const groups = byDay(jobs)
 
   return (
     <>
@@ -431,34 +533,43 @@ export function JobTable({ jobs }: { jobs: Job[] }) {
     ) : null}
     {/* On a phone, one block per run: seven columns do not fit, and a table
         that scrolls sideways hides most of what it holds. */}
-    <ul className="divide-y divide-rule md:hidden">
-      {jobs.map((job) => (
-        <li key={job.id} data-job={job.id} className="px-4 py-3">
-          <div className="space-y-1.5">
-            <div className="flex items-center justify-between gap-3">
-              {opener(job, `job-${job.id}-detail-narrow`)}
-              <RunStatus status={job.status} />
-            </div>
-            {job.work ? (
-              <Link to={`/admin/catalogue/${job.work.id}`} className="block truncate text-sm text-bone underline decoration-rule-bright underline-offset-2">
-                {job.work.title}
-              </Link>
-            ) : null}
-            <p className={job.error ? 'text-xs break-words text-vermillion' : 'text-xs text-bone-dim'}>
-              {describeDetail(job.error ?? job.detail, t)}
-            </p>
-            <p className="font-mono text-[0.6875rem] text-bone-faint tabular-nums">
-              {fmt.relative(job.createdAt, locale)} · {who(job)} · {took(job, locale)}
-            </p>
-          </div>
-          {open === job.id ? (
-            <div id={`job-${job.id}-detail-narrow`} className="mt-3 border-t border-rule pt-3">
-              <JobDetailPanel job={job} />
-            </div>
-          ) : null}
-        </li>
+    <div className="md:hidden">
+      {groups.map((group) => (
+        <div key={group.day}>
+          <h3 className="flex items-baseline justify-between gap-3 border-y border-rule bg-ink px-4 py-2 first:border-t-0">
+            <DayHeading day={group.day} jobs={group.jobs} />
+          </h3>
+          <ul className="divide-y divide-rule">
+            {group.jobs.map((job) => (
+              <li key={job.id} data-job={job.id} className="skip-offscreen px-4 py-3 [--row:7rem]">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-3">
+                    {opener(job, `job-${job.id}-detail-narrow`)}
+                    <RunStatus status={job.status} />
+                  </div>
+                  {job.work ? (
+                    <Link to={`/admin/catalogue/${job.work.id}`} className="block truncate text-sm text-bone underline decoration-rule-bright underline-offset-2">
+                      {job.work.title}
+                    </Link>
+                  ) : null}
+                  <p className={job.error ? 'text-xs break-words text-vermillion' : 'text-xs text-bone-dim'}>
+                    {describeDetail(job.error ?? job.detail, t)}
+                  </p>
+                  <p className="font-mono text-[0.6875rem] text-bone-faint tabular-nums">
+                    {fmt.relative(job.createdAt, locale)} · {who(job)} · {took(job, locale)}
+                  </p>
+                </div>
+                {open === job.id ? (
+                  <div id={`job-${job.id}-detail-narrow`} className="mt-3 border-t border-rule pt-3">
+                    <JobDetailPanel job={job} />
+                  </div>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </div>
       ))}
-    </ul>
+    </div>
     <div className="hidden md:block">
     <TableScroll label={t.admin.jobs}>
       <table className="w-full min-w-[52rem] border-collapse text-left">
@@ -475,77 +586,106 @@ export function JobTable({ jobs }: { jobs: Job[] }) {
             </Th>
           </tr>
         </thead>
-        <tbody>
-          {jobs.map((job) => {
-            // Anything but a refresh of everything, which asks for a confirmation
-            // of its own, from its card.
-            const rerunnable = job.status !== 'running' && job.kind !== 'refresh.all'
-            const expanded = open === job.id
-            return (
-              <Fragment key={job.id}>
-              <Tr data-job={job.id} className={expanded ? 'bg-ink-high' : undefined}>
-                <Td className="whitespace-nowrap">
-                  <span className="font-mono text-xs text-bone-faint tabular-nums" title={fmt.dateTime(job.createdAt, locale)}>
-                    {fmt.relative(job.createdAt, locale)}
-                  </span>
-                </Td>
-                <Td>
-                  <RunStatus status={job.status} />
-                </Td>
-                <Td>{opener(job, `job-${job.id}-detail`)}</Td>
-                <Td className="w-full max-w-0">
-                  {/* Which work, for a run that had one: "refreshed from a
-                      provider" three times over said nothing of what. */}
-                  {job.work ? (
-                    <Link
-                      to={`/admin/catalogue/${job.work.id}`}
-                      className="block truncate text-sm text-bone underline decoration-rule-bright underline-offset-2 transition-colors duration-150 hover:text-vermillion hover:decoration-vermillion"
-                    >
-                      {job.work.title}
-                    </Link>
-                  ) : null}
-                  <span className={job.error ? 'block truncate text-vermillion' : 'block truncate text-bone-dim'} title={job.error ?? job.detail}>
-                    {job.error ? describeDetail(job.error, t) : job.detail ? describeDetail(job.detail, t) : job.work ? '' : '—'}
-                  </span>
-                </Td>
-                <Td className="whitespace-nowrap">
-                  <span className="text-xs text-bone-dim">{who(job)}</span>
-                </Td>
-                <Td className="text-right font-mono text-xs whitespace-nowrap text-bone-faint tabular-nums">
-                  {took(job, locale)}
-                </Td>
-                <Td className="text-right">
-                  {rerunnable ? (
-                    <Button
-                      size="sm"
-                      variant="quiet"
-                      disabled={again.isPending && again.variables?.id === job.id}
-                      onClick={() => again.mutate(job)}
-                      aria-label={`${k.again}: ${k.names[job.kind] ?? job.kind}`}
-                    >
-                      {again.isPending && again.variables?.id === job.id ? (
-                        <Spinner className="size-4" />
-                      ) : (
-                        <Glyph name="refresh" className="size-4" />
-                      )}
-                    </Button>
-                  ) : null}
-                </Td>
-              </Tr>
-              {expanded ? (
-                <tr id={`job-${job.id}-detail`}>
-                  <td colSpan={7} className="border-b border-rule bg-ink px-5 py-4">
-                    <JobDetailPanel job={job} />
-                  </td>
-                </tr>
-              ) : null}
-              </Fragment>
-            )
-          })}
-        </tbody>
+        {groups.map((group) => (
+          <tbody key={group.day}>
+            <tr>
+              {/* A heading in a cell rather than a header cell: it describes a
+                  stretch of rows, which no cell beside it could be read as
+                  headed by. */}
+              <td colSpan={7} className="border-y border-rule bg-ink p-0">
+                <h3 className="flex items-baseline justify-between gap-3 px-5 py-2">
+                  <DayHeading day={group.day} jobs={group.jobs} />
+                </h3>
+              </td>
+            </tr>
+            {group.jobs.map((job) => {
+              // Anything but a refresh of everything, which asks for a confirmation
+              // of its own, from its card.
+              const rerunnable = job.status !== 'running' && job.kind !== 'refresh.all'
+              const expanded = open === job.id
+              return (
+                <Fragment key={job.id}>
+                <Tr data-job={job.id} className={expanded ? 'bg-ink-high' : undefined}>
+                  <Td className="whitespace-nowrap">
+                    <span className="font-mono text-xs text-bone-faint tabular-nums" title={fmt.dateTime(job.createdAt, locale)}>
+                      {fmt.relative(job.createdAt, locale)}
+                    </span>
+                  </Td>
+                  <Td>
+                    <RunStatus status={job.status} />
+                  </Td>
+                  <Td>{opener(job, `job-${job.id}-detail`)}</Td>
+                  <Td className="w-full max-w-0">
+                    {/* Which work, for a run that had one: "refreshed from a
+                        provider" three times over said nothing of what. */}
+                    {job.work ? (
+                      <Link
+                        to={`/admin/catalogue/${job.work.id}`}
+                        className="block truncate text-sm text-bone underline decoration-rule-bright underline-offset-2 transition-colors duration-150 hover:text-vermillion hover:decoration-vermillion"
+                      >
+                        {job.work.title}
+                      </Link>
+                    ) : null}
+                    <span className={job.error ? 'block truncate text-vermillion' : 'block truncate text-bone-dim'} title={job.error ?? job.detail}>
+                      {job.error ? describeDetail(job.error, t) : job.detail ? describeDetail(job.detail, t) : job.work ? '' : '—'}
+                    </span>
+                  </Td>
+                  <Td className="whitespace-nowrap">
+                    <span className="text-xs text-bone-dim">{who(job)}</span>
+                  </Td>
+                  <Td className="text-right font-mono text-xs whitespace-nowrap text-bone-faint tabular-nums">
+                    {took(job, locale)}
+                  </Td>
+                  <Td className="text-right">
+                    {rerunnable ? (
+                      <Button
+                        size="sm"
+                        variant="quiet"
+                        disabled={again.isPending && again.variables?.id === job.id}
+                        onClick={() => again.mutate(job)}
+                        aria-label={`${k.again}: ${k.names[job.kind] ?? job.kind}`}
+                      >
+                        {again.isPending && again.variables?.id === job.id ? (
+                          <Spinner className="size-4" />
+                        ) : (
+                          <Glyph name="refresh" className="size-4" />
+                        )}
+                      </Button>
+                    ) : null}
+                  </Td>
+                </Tr>
+                {expanded ? (
+                  <tr id={`job-${job.id}-detail`}>
+                    <td colSpan={7} className="border-b border-rule bg-ink px-5 py-4">
+                      <JobDetailPanel job={job} />
+                    </td>
+                  </tr>
+                ) : null}
+                </Fragment>
+              )
+            })}
+          </tbody>
+        ))}
       </table>
     </TableScroll>
     </div>
+    </>
+  )
+}
+
+/** A day's name, and how many of the runs shown under it failed, if any did. */
+function DayHeading({ day, jobs }: { day: string; jobs: Job[] }) {
+  const { t, locale } = useI18n()
+  const failed = jobs.filter((job) => job.status === 'failed').length
+
+  return (
+    <>
+      <span className="label text-bone-dim">{dayLabel(day, locale)}</span>
+      {failed ? (
+        <span className="font-mono text-xs font-medium text-vermillion tabular-nums">
+          {t.admin.tasks.dayFailed(failed)}
+        </span>
+      ) : null}
     </>
   )
 }

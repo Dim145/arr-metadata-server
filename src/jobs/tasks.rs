@@ -24,9 +24,10 @@ pub const MEDIA_STORE: &str = repo::job::kinds::MEDIA_STORE;
 pub const MEDIA_SWEEP: &str = repo::job::kinds::MEDIA_SWEEP;
 pub const TLS_RENEW: &str = repo::job::kinds::TLS_RENEW;
 pub const UPDATE_CHECK: &str = repo::job::kinds::UPDATE_CHECK;
+pub const ARR_SEED: &str = crate::arr::seed::KIND;
 
 /// Every task, in the order the page shows them.
-pub const ALL: [&str; 9] = [
+pub const ALL: [&str; 10] = [
     REFRESH_SWEEP,
     REFRESH_ALL,
     IMPORT_ANIME,
@@ -36,6 +37,7 @@ pub const ALL: [&str; 9] = [
     MEDIA_SWEEP,
     TLS_RENEW,
     UPDATE_CHECK,
+    ARR_SEED,
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
@@ -97,6 +99,7 @@ fn lock_busy(id: &str) -> bool {
         MEDIA_SWEEP => crate::media::worker::is_sweeping(),
         TLS_RENEW => crate::tls::is_renewing(),
         UPDATE_CHECK => crate::jobs::update_check::is_checking(),
+        ARR_SEED => crate::arr::seed::is_busy(),
         _ => false,
     }
 }
@@ -110,13 +113,14 @@ pub fn hold_of(id: &str) -> Option<&'static str> {
         MEDIA_STORE => Some(repo::job::kinds::MEDIA_STORE),
         MEDIA_SWEEP => Some(repo::job::kinds::MEDIA_SWEEP),
         TLS_RENEW => Some(repo::job::kinds::TLS_RENEW),
+        ARR_SEED => Some(crate::arr::seed::HOLD),
         _ => None,
     }
 }
 
 /// Whether a run of this kind checks for a stop between two works.
 pub fn stops_partway(kind: &str) -> bool {
-    matches!(kind, REFRESH_ALL | MEDIA_STORE)
+    matches!(kind, REFRESH_ALL | MEDIA_STORE | ARR_SEED)
 }
 
 async fn state_of(state: &AppState, id: &'static str) -> anyhow::Result<TaskState> {
@@ -212,6 +216,16 @@ async fn state_of(state: &AppState, id: &'static str) -> anyhow::Result<TaskStat
                 if on { Mode::Scheduled } else { Mode::Off },
                 on.then(|| crate::jobs::update_check::EVERY.as_secs() as i64),
                 (!on).then_some("updates_off"),
+            )
+        }
+        // By hand only: the library is read when somebody is about to point
+        // Sonarr or Radarr here, and when they want what came since.
+        ARR_SEED => {
+            let on = crate::arr::seed::connected(state);
+            (
+                if on { Mode::Manual } else { Mode::Off },
+                None,
+                (!on).then_some("arr_off"),
             )
         }
         _ => (Mode::Off, None, None),

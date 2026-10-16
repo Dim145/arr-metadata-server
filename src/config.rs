@@ -97,7 +97,8 @@ pub struct Config {
     pub fankai: Fankai,
     pub fankai_wiki: FankaiWiki,
     pub anime_mapping: AnimeMapping,
-    /// Which provider wins when two disagree, most trusted first.
+    /// Which provider wins when two disagree, most trusted first: the first
+    /// value of `sources.priority`, which is what the merge reads.
     pub provider_priority: Vec<String>,
     pub cache: Cache,
     pub refresh: Refresh,
@@ -247,6 +248,9 @@ pub struct Security {
     /// sends can be one of this server's: by address, like Sonarr's.
     pub anilist_policy: SurfacePolicy,
     pub arr_policy: SurfacePolicy,
+    /// The Plex provider's. Plex sends no credential to a metadata provider
+    /// for now, so it is let in by its address, like Sonarr.
+    pub plex_policy: SurfacePolicy,
     /// Peers allowed to reach any surface whose policy is
     /// [`SurfacePolicy::Allowlist`].
     ///
@@ -288,6 +292,7 @@ impl std::fmt::Debug for Security {
             .field("tvdb_policy", &self.tvdb_policy)
             .field("anilist_policy", &self.anilist_policy)
             .field("arr_policy", &self.arr_policy)
+            .field("plex_policy", &self.plex_policy)
             .field("allowlist", &self.allowlist)
             .field("allowlist_from_env", &self.allowlist_from_env)
             .field(
@@ -612,9 +617,11 @@ pub struct Refresh {
     pub enabled: bool,
     /// How often the scheduler looks for stale entries.
     pub interval: Duration,
-    /// Age past which a still-running series is refetched.
+    /// Age past which a still-running series is refetched: the first value of
+    /// `refresh.ttlContinuing`, which is what the scheduler reads.
     pub continuing_ttl: Duration,
-    /// Age past which an ended series or released movie is refetched.
+    /// Age past which an ended series or released movie is refetched: the
+    /// first value of `refresh.ttlEnded`.
     pub ended_ttl: Duration,
     /// Entries refreshed per scheduler tick.
     pub batch_size: u32,
@@ -713,6 +720,7 @@ impl Config {
                 tvdb_policy: policy(&["AMS_TVDB_AUTH"], SurfacePolicy::ApiKey)?,
                 anilist_policy: policy(&["AMS_ANILIST_AUTH"], SurfacePolicy::Allowlist)?,
                 arr_policy: policy(&["AMS_ARR_AUTH"], SurfacePolicy::Allowlist)?,
+                plex_policy: policy(&["AMS_PLEX_AUTH"], SurfacePolicy::Allowlist)?,
                 allowlist: nets(
                     &["AMS_ALLOWLIST", "AMS_ARR_ALLOWLIST"],
                     // RFC1918 + loopback + the usual container ranges.
@@ -965,13 +973,13 @@ impl Config {
                 }),
                 None => None,
             },
-            // The two the settings take over are held to the ranges the
+            // The numbers the settings take over are held to the ranges the
             // settings hold, here, rather than found out by the seeding.
             refresh: Refresh {
                 enabled: flag(&["AMS_REFRESH_ENABLED"], true)?,
                 interval: secs_in(&["AMS_REFRESH_INTERVAL"], 900, 60..=604_800)?,
-                continuing_ttl: secs(&["AMS_REFRESH_CONTINUING_TTL"], 21_600)?,
-                ended_ttl: secs(&["AMS_REFRESH_ENDED_TTL"], 604_800)?,
+                continuing_ttl: secs_in(&["AMS_REFRESH_CONTINUING_TTL"], 21_600, 60..=31_536_000)?,
+                ended_ttl: secs_in(&["AMS_REFRESH_ENDED_TTL"], 604_800, 60..=315_360_000)?,
                 batch_size: num_in(&["AMS_REFRESH_BATCH_SIZE"], 25, 1..=500)?,
             },
         })
@@ -988,6 +996,7 @@ impl Config {
             Surface::Tvdb => self.security.tvdb_policy,
             Surface::Anilist => self.security.anilist_policy,
             Surface::Arr => self.security.arr_policy,
+            Surface::Plex => self.security.plex_policy,
         }
     }
 
@@ -1043,15 +1052,18 @@ pub enum Api {
     Tvdb,
     /// `graphql.anilist.co`, the AniList relay.
     Anilist,
+    /// `/plex/*`, a metadata provider Plex Media Server is given by address.
+    Plex,
 }
 
 impl Api {
     /// Every API, in the order the access page lists them: the stand-ins,
-    /// the relays, this server's own. The counts are filed by discriminant
-    /// (`index`), not by this order.
-    pub const ALL: [Api; 6] = [
+    /// the provider Plex asks, the relays, this server's own. The counts are
+    /// filed by discriminant (`index`), not by this order.
+    pub const ALL: [Api; 7] = [
         Api::Sonarr,
         Api::Radarr,
+        Api::Plex,
         Api::Tmdb,
         Api::Tvdb,
         Api::Anilist,
@@ -1067,6 +1079,7 @@ impl Api {
             Api::Native => "api.native",
             Api::Tvdb => "api.tvdb",
             Api::Anilist => "api.anilist",
+            Api::Plex => "api.plex",
         }
     }
 
@@ -1086,6 +1099,7 @@ impl Api {
             Surface::Tvdb => Api::Tvdb,
             Surface::Anilist => Api::Anilist,
             Surface::Native => Api::Native,
+            Surface::Plex => Api::Plex,
         }
     }
 
@@ -1113,6 +1127,8 @@ pub enum Surface {
     Anilist,
     /// `/v1/tvdb/*` and `/v1/movie/*` — Sonarr and Radarr compatibility.
     Arr,
+    /// `/plex/*`, on the interface's door — the metadata provider Plex asks.
+    Plex,
 }
 
 impl Surface {
@@ -1250,6 +1266,12 @@ mod tests {
         assert_eq!(Api::of(Surface::Arr, "/v2/tvdb/search"), Api::Sonarr);
         assert_eq!(Api::of(Surface::Arr, "/v1/scenemapping"), Api::Sonarr);
         assert_eq!(Api::of(Surface::Arr, "/v1/movie/603"), Api::Radarr);
+        // Plex's provider has a surface, and a switch, of its own.
+        assert_eq!(
+            Api::of(Surface::Plex, "/plex/library/metadata/movie-tmdb-603"),
+            Api::Plex
+        );
+        assert_eq!(Api::Plex.setting(), "api.plex");
     }
 
     #[test]
@@ -1281,6 +1303,7 @@ mod tests {
                 tvdb_policy: SurfacePolicy::ApiKey,
                 anilist_policy: SurfacePolicy::Allowlist,
                 arr_policy: SurfacePolicy::Allowlist,
+                plex_policy: SurfacePolicy::Allowlist,
                 allowlist: Vec::new(),
                 allowlist_from_env: false,
                 bootstrap_admin: Some(("admin".into(), "admin-password-value".into())),

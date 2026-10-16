@@ -11,6 +11,11 @@
  * On a wide screen they stand in a rail beside the results; on a phone they
  * are one tap away in a sheet, and what is applied is always shown above the
  * results as chips that take it off again.
+ *
+ * The results are laid out as a grid of posters, to know a work by its cover,
+ * or as a list, to read and compare: `?view=list` in the address, and what the
+ * reader chose last is remembered in this browser for the address that says
+ * nothing.
  */
 
 import { useQuery } from '@tanstack/react-query'
@@ -19,6 +24,7 @@ import { useNavigate, useSearchParams } from 'react-router'
 
 import { PosterCard, PosterGrid } from '../components/media'
 import { Button, Dialog, EmptyState, Glyph, Input, Label, Select, Skeleton } from '../components/ui'
+import { WorkRow } from '../components/WorkRow'
 import { api, query } from '../lib/api'
 import { cn } from '../lib/cn'
 import { drawWork } from '../lib/draw'
@@ -50,6 +56,29 @@ const ORDERS = {
 type OrderKey = keyof typeof ORDERS
 
 const SCORES = [5, 6, 7, 8, 9]
+
+type View = 'grid' | 'list'
+
+/** Where the layout the reader chose last is kept: in this browser, and nowhere else. */
+const VIEW_KEY = 'ams.browse.view'
+
+/** The layout chosen last, or the grid where nothing was or storage cannot be read. */
+function rememberedView(): View {
+  try {
+    return localStorage.getItem(VIEW_KEY) === 'list' ? 'list' : 'grid'
+  } catch {
+    // Private browsing, or storage disabled: the grid is fine.
+    return 'grid'
+  }
+}
+
+function rememberView(view: View) {
+  try {
+    localStorage.setItem(VIEW_KEY, view)
+  } catch {
+    // The choice still applies to this visit.
+  }
+}
 
 /** A number from a URL, made into one that means something. */
 function clamp(value: number, min: number, max: number): number {
@@ -101,6 +130,11 @@ export function Browse() {
   const { t, lang, locale } = useI18n()
   const [params, setParams] = useSearchParams()
   const [sheet, setSheet] = useState(false)
+  // What the address says wins, so a link is the view it was sent as; a bare
+  // address is the one the reader last chose.
+  const [remembered, setRemembered] = useState<View>(rememberedView)
+  const asked = params.get('view')
+  const view: View = asked === 'list' || asked === 'grid' ? asked : remembered
 
   const f = read(params)
   const { sort, order } = ORDERS[f.order]
@@ -173,9 +207,26 @@ export function Browse() {
   const update = (name: string, value: string) => change({ [name]: value })
 
   const clearAll = () => {
-    // The order is how to read the list, not what is in it: it stays.
-    const order = new URLSearchParams(window.location.search).get('order')
-    setParams(order ? { order } : {}, { replace: true })
+    // The order and the view are how to read the list, not what is in it:
+    // they stay.
+    const current = new URLSearchParams(window.location.search)
+    const kept = new URLSearchParams()
+    for (const name of ['order', 'view']) {
+      const value = current.get(name)
+      if (value) kept.set(name, value)
+    }
+    setParams(kept, { replace: true })
+  }
+
+  /** Lay the results out this way: in the address, for a link, and in memory, for the next visit. */
+  const choose = (next: View) => {
+    rememberView(next)
+    setRemembered(next)
+    const address = new URLSearchParams(window.location.search)
+    // The grid is what a bare address means; only the list is worth saying.
+    if (next === 'list') address.set('view', 'list')
+    else address.delete('view')
+    setParams(address, { replace: true })
   }
 
   const applied = activeFilters(f, t, lang, locale)
@@ -256,6 +307,27 @@ export function Browse() {
             </span>
           ) : null}
 
+          {/* How the results are laid out: a grid to know them by their
+              covers, a list to read and compare. */}
+          <div role="group" aria-label={t.browse.view} className="flex rounded-full border border-rule">
+            {(['grid', 'list'] as const).map((value) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => choose(value)}
+                aria-pressed={view === value}
+                aria-label={value === 'grid' ? t.browse.viewGrid : t.browse.viewList}
+                title={value === 'grid' ? t.browse.viewGrid : t.browse.viewList}
+                className={cn(
+                  'grid size-11 cursor-pointer place-items-center rounded-full transition-colors duration-150',
+                  view === value ? 'bg-ink-top text-bone' : 'text-bone-faint hover:text-bone',
+                )}
+              >
+                <Glyph name={value} className="size-4" />
+              </button>
+            ))}
+          </div>
+
           <div className="min-w-0 basis-full sm:basis-auto">
             <label htmlFor="browse-order" className="label mb-1.5 block">
               {t.browse.sort}
@@ -323,15 +395,31 @@ export function Browse() {
               }
             />
           ) : results.isPending ? (
-            <PosterGrid>
-              {Array.from({ length: 12 }, (_, index) => (
-                <div key={index} className="space-y-2.5">
-                  <Skeleton className="aspect-2/3 w-full" />
-                  <Skeleton className="h-4 w-3/4" />
-                  <Skeleton className="h-3 w-10" />
-                </div>
-              ))}
-            </PosterGrid>
+            view === 'list' ? (
+              <ul aria-hidden className="divide-y divide-rule border-y border-rule">
+                {Array.from({ length: 6 }, (_, index) => (
+                  <li key={index} className="grid grid-cols-[4.5rem_minmax(0,1fr)] gap-x-4 px-3 py-4 sm:grid-cols-[5.5rem_minmax(0,1fr)] sm:px-4">
+                    <Skeleton className="aspect-2/3 w-full" />
+                    <div className="space-y-2.5">
+                      <Skeleton className="h-6 w-2/3" />
+                      <Skeleton className="h-3 w-24" />
+                      <Skeleton className="h-4 w-full" />
+                      <Skeleton className="h-4 w-4/5" />
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <PosterGrid>
+                {Array.from({ length: 12 }, (_, index) => (
+                  <div key={index} className="space-y-2.5">
+                    <Skeleton className="aspect-2/3 w-full" />
+                    <Skeleton className="h-4 w-3/4" />
+                    <Skeleton className="h-3 w-10" />
+                  </div>
+                ))}
+              </PosterGrid>
+            )
           ) : items.length === 0 ? (
             <EmptyState
               title={applied.length ? t.browse.noResults : t.home.empty}
@@ -362,11 +450,19 @@ export function Browse() {
             />
           ) : (
             <div className={cn('transition-opacity duration-150', results.isPlaceholderData && 'opacity-60')}>
-              <PosterGrid className="lg:grid-cols-4 xl:grid-cols-5">
-                {items.map((item) => (
-                  <PosterCard key={item.id} item={item} to={`/work/${item.id}`} kind={!f.kind} />
-                ))}
-              </PosterGrid>
+              {view === 'list' ? (
+                <ul className="stagger divide-y divide-rule border-y border-rule">
+                  {items.map((item) => (
+                    <WorkRow key={item.id} item={item} to={`/work/${item.id}`} />
+                  ))}
+                </ul>
+              ) : (
+                <PosterGrid className="lg:grid-cols-4 xl:grid-cols-5">
+                  {items.map((item) => (
+                    <PosterCard key={item.id} item={item} to={`/work/${item.id}`} kind={!f.kind} />
+                  ))}
+                </PosterGrid>
+              )}
 
               {items.length < total ? (
                 <div className="mt-12 flex flex-col items-center gap-2">

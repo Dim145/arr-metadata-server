@@ -105,6 +105,11 @@ pub struct CalendarQuery {
     pub to: String,
     /// Titles in this language, where a translation is held.
     pub language: Option<String>,
+    /// The reader's country, ISO 3166-1 alpha-2: `FR`. A film is listed on
+    /// the days it comes out there, where those are known, and on its own
+    /// dates otherwise. Absent, the country this caller is answered for:
+    /// `tmdb.watchRegion` as set for it, else its language's.
+    pub region: Option<String>,
 }
 
 /// One episode of the window, and which of the listed works it belongs to.
@@ -164,8 +169,11 @@ pub enum CalendarEntry {
 
 #[derive(Serialize, ToSchema)]
 pub struct Calendar {
-    /// The episodes alone, earliest first: the schedule as it was answered
-    /// before it held films, kept for whoever reads it so.
+    /// Deprecated: the episodes alone, earliest first — the schedule as it
+    /// was answered before it held films, which `entries` repeats beside
+    /// them. Kept for whoever reads it so, and to be removed in a later
+    /// version.
+    #[schema(deprecated)]
     pub episodes: Vec<Airing>,
     /// The episodes and the films' releases together, earliest first: an
     /// episode at its moment, a release at midnight UTC on its day, and of
@@ -184,16 +192,18 @@ pub struct Calendar {
 ///
 /// An episode by the moment it airs, in UTC — where no provider knew the
 /// time, midnight UTC on its date, which is what Sonarr is given; a release
-/// by its day, at midnight UTC too, once for each day a film comes out. The
-/// window is the caller's to choose, so a day is the caller's own day
-/// wherever it is. Switched off, or for adults where the reader would not
-/// be shown one, a work is left out of both.
+/// by its day, at midnight UTC too, once for each day a film comes out. A
+/// film's days are the reader's country's where its releases there are
+/// known, its own otherwise, and a day somebody corrected by hand stays as
+/// they put it. The window is the caller's to choose, so a day is the
+/// caller's own day wherever it is. Switched off, or for adults where the
+/// reader would not be shown one, a work is left out of both.
 #[utoipa::path(
     get, path = "/calendar", tag = TAG,
     params(CalendarQuery),
     responses(
         (status = 200, body = Calendar),
-        (status = 400, description = "The window is not two instants, or is longer than 62 days"),
+        (status = 400, description = "The window is not two instants, or is longer than 62 days, or the region is not a country code"),
     ),
 )]
 async fn calendar(
@@ -216,9 +226,34 @@ async fn calendar(
     }
 
     let language = crate::api::extract::language(query.language.as_deref())?;
+    let region = match query
+        .region
+        .as_deref()
+        .map(str::trim)
+        .filter(|r| !r.is_empty())
+    {
+        Some(asked) => Some(country_code(asked).ok_or_else(|| {
+            AppError::BadRequest("region is a country code such as FR or US".into())
+        })?),
+        None => None,
+    };
     Ok(Json(
-        window(&state, &identity, from, to, language.as_deref()).await?,
+        window_in(
+            &state,
+            &identity,
+            from,
+            to,
+            language.as_deref(),
+            region.as_deref(),
+        )
+        .await?,
     ))
+}
+
+/// A country as releases are filed under it: two letters, upper case.
+fn country_code(raw: &str) -> Option<String> {
+    let code = raw.trim().to_ascii_uppercase();
+    (code.len() == 2 && code.bytes().all(|b| b.is_ascii_uppercase())).then_some(code)
 }
 
 /// The schedule of a window, as the calendar answers it and the feeds repeat
@@ -232,18 +267,43 @@ pub(super) async fn window(
     to: chrono::DateTime<chrono::Utc>,
     language: Option<&str>,
 ) -> AppResult<Calendar> {
+    window_in(state, identity, from, to, language, None).await
+}
+
+/// [`window`], for a reader in `region` — the country the caller is
+/// answered for when it is `None`.
+pub(super) async fn window_in(
+    state: &AppState,
+    identity: &Identity,
+    from: chrono::DateTime<chrono::Utc>,
+    to: chrono::DateTime<chrono::Utc>,
+    language: Option<&str>,
+    region: Option<&str>,
+) -> AppResult<Calendar> {
     let stamp = |t: chrono::DateTime<chrono::Utc>| t.format("%Y-%m-%dT%H:%M:%SZ").to_string();
     let adult = state.adult_for(identity.client_id(), identity.peer_id(), None);
+    let region = region
+        .map(str::to_string)
+        .or_else(|| state.watch_region(identity.client_id(), identity.peer_id()));
     let (airing, episodes_cut) =
         repo::item::airing(&state.db, &stamp(from), &stamp(to), adult).await?;
     let (films, releases_cut) =
         repo::item::releasing(&state.db, &stamp(from), &stamp(to), adult).await?;
+    // And the films coming out in the reader's country in the window,
+    // whatever their own dates say.
+    let local = match region.as_deref() {
+        Some(country) => {
+            repo::release::releasing_in(&state.db, country, &stamp(from), &stamp(to), adult).await?
+        }
+        None => Vec::new(),
+    };
 
     let ids: Vec<String> = {
         let mut ids: Vec<String> = airing
             .iter()
             .map(|a| a.media_id.clone())
             .chain(films)
+            .chain(local)
             .collect();
         ids.sort();
         ids.dedup();
@@ -267,6 +327,20 @@ pub(super) async fn window(
     }
 
     service::apply_overrides(state, &mut works).await?;
+    // A film's days as its reader's country has them, the corrections laid
+    // over first: one somebody fixed stays where they put it.
+    if let Some(country) = region.as_deref() {
+        let films: Vec<String> = works
+            .iter()
+            .filter(|w| w.kind == MediaKind::Movie)
+            .map(|w| w.id.clone())
+            .collect();
+        let mut held = repo::release::load_many(&state.db, &films).await?;
+        for work in works.iter_mut().filter(|w| w.kind == MediaKind::Movie) {
+            work.releases = held.remove(&work.id).unwrap_or_default();
+            in_country(work, country);
+        }
+    }
     // Before the language: the stored translations the overlay reads come
     // with the artwork, and without them every series kept its own title.
     // The window's works at once: one query a series was up to a thousand.
@@ -426,6 +500,34 @@ pub(super) fn releases_of(work: &MediaItem) -> Vec<Release> {
             release_types,
         })
         .collect()
+}
+
+/// A film's days as a reader in `country` has them: its first in cinemas,
+/// digitally and on disc there, wherever its releases there give one and
+/// nobody fixed that date by hand; its own dates otherwise.
+pub(super) fn in_country(work: &mut MediaItem, country: &str) {
+    let days = work.days_in(country);
+    let free = |work: &MediaItem, field: &str| {
+        !work
+            .locked_fields
+            .iter()
+            .any(|locked| locked.strip_prefix("item/") == Some(field))
+    };
+    if let Some(day) = days.cinema
+        && free(work, "inCinemas")
+    {
+        work.in_cinemas = Some(day);
+    }
+    if let Some(day) = days.digital
+        && free(work, "digitalRelease")
+    {
+        work.digital_release = Some(day);
+    }
+    if let Some(day) = days.physical
+        && free(work, "physicalRelease")
+    {
+        work.physical_release = Some(day);
+    }
 }
 
 /// When a release is, as the calendar compares it: midnight UTC on its day.
@@ -1001,5 +1103,78 @@ mod tests {
                 assert!(locked.is_empty(), "{locked:?}");
             }
         }
+    }
+
+    #[tokio::test]
+    async fn a_film_is_listed_on_its_day_in_the_reader_s_country() {
+        use crate::domain::{CountryRelease, ReleaseKind};
+
+        let state = super::super::testing::server().await;
+        let at = |text: &str| {
+            chrono::DateTime::parse_from_rfc3339(text)
+                .unwrap()
+                .with_timezone(&chrono::Utc)
+        };
+        let release = |country: &str, kind: ReleaseKind, day: &str| CountryRelease {
+            country: country.into(),
+            release_type: Some(kind),
+            date: Some(day.into()),
+            certification: None,
+            note: None,
+            source: Some("tmdb".into()),
+        };
+        // Arrival, as TMDB has it: in American cinemas on 11 November, in
+        // French ones on 7 December after a festival, on French VOD in April.
+        let arrival = stored(&state, MediaKind::Movie, "Arrival", |w| {
+            w.in_cinemas = Some("2016-11-11".into());
+            w.digital_release = Some("2017-01-31".into());
+            w.releases = vec![
+                release("US", ReleaseKind::Theatrical, "2016-11-11"),
+                release("FR", ReleaseKind::Premiere, "2016-11-05"),
+                release("FR", ReleaseKind::Theatrical, "2016-12-07"),
+                release("FR", ReleaseKind::Digital, "2017-04-07"),
+            ];
+        })
+        .await;
+        let december = (at("2016-12-05T00:00:00Z"), at("2016-12-12T00:00:00Z"));
+        type Window = (chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>);
+        let listed = async |(from, to): Window, region: &str| {
+            lines(
+                &window_in(&state, &Identity::Visitor, from, to, None, Some(region))
+                    .await
+                    .expect("listed"),
+            )
+        };
+
+        // In France, on the French day; in America, and in a country it has
+        // no day in, on its own: not that week.
+        assert_eq!(
+            listed(december, "FR").await,
+            [format!("{} release 2016-12-07 cinema", arrival.id)]
+        );
+        assert!(listed(december, "US").await.is_empty());
+        assert!(listed(december, "DE").await.is_empty());
+        // Found by its French day alone, its own being January's.
+        let april = (at("2017-04-03T00:00:00Z"), at("2017-04-10T00:00:00Z"));
+        assert_eq!(
+            listed(april, "FR").await,
+            [format!("{} release 2017-04-07 digital", arrival.id)]
+        );
+
+        // A day somebody fixed by hand stays where they put it.
+        repo::override_field::set(
+            &state.db,
+            &arrival.id,
+            crate::domain::fields::Scope::Item,
+            "inCinemas",
+            Some(&serde_json::json!("2016-12-09")),
+            None,
+        )
+        .await
+        .expect("corrected");
+        assert_eq!(
+            listed(december, "FR").await,
+            [format!("{} release 2016-12-09 cinema", arrival.id)]
+        );
     }
 }

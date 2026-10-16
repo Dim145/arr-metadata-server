@@ -78,7 +78,9 @@ pub async fn load(state: &AppState, id: &str) -> Result<Option<MediaItem>> {
     }
 
     let overrides = repo::override_field::list(&state.db, id).await?;
-    fields::apply(&mut item, &overrides)?;
+    // As served in the language it is stored in, a text locked there laid
+    // over it: what a client asking in no other language is given.
+    fields::apply_in(&mut item, &overrides, &language::stored(state))?;
 
     // After the locks: a still put on an episode by hand is a provider's
     // address too, and may be kept.
@@ -135,6 +137,7 @@ pub fn as_card(work: &mut MediaItem) {
     work.translations.clear();
     work.keywords.clear();
     work.relations.clear();
+    work.releases.clear();
 
     let mut kept = Vec::with_capacity(4);
     for kind in [
@@ -207,6 +210,9 @@ pub fn redact_for_reader(identity: &crate::auth::Identity, items: &mut [MediaIte
         item.refresh_error = None;
         item.refresh_after = None;
         item.locked_fields.clear();
+        // The texts locked, laid over the work by now, and what was hidden.
+        item.locked_texts.clear();
+        item.hidden = Default::default();
     }
 }
 
@@ -273,10 +279,11 @@ pub async fn apply_overrides(state: &AppState, items: &mut [MediaItem]) -> Resul
 
     let ids: Vec<String> = items.iter().map(|i| i.id.clone()).collect();
     let by_item = repo::override_field::list_for_many(&state.db, &ids).await?;
+    let stored = language::stored(state);
 
     for item in items.iter_mut() {
         if let Some(overrides) = by_item.get(&item.id) {
-            fields::apply(item, overrides)?;
+            fields::apply_in(item, overrides, &stored)?;
         }
     }
 
@@ -442,6 +449,7 @@ fn keep_what_nobody_answered(item: &mut MediaItem, stored: MediaItem) {
     keep(&mut item.ratings, stored.ratings);
     keep(&mut item.translations, stored.translations);
     keep(&mut item.relations, stored.relations);
+    keep(&mut item.releases, stored.releases);
 }
 
 /// Carry over what TheTVDB adds to the series' name when neither TheTVDB nor
@@ -487,6 +495,8 @@ pub async fn persist(
     let returned = crate::merge::provenance::Returned::of(&item);
     // Whether a work held here was refreshing without fault before this.
     let mut was_well = false;
+    // The episodes TheTVDB moved since the copy held: said once written.
+    let mut moved = Vec::new();
 
     if let Some(existing_id) = find_existing(state, &item).await?
         && let Some(mut existing) = repo::item::get(&state.db, &existing_id).await?
@@ -499,6 +509,7 @@ pub async fn persist(
 
         repo::item::load_children(&state.db, &mut existing).await?;
         keep_title_qualifier(&mut item, &existing, snapshots);
+        moved = crate::arr::renumber::moves(&existing.episodes, &item.episodes);
         keep_what_nobody_answered(&mut item, existing);
 
         // What is locked of its identity is written as locked, not as a
@@ -547,6 +558,8 @@ pub async fn persist(
     )
     .await?;
 
+    crate::arr::renumber::tell(state, &item, &moved).await;
+
     // Refreshed in part, where its refreshes had been going well: told once.
     if was_well && let Some(error) = &item.refresh_error {
         webhook::refresh_failed(state, &item.id, Some(&item), error);
@@ -591,6 +604,7 @@ pub async fn persist_sync(
     keep_title_qualifier(&mut item, stored, snapshots);
     keep_what_nobody_answered(&mut item, stored.clone());
     crate::merge::drop_own_title(&mut item);
+    let moved = crate::arr::renumber::moves(&stored.episodes, &item.episodes);
 
     item.refreshed_at.clone_from(&stored.refreshed_at);
     item.refresh_after.clone_from(&stored.refresh_after);
@@ -610,9 +624,12 @@ pub async fn persist_sync(
     .await?;
 
     match written {
-        repo::item::Conditional::Written => after_write(state, &item.id, snapshots)
-            .await
-            .map(|item| SyncWrite::Written(Box::new(item))),
+        repo::item::Conditional::Written => {
+            crate::arr::renumber::tell(state, &item, &moved).await;
+            after_write(state, &item.id, snapshots)
+                .await
+                .map(|item| SyncWrite::Written(Box::new(item)))
+        }
         repo::item::Conditional::Changed => Ok(SyncWrite::Changed),
         repo::item::Conditional::Gone => Ok(SyncWrite::Gone),
     }
@@ -668,15 +685,10 @@ async fn after_write(
 ///
 /// A running series changes weekly; an ended one effectively never does. Using
 /// one interval for both either hammers providers or serves stale episodes.
-/// A series near an air date comes back sooner: see [`near_air`].
+/// A series near an air date comes back sooner: see [`near_air`]. The two
+/// intervals are settings, read here, each time a work is scheduled.
 fn next_refresh(state: &AppState, item: &MediaItem) -> String {
-    let cfg = &state.config.refresh;
-
-    let ttl = if has_finished(item) {
-        cfg.ended_ttl
-    } else {
-        cfg.continuing_ttl
-    };
+    let ttl = state.refresh_ttl(has_finished(item));
 
     to_rfc3339(refresh_at(item, ttl, Utc::now()))
 }
@@ -685,12 +697,7 @@ fn next_refresh(state: &AppState, item: &MediaItem) -> String {
 /// again: when a failed refresh would be, and never later than a complete one
 /// would have been.
 fn next_refresh_in_part(state: &AppState, item: &MediaItem) -> String {
-    let cfg = &state.config.refresh;
-    let ttl = if has_finished(item) {
-        cfg.ended_ttl
-    } else {
-        cfg.continuing_ttl
-    };
+    let ttl = state.refresh_ttl(has_finished(item));
     let now = Utc::now();
 
     to_rfc3339(retry_at(Some(item), now).min(refresh_at(item, ttl, now)))

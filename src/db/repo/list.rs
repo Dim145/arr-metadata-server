@@ -120,6 +120,11 @@ pub struct CuratedList {
     /// Whether a reader with no credential may see it, where public browsing
     /// is on at all.
     pub is_public: bool,
+    /// The picture the selection is shown with, by the address it goes by —
+    /// a provider's, or an upload's `upload:` origin. The store holds it so;
+    /// what a reader is given is the copy kept, where there is one, which is
+    /// the API's to put in its place.
+    pub cover: Option<String>,
     /// How many works a hand-made list holds, of those switched on; a
     /// filter's are counted as they are read, and this is nought.
     pub item_count: i64,
@@ -136,10 +141,11 @@ pub struct ListFields<'a> {
     pub mode: ListMode,
     pub filter: Option<&'a ListFilter>,
     pub is_public: bool,
+    pub cover: Option<&'a str>,
 }
 
 const COLUMNS: &str = "l.id, l.slug, l.name, l.description, l.kind, l.mode, l.filter_json,
-                       l.is_public, l.created_at, l.updated_at,
+                       l.is_public, l.cover, l.created_at, l.updated_at,
                        CASE WHEN l.mode = 'manual'
                             THEN (SELECT COUNT(*) FROM curated_list_item i
                                     JOIN media_item m ON m.id = i.media_id AND m.is_enabled = 1
@@ -160,8 +166,8 @@ pub async fn create(
 
     sqlx::query(db.sql(
         "INSERT INTO curated_list
-             (id, slug, name, description, kind, mode, filter_json, is_public, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             (id, slug, name, description, kind, mode, filter_json, is_public, cover, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     ))
     .bind(&id)
     .bind(fields.slug)
@@ -171,6 +177,7 @@ pub async fn create(
     .bind(fields.mode.as_str())
     .bind(&filter_json)
     .bind(from_bool(fields.is_public))
+    .bind(fields.cover)
     .bind(&at)
     .bind(&at)
     .execute(&mut *tx)
@@ -202,7 +209,7 @@ pub async fn update(
     let result = sqlx::query(db.sql(
         "UPDATE curated_list
             SET slug = ?, name = ?, description = ?, kind = ?, mode = ?, filter_json = ?,
-                is_public = ?, updated_at = ?
+                is_public = ?, cover = ?, updated_at = ?
           WHERE id = ?",
     ))
     .bind(fields.slug)
@@ -212,6 +219,7 @@ pub async fn update(
     .bind(fields.mode.as_str())
     .bind(&filter_json)
     .bind(from_bool(fields.is_public))
+    .bind(fields.cover)
     .bind(now())
     .bind(id)
     .execute(&mut *tx)
@@ -293,6 +301,20 @@ pub async fn member_ids(db: &Db, list_id: &str) -> Result<Vec<String>> {
     rows.iter().map(|row| Ok(row.text("media_id")?)).collect()
 }
 
+/// The members of a hand-made list, in its order, each with the moment it
+/// joined: what a feed of the selection is dated by.
+pub async fn members_joined(db: &Db, list_id: &str) -> Result<Vec<(String, String)>> {
+    let rows = sqlx::query(db.sql(
+        "SELECT media_id, added_at FROM curated_list_item WHERE list_id = ? ORDER BY position, added_at",
+    ))
+    .bind(list_id)
+    .fetch_all(db.pool())
+    .await?;
+    rows.iter()
+        .map(|row| Ok((row.text("media_id")?, row.text("added_at")?)))
+        .collect()
+}
+
 /// Replace the members of a list with these, in this order. A work named
 /// twice is kept once, where it first appears.
 pub async fn set_members(db: &Db, list_id: &str, media_ids: &[String]) -> Result<()> {
@@ -304,6 +326,11 @@ pub async fn set_members(db: &Db, list_id: &str, media_ids: &[String]) -> Result
 }
 
 /// [`set_members`], inside the transaction that writes the list.
+///
+/// A work that was a member already keeps the moment it joined: the whole
+/// membership is written afresh on every save, and dating each work by the
+/// save would tell the selection's feed that everything in it had just
+/// arrived, each time somebody moved one work.
 async fn write_members(
     db: &Db,
     tx: &mut sqlx::Transaction<'_, sqlx::Any>,
@@ -311,6 +338,15 @@ async fn write_members(
     media_ids: &[String],
 ) -> Result<()> {
     let at = now();
+
+    let joined: std::collections::HashMap<String, String> =
+        sqlx::query(db.sql("SELECT media_id, added_at FROM curated_list_item WHERE list_id = ?"))
+            .bind(list_id)
+            .fetch_all(&mut **tx)
+            .await?
+            .iter()
+            .map(|row| Ok((row.text("media_id")?, row.text("added_at")?)))
+            .collect::<Result<_>>()?;
 
     sqlx::query(db.sql("DELETE FROM curated_list_item WHERE list_id = ?"))
         .bind(list_id)
@@ -330,7 +366,7 @@ async fn write_members(
         .bind(list_id)
         .bind(media_id)
         .bind(position)
-        .bind(&at)
+        .bind(joined.get(media_id).unwrap_or(&at))
         .execute(&mut **tx)
         .await?;
         position += 1;
@@ -424,6 +460,10 @@ fn map(row: &sqlx::any::AnyRow) -> Result<CuratedList> {
         mode: ListMode::parse(&row.text("mode")?),
         filter,
         is_public: row.flag("is_public")?,
+        cover: row
+            .opt_text("cover")?
+            .map(|cover| cover.trim().to_string())
+            .filter(|cover| !cover.is_empty()),
         item_count: row.big("item_count")?,
         created_at: row.text("created_at")?,
         updated_at: row.text("updated_at")?,

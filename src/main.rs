@@ -1,4 +1,5 @@
 mod api;
+mod arr;
 mod auth;
 mod cache;
 mod config;

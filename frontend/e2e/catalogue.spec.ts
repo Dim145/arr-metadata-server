@@ -422,15 +422,16 @@ test.describe('a work', () => {
 /**
  * Where the header's secondary controls are.
  *
- * On a phone the language toggle and the way in live in the menu — together
- * with the logo, search and menu buttons they were wider than the screen, and
- * at 320px the menu button itself was pushed off the edge. Opening the menu
- * first, when there is one, is what a person on a phone does.
+ * On a phone the language toggle and the way in live in the sheet the bar along
+ * the foot of the screen opens — together with the logo, search and a menu
+ * button at the top they were wider than the screen, and at 320px the menu
+ * button itself was pushed off the edge. Opening the sheet first, when there
+ * is one, is what a person on a phone does.
  */
 async function openMenuIfNarrow(page: Page) {
-  const menu = page.getByRole('button', { name: /^(menu)$/i })
-  if (await menu.isVisible()) {
-    await menu.click()
+  const more = page.getByRole('button', { name: /^(more|plus)$/i })
+  if (await more.isVisible()) {
+    await more.click()
   }
 }
 
@@ -531,21 +532,22 @@ test.describe('an address with nothing behind it', () => {
 })
 
 test.describe('the bar on the narrowest phone', () => {
+  test.skip(({ isMobile }) => !isMobile, 'the bar along the foot is a phone’s')
   test.use({ viewport: { width: 320, height: 640 } })
 
-  test('keeps the menu button on the screen, and the menu opens', async ({ page }) => {
+  test('keeps the last place of the bar on the screen, and the sheet opens', async ({ page }) => {
     await page.goto('/')
 
-    const menu = page.getByRole('button', { name: /^(menu)$/i })
-    const box = await menu.boundingBox()
+    const more = page.getByRole('button', { name: /^(more|plus)$/i })
+    const box = await more.boundingBox()
 
     // Clipped past the edge, it could not be pressed and the navigation behind
     // it could not be reached at all.
     expect(box).not.toBeNull()
     expect(box!.x + box!.width).toBeLessThanOrEqual(320)
 
-    await menu.click()
-    await expect(page.getByRole('link', { name: /^(series|séries)$/i }).last()).toBeVisible()
+    await more.click()
+    await expect(page.getByRole('dialog', { name: /^(more|plus)$/i }).getByRole('link', { name: /^collections$/i })).toBeVisible()
   })
 })
 
@@ -557,8 +559,8 @@ test.describe('the bar on a tablet', () => {
       await page.setViewportSize({ width, height: 1024 })
       await page.goto('/')
 
-      for (const name of [/^(sign in|se connecter|admin|administration)$/i, /^(search|rechercher)/i, /^(menu)$/i]) {
-        const control = page.getByRole(/menu/.test(name.source) ? 'button' : 'link', { name }).first()
+      for (const name of [/^(sign in|se connecter|admin|administration)$/i, /^(search|rechercher)/i]) {
+        const control = page.getByRole(/search/.test(name.source) ? 'button' : 'link', { name }).first()
         if (!(await control.count())) continue
         if (!(await control.isVisible())) continue
         const box = (await control.boundingBox())!
@@ -579,7 +581,7 @@ test.describe('reaching the interface', () => {
   })
 
   test('marks the section you are in', async ({ page, isMobile }) => {
-    test.skip(isMobile, 'the tabs are behind the menu at this width')
+    test.skip(isMobile, 'the tabs are along the foot of the screen at this width')
 
     await page.goto('/browse?kind=series')
     await catalogueLoaded(page)
@@ -594,7 +596,7 @@ test.describe('reaching the interface', () => {
   })
 
   test('marks one section at a time, not every tab sharing a path', async ({ page, isMobile }) => {
-    test.skip(isMobile, 'the tabs are behind the menu at this width')
+    test.skip(isMobile, 'the tabs are along the foot of the screen at this width')
 
     // The catalogue's tab is current on the catalogue whatever it is narrowed
     // to, and on nothing else; the schedule's is current on the schedule.
@@ -607,10 +609,12 @@ test.describe('reaching the interface', () => {
       await page.goto(path)
       await catalogueLoaded(page)
 
+      // What is drawn: the bar along the foot of a phone is in the page at
+      // every width, with `display: none` above a phone's.
       const current = await page.evaluate(() =>
-        [...document.querySelectorAll('nav a[aria-current="page"]')].map((a) =>
-          (a.textContent ?? '').trim(),
-        ),
+        [...document.querySelectorAll('nav a[aria-current="page"]')]
+          .filter((a) => a.getClientRects().length > 0)
+          .map((a) => (a.textContent ?? '').trim()),
       )
 
       expect(current, `${path} should mark exactly one tab`).toEqual([expected])
@@ -632,5 +636,170 @@ test.describe('reaching the interface', () => {
     // that is the network's problem, not the interface's.
     const ours = errors.filter((text) => !/Failed to load resource|ERR_/.test(text))
     expect(ours).toEqual([])
+  })
+})
+
+/**
+ * The administration's register of everything held: what records lack, as
+ * filters kept in the address and as four marks on each row, a row's actions
+ * behind one button, and an entry typed in by hand with every field the
+ * server takes. What is made here is made by hand, one per project, and
+ * removed at the end.
+ */
+test.describe('the register', () => {
+  const USERNAME = process.env.AMS_E2E_USER
+  const PASSWORD = process.env.AMS_E2E_PASSWORD
+  test.skip(!USERNAME || !PASSWORD, 'needs AMS_E2E_USER and AMS_E2E_PASSWORD')
+
+  async function signIn(page: Page) {
+    await page.goto('/login')
+    await page.getByLabel(/username|identifiant/i).fill(USERNAME!)
+    await page.getByLabel(/password|mot de passe/i).fill(PASSWORD!)
+    await page.getByRole('button', { name: /sign in|se connecter/i }).click()
+    await page.waitForURL('**/admin')
+  }
+
+  test('narrows to what records lack, and keeps it in the address', async ({ page }) => {
+    await signIn(page)
+    const asked = page.waitForRequest((r) => r.url().includes('/api/v1/items?') && r.url().includes('missing=poster'))
+    await page.goto('/admin/catalogue?missing=poster')
+    await asked
+
+    const gaps = page.getByRole('group', { name: /what is missing|ce qui manque/i })
+    const poster = gaps.getByRole('button', { name: /no poster|sans affiche/i })
+    const overview = gaps.getByRole('button', { name: /no overview|sans synopsis/i })
+    await expect(poster).toHaveAttribute('aria-pressed', 'true')
+    await expect(overview).toHaveAttribute('aria-pressed', 'false')
+
+    // Pressed together they narrow together, and the address says so.
+    await overview.click()
+    await expect(page).toHaveURL(/missing=poster(%2C|,)overview/)
+    await page.reload()
+    await expect(overview).toHaveAttribute('aria-pressed', 'true')
+    await poster.click()
+    await overview.click()
+    await expect(page).not.toHaveURL(/missing=/)
+
+    // The server's filter is what the marks say: no IMDb id among those it lists.
+    const lacking = await page.request.get('/api/v1/items?missing=imdb&includeDisabled=true&limit=20')
+    expect(lacking.ok()).toBe(true)
+    const { items } = (await lacking.json()) as { items: { externalIds: { imdb?: string } }[] }
+    expect(items.every((item) => !item.externalIds.imdb)).toBe(true)
+    // A gap it does not know is refused, not passed over.
+    expect((await page.request.get('/api/v1/items?missing=trailer')).status()).toBe(400)
+  })
+
+  test('a row says what its record lacks, and keeps its actions behind one button', async ({ page }, info) => {
+    await signIn(page)
+    const title = `Registre e2e ${info.project.name} ${Date.now()}`
+    const created = await page.request.post('/api/v1/items', {
+      data: { kind: 'movie', title, overview: 'Un film que personne n’a tourné.' },
+    })
+    expect(created.status()).toBe(201)
+    const { id } = (await created.json()) as { id: string }
+
+    try {
+      await page.goto('/admin/catalogue')
+      await page.getByLabel(/search titles|chercher un titre/i).fill(title)
+      const row = page.locator(`tr[data-work="${id}"]`)
+      await expect(row).toBeVisible()
+
+      // Four marks, each said in words: no poster, an overview, no IMDb id,
+      // and nothing to refresh a work entered by hand from.
+      const marks = row.getByRole('list', { name: /^(completeness|complétude)$/i }).filter({ visible: true })
+      await expect(marks.getByRole('img', { name: /^(no poster|sans affiche)$/i })).toBeVisible()
+      await expect(marks.getByRole('img', { name: /^(has an overview|a un synopsis)$/i })).toBeVisible()
+      await expect(marks.getByRole('img', { name: /^(no imdb id|sans identifiant imdb)$/i })).toBeVisible()
+      await expect(marks.getByRole('img', { name: /entered by hand|saisie à la main/i })).toBeVisible()
+
+      // Behind one button: a popover of buttons and links, not a menu.
+      const more = row.getByRole('button', { name: pattern(`^(actions for|actions pour) ${escaped(title)}$`, 'i') })
+      await more.click()
+      const panel = page.locator(`#row-actions-${id}`)
+      await expect(panel).toBeVisible()
+      await expect(more).toHaveAttribute('aria-expanded', 'true')
+      await expect(page.getByRole('menu')).toHaveCount(0)
+      // A work entered by hand has nothing to be refreshed from, and says so.
+      await expect(panel.getByRole('button', { name: /^(refresh|rafraîchir)$/i })).toBeDisabled()
+
+      // Escape shuts it, with the focus back on its button.
+      await page.keyboard.press('Escape')
+      await expect(panel).toBeHidden()
+      await expect(more).toBeFocused()
+
+      await more.click()
+      await panel.getByRole('link', { name: /open the public page|ouvrir la page publique/i }).click()
+      await expect(page).toHaveURL(pattern(`/work/${id}$`))
+    } finally {
+      await page.request.delete(`/api/v1/items/${id}`)
+    }
+  })
+
+  test('an entry by hand takes every field the server does, and says what is wrong before sending', async ({
+    page,
+  }, info) => {
+    await signIn(page)
+    // Refused by the server too: a series has no release in cinemas.
+    expect(
+      (await page.request.post('/api/v1/items', { data: { kind: 'series', title: 'x', status: 'released' } })).status(),
+    ).toBe(400)
+
+    await page.goto('/admin/catalogue')
+    await page.getByRole('button', { name: /^(new entry|nouvelle fiche)$/i }).click()
+    const title = `Saisie e2e ${info.project.name} ${Date.now()}`
+    const imdb = `tt${String(Date.now()).slice(-8)}`
+    await page.locator('#compose-title').fill(title)
+    await page.locator('#compose-year').fill('99')
+    await page.locator('#compose-imdb').fill('nm0000001')
+
+    let posted = false
+    page.on('request', (request) => {
+      if (request.method() === 'POST' && request.url().endsWith('/api/v1/items')) posted = true
+    })
+    const submit = page.getByRole('button', { name: /^(create the entry|créer la fiche)$/i })
+    await submit.click()
+    // Said beside each field, the first one focused, and nothing sent.
+    await expect(page.locator('#compose-year')).toBeFocused()
+    await expect(page.locator('#compose-year')).toHaveAttribute('aria-invalid', 'true')
+    await expect(page.locator('#compose-imdb')).toHaveAttribute('aria-invalid', 'true')
+    expect(posted).toBe(false)
+
+    await page.locator('#compose-year').fill('2034')
+    await page.locator('#compose-imdb').fill(imdb)
+    await page.locator('#compose-status').selectOption('ended')
+    await page.locator('#compose-runtime').fill('48')
+    await page.locator('#compose-released').fill('2034-03-02')
+    await page.locator('#compose-network').fill('Arte')
+    await page.locator('#compose-studio').fill('Atelier e2e')
+    await page.locator('#compose-overview').fill('Une restauratrice de films muets.')
+    await page.locator('#compose-genres').fill('Drame, drame, Mystère')
+    const answered = page.waitForResponse((r) => r.request().method() === 'POST' && r.url().endsWith('/api/v1/items'))
+    await submit.click()
+    const response = await answered
+    expect(response.status()).toBe(201)
+    const work = (await response.json()) as {
+      id: string
+      genres: string[]
+      externalIds: { imdb?: string }
+    }
+
+    try {
+      expect(work).toMatchObject({
+        kind: 'series',
+        title,
+        year: 2034,
+        status: 'ended',
+        runtime: 48,
+        firstAired: '2034-03-02',
+        network: 'Arte',
+        studio: 'Atelier e2e',
+        overview: 'Une restauratrice de films muets.',
+      })
+      // A genre typed twice is kept once.
+      expect(work.genres).toEqual(['Drame', 'Mystère'])
+      expect(work.externalIds.imdb).toBe(imdb)
+    } finally {
+      await page.request.delete(`/api/v1/items/${work.id}`)
+    }
   })
 })

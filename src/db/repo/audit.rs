@@ -45,6 +45,7 @@ actions! {
     ItemUpdated => "item.updated",
     ItemRefreshed => "item.refreshed",
     ItemSynced => "item.synced",
+    ItemRenumbered => "item.renumbered",
     MediaUploaded => "media.uploaded",
     MediaRemoved => "media.removed",
     CertificateRenewed => "tls.renewed",
@@ -78,6 +79,9 @@ actions! {
     NetworkRuleAdded => "network.rule_added",
     NetworkRuleRemoved => "network.rule_removed",
     SettingChanged => "setting.changed",
+    NotificationCreated => "notification.created",
+    NotificationUpdated => "notification.updated",
+    NotificationDeleted => "notification.deleted",
     SignedIn => "auth.signed_in",
     SignInFailed => "auth.sign_in_failed",
     SignedOut => "auth.signed_out",
@@ -260,19 +264,7 @@ pub async fn prune(db: &Db, cutoff: &str) -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config;
-
-    async fn db() -> Db {
-        let db = Db::connect(&config::Database {
-            url: "sqlite::memory:".into(),
-            max_connections: 1,
-            acquire_timeout: std::time::Duration::from_secs(5),
-        })
-        .await
-        .expect("in-memory database");
-        db.migrate().await.expect("migrations");
-        db
-    }
+    use crate::db::testing::db;
 
     #[tokio::test]
     async fn the_total_is_what_the_filters_match_and_the_pages_walk_it() {

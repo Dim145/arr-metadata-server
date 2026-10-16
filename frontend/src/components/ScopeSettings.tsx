@@ -73,6 +73,11 @@ export const GROUPS = [
   // Kept in a panel of their own on the Settings page: the events are
   // ticked rather than typed, and the address can be tested.
   { id: 'webhooks', prefixes: ['webhooks'] },
+  // Kept on the Sources page, where the columns are put in order.
+  { id: 'order', prefixes: ['sources'] },
+  // Kept on the Sonarr & Radarr page, where an address is tested before it
+  // is kept and a key goes one way.
+  { id: 'arr', prefixes: ['arr'] },
 ] as const
 
 export type GroupId = (typeof GROUPS)[number]['id'] | 'other'
@@ -113,10 +118,84 @@ function useValues({ scope, id }: Scope) {
   })
 }
 
+/** What the server scope holds, as the rows read it — one query, shared with the page that searches them. */
+export function useServerValues() {
+  return useValues(SERVER)
+}
+
+/**
+ * Lower-cased and stripped of its accents, so that a search finds what it
+ * means — and the ligatures, which no accent can be taken from: "oeuvres" is
+ * the "œuvres" it was typed for.
+ */
+function folded(text: string): string {
+  return text
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '')
+    .toLocaleLowerCase()
+    .replace(/œ/g, 'oe')
+    .replace(/æ/g, 'ae')
+}
+
+/**
+ * Whether a setting answers to what was typed: each word of it is found in the
+ * key, the title, the sentence that explains it or the name of the group it
+ * stands under. Nothing typed, everything answers.
+ */
+export function settingMatches(def: SettingDef, t: Dict, term: string): boolean {
+  const words = folded(term).split(/\s+/).filter(Boolean)
+  if (!words.length) return true
+
+  const { names, hints } = named(t)
+  const haystack = folded(
+    [def.key, names[def.key], hints[def.key], t.settings.groups[groupOf(def.key)]].filter(Boolean).join(' '),
+  )
+  return words.every((word) => haystack.includes(word))
+}
+
+/**
+ * Whether a server setting is other than it began.
+ *
+ * Measured against the value the server says it began with — what the
+ * environment or the code gave it when the server started. One that begins
+ * unset is changed once it is set. A secret has nothing to be measured by:
+ * what it holds is never read back.
+ */
+export function isChanged(def: SettingDef, state: EffectiveSetting | undefined): boolean {
+  if (!state || def.kind.type === 'secret') return false
+  return state.default !== undefined ? state.value !== state.default : state.overridden
+}
+
+/**
+ * A value as a person reads it: a switch as on or off, a choice by its words,
+ * nothing as "not set".
+ */
+function shownValue(def: SettingDef, value: string | undefined, t: Dict): string {
+  if (value === undefined || value === '') return t.common.notSet
+  if (def.kind.type === 'bool') {
+    return (value === 'true' ? t.admin.config.enabled : t.admin.config.disabled).toLocaleLowerCase()
+  }
+  if (def.kind.type === 'choice') return named(t).choices[`${def.key}.${value}`] ?? value
+  return value
+}
+
 /* ── The server's own ─────────────────────────────────────────────────────── */
 
-/** Everything settable server-wide, one panel per group. */
-export function ServerSettings({ delay = 0 }: { delay?: number }) {
+/**
+ * Everything settable server-wide, one panel per group — or, under a search,
+ * only the settings that answer to it, and only the groups that still have one.
+ */
+export function ServerSettings({
+  delay = 0,
+  filter = '',
+  changedOnly = false,
+}: {
+  delay?: number
+  /** What was typed to find a setting by. */
+  filter?: string
+  /** Only those other than they began. */
+  changedOnly?: boolean
+}) {
   const { t } = useI18n()
 
   const registry = useRegistry()
@@ -141,7 +220,12 @@ export function ServerSettings({ delay = 0 }: { delay?: number }) {
   return (
     <div className="space-y-6">
       {groups.map((group, index) => {
-        const defs = here.filter((def) => groupOf(def.key) === group)
+        const defs = here.filter(
+          (def) =>
+            groupOf(def.key) === group &&
+            settingMatches(def, t, filter) &&
+            (!changedOnly || isChanged(def, values.data.find((value) => value.key === def.key))),
+        )
         if (!defs.length) return null
 
         const title = t.settings.groups[group]
@@ -166,7 +250,7 @@ export function ServerSettings({ delay = 0 }: { delay?: number }) {
                 </li>
               ))}
             </ul>
-            {group === 'sources' ? <SourcesAtWork values={values.data} /> : null}
+            {group === 'sources' && !filter && !changedOnly ? <SourcesAtWork values={values.data} /> : null}
           </Panel>
         )
       })}
@@ -444,6 +528,9 @@ function SettingRow({
   const id = `setting-${at.scope}-${def.key.replace(/\W/g, '-')}`
   const name = names[def.key]
   const hint = hints[def.key]
+  // Said of the server's own only: a key's or an address's is told by whether
+  // it sets the setting here or inherits it.
+  const changed = !inheritable && isChanged(def, state)
 
   // The server answers `{key} {why}`; the key is already the title of this row.
   const message = save.error instanceof ApiError ? save.error.message : save.error?.message
@@ -456,7 +543,7 @@ function SettingRow({
           meets "inherited" before the value it describes has to go back. */}
       <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-3">
         <div className="min-w-40 flex-1">
-          <label htmlFor={id} className="block text-sm font-medium text-bone">
+          <label htmlFor={id} id={`${id}-label`} className="block text-sm font-medium text-bone">
             {name ?? def.key}
           </label>
           {name ? (
@@ -491,6 +578,30 @@ function SettingRow({
           />
         </div>
       </div>
+
+      {changed ? (
+        <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+          {/* Brass: a person decided this. */}
+          <Chip tone="manual">
+            <Glyph name="pencil" className="size-3" />
+            {t.settings.modified}
+          </Chip>
+          <span className="text-xs text-bone-faint">{t.settings.defaultIs(shownValue(def, state?.default, t))}</span>
+          {/* Back to what it began as: that value written, or — for one that
+              begins unset — the setting cleared. The row it belongs to is
+              what names it to a screen reader, so no two share a name. */}
+          <Button
+            size="sm"
+            variant="quiet"
+            disabled={save.isPending}
+            aria-describedby={`${id}-label`}
+            onClick={() => save.mutate(state?.default ?? null)}
+          >
+            <Glyph name="arrowLeft" className="size-3.5" />
+            {t.settings.revert}
+          </Button>
+        </div>
+      ) : null}
 
       {inheritable ? (
         <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5">

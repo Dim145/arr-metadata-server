@@ -358,6 +358,9 @@ pub enum Outcome {
     Failed,
     /// Nothing to do: gone meanwhile, or nothing to refresh from.
     Skipped,
+    /// Fetched and stored for the first time: the seed's, from the
+    /// operator's own library.
+    Imported,
 }
 
 impl Outcome {
@@ -366,6 +369,7 @@ impl Outcome {
             Self::Ok => "ok",
             Self::Failed => "failed",
             Self::Skipped => "skipped",
+            Self::Imported => "imported",
         }
     }
 }
@@ -373,6 +377,7 @@ impl Outcome {
 /// A work as a run names it: its id, and its title and kind as they stood,
 /// kept so the run reads the same once the work is gone.
 pub struct Touched<'a> {
+    /// Empty for a work not held here — one of a library no provider had.
     pub id: &'a str,
     pub title: Option<&'a str>,
     pub kind: Option<&'a str>,
@@ -429,7 +434,7 @@ pub async fn add_entry(
     .bind(new_id())
     .bind(job_id)
     .bind(position)
-    .bind(work.id)
+    .bind((!work.id.is_empty()).then_some(work.id))
     .bind(work.title)
     .bind(work.kind)
     .bind(outcome.as_str())
@@ -478,19 +483,7 @@ pub async fn count_entries(db: &Db, job_id: &str) -> Result<i64> {
 #[cfg(test)]
 mod entry_tests {
     use super::*;
-    use crate::config;
-
-    async fn db() -> Db {
-        let db = Db::connect(&config::Database {
-            url: "sqlite::memory:".into(),
-            max_connections: 1,
-            acquire_timeout: std::time::Duration::from_secs(5),
-        })
-        .await
-        .unwrap();
-        db.migrate().await.unwrap();
-        db
-    }
+    use crate::db::testing::db;
 
     #[tokio::test]
     async fn a_run_writes_down_each_work_in_order_and_is_pruned_with_them() {
@@ -632,17 +625,11 @@ pub async fn fail_gone(db: &Db, id: &str) -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::testing::db;
 
     #[tokio::test]
     async fn runs_are_counted_by_kind_and_state() {
-        let db = crate::db::Db::connect(&crate::config::Database {
-            url: "sqlite::memory:".into(),
-            max_connections: 1,
-            acquire_timeout: std::time::Duration::from_secs(5),
-        })
-        .await
-        .expect("in-memory database");
-        db.migrate().await.expect("migrations");
+        let db = db().await;
         assert!(counts(&db).await.unwrap().is_empty());
 
         let done = start(&db, kinds::REFRESH_ITEM, Some("x")).await.unwrap();
@@ -662,19 +649,6 @@ mod tests {
         assert_eq!(of("succeeded"), Some(1));
         assert_eq!(of("failed"), Some(1));
         assert_eq!(of("running"), Some(1));
-    }
-    use crate::config;
-
-    async fn db() -> Db {
-        let db = Db::connect(&config::Database {
-            url: "sqlite::memory:".into(),
-            max_connections: 1,
-            acquire_timeout: std::time::Duration::from_secs(5),
-        })
-        .await
-        .unwrap();
-        db.migrate().await.unwrap();
-        db
     }
 
     #[tokio::test]

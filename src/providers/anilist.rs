@@ -27,7 +27,7 @@ use crate::{
 
 const QUERY: &str = "query ($id: Int) {
   Media(id: $id, type: ANIME) {
-    id idMal
+    id idMal format
     title { romaji english native }
     synonyms
     description(asHtml: false)
@@ -177,6 +177,8 @@ impl AnilistClient {
 struct Media {
     id: i64,
     id_mal: Option<i64>,
+    /// `TV`, `TV_SHORT`, `MOVIE`, `SPECIAL`, `OVA`, `ONA`, `MUSIC`.
+    format: Option<String>,
     #[serde(default)]
     title: Titles,
     #[serde(default)]
@@ -316,6 +318,8 @@ fn to_item(media: &Media, kind: MediaKind) -> MediaItem {
         .map(|t| t.name.clone())
         .collect();
     item.is_adult = media.is_adult;
+    // What the entry is, in AniList's own words: the interface names them.
+    item.format = text(&media.format).map(|f| f.to_ascii_uppercase());
 
     item.external_ids = ExternalIds {
         anilist: vec![media.id],
@@ -605,6 +609,61 @@ mod tests {
                 .collect::<Vec<_>>(),
             [0, 1, 2]
         );
+    }
+
+    #[test]
+    fn the_entry_s_format_is_kept() {
+        let mut media = attack_on_titan();
+        media.format = Some("tv".into());
+        assert_eq!(
+            to_item(&media, MediaKind::Series).format.as_deref(),
+            Some("TV")
+        );
+        media.format = Some("OVA".into());
+        assert_eq!(
+            to_item(&media, MediaKind::Series).format.as_deref(),
+            Some("OVA")
+        );
+        media.format = None;
+        assert_eq!(to_item(&media, MediaKind::Series).format, None);
+    }
+
+    /// TMDB answers first, with keywords of its own: taken whole, they were
+    /// all a work kept, and AniList's tags went.
+    #[test]
+    fn its_tags_stay_beside_tmdb_s_keywords() {
+        use crate::merge::{Contribution, combine};
+
+        let mut media = attack_on_titan();
+        media.format = Some("TV".into());
+        media.tags.push(Tag {
+            name: "Military".into(),
+            rank: Some(80),
+            is_media_spoiler: false,
+            is_general_spoiler: false,
+        });
+        let mut tmdb = MediaItem::empty(MediaKind::Series);
+        tmdb.title = "Attack on Titan".into();
+        tmdb.keywords = vec!["based on manga".into(), "kaiju".into()];
+
+        let merged = combine(
+            vec![
+                Contribution {
+                    provider: "tmdb".into(),
+                    item: tmdb,
+                },
+                Contribution {
+                    provider: "anilist".into(),
+                    item: to_item(&media, MediaKind::Series),
+                },
+            ],
+            &["tmdb".to_string(), "anilist".to_string()],
+        )
+        .expect("merged");
+
+        // Each once, whatever its case, the first spelling kept.
+        assert_eq!(merged.keywords, ["based on manga", "kaiju", "Military"]);
+        assert_eq!(merged.format.as_deref(), Some("TV"));
     }
 
     #[test]

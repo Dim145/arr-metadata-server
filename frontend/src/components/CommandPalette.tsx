@@ -148,6 +148,7 @@ export function CommandPalette({ canWrite, isAdmin }: { canWrite: boolean; isAdm
             { key: 'admin-lists', label: t.admin.lists, to: '/admin/lists', admin: true },
             { key: 'jobs', label: t.admin.jobs, to: '/admin/jobs', admin: true, adminOnly: true },
             { key: 'audit', label: t.admin.audit, to: '/admin/audit', admin: true, adminOnly: true },
+            { key: 'notifications', label: t.admin.notificationsNav, to: '/admin/notifications', admin: true, adminOnly: true },
             { key: 'settings', label: t.admin.settings, to: '/admin/settings', admin: true, adminOnly: true },
           ] satisfies Place[]).filter((place) => isAdmin || !place.adminOnly)
         : []),

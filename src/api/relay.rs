@@ -6,17 +6,25 @@
 //! does not answer itself. Each keeps its own rules for the credentials it
 //! stands in for and for what it writes into an answer; what they have in
 //! common is here: which headers travel, which never do, what a path may not
-//! say, and the work a document is patched for.
+//! say, whose credential the service is asked with, the work a document is
+//! patched for, and the text it is patched with in the language asked.
 
 use std::{sync::LazyLock, time::Duration};
 
-use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, Uri, header};
+use axum::{
+    Json,
+    http::{HeaderMap, HeaderName, HeaderValue, StatusCode, Uri, header},
+    response::{IntoResponse, Response},
+};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 
 use crate::{
+    auth::secrets,
     cache,
-    domain::{CoverType, ExternalSource, MediaItem},
+    config::{Surface, SurfacePolicy},
+    domain::{CoverType, Episode, ExternalSource, MediaItem, Season, fields},
     error::AppResult,
-    service,
+    service::{self, language},
     state::AppState,
 };
 
@@ -226,14 +234,54 @@ pub fn is_json(headers: &HeaderMap) -> bool {
         .is_some_and(|v| v.starts_with("application/json"))
 }
 
-/// The bearer token a request carries, when it carries one.
+/// The bearer token a request carries, when it carries one. The scheme is
+/// read whatever its case, as HTTP reads every scheme (RFC 9110 §11.1): a key
+/// sent as `BEARER ams_…` is a bearer token all the same, and a relay that
+/// took it for none would hand it on.
 pub fn bearer(headers: &HeaderMap) -> Option<String> {
-    let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
-    let token = value
-        .strip_prefix("Bearer ")
-        .or_else(|| value.strip_prefix("bearer "))?
-        .trim();
-    (!token.is_empty()).then(|| token.to_string())
+    let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?.trim();
+    let (scheme, token) = value.split_once(|c: char| c.is_ascii_whitespace())?;
+    let token = token.trim();
+    (scheme.eq_ignore_ascii_case("bearer") && !token.is_empty()).then(|| token.to_string())
+}
+
+/// Every word a credential is written with — split at spaces, commas,
+/// equals signs, semicolons and quotes, its bytes read as they came — where
+/// a key may sit whatever the shape around it: `Token ams_…`,
+/// `Bearer theirs ams_…`, `token="ams_…"`.
+fn words(text: &str) -> impl Iterator<Item = &str> {
+    text.split(|c: char| c.is_whitespace() || matches!(c, ',' | '=' | ';' | '"'))
+        .filter(|word| !word.is_empty())
+}
+
+/// Every word each `Authorization` value carries, whatever its scheme — and,
+/// of a `Basic` one, the name and the password it encodes.
+fn authorization_words(headers: &HeaderMap) -> Vec<String> {
+    let mut found: Vec<String> = Vec::new();
+    for value in headers.get_all(header::AUTHORIZATION) {
+        let text = String::from_utf8_lossy(value.as_bytes());
+        let mut parts = text.split_whitespace();
+        if parts
+            .next()
+            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("basic"))
+            && let Some(encoded) = parts.next()
+            && let Ok(decoded) = STANDARD.decode(encoded)
+        {
+            let decoded = String::from_utf8_lossy(&decoded);
+            found.extend(decoded.split(':').map(str::to_string));
+        }
+        found.extend(words(&text).map(str::to_string));
+    }
+    found
+}
+
+/// Whether `Authorization` carries a key issued here anywhere in it, in any
+/// of its values: what a relay that hands the header on to its service
+/// never hands on.
+pub fn authorization_carries_key_issued_here(headers: &HeaderMap) -> bool {
+    authorization_words(headers)
+        .iter()
+        .any(|word| secrets::is_issued_here(word))
 }
 
 /// A work of this catalogue a service's document is about, when a person
@@ -277,6 +325,432 @@ pub fn chosen_image(item: &MediaItem, kind: CoverType) -> Option<String> {
         .iter()
         .find(|image| image.id == chosen)
         .map(|image| image.url.clone())
+}
+
+/// The address of the poster a person chose for a season, when they chose
+/// one.
+pub fn chosen_season_poster(season: &Season) -> Option<String> {
+    let chosen = season.primary_images.poster.as_deref()?;
+    season
+        .images
+        .iter()
+        .find(|image| image.id == chosen)
+        .map(|image| image.url.clone())
+}
+
+/// Whether a field of one of the work's seasons is locked — `title`,
+/// `overview`, `airDate`, `primaryPoster` — by the catalogue's own number.
+pub fn season_locked(item: &MediaItem, season: i32, field: &str) -> bool {
+    let key = format!("season:{season}/{field}");
+    item.locked_fields.contains(&key)
+}
+
+/// Whether a field of one of the work's episodes is locked, by the
+/// catalogue's own numbers.
+pub fn episode_locked(item: &MediaItem, episode: &Episode, field: &str) -> bool {
+    let key = format!(
+        "episode:{}x{}/{field}",
+        episode.season_number, episode.episode_number
+    );
+    item.locked_fields.contains(&key)
+}
+
+// ─── Whose credential a relay asks with ─────────────────────────────────────
+
+/// Whose credential a relay asks its service with: an administrator's
+/// choice on the access page, `tmdb.relayCredential` for TMDB's relay and
+/// `tvdb.relayCredential` for TheTVDB's. AniList has no key to choose.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RelayCredential {
+    /// This server's own key, in place of whatever the client sent: the
+    /// operator's key serves every client, and the operator answers for that
+    /// use to the service.
+    Server,
+    /// The client's own, handed on as it came. This server's key is never
+    /// used, and a key issued here is refused — it is none of the service's.
+    /// Nothing asked with a client's own credential is kept for another.
+    Client,
+}
+
+impl RelayCredential {
+    /// The setting that says it for a surface: none for one whose service
+    /// takes no key, or that relays nothing.
+    pub fn setting(surface: Surface) -> Option<&'static str> {
+        match surface {
+            Surface::Tmdb => Some("tmdb.relayCredential"),
+            Surface::Tvdb => Some("tvdb.relayCredential"),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Server => "server",
+            Self::Client => "client",
+        }
+    }
+}
+
+/// Whose credential the relay on `surface` asks with: this server's own,
+/// unless an administrator chose each client's.
+pub fn credential(state: &AppState, surface: Surface) -> RelayCredential {
+    let chosen =
+        RelayCredential::setting(surface).and_then(|key| state.settings.resolve(key, None, None));
+    match chosen.as_deref() {
+        Some("client") => RelayCredential::Client,
+        _ => RelayCredential::Server,
+    }
+}
+
+/// How a surface is guarded, as its guard applies it: the deployment's
+/// policy (`AMS_*_AUTH`, after `AMS_AUTH_DISABLED`) — except on a relay
+/// asked with each client's own credential. A key issued here is refused
+/// there, so a key policy would turn away every caller the relay can serve:
+/// the address list guards it instead, as it guards Sonarr's surface. Open
+/// stays open.
+pub fn policy(state: &AppState, surface: Surface) -> SurfacePolicy {
+    let configured = state.config.policy_for(surface);
+    guarded(configured, credential(state, surface))
+}
+
+/// [`policy`], once its two answers are known.
+fn guarded(configured: SurfacePolicy, credential: RelayCredential) -> SurfacePolicy {
+    if configured == SurfacePolicy::ApiKey && credential == RelayCredential::Client {
+        SurfacePolicy::Allowlist
+    } else {
+        configured
+    }
+}
+
+/// Whether a request carries a key issued here where a key may be sent: in
+/// `Authorization`, as a bearer token or under any other scheme, in any of
+/// its values and anywhere in each; in `X-Api-Key`; or in the query under
+/// any name a key goes by here — `api_key` among them, which is TMDB's own.
+/// Every word of each is looked at, not only the first, the scheme read
+/// whatever its case. What a relay asked with each client's own credential
+/// refuses before its service is asked anything, since it is this server's
+/// and not the service's.
+pub fn carries_key_issued_here(headers: &HeaderMap, uri: &Uri) -> bool {
+    let in_header: Vec<String> = headers
+        .get_all("x-api-key")
+        .iter()
+        .flat_map(|value| {
+            words(&String::from_utf8_lossy(value.as_bytes()))
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let in_query: Vec<String> = uri
+        .query()
+        .map(|query| {
+            url::form_urlencoded::parse(query.as_bytes())
+                .filter(|(name, _)| {
+                    OUR_PARAMS
+                        .iter()
+                        .any(|ours| name.eq_ignore_ascii_case(ours))
+                })
+                .flat_map(|(_, value)| words(&value).map(str::to_string).collect::<Vec<_>>())
+                .collect()
+        })
+        .unwrap_or_default();
+    authorization_words(headers)
+        .into_iter()
+        .chain(in_header)
+        .chain(in_query)
+        .any(|key| secrets::is_issued_here(&key))
+}
+
+/// A refusal this server made itself, marked on the answer, so that a route
+/// counting its calls tells it from a service's own refusal handed back.
+#[derive(Clone, Copy, Debug)]
+pub struct RefusedHere;
+
+/// What a relay asked with each client's own credential answers a key
+/// issued here: a 401 that says why, before the service is asked anything.
+/// Neither the key nor what it is for leaves this server.
+pub fn key_issued_here_refused(service: &str, setting: &str) -> Response {
+    let mut response = (
+        StatusCode::UNAUTHORIZED,
+        Json(serde_json::json!({
+            "error": "own_key_required",
+            "message": format!(
+                "this server hands each client's own {service} key on to {service} ({setting} \
+                 is client), and a key issued here is not one: use your own {service} key, or \
+                 have an administrator let the relay stand in with the server's"
+            ),
+        })),
+    )
+        .into_response();
+    response.extensions_mut().insert(RefusedHere);
+    response
+}
+
+// ─── The text a work is answered with, by language ──────────────────────────
+
+/// Lay over a work the texts a relayed document in `asked` is written with,
+/// and say them locked — a language as a client wrote it, `fr-FR` or
+/// TheTVDB's `fra`. In the language the catalogue keeps its works in, the
+/// work as it is read: a text locked in that language, else in every one.
+/// In another, only a text locked in that language itself: a text locked in
+/// every language is the catalogue's own, and a service's document in
+/// another language keeps the service's text in it — a German Jellyseerr is
+/// answered TMDB's German, as it was before a lock had a language. What is
+/// not text, a date or a picture, is written in every language.
+///
+/// The relays' rule alone. The native API, Sonarr, Radarr, Plex and the
+/// `.nfo` serve their own documents, and a text locked in every language is
+/// theirs in any language ([`language::lay_locks`]).
+pub fn lay_locks(state: &AppState, item: &mut MediaItem, asked: &str) {
+    let asked = language::normalize(asked);
+    if !asked.is_empty() && asked == language::stored(state) {
+        return;
+    }
+    fields::lay_only_in(item, &asked);
+}
+
+/// The text a person locked for a field of a work — the work's own, `item`;
+/// a season's, `season:1`; an episode's, `episode:1x2` — as a relayed
+/// document in `language` carries it ([`lay_locks`]): in the catalogue's
+/// own language, `stored` (`fra`), the one locked in it, else the one locked
+/// in every language ([`fields::text_lock`]); in another, only one locked in
+/// that language itself. `language` as a client wrote it: `fr-FR`, or
+/// TheTVDB's `fra`. None where nothing was locked for it, or the text was
+/// locked cleared.
+pub fn locked_text(
+    item: &MediaItem,
+    scope: &str,
+    field: &str,
+    language: &str,
+    stored: &str,
+) -> Option<String> {
+    let language = language::normalize(language);
+    let lock = if !language.is_empty() && language == stored {
+        fields::text_lock(item, scope, field, &language)
+    } else {
+        item.locked_texts.iter().find(|lock| {
+            lock.scope == scope
+                && lock.field == field
+                && !language.is_empty()
+                && lock.language == language
+        })
+    };
+    lock.and_then(|lock| lock.value.clone())
+        .filter(|text| !text.trim().is_empty())
+}
+
+/// The languages a person locked a field of a work in alone, with the text
+/// they locked: what a document that lists its languages one by one is
+/// given where it has none of its own in them.
+pub fn locked_languages(item: &MediaItem, scope: &str, field: &str) -> Vec<(String, String)> {
+    item.locked_texts
+        .iter()
+        .filter(|lock| lock.scope == scope && lock.field == field && !lock.language.is_empty())
+        .filter_map(|lock| {
+            let text = lock.value.clone().filter(|text| !text.trim().is_empty())?;
+            Some((lock.language.clone(), text))
+        })
+        .collect()
+}
+
+/// What the relays' tests share: a work as it is read with its locks, as a
+/// document in another language is written from it, and the whole server
+/// with the services it relays at a stand-in that answers what a test says
+/// and keeps what it was asked.
+#[cfg(test)]
+pub(crate) mod testing {
+    use std::sync::{Arc, Mutex};
+
+    use axum::{Router, extract::Request, response::IntoResponse};
+    use serde_json::Value;
+
+    use super::*;
+    use crate::{
+        config,
+        domain::fields::{self, Override},
+    };
+
+    /// The operator's own keys, as the stand-in sees them.
+    pub const OPERATOR_TMDB_KEY: &str = "operator-tmdb-key";
+    pub const OPERATOR_TVDB_KEY: &str = "operator-tvdb-key";
+
+    /// A work as it is read in a catalogue kept in French, these locks
+    /// applied: `(scope, field, language, value)`, the language empty for a
+    /// lock in every one.
+    pub fn read_with(mut item: MediaItem, locks: &[(&str, &str, &str, Value)]) -> MediaItem {
+        let overrides: Vec<Override> = locks
+            .iter()
+            .map(|(scope, field, language, value)| Override {
+                scope: scope.to_string(),
+                field: field.to_string(),
+                language: (!language.is_empty()).then(|| language.to_string()),
+                value: Some(value.clone()),
+                updated_at: crate::db::now(),
+                updated_by: None,
+            })
+            .collect();
+        fields::apply_in(&mut item, &overrides, "fra").expect("the locks apply");
+        item
+    }
+
+    /// The work as a relayed document in `language`, another than the
+    /// catalogue's, is written from: what [`super::lay_locks`] makes of it.
+    pub fn laid_for(mut item: MediaItem, language: &str) -> MediaItem {
+        fields::lay_only_in(&mut item, language);
+        item
+    }
+
+    /// One request the stand-in was asked.
+    #[derive(Clone, Debug)]
+    pub struct Asked {
+        pub method: String,
+        pub path: String,
+        pub query: String,
+        pub authorization: Option<String>,
+        pub body: String,
+    }
+
+    /// What the stand-in answers a request with: a status and a document.
+    pub type Answers = fn(&Asked) -> (StatusCode, Value);
+
+    /// A stand-in for the services relayed: it answers each request as
+    /// `answers` says, and keeps what it was asked.
+    pub struct StandIn {
+        pub at: String,
+        asked: Arc<Mutex<Vec<Asked>>>,
+    }
+
+    impl StandIn {
+        pub async fn start(answers: Answers) -> Self {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("a port");
+            let at = format!("http://{}", listener.local_addr().expect("its address"));
+            let asked = Arc::new(Mutex::new(Vec::new()));
+            let kept = Arc::clone(&asked);
+            let app = Router::new().fallback(move |request: Request| {
+                let kept = Arc::clone(&kept);
+                async move {
+                    let (parts, body) = request.into_parts();
+                    let body = axum::body::to_bytes(body, 1 << 20)
+                        .await
+                        .unwrap_or_default();
+                    let one = Asked {
+                        method: parts.method.to_string(),
+                        path: parts.uri.path().to_string(),
+                        query: parts.uri.query().unwrap_or_default().to_string(),
+                        authorization: parts
+                            .headers
+                            .get(header::AUTHORIZATION)
+                            .and_then(|v| v.to_str().ok())
+                            .map(str::to_string),
+                        body: String::from_utf8_lossy(&body).into_owned(),
+                    };
+                    let (status, document) = answers(&one);
+                    kept.lock().expect("the list").push(one);
+                    (status, Json(document)).into_response()
+                }
+            });
+            tokio::spawn(async move {
+                let _ = axum::serve(listener, app).await;
+            });
+            Self { at, asked }
+        }
+
+        /// What it was asked at a path, in order.
+        pub fn asked_at(&self, path: &str) -> Vec<Asked> {
+            self.asked
+                .lock()
+                .expect("the list")
+                .iter()
+                .filter(|asked| asked.path == path)
+                .cloned()
+                .collect()
+        }
+    }
+
+    /// The whole server, its catalogue kept in French, TMDB and TheTVDB
+    /// keyed as an operator keys them, every service at `stand_in`, and its
+    /// relays guarded by a key.
+    pub async fn server(stand_in: &StandIn) -> AppState {
+        let mut config = config::Config::from_env().expect("a configuration");
+        config.mode = config::Mode::Single;
+        config.database = config::Database {
+            url: "sqlite::memory:".into(),
+            max_connections: 1,
+            acquire_timeout: Duration::from_secs(5),
+        };
+        config.security.bootstrap_admin = None;
+        config.security.auth_disabled = false;
+        config.security.tmdb_policy = SurfacePolicy::ApiKey;
+        config.security.tvdb_policy = SurfacePolicy::ApiKey;
+        config.cache.redis_url = None;
+        config.media.storage = config::MediaStorage::Off;
+        config.clients = None;
+        config.tmdb.api_key = Some(OPERATOR_TMDB_KEY.into());
+        config.tmdb.language = "fr-FR".into();
+        config.tmdb.passthrough = true;
+        config.tvdb.api_key = Some(OPERATOR_TVDB_KEY.into());
+        config.tvdb.pin = None;
+        config.tvdb.passthrough = true;
+        let at = stand_in.at.clone();
+        for upstream in [
+            &mut config.tmdb.upstream,
+            &mut config.fanart.upstream,
+            &mut config.skyhook.upstream,
+            &mut config.sonarr_services.upstream,
+            &mut config.sonarr_services.xem_upstream,
+            &mut config.radarr_metadata.upstream,
+            &mut config.tvmaze.upstream,
+            &mut config.anilist.upstream,
+            &mut config.mal.upstream,
+            &mut config.mal.jikan_upstream,
+            &mut config.mal.tenrai_upstream,
+            &mut config.fankai.upstream,
+            &mut config.fankai_wiki.upstream,
+            &mut config.imdb.datasets,
+            &mut config.anime_mapping.url,
+        ] {
+            upstream.clone_from(&at);
+        }
+        config.tvdb.upstream = format!("{at}/v4");
+        AppState::bootstrap(config).await.expect("a server")
+    }
+
+    /// Store a work, and lock these fields of it: `(scope, field, language,
+    /// value)`, as [`read_with`] takes them.
+    pub async fn store(state: &AppState, item: &MediaItem, locks: &[(&str, &str, &str, Value)]) {
+        crate::db::repo::item::upsert(
+            &state.db,
+            crate::db::repo::item::ItemWrite {
+                item,
+                replace_children: true,
+            },
+        )
+        .await
+        .expect("the work is stored");
+        for (scope, field, language, value) in locks {
+            crate::db::repo::override_field::set_in(
+                &state.db,
+                &item.id,
+                scope,
+                field,
+                language,
+                Some(value),
+                None,
+            )
+            .await
+            .expect("the lock is stored");
+        }
+    }
+
+    /// Choose whose key a relay asks its service with.
+    pub async fn choose(state: &AppState, key: &str, value: &str) {
+        state
+            .settings
+            .set(crate::settings::Scope::Server, "", key, value, None)
+            .await
+            .expect("the setting is written");
+    }
 }
 
 #[cfg(test)]
@@ -462,7 +936,20 @@ mod tests {
             HeaderValue::from_static("bearer ams_k"),
         );
         assert_eq!(bearer(&headers).as_deref(), Some("ams_k"));
+        // Any case, and any blank after the scheme.
+        for written in ["BEARER ams_k", "BeArEr\tams_k", "  Bearer   ams_k  "] {
+            headers.insert(
+                header::AUTHORIZATION,
+                HeaderValue::from_str(written).unwrap(),
+            );
+            assert_eq!(bearer(&headers).as_deref(), Some("ams_k"), "{written:?}");
+        }
         headers.insert(header::AUTHORIZATION, HeaderValue::from_static("Basic abc"));
+        assert_eq!(bearer(&headers), None);
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearerams_k"),
+        );
         assert_eq!(bearer(&headers), None);
     }
 
@@ -474,5 +961,167 @@ mod tests {
                 "{name} authenticates here but would be relayed"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod credential_tests {
+    use serde_json::json;
+
+    use super::{testing::read_with, *};
+    use crate::domain::MediaKind;
+
+    #[test]
+    fn a_relay_asked_with_each_clients_key_is_guarded_by_address() {
+        // A key issued here is refused there: asking for one would refuse
+        // everybody.
+        assert_eq!(
+            guarded(SurfacePolicy::ApiKey, RelayCredential::Client),
+            SurfacePolicy::Allowlist
+        );
+        assert_eq!(
+            guarded(SurfacePolicy::ApiKey, RelayCredential::Server),
+            SurfacePolicy::ApiKey
+        );
+        for policy in [SurfacePolicy::Allowlist, SurfacePolicy::Open] {
+            for credential in [RelayCredential::Server, RelayCredential::Client] {
+                assert_eq!(guarded(policy, credential), policy);
+            }
+        }
+        assert_eq!(
+            RelayCredential::setting(Surface::Tmdb),
+            Some("tmdb.relayCredential")
+        );
+        assert_eq!(
+            RelayCredential::setting(Surface::Tvdb),
+            Some("tvdb.relayCredential")
+        );
+        assert_eq!(RelayCredential::setting(Surface::Anilist), None);
+    }
+
+    #[test]
+    fn a_key_issued_here_is_found_wherever_a_key_is_read() {
+        let none = HeaderMap::new();
+        let at = |text: &str| -> Uri { text.parse().unwrap() };
+        assert!(carries_key_issued_here(
+            &none,
+            &at("/3/movie/1?api_key=ams_x")
+        ));
+        assert!(carries_key_issued_here(
+            &none,
+            &at("/3/movie/1?APIKEY=ams_x")
+        ));
+        assert!(carries_key_issued_here(
+            &none,
+            &at("/3/movie/1?api%5Fkey=ams_x")
+        ));
+        assert!(!carries_key_issued_here(
+            &none,
+            &at("/3/movie/1?api_key=their-tmdb-key")
+        ));
+        assert!(!carries_key_issued_here(
+            &none,
+            &at("/3/movie/1?query=ams_x")
+        ));
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer ams_x"),
+        );
+        assert!(carries_key_issued_here(&headers, &at("/v4/series/1")));
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer their.jwt.token"),
+        );
+        assert!(!carries_key_issued_here(&headers, &at("/v4/series/1")));
+        headers.insert("x-api-key", HeaderValue::from_static("ams_x"));
+        assert!(carries_key_issued_here(&headers, &at("/v4/series/1")));
+    }
+
+    #[test]
+    fn a_key_issued_here_is_found_whatever_the_header_wraps_it_in() {
+        let at: Uri = "/3/movie/1".parse().unwrap();
+        let with = |values: &[&str]| {
+            let mut headers = HeaderMap::new();
+            for value in values {
+                headers.append(header::AUTHORIZATION, HeaderValue::from_str(value).unwrap());
+            }
+            headers
+        };
+        // The scheme in capitals, or another scheme altogether.
+        for carried in [
+            "BEARER ams_x",
+            "bEaReR ams_x",
+            "Token ams_x",
+            "ams_x",
+            "Token token=\"ams_x\"",
+            // After the client's own token, in the same value.
+            "Bearer their.jwt.token ams_x",
+            "Bearer their.jwt.token, ams_x",
+            // A name and a password: `user:ams_x`, and `ams_x:` .
+            "Basic dXNlcjphbXNfeA==",
+            "Basic YW1zX3g6",
+            // Its prefix in capitals is still none to hand on.
+            "Bearer AMS_x",
+        ] {
+            assert!(
+                carries_key_issued_here(&with(&[carried]), &at),
+                "{carried:?}"
+            );
+            assert!(authorization_carries_key_issued_here(&with(&[carried])));
+        }
+        // In a second value of the header, behind the client's own.
+        assert!(carries_key_issued_here(
+            &with(&["Bearer their.jwt.token", "Bearer ams_x"]),
+            &at
+        ));
+        // In X-Api-Key, behind a scheme.
+        let mut headers = HeaderMap::new();
+        headers.insert("x-api-key", HeaderValue::from_static("Bearer ams_x"));
+        assert!(carries_key_issued_here(&headers, &at));
+
+        // The client's own credential alone is theirs.
+        for theirs in ["Bearer their.jwt.token", "Basic dXNlcjpwYXNz", "Token abc"] {
+            assert!(
+                !carries_key_issued_here(&with(&[theirs]), &at),
+                "{theirs:?}"
+            );
+            assert!(!authorization_carries_key_issued_here(&with(&[theirs])));
+        }
+    }
+
+    #[test]
+    fn a_text_is_locked_for_a_language_in_it_or_in_every_one() {
+        let item = read_with(
+            MediaItem::empty(MediaKind::Series),
+            &[
+                ("item", "title", "", json!("Mon titre")),
+                ("item", "overview", "deu", json!("Mein Überblick")),
+                ("season:1", "title", "ita", json!("La prima")),
+            ],
+        );
+        // In the catalogue's own language, a text locked in every one.
+        assert_eq!(
+            locked_text(&item, "item", "title", "fr-FR", "fra").as_deref(),
+            Some("Mon titre")
+        );
+        // In another, only what was locked in it: the service's own text
+        // stands where the lock is every language's.
+        assert_eq!(locked_text(&item, "item", "title", "es-ES", "fra"), None);
+        assert_eq!(
+            locked_text(&item, "item", "overview", "de", "fra").as_deref(),
+            Some("Mein Überblick")
+        );
+        assert_eq!(locked_text(&item, "item", "overview", "fra", "fra"), None);
+        // A language that names none is none of them.
+        assert_eq!(locked_text(&item, "item", "title", "", "fra"), None);
+        assert_eq!(
+            locked_languages(&item, "season:1", "title"),
+            [("ita".to_string(), "La prima".to_string())]
+        );
+        // A lock in every language is the work's own text, and no language
+        // of its own.
+        assert!(locked_languages(&item, "item", "title").is_empty());
     }
 }

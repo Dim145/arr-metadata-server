@@ -430,7 +430,7 @@ async fn collection(
 /// TMDB's own record of a collection — name, pictures, parts — in the
 /// reader's language, kept a day; nothing where no key lets it be asked or
 /// TMDB has none.
-async fn named(state: &AppState, tmdb_id: i64, language: &str) -> Option<Value> {
+pub(super) async fn named(state: &AppState, tmdb_id: i64, language: &str) -> Option<Value> {
     if !state.tmdb.is_configured() {
         return None;
     }

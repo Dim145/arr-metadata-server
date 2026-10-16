@@ -9,7 +9,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Link, useParams } from 'react-router'
 
-import { PosterCard, PosterGrid } from '../components/media'
+import { Artwork, PosterCard, PosterGrid } from '../components/media'
 import { Button, Chip, EmptyState, Glyph, Label, SectionTitle, Skeleton } from '../components/ui'
 import { ApiError, api, query, segment } from '../lib/api'
 import { useCuratedLists, useTitle } from '../lib/hooks'
@@ -275,21 +275,35 @@ function ListCard({ list }: { list: CuratedList }) {
   return (
     <Link
       to={`/lists/${list.slug}`}
-      className="plate group flex h-full flex-col gap-3 rounded-panel border border-rule bg-ink-raised p-5 transition-colors duration-150 hover:border-rule-bright"
+      className="plate group flex h-full flex-col overflow-hidden rounded-panel border border-rule bg-ink-raised transition-colors duration-150 hover:border-rule-bright"
     >
-      <div className="flex flex-wrap items-center gap-2">
-        <Chip>{t.lists.kind[list.kind]}</Chip>
-        {list.isPublic ? null : <Chip tone="accent">{t.lists.private}</Chip>}
-      </div>
-      <h2 className="font-display text-xl text-bone transition-colors duration-150 group-hover:text-vermillion">
-        {list.name}
-      </h2>
-      {list.description ? (
-        <p className="line-clamp-3 text-sm leading-relaxed text-bone-dim">{list.description}</p>
+      {/* The picture the selection is shown with, above its words; a card with
+          none keeps the words alone, as it always has. */}
+      {list.cover ? (
+        <Artwork
+          url={list.cover}
+          role="backdrop"
+          alt=""
+          sizes="(min-width: 1024px) 24rem, (min-width: 640px) 45vw, 100vw"
+          className="aspect-video w-full border-b border-rule bg-ink-high object-cover"
+          fallback={<span aria-hidden className="block aspect-video w-full border-b border-rule bg-ink-high" />}
+        />
       ) : null}
-      <p className="mt-auto font-mono text-xs text-bone-faint tabular-nums">
-        {list.mode === 'filter' ? t.lists.byFilter : t.lists.count(list.itemCount)}
-      </p>
+      <div className="flex flex-1 flex-col gap-3 p-5">
+        <div className="flex flex-wrap items-center gap-2">
+          <Chip>{t.lists.kind[list.kind]}</Chip>
+          {list.isPublic ? null : <Chip tone="accent">{t.lists.private}</Chip>}
+        </div>
+        <h2 className="font-display text-xl text-bone transition-colors duration-150 group-hover:text-vermillion">
+          {list.name}
+        </h2>
+        {list.description ? (
+          <p className="line-clamp-3 text-sm leading-relaxed text-bone-dim">{list.description}</p>
+        ) : null}
+        <p className="mt-auto font-mono text-xs text-bone-faint tabular-nums">
+          {list.mode === 'filter' ? t.lists.byFilter : t.lists.count(list.itemCount)}
+        </p>
+      </div>
     </Link>
   )
 }
@@ -347,6 +361,21 @@ export function ListDetail() {
           <Glyph name="chevronLeft" className="size-4" />
           {t.lists.label}
         </Link>
+        {/* The selection's cover, wide, above its title: the first thing on
+            the page, so it is not held back to be fetched lazily. */}
+        {list.cover ? (
+          <div className="mt-3 overflow-hidden rounded-panel border border-rule bg-ink-high">
+            <Artwork
+              url={list.cover}
+              role="backdrop"
+              alt=""
+              eager
+              sizes="(min-width: 1280px) 72rem, 100vw"
+              className="aspect-[21/9] max-h-80 w-full object-cover"
+              fallback={<span aria-hidden className="block aspect-[21/9] max-h-80 w-full bg-ink-high" />}
+            />
+          </div>
+        ) : null}
         <div className="mt-2">
           <Label>{t.lists.one}</Label>
         </div>
@@ -390,6 +419,12 @@ export function ImportAddresses({ list }: { list: CuratedList }) {
     { key: 'sonarr', label: t.lists.sonarr, url: `${base}/sonarr.json`, kinds: ['series', 'mixed'] },
     { key: 'radarr', label: t.lists.radarr, url: `${base}/radarr.json`, kinds: ['movie', 'mixed'] },
     { key: 'stevenlu', label: t.lists.stevenlu, url: `${base}/stevenlu.json`, kinds: ['movie', 'mixed'] },
+    // Kometa's libraries hold one kind each, and a number means a film in one and
+    // a series in the other: a selection of both is given once for each.
+    { key: 'kometa', label: t.lists.kometa, url: `${base}/ids.txt`, kinds: ['series', 'movie'] },
+    { key: 'kometa-movie', label: t.lists.kometaMovies, url: `${base}/ids.txt?kind=movie`, kinds: ['mixed'] },
+    { key: 'kometa-series', label: t.lists.kometaSeries, url: `${base}/ids.txt?kind=series`, kinds: ['mixed'] },
+    { key: 'atom', label: t.lists.feed, url: `${base}/feed.atom`, kinds: ['series', 'movie', 'mixed'] },
   ]
 
   return (

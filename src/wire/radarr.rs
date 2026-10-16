@@ -14,7 +14,7 @@ const MAX_IMAGES: usize = 200;
 const MAX_TITLES: usize = 500;
 
 use super::string_or_null;
-use crate::domain::{Credit, CreditType, Image, MediaItem, Rating};
+use crate::domain::{CountryRelease, Credit, CreditType, Image, MediaItem, Rating};
 
 /// A list that the upstream sometimes writes as `null`.
 ///
@@ -313,16 +313,18 @@ pub fn from_item(item: &MediaItem) -> MovieResource {
         credits: Some(credits(&item.credits)),
         studio: item.studio.clone(),
         youtube_trailer_id: item.trailer_youtube_id.clone(),
-        // Radarr looks this up by country code and compares against its own
-        // setting, which is ISO 3166-1 alpha-2 uppercase. The production
-        // country is not the certification country, and must not stand in for it.
-        certifications: match (&item.content_rating, &item.content_rating_country) {
-            (Some(rating), Some(country)) => vec![CertificationResource {
-                country: country.clone(),
-                certification: rating.clone(),
-            }],
-            _ => Vec::new(),
-        },
+        // Every country's, as api.radarr.video sends them: Radarr takes the
+        // one of the country it is set to (`CertificationCountry`, ISO 3166-1
+        // alpha-2 upper case), so it picks its own. The production country
+        // is not a certification country, and must not stand in for one.
+        certifications: item
+            .certifications()
+            .into_iter()
+            .map(|(country, certification)| CertificationResource {
+                country,
+                certification,
+            })
+            .collect(),
         status: Some(radarr_status(item.status.as_deref())),
         collection: None,
         original_language: non_empty(item.original_language.as_deref())
@@ -461,7 +463,15 @@ fn credits(all: &[Credit]) -> Credits {
             .filter_map(|c| {
                 Some(CrewResource {
                     name: c.person_name.clone(),
-                    job: Some(capitalize(c.credit_type.as_str())),
+                    // The job as TMDB names it, `Screenplay`, where it was
+                    // kept; else the kind of credit.
+                    job: c
+                        .character_name
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|job| !job.is_empty())
+                        .map(String::from)
+                        .or_else(|| Some(capitalize(c.credit_type.as_str()))),
                     department: Some(department_for(c.credit_type)),
                     order: Some(c.sort_order),
                     tmdb_id: c.tmdb_person_id,
@@ -485,7 +495,8 @@ fn person_image(url: Option<&str>) -> Vec<ImageResource> {
 
 fn department_for(credit_type: CreditType) -> String {
     match credit_type {
-        CreditType::Director | CreditType::Producer => "Directing",
+        CreditType::Director => "Directing",
+        CreditType::Producer => "Production",
         CreditType::Writer => "Writing",
         _ => "Acting",
     }
@@ -579,11 +590,19 @@ pub fn to_item(resource: &MovieResource) -> MediaItem {
     };
 
     // Radarr's certifications carry the country the rating applies to, which is
-    // the part TMDB's own block makes us dig for.
-    if let Some(cert) = resource.certifications.first() {
-        item.content_rating = non_empty(Some(&cert.certification));
-        item.content_rating_country =
-            non_empty(Some(&cert.country)).map(|c| c.to_ascii_uppercase());
+    // the part TMDB's own block makes us dig for. Every country's is kept; the
+    // record's own is the American one, as TMDB's is, and else the first —
+    // api.radarr.video lists them in the order of their codes, so the first
+    // was Argentina's.
+    item.releases = certifications(&resource.certifications);
+    if let Some(cert) = item
+        .releases
+        .iter()
+        .find(|r| r.country == "US")
+        .or_else(|| item.releases.first())
+    {
+        item.content_rating.clone_from(&cert.certification);
+        item.content_rating_country = Some(cert.country.clone());
     }
 
     item.ratings = collect_ratings(resource);
@@ -640,6 +659,33 @@ pub fn to_item(resource: &MovieResource) -> MediaItem {
     item
 }
 
+/// api.radarr.video's certifications, a country each: one with no country
+/// code, or none Radarr could match, is left out.
+fn certifications(all: &[CertificationResource]) -> Vec<CountryRelease> {
+    let mut out: Vec<CountryRelease> = Vec::new();
+    for cert in all.iter().take(MAX_TITLES) {
+        let country = cert.country.trim().to_ascii_uppercase();
+        let Some(certification) = non_empty(Some(&cert.certification)) else {
+            continue;
+        };
+        if country.len() != 2
+            || !country.bytes().all(|b| b.is_ascii_uppercase())
+            || out.iter().any(|r| r.country == country)
+        {
+            continue;
+        }
+        out.push(CountryRelease {
+            country,
+            release_type: None,
+            date: None,
+            certification: Some(certification),
+            note: None,
+            source: Some(crate::providers::names::RADARR.to_string()),
+        });
+    }
+    out
+}
+
 fn collect_ratings(resource: &MovieResource) -> Vec<Rating> {
     let Some(ratings) = &resource.movie_ratings else {
         return Vec::new();
@@ -682,24 +728,40 @@ fn to_credits(credits: &Credits) -> Vec<Credit> {
         is_manual: false,
     });
 
-    let crew = credits.crew.iter().enumerate().map(|(i, member)| Credit {
-        id: new_id(),
-        credit_type: member
-            .job
-            .as_deref()
-            .unwrap_or("actor")
-            .parse()
-            .unwrap_or(CreditType::Actor),
-        person_name: member.name.clone(),
-        character_name: None,
-        image: member.images.first().map(|i| i.url.clone()),
-        tmdb_person_id: member.tmdb_id,
-        credit_tmdb_id: Some(member.credit_id.clone()).filter(|c| !c.is_empty()),
-        sort_order: member.order.unwrap_or(i as i32),
-        is_manual: false,
+    // The crew the catalogue keeps — directors, writers, producers — with
+    // the job Radarr names: anyone else was filed as cast, the composer and
+    // the editor among the actors.
+    let crew = credits.crew.iter().enumerate().filter_map(|(i, member)| {
+        Some(Credit {
+            id: new_id(),
+            credit_type: crew_kind(member)?,
+            person_name: member.name.clone(),
+            character_name: non_empty(member.job.as_deref()),
+            image: member.images.first().map(|i| i.url.clone()),
+            tmdb_person_id: member.tmdb_id,
+            credit_tmdb_id: Some(member.credit_id.clone()).filter(|c| !c.is_empty()),
+            sort_order: member.order.unwrap_or(i as i32),
+            is_manual: false,
+        })
     });
 
     cast.chain(crew).collect()
+}
+
+/// What one of Radarr's crew is here, by the job and the department it
+/// gives: a director, a writer, a producer, or nobody the catalogue keeps.
+fn crew_kind(member: &CrewResource) -> Option<CreditType> {
+    let job = member.job.as_deref().map(str::trim).unwrap_or_default();
+    let department = member.department.as_deref().map(str::trim);
+    if job.eq_ignore_ascii_case("director") {
+        Some(CreditType::Director)
+    } else if department == Some("Writing") || job.eq_ignore_ascii_case("writer") {
+        Some(CreditType::Writer)
+    } else if job.eq_ignore_ascii_case("producer") {
+        Some(CreditType::Producer)
+    } else {
+        None
+    }
 }
 
 fn non_empty(value: Option<&str>) -> Option<String> {
@@ -1193,6 +1255,90 @@ mod tests {
         assert_eq!(
             read,
             [(687163, "Project Hail Mary"), (299534, "Avengers: Endgame")]
+        );
+    }
+
+    #[test]
+    fn every_certification_of_the_upstream_is_kept_and_the_american_is_the_record_s() {
+        // api.radarr.video's The Matrix, in part: its countries in the order
+        // of their codes, one written with a space after it.
+        let body = serde_json::json!({
+            "TmdbId": 603,
+            "Title": "The Matrix",
+            "TitleSlug": "603",
+            "Year": 1999,
+            "Certifications": [
+                { "Country": "AR", "Certification": "13" },
+                { "Country": "FR", "Certification": "TP" },
+                { "Country": "GR", "Certification": "K-8 " },
+                { "Country": "US", "Certification": "R" }
+            ]
+        });
+        let movie: MovieResource = serde_json::from_value(body).expect("reads");
+        let item = to_item(&movie);
+
+        // Argentina's came first, and was the record's.
+        assert_eq!(item.content_rating.as_deref(), Some("R"));
+        assert_eq!(item.content_rating_country.as_deref(), Some("US"));
+        assert_eq!(item.releases.len(), 4);
+        assert_eq!(item.certification_in("GR"), Some("K-8"));
+
+        // Sent on as they came: Radarr takes its own country's.
+        let sent: Vec<(String, String)> = from_item(&item)
+            .certifications
+            .into_iter()
+            .map(|c| (c.country, c.certification))
+            .collect();
+        let expected: Vec<(String, String)> =
+            [("AR", "13"), ("FR", "TP"), ("GR", "K-8"), ("US", "R")]
+                .into_iter()
+                .map(|(c, r)| (c.to_string(), r.to_string()))
+                .collect();
+        assert_eq!(sent, expected);
+    }
+
+    #[test]
+    fn a_rating_locked_for_a_country_is_the_one_sent_for_it() {
+        let mut it = item();
+        it.releases = vec![CountryRelease {
+            country: "US".into(),
+            release_type: None,
+            date: None,
+            certification: Some("R".into()),
+            note: None,
+            source: Some("tmdb".into()),
+        }];
+        // The record says PG-13 for the United States: somebody locked it.
+        let sent = from_item(&it).certifications;
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].certification, "PG-13");
+    }
+
+    #[test]
+    fn only_the_crew_the_catalogue_keeps_is_taken_from_the_upstream() {
+        let body = serde_json::json!({
+            "TmdbId": 329865, "Title": "Arrival", "TitleSlug": "329865", "Year": 2016,
+            "Credits": { "Cast": [], "Crew": [
+                { "Name": "Denis Villeneuve", "Job": "Director", "Department": "Directing", "CreditId": "a" },
+                { "Name": "Eric Heisserer", "Job": "Screenplay", "Department": "Writing", "CreditId": "b" },
+                { "Name": "Shawn Levy", "Job": "Producer", "Department": "Production", "CreditId": "c" },
+                { "Name": "Jóhann Jóhannsson", "Job": "Original Music Composer", "Department": "Sound", "CreditId": "d" }
+            ] }
+        });
+        let movie: MovieResource = serde_json::from_value(body).expect("reads");
+        let kept: Vec<(CreditType, Option<String>)> = to_item(&movie)
+            .credits
+            .into_iter()
+            .map(|c| (c.credit_type, c.character_name))
+            .collect();
+        assert_eq!(
+            kept,
+            [
+                (CreditType::Director, Some("Director".to_string())),
+                (CreditType::Writer, Some("Screenplay".to_string())),
+                (CreditType::Producer, Some("Producer".to_string())),
+            ],
+            "the composer is not filed as cast"
         );
     }
 

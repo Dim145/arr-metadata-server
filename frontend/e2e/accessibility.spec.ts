@@ -241,7 +241,15 @@ test.describe('the administration side', () => {
       const index = now.getFullYear() * 4 + Math.floor(now.getMonth() / 3) + 1
       return `/seasons/${Math.floor(index / 4)}/${['winter', 'spring', 'summer', 'autumn'][index % 4]}`
     })
-    await scanned(page, ['/admin/sources', '/admin/media', '/admin/cache', '/admin/audit', '/admin/settings', season])
+    await scanned(page, [
+      '/admin/sources',
+      '/admin/media',
+      '/admin/cache',
+      '/admin/audit',
+      '/admin/notifications',
+      '/admin/settings',
+      season,
+    ])
   })
 
   test('the work editor meets WCAG 2.1 AA', async ({ page }) => {

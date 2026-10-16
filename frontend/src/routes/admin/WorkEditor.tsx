@@ -32,6 +32,7 @@ import type { FieldRegistry, MediaItem, Override, ProvenanceReport, Uploaded } f
 import { ArtworkTab } from './editor/ArtworkTab'
 import { ElsewhereTab } from './editor/ElsewhereTab'
 import { ImagePicker, type Candidate } from './editor/ImagePicker'
+import { EditorLocksContext, type EditorLocks } from './editor/locks'
 import { PeopleTab } from './editor/PeopleTab'
 import { RecordTab } from './editor/RecordTab'
 import { SeasonsTab } from './editor/SeasonsTab'
@@ -154,7 +155,18 @@ export function WorkEditor() {
   const synced = hasSources(work)
   const locks = synced ? (overrides.data ?? []) : []
   const ownLocks = locks.filter((o) => o.scope === 'item').length
-  const deeperLocks = locks.length - ownLocks
+  const deeperLocks = locks.filter((o) => o.scope.startsWith('season:') || o.scope.startsWith('episode:')).length
+  // What the sources gave and a person hid or corrected, counted on the tab
+  // that holds it.
+  const peopleLocks = locks.filter((o) => o.scope.startsWith('credit:') || o.scope.startsWith('alternativeTitle:')).length
+  const artworkLocks = locks.filter((o) => o.scope.startsWith('image:')).length
+  // Every row reads its lock in the language shown, whichever tab drew it.
+  const lockContext: EditorLocks = {
+    language,
+    overrides: locks,
+    lockedFields: work.lockedFields ?? [],
+    translated: registry.data.translated ?? [],
+  }
   const tabs = work.kind === 'series' ? TABS : TABS.filter((one) => one !== 'seasons')
   const shown: Tab = tabs.includes(tab) ? tab : 'record'
   const sheet = poster(work)
@@ -208,12 +220,22 @@ export function WorkEditor() {
         <LockBadge n={deeperLocks} />
       </>
     ),
-    artwork: images ? <Count>{images}</Count> : null,
-    people: peopleCount ? (
-      <Count>
-        {work.credits?.length ?? 0} · {work.alternativeTitles?.length ?? 0}
-      </Count>
-    ) : null,
+    artwork: (
+      <>
+        {images ? <Count>{images}</Count> : null}
+        <LockBadge n={artworkLocks} />
+      </>
+    ),
+    people: (
+      <>
+        {peopleCount ? (
+          <Count>
+            {work.credits?.length ?? 0} · {work.alternativeTitles?.length ?? 0}
+          </Count>
+        ) : null}
+        <LockBadge n={peopleLocks} />
+      </>
+    ),
     elsewhere: identifiers ? <Count>{identifiers}</Count> : null,
   }
 
@@ -434,32 +456,34 @@ export function WorkEditor() {
         </div>
       </nav>
 
-      <div key={shown} id={`panel-${shown}`} role="tabpanel" aria-labelledby={`tab-${shown}`} className="rise" style={{ animationDelay: '40ms' }}>
-        {shown === 'record' ? (
-          <RecordTab
-            work={work}
-            registry={registry.data}
-            overrides={locks}
-            lockable={synced}
-            report={report.data}
-            reportFailed={report.isError}
-            onRetryReport={() => void report.refetch()}
-            language={language}
-            onLanguage={setLanguage}
-            refreshing={refresh.isPending}
-            onRefresh={() => refresh.mutate()}
-            onChanged={invalidate}
-          />
-        ) : shown === 'seasons' ? (
-          <SeasonsTab work={work} registry={registry.data} overrides={locks} lockable={synced} report={report.data} onChanged={invalidate} />
-        ) : shown === 'artwork' ? (
-          <ArtworkTab work={work} onChanged={invalidate} />
-        ) : shown === 'people' ? (
-          <PeopleTab work={work} report={report.data} onChanged={invalidate} />
-        ) : (
-          <ElsewhereTab work={work} overrides={locks} onChanged={invalidate} />
-        )}
-      </div>
+      <EditorLocksContext value={lockContext}>
+        <div key={shown} id={`panel-${shown}`} role="tabpanel" aria-labelledby={`tab-${shown}`} className="rise" style={{ animationDelay: '40ms' }}>
+          {shown === 'record' ? (
+            <RecordTab
+              work={work}
+              registry={registry.data}
+              overrides={locks}
+              lockable={synced}
+              report={report.data}
+              reportFailed={report.isError}
+              onRetryReport={() => void report.refetch()}
+              language={language}
+              onLanguage={setLanguage}
+              refreshing={refresh.isPending}
+              onRefresh={() => refresh.mutate()}
+              onChanged={invalidate}
+            />
+          ) : shown === 'seasons' ? (
+            <SeasonsTab work={work} registry={registry.data} overrides={locks} lockable={synced} report={report.data} onChanged={invalidate} />
+          ) : shown === 'artwork' ? (
+            <ArtworkTab work={work} onChanged={invalidate} />
+          ) : shown === 'people' ? (
+            <PeopleTab work={work} report={report.data} onChanged={invalidate} />
+          ) : (
+            <ElsewhereTab work={work} overrides={locks} onChanged={invalidate} />
+          )}
+        </div>
+      </EditorLocksContext>
     </div>
   )
 }

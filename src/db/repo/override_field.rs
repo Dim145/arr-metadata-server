@@ -19,63 +19,72 @@ use crate::{
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Taken(pub String);
 
+/// The columns a lock is read from, its work's aside.
+const COLUMNS: &str = "scope, field, language, value, updated_at, updated_by";
+
+/// A lock as it is stored: in every language where its language is empty.
+fn read(row: &sqlx::any::AnyRow) -> Result<Override> {
+    let raw: Option<String> = row.opt_text("value")?;
+    Ok(Override {
+        scope: row.text("scope")?,
+        field: row.text("field")?,
+        language: row.opt_text("language")?.filter(|l| !l.is_empty()),
+        value: raw.and_then(|s| serde_json::from_str(&s).ok()),
+        updated_at: row.text("updated_at")?,
+        updated_by: row.opt_text("updated_by")?,
+    })
+}
+
 pub async fn list(db: &Db, media_id: &str) -> Result<Vec<Override>> {
-    let rows = sqlx::query(db.sql(
-        "SELECT scope, field, value, updated_at, updated_by
-         FROM media_override WHERE media_id = ? ORDER BY scope, field",
-    ))
+    let rows = sqlx::query(db.sql(&format!(
+        "SELECT {COLUMNS}
+         FROM media_override WHERE media_id = ? ORDER BY scope, field, language"
+    )))
     .bind(media_id)
     .fetch_all(db.pool())
     .await?;
 
-    rows.iter()
-        .map(|row| {
-            let raw: Option<String> = row.opt_text("value")?;
-            Ok(Override {
-                scope: row.text("scope")?,
-                field: row.text("field")?,
-                value: raw.and_then(|s| serde_json::from_str(&s).ok()),
-                updated_at: row.text("updated_at")?,
-                updated_by: row.opt_text("updated_by")?,
-            })
-        })
-        .collect()
+    rows.iter().map(read).collect()
 }
 
 /// Every override in the catalogue, with the work each is on, in a fixed
 /// order: what an export is made of.
 pub async fn all(db: &Db) -> Result<Vec<(String, Override)>> {
-    let rows = sqlx::query(db.sql(
-        "SELECT media_id, scope, field, value, updated_at, updated_by
-         FROM media_override ORDER BY media_id, scope, field",
-    ))
+    let rows = sqlx::query(db.sql(&format!(
+        "SELECT media_id, {COLUMNS}
+         FROM media_override ORDER BY media_id, scope, field, language"
+    )))
     .fetch_all(db.pool())
     .await?;
 
     rows.iter()
-        .map(|row| {
-            let raw: Option<String> = row.opt_text("value")?;
-            Ok((
-                row.text("media_id")?,
-                Override {
-                    scope: row.text("scope")?,
-                    field: row.text("field")?,
-                    value: raw.and_then(|s| serde_json::from_str(&s).ok()),
-                    updated_at: row.text("updated_at")?,
-                    updated_by: row.opt_text("updated_by")?,
-                },
-            ))
-        })
+        .map(|row| Ok((row.text("media_id")?, read(row)?)))
         .collect()
 }
 
-/// Record an edit. `value = None` stores an explicit "cleared" marker, which is
-/// different from deleting the override.
+/// Record an edit, in every language. `value = None` stores an explicit
+/// "cleared" marker, which is different from deleting the override.
 pub async fn set(
     db: &Db,
     media_id: &str,
     scope: Scope,
     field: &str,
+    value: Option<&Value>,
+    by: Option<&str>,
+) -> Result<()> {
+    set_in(db, media_id, &scope.to_string(), field, "", value, by).await
+}
+
+/// Record an edit of anything a lock names — a field of the work, a season
+/// or an episode, or a child the sources gave ([`crate::domain::fields::Child`])
+/// — in one language, by its key (`fra`), or in every one (empty). The
+/// caller has checked the scope, the field and the value.
+pub async fn set_in(
+    db: &Db,
+    media_id: &str,
+    scope: &str,
+    field: &str,
+    language: &str,
     value: Option<&Value>,
     by: Option<&str>,
 ) -> Result<()> {
@@ -87,16 +96,18 @@ pub async fn set(
     let mut tx = db.begin_write().await?;
 
     sqlx::query(db.sql(
-        "INSERT INTO media_override (media_id, scope, field, value, created_at, updated_at, updated_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT (media_id, scope, field) DO UPDATE SET
+        "INSERT INTO media_override
+             (media_id, scope, field, language, value, created_at, updated_at, updated_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (media_id, scope, field, language) DO UPDATE SET
              value = excluded.value,
              updated_at = excluded.updated_at,
              updated_by = excluded.updated_by",
     ))
     .bind(media_id)
-    .bind(scope.to_string())
+    .bind(scope)
     .bind(field)
+    .bind(language)
     .bind(encoded)
     .bind(&at)
     .bind(&at)
@@ -106,7 +117,7 @@ pub async fn set(
 
     // A lock on the work itself changes what it is listed by: its genre, its
     // year, its title's place in the order.
-    if scope == Scope::Item {
+    if scope == "item" {
         super::item::mark_changed_in(db, &mut tx, media_id).await?;
     }
 
@@ -221,10 +232,12 @@ pub async fn set_on_work(
         _ => {}
     }
 
+    // In every language: the identity is no text.
     sqlx::query(db.sql(
-        "INSERT INTO media_override (media_id, scope, field, value, created_at, updated_at, updated_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT (media_id, scope, field) DO UPDATE SET
+        "INSERT INTO media_override
+             (media_id, scope, field, language, value, created_at, updated_at, updated_by)
+         VALUES (?, ?, ?, '', ?, ?, ?, ?)
+         ON CONFLICT (media_id, scope, field, language) DO UPDATE SET
              value = excluded.value,
              updated_at = excluded.updated_at,
              updated_by = excluded.updated_by",
@@ -263,23 +276,37 @@ async fn refresh_soon(
 
 /// Remove an override, handing the field back to provider data — for one of
 /// the work's identity (see [`set_on_work`]), at its next refresh, which is
-/// asked for now.
+/// asked for now. The lock in every language; see [`unset_in`] for one.
 pub async fn unset(db: &Db, media_id: &str, scope: Scope, field: &str) -> Result<bool> {
+    unset_in(db, media_id, &scope.to_string(), field, "").await
+}
+
+/// Remove the lock anything a lock names carries in one language (`fra`),
+/// or in every one (empty), as [`unset`] does: the other languages' stand.
+pub async fn unset_in(
+    db: &Db,
+    media_id: &str,
+    scope: &str,
+    field: &str,
+    language: &str,
+) -> Result<bool> {
     let mut tx = db.begin_write().await?;
 
-    let result = sqlx::query(
-        db.sql("DELETE FROM media_override WHERE media_id = ? AND scope = ? AND field = ?"),
-    )
+    let result = sqlx::query(db.sql(
+        "DELETE FROM media_override
+          WHERE media_id = ? AND scope = ? AND field = ? AND language = ?",
+    ))
     .bind(media_id)
-    .bind(scope.to_string())
+    .bind(scope)
     .bind(field)
+    .bind(language)
     .execute(&mut *tx)
     .await?;
 
     let removed = result.rows_affected() > 0;
-    if removed && scope == Scope::Item {
+    if removed && scope == "item" {
         super::item::mark_changed_in(db, &mut tx, media_id).await?;
-        if IDENTITY.contains(&field) {
+        if language.is_empty() && IDENTITY.contains(&field) {
             refresh_soon(db, &mut tx, media_id).await?;
         }
     }
@@ -340,9 +367,9 @@ pub async fn list_for_many(
     for chunk in media_ids.chunks(200) {
         let placeholders = vec!["?"; chunk.len()].join(", ");
         let sql = format!(
-            "SELECT media_id, scope, field, value, updated_at, updated_by
+            "SELECT media_id, {COLUMNS}
              FROM media_override WHERE media_id IN ({placeholders})
-             ORDER BY media_id, scope, field"
+             ORDER BY media_id, scope, field, language"
         );
 
         let mut query = sqlx::query(db.sql(&sql));
@@ -351,16 +378,9 @@ pub async fn list_for_many(
         }
 
         for row in query.fetch_all(db.pool()).await? {
-            let raw: Option<String> = row.opt_text("value")?;
             out.entry(row.text("media_id")?)
                 .or_default()
-                .push(Override {
-                    scope: row.text("scope")?,
-                    field: row.text("field")?,
-                    value: raw.and_then(|s| serde_json::from_str(&s).ok()),
-                    updated_at: row.text("updated_at")?,
-                    updated_by: row.opt_text("updated_by")?,
-                });
+                .push(read(&row)?);
         }
     }
 
@@ -379,24 +399,10 @@ pub async fn count(db: &Db) -> Result<i64> {
 mod tests {
     use super::*;
     use crate::{
-        config,
-        db::repo::item,
+        db::{repo::item, testing::db},
         domain::{ExternalSource, MediaItem},
     };
     use serde_json::json;
-
-    async fn db() -> Db {
-        let db = Db::connect(&config::Database {
-            url: "sqlite::memory:".into(),
-            max_connections: 1,
-            acquire_timeout: std::time::Duration::from_secs(5),
-        })
-        .await
-        .expect("in-memory database");
-
-        db.migrate().await.expect("migrations");
-        db
-    }
 
     async fn film(db: &Db, title: &str, tmdb: i64) -> MediaItem {
         let mut work = MediaItem::empty(MediaKind::Movie);

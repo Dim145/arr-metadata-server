@@ -171,6 +171,9 @@ pub struct Inner {
     /// several: kept in the database, since the sign-in may come back to
     /// another instance than the one it left from.
     pub cookie_key: axum_extra::extract::cookie::Key,
+    /// What the webhooks keep between two events: their client, their
+    /// worker's bell, and which events the destinations want.
+    pub webhooks: crate::service::webhook::Hooks,
 }
 
 impl std::ops::Deref for AppState {
@@ -304,6 +307,7 @@ impl AppState {
             tls,
             coord,
             media,
+            webhooks: crate::service::webhook::Hooks::new()?,
         }));
 
         // One instance at a time: each finds what the one before it made.
@@ -311,7 +315,10 @@ impl AppState {
         let started = async {
             state.bootstrap_admin().await?;
             state.bootstrap_allowlist().await?;
-            state.bootstrap_settings().await
+            state.bootstrap_settings().await?;
+            // The single webhook address of earlier versions made a
+            // destination, once, and the destinations read.
+            crate::service::webhook::start(&state).await
         }
         .await;
         held.release().await;
@@ -351,6 +358,10 @@ impl AppState {
                         .unwrap_or_else(|| "US".to_string()),
                 ),
                 ("tmdb.searchLimit", cfg.tmdb.search_limit.to_string()),
+                (
+                    "tmdb.castLimit",
+                    crate::providers::tmdb::map::DEFAULT_CAST.to_string(),
+                ),
                 ("tvdb.searchFallback", cfg.tvdb.enabled.to_string()),
                 ("skyhook.fallback", cfg.skyhook.fallback.to_string()),
                 ("skyhook.enrich", cfg.skyhook.enrich.to_string()),
@@ -402,23 +413,41 @@ impl AppState {
                 ("api.native", "true".to_string()),
                 ("api.tvdb", "true".to_string()),
                 ("api.anilist", "true".to_string()),
+                ("api.plex", "true".to_string()),
                 // Off: the relays spend the operator's quotas, and with
                 // sign-ups open a member is anybody.
                 ("api.tmdbMembers", "false".to_string()),
+                // The relays stand in with this server's keys, as they always
+                // did — under AMS_TVDB_AUTH=allowlist too, where a client's
+                // own TheTVDB key travels as it came and a key issued here
+                // still stands in: `server` is what either value did.
+                ("tmdb.relayCredential", "server".to_string()),
+                ("tvdb.relayCredential", "server".to_string()),
                 ("oidc.enabled", "false".to_string()),
                 ("oidc.scopes", "openid profile email".to_string()),
                 ("oidc.autoRegister", "false".to_string()),
                 ("auth.passwordLogin", "true".to_string()),
-                (
-                    "webhooks.events",
-                    crate::service::webhook::DEFAULT_EVENTS.to_string(),
-                ),
                 ("refresh.enabled", cfg.refresh.enabled.to_string()),
                 (
                     "refresh.intervalSeconds",
                     cfg.refresh.interval.as_secs().to_string(),
                 ),
                 ("refresh.batchSize", cfg.refresh.batch_size.to_string()),
+                (
+                    "refresh.ttlContinuing",
+                    cfg.refresh.continuing_ttl.as_secs().to_string(),
+                ),
+                (
+                    "refresh.ttlEnded",
+                    cfg.refresh.ended_ttl.as_secs().to_string(),
+                ),
+                // The order the merge followed until it was a setting, every
+                // provider named: one the environment left out came after the
+                // rest, and one it misspelt was passed over, as before.
+                (
+                    "sources.priority",
+                    crate::merge::rules::order(&cfg.provider_priority).join(","),
+                ),
                 // Off unless somebody turns it on. A server that started
                 // serving adult titles because it was upgraded would be a
                 // surprise of the worst kind.
@@ -431,6 +460,9 @@ impl AppState {
                     },
                 ),
                 ("adult.force", "false".to_string()),
+                // Off: telling the operator's own Sonarr and Radarr of a
+                // change is theirs to ask for, once they are connected.
+                ("arr.pushRefresh", "false".to_string()),
             ])
             .await?;
 
@@ -749,6 +781,41 @@ impl AppState {
             .int_at("tmdb.searchLimit", None, None)
             .and_then(|n| usize::try_from(n).ok())
             .unwrap_or(self.config.tmdb.search_limit)
+    }
+
+    /// How much of TMDB's cast a work keeps, top of the bill first.
+    pub fn cast_limit(&self) -> usize {
+        use crate::providers::tmdb::map::{DEFAULT_CAST, MAX_CAST};
+        self.settings
+            .int_at("tmdb.castLimit", None, None)
+            .and_then(|n| usize::try_from(n).ok())
+            .map_or(DEFAULT_CAST, |n| n.clamp(1, MAX_CAST))
+    }
+
+    /// The order the merge takes the providers in, most trusted first, as
+    /// the Sources page last put them: read by every merge, so the next work
+    /// refreshed takes a new order without a restart.
+    pub fn provider_priority(&self) -> Vec<String> {
+        self.settings
+            .resolve("sources.priority", None, None)
+            .and_then(|text| crate::merge::rules::parse_priority(&text).ok())
+            .unwrap_or_else(|| self.config.provider_priority.clone())
+    }
+
+    /// How long a work keeps before it is fetched again: one done changing —
+    /// an ended series, a released film — or one still changing. Read when
+    /// the work is scheduled.
+    pub fn refresh_ttl(&self, finished: bool) -> std::time::Duration {
+        let (key, configured) = if finished {
+            ("refresh.ttlEnded", self.config.refresh.ended_ttl)
+        } else {
+            ("refresh.ttlContinuing", self.config.refresh.continuing_ttl)
+        };
+        self.settings
+            .int_at(key, None, None)
+            .and_then(|secs| u64::try_from(secs).ok())
+            .map(std::time::Duration::from_secs)
+            .unwrap_or(configured)
     }
 
     pub fn flag(&self, key: &str, fallback: bool) -> bool {

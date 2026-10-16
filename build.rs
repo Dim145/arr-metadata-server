@@ -32,6 +32,11 @@ fn main() {
     let dist = Path::new("frontend/dist");
 
     println!("cargo:rerun-if-changed=frontend/dist");
+    // The migrations are read into the binary when it is built, and a file
+    // added to either directory is not a change Cargo notices by itself: a test
+    // run after a new migration would go on running the schema from before it.
+    println!("cargo:rerun-if-changed=migrations/sqlite");
+    println!("cargo:rerun-if-changed=migrations/postgres");
 
     if dist.join("index.html").exists() {
         return;

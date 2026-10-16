@@ -56,6 +56,12 @@ pub async fn record(state: &AppState, event: Event<'_>) {
         tracing::warn!(action = %event.action, error = %e, "could not write the audit entry");
     }
 
+    // A lock, an edit, a sync: told to the operator's own Sonarr or Radarr
+    // too, when that is asked for.
+    crate::arr::push::heard(state, event.action, target.as_deref());
+
+    // Owed to the destinations that want it, written before this returns:
+    // the sending is the webhook worker's, and a restart loses none of it.
     crate::service::webhook::notify(
         state,
         crate::service::webhook::Happening {
@@ -64,7 +70,46 @@ pub async fn record(state: &AppState, event: Event<'_>) {
             target,
             detail,
         },
-    );
+    )
+    .await;
+}
+
+/// Who the trail says did what this server does of its own accord.
+const SYSTEM: &str = "system";
+
+/// Record what this server did of its own accord — a refresh that found
+/// TheTVDB had moved episodes — as [`record`] does a person's doing: in the
+/// trail as `system`'s, from no address, and owed to the webhooks that want it.
+pub async fn record_system(state: &AppState, action: Action, target: &str, detail: &str) {
+    let target = clip(target);
+    let detail = clip(detail);
+
+    let result = repo::audit::record(
+        &state.db,
+        repo::audit::Record {
+            actor: Some(SYSTEM),
+            action,
+            target: Some(&target),
+            detail: Some(&detail),
+            ip: None,
+        },
+    )
+    .await;
+
+    if let Err(e) = result {
+        tracing::warn!(action = %action, error = %e, "could not write the audit entry");
+    }
+
+    crate::service::webhook::notify(
+        state,
+        crate::service::webhook::Happening {
+            action,
+            actor: Some(SYSTEM.to_string()),
+            target: Some(target),
+            detail: Some(detail),
+        },
+    )
+    .await;
 }
 
 /// The most of any one field this trail will hold.

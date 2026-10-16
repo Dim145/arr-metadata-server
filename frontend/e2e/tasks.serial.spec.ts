@@ -70,7 +70,8 @@ test.describe('the tasks', () => {
     const name = USERNAME!.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     expect(mine?.triggeredBy).toMatch(pattern(`:${escaped(name)}$`))
     await page.getByLabel(/^(started by|lancée par)$/i).selectOption('person')
-    await expect(page.getByRole('table').getByRole('row').nth(1)).toContainText(
+    // The newest run is the first row under the first day's heading.
+    await expect(page.locator('tr[data-job]').first()).toContainText(
       /refresh what is due|actualiser ce qui est dû/i,
     )
 

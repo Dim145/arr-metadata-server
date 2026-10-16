@@ -1,13 +1,9 @@
 //! TMDB API response shapes.
 //!
-//! Only the fields this server maps are declared. Everything is `Option` or
+//! Only the fields this server maps are declared, and the few it reads
+//! nowhere yet say so where they stand. Everything is `Option` or
 //! `#[serde(default)]`: TMDB omits fields freely depending on the title, and a
 //! missing one must not fail the whole fetch.
-
-// These mirror TMDB's documents. Some fields are declared but not yet mapped;
-// they are kept because the struct doubles as documentation of what upstream
-// returns, and because adding one back later is a one-line change.
-#![allow(dead_code)]
 
 use serde::Deserialize;
 
@@ -20,6 +16,8 @@ use serde::Deserialize;
 pub struct SearchResponse<T> {
     #[serde(default)]
     pub results: Vec<T>,
+    /// Unread: the pages are counted by `total_pages`.
+    #[allow(dead_code)]
     #[serde(default)]
     pub total_results: i64,
     #[serde(default)]
@@ -103,6 +101,12 @@ pub struct Tv {
     #[serde(default)]
     pub seasons: Vec<SeasonSummary>,
     pub adult: Option<bool>,
+    pub tagline: Option<String>,
+    #[serde(default)]
+    pub production_countries: Vec<Country>,
+    /// Whoever created the series, which its crew does not list.
+    #[serde(default)]
+    pub created_by: Vec<Creator>,
 
     // append_to_response
     pub external_ids: Option<ExternalIds>,
@@ -127,6 +131,8 @@ pub struct SeasonSummary {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Season {
+    /// Unread outside the tests: every episode carries its own.
+    #[allow(dead_code)]
     pub season_number: i32,
     #[serde(default)]
     pub episodes: Vec<Episode>,
@@ -273,13 +279,20 @@ pub struct Movie {
 #[derive(Debug, Clone, Deserialize)]
 pub struct CollectionRef {
     pub id: i64,
+    // Unread: a collection is read in full from `/collection/{id}`, in the
+    // reader's language.
+    #[allow(dead_code)]
     pub name: Option<String>,
+    #[allow(dead_code)]
     pub poster_path: Option<String>,
+    #[allow(dead_code)]
     pub backdrop_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Collection {
+    /// Unread: the one it was asked by.
+    #[allow(dead_code)]
     pub id: i64,
     #[serde(default)]
     pub name: String,
@@ -305,7 +318,12 @@ pub struct ReleaseDate {
     #[serde(rename = "type")]
     pub release_type: Option<i32>,
     pub release_date: Option<String>,
+    /// The language of the copies shown, where one release is told from
+    /// another by it.
+    #[allow(dead_code)]
     pub iso_639_1: Option<String>,
+    /// What TMDB notes beside the release: a festival, a service.
+    pub note: Option<String>,
 }
 
 // ─── shared ──────────────────────────────────────────────────────────────────
@@ -368,6 +386,17 @@ pub struct CrewMember {
     pub profile_path: Option<String>,
 }
 
+/// Somebody who created a series, as `/tv/{id}` lists them.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Creator {
+    pub id: Option<i64>,
+    /// Identifies the credit, not the person.
+    pub credit_id: Option<String>,
+    #[serde(default)]
+    pub name: String,
+    pub profile_path: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct ContentRating {
     pub iso_3166_1: String,
@@ -418,6 +447,8 @@ pub struct Video {
     #[serde(rename = "type")]
     pub video_type: Option<String>,
     pub official: Option<bool>,
+    /// Unread: a trailer is chosen by whether it is official.
+    #[allow(dead_code)]
     pub size: Option<i32>,
 }
 
@@ -434,8 +465,13 @@ pub struct Images {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ImageRef {
     pub file_path: String,
+    // Unread: the language is the one asked for, and the pictures are kept
+    // in the order TMDB ranks them.
+    #[allow(dead_code)]
     pub iso_639_1: Option<String>,
+    #[allow(dead_code)]
     pub vote_average: Option<f64>,
+    #[allow(dead_code)]
     pub width: Option<i32>,
 }
 
@@ -473,6 +509,8 @@ pub struct ChangesResponse {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ChangedId {
     pub id: i64,
+    /// Unread: a changed work is refreshed for whoever may see it.
+    #[allow(dead_code)]
     pub adult: Option<bool>,
 }
 

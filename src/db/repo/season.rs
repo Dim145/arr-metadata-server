@@ -310,23 +310,12 @@ pub fn works(
 mod tests {
     use super::*;
     use crate::{
-        config,
-        db::repo::{self, child::blank_episode},
+        db::{
+            repo::{self, child::blank_episode},
+            testing::db,
+        },
         domain::{MediaItem, MediaKind},
     };
-
-    async fn db() -> Db {
-        let db = Db::connect(&config::Database {
-            url: "sqlite::memory:".into(),
-            max_connections: 1,
-            acquire_timeout: std::time::Duration::from_secs(5),
-        })
-        .await
-        .expect("in-memory database");
-
-        db.migrate().await.expect("migrations");
-        db
-    }
 
     async fn stored(db: &Db, adjust: impl FnOnce(&mut MediaItem)) -> MediaItem {
         let mut item = MediaItem::empty(MediaKind::Series);

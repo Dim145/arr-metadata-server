@@ -800,3 +800,114 @@ test.describe('an address that is not a work’s', () => {
     await expect(page.getByRole('link', { name: /cinémathèque/i }).first()).toBeVisible()
   })
 })
+
+/* ── What the sources give beside the rest ───────────────────────────────── */
+
+interface CountryRelease {
+  country: string
+  releaseType?: string
+  date?: string
+  certification?: string
+}
+
+interface Recorded {
+  id: string
+  title: string
+  tagline?: string
+  contentRating?: string
+  contentRatingCountry?: string
+  productionCountries?: string[]
+  releases?: CountryRelease[]
+}
+
+/** The first of the most popular works of a kind whose record holds what is wanted. */
+async function aWorkWith(
+  request: APIRequestContext,
+  kind: 'movie' | 'series',
+  wanted: (work: Recorded) => boolean,
+): Promise<Recorded | undefined> {
+  const { items } = await (await request.get(`/api/v1/items?kind=${kind}&limit=30`)).json()
+  for (const { id } of items as { id: string }[]) {
+    const work = (await (await request.get(`/api/v1/items/${id}`)).json()) as Recorded
+    if (wanted(work)) return work
+  }
+  return undefined
+}
+
+/** A country with a dated release of the work, other than the record's own. */
+function aCountryOf(work: Recorded): string | undefined {
+  const dated = (work.releases ?? []).filter((r) => r.date && r.country !== work.contentRatingCountry)
+  return dated.find((r) => r.releaseType === 'theatrical' && r.certification)?.country ?? dated[0]?.country
+}
+
+test.describe('a work’s record', () => {
+  test('carries its tagline under its title', async ({ page, request }) => {
+    const tagged = (w: Recorded) => Boolean(w.tagline?.trim())
+    const work = (await aWorkWith(request, 'movie', tagged)) ?? (await aWorkWith(request, 'series', tagged))
+    test.skip(!work, 'no work here has a tagline yet: TMDB gives one at the next refresh')
+
+    await page.goto(`/work/${work!.id}`)
+    const plate = page.locator('article > header').first()
+    await expect(plate.getByText(work!.tagline!.trim(), { exact: true })).toBeVisible()
+  })
+
+  test('names every country it was made in', async ({ page, request }) => {
+    const work = await aWorkWith(request, 'movie', (w) => (w.productionCountries?.length ?? 0) > 0)
+    test.skip(!work, 'no film here lists its countries yet: TMDB gives them at the next refresh')
+
+    await page.goto(`/work/${work!.id}`)
+    const countries = page.locator('dt', { hasText: /^(countries|pays)$/i }).locator('xpath=following-sibling::dd[1]')
+    await expect(countries).toBeVisible()
+    // In the reader's language, as the browser names countries.
+    const names = new Intl.DisplayNames(['en-GB'], { type: 'region' })
+    for (const code of work!.productionCountries!) {
+      await expect(countries).toContainText(names.of(code) ?? code)
+    }
+  })
+
+  test('dates and rates a film for the reader’s country, and folds the others', async ({ page, request }) => {
+    const work = await aWorkWith(
+      request,
+      'movie',
+      (w) => new Set((w.releases ?? []).map((r) => r.country)).size > 1 && aCountryOf(w) !== undefined,
+    )
+    test.skip(!work, 'no film here has releases in two countries yet: TMDB gives them at the next refresh')
+    const country = aCountryOf(work!)!
+    // The country a reader picks on a page to see where it is watched.
+    await page.addInitScript((code) => localStorage.setItem('ams.watchRegion', code), country)
+
+    await page.goto(`/work/${work!.id}`)
+    const name = new Intl.DisplayNames(['en-GB'], { type: 'region' }).of(country) ?? country
+    const panel = page.getByRole('region', { name: /^(releases|sorties)$/i })
+    await expect(panel.getByText(name, { exact: true }).first()).toBeVisible()
+    const first = (work!.releases ?? [])
+      .filter((r) => r.country === country && r.date)
+      .sort((a, b) => a.date!.localeCompare(b.date!))[0]!
+    const day = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }).format(
+      new Date(`${first.date!.slice(0, 10)}T00:00:00Z`),
+    )
+    await expect(panel.getByText(day).first()).toBeVisible()
+
+    // The rating there, on the plate, as given for its cinemas.
+    const rating = (work!.releases ?? [])
+      .filter((r) => r.country === country && r.releaseType === 'theatrical' && r.certification?.trim())
+      .sort((a, b) => a.date!.localeCompare(b.date!))[0]?.certification?.trim()
+    if (rating) {
+      const plate = page.locator('article > header').first()
+      await expect(plate.getByText(rating, { exact: true })).toBeVisible()
+    }
+
+    // Every other country a press away.
+    const others = page.getByRole('button', { name: /other countr|autres? pays/i })
+    await expect(others).toHaveAttribute('aria-expanded', 'false')
+    await others.click()
+    await expect(page.getByRole('button', { name: /fewer countries|moins de pays/i })).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    )
+    const another = (work!.releases ?? []).find((r) => r.country !== country)!.country
+    const otherName = new Intl.DisplayNames(['en-GB'], { type: 'region' }).of(another) ?? another
+    await expect(panel.getByText(otherName, { exact: true }).first()).toBeVisible()
+    expect(await scrollsSideways(page)).toBe(false)
+  })
+})

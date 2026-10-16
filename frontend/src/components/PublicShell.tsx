@@ -5,6 +5,11 @@
  * a header that frosts what scrolls under it costs a compositor pass on every
  * frame, and this interface has to stay cheap on a machine whose job is
  * transcoding.
+ *
+ * The one thing that does float is the bar along the foot of a phone — fixed,
+ * since a thumb reaches the bottom of a screen and not its top — and the page
+ * keeps room under its own end for it: nothing, the footer included, is left
+ * beneath it.
  */
 
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
@@ -16,9 +21,9 @@ import { useSettled } from '../lib/debounce'
 import { feeds, webcal } from '../lib/feeds'
 import { useHasLists, useMe, useNavigationReset } from '../lib/hooks'
 import { cn } from '../lib/cn'
-import { LANGS, LANGUAGES, useI18n } from '../lib/i18n'
+import { useI18n } from '../lib/i18n'
 import { ThemeToggle } from './ThemeToggle'
-import { BrowseTab, Tab } from './nav'
+import { AdminLink, BrowseTab, LanguageToggle, Tab, TabBar } from './nav'
 import { lookup, providerName } from '../lib/labels'
 import { poster } from '../lib/media'
 import type { ItemPage, Me, Sources } from '../lib/types'
@@ -34,14 +39,12 @@ export function PublicShell({ me }: { me?: Me }) {
   const hasLists = useHasLists()
   // Signed in, whatever the account may do: a member has a way out too.
   const signedIn = Boolean(me?.canWrite || me?.user)
-  const [open, setOpen] = useState(false)
   const [searching, setSearching] = useState(false)
   const location = useLocation()
   useNavigationReset('main')
 
-  // A menu that survives navigation would cover the page it just opened.
+  // A search that survives navigation would cover the page it just opened.
   useEffect(() => {
-    setOpen(false)
     setSearching(false)
   }, [location.pathname, location.search])
 
@@ -59,7 +62,6 @@ export function PublicShell({ me }: { me?: Me }) {
         box.select()
       } else {
         setSearching(true)
-        setOpen(false)
       }
     }
     window.addEventListener('keydown', onKey)
@@ -72,7 +74,10 @@ export function PublicShell({ me }: { me?: Me }) {
     // without containment that bleed makes the whole page scroll sideways.
     // `hidden` would contain it too, but it turns this element into a scroll
     // container and the sticky header stops sticking.
-    <div className="grain ambience min-h-dvh overflow-x-clip">
+    //
+    // Under a phone, room for the bar along its foot: a cell is 3.5rem and a
+    // hairline, and a phone with a home indicator adds its own inset.
+    <div className="grain ambience min-h-dvh overflow-x-clip pb-[calc(3.625rem+env(safe-area-inset-bottom))] md:pb-0">
       <a
         href="#main"
         className="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-50 focus:rounded-card focus:bg-vermillion focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-ink"
@@ -119,14 +124,11 @@ export function PublicShell({ me }: { me?: Me }) {
             </button>
 
             {/* Below the width where the field fits, search is still one tap
-                away rather than buried in the menu: it is the thing people
-                come to a catalogue to do. */}
+                away, in the bar at the top with the title: it is the thing
+                people come to a catalogue to do. */}
             <button
               type="button"
-              onClick={() => {
-                setSearching((was) => !was)
-                setOpen(false)
-              }}
+              onClick={() => setSearching((was) => !was)}
               aria-expanded={searching}
               aria-label={t.nav.search}
               className="grid size-11 place-items-center rounded-card text-bone-dim transition-colors duration-200 hover:bg-ink-high hover:text-bone lg:hidden"
@@ -134,13 +136,14 @@ export function PublicShell({ me }: { me?: Me }) {
               <Glyph name={searching ? 'close' : 'search'} className="size-5" />
             </button>
 
-            {/* In the bar from `md` up; below it they move into the menu. On a
-                phone the logo, search, language, account and menu buttons are
-                wider than the screen together — at 320px the menu button sat
-                past the edge, clipped away, and the navigation behind it could
-                not be opened at all. */}
+            {/* In the bar from `md` up; below it they are in the sheet the
+                bar along the foot of the screen opens. On a phone the logo,
+                search, language, account and a menu button were wider than
+                the screen together — at 320px the menu button sat past the
+                edge, clipped away, and the navigation behind it could not be
+                opened at all. The top bar keeps the title and the search. */}
             <div className="hidden items-center gap-2 md:flex">
-              {/* On a tablet the bar is full; the lamp is in the menu there. */}
+              {/* On a tablet the bar is full: the lamp waits for `lg`. */}
               <ThemeToggle className="hidden lg:flex" />
               <LanguageToggle />
               <AdminLink me={me} />
@@ -151,68 +154,12 @@ export function PublicShell({ me }: { me?: Me }) {
                 />
               ) : null}
             </div>
-
-            <button
-              type="button"
-              onClick={() => {
-                setOpen((was) => !was)
-                setSearching(false)
-              }}
-              aria-expanded={open}
-              aria-label={open ? t.nav.close : t.nav.menu}
-              className="grid size-11 place-items-center rounded-card text-bone-dim transition-colors duration-200 hover:bg-ink-high hover:text-bone md:hidden"
-            >
-              <Glyph name={open ? 'close' : 'menu'} className="size-5" />
-            </button>
           </div>
         </div>
 
         {searching ? (
           <div className="border-t border-rule bg-ink-raised px-4 py-3 lg:hidden">
             <SearchBox id="catalogue-search-bar" autoFocus />
-          </div>
-        ) : null}
-
-        {open ? (
-          <div className="border-t border-rule bg-ink-raised px-4 py-4 md:hidden">
-            <nav aria-label={t.nav.browse} className="grid gap-1">
-              <Tab to="/browse" block>
-                {t.nav.browse}
-              </Tab>
-              {/* No pointer to rest on the tab here: the ways into the
-                  catalogue are listed beneath it instead. */}
-              <div className="ml-4 grid gap-0.5 border-l border-rule pl-2">
-                <Tab to="/browse?kind=series" block>
-                  {t.nav.series}
-                </Tab>
-                <Tab to="/browse?kind=movie" block>
-                  {t.nav.films}
-                </Tab>
-                <Tab to="/collections" block section>
-                  {t.collections.label}
-                </Tab>
-              </div>
-              <Tab to="/calendar" block>
-                {t.nav.calendar}
-              </Tab>
-              {hasLists ? (
-                <Tab to="/lists" block section>
-                  {t.nav.lists}
-                </Tab>
-              ) : null}
-              <Tab to="/seasons" block section>
-                {t.nav.seasons}
-              </Tab>
-            </nav>
-
-            <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-rule pt-3">
-              <ThemeToggle />
-              <LanguageToggle />
-              <AdminLink me={me} labelled />
-              {signedIn ? (
-                <SignOut className="flex min-h-11 items-center gap-2 rounded-card px-3 text-sm font-medium text-bone-dim transition-colors duration-200 hover:bg-ink-high hover:text-vermillion" />
-              ) : null}
-            </div>
           </div>
         ) : null}
       </header>
@@ -226,6 +173,8 @@ export function PublicShell({ me }: { me?: Me }) {
       </main>
 
       <Footer />
+
+      <TabBar me={me} />
     </div>
   )
 }
@@ -448,71 +397,6 @@ function SearchBox({
         {listed && found.isSuccess ? t.nav.resultsFound(items.length) : ''}
       </p>
     </form>
-  )
-}
-
-function LanguageToggle() {
-  const { lang, setLang, t } = useI18n()
-
-  return (
-    <div
-      role="group"
-      aria-label={t.nav.language}
-      className="flex items-center rounded-card border border-rule"
-    >
-      {LANGS.map((code) => (
-        <button
-          key={code}
-          type="button"
-          onClick={() => setLang(code)}
-          aria-pressed={lang === code}
-          title={LANGUAGES[code].name}
-          lang={code}
-          className={cn(
-            // Each half is a target in its own right, so each half gets the
-            // full 44px rather than the pair sharing one.
-            'flex min-h-11 min-w-11 items-center justify-center rounded-card px-2',
-            'font-mono text-[0.6875rem] font-medium tracking-wider uppercase',
-            'cursor-pointer transition-colors duration-200',
-            lang === code ? 'bg-bone text-ink' : 'text-bone-faint hover:text-bone',
-          )}
-        >
-          {code}
-        </button>
-      ))}
-    </div>
-  )
-}
-
-function AdminLink({ me, labelled = false }: { me?: Me; labelled?: boolean }) {
-  const { t } = useI18n()
-  const signedIn = Boolean(me?.canWrite)
-  // A member is signed in too, with no administration to go to: their account.
-  const member = !signedIn && Boolean(me?.user)
-
-  const label = signedIn ? t.nav.admin : member ? t.nav.account : t.nav.signIn
-
-  return (
-    <Link
-      to={signedIn ? '/admin' : member ? '/account' : '/login'}
-      aria-label={label}
-      className={cn(
-        'flex min-h-11 items-center gap-2 rounded-card px-3 text-sm font-medium',
-        'transition-colors duration-200',
-        signedIn
-          ? 'border border-vermillion-deep text-vermillion hover:bg-vermillion hover:text-ink'
-          : 'text-bone-dim hover:bg-ink-high hover:text-bone',
-      )}
-    >
-      {/* The word from `lg` up only: between `md` and `lg` the bar holds
-          the tabs, the search, the language and this, and with the word it
-          was wider than an 820px tablet — this link cut off past the edge.
-          For somebody signed in it waits for `xl`: the bar then holds the way
-          out beside it too, and a member's "My account" is the longest word
-          it carries — at 1024px it was this, and the way out, past the edge. */}
-      <Glyph name={signedIn ? 'settings' : 'user'} className="size-4" />
-      <span className={labelled ? undefined : signedIn || member ? 'hidden xl:inline' : 'hidden lg:inline'}>{label}</span>
-    </Link>
   )
 }
 

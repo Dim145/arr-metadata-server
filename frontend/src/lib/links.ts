@@ -47,6 +47,9 @@ export function identifierLink(
     // wrong one — the work's homepage is its page on the Fankai wiki.
     case 'fankai':
       return undefined
+    // An item's page, `Q1079`, whatever kind of work it is.
+    case 'wikidata':
+      return /^Q\d+$/.test(String(value)) ? `https://www.wikidata.org/wiki/${id}` : undefined
     default:
       return undefined
   }

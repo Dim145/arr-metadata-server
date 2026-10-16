@@ -29,8 +29,11 @@ use crate::{
 const TAG: &str = super::overrides::TAG;
 
 /// The shape of the document; bumped when it changes in a way an older
-/// server could not read.
-const VERSION: u32 = 1;
+/// server could not read. Two names a lock's language, or a child the
+/// sources gave as its scope, which a server reading one would set in every
+/// language or refuse: a document is written as two only when it holds such
+/// a lock, and both are read.
+const VERSION: u32 = 2;
 
 /// The most locks one request takes. A request body is a megabyte at most,
 /// so a long document is sent in parts — the interface does that on its own.
@@ -67,9 +70,13 @@ pub struct LockedWork {
 #[serde(rename_all = "camelCase")]
 pub struct Lock {
     pub work: LockedWork,
-    /// `item`, `season:3` or `episode:3x7`.
+    /// `item`, `season:3` or `episode:3x7` — or a child the sources gave,
+    /// `credit:actor:tmdb:17419`, as the lock names it.
     pub scope: String,
     pub field: String,
+    /// The language a text is locked in alone, `fra`; absent for every one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
     /// The value the field is locked to, or `null` where it was cleared and
     /// locked so. Left out altogether, the lock is refused: nothing is
     /// guessed on a document's behalf.
@@ -160,13 +167,24 @@ async fn export(
                 },
                 scope: o.scope,
                 field: o.field,
+                language: o.language,
                 value: Some(o.value),
             })
         })
-        .collect();
+        .collect::<Vec<_>>();
+
+    // Read as one wherever nothing in it needs two.
+    let version = if locks
+        .iter()
+        .any(|lock| lock.language.is_some() || lock.scope.parse::<fields::Child>().is_ok())
+    {
+        VERSION
+    } else {
+        1
+    };
 
     Ok(Json(Locks {
-        version: VERSION,
+        version,
         exported_at: crate::db::now(),
         locks,
     }))
@@ -197,9 +215,9 @@ async fn import(
 ) -> AppResult<Json<Imported>> {
     require_admin(&identity)?;
 
-    if document.version != VERSION {
+    if !(1..=VERSION).contains(&document.version) {
         return Err(AppError::BadRequest(format!(
-            "this server reads version {VERSION} of the locks document, not {}",
+            "this server reads versions 1 to {VERSION} of the locks document, not {}",
             document.version
         )));
     }
@@ -216,6 +234,7 @@ async fn import(
     // request that stopped early leaves nothing half-done behind it.
     for id in &outcome.touched {
         service::listing::after_write(&state, id).await;
+        crate::arr::push::offer(&state, id, crate::arr::push::Reason::Lock);
     }
     audit::record(
         &state,
@@ -276,9 +295,9 @@ struct Known {
     title: String,
     seasons: HashSet<i32>,
     episodes: HashSet<(i32, i32)>,
-    /// What is locked already, by scope and field, to tell a lock already
-    /// set from one to set.
-    current: HashMap<(String, String), Option<Value>>,
+    /// What is locked already, by scope, field and language (empty for
+    /// every one), to tell a lock already set from one to set.
+    current: HashMap<(String, String, String), Option<Value>>,
 }
 
 /// One key per work named, whatever it was named by.
@@ -339,6 +358,45 @@ async fn apply(
             refuse(outcome, "no value; give one, or null to clear the field");
             continue;
         };
+
+        // A child the sources gave, hidden or corrected wherever it is held:
+        // there is no row of it to be missing.
+        if let Ok(child) = lock.scope.parse::<fields::Child>() {
+            if lock.language.is_some() {
+                refuse(
+                    outcome,
+                    "a credit, an image or a title is locked in every language",
+                );
+                continue;
+            }
+            if let Err(e) = fields::validate_child(&child, &lock.field, value.as_ref()) {
+                refuse(outcome, &e);
+                continue;
+            }
+            let slot = (child.to_string(), lock.field.clone(), String::new());
+            if known
+                .current
+                .get(&slot)
+                .is_some_and(|stored| stored == value)
+            {
+                outcome.unchanged += 1;
+                continue;
+            }
+            super::overrides::lock_child(
+                state,
+                &known.id,
+                &child,
+                &lock.field,
+                value.as_ref(),
+                &identity.label(),
+            )
+            .await?;
+            known.current.insert(slot, value.clone());
+            outcome.applied += 1;
+            outcome.touch(&known.id);
+            continue;
+        }
+
         let scope: fields::Scope = match lock.scope.parse() {
             Ok(scope) => scope,
             Err(e) => {
@@ -346,7 +404,17 @@ async fn apply(
                 continue;
             }
         };
+        let Ok(language) = super::overrides::lock_language(lock.language.as_deref()) else {
+            refuse(outcome, "that is no language a work is served in");
+            continue;
+        };
         if let Err(e) = fields::validate(scope, &lock.field, value.as_ref()) {
+            refuse(outcome, &e);
+            continue;
+        }
+        if language.is_some()
+            && let Err(e) = fields::validate_language(scope, &lock.field)
+        {
             refuse(outcome, &e);
             continue;
         }
@@ -362,7 +430,11 @@ async fn apply(
             continue;
         }
 
-        let slot = (scope.to_string(), lock.field.clone());
+        let slot = (
+            scope.to_string(),
+            lock.field.clone(),
+            language.clone().unwrap_or_default(),
+        );
         let unchanged = known
             .current
             .get(&slot)
@@ -380,16 +452,32 @@ async fn apply(
 
         // Served afresh from here on, and the lists drawn before it dropped,
         // whether or not the request gets to the end of the document.
-        match super::overrides::lock(
-            state,
-            (&known.id, known.kind),
-            scope,
-            &lock.field,
-            value.as_ref(),
-            &identity.label(),
-        )
-        .await
-        {
+        let locked = match language.as_deref() {
+            Some(language) => {
+                super::overrides::lock_in_language(
+                    state,
+                    &known.id,
+                    scope,
+                    &lock.field,
+                    language,
+                    value.as_ref(),
+                    &identity.label(),
+                )
+                .await
+            }
+            None => {
+                super::overrides::lock(
+                    state,
+                    (&known.id, known.kind),
+                    scope,
+                    &lock.field,
+                    value.as_ref(),
+                    &identity.label(),
+                )
+                .await
+            }
+        };
+        match locked {
             Ok(()) => {}
             // A slug or an identifier another work holds: this lock, not the
             // document.
@@ -426,7 +514,7 @@ async fn know(state: &AppState, work: &LockedWork) -> AppResult<Option<Known>> {
     let current = repo::override_field::list(&state.db, &id)
         .await?
         .into_iter()
-        .map(|o| ((o.scope, o.field), o.value))
+        .map(|o| ((o.scope, o.field, o.language.unwrap_or_default()), o.value))
         .collect();
     Ok(Some(Known {
         id: item.id,
@@ -496,6 +584,7 @@ mod tests {
                     },
                     scope: "item".into(),
                     field: "title".into(),
+                    language: None,
                     value: Some(Some(Value::String("Breaking Bad".into()))),
                 },
                 Lock {
@@ -510,16 +599,19 @@ mod tests {
                     },
                     scope: "item".into(),
                     field: "tagline".into(),
+                    language: Some("fra".into()),
                     value: Some(None),
                 },
             ],
         };
         let text = serde_json::to_string(&document).unwrap();
-        // A cleared lock is written out as null, never left out.
+        // A cleared lock is written out as null, never left out; a lock in
+        // every language names none.
         assert!(
-            text.contains("\"field\":\"tagline\",\"value\":null"),
+            text.contains("\"field\":\"tagline\",\"language\":\"fra\",\"value\":null"),
             "{text}"
         );
+        assert!(text.contains("\"field\":\"title\",\"value\""), "{text}");
 
         let back: Locks = serde_json::from_str(&text).unwrap();
         assert_eq!(back.locks[0].work.tmdb, Some(1396));
@@ -527,7 +619,9 @@ mod tests {
             back.locks[0].value,
             Some(Some(Value::String("Breaking Bad".into())))
         );
+        assert_eq!(back.locks[0].language, None);
         assert_eq!(back.locks[1].value, Some(None), "null is a cleared lock");
+        assert_eq!(back.locks[1].language.as_deref(), Some("fra"));
 
         // Written by hand without a value: nothing to set, and not a clearing.
         let bare: Locks = serde_json::from_str(

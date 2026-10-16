@@ -308,6 +308,7 @@ const PROVIDERS: Record<string, string> = {
   tvdb: 'TheTVDB',
   tvmaze: 'TVmaze',
   tvrage: 'TVRage',
+  wikidata: 'Wikidata',
 }
 
 export function providerName(key: string): string {

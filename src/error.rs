@@ -135,6 +135,12 @@ pub enum AppError {
     /// A body larger than the route takes.
     #[error("{0}")]
     PayloadTooLarge(String),
+
+    /// A body of another type than the route reads: what a web page may send
+    /// another site without asking first, refused where only a client that
+    /// names its JSON is to be answered.
+    #[error("{0}")]
+    UnsupportedMediaType(String),
 }
 
 /// Most failures are internal, but a unique-constraint violation is the caller
@@ -155,6 +161,7 @@ impl AppError {
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
             Self::PayloadTooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
+            Self::UnsupportedMediaType(_) => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
             Self::Forbidden => StatusCode::FORBIDDEN,
             Self::Conflict(_) => StatusCode::CONFLICT,
@@ -174,6 +181,7 @@ impl AppError {
             Self::NotFound => "not_found",
             Self::BadRequest(_) => "bad_request",
             Self::PayloadTooLarge(_) => "payload_too_large",
+            Self::UnsupportedMediaType(_) => "unsupported_media_type",
             Self::Unauthorized => "unauthorized",
             Self::Forbidden => "forbidden",
             Self::Conflict(_) => "conflict",
@@ -193,6 +201,7 @@ impl AppError {
             Self::NotFound
             | Self::BadRequest(_)
             | Self::PayloadTooLarge(_)
+            | Self::UnsupportedMediaType(_)
             | Self::Unauthorized
             | Self::Forbidden
             | Self::Conflict(_)

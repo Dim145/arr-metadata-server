@@ -545,3 +545,165 @@ test.describe('the work editor', () => {
     }
   })
 })
+
+test.describe('a season’s air dates, moved together', () => {
+  test.skip(!USERNAME || !PASSWORD, 'needs AMS_E2E_USER and AMS_E2E_PASSWORD')
+
+  test('are shifted by a number of days after a preview, each episode its own change', async ({ page }, info) => {
+    await signIn(page)
+    const created = await page.request.post('/api/v1/items', {
+      data: { kind: 'series', title: `Décalage e2e ${info.project.name} ${Date.now()}`, year: 2034 },
+    })
+    expect(created.status()).toBe(201)
+    const { id } = (await created.json()) as { id: string }
+
+    try {
+      expect((await page.request.post(`/api/v1/items/${id}/seasons`, { data: { seasonNumber: 1 } })).status()).toBe(201)
+      // Two dated across a month's end, and one with no date, which has nothing to move.
+      for (const [episodeNumber, airDate] of [
+        [1, '2034-01-30'],
+        [2, '2034-02-06'],
+        [3, undefined],
+      ] as const) {
+        const added = await page.request.post(`/api/v1/items/${id}/episodes`, {
+          data: { seasonNumber: 1, episodeNumber, title: `Épisode ${episodeNumber}`, airDate },
+        })
+        expect(added.status()).toBe(201)
+      }
+
+      await page.goto(`/admin/catalogue/${id}?tab=seasons&season=1`)
+      await page.locator('#season-fields').getByRole('button', { name: /shift the air dates|décaler les dates/i }).click()
+      const dialog = page.getByRole('dialog')
+      await expect(dialog.getByRole('heading', { name: /shift the air dates|décaler les dates/i })).toBeVisible()
+      const apply = dialog.getByRole('button', { name: /^(shift|décaler) 2 /i })
+      const days = dialog.getByLabel(/by how many days|de combien de jours/i)
+
+      const sent: string[] = []
+      page.on('request', (request) => {
+        if (request.method() === 'PUT' && request.url().endsWith(`/api/v1/items/${id}/overrides`)) {
+          sent.push(request.postData() ?? '')
+        }
+      })
+
+      // Nought days moves nothing, and is said so before anything is sent.
+      await days.fill('0')
+      await apply.click()
+      await expect(dialog.getByRole('alert')).toBeVisible()
+      expect(sent).toHaveLength(0)
+
+      // The two dated episodes, before and after, laid out first.
+      await days.fill('3')
+      const preview = dialog.getByRole('table', { name: /what changes|ce qui change/i })
+      await expect(preview.getByRole('row')).toHaveCount(3)
+      await apply.click()
+      await expect(dialog.getByRole('status')).toHaveText(/2 episodes moved|2 épisodes décalés/i)
+      expect(sent).toHaveLength(2)
+
+      const work = (await (await page.request.get(`/api/v1/items/${id}`)).json()) as {
+        episodes: { episodeNumber: number; airDate?: string }[]
+      }
+      const day = (n: number) => work.episodes.find((episode) => episode.episodeNumber === n)?.airDate?.slice(0, 10)
+      expect(day(1)).toBe('2034-02-02')
+      expect(day(2)).toBe('2034-02-09')
+      expect(day(3)).toBeUndefined()
+      // Each its own lock, as an edit by hand makes one.
+      const locks = (await (await page.request.get(`/api/v1/items/${id}/overrides`)).json()) as {
+        scope: string
+        field: string
+      }[]
+      expect(
+        locks
+          .filter((lock) => lock.field === 'airDate')
+          .map((lock) => lock.scope)
+          .sort(),
+      ).toEqual(['episode:1x1', 'episode:1x2'])
+
+      await dialog.getByRole('button', { name: /^(close|fermer)$/i }).click()
+      await expect(dialog).toBeHidden()
+    } finally {
+      await page.request.delete(`/api/v1/items/${id}`)
+    }
+  })
+
+  test('a title shown in a language is locked in that one alone, and says so', async ({ page }, info) => {
+    await signIn(page)
+    const series = await aSeries(page, ownSeries(info.project.name))
+    test.skip(!series, 'the catalogue holds no series with seasons')
+    const title = `Titre e2e ${info.project.name}`
+    const titleIn = async (language: string) =>
+      ((await (await page.request.get(`/api/v1/items/${series!.id}${language ? `?language=${language}` : ''}`)).json()) as { title: string }).title
+
+    try {
+      await page.goto(`/admin/catalogue/${series!.id}`)
+      await page.locator('#editor-language').selectOption('fr')
+      const row = page.locator('li[data-field="title"]')
+      await row.getByRole('button', { name: /^(edit|modifier)$/i }).click()
+      await row.getByRole('textbox').fill(title)
+      // Asked for which languages the edit holds: this one alone, by default.
+      const reach = row.getByRole('radiogroup', { name: /the edit holds for|la modification vaut pour/i })
+      await expect(reach.getByRole('radio', { name: /this language only|cette langue seulement/i })).toBeChecked()
+      await row.getByRole('button', { name: /save and lock|enregistrer et verrouiller/i }).click()
+
+      // The lock says its language, and the work is served so in French alone.
+      await expect(row.getByText(/locked in french|verrouillé en français/i)).toBeVisible()
+      await expect(row).toContainText(title)
+      expect(await titleIn('fr')).toBe(title)
+      expect(await titleIn('')).not.toBe(title)
+      const locks = (await (await page.request.get(`/api/v1/items/${series!.id}/overrides`)).json()) as {
+        scope: string
+        field: string
+        language?: string
+      }[]
+      expect(locks.some((lock) => lock.scope === 'item' && lock.field === 'title' && lock.language === 'fra')).toBe(true)
+
+      // Unlocked from the same row: French is given its translation again.
+      await row.getByRole('button', { name: /^(unlock|déverrouiller)$/i }).click()
+      await expect(row.getByRole('button', { name: /^(edit|modifier)$/i })).toBeVisible()
+      expect(await titleIn('fr')).not.toBe(title)
+    } finally {
+      await page.request.delete(`/api/v1/items/${series!.id}/overrides/item/title?language=fra`)
+    }
+  })
+
+  test('a credit a source gave is hidden, shown again, and its character corrected in place', async ({ page }, info) => {
+    await signIn(page)
+    const series = await aSeries(page, ownSeries(info.project.name))
+    test.skip(!series, 'the catalogue holds no series with seasons')
+    type Credit = { id: string; personName: string; characterName?: string; isManual: boolean }
+    const read = async () =>
+      (await (await page.request.get(`/api/v1/items/${series!.id}`)).json()) as { credits?: Credit[]; hidden?: { credits?: Credit[] } }
+    const given = (await read()).credits?.find((credit) => !credit.isManual)
+    test.skip(!given, 'no source credits anybody on this series')
+    const credit = given!
+
+    try {
+      await page.goto(`/admin/catalogue/${series!.id}?tab=people`)
+      const row = page.locator(`#credits li[data-credit="${credit.personName.replace(/"/g, '\\"')}"]`).first()
+      await row.getByRole('button', { name: pattern(credit.personName) }).filter({ hasText: /^(hide|masquer)$/i }).click()
+
+      // Hidden: still listed here, marked, and served to nobody.
+      await expect(row.getByText(/^(hidden|masqué)$/i)).toBeVisible()
+      let work = await read()
+      expect(work.credits?.some((c) => c.id === credit.id)).toBe(false)
+      expect(work.hidden?.credits?.some((c) => c.id === credit.id)).toBe(true)
+
+      await row.getByRole('button', { name: /^(show|montrer)/i }).click()
+      await expect(row.getByText(/^(hidden|masqué)$/i)).toHaveCount(0)
+      work = await read()
+      expect(work.credits?.some((c) => c.id === credit.id)).toBe(true)
+
+      // Corrected in place: the character, kept as a lock.
+      await row.getByRole('button', { name: /correct|corriger/i }).click()
+      await row.getByLabel(/^(character|personnage)$/i).fill('Personnage e2e')
+      await row.getByRole('button', { name: /save and lock|enregistrer et verrouiller/i }).click()
+      await expect(row.getByText(/^(corrected|corrigé)$/i)).toBeVisible()
+      work = await read()
+      expect(work.credits?.find((c) => c.personName === credit.personName)?.characterName).toBe('Personnage e2e')
+    } finally {
+      const locks = (await (await page.request.get(`/api/v1/items/${series!.id}/overrides`)).json()) as { scope: string; field: string }[]
+      for (const lock of locks.filter((one) => one.scope.startsWith('credit:'))) {
+        await page.request.delete(`/api/v1/items/${series!.id}/overrides/${encodeURIComponent(lock.scope)}/${lock.field}`)
+      }
+    }
+  })
+})

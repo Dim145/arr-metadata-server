@@ -51,7 +51,9 @@ const Sources = named(() => import('./routes/admin/Sources'), 'Sources')
 const Media = named(() => import('./routes/admin/Media'), 'Media')
 const Cache = named(() => import('./routes/admin/Cache'), 'Cache')
 const Audit = named(() => import('./routes/admin/Audit'), 'Audit')
+const Notifications = named(() => import('./routes/admin/Notifications'), 'Notifications')
 const Settings = named(() => import('./routes/admin/Settings'), 'Settings')
+const Arr = named(() => import('./routes/admin/Arr'), 'Arr')
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -149,7 +151,9 @@ function Router() {
           <Route path="media" element={<Media />} />
           <Route path="cache" element={<Cache />} />
           <Route path="audit" element={<Audit />} />
+          <Route path="notifications" element={<Notifications />} />
           <Route path="settings" element={<Settings />} />
+          <Route path="arr" element={<Arr />} />
           <Route path="*" element={<NotFound admin />} />
         </Route>
       </Routes>

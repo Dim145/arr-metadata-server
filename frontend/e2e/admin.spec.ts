@@ -28,6 +28,7 @@ const SCREENS = [
   ['/admin/access', /^(opening & apis|ouverture & api)$/i],
   ['/admin/jobs', /jobs|tâches/i],
   ['/admin/audit', /audit|journal/i],
+  ['/admin/notifications', /notifications/i],
   ['/admin/settings', /settings|réglages/i],
 ] as const
 
@@ -54,15 +55,18 @@ test.describe('the administration side', () => {
     'set AMS_E2E_USER and AMS_E2E_PASSWORD to exercise the administration side',
   )
 
-  test('a row’s buttons take the press, not the row behind them', async ({ page, isMobile }) => {
-    test.skip(isMobile, 'the buttons are in the editor at this width')
+  test('a row’s buttons take the press, not the row behind them', async ({ page }) => {
     await signIn(page)
     await page.goto('/admin/catalogue')
 
     // By the pointer, as the row's title link stretches over the whole row:
-    // the press must reach the button, and the dialog it opens is the proof.
-    const remove = page.getByRole('button', { name: /^(delete|supprimer)$/i }).first()
-    await expect(remove).toBeVisible()
+    // the press must reach the row's one button — at every width — and the
+    // dialog the last of its actions opens is the proof.
+    const more = page.getByRole('button', { name: /^(actions for|actions pour) /i }).first()
+    await expect(more).toBeVisible()
+    await more.click()
+    const remove = page.getByRole('button', { name: /^(delete|supprimer)$/i }).filter({ visible: true })
+    await expect(remove).toHaveCount(1)
     await remove.click()
     const dialog = page.getByRole('dialog')
     await expect(dialog).toBeVisible()
@@ -224,7 +228,8 @@ test.describe('network access', () => {
     await signIn(page)
     await page.goto('/admin/clients')
 
-    const rules = page.getByRole('region').filter({ hasText: /allowed addresses|adresses autorisées/i })
+    // By its name: the Plex panel on the same page speaks of the list too.
+    const rules = page.getByRole('region', { name: /^(allowed addresses|adresses autorisées)$/i })
     await expect(rules).toBeVisible()
 
     // Clean up after a run that failed partway, or this one starts from a
@@ -349,7 +354,8 @@ test.describe('settings', () => {
     await signIn(page)
     await page.goto('/admin/clients')
 
-    const rules = page.getByRole('region').filter({ hasText: /allowed addresses|adresses autorisées/i })
+    // By its name: the Plex panel on the same page speaks of the list too.
+    const rules = page.getByRole('region', { name: /^(allowed addresses|adresses autorisées)$/i })
     const row = () => rules.locator('li').filter({ hasText: address }).first()
 
     // A run that failed partway would otherwise leave the rule behind — named,
@@ -424,63 +430,110 @@ test.describe('settings', () => {
   })
 
   /**
-   * The webhook's events, ticked rather than typed, kept across a reload; and
-   * its address tested where it is set. Server-wide, so one project only.
+   * A destination made on the Notifications page: its signing secret shown
+   * once, its events ticked and kept across a reload, a test said in its
+   * row, and its log — fed by changing the destination itself, an event it
+   * is ticked for — with a delivery switched off and told again. The
+   * destinations are the server's, so one project only.
    *
-   * The address tried is under `.invalid`, which never resolves: the test is
-   * answered "not reached", and nothing the suite does meanwhile is posted
-   * anywhere. Whatever was set before is put back.
+   * The address is under `.invalid`, which never resolves: the test is
+   * answered "not reached" and every delivery fails, so nothing the suite
+   * does is posted anywhere. The destination is deleted at the end.
    */
-  test('the webhook’s events are ticked, and its address is tested where it is set', async ({
-    page,
-  }, info) => {
-    test.skip(info.project.name !== 'desktop', 'the server scope is shared; one writer is enough')
+  test('a destination is made, tested, told what happens and told it again', async ({ page }, info) => {
+    test.skip(info.project.name !== 'desktop', 'the destinations are the server’s; one writer is enough')
 
     await signIn(page)
-    await page.goto('/admin/settings')
+    await page.goto('/admin/notifications')
 
-    const panel = page.getByRole('region', { name: /^webhooks$/i })
-    const fact = () => panel.getByRole('checkbox', { name: /a work’s refresh failed|l’actualisation d’une œuvre a échoué/i })
-    const every = () => panel.getByRole('checkbox', { name: /every event|tous les événements/i })
-    await expect(fact()).toBeVisible()
-    const everyBefore = await every().isChecked()
-    if (everyBefore) {
-      await every().uncheck()
-      await expect(every()).not.toBeChecked()
-    }
-    const before = await fact().isChecked()
+    const name = `e2e ${Date.now()}`
+    const row = () => page.locator('[data-destination]').filter({ hasText: name })
+    const editor = page.getByRole('dialog')
+    // The trail's actions are folded away; the summary opens them.
+    const actions = () => editor.locator('summary').filter({ hasText: /actions of the audit trail|actions du journal/i })
+    const changed = () => editor.getByRole('checkbox', { name: /destination changed|destination modifiée/i })
+    const fact = () =>
+      editor.getByRole('checkbox', { name: /a work’s refresh failed|l’actualisation d’une œuvre a échoué/i })
 
-    await fact().setChecked(!before)
-    await expect(panel.getByText(/^(saved|enregistré)$/i).first()).toBeVisible()
-    await page.reload()
-    await expect(fact()).toBeChecked({ checked: !before })
+    await page.getByRole('button', { name: /add a destination|ajouter une destination/i }).click()
+    await editor.getByLabel(/^(kind|sorte)$/i).selectOption('standard')
+    await editor.getByLabel(/^(name|nom)$/i).fill(name)
+    await editor.getByLabel(/^(address|adresse)$/i).fill('https://ams-e2e.invalid/hook')
+    await actions().click()
+    await changed().check()
+    await editor.getByRole('button', { name: /^(add it|l’ajouter)$/i }).click()
 
-    await fact().setChecked(before)
-    await expect(fact()).toBeChecked({ checked: before })
-    if (everyBefore) {
-      await every().check()
-      await expect(every()).toBeChecked()
-    }
-
-    const address = panel.getByLabel(/webhook address|adresse du webhook/i)
-    const tryIt = panel.getByRole('button', { name: /^(test|tester)$/i })
-    const was = await address.inputValue()
     try {
-      // Nothing saved, nothing to test.
-      await address.fill('')
-      await address.blur()
-      await expect(tryIt).toBeDisabled()
+      // The signing secret, once.
+      await expect(page.getByLabel(/^(signing secret|secret de signature)$/i)).toHaveValue(/^whsec_/)
+      await page.getByRole('button', { name: /i have kept it|je l’ai gardé/i }).click()
+      await expect(row()).toContainText(/signed|signée/i)
+      await expect(row()).toContainText('https://ams-e2e.invalid/')
+      await expect(row()).not.toContainText('/hook')
 
-      await address.fill('https://ams-e2e.invalid/hook')
-      await address.blur()
-      await expect(tryIt).toBeEnabled()
-      await tryIt.click()
-      await expect(panel.getByRole('status')).toContainText(/not reached|pas atteinte/i, { timeout: 20_000 })
+      // A test: not reached, and said in the row.
+      await row().getByRole('button', { name: /^(test|tester)$/i }).click()
+      await expect(row().getByRole('status')).toContainText(/not reached|pas atteinte/i, { timeout: 20_000 })
+
+      // A fact ticked besides, kept across a reload. The change is itself an
+      // event the destination is ticked for.
+      await row().getByRole('button', { name: new RegExp(`^(change|modifier) ${literally(name)}$`, 'i') }).click()
+      // An address at another host is another receiver, given a secret of
+      // its own: the editor says so before anything is saved, and an address
+      // left empty keeps the one kept, and its secret.
+      const address = editor.getByLabel(/^(address|adresse)$/i)
+      await address.fill('https://elsewhere-e2e.invalid/hook')
+      await expect(editor.getByText(/a new secret is made|un nouveau secret est créé/i)).toBeVisible()
+      await address.fill('')
+      await expect(editor.getByText(/^(kept, and never shown again\.|gardé, et plus jamais montré\.)$/i)).toBeVisible()
+      await fact().check()
+      await editor.getByRole('button', { name: /^(save|enregistrer)$/i }).click()
+      await expect(editor).toBeHidden()
+      await page.reload()
+      await row().getByRole('button', { name: new RegExp(`^(change|modifier) ${literally(name)}$`, 'i') }).click()
+      await expect(fact()).toBeChecked()
+      await actions().click()
+      await expect(changed()).toBeChecked()
+      await page.keyboard.press('Escape')
+
+      // Its log: the change, owed to it.
+      await row().getByRole('button', { name: /^(log|journal)$/i }).click()
+      const log = page.getByRole('region', {
+        name: new RegExp(`^(what was told to|ce qui a été envoyé à) ${literally(name)}$`, 'i'),
+      })
+      await expect(log.getByRole('row').filter({ hasText: 'notification.updated' }).first()).toBeVisible()
+
+      // Switched off, what waited is given up; switched on, it can be told again.
+      const send = row().getByRole('switch', { name: new RegExp(`(send to|envoyer à) ${literally(name)}`, 'i') })
+      await send.click()
+      await expect(send).toHaveAttribute('aria-checked', 'false')
+      const given = log.getByRole('row').filter({ hasText: /given up|abandonné/i }).first()
+      await expect(given).toBeVisible({ timeout: 15_000 })
+      await send.click()
+      await expect(send).toHaveAttribute('aria-checked', 'true')
+      await given.getByRole('button', { name: /replay|renvoyer/i }).click()
+      await expect(log.getByText(/^(replayed|renvoyé)$/i).first()).toBeVisible()
     } finally {
-      await address.fill(was)
-      await address.blur()
-      await expect(address).toHaveValue(was)
+      // However far it got: the destination goes, with its log.
+      await page.goto('/admin/notifications')
+      if (await row().count()) {
+        await row().getByRole('button', { name: new RegExp(`^(delete|supprimer) ${literally(name)}$`, 'i') }).click()
+        await page.getByRole('dialog').getByRole('button', { name: /^(delete|supprimer)$/i }).click()
+        await expect(row()).toHaveCount(0)
+      }
     }
+  })
+
+  /** The webhook moved to its own page; the settings say where. */
+  test('the settings lead to the notifications', async ({ page }) => {
+    await signIn(page)
+    await page.goto('/admin/settings')
+    await page
+      .getByRole('region', { name: /^webhooks$/i })
+      .getByRole('link', { name: /notifications/i })
+      .click()
+    await expect(page).toHaveURL(/\/admin\/notifications$/)
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText(/notifications/i)
   })
 
   /**

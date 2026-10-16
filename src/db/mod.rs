@@ -15,6 +15,13 @@
 pub mod repo;
 pub mod transfer;
 
+// What the tests of every module open a database with, and the test that
+// says the two migration sets build the same schema.
+#[cfg(test)]
+mod parity;
+#[cfg(test)]
+pub(crate) mod testing;
+
 use std::{borrow::Cow, path::Path, time::Duration};
 
 use anyhow::{Context, Result, bail};
@@ -146,6 +153,10 @@ impl Dialect {
 pub struct Db {
     pool: AnyPool,
     dialect: Dialect,
+    /// What takes a test's PostgreSQL database away once the last handle to
+    /// it is let go of; nothing in the server itself.
+    #[cfg(test)]
+    lease: Option<std::sync::Arc<testing::Lease>>,
 }
 
 /// A PostgreSQL address with its statement cache switched off, unless the
@@ -214,7 +225,12 @@ impl Db {
             .await
             .with_context(|| format!("failed to connect to {}", redact(&cfg.url)))?;
 
-        Ok(Self { pool, dialect })
+        Ok(Self {
+            pool,
+            dialect,
+            #[cfg(test)]
+            lease: None,
+        })
     }
 
     /// Apply the migration set belonging to this dialect.

@@ -253,4 +253,59 @@ test.describe('where values come from', () => {
     expect((await visitor.request.get(`/api/v1/items/${id}/provenance`)).status()).toBe(401)
     await visitor.close()
   })
+
+  test('the order is put by hand, followed by the merge, and put back', async ({ page }) => {
+    await signIn(page)
+    type Rules = { providers: { id: string }[]; defaultOrder: string[] }
+    const rules = async () => (await (await page.request.get('/api/v1/sources/rules')).json()) as Rules
+    const before = await rules()
+    const order = before.providers.map((provider) => provider.id)
+    const [first, second] = order as [string, string]
+    const name = (id: string) => escape(NAMES[id] ?? id)
+
+    try {
+      await page.goto('/admin/sources')
+      const strip = page.getByRole('list', { name: /^(order of the sources|ordre des sources)$/i })
+      await expect(strip.getByRole('listitem')).toHaveCount(order.length)
+
+      // A rank later by its arrow: the focus stays on the arrow, which has
+      // moved with its source, and the new rank is said.
+      const later = strip.getByRole('button', {
+        name: pattern(`^(move ${name(first)} a rank later|reculer ${name(first)} d’un rang)$`, 'i'),
+      })
+      await later.click()
+      await expect(later).toBeFocused()
+      const status = page.getByRole('status').filter({ hasText: /rank 2 of|rang 2 sur/i })
+      await expect(status).toBeVisible()
+      await expect(status).toContainText(/saved|enregistré/i)
+
+      // The setting the merge reads, and the matrix's columns with it.
+      expect((await rules()).providers.slice(0, 2).map((provider) => provider.id)).toEqual([second, first])
+      const table = page.getByRole('table')
+      if (await table.isVisible()) {
+        await expect(table.getByRole('columnheader').nth(1)).toContainText(NAMES[second] ?? second)
+      }
+
+      // A provider the merge does not know is refused by the server as well.
+      const refused = await page.request.put('/api/v1/settings/server/-', {
+        data: { key: 'sources.priority', value: 'tmdb,nobody' },
+      })
+      expect(refused.status()).toBe(400)
+
+      // Works take it at their next refresh — or now, from the task's card.
+      await expect(page.getByRole('link', { name: /refresh everything now|tout actualiser maintenant/i })).toHaveAttribute(
+        'href',
+        '/admin/jobs#task-refresh.all',
+      )
+
+      // Back to the order the server started with.
+      await page.getByRole('button', { name: /back to the starting order|revenir à l’ordre de départ/i }).click()
+      await expect(page.getByRole('status').filter({ hasText: /saved|enregistré/i })).toBeVisible()
+      expect((await rules()).providers.map((provider) => provider.id)).toEqual(before.defaultOrder)
+    } finally {
+      await page.request.put('/api/v1/settings/server/-', {
+        data: { key: 'sources.priority', value: order.join(',') },
+      })
+    }
+  })
 })

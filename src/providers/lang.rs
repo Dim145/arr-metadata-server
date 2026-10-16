@@ -150,76 +150,135 @@ pub fn iso_639_1_to_3(code: &str) -> String {
     mapped.to_string()
 }
 
-/// ISO 3166-1 alpha-2 → alpha-3, lowercased.
+/// The countries works are filed under, as ISO 3166-1 codes them — alpha-2,
+/// then alpha-3 in lower case — with the English name TMDB gives each.
+const COUNTRIES: &[(&str, &str, &str)] = &[
+    ("AE", "are", "United Arab Emirates"),
+    ("AR", "arg", "Argentina"),
+    ("AT", "aut", "Austria"),
+    ("AU", "aus", "Australia"),
+    ("BA", "bih", "Bosnia and Herzegovina"),
+    ("BD", "bgd", "Bangladesh"),
+    ("BE", "bel", "Belgium"),
+    ("BG", "bgr", "Bulgaria"),
+    ("BO", "bol", "Bolivia"),
+    ("BR", "bra", "Brazil"),
+    ("BY", "blr", "Belarus"),
+    ("CA", "can", "Canada"),
+    ("CH", "che", "Switzerland"),
+    ("CL", "chl", "Chile"),
+    ("CN", "chn", "China"),
+    ("CO", "col", "Colombia"),
+    ("CR", "cri", "Costa Rica"),
+    ("CU", "cub", "Cuba"),
+    ("CY", "cyp", "Cyprus"),
+    ("CZ", "cze", "Czech Republic"),
+    ("DE", "deu", "Germany"),
+    ("DK", "dnk", "Denmark"),
+    ("DO", "dom", "Dominican Republic"),
+    ("DZ", "dza", "Algeria"),
+    ("EC", "ecu", "Ecuador"),
+    ("EE", "est", "Estonia"),
+    ("EG", "egy", "Egypt"),
+    ("ES", "esp", "Spain"),
+    ("FI", "fin", "Finland"),
+    ("FR", "fra", "France"),
+    ("GB", "gbr", "United Kingdom"),
+    ("GE", "geo", "Georgia"),
+    ("GR", "grc", "Greece"),
+    ("GT", "gtm", "Guatemala"),
+    ("HK", "hkg", "Hong Kong"),
+    ("HR", "hrv", "Croatia"),
+    ("HU", "hun", "Hungary"),
+    ("ID", "idn", "Indonesia"),
+    ("IE", "irl", "Ireland"),
+    ("IL", "isr", "Israel"),
+    ("IN", "ind", "India"),
+    ("IQ", "irq", "Iraq"),
+    ("IR", "irn", "Iran"),
+    ("IS", "isl", "Iceland"),
+    ("IT", "ita", "Italy"),
+    ("JM", "jam", "Jamaica"),
+    ("JO", "jor", "Jordan"),
+    ("JP", "jpn", "Japan"),
+    ("KE", "ken", "Kenya"),
+    ("KR", "kor", "South Korea"),
+    ("KZ", "kaz", "Kazakhstan"),
+    ("LB", "lbn", "Lebanon"),
+    ("LK", "lka", "Sri Lanka"),
+    ("LT", "ltu", "Lithuania"),
+    ("LU", "lux", "Luxembourg"),
+    ("LV", "lva", "Latvia"),
+    ("MA", "mar", "Morocco"),
+    ("MK", "mkd", "North Macedonia"),
+    ("MT", "mlt", "Malta"),
+    ("MX", "mex", "Mexico"),
+    ("MY", "mys", "Malaysia"),
+    ("NG", "nga", "Nigeria"),
+    ("NL", "nld", "Netherlands"),
+    ("NO", "nor", "Norway"),
+    ("NP", "npl", "Nepal"),
+    ("NZ", "nzl", "New Zealand"),
+    ("PE", "per", "Peru"),
+    ("PH", "phl", "Philippines"),
+    ("PK", "pak", "Pakistan"),
+    ("PL", "pol", "Poland"),
+    ("PR", "pri", "Puerto Rico"),
+    ("PT", "prt", "Portugal"),
+    ("PY", "pry", "Paraguay"),
+    ("QA", "qat", "Qatar"),
+    ("RO", "rou", "Romania"),
+    ("RS", "srb", "Serbia"),
+    ("RU", "rus", "Russia"),
+    ("SA", "sau", "Saudi Arabia"),
+    ("SE", "swe", "Sweden"),
+    ("SG", "sgp", "Singapore"),
+    ("SI", "svn", "Slovenia"),
+    ("SK", "svk", "Slovakia"),
+    ("SN", "sen", "Senegal"),
+    ("TH", "tha", "Thailand"),
+    ("TN", "tun", "Tunisia"),
+    ("TR", "tur", "Turkey"),
+    ("TW", "twn", "Taiwan"),
+    ("UA", "ukr", "Ukraine"),
+    ("US", "usa", "United States of America"),
+    ("UY", "ury", "Uruguay"),
+    ("VE", "ven", "Venezuela"),
+    ("VN", "vnm", "Vietnam"),
+    ("ZA", "zaf", "South Africa"),
+];
+
+/// ISO 3166-1 alpha-2 → alpha-3, lowercased. A code this does not know
+/// passes through, lowercased.
 pub fn iso_3166_2_to_3(code: &str) -> String {
     let upper = code.trim().to_ascii_uppercase();
+    COUNTRIES
+        .iter()
+        .find(|(two, _, _)| *two == upper)
+        .map_or_else(
+            || upper.to_ascii_lowercase(),
+            |(_, three, _)| (*three).to_string(),
+        )
+}
 
-    let mapped = match upper.as_str() {
-        "AE" => "are",
-        "AR" => "arg",
-        "AT" => "aut",
-        "AU" => "aus",
-        "BE" => "bel",
-        "BG" => "bgr",
-        "BR" => "bra",
-        "CA" => "can",
-        "CH" => "che",
-        "CL" => "chl",
-        "CN" => "chn",
-        "CO" => "col",
-        "CZ" => "cze",
-        "DE" => "deu",
-        "DK" => "dnk",
-        "EE" => "est",
-        "EG" => "egy",
-        "ES" => "esp",
-        "FI" => "fin",
-        "FR" => "fra",
-        "GB" => "gbr",
-        "GR" => "grc",
-        "HK" => "hkg",
-        "HR" => "hrv",
-        "HU" => "hun",
-        "ID" => "idn",
-        "IE" => "irl",
-        "IL" => "isr",
-        "IN" => "ind",
-        "IR" => "irn",
-        "IS" => "isl",
-        "IT" => "ita",
-        "JP" => "jpn",
-        "KR" => "kor",
-        "LT" => "ltu",
-        "LU" => "lux",
-        "LV" => "lva",
-        "MX" => "mex",
-        "MY" => "mys",
-        "NL" => "nld",
-        "NO" => "nor",
-        "NZ" => "nzl",
-        "PE" => "per",
-        "PH" => "phl",
-        "PL" => "pol",
-        "PT" => "prt",
-        "RO" => "rou",
-        "RS" => "srb",
-        "RU" => "rus",
-        "SA" => "sau",
-        "SE" => "swe",
-        "SG" => "sgp",
-        "SI" => "svn",
-        "SK" => "svk",
-        "TH" => "tha",
-        "TR" => "tur",
-        "TW" => "twn",
-        "UA" => "ukr",
-        "US" => "usa",
-        "VN" => "vnm",
-        "ZA" => "zaf",
-        other => return other.to_ascii_lowercase(),
-    };
+/// ISO 3166-1 alpha-3 → alpha-2, upper case, as clients match countries;
+/// nothing for one this does not know, rather than a guess.
+pub fn iso_3166_3_to_2(code: &str) -> Option<&'static str> {
+    let lower = code.trim().to_ascii_lowercase();
+    COUNTRIES
+        .iter()
+        .find(|(_, three, _)| *three == lower)
+        .map(|(two, _, _)| *two)
+}
 
-    mapped.to_string()
+/// A country's name in English, as TMDB writes it, by its alpha-2 code: what
+/// a Kodi document names a country of production by.
+pub fn country_name(code: &str) -> Option<&'static str> {
+    let upper = code.trim().to_ascii_uppercase();
+    COUNTRIES
+        .iter()
+        .find(|(two, _, _)| *two == upper)
+        .map(|(_, _, name)| *name)
 }
 
 /// The language part of a TMDB locale: `fr-FR` → `fr`.
@@ -255,6 +314,21 @@ mod tests {
     #[test]
     fn unknown_countries_pass_through_lowercased() {
         assert_eq!(iso_3166_2_to_3("ZZ"), "zz");
+    }
+
+    #[test]
+    fn a_country_reads_back_from_alpha_3_and_is_named() {
+        assert_eq!(iso_3166_3_to_2("usa"), Some("US"));
+        assert_eq!(iso_3166_3_to_2(" GBR "), Some("GB"));
+        assert_eq!(iso_3166_3_to_2("xyz"), None);
+        assert_eq!(country_name("us"), Some("United States of America"));
+        assert_eq!(country_name("KR"), Some("South Korea"));
+        assert_eq!(country_name("ZZ"), None);
+        // Every one both ways.
+        for (two, three, _) in COUNTRIES {
+            assert_eq!(iso_3166_2_to_3(two), *three);
+            assert_eq!(iso_3166_3_to_2(three), Some(*two));
+        }
     }
 
     #[test]

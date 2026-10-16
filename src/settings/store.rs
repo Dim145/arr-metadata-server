@@ -28,6 +28,13 @@ pub struct Effective {
     pub source: String,
     /// Whether this scope sets it itself, as opposed to inheriting.
     pub overridden: bool,
+    /// What the server scope held before anybody changed it: the value the
+    /// environment or the code gave it when the server began, which a change
+    /// is measured against and a reversal returns to. Said of the server
+    /// scope only, and never of a secret; absent for a setting that starts
+    /// unset, whose reversal is to set nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default: Option<String>,
 }
 
 /// `(scope, scope_id, key)` — what a setting is filed under.
@@ -65,6 +72,11 @@ pub struct Store {
     db: Db,
     /// The whole table, which is a few dozen rows.
     values: Arc<RwLock<HashMap<Address, String>>>,
+    /// What each setting of the server scope begins as, by key: the
+    /// environment's value or the code's, taken once at the start. Kept
+    /// beside the table so that a change can be told from a value that was
+    /// never touched.
+    defaults: Arc<RwLock<HashMap<String, String>>>,
     /// Held across write-then-reload, so two writers cannot install their
     /// snapshots in the opposite order to the one they read them in.
     ///
@@ -82,6 +94,7 @@ impl Store {
         Self {
             db,
             values: Arc::new(RwLock::new(HashMap::new())),
+            defaults: Arc::new(RwLock::new(HashMap::new())),
             writes: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
@@ -104,7 +117,12 @@ impl Store {
         }
 
         for ((_, _, key), value) in &fresh {
-            if LOGGED_SECRETS.contains(&key.as_str()) {
+            // And every value that is a secret by its kind — Sonarr's and
+            // Radarr's keys — so that one added later is hidden without
+            // being named here.
+            if LOGGED_SECRETS.contains(&key.as_str())
+                || registry::find(key).is_some_and(|def| def.kind.is_secret())
+            {
                 hide_from_logs(value);
             }
         }
@@ -175,6 +193,7 @@ impl Store {
                 },
                 source: scope.as_str().to_string(),
                 overridden: true,
+                default: self.default_of(def, scope),
             });
         }
 
@@ -194,7 +213,17 @@ impl Store {
             },
             source: Scope::Server.as_str().to_string(),
             overridden: false,
+            default: None,
         })
+    }
+
+    /// What the server scope's setting began as, for the one scope a change
+    /// is measured at. A secret has none to show.
+    fn default_of(&self, def: &Definition, scope: Scope) -> Option<String> {
+        if scope != Scope::Server || def.kind.is_secret() {
+            return None;
+        }
+        self.defaults.read().get(def.key).cloned()
     }
 
     pub async fn set(
@@ -287,6 +316,13 @@ impl Store {
     pub async fn seed_missing(&self, defaults: &[(&str, String)]) -> Result<usize> {
         let mut written = 0;
 
+        // Every one is what its setting begins as, written now or kept from
+        // an earlier start: the reference a change is told from.
+        *self.defaults.write() = defaults
+            .iter()
+            .map(|(key, value)| ((*key).to_string(), value.clone()))
+            .collect();
+
         for (key, value) in defaults {
             if self.at(Scope::Server, "", key).is_none() {
                 self.set(Scope::Server, "", key, value, None).await?;
@@ -319,6 +355,42 @@ fn hide_from_logs(value: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The server scope's value of one setting, as the interface is told it.
+    fn told(state: &crate::state::AppState, key: &str) -> Effective {
+        state
+            .settings
+            .effective(Scope::Server, "")
+            .into_iter()
+            .find(|setting| setting.key == key)
+            .expect("a setting the server seeds")
+    }
+
+    #[tokio::test]
+    async fn a_change_is_told_from_what_the_server_began_with() {
+        let state = crate::api::native::testing::server().await;
+
+        // Untouched, it is what it began as.
+        let began = told(&state, "tmdb.searchLimit");
+        assert_eq!(began.default.as_deref(), Some(began.value.as_str()));
+
+        state
+            .settings
+            .set(Scope::Server, "", "tmdb.searchLimit", "7", Some("admin:x"))
+            .await
+            .expect("set");
+        let changed = told(&state, "tmdb.searchLimit");
+        assert_eq!(changed.value, "7");
+        // The reference does not move with the value: it is what to go back to.
+        assert_eq!(changed.default, began.default);
+
+        // A key's or an address's own answer inherits, and has no default of
+        // its own to be measured against.
+        let own = state.settings.effective(Scope::Client, "some-key");
+        assert!(own.iter().all(|setting| setting.default.is_none()));
+        let shape = serde_json::to_value(own.first().expect("a setting a key may answer")).unwrap();
+        assert!(shape.get("default").is_none(), "{shape}");
+    }
 
     #[test]
     fn a_refused_value_is_the_callers_and_a_failed_store_is_the_servers() {

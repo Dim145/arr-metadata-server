@@ -80,21 +80,21 @@ const PER_CLIENT: &[Scope] = &[Scope::Client, Scope::Peer];
 /// The text settings that may be set to nothing, which switches them off:
 /// an address to post to is one, a language is not.
 const OPTIONAL: &[&str] = &[
-    "webhooks.url",
-    // No event at all: the address kept, and nothing posted to it.
-    "webhooks.events",
     "oidc.issuer",
     "oidc.clientId",
     "oidc.buttonLabel",
     "oidc.roleClaim",
     "oidc.adminValues",
     "oidc.editorValues",
+    // No address: that one is not connected.
+    "arr.sonarrUrl",
+    "arr.radarrUrl",
 ];
 
-/// The text settings that may run longer than a line, and how long: every
-/// event a webhook can be told of, named one by one, is several hundred
-/// characters.
-const LONG: &[(&str, usize)] = &[("webhooks.events", 2000)];
+/// The text settings that may run longer than a line, and how long. None
+/// today: the webhook's events, which did, are each destination's own now,
+/// kept with it on the Notifications page.
+const LONG: &[(&str, usize)] = &[];
 
 pub const REGISTRY: &[Definition] = &[
     // ── Answering ────────────────────────────────────────────────────────────
@@ -115,6 +115,16 @@ pub const REGISTRY: &[Definition] = &[
     Definition {
         key: "tmdb.searchLimit",
         kind: Kind::Int { min: 1, max: 50 },
+        scopes: SERVER_ONLY,
+    },
+    Definition {
+        // The cast kept of TMDB's, top of the bill first: a long-running
+        // series lists hundreds, each a row and a portrait to fetch.
+        key: "tmdb.castLimit",
+        kind: Kind::Int {
+            min: 1,
+            max: crate::providers::tmdb::map::MAX_CAST as i64,
+        },
         scopes: SERVER_ONLY,
     },
     // ── Providers ────────────────────────────────────────────────────────────
@@ -150,6 +160,38 @@ pub const REGISTRY: &[Definition] = &[
     },
     Definition {
         key: "radarr.enrich",
+        kind: Kind::Bool,
+        scopes: SERVER_ONLY,
+    },
+    // ── The operator's own Sonarr and Radarr, reached the other way ──────────
+    // Set on their page, which checks an address as one before keeping it.
+    Definition {
+        // Where this server reaches them — `http://sonarr:8989`, with the URL
+        // base when there is one — to tell them of a change and read what
+        // they hold.
+        key: "arr.sonarrUrl",
+        kind: Kind::Text,
+        scopes: SERVER_ONLY,
+    },
+    Definition {
+        key: "arr.sonarrKey",
+        kind: Kind::Secret,
+        scopes: SERVER_ONLY,
+    },
+    Definition {
+        key: "arr.radarrUrl",
+        kind: Kind::Text,
+        scopes: SERVER_ONLY,
+    },
+    Definition {
+        key: "arr.radarrKey",
+        kind: Kind::Secret,
+        scopes: SERVER_ONLY,
+    },
+    Definition {
+        // Ask them to read a work again once it changes here, rather than at
+        // their next refresh; off until turned on.
+        key: "arr.pushRefresh",
         kind: Kind::Bool,
         scopes: SERVER_ONLY,
     },
@@ -249,6 +291,12 @@ pub const REGISTRY: &[Definition] = &[
         kind: Kind::Bool,
         scopes: SERVER_ONLY,
     },
+    Definition {
+        // The metadata provider Plex Media Server is given by address.
+        key: "api.plex",
+        kind: Kind::Bool,
+        scopes: SERVER_ONLY,
+    },
     // ── Signing in through an identity provider ──────────────────────────────
     Definition {
         key: "oidc.enabled",
@@ -319,6 +367,27 @@ pub const REGISTRY: &[Definition] = &[
         // Members on the TMDB relay, which spends the operator's quota.
         key: "api.tmdbMembers",
         kind: Kind::Bool,
+        scopes: SERVER_ONLY,
+    },
+    Definition {
+        // Whose key the TMDB relay asks with: this server's, in place of
+        // whatever the client sent, or the client's own, handed on as it
+        // came — a key issued here is then refused, and the address list
+        // guards the relay instead of a key.
+        key: "tmdb.relayCredential",
+        kind: Kind::Choice {
+            options: &["server", "client"],
+        },
+        scopes: SERVER_ONLY,
+    },
+    Definition {
+        // The same for the TheTVDB relay. AMS_TVDB_AUTH still says how the
+        // surface is guarded; `client` reads its key policy as the address
+        // list, as it does AMS_TMDB_AUTH's.
+        key: "tvdb.relayCredential",
+        kind: Kind::Choice {
+            options: &["server", "client"],
+        },
         scopes: SERVER_ONLY,
     },
     Definition {
@@ -404,22 +473,39 @@ pub const REGISTRY: &[Definition] = &[
         kind: Kind::Int { min: 1, max: 500 },
         scopes: SERVER_ONLY,
     },
-    // ── Webhooks ─────────────────────────────────────────────────────────────
     Definition {
-        // Where what happens is posted, as JSON; nothing is posted while it is
-        // unset.
-        key: "webhooks.url",
-        kind: Kind::Text,
+        // How long a work still changing — a running series, a film not out
+        // yet — keeps before it is fetched again, in seconds: a minute to a
+        // year. Read when the work is scheduled, so a change applies from the
+        // next refresh of each.
+        key: "refresh.ttlContinuing",
+        kind: Kind::Int {
+            min: 60,
+            max: 31_536_000,
+        },
         scopes: SERVER_ONLY,
     },
     Definition {
-        // Which events are posted — the actions of the audit trail and the
-        // facts nobody did — by their names, separated by commas, or `*` for
-        // every one.
-        key: "webhooks.events",
+        // And a work done changing — an ended series, a released film: a
+        // minute to ten years.
+        key: "refresh.ttlEnded",
+        kind: Kind::Int {
+            min: 60,
+            max: 315_360_000,
+        },
+        scopes: SERVER_ONLY,
+    },
+    // ── Sources ──────────────────────────────────────────────────────────────
+    Definition {
+        // The order the merge takes the providers in, most trusted first: their
+        // names, separated by commas, as the Sources page puts them in order. A
+        // provider left out comes after the rest. Read by every merge.
+        key: "sources.priority",
         kind: Kind::Text,
         scopes: SERVER_ONLY,
     },
+    // Webhooks were two settings here, an address and its events, until
+    // they became destinations of their own: see `service::webhook`.
     // ── Updates ──────────────────────────────────────────────────────────────
     Definition {
         // GitHub asked daily for the latest release; off until turned on.
@@ -479,6 +565,10 @@ pub fn validate(def: &Definition, value: &str) -> Result<(), String> {
                 Err("must not be empty".to_string())
             } else if value.len() > most {
                 Err("is too long".to_string())
+            } else if def.key == "sources.priority" {
+                // Providers the merge knows, each once: a name it does not
+                // know would be passed over without a word.
+                crate::merge::rules::parse_priority(value).map(|_| ())
             } else {
                 Ok(())
             }
@@ -546,28 +636,16 @@ mod tests {
         assert!(validate(def("adult.mode"), "hidden").is_ok());
         assert!(validate(def("adult.mode"), "visible").is_ok());
         assert!(validate(def("adult.mode"), "sometimes").is_err());
-        assert!(validate(def("webhooks.url"), "").is_ok());
-        assert!(validate(def("webhooks.url"), "https://example.com/hook").is_ok());
+        assert!(validate(def("oidc.issuer"), "").is_ok());
         assert!(validate(def("tmdb.language"), "").is_err());
     }
 
     #[test]
-    fn the_webhook_s_events_take_every_name_and_none() {
-        let every: Vec<&str> = crate::db::repo::audit::Action::ALL
-            .iter()
-            .map(|a| a.as_str())
-            .chain(
-                crate::service::webhook::Fact::ALL
-                    .iter()
-                    .map(|f| f.as_str()),
-            )
-            .collect();
-        assert!(validate(def("webhooks.events"), &every.join(",")).is_ok());
-        // None at all: the address kept, nothing posted.
-        assert!(validate(def("webhooks.events"), "").is_ok());
-        assert!(validate(def("webhooks.events"), &"x".repeat(2001)).is_err());
-        // Any other text keeps to a line.
+    fn a_text_keeps_to_a_line_and_the_webhook_is_no_setting_now() {
         assert!(validate(def("tmdb.language"), &"x".repeat(201)).is_err());
+        // Its address and events are each destination's own.
+        assert!(find("webhooks.url").is_none());
+        assert!(find("webhooks.events").is_none());
     }
 
     #[test]

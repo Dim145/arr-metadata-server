@@ -36,13 +36,13 @@ struct Assets;
 /// than fall through to the UI's index page, or a mistyped endpoint would
 /// answer `200 text/html` and confuse every client.
 const API_PREFIXES: &[&str] = &[
-    "/api/", "/v1/", "/v2/", "/3/", "/4/", "/v4/", "/media/", "/health", "/ready",
+    "/api/", "/v1/", "/v2/", "/3/", "/4/", "/v4/", "/plex/", "/media/", "/health", "/ready",
 ];
 
 /// The same roots, as the trailing-slash normalisation leaves `/api/` and
 /// its like: no prefix above matches them any more, and they used to be
 /// answered the interface's page.
-const API_ROOTS: &[&str] = &["/api", "/v1", "/v2", "/3", "/4", "/v4", "/media"];
+const API_ROOTS: &[&str] = &["/api", "/v1", "/v2", "/3", "/4", "/v4", "/plex", "/media"];
 
 /// Where Vite puts what it fingerprints. A file there that is not in the
 /// build is a bundle a page from before a deploy still names: a 404 the
@@ -305,10 +305,17 @@ async fn list_preview(state: &AppState, key: &str) -> Option<Preview> {
     if !list.is_public {
         return None;
     }
+    // The selection's cover, as an address a crawler can follow: the copy
+    // kept, under the public URL, or the address it was given by.
+    let image = list
+        .cover
+        .as_deref()
+        .and_then(|cover| state.media.for_elsewhere(&state.media.localized(cover)))
+        .filter(|url| url.starts_with("https://") || url.starts_with("http://"));
     Some(Preview {
         title: list.name.clone(),
         description: list.description.as_deref().and_then(line),
-        image: None,
+        image,
         kind: "website",
     })
 }
@@ -388,6 +395,15 @@ mod tests {
         assert!(is_api_path("/v2/tvdb/shows/eng/81189/official"));
         assert!(is_api_path("/v2/tvdb/search"));
         assert!(is_api_path("/v2"));
+    }
+
+    #[test]
+    fn plex_s_provider_is_an_api_path() {
+        // Plex reads its manifest at the root and JSON under it: a route it
+        // mistypes is told so, not handed the interface's page.
+        assert!(is_api_path("/plex"));
+        assert!(is_api_path("/plex/library/metadata/movie-tmdb-603"));
+        assert!(is_ui_path(&"/plexus".parse::<Uri>().unwrap()));
     }
 
     #[test]

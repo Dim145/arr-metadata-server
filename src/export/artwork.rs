@@ -6,10 +6,25 @@
 //! the media server cannot reach. Local files are read by all of them.
 //!
 //! So the export writes the pictures next to the documents, under the names
-//! Kodi defined and Plex adopted — `poster.jpg`, `fanart.jpg`,
-//! `season01-poster.jpg`, `S01E01-thumb.jpg`, and cast headshots in `.actors/`.
-//! Nothing here invents a convention; these are the names those programs look
-//! for.
+//! those programs look for — and where the two do not look for the same, under
+//! both:
+//!
+//! | | Kodi | Plex (local assets, which its NFO agent reads) |
+//! |---|---|---|
+//! | poster, background, logo | `poster.jpg`, `fanart.jpg`, `clearlogo.png` | the same: `poster`, `fanart` (among `art`, `backdrop`, `background`), `clearlogo` (or `logo`) |
+//! | a season's poster | `season01-poster.jpg` | `season01.jpg` |
+//! | the specials' | `season-specials-poster.jpg` | the same |
+//! | an episode's still | `S01E01-thumb.jpg` | `S01E01.jpg` |
+//! | banner, clear art, landscape | `banner.jpg`, `clearart.png`, `landscape.jpg` | not read |
+//!
+//! Where the names differ the picture is written once, under Kodi's, and the
+//! other is a hard link to it: the same bytes on the disk, which a second
+//! copy would double — a library's stills are thousands of files. A disk that
+//! cannot link (a network share, FAT) is given a copy instead, which is the
+//! one case that costs the space.
+//!
+//! Cast headshots go in `.actors/`, and the theme beside the show as
+//! `theme.mp3`, where both programs and Jellyfin look for them.
 
 use std::{
     collections::HashSet,
@@ -30,6 +45,9 @@ pub struct Download {
     /// Relative to the export root, using `/` as the separator.
     pub path: String,
     pub url: String,
+    /// The other names the same file goes by, for the program that does not
+    /// look for the first: each a link to it, or a copy. See the table above.
+    pub aliases: Vec<String>,
 }
 
 /// Every picture a work's documents refer to, and its theme music, and where
@@ -49,8 +67,23 @@ pub fn plan(item: &MediaItem) -> Vec<Download> {
     // most-wanted first, and a folder holds one poster. The claim is staked on
     // the stem, not the file name, or a PNG logo and a JPEG one would both land
     // and leave the consumer to pick.
-    for image in &item.images {
-        let Some(stem) = file_stem(image.cover_type, image.season_number) else {
+    //
+    // A season's own pictures are kept on the season, not among the work's: a
+    // work read from the store has none of them in `images`, so they are taken
+    // from the seasons — in their order — after the work's own.
+    let season_images = item.seasons.iter().flat_map(|season| {
+        season
+            .images
+            .iter()
+            .map(move |image| (image, Some(season.season_number)))
+    });
+    for (image, season) in item
+        .images
+        .iter()
+        .map(|image| (image, image.season_number))
+        .chain(season_images)
+    {
+        let Some(stem) = file_stem(image.cover_type, season) else {
             continue;
         };
 
@@ -58,9 +91,20 @@ pub fn plan(item: &MediaItem) -> Vec<Download> {
             continue;
         }
 
+        let extension = extension(&image.url);
+        // Plex reads a season's poster as `seasonNN.jpg`, where Kodi reads
+        // `seasonNN-poster.jpg`; the specials' is the same for both.
+        let aliases = match (image.cover_type, season) {
+            (CoverType::Poster, Some(number)) if number > 0 => {
+                vec![format!("{folder}/season{number:02}.{extension}")]
+            }
+            _ => Vec::new(),
+        };
+
         downloads.push(Download {
-            path: format!("{folder}/{stem}.{}", extension(&image.url)),
+            path: format!("{folder}/{stem}.{extension}"),
             url: image.url.clone(),
+            aliases,
         });
     }
 
@@ -72,9 +116,19 @@ pub fn plan(item: &MediaItem) -> Vec<Download> {
         let path = format!("{folder}/{}", episode_name(episode, url));
 
         if taken.insert(path.clone()) {
+            // Plex reads the still as the episode's file name with a picture's
+            // extension, where Kodi reads it with `-thumb` before it.
+            let alias = format!(
+                "{folder}/Season {:02}/S{:02}E{:02}.{}",
+                episode.season_number,
+                episode.season_number,
+                episode.episode_number,
+                extension(url)
+            );
             downloads.push(Download {
                 path,
                 url: url.to_string(),
+                aliases: vec![alias],
             });
         }
     }
@@ -96,6 +150,7 @@ pub fn plan(item: &MediaItem) -> Vec<Download> {
             downloads.push(Download {
                 path,
                 url: url.to_string(),
+                aliases: Vec::new(),
             });
         }
     }
@@ -110,6 +165,7 @@ pub fn plan(item: &MediaItem) -> Vec<Download> {
             downloads.push(Download {
                 path,
                 url: url.to_string(),
+                aliases: Vec::new(),
             });
         }
     }
@@ -120,12 +176,18 @@ pub fn plan(item: &MediaItem) -> Vec<Download> {
 /// The name Kodi looks for, without an extension, or `None` for artwork it has
 /// no place for.
 fn file_stem(cover: CoverType, season: Option<i32>) -> Option<String> {
-    // A season's poster sits in the show's folder, numbered.
+    // A season's poster sits in the show's folder, numbered — and the
+    // specials', season nought, have a name of their own, which Plex reads
+    // the same: `season00-poster` is read by neither.
     if let Some(season) = season.filter(|s| *s >= 0) {
+        let season = match season {
+            0 => "season-specials".to_string(),
+            number => format!("season{number:02}"),
+        };
         return match cover {
-            CoverType::Poster => Some(format!("season{season:02}-poster")),
-            CoverType::Banner => Some(format!("season{season:02}-banner")),
-            CoverType::Fanart => Some(format!("season{season:02}-fanart")),
+            CoverType::Poster => Some(format!("{season}-poster")),
+            CoverType::Banner => Some(format!("{season}-banner")),
+            CoverType::Fanart => Some(format!("{season}-fanart")),
             _ => None,
         };
     }
@@ -199,17 +261,57 @@ fn extension(url: &str) -> &str {
     }
 }
 
-/// Fetch one picture and write it, unless it is already there.
+/// Fetch one picture and write it, unless it is already there — and give it
+/// the other names it goes by, which are links to it.
 ///
 /// Returns `false` when the file already existed, so a second export costs
 /// nothing rather than refetching a library's worth of artwork.
+pub async fn fetch_one(
+    state: &crate::state::AppState,
+    root: &Path,
+    download: &Download,
+) -> Result<bool> {
+    let written = fetch_primary(state, root, download).await?;
+
+    // Also where the file was there already: an export from before a name
+    // was added is given it by the next one.
+    let original = resolve(root, &download.path)?;
+    for alias in &download.aliases {
+        link_or_copy(&original, &resolve(root, alias)?).await?;
+    }
+
+    Ok(written)
+}
+
+/// Another name for a file already written: a hard link, which is the same
+/// bytes on the disk and costs none, or — where the disk cannot link — a
+/// copy. Left alone where the name is taken: a file somebody put there is
+/// not ours to replace.
+async fn link_or_copy(original: &Path, name: &Path) -> Result<()> {
+    if tokio::fs::metadata(name).await.is_ok_and(|m| m.len() > 0) {
+        return Ok(());
+    }
+    // An empty file left by a write that did not finish is no name taken.
+    let _ = tokio::fs::remove_file(name).await;
+
+    if tokio::fs::hard_link(original, name).await.is_ok() {
+        return Ok(());
+    }
+    tokio::fs::copy(original, name)
+        .await
+        .with_context(|| format!("could not place {}", name.display()))?;
+
+    Ok(())
+}
+
+/// Fetch one picture and write it, unless it is already there.
 ///
 /// Fetched as the media store fetches: through its guarded client, every
 /// redirect judged, no larger than a picture — or a theme — may be, and
 /// written only when the bytes are the picture or the sound wanted. An
 /// address that answers with anything else is somebody's page, or worse,
 /// and is not left beside the documents under a picture's name.
-pub async fn fetch_one(
+async fn fetch_primary(
     state: &crate::state::AppState,
     root: &Path,
     download: &Download,
@@ -356,6 +458,7 @@ mod tests {
             vec![Download {
                 path: "series/breaking-bad-2008/theme.mp3".into(),
                 url: "https://metadata.fankai.fr/series/12/theme?t=1".into(),
+                aliases: Vec::new(),
             }]
         );
 
@@ -491,5 +594,177 @@ mod tests {
         assert_eq!(extension("https://x.invalid/a.png"), "png");
         assert_eq!(extension("https://x.invalid/a.jpg?size=w500"), "jpg");
         assert_eq!(extension("https://x.invalid/nothing"), "jpg");
+    }
+
+    /// A season, with the posters it was given.
+    fn season(number: i32, posters: &[&str]) -> crate::domain::Season {
+        crate::domain::Season {
+            id: format!("s{number}"),
+            season_number: number,
+            title: None,
+            overview: None,
+            air_date: None,
+            tmdb_id: None,
+            tvdb_id: None,
+            is_manual: false,
+            images: posters
+                .iter()
+                .map(|url| image(CoverType::Poster, Some(number), url))
+                .collect(),
+            primary_images: Default::default(),
+        }
+    }
+
+    #[test]
+    fn a_seasons_poster_is_taken_from_the_season_and_goes_by_both_names() {
+        // A work read from the store has its seasons' pictures on the
+        // seasons, not among its own: the plan must look there.
+        let mut item = series();
+        item.images = vec![image(CoverType::Poster, None, "https://x.invalid/p.jpg")];
+        item.seasons = vec![
+            season(
+                1,
+                &["https://x.invalid/s1a.png", "https://x.invalid/s1b.jpg"],
+            ),
+            season(2, &["https://x.invalid/s2.jpg"]),
+        ];
+
+        let downloads = plan(&item);
+        let named: Vec<(&str, Vec<&str>)> = downloads
+            .iter()
+            .map(|d| {
+                (
+                    d.path.as_str(),
+                    d.aliases.iter().map(String::as_str).collect(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            named,
+            [
+                ("series/breaking-bad-2008/poster.jpg", vec![]),
+                (
+                    "series/breaking-bad-2008/season01-poster.png",
+                    vec!["series/breaking-bad-2008/season01.png"]
+                ),
+                (
+                    "series/breaking-bad-2008/season02-poster.jpg",
+                    vec!["series/breaking-bad-2008/season02.jpg"]
+                ),
+            ],
+            "the first poster of each season, once"
+        );
+        assert_eq!(downloads[1].url, "https://x.invalid/s1a.png");
+    }
+
+    #[test]
+    fn the_specials_are_named_as_both_programs_name_them() {
+        let mut item = series();
+        item.seasons = vec![season(0, &["https://x.invalid/sp.jpg"])];
+
+        let downloads = plan(&item);
+        assert_eq!(downloads.len(), 1);
+        assert_eq!(
+            downloads[0].path,
+            "series/breaking-bad-2008/season-specials-poster.jpg"
+        );
+        assert!(
+            downloads[0].aliases.is_empty(),
+            "Kodi and Plex read the same name for the specials"
+        );
+        assert_eq!(
+            file_stem(CoverType::Banner, Some(0)).as_deref(),
+            Some("season-specials-banner")
+        );
+        assert_eq!(
+            file_stem(CoverType::Fanart, Some(3)).as_deref(),
+            Some("season03-fanart")
+        );
+    }
+
+    #[test]
+    fn what_both_programs_read_under_one_name_is_written_once() {
+        let mut item = series();
+        item.images = vec![
+            image(CoverType::Poster, None, "https://x.invalid/p.jpg"),
+            image(CoverType::Fanart, None, "https://x.invalid/b.jpg"),
+            image(CoverType::Clearlogo, None, "https://x.invalid/l.png"),
+            image(CoverType::Banner, None, "https://x.invalid/ba.jpg"),
+        ];
+        for download in plan(&item) {
+            assert!(
+                download.aliases.is_empty(),
+                "{} needs no second name",
+                download.path
+            );
+        }
+    }
+
+    #[test]
+    fn an_episodes_still_goes_by_the_name_plex_reads_too() {
+        let mut item = series();
+        let mut episode = crate::db::repo::child::blank_episode(2, 3);
+        episode.image = Some("https://x.invalid/still.png".into());
+        item.episodes = vec![episode];
+
+        let downloads = plan(&item);
+        assert_eq!(
+            downloads[0].path,
+            "series/breaking-bad-2008/Season 02/S02E03-thumb.png"
+        );
+        assert_eq!(
+            downloads[0].aliases,
+            ["series/breaking-bad-2008/Season 02/S02E03.png"]
+        );
+    }
+
+    /// A directory for a test to write in.
+    fn scratch(name: &str) -> PathBuf {
+        // nosemgrep: rust.lang.security.temp-dir.temp-dir — a test's scratch directory, named after a fresh id: nothing security-relevant lives in it
+        std::env::temp_dir().join(format!("ams-{name}-{}", crate::db::new_id()))
+    }
+
+    #[tokio::test]
+    async fn another_name_costs_no_second_copy_and_never_replaces_a_file() {
+        let root = scratch("art");
+        tokio::fs::create_dir_all(&root).await.unwrap();
+        let original = root.join("season01-poster.jpg");
+        tokio::fs::write(&original, b"the poster").await.unwrap();
+
+        let alias = root.join("season01.jpg");
+        link_or_copy(&original, &alias).await.expect("linked");
+        assert_eq!(tokio::fs::read(&alias).await.unwrap(), b"the poster");
+        // On a disk that links, the same file: one set of bytes, two names.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let (a, b) = (
+                std::fs::metadata(&original).unwrap(),
+                std::fs::metadata(&alias).unwrap(),
+            );
+            assert_eq!((a.dev(), a.ino()), (b.dev(), b.ino()));
+        }
+
+        // Again, and over a name somebody put there: left alone.
+        link_or_copy(&original, &alias).await.expect("again");
+        let theirs = root.join("theirs.jpg");
+        tokio::fs::write(&theirs, b"their poster").await.unwrap();
+        link_or_copy(&original, &theirs).await.expect("kept");
+        assert_eq!(tokio::fs::read(&theirs).await.unwrap(), b"their poster");
+
+        // A name left empty by a write that did not finish is replaced.
+        let empty = root.join("empty.jpg");
+        tokio::fs::write(&empty, b"").await.unwrap();
+        link_or_copy(&original, &empty).await.expect("replaced");
+        assert_eq!(tokio::fs::read(&empty).await.unwrap(), b"the poster");
+
+        // Nothing to link to: said, not skipped.
+        assert!(
+            link_or_copy(&root.join("missing.jpg"), &root.join("other.jpg"))
+                .await
+                .is_err()
+        );
+
+        let _ = tokio::fs::remove_dir_all(&root).await;
     }
 }

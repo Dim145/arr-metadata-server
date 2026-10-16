@@ -29,9 +29,14 @@ const DISPLAY_PREFIX_LEN: usize = KEY_PREFIX.len() + 8;
 
 /// Whether a credential is shaped like a key issued here: what a relay goes
 /// by to tell this server's key, which it stands in for, from a client's own
-/// token for the service relayed, which it hands on.
+/// token for the service relayed, which it hands on. Its prefix is read
+/// whatever its case: a key a client wrote in capitals is no key that
+/// authenticates here, but neither is it one to hand on — what follows the
+/// prefix is the key's own secret.
 pub fn is_issued_here(credential: &str) -> bool {
-    credential.starts_with(KEY_PREFIX)
+    credential
+        .get(..KEY_PREFIX.len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(KEY_PREFIX))
 }
 
 /// A freshly minted key. `plaintext` is shown to the user exactly once.

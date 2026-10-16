@@ -57,10 +57,19 @@ pub async fn serve(state: AppState) -> Result<()> {
     keep.run("listing", Ends::Never, jobs::listing::run);
     // Whether it asks is a setting too, off until somebody turns it on.
     keep.run("update check", Ends::Never, jobs::update_check::run);
+    // The works changed here, told to the operator's Sonarr and Radarr when
+    // that is asked for: idle until a change is offered.
+    keep.run("sonarr and radarr", Ends::Never, crate::arr::push::run);
     // The media in line, fetched; the media nobody points at, swept. Neither
     // has anything to do without a store.
     keep.run("media worker", Ends::WhenDone, media::worker::run);
     keep.run("media sweeps", Ends::WhenDone, media::worker::run_sweeps);
+    // What is owed to the webhooks and notifications, sent and tried again.
+    keep.run(
+        "webhook deliveries",
+        Ends::Never,
+        crate::service::webhook::run,
+    );
     // The cache server, attached when it answers and listened to: its
     // heartbeat and its channel are kept too, once it does.
     tasks.keep("cache server", Ends::WhenDone, {

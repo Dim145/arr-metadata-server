@@ -30,6 +30,8 @@ import {
   Toggle,
   Tr,
 } from '../../components/ui'
+import { SelectionNfo } from '../../components/Exports'
+import { Artwork } from '../../components/media'
 import { api, query } from '../../lib/api'
 import { useSettled } from '../../lib/debounce'
 import { useTitle } from '../../lib/hooks'
@@ -46,6 +48,7 @@ import type {
   MediaItem,
 } from '../../lib/types'
 import { ImportAddresses } from '../Lists'
+import { ImagePicker, type Candidate } from './editor/ImagePicker'
 
 const KINDS: ListKind[] = ['mixed', 'series', 'movie']
 const SORTS = ['popularity', 'rating', 'release', 'title', 'added'] as const
@@ -388,6 +391,19 @@ function Editor({ id, onClose, onSaved }: { id: string; onClose: () => void; onS
     },
   })
 
+  // The cover is chosen and kept on its own, as a picture is chosen for a
+  // work: the dialog's button is the save, and what the form holds is not
+  // touched by it.
+  const [choosingCover, setChoosingCover] = useState(false)
+  const setCover = useMutation({
+    mutationFn: (address: string) =>
+      api.put<CuratedList>(`/lists/${id}`, { cover: address } satisfies Partial<CuratedListRequest>),
+    onSuccess: () => {
+      onSaved()
+      void queryClient.invalidateQueries({ queryKey: ['admin-list', id] })
+    },
+  })
+
   // Adding a member: the catalogue searched as it is typed, narrowed to the
   // kind the list holds.
   const [term, setTerm] = useState('')
@@ -425,6 +441,13 @@ function Editor({ id, onClose, onSaved }: { id: string; onClose: () => void; onS
     return <Skeleton className="h-64 w-full" />
   }
   const list = detail.data.list
+  // The cover is wide, so the pictures offered are the members' backgrounds:
+  // a poster cropped to a strip is not a cover.
+  const covers: Candidate[] = detail.data.items.flatMap((member) =>
+    (member.images ?? [])
+      .filter((image) => image.coverType === 'fanart' || image.coverType === 'landscape')
+      .map((image) => ({ image, group: 'work' as const, groupLabel: member.title })),
+  )
   const set = (patch: Partial<Form>) => setForm({ ...form, ...patch })
   const setFilter = (patch: Partial<FilterForm>) => setForm({ ...form, filter: { ...form.filter, ...patch } })
 
@@ -474,6 +497,49 @@ function Editor({ id, onClose, onSaved }: { id: string; onClose: () => void; onS
                 onChange={(event) => set({ description: event.target.value })}
               />
             </FormField>
+          </div>
+          <div className="sm:col-span-2">
+            <span className="label mb-1.5 block">{t.admin.curated.cover}</span>
+            <div className="flex flex-wrap items-center gap-4">
+              <div className="aspect-video w-48 shrink-0 overflow-hidden rounded-card border border-rule bg-ink-high">
+                {list.cover ? (
+                  <Artwork
+                    url={list.cover}
+                    role="still"
+                    alt=""
+                    className="size-full object-cover"
+                    fallback={<span aria-hidden className="block size-full bg-ink-high" />}
+                  />
+                ) : (
+                  <span className="grid size-full place-items-center px-3 text-center text-xs text-bone-faint">
+                    {t.admin.curated.coverNone}
+                  </span>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button size="sm" onClick={() => setChoosingCover(true)}>
+                  <Glyph name="image" className="size-4" />
+                  {list.cover ? t.admin.curated.coverChange : t.admin.curated.coverChoose}
+                </Button>
+                {list.cover ? (
+                  <Button
+                    size="sm"
+                    variant="quiet"
+                    disabled={setCover.isPending}
+                    onClick={() => setCover.mutate('')}
+                  >
+                    <Glyph name="close" className="size-4" />
+                    {t.admin.curated.coverRemove}
+                  </Button>
+                ) : null}
+              </div>
+            </div>
+            <p className="mt-2 max-w-prose text-xs leading-relaxed text-bone-faint">{t.admin.curated.coverHint}</p>
+            {setCover.isError ? (
+              <p role="alert" className="mt-2 text-xs text-vermillion">
+                {setCover.error.message}
+              </p>
+            ) : null}
           </div>
           <FormField label={t.admin.curated.mode} htmlFor="edit-mode">
             <Select id="edit-mode" value={form.mode} onChange={(event) => set({ mode: event.target.value as ListMode })}>
@@ -679,8 +745,27 @@ function Editor({ id, onClose, onSaved }: { id: string; onClose: () => void; onS
         </div>
       </form>
 
+      <ImagePicker
+        open={choosingCover}
+        onClose={() => setChoosingCover(false)}
+        title={t.admin.curated.coverTitle}
+        subtitle={list.name}
+        work={{ id: list.id }}
+        shape="wide"
+        candidates={covers.length ? covers : undefined}
+        current={list.cover}
+        uploadFields={false}
+        onChoose={(address) => setCover.mutateAsync(address)}
+        confirm={{ own: t.admin.curated.coverUse, address: t.admin.curated.coverUse }}
+        hints={{ own: t.admin.curated.coverPickHint, address: t.admin.curated.coverPickHint }}
+      />
+
       <div className="border-t border-rule p-5">
         <ImportAddresses list={list} />
+      </div>
+
+      <div className="border-t border-rule p-5">
+        <SelectionNfo listId={list.id} />
       </div>
     </Panel>
   )

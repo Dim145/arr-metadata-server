@@ -311,6 +311,13 @@ impl Media {
             self.localize_optional(&mut relation.image);
         }
         self.localize_optional(&mut item.theme_music);
+        // What a person hid, as the editor shows it to be given back.
+        for image in &mut item.hidden.images {
+            self.localize_url(&mut image.url);
+        }
+        for credit in &mut item.hidden.credits {
+            self.localize_optional(&mut credit.image);
+        }
     }
 
     /// The address a reader elsewhere can follow, for one of this server's

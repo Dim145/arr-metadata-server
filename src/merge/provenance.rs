@@ -34,6 +34,21 @@ const ALSO_TRACKED: &[&str] = &["popularity", "credits", "relations"];
 /// whatever nobody gave anew stays as it was. Never a provider of record.
 pub const STORED: &str = "stored";
 
+/// The lists the merge gathers from every source rather than takes whole
+/// from one: see `merge::union_keywords`.
+const GATHERED: &[&str] = &["keywords"];
+
+/// Whether a source's list holds any of what was kept, the two compared as
+/// [`normalized`] leaves them.
+fn shares(value: &serde_json::Value, kept: &serde_json::Value) -> bool {
+    match (value, kept) {
+        (serde_json::Value::Array(given), serde_json::Value::Array(kept)) => {
+            given.iter().any(|item| kept.contains(item))
+        }
+        _ => value == kept,
+    }
+}
+
 /// Who gave a work its values.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
@@ -180,6 +195,14 @@ struct Tracked<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     title_qualifier: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    tagline: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    format: Option<&'a str>,
+    #[serde(skip_serializing_if = "<[String]>::is_empty")]
+    production_countries: &'a [String],
+    #[serde(skip_serializing_if = "<[String]>::is_empty")]
+    production_companies: &'a [String],
+    #[serde(skip_serializing_if = "Option::is_none")]
     popularity: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     collection_tmdb_id: Option<i64>,
@@ -217,6 +240,10 @@ fn tracked_json(item: &MediaItem) -> serde_json::Value {
         trailer_youtube_id: item.trailer_youtube_id.as_deref(),
         theme_music: item.theme_music.as_deref(),
         title_qualifier: item.title_qualifier.as_deref(),
+        tagline: item.tagline.as_deref(),
+        format: item.format.as_deref(),
+        production_countries: &item.production_countries,
+        production_companies: &item.production_companies,
         popularity: item.popularity,
         collection_tmdb_id: item.collection_tmdb_id,
         genres: &item.genres,
@@ -281,10 +308,20 @@ pub fn attribute(merged: &MediaItem, views: &[View]) -> Provenance {
             continue;
         };
         let kept = normalized(kept);
+        // A list gathered from every source is no one source's: each that
+        // gave any of it gave it, the first of them first.
+        let gathered = GATHERED.contains(&name);
+        let gave = |value: &serde_json::Value| {
+            if gathered {
+                shares(value, &kept)
+            } else {
+                *value == kept
+            }
+        };
 
         let Some(at) = views
             .iter()
-            .position(|view| view.values.get(name) == Some(&kept))
+            .position(|view| view.values.get(name).is_some_and(gave))
         else {
             continue;
         };
@@ -297,9 +334,9 @@ pub fn attribute(merged: &MediaItem, views: &[View]) -> Provenance {
                 .map(|(_, view)| view.provider.clone())
                 .collect()
         };
-        let agreed = named(&|index, view| index > at && view.values.get(name) == Some(&kept));
+        let agreed = named(&|index, view| index > at && view.values.get(name).is_some_and(gave));
         let differed = named(&|index, view| {
-            index != at && view.values.get(name).is_some_and(|value| *value != kept)
+            index != at && view.values.get(name).is_some_and(|value| !gave(value))
         });
         let passed = named(&|index, view| {
             index < at && !view.values.is_empty() && !view.values.contains_key(name)
@@ -639,11 +676,20 @@ pub fn reconstruct(
             .collect();
     }
 
+    // Each release says whose it is.
+    item.releases = stored
+        .releases
+        .iter()
+        .filter(|r| r.source.as_deref() == Some(provider))
+        .cloned()
+        .collect();
+
     let gave_a_list = !item.images.is_empty()
         || !item.episodes.is_empty()
         || !item.translations.is_empty()
         || !item.ratings.is_empty()
-        || !item.alternative_titles.is_empty();
+        || !item.alternative_titles.is_empty()
+        || !item.releases.is_empty();
     (gave_a_value || gave_a_list).then_some(item)
 }
 
@@ -666,6 +712,13 @@ pub fn leftover(stored: &MediaItem, answered: &[&str]) -> MediaItem {
     for season in &mut item.seasons {
         season.images.retain(kept);
     }
+    // Nor a release the source that answered no longer lists.
+    item.releases.retain(|release| {
+        !release
+            .source
+            .as_deref()
+            .is_some_and(|source| answered.contains(&source))
+    });
     item
 }
 
@@ -1170,6 +1223,8 @@ mod tests {
             ("trailerYoutubeId", "yt"),
             ("themeMusic", "https://m"),
             ("titleQualifier", "US"),
+            ("tagline", "t"),
+            ("format", "OVA"),
         ] {
             let mut json = serde_json::to_value(&item).unwrap();
             json[name] = serde_json::Value::String(value.into());
@@ -1181,6 +1236,8 @@ mod tests {
         item.collection_tmdb_id = Some(7);
         item.genres = vec!["Drama".into()];
         item.keywords = vec!["k".into()];
+        item.production_countries = vec!["US".into()];
+        item.production_companies = vec!["C".into()];
         item.credits = serde_json::from_value(serde_json::json!([
             { "id": "c", "personName": "P", "creditType": "actor", "sortOrder": 0, "isManual": false }
         ]))
@@ -1227,6 +1284,71 @@ mod tests {
             .map(|t| (t.title.as_str(), t.language.as_deref()))
             .collect();
         assert_eq!(kept, [("Le Show", Some("fra"))]);
+    }
+
+    /// Keywords are gathered from every source: each that gave any of them
+    /// gave them, and none is said to have differed.
+    #[test]
+    fn gathered_keywords_name_every_source_that_gave_some() {
+        let mut tmdb = item("Attack on Titan", None, None);
+        tmdb.keywords = vec!["based on manga".into(), "kaiju".into()];
+        let tvdb = item("Attack on Titan", None, Some(24));
+        let mut anilist = item("Attack on Titan", None, None);
+        anilist.keywords = vec!["Kaiju".into(), "Military".into()];
+
+        let (merged, provenance) =
+            merge(vec![("tmdb", tmdb), ("tvdb", tvdb), ("anilist", anilist)]);
+        assert_eq!(merged.keywords, ["based on manga", "kaiju", "Military"]);
+        let keywords = &provenance.fields["keywords"];
+        assert_eq!(keywords.from, "tmdb");
+        assert_eq!(keywords.agreed, ["anilist"]);
+        assert!(keywords.differed.is_empty());
+    }
+
+    /// A sync from one source hands the others their countries back, and
+    /// the source asked again gives its own anew: one it no longer lists
+    /// goes.
+    #[test]
+    fn releases_go_back_to_whoever_gave_them() {
+        let rated = |country: &str, rating: &str, source: &str| crate::domain::CountryRelease {
+            country: country.into(),
+            release_type: None,
+            date: None,
+            certification: Some(rating.into()),
+            note: None,
+            source: Some(source.into()),
+        };
+        let countries = |work: &MediaItem| -> Vec<(String, String)> {
+            work.releases
+                .iter()
+                .map(|r| {
+                    (
+                        r.country.clone(),
+                        r.certification.clone().unwrap_or_default(),
+                    )
+                })
+                .collect()
+        };
+        let pairs = |list: &[(&str, &str)]| -> Vec<(String, String)> {
+            list.iter()
+                .map(|(c, r)| (c.to_string(), r.to_string()))
+                .collect()
+        };
+
+        let mut tmdb = item("A", Some("Ended"), None);
+        tmdb.releases = vec![rated("US", "TV-MA", "tmdb"), rated("GB", "18", "tmdb")];
+        let mut tvdb = item("A", Some("Ended"), Some(50));
+        tvdb.releases = vec![rated("US", "TV-14", "tvdb"), rated("DE", "16", "tvdb")];
+        let (stored, provenance) = merge(vec![("tmdb", tmdb), ("tvdb", tvdb)]);
+        assert_eq!(
+            countries(&stored),
+            pairs(&[("US", "TV-MA"), ("GB", "18"), ("DE", "16")])
+        );
+
+        let mut fresh = item("A", Some("Ended"), None);
+        fresh.releases = vec![rated("US", "TV-14", "tmdb")];
+        let (after, _) = synced(&stored, &provenance, vec![("tmdb", fresh)]);
+        assert_eq!(countries(&after), pairs(&[("US", "TV-14"), ("DE", "16")]));
     }
 
     #[test]

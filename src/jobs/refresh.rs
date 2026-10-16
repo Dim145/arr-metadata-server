@@ -39,6 +39,12 @@ pub async fn refresh_one(state: &AppState, item: &MediaItem) -> Result<Option<Me
         MediaKind::Movie => refresh_movie(state, item).await?,
     };
 
+    // Served differently since: told to the operator's Sonarr or Radarr,
+    // when that is asked for.
+    if let Some(fresh) = &refreshed {
+        crate::arr::push::refreshed(state, item, fresh);
+    }
+
     Ok(refreshed)
 }
 

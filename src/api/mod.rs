@@ -1,7 +1,8 @@
 //! HTTP surfaces.
 //!
-//! Three compatibility surfaces plus this server's own API. They are separate
-//! routers because they have separate authentication policies — see
+//! Three compatibility surfaces, the metadata provider Plex asks, and this
+//! server's own API. They are separate routers because they have separate
+//! authentication policies — see
 //! [`crate::config::Surface`] — and they are documented together, because an
 //! operator wants one page describing everything the server answers.
 
@@ -9,6 +10,7 @@ pub mod anilist;
 pub mod audit;
 pub mod extract;
 pub mod native;
+pub mod plex;
 pub mod radarr;
 pub mod relay;
 pub mod sonarr;
@@ -42,17 +44,18 @@ A self-hosted metadata server for the *arr stack.
 
 It answers three client protocols from one store — Sonarr's Skyhook API, \
 Radarr's metadata API, and the TMDB v3 API — alongside its own API, documented \
-here in full. TheTVDB's v4 API and AniList's are relayed to the real services, \
-with the fields locked here written into their answers.
+here in full, and it is a metadata provider Plex Media Server can be given, \
+under `/plex`. TheTVDB's v4 API and AniList's are relayed to the real \
+services, with the fields locked here written into their answers.
 
 **Locks.** Any field a person edits is recorded separately from provider data \
 and is never overwritten by a refresh. That is what the `/items/{id}/overrides` \
 routes manage, and what `lockedFields` reports.
 
 **Authentication differs per surface.** Sonarr and Radarr have their metadata \
-URLs compiled in and cannot attach a credential, so those routes are guarded by \
-address rather than by key. The routes documented without a security \
-requirement are those; they are not open.",
+URLs compiled in and cannot attach a credential, and Plex sends none to a \
+provider, so those routes are guarded by address rather than by key. The \
+routes documented without a security requirement are those; they are not open.",
         version = env!("CARGO_PKG_VERSION"),
         license(name = "MIT"),
     ),
@@ -73,6 +76,7 @@ requirement are those; they are not open.",
         (name = "TMDB compatibility", description = "TMDB v3, relayed and patched"),
         (name = "TheTVDB compatibility", description = "TheTVDB v4, relayed and patched, in api4.thetvdb.com's place"),
         (name = "AniList compatibility", description = "AniList's GraphQL, relayed and patched, in graphql.anilist.co's place"),
+        (name = "Plex provider", description = "A custom metadata provider for Plex Media Server, given to Plex by its address"),
     ),
 )]
 pub struct ApiDoc;
@@ -141,8 +145,17 @@ pub fn build(state: AppState) -> (Router<AppState>, utoipa::openapi::OpenApi) {
 
     let (thetvdb, thetvdb_api) = thetvdb::router().split_for_parts();
 
+    let (plex, plex_api) = plex::router().split_for_parts();
+
     let mut api = ApiDoc::openapi();
-    for part in [native_api, public_api, arr_api, tmdb_api, thetvdb_api] {
+    for part in [
+        native_api,
+        public_api,
+        arr_api,
+        tmdb_api,
+        thetvdb_api,
+        plex_api,
+    ] {
         api.merge(part);
     }
 
@@ -163,7 +176,10 @@ pub fn build(state: AppState) -> (Router<AppState>, utoipa::openapi::OpenApi) {
         )))
         .merge(arr_surface(state.clone(), arr))
         .merge(tmdb_surface(state.clone(), tmdb))
-        .merge(thetvdb_surface(state, thetvdb));
+        .merge(thetvdb_surface(state.clone(), thetvdb))
+        // On this door only: Plex is given an address, and has no name
+        // compiled in for the clients' door to answer under.
+        .merge(plex_surface(state, plex));
 
     (router, api)
 }
@@ -268,6 +284,14 @@ fn anilist_surface(state: AppState, anilist: Router<AppState>) -> Router<AppStat
         .layer(from_fn_with_state(state, crate::auth::ratelimit::limit))
 }
 
+/// The provider Plex asks: guarded by address, since Plex presents no
+/// credential to a provider yet, and limited like the others — a host not
+/// on the list can still spend this server's time being told so.
+fn plex_surface(state: AppState, plex: Router<AppState>) -> Router<AppState> {
+    plex.layer(from_fn_with_state(state.clone(), guards::guard_plex))
+        .layer(from_fn_with_state(state, crate::auth::ratelimit::limit))
+}
+
 /// Assemble the spec alone, without the state a running server needs.
 ///
 /// [`build`] cannot be called from a test — it wants an `AppState`, and that
@@ -286,9 +310,17 @@ fn openapi_only() -> utoipa::openapi::OpenApi {
     let (_, arr_api) = arr_routers().split_for_parts();
     let (_, tmdb_api) = tmdb::router().split_for_parts();
     let (_, thetvdb_api) = thetvdb::router().split_for_parts();
+    let (_, plex_api) = plex::router().split_for_parts();
 
     let mut api = ApiDoc::openapi();
-    for part in [native_api, public_api, arr_api, tmdb_api, thetvdb_api] {
+    for part in [
+        native_api,
+        public_api,
+        arr_api,
+        tmdb_api,
+        thetvdb_api,
+        plex_api,
+    ] {
         api.merge(part);
     }
     api
@@ -342,6 +374,10 @@ mod tests {
             "/api/v1/admin/locks",
             "/api/v1/jobs/{id}",
             "/api/v1/lists/{key}/sonarr.json",
+            "/api/v1/lists/{key}/ids.txt",
+            "/api/v1/lists/{key}/feed.atom",
+            "/api/v1/export/kometa.yml",
+            "/api/v1/export/nfo",
             "/v1/tvdb/shows/{language}/{tvdb_id}",
             "/v2/tvdb/shows/{language}/{tvdb_id}/{season_type}",
             "/v2/tvdb/search",
@@ -351,6 +387,12 @@ mod tests {
             "/4/{path}",
             "/v4/login",
             "/v4/{path}",
+            "/plex",
+            "/plex/library/metadata/matches",
+            "/plex/library/metadata/{rating_key}",
+            "/plex/library/metadata/{rating_key}/children",
+            "/plex/library/metadata/{rating_key}/grandchildren",
+            "/plex/library/metadata/{rating_key}/images",
             "/",
         ] {
             assert!(paths.contains_key(expected), "{expected} is not documented");
@@ -491,7 +533,12 @@ mod tests {
         // They cannot present a credential, so advertising one would mislead.
         let json = serde_json::to_value(openapi_only()).unwrap();
 
-        for path in ["/v1/tvdb/shows/{language}/{tvdb_id}", "/v1/movie/{tmdb_id}"] {
+        for path in [
+            "/v1/tvdb/shows/{language}/{tvdb_id}",
+            "/v1/movie/{tmdb_id}",
+            "/plex",
+            "/plex/library/metadata/{rating_key}",
+        ] {
             assert_eq!(
                 json["paths"][path]["get"]["security"]
                     .as_array()
@@ -500,5 +547,12 @@ mod tests {
                 "{path} should carry no security requirement"
             );
         }
+        assert_eq!(
+            json["paths"]["/plex/library/metadata/matches"]["post"]["security"]
+                .as_array()
+                .map(Vec::len),
+            Some(0),
+            "Plex's matches should carry no security requirement"
+        );
     }
 }
