@@ -1923,7 +1923,7 @@ export const fr: Dict = {
       refreshing: 'Rafraîchissement…',
       refreshFailed: 'Le dernier rafraîchissement a échoué',
       nfo: 'Télécharger le .nfo',
-      nfoHint: 'Un document Kodi ou XBMC — la route vers Plex',
+      nfoHint: 'Un document Kodi ou XBMC — pour Kodi, ou une bibliothèque Plex qui les lit',
       showIn: 'Afficher en',
       asStored: 'Tel quel',
       translationNote:
@@ -2617,7 +2617,7 @@ export const fr: Dict = {
       export: 'Plex et les autres lecteurs de .nfo',
       exportTitle: 'Exporter chaque fiche en .nfo',
       exportBody:
-        'Écrit des documents Kodi et XBMC sous AMS_NFO_EXPORT_PATH : c’est ainsi que vos modifications atteignent Plex, qui n’a aucune source de métadonnées configurable. Si Sonarr ou Radarr gèrent la bibliothèque, activer leur propre écriture de métadonnées Kodi est plus simple : ils écrivent déjà ces fichiers à côté des médias, à partir de ce que ce serveur leur a donné.',
+        'Écrit des documents Kodi et XBMC sous AMS_NFO_EXPORT_PATH, pour Kodi et pour une bibliothèque Plex qui les lit plutôt que de prendre ce serveur comme fournisseur de métadonnées. Si Sonarr ou Radarr gèrent la bibliothèque, activer leur propre écriture de métadonnées Kodi est plus simple : ils écrivent déjà ces fichiers à côté des médias, à partir de ce que ce serveur leur a donné.',
       exportRun: 'Exporter',
       exportRunning: 'Export en cours…',
       exportDone: (works: number, episodes: number) =>

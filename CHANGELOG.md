@@ -138,7 +138,7 @@ may change what the API or the configuration means, and says so here.
   last of them; a refresh that found everything as it was tells nobody. What
   was sent lately, and how it went, is listed on the page.
 - A new task, *Seed from Sonarr and Radarr* (`arr.seed`, by hand on the
-  Tasks page or on the new page), reads every series Sonarr holds and every
+  Jobs page or on the new page), reads every series Sonarr holds and every
   film Radarr holds and imports what is missing the way the import page
   does, one work after another, gently. A work held already is passed over,
   so it can run again at any time and fetch only what came since, and it can
@@ -202,8 +202,8 @@ may change what the API or the configuration means, and says so here.
   long it took — its tries and its next one. A delivered or given-up one can
   be replayed, under the same `webhook-id`. The log is kept thirty days, the
   newest thousand of each destination.
-- A title, an overview or a tagline — of a work, a season or an episode —
-  can be locked for the readers of one language alone. A work served in a
+- A title or an overview — of a work, a season or an episode — and a work's
+  tagline can be locked for the readers of one language alone. A work served in a
   language is given what was locked in that language, else what was locked
   in every language, else the translation, else the text it is stored in: by
   the native API, Sonarr, Radarr and the `.nfo`, and by the relays as

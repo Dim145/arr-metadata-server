@@ -1,10 +1,9 @@
 //! Kodi/XBMC `.nfo` documents.
 //!
-//! This is the only route to Plex. Plex has no configurable metadata source —
-//! since the legacy agents were removed it talks to `metadata.provider.plex.tv`
-//! over a pinned connection tied to a Plex account — so the supported way to get
-//! your own data in front of it is the Personal Media / XBMCnfo agent reading
-//! files beside the media.
+//! For Kodi, and for a Plex library that reads files beside the media — its
+//! Personal Media / XBMCnfo agent — rather than taking this server as its
+//! metadata provider, which Plex Media Server 1.43 and later can (`/plex`, see
+//! `docs/plex.md`).
 //!
 //! Note that if Sonarr or Radarr manage the library, enabling *their* Kodi
 //! metadata writer is the better route: they already write these files next to

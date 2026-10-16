@@ -13,6 +13,31 @@ Sonarr's metadata service — and does what both did, from one catalogue.
 > Sonarr, Radarr and Jellyseerr containers — including that a refresh leaves
 > manually locked fields alone. See [`docs/integration.md`](docs/integration.md).
 
+## Documentation
+
+- [`docs/integration.md`](docs/integration.md) — pointing Sonarr, Radarr and the
+  TMDB, TheTVDB and AniList clients at this server: the clients' door, trusting its
+  authority, allowing the clients through.
+- [`docs/plex.md`](docs/plex.md) — Plex Media Server taking its metadata from this
+  server, as a custom metadata provider.
+- [`docs/sonarr-radarr.md`](docs/sonarr-radarr.md) — what Sonarr v4, Sonarr v5 and
+  Radarr are given, and connecting your own Sonarr and Radarr: telling them of a
+  change, filling the catalogue from their libraries.
+- [`docs/relays.md`](docs/relays.md) — the TMDB, TheTVDB and AniList relays: whose key
+  TMDB and TheTVDB are asked with, what is written into the answers and what is taken
+  out of them.
+- [`docs/notifications.md`](docs/notifications.md) — telling what happens to Standard
+  Webhooks receivers, Discord, Slack, ntfy, Gotify and Apprise: tries, log and replay.
+- [`docs/exports.md`](docs/exports.md) — Kometa's metadata file, selections as text
+  files and feeds, and `.nfo` documents with their artwork.
+- [`docs/editing.md`](docs/editing.md) — locks per language, hiding what the sources
+  gave, the catalogue's register and its actions on many works, the order of the
+  sources, and the dashboard's list of what there is to do.
+- [`docs/data.md`](docs/data.md) — release dates and ratings by country, the schedule,
+  and what a work carries besides: tagline, writers, Wikidata, AniList's format.
+- [`docs/interface.md`](docs/interface.md) — the bar along the foot of a phone, the
+  catalogue as a list, the Settings page and the Jobs page.
+
 ## What it does
 
 - **One metadata source for the whole stack.** Sonarr's Skyhook API — its
@@ -38,7 +63,9 @@ Sonarr's metadata service — and does what both did, from one catalogue.
 - **Per-language answers.** Sonarr asks in its URL, the native API takes
   `?language=`. Translations are fetched the first time a language is asked for
   and kept — from TMDB, then TheTVDB for the many languages TMDB does not carry.
-  A locked field stays locked in every language.
+  A locked field stays locked in every language; a title, an overview or a
+  tagline can also be locked for one language alone
+  ([`docs/editing.md`](docs/editing.md)).
 - **Sonarr's alternate titles.** Sonarr recognises releases only by the
   titles of the list it downloads from `services.sonarr.tv`, never by those of
   a Skyhook answer. Resolve that name here too and the list reaches it with
@@ -56,20 +83,24 @@ Sonarr's metadata service — and does what both did, from one catalogue.
 - **Curated lists.** Selections composed by hand or by a filter, shown on
   the site and served to Sonarr and Radarr as the custom lists their import
   lists read.
-- **The catalogue in numbers, the server's health, and webhooks.** A public
+- **The catalogue in numbers, the server's health, and notifications.** A public
   page counts what the catalogue holds by decade, genre, network, language
   and score; the administrator's dashboard says what the server is, keeps and
   did last — and, when `updates.check` is on, whether a newer release is
   out, learnt by one anonymous GET to GitHub a day and nothing else; and
-  what happens can be posted to a webhook — Discord, Slack or anything that
-  takes JSON — for the events ticked (`webhooks.url`, `webhooks.events`).
-  To begin with, the events are what enters and leaves the catalogue:
-  `item.imported`, `item.created`, `item.deleted` and `dataset.imported`;
-  `*` is every one. Three facts nobody did are among them: `refresh.failed`,
-  once when a work starts failing; `media.failed`, a picture or theme whose
-  every try failed; `update.available`. *Test*, beside the address, posts
-  `webhook.test` and says what came back. A failed sign-in is posted without
-  the name that was typed, and the webhook address itself is never posted.
+  what happens can be told to as many destinations as you like, on the
+  Notifications page — a receiver of your own, signed as Standard Webhooks
+  says, Discord, Slack, ntfy, Gotify, Apprise, or anything that takes JSON —
+  each for the events ticked for it. To begin with, the events are what enters
+  and leaves the catalogue: `item.imported`, `item.created`, `item.deleted` and
+  `dataset.imported`; `*` is every one. Three facts nobody did are among them:
+  `refresh.failed`, once when a work starts failing; `media.failed`, a picture
+  or theme whose every try failed; `update.available`. What a destination does
+  not take is tried again for a day and more, and what it was told is kept
+  thirty days in its log, with a test and a replay for each. A failed sign-in is
+  posted without the name that was typed, and a destination's address and
+  token are never shown whole, posted or logged
+  ([`docs/notifications.md`](docs/notifications.md)).
 - **Related works, and who people are.** What AniList files beside an anime
   — its sequels, prequels, side stories, what it was drawn from — is kept
   with the work and shown on its page, leading to the work here when the
@@ -119,7 +150,12 @@ Sonarr's metadata service — and does what both did, from one catalogue.
   any one work, as an iCalendar a phone subscribes to; what arrives, airs
   and comes out as Atom feeds.
 - **`.nfo` export with the artwork beside it**, in the layout Kodi defined and
-  Plex's Personal Media agent reads. It is the only route to Plex.
+  Plex's Personal Media agent reads: for Kodi, for Jellyfin, and for a Plex that
+  does not call this server. A Plex Media Server 1.43 or later can take its
+  metadata from this server directly instead, as a custom metadata provider
+  (`/plex`), and Kometa can lay what is locked here over a Plex library
+  (`/api/v1/export/kometa.yml`). See [`docs/plex.md`](docs/plex.md) and
+  [`docs/exports.md`](docs/exports.md).
 - **Two interfaces, in English or French.** A catalogue anyone can browse —
   posters, seasons, cast, the record — and an administration side for the
   people who maintain it. Both switch language from the bar and remember the
@@ -220,7 +256,8 @@ Four sources are asked at once and merged into one entity:
 Only TMDB is really needed to start. The rest are optional and on by default;
 each costs one extra call per refresh.
 
-The merge is field by field, in `AMS_PROVIDER_PRIORITY` order:
+The merge is field by field, in the order of the setting `sources.priority` — put
+in order on the Sources page, and given its first value by `AMS_PROVIDER_PRIORITY`:
 
 - **Scalars** take the first provider that has anything, so a lower-priority
   source fills a gap rather than overwriting an answer.
@@ -639,6 +676,7 @@ what they can send:
 | TheTVDB-compatible | `/v4/*` | API key (a key issued here, as the client's TheTVDB key) |
 | AniList-compatible | `graphql.anilist.co`, on the clients' door | IP allowlist |
 | Sonarr / Radarr compatible | `/v1/*`, including the IMDb lists Radarr imports from | IP allowlist |
+| Plex metadata provider | `/plex/*`, on the interface's door | IP allowlist (`AMS_PLEX_AUTH`) |
 
 ### Letting anyone browse
 
@@ -684,9 +722,13 @@ account, and no sign-up ever makes an administrator. Uninvited sign-ups are
 limited to `AMS_SIGNUPS_PER_HOUR` (5) per address — an IPv6 address counts by
 its /64 — and `AMS_SIGNUPS_PER_HOUR_TOTAL` (100) for the whole server.
 
-The same page switches each API off — Sonarr's, Radarr's, the TMDB relay, and
-the native API's keys (the interface's own session is never cut). A switched-off
-API answers `503`, which Sonarr and Radarr read as "try again later".
+The same page switches each API off — Sonarr's, Radarr's, the Plex provider, the
+TMDB, TheTVDB and AniList relays, and the native API's keys (the interface's own
+session is never cut). A switched-off API answers `503`, which Sonarr and Radarr
+read as "try again later". It also says whose key the TMDB and TheTVDB relays ask
+their service with: this server's, or each client's own
+(`tmdb.relayCredential`, `tvdb.relayCredential`; see
+[`docs/relays.md`](docs/relays.md)).
 
 `AMS_ADMIN_USERNAME` and `AMS_ADMIN_PASSWORD` open the first administrator. After
 that they are a way back in: when no active administrator is left, a restart
@@ -912,20 +954,23 @@ A few things worth knowing before this is reachable from anywhere:
   idle between two requests no longer.
 - **What is logged has its secrets masked:** the values of `api_key`, `apikey`,
   `token` and their like in any address, what follows `Bearer` or `Basic`, the
-  password of an address, the configured keys and passwords, the webhook's
-  address. A failed sign-in's username is logged quoted, its line breaks
-  escaped.
+  password of an address, the configured keys and passwords, the keys kept for
+  your own Sonarr and Radarr, and the addresses, tokens and signing secrets of
+  notification destinations. A failed sign-in's username is logged quoted, its
+  line breaks escaped.
 - **An image URL may not name an address only this server can reach** — loopback,
   link-local, `169.254.169.254`. The NFO export downloads stored artwork, which
   makes an image URL a request this server makes on somebody else's say-so.
   A private LAN address is still allowed — a picture mirror at home is a
   reasonable thing to own — unless `AMS_MEDIA_PRIVATE_NETWORKS=false` refuses
   those too.
-- **The webhook's test posts to the one address configured**, an
-  administrator's setting: refused the addresses an image URL is refused —
-  loopback, link-local, the cloud's metadata — and allowed a LAN one, since a
-  relay at home is as reasonable as a picture mirror. What it says back is
-  the status and how long it took, nothing of the body.
+- **A notification destination's address is an administrator's setting**, and
+  is refused the addresses an image URL is refused — loopback, link-local, the
+  cloud's metadata — and allowed a LAN one, since a relay at home is as
+  reasonable as a picture mirror. Webhooks are posted without `HTTP_PROXY`, and
+  a redirect is not followed. A test posts to that destination alone, and says
+  back the status and how long it took and, when the address refused it, the
+  start of what it answered, with the destination's secrets masked.
 - **`AMS_CORS_ORIGINS` names origins.** `*` is ignored with a warning rather than
   honoured — this server sends credentials, and the two cannot be combined.
 - **`AMS_ALLOWED_HOSTS` names the hostnames this server answers to**, and is the
@@ -1021,7 +1066,7 @@ it against a real Sonarr.
 ## Development
 
 ```bash
-cargo test                      # 175 tests; the repository ones use an in-memory SQLite
+cargo test                      # the repository tests use an in-memory SQLite
 cargo clippy --all-targets
 cargo fmt --check
 

@@ -15,7 +15,8 @@ metadata source. The URLs are compiled into the applications:
 Sonarr v4 asks `skyhook.sonarr.tv` under `/v1/`, Sonarr v5 under `/v2/` — the
 second edition of the Skyhook API, which carries the languages a series is
 named in and the orders its episodes come in. Both are answered by the same
-surface, and nothing below differs between the two.
+surface, and nothing below differs between the two. What each is given is in
+[Sonarr and Radarr](sonarr-radarr.md).
 
 So substituting this server is done at the network layer: resolve those
 hostnames to it, and make the client trust the certificate it presents. That is
@@ -296,9 +297,13 @@ The text — the title, the overview, the homepage, the genres' names — is
 written only for a client that asks in the language the catalogue is kept in
 (`AMS_TMDB_LANGUAGE`, by its language whatever the region: `fr` and `fr-CA`
 are French; a client that asks none is answered TMDB's `en-US`). A client
-asking in another language gets TMDB's text in it. Genres keep TMDB's ids:
+asking in another language gets TMDB's text in it — except for a title or an
+overview locked for that language alone, which is written into the documents in
+that language. Genres keep TMDB's ids:
 when one of the genres locked is not among TMDB's for that title, TMDB's are
-left as they are rather than sent without an id.
+left as they are rather than sent without an id. Seasons, episodes and the
+results of a search are written too, and a client's own key can be handed on
+to TMDB in place of this server's: see [The relays](relays.md).
 
 TMDB's answers are kept a while and shared by every client — a search a
 quarter of an hour, a title six hours, the configuration a day — and only
@@ -368,7 +373,9 @@ calls to AniList among them.
 
 Both relays are switches on **Opening & APIs** (`api.tvdb`, `api.anilist`),
 listed with the others; a member's key is kept off every relay until *Members
-too* is on there. Each is also a start-up flag, `AMS_TVDB_PASSTHROUGH` and
+too* is on there. Whose key the TMDB and TheTVDB relays ask with is a choice
+there too, and what is written into their answers, and taken out of them, is in
+[The relays](relays.md). Each is also a start-up flag, `AMS_TVDB_PASSTHROUGH` and
 `AMS_ANILIST_PASSTHROUGH`, on by default. This server calls both services as
 sources of its own, by the same names: see
 [If you redirect at the resolver](#if-you-redirect-at-the-resolver).
@@ -648,7 +655,8 @@ or the same network included: it is yours. Where it *redirects* is not: a
 hop to an address that only means something from where this server stands
 (loopback, link-local, a cloud's metadata service), written as an address
 or as a name that resolves there, is refused, and MyAnimeList's client id is
-never carried to another host than the one first asked.
+never carried to another origin — scheme, host and port — than the one first
+asked.
 
 ## When a provider does not answer
 
@@ -672,18 +680,20 @@ that is refused is not tried again for a minute.
 
 ## A note on languages
 
-Sonarr's request builder pins the language segment to `en` and nothing in Sonarr
-changes it, so asking this server for French through Sonarr is not possible from
-Sonarr's side. Set `AMS_TMDB_LANGUAGE` instead: entries are stored in that
-language and every client gets it.
+Sonarr v4's request builder pins the language segment to `en` and nothing in
+Sonarr changes it, so asking this server for French through Sonarr v4 is not
+possible from Sonarr's side. Set `AMS_TMDB_LANGUAGE` instead: entries are stored
+in that language and every client gets it. Sonarr v5 does ask in the language set
+for the series: see *Languages* in the README.
 
 Radarr has no language in its protocol at all, and the same applies.
 
 TMDB clients do send `language=`, and it is forwarded upstream, so those get
 whatever they ask for. Your locked text — a title, an overview — is written
 into what they asked for only when they asked in `AMS_TMDB_LANGUAGE`'s
-language, which it was written in; a lock that is no text, a date or a chosen
-poster, is written in every language.
+language, which it was written in, or in the one language it was locked for
+alone ([Editing](editing.md#locking-a-text-for-one-language)); a lock that is no
+text, a date or a chosen poster, is written in every language.
 
 ## Series of the same name
 
@@ -700,14 +710,20 @@ sent exactly as it was locked.
 
 ## What about Plex?
 
-Plex has no configurable metadata source. Since the legacy agents were removed,
-the server talks to `metadata.provider.plex.tv` over a pinned connection tied to
-your Plex account, and that cannot be substituted the way the others can.
+Plex's own metadata comes from `metadata.provider.plex.tv`, over a pinned
+connection tied to your Plex account, and that cannot be substituted the way the
+others' addresses can. But Plex Media Server 1.43 and later can be given another
+provider by its address, and this server is one: add `/plex` on the interface's
+door under Settings › Metadata Agents. That is the route to take for a Plex that
+can call this server; see [Plex](plex.md).
 
-The supported route is the **Personal Media / XBMCnfo** agent reading `.nfo`
-files and local artwork. Sonarr and Radarr already write those, so a practical
-setup is: this server feeds Sonarr and Radarr, they write the `.nfo` files, and
-Plex reads them. Your corrections reach Plex, just indirectly.
+The other routes are for a Plex that cannot, and for Kodi and Jellyfin. One is
+the **Personal Media / XBMCnfo** agent reading `.nfo` files and local artwork.
+Sonarr and Radarr already write those, so a practical setup is: this server feeds
+Sonarr and Radarr, they write the `.nfo` files, and Plex reads them. Your
+corrections reach Plex, just indirectly. The other is Kometa, which can lay what
+is locked here over a library's metadata. Both are in
+[Exports](exports.md).
 
 If nothing else manages the library, `POST /api/v1/export/nfo` writes the whole
 catalogue under `AMS_NFO_EXPORT_PATH`, pictures included:

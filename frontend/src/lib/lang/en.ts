@@ -1910,7 +1910,7 @@ export const en = {
       refreshing: 'Refreshing…',
       refreshFailed: 'The last refresh failed',
       nfo: 'Download .nfo',
-      nfoHint: 'A Kodi or XBMC document — the route to Plex',
+      nfoHint: 'A Kodi or XBMC document — for Kodi, or a Plex library that reads them',
       showIn: 'Show in',
       asStored: 'As stored',
       translationNote:
@@ -2601,7 +2601,7 @@ export const en = {
       export: 'Plex and other .nfo readers',
       exportTitle: 'Export every entry as .nfo',
       exportBody:
-        'Writes Kodi and XBMC documents under AMS_NFO_EXPORT_PATH, which is how your edits reach Plex — it has no configurable metadata source. If Sonarr or Radarr manage the library, switching on their own Kodi metadata writer is simpler: they already write these files beside the media, from what this server gave them.',
+        'Writes Kodi and XBMC documents under AMS_NFO_EXPORT_PATH, for Kodi and for a Plex library that reads them rather than taking this server as its metadata provider. If Sonarr or Radarr manage the library, switching on their own Kodi metadata writer is simpler: they already write these files beside the media, from what this server gave them.',
       exportRun: 'Export',
       exportRunning: 'Exporting…',
       exportDone: (works: number, episodes: number) =>
