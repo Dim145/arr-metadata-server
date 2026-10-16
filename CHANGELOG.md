@@ -7,6 +7,8 @@ may change what the API or the configuration means, and says so here.
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-10-17
+
 ### Added
 
 - **Sonarr v5 is served.** It reads the second edition of the Skyhook API —
@@ -1461,7 +1463,8 @@ and arm64.
 - End-to-end checks against a real Sonarr, against two instances, and a
   Playwright suite over the whole interface.
 
-[Unreleased]: https://github.com/Dim145/arr-metadata-server/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/Dim145/arr-metadata-server/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/Dim145/arr-metadata-server/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/Dim145/arr-metadata-server/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/Dim145/arr-metadata-server/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/Dim145/arr-metadata-server/compare/v0.4.0...v0.5.0
