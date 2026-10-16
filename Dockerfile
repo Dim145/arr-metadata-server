@@ -5,7 +5,7 @@
 # manager, and a non-root user by default.
 
 # ── 1. Web UI ────────────────────────────────────────────────────────────────
-FROM node:24-trixie-slim AS ui
+FROM node:25-trixie-slim AS ui
 
 WORKDIR /ui
 
