@@ -7,6 +7,13 @@ may change what the API or the configuration means, and says so here.
 
 ## [Unreleased]
 
+### Changed
+
+- The web UI is type-checked by TypeScript 7, the native compiler, with the
+  same diagnostics as 5.9. Dependabot no longer offers a new major of Node
+  or of `@types/node`: the UI is built on Node's LTS line, moved by hand
+  with ci.yml's `node-version`.
+
 ## [0.8.0] — 2026-10-17
 
 ### Added

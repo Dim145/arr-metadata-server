@@ -43,6 +43,11 @@ updates:
     groups:
       npm-minor-and-patch:
         update-types: [minor, patch]
+    # @types/node describes the Node the UI is built with — the LTS line of the
+    # Dockerfile's build stage and of ci.yml — and moves with it, by hand.
+    ignore:
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
     labels: [dependencies, javascript]
 
   # The base images in the Dockerfile.
@@ -56,6 +61,12 @@ updates:
     groups:
       docker-minor-and-patch:
         update-types: [minor, patch]
+    # Node's major is the LTS line the UI is built with, moved by hand once a
+    # new line is LTS, with ci.yml's node-version and @types/node. An odd line
+    # never is: Node 25 was offered here past its end of life.
+    ignore:
+      - dependency-name: "node"
+        update-types: ["version-update:semver-major"]
     labels: [dependencies, docker]
 
   # The actions are pinned by commit, with the version in a comment: Dependabot
