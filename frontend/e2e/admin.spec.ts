@@ -288,9 +288,11 @@ test.describe('network access', () => {
     await expect(callers.getByText('127.0.0.1').first()).toBeVisible()
     await expect(callers.getByText(/localhost/).first()).toBeVisible()
     // An address is written down once a minute at most, so the client named
-    // is whichever knocked first in that minute: this test's Sonarr, or the
-    // Radarr of the visitor tests running beside it.
-    await expect(callers.getByText(/(Sonarr|Radarr)\//).first()).toBeVisible()
+    // is whichever knocked first in that minute: this test's Sonarr, the
+    // Radarr of the visitor tests running beside it, or the suite's own
+    // requests to the Plex provider — named as Playwright, or as the browser
+    // a project plays. A client named with its version, whichever it is.
+    await expect(callers.getByText(/\b(Sonarr|Radarr|Playwright|Mozilla)\/\d/).first()).toBeVisible()
   })
 })
 

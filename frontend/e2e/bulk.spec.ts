@@ -66,7 +66,9 @@ test.describe('bulk actions', () => {
    * name and selected whole; removed at the end.
    */
   async function twoWorks(page: Page, project: string) {
-    const stamp = `E2E masse ${project} ${Date.now()}`
+    // The moment alone is not enough: two tests of a project, in two workers,
+    // started in the same millisecond and made the same four works.
+    const stamp = `E2E masse ${project} ${Date.now()} ${Math.random().toString(36).slice(2, 8)}`
     const ids: string[] = []
     for (const n of [1, 2]) {
       const created = await page.request.post('/api/v1/items', {
