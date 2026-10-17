@@ -313,7 +313,7 @@ mod tests {
 
     #[test]
     fn the_key_a_plex_address_carries_is_masked_in_a_logged_path() {
-        let key = "ams_Zm9vYmFyYmF6cXV4cXV1eA";
+        let key = "ams_example_example_example";
         assert_eq!(
             redact_path(&format!("/plex/{key}/library/metadata/movie-tmdb-603")),
             "/plex/***/library/metadata/movie-tmdb-603"
