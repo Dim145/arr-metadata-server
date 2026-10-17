@@ -49,8 +49,20 @@ impl<B> tower_http::trace::MakeSpan<B> for RequestSpan {
 /// A request's path and query, the query's secrets masked.
 pub fn redact_uri(uri: &axum::http::Uri) -> String {
     match uri.query() {
-        Some(query) => format!("{}?{}", uri.path(), mask_parameters(query)),
-        None => uri.path().to_string(),
+        Some(query) => format!("{}?{}", redact_path(uri.path()), mask_parameters(query)),
+        None => redact_path(uri.path()).into_owned(),
+    }
+}
+
+/// A request's path as a log may hold it: the API key an address of the
+/// Plex provider carries, `/plex/<key>/…`, masked.
+pub fn redact_path(path: &str) -> std::borrow::Cow<'_, str> {
+    match crate::api::plex::key_in_path(path) {
+        Some(key) => {
+            let at = path.find(key).unwrap_or_default();
+            std::borrow::Cow::Owned(format!("{}{MASK}{}", &path[..at], &path[at + key.len()..]))
+        }
+        None => std::borrow::Cow::Borrowed(path),
     }
 }
 
@@ -298,6 +310,33 @@ fn escape_controls(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_key_a_plex_address_carries_is_masked_in_a_logged_path() {
+        let key = "ams_Zm9vYmFyYmF6cXV4cXV1eA";
+        assert_eq!(
+            redact_path(&format!("/plex/{key}/library/metadata/movie-tmdb-603")),
+            "/plex/***/library/metadata/movie-tmdb-603"
+        );
+        assert_eq!(redact_path(&format!("/plex/{key}")), "/plex/***");
+        let uri: axum::http::Uri =
+            format!("/plex/{key}/library/metadata/matches?X-Plex-Language=fr")
+                .parse()
+                .unwrap();
+        assert_eq!(
+            redact_uri(&uri),
+            "/plex/***/library/metadata/matches?X-Plex-Language=fr"
+        );
+
+        // The provider's own paths, and every other, are left as they are.
+        for path in [
+            "/plex",
+            "/plex/library/metadata/show-tvdb-81189",
+            "/v1/tvdb/shows/en/81189",
+        ] {
+            assert_eq!(redact_path(path), path);
+        }
+    }
 
     #[test]
     fn keys_in_an_address_are_masked() {

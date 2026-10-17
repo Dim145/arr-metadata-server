@@ -602,7 +602,9 @@ its DVD order on Sonarr 5; locks a title and finds it in each client after a
 refresh; connects the server to them and finds the command a lock sends in their
 history of commands; seeds a new, empty catalogue from their libraries; and has
 Plex add this server as a metadata provider, make an agent of it, scan a film and
-a series and show what the catalogue holds. `PHASES="sonarr5"` runs a part of it,
+a series and show what the catalogue holds — then, the server asking for a key,
+gives Plex the address that carries one ([`/plex/<key>`](plex.md#a-key-in-the-address))
+and sees a lock reach it there. `PHASES="sonarr5"` runs a part of it,
 `KEEP=1` leaves the containers behind. It needs Docker, python3, a built binary
 (`BUILD=1` builds it), a free port 443, the internet, and `TMDB_API_KEY` and
 `TVDB_API_KEY` (read from the environment or from `.env.local`, and handed to the

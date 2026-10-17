@@ -48,20 +48,59 @@ start; `ams_http_requests_total` counts it under `surface="plex"`.
 Plex cannot yet prove who it is to a provider, so whatever the list of allowed
 addresses lets in can read the catalogue through `/plex`. Do not publish the path
 beyond your local network: put only your Plex server's address on the list, and
-keep a reverse proxy from forwarding `/plex` to the internet.
+keep a reverse proxy from forwarding `/plex` to the internet. A Plex elsewhere —
+on another network, or behind an address that changes — is given a key instead
+([below](#a-key-in-the-address)).
 
 `AMS_PLEX_AUTH` sets what the provider asks for, as `AMS_ARR_AUTH` does for
 Sonarr's and Radarr's routes:
 
 | Value | Meaning |
 |---|---|
-| `allowlist` (default) | The caller's address must be on the list of allowed addresses. |
-| `open` | Anything that reaches the address is answered. The panel says so. |
-| `apikey` | A key issued here is asked for. Plex cannot send one, so Plex is refused: not a useful value. |
+| `allowlist` (default) | The caller's address must be on the list of allowed addresses. An address with a key in it, `/plex/<key>`, is refused with `403` and the code `plex_key_unused`. |
+| `open` | Anything that reaches the address is answered, an address with a key in it too. The panel says so. |
+| `apikey` | A key issued here is asked for, carried in the address Plex is given: `/plex/<key>`. |
 
 `AMS_AUTH_DISABLED=true` opens every surface, this one included. The provider is
 rate limited like the others (`AMS_RATE_LIMIT_PER_MINUTE`, per address); a
 refusal says when to come back in `Retry-After`.
+
+## A key in the address
+
+Plex sends no credential to a provider and keeps no query string, but it calls
+the paths of the manifest under whatever address it was given. With
+`AMS_PLEX_AUTH=apikey`, that address carries a key issued here:
+
+```
+https://ams.example.org/plex/ams_…
+```
+
+and Plex calls `/plex/ams_…/library/metadata/…` under it. The key is checked as
+any key is — enabled, not expired, its owner active — and Plex is answered from
+wherever it calls: no address of it has to be on the list. The settings a key can
+carry apply to Plex as to any client, its language and its country among them.
+
+1. In **Keys & network**, the **Plex** panel shows the address with `<key>` in it
+   and a button, **Make a key for Plex**: it makes a key that only reads, named
+   Plex, and shows the whole address once — only a hash of the key is kept, so
+   copy it then. A read-only key of your own can go in place of `<key>` instead.
+2. Give Plex that address, as in [step 3 above](#adding-the-provider-to-plex).
+3. To shut Plex out, revoke the key in the list on the same page.
+
+A Plex that already has the provider — added at `/plex`, or with a key since
+revoked — is given the new address in place: Plex refuses to remove a provider an
+agent uses, but its API changes the address,
+`PUT /media/providers/metadata/{id}?uri=<the new address>` (the provider's id is in
+`GET /media/providers/metadata`). Then restart Plex Media Server: until it is
+restarted, its agents keep calling the address the provider had when Plex started,
+and a refresh there is refused.
+
+`/plex` with no key is refused (`401`), and a key in a header (`X-Api-Key`) is
+still taken, for a caller that can send one. Logs never hold the key: the
+server writes the path as `/plex/***/…`. Plex does not do as much — it keeps the
+address in its database and may write it in its own logs — so keep the key for
+Plex alone, and give Plex an `https` address when it reaches this server across a
+network you do not trust.
 
 ## What is served
 
@@ -178,7 +217,7 @@ found.
 | Name | Default | What it does |
 |---|---|---|
 | `api.plex` | `true` | Answers Plex. Off, every call gets a `503`. A setting, switched on **Keys & network** and on **Opening & APIs**. |
-| `AMS_PLEX_AUTH` | `allowlist` | What the provider asks for: `allowlist`, `open` or `apikey`. Read at start. |
+| `AMS_PLEX_AUTH` | `allowlist` | What the provider asks for: `allowlist`, `open` or `apikey` — a key in the address Plex is given, `/plex/<key>`. Read at start. |
 | `tmdb.language` | the server's | The language Plex is answered in when it asks in none the work is named in; per key or per allowlist rule. |
 | `tmdb.watchRegion` | the language's country | The country of the rating and of the release day when Plex names none; per key or per allowlist rule. |
 | `AMS_PUBLIC_URL` | unset | What pictures and the panel's address are given under. |

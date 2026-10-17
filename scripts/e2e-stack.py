@@ -970,6 +970,38 @@ def plex_post(base, path, params, timeout=120):
     return plex_xml(http("POST", f"{base}{path}?{query}", timeout=timeout, raw=True))
 
 
+def plex_put(base, path, params, timeout=120):
+    query = urllib.parse.urlencode(params, quote_via=urllib.parse.quote)
+    return plex_xml(http("PUT", f"{base}{path}?{query}", timeout=timeout, raw=True))
+
+
+def plex_restarted(base):
+    """Plex restarted, and answering again. Its agents keep the address a
+    provider had when Plex started: one changed since is theirs only after."""
+    subprocess.run(["docker", "restart", "ams-e2e-plex"], check=True, capture_output=True)
+    for _ in range(60):
+        try:
+            if plex_get(base, "/identity").get("startState") in (None, "started"):
+                return
+        except TRANSIENT + (HttpError,):
+            pass
+        time.sleep(3)
+    raise Failure("Plex did not come back after its restart")
+
+
+def plex_refreshed(base, rating_key, tag, attr, expected, tries=4):
+    """What Plex holds is what the agent said when it was last asked. A
+    catalogue changed since — a title locked by an earlier phase — shows in
+    Plex after the item's refresh, which is asked for until it does."""
+    for _ in range(tries):
+        node = plex_get(base, f"/library/metadata/{rating_key}").find(tag)
+        if node is not None and node.get(attr) == expected:
+            return node
+        http("PUT", f"{base}/library/metadata/{rating_key}/refresh", raw=True, timeout=60)
+        time.sleep(10)
+    return plex_get(base, f"/library/metadata/{rating_key}").find(tag)
+
+
 def eventually(fetch, done, wait=90, every=3):
     """Plex fills an item in stages, a moment after the scan says it is over:
     read again until what is looked at is all there, or the time is up, and
@@ -1036,7 +1068,11 @@ def phase_plex(R, stack):
 
     with R.check("plex: the provider is added, and Plex finds it answering, for films and series"):
         known = [p for p in plex_get(base, "/media/providers/metadata").findall("MetadataAgentProvider") if p.get("identifier") == PLEX_IDENTIFIER]
-        node = known[0] if known else plex_post(base, "/media/providers/metadata", {"uri": provider}).find("MetadataAgentProvider")
+        if known and known[0].get("uri") != provider:
+            # Left at another address by an earlier run: the one with a key.
+            node = plex_put(base, f"/media/providers/metadata/{known[0].get('id')}", {"uri": provider}).find("MetadataAgentProvider")
+        else:
+            node = known[0] if known else plex_post(base, "/media/providers/metadata", {"uri": provider}).find("MetadataAgentProvider")
         expect(node is not None, "Plex took no provider from the address")
         expect(node.get("identifier") == PLEX_IDENTIFIER, f"the provider's identifier is {node.get('identifier')!r}")
         expect(node.get("online") == "1", "Plex says the provider is offline")
@@ -1073,16 +1109,7 @@ def phase_plex(R, stack):
         return http("GET", f"{stack.native.url}/plex{path}", headers=headers)["MediaContainer"]["Metadata"][0]
 
     def refreshed(rating_key, tag, attr, expected, tries=4):
-        """What Plex holds is what the agent said when it was last asked. A
-        catalogue changed since — a title locked by an earlier phase — shows in
-        Plex after the item's refresh, which is asked for until it does."""
-        for _ in range(tries):
-            node = plex_get(base, f"/library/metadata/{rating_key}").find(tag)
-            if node is not None and node.get(attr) == expected:
-                return node
-            http("PUT", f"{base}/library/metadata/{rating_key}/refresh", raw=True, timeout=60)
-            time.sleep(10)
-        return plex_get(base, f"/library/metadata/{rating_key}").find(tag)
+        return plex_refreshed(base, rating_key, tag, attr, expected, tries)
 
     def picture(path):
         data = http("GET", base + path, raw=True, timeout=60)
@@ -1174,10 +1201,71 @@ def phase_plex(R, stack):
         R.note(f"plex: {served} calls to /plex answered while Plex scanned")
 
 
+def phase_plexkey(R, stack):
+    """The provider asking for a key — the server restarted with
+    AMS_PLEX_AUTH=apikey — and Plex given the address that carries one, on
+    the libraries the plex phase made."""
+    base = env("E2E_PLEX_URL").rstrip("/")
+    provider = env("E2E_PLEX_PROVIDER")
+    native = stack.native
+    with R.check("plexkey: /plex answers nobody without a key, now that the provider asks for one"):
+        try:
+            http("GET", f"{native.url}/plex")
+        except HttpError as e:
+            expect(e.status == 401, f"/plex answers {e.status} without a key")
+        else:
+            raise Failure("/plex answered without a key")
+    made = native.call("POST", "/clients", {"name": "Plex (e2e stack)", "scopes": ["read"]})
+    key = made["key"]
+    try:
+        node_id = None
+        with R.check("plexkey: Plex is given the address with a key in it, and finds the provider answering there"):
+            known = [p for p in plex_get(base, "/media/providers/metadata").findall("MetadataAgentProvider") if p.get("identifier") == PLEX_IDENTIFIER]
+            expect(known, "no provider left by the plex phase")
+            node_id = known[0].get("id")
+            node = plex_put(base, f"/media/providers/metadata/{node_id}", {"uri": f"{provider}/{key}"}).find("MetadataAgentProvider")
+            expect(node is not None and node.get("online") == "1", "Plex says the provider is offline at the address with the key")
+        with R.check("plexkey: once Plex is restarted, a title locked here reaches it through that address"):
+            if node_id is None:
+                raise Skipped("Plex took no address with a key")
+            # Plex's agents still call the address the provider had when Plex
+            # started — /plex, refused now — until Plex is restarted.
+            plex_restarted(base)
+            sections = {s.get("title"): s for s in plex_get(base, "/library/sections").findall("Directory")}
+            expect("Series AMS" in sections, "no library Series AMS: the plex phase runs first")
+            series = plex_get(base, f"/library/sections/{sections['Series AMS'].get('key')}/all").findall("Directory")
+            expect(series, "the series library is empty")
+            item = native.item("series", "tvdb", 81189)
+            expect(item is not None, "tvdb:81189 is not in the catalogue")
+            text = "Locked by the e2e stack (plexkey)"
+            native.lock_title(item["id"], text)
+            try:
+                node = plex_refreshed(base, series[0].get("ratingKey"), "Directory", "title", text)
+                expect(node.get("title") == text, f"Plex's title is {node.get('title')!r}, not the lock {text!r}")
+            finally:
+                native.call("DELETE", f"/items/{item['id']}/overrides/item/title")
+            plex_refreshed(base, series[0].get("ratingKey"), "Directory", "title", "Breaking Bad")
+        with R.check("plexkey: an address with a key this server never issued is not answered"):
+            if node_id is None:
+                raise Skipped("Plex took no address with a key")
+            try:
+                node = plex_put(base, f"/media/providers/metadata/{node_id}", {"uri": f"{provider}/ams_neverissued"}).find("MetadataAgentProvider")
+                expect(node is None or node.get("online") != "1", "Plex finds the provider answering with a key never issued")
+            except HttpError as e:
+                expect(e.status == 400, f"Plex answered {e.status}")
+            finally:
+                plex_put(base, f"/media/providers/metadata/{node_id}", {"uri": f"{provider}/{key}"})
+        with R.check("plexkey: the server's log holds the key nowhere"):
+            with open(env("E2E_SERVER_LOG"), encoding="utf-8", errors="replace") as log:
+                expect(key not in log.read(), "the key is written in the server's log")
+    finally:
+        native.call("DELETE", f"/clients/{made['id']}")
+
+
 # ── Main ───────────────────────────────────────────────────────────────────
 
 
-PHASES = ("sonarr4", "sonarr5", "radarr", "push", "seed", "plex")
+PHASES = ("sonarr4", "sonarr5", "radarr", "push", "seed", "plex", "plexkey")
 
 
 def main(argv):
@@ -1203,6 +1291,8 @@ def main(argv):
                 phase_seed(report, stack)
             elif phase == "plex" and os.environ.get("E2E_PLEX_URL"):
                 phase_plex(report, stack)
+            elif phase == "plexkey" and os.environ.get("E2E_PLEX_URL"):
+                phase_plexkey(report, stack)
             else:
                 print("  not part of this stack")
         except Exception as error:  # a phase that cannot go on is a failure, named

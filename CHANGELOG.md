@@ -7,6 +7,23 @@ may change what the API or the configuration means, and says so here.
 
 ## [Unreleased]
 
+### Added
+
+- **Plex is given a key in its address.** With `AMS_PLEX_AUTH=apikey`, the
+  provider answers `/plex/<key>` and the paths under it, which is how Plex —
+  sending no credential and keeping no query string — calls a provider: a
+  Plex on another network, or behind an address that changes, is let in by
+  the key rather than by a list of allowed addresses. The **Plex** panel of
+  **Keys & network** makes a key for Plex, read only, and shows the address
+  that carries it, once; revoking the key shuts Plex out. The key is checked
+  as any other and carries its settings, language and country among them.
+  Logs write the path as `/plex/***/…`. Asked by address, the provider
+  refuses an address with a key in it (`403`, `plex_key_unused`) rather than
+  answer as though the key mattered; `/plex` itself is unchanged. A Plex
+  that already has the provider is given the new address through its API
+  and uses it once restarted. `scripts/e2e-stack.sh` checks all of it
+  against a real Plex Media Server (`plexkey`).
+
 ### Changed
 
 - The web UI is type-checked by TypeScript 7, the native compiler, with the

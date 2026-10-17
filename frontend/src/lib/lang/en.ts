@@ -2331,6 +2331,15 @@ export const en = {
       toList: 'Add it to the list',
       localOnly: 'Keep this address on your local network: whatever the list lets in can read the catalogue through it, and Plex cannot yet prove who it is.',
       openPolicy: 'AMS_PLEX_AUTH=open: anything that reaches this address is answered.',
+      makeKey: 'Make a key for Plex',
+      keyed:
+        'AMS_PLEX_AUTH=apikey: Plex is given a key in its address, in place of <key>. Make one for it here — read only, named Plex — or put a read-only key of yours there.',
+      keyOnce:
+        'Give Plex this address now: the key in it is shown this once, and only a hash of it is kept. A Plex that already has this provider takes a new address once restarted. Revoke the key in the list below to shut Plex out.',
+      keyCredential:
+        'Plex is let in by the key its address carries, from wherever it calls: no address of it needs to be on a list. Revoking the key shuts it out.',
+      keyTravels:
+        'The key travels in the address: Plex keeps it in its database and may write it in its logs. Give Plex an https address when it reaches this server across a network you do not trust, and keep the key for Plex alone.',
       calls: (served: number, refused: number) =>
         `${served.toLocaleString('en')} answered, ${refused.toLocaleString('en')} refused since the start.`,
     },

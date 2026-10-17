@@ -2347,6 +2347,15 @@ export const fr: Dict = {
       toList: 'L’ajouter à la liste',
       localOnly: 'Gardez cette adresse sur votre réseau local : ce que la liste laisse entrer peut lire le catalogue par elle, et Plex ne sait pas encore prouver qui il est.',
       openPolicy: 'AMS_PLEX_AUTH=open : tout ce qui atteint cette adresse reçoit une réponse.',
+      makeKey: 'Créer une clé pour Plex',
+      keyed:
+        'AMS_PLEX_AUTH=apikey : Plex reçoit une clé dans son adresse, à la place de <key>. Créez-en une pour lui ici — en lecture seule, nommée Plex — ou mettez-y une clé de lecture à vous.',
+      keyOnce:
+        'Donnez dès maintenant cette adresse à Plex : la clé qu’elle porte n’est montrée que cette fois, seule son empreinte est gardée. Un Plex qui a déjà ce fournisseur ne prend une nouvelle adresse qu’une fois redémarré. Révoquez la clé dans la liste ci-dessous pour couper l’accès à Plex.',
+      keyCredential:
+        'Plex entre par la clé que porte son adresse, d’où qu’il appelle : aucune de ses adresses n’a besoin d’être dans une liste. Révoquer la clé lui coupe l’accès.',
+      keyTravels:
+        'La clé voyage dans l’adresse : Plex la garde dans sa base et peut l’écrire dans ses journaux. Donnez à Plex une adresse en https s’il traverse un réseau dont vous n’êtes pas sûr pour atteindre ce serveur, et réservez cette clé à Plex.',
       calls: (served: number, refused: number) =>
         `${served.toLocaleString('fr')} réponses, ${refused.toLocaleString('fr')} refus depuis le démarrage.`,
     },

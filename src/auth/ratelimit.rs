@@ -320,7 +320,7 @@ pub async fn limit(
         .map_or(UNKNOWN_PEER, ip::bucket);
 
     if let Err(wait) = state.limiter.check(peer).await {
-        tracing::warn!(%peer, path = %request.uri().path(), "rate limited");
+        tracing::warn!(%peer, path = %crate::telemetry::redact_path(request.uri().path()), "rate limited");
         return Err(AppError::RateLimited(Throttle::spent(
             state.limiter.per_minute,
             MINUTE,

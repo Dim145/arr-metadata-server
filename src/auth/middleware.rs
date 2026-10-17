@@ -218,7 +218,25 @@ async fn identify(
 
     // A relay asked with each client's own key reads a key policy as the
     // address list: a key issued here is refused there.
-    let identity = match crate::api::relay::policy(state, surface) {
+    let policy = crate::api::relay::policy(state, surface);
+
+    // An address of the Plex provider with a key in it, where the provider
+    // asks for none: refused, rather than answered as though the key kept
+    // anybody out — the list of allowed addresses does that here. An open
+    // provider answers everything, that address with the rest.
+    if surface == Surface::Plex
+        && policy == SurfacePolicy::Allowlist
+        && crate::api::plex::key_in_path(request.uri().path()).is_some()
+    {
+        return Err(AppError::Refused {
+            code: "plex_key_unused",
+            message: "this provider asks for no key (AMS_PLEX_AUTH is not apikey): give \
+                      Plex its address without one, ending in /plex"
+                .into(),
+        });
+    }
+
+    let identity = match policy {
         SurfacePolicy::Open => Identity::Anonymous,
 
         SurfacePolicy::Allowlist => {
@@ -249,7 +267,7 @@ async fn identify(
                     (true, Some(proxy)) if warning_due(proxy, Warning::Stranger) => {
                         tracing::warn!(
                             %proxy,
-                            path = %request.uri().path(),
+                            path = %crate::telemetry::redact_path(request.uri().path()),
                             "refused a forwarded request from a proxy outside AMS_TRUSTED_PROXIES: \
                              every client behind it would look like the proxy. Add the proxy's \
                              address to AMS_TRUSTED_PROXIES"
@@ -258,7 +276,7 @@ async fn identify(
                     (true, _) => {}
                     (false, _) => tracing::warn!(
                         ?client_ip,
-                        path = %request.uri().path(),
+                        path = %crate::telemetry::redact_path(request.uri().path()),
                         "rejected: peer is not in the allowlist"
                     ),
                 }
@@ -278,7 +296,14 @@ async fn identify(
         }
 
         SurfacePolicy::ApiKey => {
-            let presented = extract_key(request.headers(), request.uri().query());
+            // Plex can carry a key nowhere but in the address it is given,
+            // `/plex/<key>`: it sends no header and keeps no query.
+            let presented = extract_key(request.headers(), request.uri().query()).or_else(|| {
+                (surface == Surface::Plex)
+                    .then(|| crate::api::plex::key_in_path(request.uri().path()))
+                    .flatten()
+                    .map(str::to_string)
+            });
 
             // A session is accepted wherever a key is, so the web UI can call
             // the same endpoints without minting a key for itself.
@@ -319,7 +344,7 @@ async fn identify(
                 reason = why,
                 origin = ?request.headers().get(header::ORIGIN),
                 fetch_site = ?request.headers().get("sec-fetch-site"),
-                path = %request.uri().path(),
+                path = %crate::telemetry::redact_path(request.uri().path()),
                 "refused a change asked from another site's page"
             );
             return Err(AppError::Refused {
@@ -490,7 +515,7 @@ fn note_caller(
         .and_then(|value| value.to_str().ok())
         .map(|value| value.chars().take(200).collect::<String>());
 
-    let path = request.uri().path().to_string();
+    let path = crate::telemetry::redact_path(request.uri().path()).into_owned();
     let surface = format!("{surface:?}").to_lowercase();
     let state = state.clone();
 
@@ -675,7 +700,7 @@ pub async fn reject_self_calls(
 
     if caller == Some(state.instance.as_str()) {
         tracing::error!(
-            path = %request.uri().path(),
+            path = %crate::telemetry::redact_path(request.uri().path()),
             "this server resolved an upstream provider to itself; set the upstream to \
              somewhere else, or turn enrichment off"
         );

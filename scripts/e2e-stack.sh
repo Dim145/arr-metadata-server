@@ -42,6 +42,10 @@
 #                      made of it, a library of films, one of series, one of
 #                      series in French; the scan; the film, the series, its
 #                      season and its episodes as the catalogue has them
+#   plexkey            the server restarted with AMS_PLEX_AUTH=apikey: /plex
+#                      refused without a key; Plex given /plex/<key> instead,
+#                      a lock reaching it there, a key never issued answered
+#                      nothing, and the key written nowhere in the log
 #
 # Needs: Docker (and its compose plugin), python3, curl, a built binary
 # (BUILD=1 builds it), the internet (the series are real: TMDB's and TheTVDB's
@@ -108,7 +112,7 @@ SONARR5_PORT="${SONARR5_PORT:-18990}"
 RADARR_PORT="${RADARR_PORT:-17878}"
 PLEX_PORT="${PLEX_PORT:-32400}"
 DEFAULT_PHASES="sonarr4 sonarr5 radarr push seed"
-if command -v ffmpeg >/dev/null 2>&1; then DEFAULT_PHASES="$DEFAULT_PHASES plex"; fi
+if command -v ffmpeg >/dev/null 2>&1; then DEFAULT_PHASES="$DEFAULT_PHASES plex plexkey"; fi
 PHASES="${PHASES:-$DEFAULT_PHASES}"
 BASE="http://127.0.0.1:${WEB_PORT}"
 USER_NAME=e2e
@@ -148,6 +152,7 @@ command -v python3 >/dev/null || fail "python3 is required"
 command -v curl >/dev/null || fail "curl is required"
 command -v openssl >/dev/null || fail "openssl is required (for the administrator's password)"
 if has_phase plex && ! command -v ffmpeg >/dev/null 2>&1; then fail "the plex phase makes its videos with ffmpeg, which is not installed: PHASES without plex, or install it"; fi
+if has_phase plexkey && ! has_phase plex; then fail "the plexkey phase runs on the libraries the plex phase makes: PHASES=\"plex plexkey\""; fi
 
 # The providers' keys, from the environment or .env.local: handed to the
 # server and to nothing else.
@@ -222,6 +227,7 @@ start_server() {
   AMS_ANILIST_ENABLED=true \
   AMS_MAL_ENABLED=true \
   AMS_SONARR_SCENE_MAPPINGS=true \
+  AMS_PLEX_AUTH="${PLEX_AUTH:-allowlist}" \
   AMS_LOG="${AMS_LOG:-info}" \
     "$BINARY" >> "$WORK/server.log" 2>&1 &
   SERVER=$!
@@ -341,6 +347,7 @@ run_phase() {
     E2E_SONARR5_URL="$sonarr5_url" E2E_SONARR5_KEY="$(cat "$KEYS_DIR/sonarr5" 2>/dev/null || true)" E2E_SONARR5_VERSION="5." \
     E2E_RADARR_URL="$radarr_url" E2E_RADARR_KEY="$(cat "$KEYS_DIR/radarr" 2>/dev/null || true)" E2E_RADARR_VERSION="6." \
     E2E_PLEX_URL="$plex_url" E2E_PLEX_PROVIDER="http://host.docker.internal:${WEB_PORT}/plex" \
+    E2E_SERVER_LOG="$WORK/server.log" \
     E2E_SERIES="${SERIES:-}" \
     python3 -I "$ROOT/scripts/e2e-stack.py" "$phase" || FAILED="$FAILED $phase"
 }
@@ -358,6 +365,14 @@ if has_phase seed; then
   run_phase seed
 fi
 if has_phase plex; then run_phase plex; fi
+if has_phase plexkey; then
+  echo
+  step "the server is restarted asking Plex for a key (AMS_PLEX_AUTH=apikey)"
+  stop_server
+  PLEX_AUTH=apikey start_server
+  ok
+  run_phase plexkey
+fi
 
 echo
 if [ -n "$FAILED" ]; then

@@ -676,7 +676,7 @@ what they can send:
 | TheTVDB-compatible | `/v4/*` | API key (a key issued here, as the client's TheTVDB key) |
 | AniList-compatible | `graphql.anilist.co`, on the clients' door | IP allowlist |
 | Sonarr / Radarr compatible | `/v1/*`, including the IMDb lists Radarr imports from | IP allowlist |
-| Plex metadata provider | `/plex/*`, on the interface's door | IP allowlist (`AMS_PLEX_AUTH`) |
+| Plex metadata provider | `/plex/*`, on the interface's door | IP allowlist, or a key in the address, `/plex/<key>` (`AMS_PLEX_AUTH`) |
 
 ### Letting anyone browse
 

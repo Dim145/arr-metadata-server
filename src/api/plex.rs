@@ -71,6 +71,13 @@ const HELD_CANDIDATES: i64 = 50;
 /// otherwise be as many calls upstream.
 const MOST_HINTS: usize = 10;
 
+/// What every path of the provider begins with.
+const BASE: &str = "/plex/";
+
+/// The one fixed segment under `/plex`: any other first segment there is the
+/// API key of an address that carries one.
+const LIBRARY: &str = "library";
+
 pub fn router() -> OpenApiRouter<AppState> {
     // `/matches` is a fixed segment, so it is matched before the
     // `{rating_key}` beside it whatever the order here.
@@ -81,6 +88,45 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(children))
         .routes(routes!(grandchildren))
         .routes(routes!(images))
+}
+
+/// The same provider under an address that carries an API key,
+/// `/plex/<key>`: what Plex is given when the provider asks for a key
+/// (`AMS_PLEX_AUTH=apikey`). Plex sends no credential to a provider and keeps
+/// no query, but calls the paths of the manifest under the address it was
+/// given — so the key rides in the path, the guard reads it there
+/// ([`key_in_path`]), and the handlers are the ones [`router`] documents.
+pub fn keyed_router() -> axum::Router<AppState> {
+    use axum::routing::{get, post};
+
+    axum::Router::new().nest(
+        "/plex/{key}",
+        axum::Router::new()
+            .route("/", get(provider))
+            .route("/library/metadata/matches", post(matches))
+            .route("/library/metadata/{rating_key}", get(metadata))
+            .route("/library/metadata/{rating_key}/children", get(children))
+            .route(
+                "/library/metadata/{rating_key}/grandchildren",
+                get(grandchildren),
+            )
+            .route("/library/metadata/{rating_key}/images", get(images)),
+    )
+}
+
+/// The API key an address of the provider carries — `/plex/<key>/…` — and
+/// nothing for `/plex` and the paths under it. What the guard reads a key
+/// from when the provider asks for one, and what a log masks.
+pub fn key_in_path(path: &str) -> Option<&str> {
+    let segment = path.strip_prefix(BASE)?.split('/').next()?;
+    (!segment.is_empty() && segment != LIBRARY).then_some(segment)
+}
+
+/// An item's path segment, `{rating_key}`: read by name, so that the key an
+/// address may carry before it is left aside.
+#[derive(Deserialize)]
+struct Item {
+    rating_key: String,
 }
 
 /// What Plex adds to a request besides its path. The `X-Plex-*` values may
@@ -231,7 +277,7 @@ async fn metadata(
     Extension(identity): Extension<Identity>,
     peer: Peer,
     headers: HeaderMap,
-    Path(rating_key): Path<String>,
+    Path(Item { rating_key }): Path<Item>,
     Query(query): Query<PlexQuery>,
 ) -> AppResult<Json<PlexMetadataResponse>> {
     let key = Key::parse(&rating_key).ok_or(AppError::NotFound)?;
@@ -294,7 +340,7 @@ async fn children(
     Extension(identity): Extension<Identity>,
     peer: Peer,
     headers: HeaderMap,
-    Path(rating_key): Path<String>,
+    Path(Item { rating_key }): Path<Item>,
     Query(query): Query<PlexQuery>,
 ) -> AppResult<Json<PlexMetadataResponse>> {
     let key = Key::parse(&rating_key).ok_or(AppError::NotFound)?;
@@ -351,7 +397,7 @@ async fn grandchildren(
     Extension(identity): Extension<Identity>,
     peer: Peer,
     headers: HeaderMap,
-    Path(rating_key): Path<String>,
+    Path(Item { rating_key }): Path<Item>,
     Query(query): Query<PlexQuery>,
 ) -> AppResult<Json<PlexMetadataResponse>> {
     let key = Key::parse(&rating_key).ok_or(AppError::NotFound)?;
@@ -397,7 +443,7 @@ async fn images(
     Extension(identity): Extension<Identity>,
     peer: Peer,
     headers: HeaderMap,
-    Path(rating_key): Path<String>,
+    Path(Item { rating_key }): Path<Item>,
     Query(query): Query<PlexQuery>,
 ) -> AppResult<Json<PlexImagesResponse>> {
     let key = Key::parse(&rating_key).ok_or(AppError::NotFound)?;
@@ -1151,7 +1197,14 @@ mod tests {
     /// The whole server on a database in memory, stored in English, with no
     /// provider to ask: what a match falls back to finds nothing upstream.
     async fn server() -> AppState {
+        server_asking(config::SurfacePolicy::Allowlist).await
+    }
+
+    /// The same, the provider asking `policy` of its callers.
+    async fn server_asking(policy: config::SurfacePolicy) -> AppState {
         let mut config = config::Config::from_env().expect("a configuration");
+        config.security.plex_policy = policy;
+        config.security.auth_disabled = false;
         config.mode = config::Mode::Single;
         config.database = config::Database {
             url: "sqlite::memory:".into(),
@@ -1180,6 +1233,7 @@ mod tests {
     fn door(state: &AppState) -> Router {
         let (routes, _) = router().split_for_parts();
         routes
+            .merge(keyed_router())
             .layer(from_fn_with_state(
                 state.clone(),
                 crate::auth::middleware::guard_plex,
@@ -1387,6 +1441,140 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::FORBIDDEN);
+    }
+
+    /// A key issued here, read only, as one is made for Plex.
+    async fn issued(state: &AppState) -> String {
+        let key = crate::auth::secrets::generate_api_key().expect("a key");
+        repo::client::create(
+            &state.db,
+            repo::client::NewClient {
+                name: "Plex",
+                key_prefix: &key.prefix,
+                key_hash: &key.hash,
+                scopes: &["read".to_string()],
+                expires_at: None,
+                note: None,
+                owner_id: None,
+            },
+        )
+        .await
+        .expect("the key is stored");
+        key.plaintext
+    }
+
+    #[test]
+    fn the_key_an_address_carries_is_the_first_segment_under_plex() {
+        assert_eq!(key_in_path("/plex/ams_abc"), Some("ams_abc"));
+        assert_eq!(key_in_path("/plex/ams_abc/"), Some("ams_abc"));
+        assert_eq!(
+            key_in_path("/plex/ams_abc/library/metadata/movie-tmdb-603"),
+            Some("ams_abc")
+        );
+        // The provider's own paths, and nothing outside it.
+        for path in [
+            "/plex",
+            "/plex/",
+            "/plex/library/metadata/matches",
+            "/plexus/ams_abc",
+            "/api/v1/items",
+        ] {
+            assert_eq!(key_in_path(path), None, "{path}");
+        }
+    }
+
+    #[tokio::test]
+    async fn asked_for_a_key_the_provider_reads_the_one_its_address_carries() {
+        let state = server_asking(config::SurfacePolicy::ApiKey).await;
+        the_matrix(&state).await;
+        let key = issued(&state).await;
+
+        // The manifest and the provider's paths, under the address with the
+        // key — from anywhere: the key is what lets Plex in, not its address.
+        let (status, manifest) = ask_from(
+            &state,
+            [203, 0, 113, 9],
+            "GET",
+            &format!("/plex/{key}"),
+            &[],
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{manifest}");
+        assert_eq!(
+            manifest["MediaProvider"]["identifier"],
+            plex::provider().media_provider.identifier
+        );
+        let (status, answer) = ask_from(
+            &state,
+            [203, 0, 113, 9],
+            "POST",
+            &format!("/plex/{key}/library/metadata/matches"),
+            &[("content-type", "application/json")],
+            Some(json!({ "type": 1, "guid": "tmdb://603" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{answer}");
+        assert_eq!(
+            answer["MediaContainer"]["Metadata"][0]["ratingKey"],
+            "movie-tmdb-603"
+        );
+        let (status, film) = ask_from(
+            &state,
+            [203, 0, 113, 9],
+            "GET",
+            &format!("/plex/{key}/library/metadata/movie-tmdb-603"),
+            &[],
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{film}");
+        assert_eq!(film["MediaContainer"]["Metadata"][0]["title"], "The Matrix");
+
+        // Without a key, or with one never issued, the provider answers
+        // nothing — not even the machine itself.
+        let (status, _) = ask(&state, "/plex", &[]).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let (status, _) = ask(
+            &state,
+            "/plex/ams_neverissued/library/metadata/movie-tmdb-603",
+            &[],
+        )
+        .await;
+        assert!(
+            status.is_client_error() && status != StatusCode::NOT_FOUND,
+            "{status}"
+        );
+
+        // A key in a header still does, for whoever can send one.
+        let (status, _) = ask(&state, "/plex", &[("x-api-key", &key)]).await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn an_address_with_a_key_is_refused_where_the_provider_asks_for_none() {
+        // By address: the list of allowed addresses keeps callers out, and a
+        // key in the address would only look as though it did.
+        let state = server().await;
+        let (status, refusal) =
+            ask(&state, "/plex/ams_whatever/library/metadata/matches", &[]).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(refusal["error"], "plex_key_unused");
+        let (status, _) = ask(&state, "/plex", &[]).await;
+        assert_eq!(status, StatusCode::OK);
+
+        // Open: everything is answered, that address with the rest.
+        let state = server_asking(config::SurfacePolicy::Open).await;
+        let (status, _) = ask_from(
+            &state,
+            [203, 0, 113, 9],
+            "GET",
+            "/plex/ams_whatever",
+            &[],
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
     }
 
     #[tokio::test]

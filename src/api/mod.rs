@@ -285,10 +285,12 @@ fn anilist_surface(state: AppState, anilist: Router<AppState>) -> Router<AppStat
 }
 
 /// The provider Plex asks: guarded by address, since Plex presents no
-/// credential to a provider yet, and limited like the others — a host not
+/// credential to a provider yet — or, asked for a key, by the one its
+/// address carries (`/plex/<key>`) — and limited like the others: a host not
 /// on the list can still spend this server's time being told so.
 fn plex_surface(state: AppState, plex: Router<AppState>) -> Router<AppState> {
-    plex.layer(from_fn_with_state(state.clone(), guards::guard_plex))
+    plex.merge(plex::keyed_router())
+        .layer(from_fn_with_state(state.clone(), guards::guard_plex))
         .layer(from_fn_with_state(state, crate::auth::ratelimit::limit))
 }
 

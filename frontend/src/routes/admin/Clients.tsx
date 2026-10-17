@@ -348,6 +348,11 @@ export function Clients() {
  * Plex presents no credential to a provider, so the decision that lets it in
  * is the list of allowed addresses just below; the panel says so and leads
  * there, to the field an address is typed in.
+ *
+ * Unless the provider asks for a key (`AMS_PLEX_AUTH=apikey`): then Plex is
+ * given one in its address, `/plex/<key>`, and the panel makes a key for it —
+ * read only, named Plex — and shows the address it goes in, once, as a key
+ * is only ever shown once.
  */
 function PlexPanel() {
   const { t } = useI18n()
@@ -358,6 +363,8 @@ function PlexPanel() {
   // the reader to copy where the clipboard is out of reach — a plain-HTTP
   // page on a LAN address, which is where this panel is usually read.
   const [copied, setCopied] = useState<'done' | 'manual' | null>(null)
+  // The key just made for Plex, for as long as this page is open.
+  const [made, setMade] = useState<string | null>(null)
 
   const settings = useQuery({
     queryKey: ['settings'],
@@ -377,6 +384,15 @@ function PlexPanel() {
     },
   })
 
+  const makeKey = useMutation({
+    mutationFn: () => api.post<ApiClient & { key: string }>('/clients', { name: 'Plex', scopes: ['read'] }),
+    onSuccess: (result) => {
+      setMade(result.key)
+      void queryClient.invalidateQueries({ queryKey: ['clients'] })
+      void queryClient.invalidateQueries({ queryKey: ['stats'] })
+    },
+  })
+
   useEffect(() => {
     if (copied !== 'done') return
     const timer = setTimeout(() => setCopied(null), 2_000)
@@ -384,9 +400,12 @@ function PlexPanel() {
   }, [copied])
 
   const base = (settings.data?.publicUrl ?? window.location.origin).replace(/\/+$/, '')
-  const address = `${base}/plex`
   const plex = access.data?.apis.find((x) => x.api === 'plex')
   const open = plex?.policy === 'open'
+  const keyed = plex?.policy === 'apikey'
+  const address = keyed ? `${base}/plex/${made ?? '<key>'}` : `${base}/plex`
+  // Nothing to copy yet: the address waits for its key.
+  const waiting = keyed && !made
 
   const copy = async () => {
     try {
@@ -430,14 +449,33 @@ function PlexPanel() {
               ref={field}
               readOnly
               value={address}
+              aria-describedby={keyed ? 'plex-key-note' : undefined}
               onFocus={(event) => event.currentTarget.select()}
               className="min-h-11 min-w-0 flex-1 rounded-card border border-rule bg-ink px-3 font-mono text-sm text-bone"
             />
-            <Button onClick={() => void copy()}>
-              <Glyph name={copied === 'done' ? 'check' : 'copy'} className="size-4" />
-              {copied === 'done' ? p.copied : p.copy}
-            </Button>
+            {waiting ? (
+              <Button variant="primary" onClick={() => makeKey.mutate()} disabled={makeKey.isPending}>
+                {makeKey.isPending ? <Spinner className="size-4" /> : <Glyph name="key" className="size-4" />}
+                {p.makeKey}
+              </Button>
+            ) : (
+              <Button onClick={() => void copy()}>
+                <Glyph name={copied === 'done' ? 'check' : 'copy'} className="size-4" />
+                {copied === 'done' ? p.copied : p.copy}
+              </Button>
+            )}
           </div>
+          {keyed ? (
+            <p id="plex-key-note" className="mt-2 max-w-prose text-xs leading-relaxed text-bone-dim">
+              {made ? p.keyOnce : p.keyed}
+            </p>
+          ) : null}
+          {makeKey.isError ? (
+            <p role="alert" className="mt-2 flex items-center gap-2 text-xs text-vermillion">
+              <Glyph name="alert" className="size-3.5" />
+              {makeKey.error.message}
+            </p>
+          ) : null}
           {copied === 'manual' ? (
             <p role="status" className="mt-2 text-xs text-bone-dim">
               {p.copyManual}
@@ -472,8 +510,8 @@ function PlexPanel() {
         <p className="flex items-start gap-2 text-sm leading-relaxed text-bone">
           <Glyph name="shield" className="mt-0.5 size-4 shrink-0 text-brass" />
           <span>
-            {open ? p.openPolicy : p.credential}{' '}
-            {open ? null : (
+            {open ? p.openPolicy : keyed ? p.keyCredential : p.credential}{' '}
+            {open || keyed ? null : (
               <a
                 href="#network-cidr"
                 onClick={toList}
@@ -484,7 +522,7 @@ function PlexPanel() {
             )}
           </span>
         </p>
-        <p className="max-w-prose text-xs leading-relaxed text-bone-faint">{p.localOnly}</p>
+        <p className="max-w-prose text-xs leading-relaxed text-bone-faint">{keyed ? p.keyTravels : p.localOnly}</p>
       </div>
     </Panel>
   )

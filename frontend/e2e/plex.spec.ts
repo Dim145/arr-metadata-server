@@ -43,6 +43,12 @@ test('the provider tells Plex what it serves, and a path it lacks is no page', a
   })
   expect(asText.status()).toBe(415)
   expect(((await asText.json()) as { error: string }).error).toBe('unsupported_media_type')
+
+  // An address with a key in it, where the provider asks by address, is
+  // refused, saying why, rather than answered as though the key mattered.
+  const keyed = await request.get('/plex/ams_whatever')
+  expect(keyed.status()).toBe(403)
+  expect(((await keyed.json()) as { error: string }).error).toBe('plex_key_unused')
 })
 
 test.describe('the Plex panel', () => {
@@ -61,5 +67,40 @@ test.describe('the Plex panel', () => {
     // The link leads to the field an address is typed in, below.
     await panel.getByRole('link', { name: /add it to the list|l’ajouter à la liste/i }).click()
     await expect(page.getByLabel(/address or block|adresse ou plage/i)).toBeFocused()
+  })
+
+  test('asked for a key, makes one for Plex and gives the address that carries it, once', async ({ page }) => {
+    // The suite's server asks Plex by address, so the panel is shown as a
+    // provider that asks for a key has it: the access report says so.
+    await page.route(/\/api\/v1\/admin\/access$/, async (route) => {
+      const response = await route.fetch()
+      const report = (await response.json()) as { apis: { api: string; policy: string }[] }
+      for (const surface of report.apis) if (surface.api === 'plex') surface.policy = 'apikey'
+      await route.fulfill({ response, json: report })
+    })
+    await signIn(page)
+    await page.goto('/admin/clients')
+
+    const panel = page.getByRole('region', { name: /^plex$/i })
+    const address = panel.getByLabel(/address to give plex|adresse à donner à plex/i)
+    await expect(address).toHaveValue(/\/plex\/<key>$/)
+    await expect(panel).toContainText(/key its address carries|clé que porte son adresse/i)
+    // No list to be put on: the key lets Plex in.
+    await expect(panel.getByRole('link', { name: /add it to the list|l’ajouter à la liste/i })).toHaveCount(0)
+
+    const made = page.waitForResponse(
+      (response) => /\/api\/v1\/clients$/.test(response.url()) && response.request().method() === 'POST',
+    )
+    await panel.getByRole('button', { name: /make a key for plex|créer une clé pour plex/i }).click()
+    const client = (await (await made).json()) as { id: string; key: string; scopes: string[] }
+    try {
+      expect(client.key).toMatch(/^ams_/)
+      expect(client.scopes).toEqual(['read'])
+      await expect(address).toHaveValue(new RegExp(`^https?://[^/]+/plex/${client.key}$`))
+      await expect(panel.getByRole('button', { name: /^(copy|copier)$/i })).toBeVisible()
+      await expect(panel).toContainText(/shown this once|montrée que cette fois/i)
+    } finally {
+      await page.request.delete(`/api/v1/clients/${client.id}`)
+    }
   })
 })
