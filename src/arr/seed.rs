@@ -233,8 +233,11 @@ pub async fn seed_one(state: &AppState, app: App, held: &Held) -> (Seeded, bool)
 
     let fetched = match (app, *source) {
         (App::Sonarr, _) => match held.tvdb_id.filter(|id| *id > 0) {
-            Some(client_id) => service::series::by_client_id(state, client_id).await,
-            None => service::series::by_imdb_id(state, value).await,
+            // A task nobody waits on: a slow source is given its time.
+            Some(client_id) => {
+                crate::providers::unhurried(service::series::by_client_id(state, client_id)).await
+            }
+            None => crate::providers::unhurried(service::series::by_imdb_id(state, value)).await,
         },
         (App::Radarr, ExternalSource::Imdb) => service::movie::by_imdb_id(state, value).await,
         (App::Radarr, _) => match value.parse::<i64>() {

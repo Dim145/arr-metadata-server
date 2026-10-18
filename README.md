@@ -361,6 +361,14 @@ None needs a key.
 | **Fankai** | the Fan-Kai productions — anime recut into films, each as a series with its sagas as seasons — from Fankai's own metadata service | one call per saga, and three more per production fetch |
 | **Wiki Fankai** | for each Fan-Kai, the anime it was cut from and the Fan-Kai that follows it — only while Fankai is on | one call per Fan-Kai fetch |
 
+TVmaze's servers take fifteen to twenty seconds, now and then, over what their
+cache does not hold — the first lookup of a series — whatever the pace of the
+calls. A refresh or a seed gives TVmaze a minute and asks once more after a
+pause; a client waiting on this server gives it twenty seconds, and the fetch
+goes without it. Its API keys are not asked for: they open its user API, a
+premium member's own data, and change nothing of the public one's limit, which
+is per address.
+
 None of the first four changes the shape of an answer: Sonarr and Radarr are
 served the same fields as before, some of them now more accurate. Fankai adds
 works instead — ones no other source has.

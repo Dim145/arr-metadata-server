@@ -8,10 +8,14 @@
 //! Sonarr does not search for an episode before that instant, so it is the
 //! field worth fetching this source for.
 //!
-//! No key. Twenty calls in ten seconds per address: one per series once its
+//! No key: TVmaze's API keys open its user API — a premium member's own marks,
+//! follows and votes — and change nothing of the public one read here, which
+//! is limited per address. Twenty calls in ten seconds: one per series once its
 //! TVmaze id is known, three the first time. The data is CC BY-SA, which asks
 //! for a link back to TVmaze wherever it is shown — the interface carries one
 //! when this source is on.
+
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
@@ -24,11 +28,31 @@ use crate::{
     providers::{PATIENCE, Pacer, plain_text},
 };
 
+/// How long TVmaze is given for an answer while a client waits on this
+/// server: it is cut at `AMS_REQUEST_TIMEOUT`, sixty seconds by default, and
+/// the other sources take their time as well.
+const ANSWER: Duration = Duration::from_secs(20);
+
+/// How long it is given in a background task, which nobody waits on. What
+/// its cache does not hold — the first lookup of a series, a little-asked
+/// list of episodes — its servers take fifteen to twenty seconds over, now
+/// and then, whatever the pace of the calls: they answer in the end.
+const ANSWER_UNHURRIED: Duration = Duration::from_secs(60);
+
+/// The pause before asking again, in a background task, for what TVmaze never
+/// answered: by then it has often finished, and the answer comes from its
+/// cache. As TVmaze asks of its clients, a pause and a second try rather than
+/// a failure.
+const AGAIN_AFTER: Duration = Duration::from_secs(2);
+
 pub struct TvmazeClient {
     http: reqwest::Client,
     base: String,
     pacer: Pacer,
     gate: crate::providers::Gate,
+    answer: Duration,
+    answer_unhurried: Duration,
+    again_after: Duration,
 }
 
 impl TvmazeClient {
@@ -37,9 +61,12 @@ impl TvmazeClient {
             http,
             base: cfg.upstream.clone(),
             // Twenty calls in ten seconds, spaced rather than bunched.
-            pacer: Pacer::new(std::time::Duration::from_millis(500)),
+            pacer: Pacer::new(Duration::from_millis(500)),
             // Spaced already; this is for its `Retry-After`.
             gate: crate::providers::Gate::new("tvmaze", "TVmaze", 4),
+            answer: ANSWER,
+            answer_unhurried: ANSWER_UNHURRIED,
+            again_after: AGAIN_AFTER,
         }
     }
 
@@ -120,22 +147,35 @@ impl TvmazeClient {
     }
 
     /// One request, or `calls` of them when TVmaze is known to answer with a
-    /// redirect the client follows.
+    /// redirect the client follows. In a background task it is given longer,
+    /// and asked once more when it never answered (see [`ANSWER_UNHURRIED`]).
     async fn fetch(&self, url: &str, query: &[(&str, &str)], calls: u32) -> Result<Option<Value>> {
-        if !self.pacer.turn(calls, PATIENCE).await {
-            anyhow::bail!("TVmaze's queue is full; this fetch goes without it");
-        }
+        let unhurried = crate::providers::is_unhurried();
+        let wait = if unhurried {
+            self.answer_unhurried
+        } else {
+            self.answer
+        };
+        let mut again = unhurried;
 
-        let (response, _permit) = self
-            .gate
-            .send(|| {
-                self.http
-                    .get(url)
-                    .query(query)
-                    .timeout(std::time::Duration::from_secs(20))
-            })
-            .await
-            .map_err(|e| anyhow::anyhow!("TVmaze request failed: {url}: {e}"))?;
+        let (response, _permit) = loop {
+            if !self.pacer.turn(calls, PATIENCE).await {
+                anyhow::bail!("TVmaze's queue is full; this fetch goes without it");
+            }
+            match self
+                .gate
+                .send(|| self.http.get(url).query(query).timeout(wait))
+                .await
+            {
+                Ok(answered) => break answered,
+                Err(e) if again && crate::providers::timed_out(&e) => {
+                    tracing::debug!(url, "TVmaze did not answer in time; asking once more");
+                    again = false;
+                    tokio::time::sleep(self.again_after).await;
+                }
+                Err(e) => anyhow::bail!("TVmaze request failed: {url}: {e}"),
+            }
+        };
 
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
@@ -281,6 +321,85 @@ fn instant(airstamp: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A TVmaze that keeps its first caller waiting without a word, then
+    /// answers the show with its episodes; and how many came.
+    async fn silent_then_answering() -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let at = format!("http://{}", listener.local_addr().unwrap());
+        let asked = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = asked.clone();
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((mut connection, _)) = listener.accept().await {
+                let first = counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0;
+                let mut request = [0u8; 4096];
+                let _ = connection.read(&mut request).await;
+                if first {
+                    held.push(connection);
+                    continue;
+                }
+                let body = json!({
+                    "id": 169,
+                    "name": "Breaking Bad",
+                    "externals": { "thetvdb": 81189 },
+                    "_embedded": { "episodes": [] }
+                })
+                .to_string();
+                let answer = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
+                     Connection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = connection.write_all(answer.as_bytes()).await;
+                let _ = connection.shutdown().await;
+            }
+        });
+        (at, asked)
+    }
+
+    /// The client, given a fraction of a second where TVmaze is given tens.
+    fn impatient(at: &str) -> TvmazeClient {
+        let mut client = TvmazeClient::new(
+            reqwest::Client::new(),
+            &config::Tvmaze {
+                upstream: at.to_string(),
+                enabled: true,
+            },
+        );
+        client.answer = Duration::from_millis(300);
+        client.answer_unhurried = Duration::from_millis(300);
+        client.again_after = Duration::from_millis(10);
+        client
+    }
+
+    #[tokio::test]
+    async fn in_a_background_task_what_tvmaze_never_answered_is_asked_once_more() {
+        let (at, asked) = silent_then_answering().await;
+        let tvmaze = impatient(&at);
+
+        let (_, item) = crate::providers::unhurried(tvmaze.series(Some(81189), Some(169)))
+            .await
+            .expect("answered the second time")
+            .expect("the show");
+        assert_eq!(item.title, "Breaking Bad");
+        assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn a_client_waiting_is_not_kept_for_a_second_try() {
+        let (at, asked) = silent_then_answering().await;
+        let tvmaze = impatient(&at);
+
+        let failed = tvmaze
+            .series(Some(81189), Some(169))
+            .await
+            .expect_err("never answered");
+        assert!(format!("{failed:#}").contains("timed out"), "{failed:#}");
+        assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
 
     fn fixture() -> (Show, Vec<EpisodeRecord>) {
         let show: Show = serde_json::from_value(json!({

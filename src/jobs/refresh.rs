@@ -501,17 +501,19 @@ async fn refresh_due(state: &AppState, id: &str, recorder: &Recorder) -> bool {
     // fails that work, not the sweep: unwound, it would end the loop that
     // runs every sweep for good, and the work, still first by its deadline,
     // would be the first of the next.
-    let refreshed = std::panic::AssertUnwindSafe(refresh_one(state, &item))
-        .catch_unwind()
-        .await
-        .unwrap_or_else(|panic| {
-            let what = panic
-                .downcast_ref::<&str>()
-                .map(|s| (*s).to_string())
-                .or_else(|| panic.downcast_ref::<String>().cloned())
-                .unwrap_or_default();
-            Err(anyhow::anyhow!("the refresh panicked: {what}"))
-        });
+    // Nobody waits on a sweep: a slow source is given its time here.
+    let refreshed =
+        std::panic::AssertUnwindSafe(crate::providers::unhurried(refresh_one(state, &item)))
+            .catch_unwind()
+            .await
+            .unwrap_or_else(|panic| {
+                let what = panic
+                    .downcast_ref::<&str>()
+                    .map(|s| (*s).to_string())
+                    .or_else(|| panic.downcast_ref::<String>().cloned())
+                    .unwrap_or_default();
+                Err(anyhow::anyhow!("the refresh panicked: {what}"))
+            });
 
     let (came_back, outcome, note) = match refreshed {
         // Answered with what was stored — no provider had it — and still due:

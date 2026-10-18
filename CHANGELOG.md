@@ -7,6 +7,18 @@ may change what the API or the configuration means, and says so here.
 
 ## [Unreleased]
 
+### Fixed
+
+- TVmaze is given a minute in a background task — a refresh, a seed — and
+  asked once more, after a pause, for what it never answered. Its servers
+  take fifteen to twenty seconds, now and then, over what their cache does
+  not hold, whatever the pace of the calls, and a refresh logged
+  `TVmaze lookup failed … timed out` past the twenty it was given. A client
+  waiting on this server still gives it twenty seconds, and no second try.
+  TVmaze's API keys are not asked for: they open its user API, a premium
+  member's own data, and change nothing of the public one's limit, which is
+  per address.
+
 ## [0.8.1] — 2026-10-17
 
 ### Added

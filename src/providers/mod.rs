@@ -125,6 +125,43 @@ fn retry_after(response: &reqwest::Response) -> Option<std::time::Duration> {
     Some(wait.clamp(std::time::Duration::from_secs(1), MAX_BACKOFF))
 }
 
+/// A request a provider never answered in the time it was given — as against
+/// one it answered, refused, or could not be sent: what a caller may ask
+/// again.
+#[derive(Debug)]
+pub struct TimedOut(String);
+
+impl std::fmt::Display for TimedOut {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for TimedOut {}
+
+/// Whether a request failed for want of an answer in time: see [`TimedOut`].
+pub fn timed_out(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<TimedOut>().is_some()
+}
+
+tokio::task_local! {
+    /// Set over a background task's fetches — a refresh, a seed — which
+    /// nobody is waiting on, as against a client's request.
+    static UNHURRIED: ();
+}
+
+/// Run `work` as a background task, which nobody is waiting on: a provider
+/// slow to answer is given longer, and asked again when it never did (see
+/// `tvmaze`). Outside it, a fetch is a client's, kept short.
+pub async fn unhurried<F: std::future::Future>(work: F) -> F::Output {
+    UNHURRIED.scope((), work).await
+}
+
+/// Whether what runs now is a background task's: see [`unhurried`].
+pub fn is_unhurried() -> bool {
+    UNHURRIED.try_with(|()| ()).is_ok()
+}
+
 /// One provider's door: how many of its requests are in flight at once, and
 /// how long it is left alone once it has said so.
 ///
@@ -156,7 +193,8 @@ impl Gate {
     /// Send what `request` builds once the door is open, holding one of its
     /// places until the permit returned with the answer is dropped — after
     /// the body is read, so the cap covers the whole exchange. Errors carry
-    /// the kind of failure, never the address.
+    /// the kind of failure, never the address; one that ran out of time is a
+    /// [`TimedOut`].
     pub async fn send(
         &self,
         request: impl Fn() -> reqwest::RequestBuilder,
@@ -173,7 +211,14 @@ impl Gate {
             let started = std::time::Instant::now();
             let sent = request().send().await;
             crate::metrics::upstream(self.metric, started, sent.as_ref().ok().map(|r| r.status()));
-            let response = sent.map_err(|e| anyhow::anyhow!(describe_request_error(&e)))?;
+            let response = sent.map_err(|e| {
+                let said = describe_request_error(&e);
+                if e.is_timeout() {
+                    anyhow::Error::new(TimedOut(said))
+                } else {
+                    anyhow::anyhow!(said)
+                }
+            })?;
 
             match self.back_off(&response) {
                 Some(wait) if !retried && wait <= PATIENCE => {
@@ -469,6 +514,57 @@ mod tests {
     }
 
     const TOO_MANY: &str = "HTTP/1.1 429 Too Many Requests\r\nRetry-After: 1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+
+    #[tokio::test]
+    async fn a_provider_that_never_answers_is_told_from_one_that_cannot_be_reached() {
+        // A server that takes the connection and says nothing.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let at = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((connection, _)) = listener.accept().await {
+                held.push(connection);
+            }
+        });
+        let gate = Gate::new("tvmaze", "TVmaze", 4);
+        let http = reqwest::Client::new();
+        let silent = gate
+            .send(|| http.get(&at).timeout(std::time::Duration::from_millis(200)))
+            .await
+            .expect_err("nothing was answered");
+        assert!(timed_out(&silent), "{silent:#}");
+        assert!(silent.to_string().starts_with("timed out"), "{silent:#}");
+
+        // Nobody listening is no time out: asking again would change nothing.
+        let closed = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap();
+        let refused = gate
+            .send(|| http.get(format!("http://{closed}")))
+            .await
+            .expect_err("nobody listens");
+        assert!(!timed_out(&refused), "{refused:#}");
+    }
+
+    #[tokio::test]
+    async fn a_background_task_is_told_from_a_clients_request() {
+        assert!(!is_unhurried());
+        assert!(unhurried(async { is_unhurried() }).await);
+        // Across what it awaits, and what it joins.
+        let (first, second) = unhurried(async {
+            tokio::join!(
+                async {
+                    tokio::task::yield_now().await;
+                    is_unhurried()
+                },
+                async { is_unhurried() }
+            )
+        })
+        .await;
+        assert!(first && second);
+        assert!(!is_unhurried());
+    }
     const FINE: &str = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}";
 
     #[tokio::test]
