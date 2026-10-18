@@ -41,7 +41,7 @@ pub fn router() -> OpenApiRouter<AppState> {
 async fn catalogue(
     Extension(identity): Extension<Identity>,
 ) -> AppResult<Json<&'static [Definition]>> {
-    require_admin(&identity)?;
+    identity.require_admin()?;
 
     Ok(Json(REGISTRY))
 }
@@ -64,7 +64,7 @@ async fn effective(
     Extension(identity): Extension<Identity>,
     Path((scope, id)): Path<(String, String)>,
 ) -> AppResult<Json<Vec<Effective>>> {
-    require_admin(&identity)?;
+    identity.require_admin()?;
 
     let (scope, id) = address(&scope, &id)?;
 
@@ -100,7 +100,7 @@ async fn put(
     Path((scope, id)): Path<(String, String)>,
     Json(write): Json<SettingWrite>,
 ) -> AppResult<Json<Vec<Effective>>> {
-    require_admin(&identity)?;
+    identity.require_admin()?;
 
     let (scope, id) = address(&scope, &id)?;
 
@@ -189,7 +189,7 @@ async fn clear(
     ip: ClientIp,
     Path((scope, id)): Path<(String, String)>,
 ) -> AppResult<StatusCode> {
-    require_admin(&identity)?;
+    identity.require_admin()?;
 
     let (scope, id) = address(&scope, &id)?;
 
@@ -253,8 +253,4 @@ fn address(scope: &str, id: &str) -> AppResult<(Scope, String)> {
     };
 
     Ok((scope, id))
-}
-
-fn require_admin(identity: &Identity) -> AppResult<()> {
-    identity.is_admin().then_some(()).ok_or(AppError::Forbidden)
 }

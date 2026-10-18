@@ -128,7 +128,7 @@ async fn set(
     Path(id): Path<String>,
     Json(mut request): Json<SetRequest>,
 ) -> AppResult<Json<SetResponse>> {
-    require_write(&identity)?;
+    identity.require_write()?;
 
     // A child the sources gave, by what it is.
     if let Ok(child) = request.scope.parse::<Child>() {
@@ -322,7 +322,7 @@ async fn unset(
     Path((id, scope, field)): Path<(String, String, String)>,
     Query(query): Query<UnsetQuery>,
 ) -> AppResult<StatusCode> {
-    require_write(&identity)?;
+    identity.require_write()?;
 
     let language = lock_language(query.language.as_deref())?;
     let (scope, uploads) = match scope.parse::<Child>() {
@@ -476,7 +476,7 @@ async fn clear(
     ip: ClientIp,
     Path(id): Path<String>,
 ) -> AppResult<Json<ClearResponse>> {
-    require_write(&identity)?;
+    identity.require_write()?;
 
     let uploads = uploads_locked(&state, &id, None).await?;
     let removed = repo::override_field::clear(&state.db, &id).await?;
@@ -530,13 +530,6 @@ pub(super) async fn lock(
 
     state.caches.touched(id).await;
     Ok(())
-}
-
-fn require_write(identity: &Identity) -> AppResult<()> {
-    identity
-        .can_write()
-        .then_some(())
-        .ok_or(AppError::Forbidden)
 }
 
 /// The uploads a work's locks point at — one lock's, or every lock's — for

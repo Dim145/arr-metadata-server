@@ -15,7 +15,7 @@ use crate::{
     auth::Identity,
     db::repo::{self, job::Job},
     domain::MediaKind,
-    error::{AppError, AppResult},
+    error::AppResult,
     state::AppState,
 };
 
@@ -238,9 +238,7 @@ async fn health(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
 ) -> AppResult<Json<Health>> {
-    if !identity.is_admin() {
-        return Err(AppError::Forbidden);
-    }
+    identity.require_admin()?;
     let everything = repo::item::Query {
         include_adult: true,
         include_disabled: true,
@@ -351,9 +349,7 @@ async fn metrics(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
 ) -> AppResult<([(header::HeaderName, &'static str); 1], String)> {
-    if !identity.is_admin() {
-        return Err(AppError::Forbidden);
-    }
+    identity.require_admin()?;
     use crate::metrics::{Metric, label};
 
     let mut gauges = match held(&state).await {

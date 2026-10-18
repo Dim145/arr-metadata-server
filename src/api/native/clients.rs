@@ -44,7 +44,7 @@ async fn list(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
 ) -> AppResult<Json<Vec<ApiClient>>> {
-    require_admin(&identity)?;
+    identity.require_admin()?;
 
     Ok(Json(
         repo::client::list(&state.db, repo::client::Owner::Any).await?,
@@ -66,7 +66,7 @@ async fn detail(
     Extension(identity): Extension<Identity>,
     Path(id): Path<String>,
 ) -> AppResult<Json<ApiClient>> {
-    require_admin(&identity)?;
+    identity.require_admin()?;
 
     repo::client::get(&state.db, &id)
         .await?
@@ -121,7 +121,7 @@ async fn create(
     ip: ClientIp,
     Json(request): Json<CreateRequest>,
 ) -> AppResult<(StatusCode, Json<CreateResponse>)> {
-    require_admin(&identity)?;
+    identity.require_admin()?;
 
     let name = request.name.trim();
     if name.is_empty() {
@@ -235,7 +235,7 @@ async fn update(
     Path(id): Path<String>,
     Json(request): Json<UpdateRequest>,
 ) -> AppResult<Json<ApiClient>> {
-    require_admin(&identity)?;
+    identity.require_admin()?;
 
     if let Some(enabled) = request.is_enabled {
         // Read first: the trail is read by humans, who know the name, and a
@@ -293,7 +293,7 @@ async fn remove(
     ip: ClientIp,
     Path(id): Path<String>,
 ) -> AppResult<StatusCode> {
-    require_admin(&identity)?;
+    identity.require_admin()?;
 
     let name = repo::client::get(&state.db, &id).await?.map(|c| c.name);
 
@@ -333,10 +333,6 @@ async fn remove(
     .await;
 
     Ok(StatusCode::NO_CONTENT)
-}
-
-fn require_admin(identity: &Identity) -> AppResult<()> {
-    identity.is_admin().then_some(()).ok_or(AppError::Forbidden)
 }
 
 /// An expiry a caller gave, or why it cannot be one: a time — RFC 3339, or a

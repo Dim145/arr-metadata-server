@@ -277,7 +277,7 @@ async fn work_media(
     Extension(identity): Extension<Identity>,
     Path(id): Path<String>,
 ) -> AppResult<Json<WorkMedia>> {
-    require_write(&identity)?;
+    identity.require_write()?;
     let mut item = repo::item::get(&state.db, &id)
         .await?
         .ok_or(AppError::NotFound)?;
@@ -443,7 +443,7 @@ async fn upload(
     Path(id): Path<String>,
     mut form: Multipart,
 ) -> AppResult<(StatusCode, Json<Uploaded>)> {
-    require_write(&identity)?;
+    identity.require_write()?;
     let Some(store) = state.media.store() else {
         return Err(AppError::Disabled {
             code: "media_off",
@@ -683,7 +683,7 @@ async fn forget(
     ip: ClientIp,
     Path((id, asset_id)): Path<(String, String)>,
 ) -> AppResult<StatusCode> {
-    require_write(&identity)?;
+    identity.require_write()?;
     let mut item = repo::item::get(&state.db, &id)
         .await?
         .ok_or(AppError::NotFound)?;
@@ -782,11 +782,4 @@ pub async fn remove_asset(state: &AppState, asset: &Asset, removal: Removal) -> 
         crate::media::worker::delete_files(state, store, key, asset.thumb).await;
     }
     Ok(true)
-}
-
-fn require_write(identity: &Identity) -> AppResult<()> {
-    identity
-        .can_write()
-        .then_some(())
-        .ok_or(AppError::Forbidden)
 }

@@ -137,7 +137,7 @@ async fn export(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
 ) -> AppResult<Json<Locks>> {
-    require_admin(&identity)?;
+    identity.require_admin()?;
 
     let overrides = repo::override_field::all(&state.db).await?;
     let mut ids: Vec<String> = overrides.iter().map(|(id, _)| id.clone()).collect();
@@ -213,7 +213,7 @@ async fn import(
     ip: ClientIp,
     Json(document): Json<Locks>,
 ) -> AppResult<Json<Imported>> {
-    require_admin(&identity)?;
+    identity.require_admin()?;
 
     if !(1..=VERSION).contains(&document.version) {
         return Err(AppError::BadRequest(format!(
@@ -556,10 +556,6 @@ async fn resolve(state: &AppState, work: &LockedWork) -> AppResult<Option<String
         }
     }
     Ok(None)
-}
-
-fn require_admin(identity: &Identity) -> AppResult<()> {
-    identity.is_admin().then_some(()).ok_or(AppError::Forbidden)
 }
 
 #[cfg(test)]

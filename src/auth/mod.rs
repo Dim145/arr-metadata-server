@@ -145,6 +145,15 @@ impl Identity {
         }
     }
 
+    /// A refusal, unless this identity may write ([`Self::can_write`]). What
+    /// every handler that writes opens with, rather than a check of its own,
+    /// so that all of them refuse alike.
+    pub fn require_write(&self) -> AppResult<()> {
+        self.can_write().then_some(()).ok_or(AppError::Forbidden)
+    }
+
+    /// A refusal, unless this identity may manage clients, users and settings
+    /// ([`Self::is_admin`]); see [`Self::require_write`].
     pub fn require_admin(&self) -> AppResult<()> {
         self.is_admin().then_some(()).ok_or(AppError::Forbidden)
     }

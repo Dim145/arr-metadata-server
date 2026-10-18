@@ -48,7 +48,7 @@ async fn rules(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
 ) -> AppResult<Json<Vec<NetworkRule>>> {
-    require_admin(&identity)?;
+    identity.require_admin()?;
 
     Ok(Json(repo::network::list_rules(&state.db).await?))
 }
@@ -81,7 +81,7 @@ async fn add(
     ip: ClientIp,
     Json(request): Json<NewRule>,
 ) -> AppResult<(StatusCode, Json<NetworkRule>)> {
-    require_admin(&identity)?;
+    identity.require_admin()?;
 
     let parsed = repo::network::parse_rule(&request.cidr)
         .map_err(|e| AppError::BadRequest(e.to_string()))?;
@@ -144,7 +144,7 @@ async fn remove(
     ip: ClientIp,
     Path(id): Path<String>,
 ) -> AppResult<StatusCode> {
-    require_admin(&identity)?;
+    identity.require_admin()?;
 
     let removed = repo::network::list_rules(&state.db)
         .await?
@@ -206,7 +206,7 @@ async fn rename(
     Path(id): Path<String>,
     Json(request): Json<Rename>,
 ) -> AppResult<Json<NetworkRule>> {
-    require_admin(&identity)?;
+    identity.require_admin()?;
 
     if !repo::network::rename(&state.db, &id, request.name.as_deref()).await? {
         return Err(AppError::NotFound);
@@ -246,7 +246,7 @@ async fn callers(
     Extension(identity): Extension<Identity>,
     Query(query): Query<CallerQuery>,
 ) -> AppResult<Json<Vec<Caller>>> {
-    require_admin(&identity)?;
+    identity.require_admin()?;
 
     let mut callers = repo::network::callers(&state.db, query.limit.unwrap_or(100)).await?;
 
@@ -262,8 +262,4 @@ async fn callers(
     }
 
     Ok(Json(callers))
-}
-
-fn require_admin(identity: &Identity) -> AppResult<()> {
-    identity.is_admin().then_some(()).ok_or(AppError::Forbidden)
 }

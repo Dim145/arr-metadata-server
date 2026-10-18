@@ -463,7 +463,7 @@ async fn create(
     ip: ClientIp,
     Json(request): Json<CreateRequest>,
 ) -> AppResult<(StatusCode, Json<MediaItem>)> {
-    require_write(&identity)?;
+    identity.require_write()?;
 
     let kind: MediaKind = request
         .kind
@@ -555,7 +555,7 @@ async fn update(
     Path(id): Path<String>,
     Json(request): Json<UpdateRequest>,
 ) -> AppResult<Json<MediaItem>> {
-    require_write(&identity)?;
+    identity.require_write()?;
 
     if let Some(enabled) = request.is_enabled {
         if !repo::item::set_enabled(&state.db, &id, enabled).await? {
@@ -598,7 +598,7 @@ async fn remove(
     ip: ClientIp,
     Path(id): Path<String>,
 ) -> AppResult<StatusCode> {
-    require_write(&identity)?;
+    identity.require_write()?;
 
     // Read the title before it goes, so the trail says what was deleted rather
     // than only which id.
@@ -646,7 +646,7 @@ async fn refresh(
     ip: ClientIp,
     Path(id): Path<String>,
 ) -> AppResult<Json<MediaItem>> {
-    require_write(&identity)?;
+    identity.require_write()?;
 
     let item = service::load(&state, &id)
         .await?
@@ -841,7 +841,7 @@ async fn provenance(
     Extension(identity): Extension<Identity>,
     Path(id): Path<String>,
 ) -> AppResult<Json<ProvenanceReport>> {
-    require_write(&identity)?;
+    identity.require_write()?;
 
     let stored = repo::item::get(&state.db, &id)
         .await?
@@ -915,7 +915,7 @@ async fn sync(
     Path(id): Path<String>,
     Json(request): Json<SyncRequest>,
 ) -> AppResult<Json<SyncOutcome>> {
-    require_write(&identity)?;
+    identity.require_write()?;
     if service::load(&state, &id)
         .await?
         .ok_or(AppError::NotFound)?
@@ -1258,13 +1258,6 @@ fn is_imdb(id: &str) -> bool {
     id.strip_prefix("tt").is_some_and(|digits| {
         (7..=10).contains(&digits.len()) && digits.bytes().all(|b| b.is_ascii_digit())
     })
-}
-
-fn require_write(identity: &Identity) -> AppResult<()> {
-    identity
-        .can_write()
-        .then_some(())
-        .ok_or(AppError::Forbidden)
 }
 
 /// A slug not already taken by another work of the same kind.

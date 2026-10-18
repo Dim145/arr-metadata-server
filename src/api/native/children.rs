@@ -934,9 +934,7 @@ async fn writable(
     identity: &Identity,
     id: &str,
 ) -> AppResult<crate::domain::MediaItem> {
-    if !identity.can_write() {
-        return Err(AppError::Forbidden);
-    }
+    identity.require_write()?;
 
     service::load(state, id).await?.ok_or(AppError::NotFound)
 }

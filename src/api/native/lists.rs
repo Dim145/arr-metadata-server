@@ -408,7 +408,7 @@ async fn create(
     ip: ClientIp,
     Json(mut request): Json<CuratedListRequest>,
 ) -> AppResult<(StatusCode, Json<CuratedList>)> {
-    require_write(&identity)?;
+    identity.require_write()?;
     unkept(&state, &mut request);
     let checked = check(&request, None)?;
     let members = match &request.items {
@@ -459,7 +459,7 @@ async fn update(
     Path(key): Path<String>,
     Json(mut request): Json<CuratedListRequest>,
 ) -> AppResult<Json<CuratedList>> {
-    require_write(&identity)?;
+    identity.require_write()?;
     unkept(&state, &mut request);
     let current = find(&state, &key).await?.ok_or(AppError::NotFound)?;
     let checked = check(&request, Some(&current))?;
@@ -523,7 +523,7 @@ async fn set_items(
     Path(key): Path<String>,
     Json(request): Json<CuratedListItems>,
 ) -> AppResult<Json<CuratedList>> {
-    require_write(&identity)?;
+    identity.require_write()?;
     let current = find(&state, &key).await?.ok_or(AppError::NotFound)?;
     if current.mode != ListMode::Manual {
         return Err(AppError::BadRequest(
@@ -568,7 +568,7 @@ async fn delete(
     ip: ClientIp,
     Path(key): Path<String>,
 ) -> AppResult<StatusCode> {
-    require_write(&identity)?;
+    identity.require_write()?;
     let current = find(&state, &key).await?.ok_or(AppError::NotFound)?;
     if !repo::list::delete(&state.db, &current.id).await? {
         return Err(AppError::NotFound);
@@ -591,13 +591,6 @@ async fn delete(
 }
 
 // ─── the pieces ──────────────────────────────────────────────────────────────
-
-fn require_write(identity: &Identity) -> AppResult<()> {
-    identity
-        .can_write()
-        .then_some(())
-        .ok_or(AppError::Forbidden)
-}
 
 /// A list by id, or failing that by slug.
 pub(super) async fn find(state: &AppState, key: &str) -> AppResult<Option<CuratedList>> {

@@ -190,9 +190,7 @@ async fn suggestions(
     Extension(identity): Extension<Identity>,
     Path(id): Path<String>,
 ) -> AppResult<Json<Suggestions>> {
-    if !identity.can_write() {
-        return Err(AppError::Forbidden);
-    }
+    identity.require_write()?;
     let item = service::load(&state, &id)
         .await?
         .ok_or(AppError::NotFound)?;

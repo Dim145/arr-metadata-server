@@ -97,7 +97,7 @@ async fn search(
     Extension(identity): Extension<Identity>,
     Query(query): Query<SearchQuery>,
 ) -> AppResult<Json<Vec<Found>>> {
-    require_write(&identity)?;
+    identity.require_write()?;
 
     // A page pasted whole is the lookup it stands for, and says which kind it
     // is when its address does.
@@ -206,7 +206,7 @@ async fn import(
     ip: ClientIp,
     Json(request): Json<ImportRequest>,
 ) -> AppResult<Json<MediaItem>> {
-    require_write(&identity)?;
+    identity.require_write()?;
 
     let kind: MediaKind = request
         .kind
@@ -392,13 +392,6 @@ fn from_link(term: &str) -> Option<(String, Option<MediaKind>)> {
 /// `tt0903747`: an IMDb title's id, and nothing else.
 fn is_tconst(id: &str) -> bool {
     id.len() > 2 && id.starts_with("tt") && id[2..].bytes().all(|b| b.is_ascii_digit())
-}
-
-fn require_write(identity: &Identity) -> AppResult<()> {
-    identity
-        .can_write()
-        .then_some(())
-        .ok_or(AppError::Forbidden)
 }
 
 #[cfg(test)]

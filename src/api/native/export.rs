@@ -397,9 +397,7 @@ async fn export_all(
     ip: ClientIp,
     Query(query): Query<ExportQuery>,
 ) -> AppResult<(StatusCode, Json<ExportStarted>)> {
-    if !identity.can_write() {
-        return Err(AppError::Forbidden);
-    }
+    identity.require_write()?;
 
     let subset = match query
         .list

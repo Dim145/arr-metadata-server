@@ -7,7 +7,7 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::{
     auth::Identity,
-    error::{AppError, AppResult},
+    error::AppResult,
     merge::rules,
     providers::{mal, names},
     service::gather,
@@ -66,9 +66,7 @@ async fn source_rules(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
 ) -> AppResult<Json<SourceRules>> {
-    if !identity.can_write() {
-        return Err(AppError::Forbidden);
-    }
+    identity.require_write()?;
 
     let priority = state.provider_priority();
     let providers = rules::order(&priority)
@@ -96,6 +94,7 @@ mod tests {
     use super::*;
     use crate::{
         domain::{MediaItem, MediaKind},
+        error::AppError,
         merge::{self, Contribution},
         settings::registry::Scope,
     };

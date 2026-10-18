@@ -238,7 +238,7 @@ async fn settings(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
 ) -> AppResult<Json<Settings>> {
-    require_admin(&identity)?;
+    identity.require_admin()?;
 
     let imported = |import: Option<repo::import::Import>| {
         import.map(|i| ListImport {
@@ -280,13 +280,6 @@ async fn settings(
         arr_policy: policy_name(state.config.policy_for(Surface::Arr)),
         further_sources,
     }))
-}
-
-fn require_admin(identity: &Identity) -> AppResult<()> {
-    identity
-        .is_admin()
-        .then_some(())
-        .ok_or(crate::error::AppError::Forbidden)
 }
 
 #[derive(Deserialize, IntoParams)]
@@ -331,7 +324,7 @@ async fn jobs(
     Extension(identity): Extension<Identity>,
     Query(query): Query<JobQuery>,
 ) -> AppResult<Json<JobsResponse>> {
-    require_admin(&identity)?;
+    identity.require_admin()?;
 
     let filter = repo::job::Query {
         kind: query.kind,
@@ -377,9 +370,7 @@ async fn clear_cache(
     Extension(identity): Extension<Identity>,
     ip: ClientIp,
 ) -> AppResult<StatusCode> {
-    if !identity.can_write() {
-        return Err(crate::error::AppError::Forbidden);
-    }
+    identity.require_write()?;
 
     state.caches.invalidate_all().await;
     tracing::info!(actor = %identity.label(), "cleared the in-process cache");
@@ -431,7 +422,7 @@ async fn import_dataset(
     ip: ClientIp,
     axum::extract::Path(name): axum::extract::Path<String>,
 ) -> AppResult<(StatusCode, Json<Imported>)> {
-    require_admin(&identity)?;
+    identity.require_admin()?;
 
     use crate::jobs::datasets::{Asked, import_now};
 

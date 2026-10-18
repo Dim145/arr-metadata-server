@@ -398,9 +398,7 @@ async fn candidates(
     Path((year, season)): Path<(i32, String)>,
     Query(query): Query<CandidatesQuery>,
 ) -> AppResult<Json<Vec<Candidate>>> {
-    if !identity.can_write() {
-        return Err(AppError::Forbidden);
-    }
+    identity.require_write()?;
     if !state.tmdb.is_configured() {
         return Err(AppError::ProviderNotConfigured);
     }
