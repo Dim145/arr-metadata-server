@@ -7,6 +7,8 @@ may change what the API or the configuration means, and says so here.
 
 ## [Unreleased]
 
+## [0.8.2] — 2026-10-18
+
 ### Added
 
 - **Failed refreshes, grouped.** A notification destination can be told of
@@ -1523,7 +1525,8 @@ and arm64.
 - End-to-end checks against a real Sonarr, against two instances, and a
   Playwright suite over the whole interface.
 
-[Unreleased]: https://github.com/Dim145/arr-metadata-server/compare/v0.8.1...HEAD
+[Unreleased]: https://github.com/Dim145/arr-metadata-server/compare/v0.8.2...HEAD
+[0.8.2]: https://github.com/Dim145/arr-metadata-server/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/Dim145/arr-metadata-server/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/Dim145/arr-metadata-server/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/Dim145/arr-metadata-server/compare/v0.6.0...v0.7.0
