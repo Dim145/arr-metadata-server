@@ -9,6 +9,13 @@ frontend/dist/
 frontend/.vite/
 *.tsbuildinfo
 
+# --- Documentation site ---
+# The pages are made from README.md and docs/*.md before every build
+# (site/scripts/sync-docs.mjs); what is committed is the site around them.
+site/dist/
+site/.astro/
+site/src/content/docs/
+
 # --- Runtime data ---
 /data
 *.db

@@ -364,7 +364,8 @@ pub const REGISTRY: &[Definition] = &[
         scopes: SERVER_ONLY,
     },
     Definition {
-        // Members on the TMDB relay, which spends the operator's quota.
+        // Members on the relays — TMDB's, TheTVDB's and AniList's — which
+        // spend the operator's quotas.
         key: "api.tmdbMembers",
         kind: Kind::Bool,
         scopes: SERVER_ONLY,

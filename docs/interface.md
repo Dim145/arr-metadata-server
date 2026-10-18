@@ -47,7 +47,8 @@ a thousand works scrolls as lightly as a page of thirty.
 ## The Settings page
 
 *Administration › Access › Settings* (`/admin/settings`, for administrators) lists the server's
-settings, apart from those that have a page of their own: signing in, the APIs and whose key the
+settings — every one is described in the [settings reference](settings.md) — apart from those
+that have a page of their own: signing in, the APIs and whose key the
 relays ask with are on **Opening & APIs**, the order of the sources on **Sources**, the media
 store on **Media**, the cache's spaces on **Cache**, Sonarr's and Radarr's connections on
 **Sonarr & Radarr**, and the destinations of notifications on **Notifications**.

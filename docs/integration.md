@@ -81,8 +81,8 @@ namespace, since 20.10), so `AMS_CLIENTS_BIND=0.0.0.0:443` and `"443:443"` do.
 On an older engine, bind 8443 and map `"443:8443"`. Outside a container on
 Linux, `setcap cap_net_bind_service=+ep` on the binary; macOS asks nothing.
 
-With several instances (`AMS_MODE=multi`, see the README's *Several
-instances*), every instance has a door of its own on 443, and all of them
+With several instances (`AMS_MODE=multi`, see
+[Several instances](instances.md)), every instance has a door of its own on 443, and all of them
 serve the one certificate the authority in the database issued: point the
 names at any of them, at a TCP balancer in front of them, or — in Compose —
 give every instance the three names as network aliases, as
@@ -498,7 +498,7 @@ keeps that order for the series (the orders `/api/v1/items/{id}/orders` lists,
 read from TheTVDB when the series is fetched); in the aired order otherwise,
 as Skyhook answers, so that a choice the series has no order for fails
 nothing. It asks in the language it holds for the series, too: see
-*Languages* in the README for what it is answered in.
+[Languages](languages.md) for what it is answered in.
 
 ---
 
@@ -690,7 +690,7 @@ Sonarr v4's request builder pins the language segment to `en` and nothing in
 Sonarr changes it, so asking this server for French through Sonarr v4 is not
 possible from Sonarr's side. Set `AMS_TMDB_LANGUAGE` instead: entries are stored
 in that language and every client gets it. Sonarr v5 does ask in the language set
-for the series: see *Languages* in the README.
+for the series: see [Languages](languages.md).
 
 Radarr has no language in its protocol at all, and the same applies.
 

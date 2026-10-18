@@ -4,7 +4,7 @@ The sources give a work more than a title and a release date: the days it came o
 each country, the rating it carries there, the line it was sold on, every country and
 company that made it, the people who wrote it, its Wikidata item. This page says what is
 kept of it, where it is shown, and what it changes in the answers.
-[Where the data comes from](../README.md#where-the-data-comes-from) in the README says which
+[Where the data comes from](sources.md) says which
 source brings what, and in which order the sources are merged.
 
 A work takes the data on this page at its next refresh; **Refresh everything**, on the Jobs
@@ -85,7 +85,7 @@ another country (`region=FR`; anything but two letters is a `400`).
 — sortie en salles* — and the airing feed (`airing.atom`) has an entry for it. A film's own calendar,
 `/api/v1/items/{id}/calendar.ics`, lists every release, a day each, under the UIDs
 `release-{id}-{cinema|digital|physical}`: an app subscribed to it replaces its one event once. The
-feeds are described with the others in the README's [Feeds](../README.md#feeds). The site lists the
+feeds are described with the others in [Calendars and feeds](exports.md#calendars-and-feeds). The site lists the
 films beside the episodes on each day one comes out — in cinemas, digitally, on disc — in the week
 with its poster and a chip a kind, in the month's cells after the day's episodes, and on the front
 page's strip, counted apart: *15 episodes · 2 releases*.

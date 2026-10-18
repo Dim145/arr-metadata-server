@@ -19,6 +19,8 @@
 //! it restarts and an operator's intent does not. The allowlist rule is already
 //! the thing they curate; naming it names the client.
 
+#[cfg(test)]
+mod reference;
 pub mod registry;
 pub mod store;
 

@@ -320,7 +320,8 @@ pub struct Tmdb {
     pub include_adult: bool,
     /// How many search hits get enriched with external ids before being returned.
     pub search_limit: usize,
-    /// Whether unmatched `/3/*` requests are forwarded upstream.
+    /// Whether the relay answers at all: off, every `/3/*` call is answered
+    /// 503 (`provider_not_configured`).
     pub passthrough: bool,
 }
 

@@ -1,0 +1,87 @@
+# Builds the documentation site — README.md and docs/*.md, made into pages by
+# site/ — and publishes it on GitHub Pages, at
+# https://dim145.github.io/arr-metadata-server/. GitHub only: Pages is
+# GitHub's, and so are the three actions that publish to it.
+#
+# The repository has to publish Pages from GitHub Actions (Settings › Pages ›
+# Source: GitHub Actions); until it does, the deployment is refused, and the
+# build still says whether the pages and their links hold.
+name: Documentation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - docs/**
+      - site/**
+      - README.md
+      # A change to how the site is published is worth publishing it again.
+      - .github/workflows/docs.yml
+  workflow_dispatch:
+
+# Least privilege: the build reads the repository and nothing else. Only the
+# deployment is given more, below: to write the Pages site, and the identity
+# token Pages checks the deployment by.
+permissions:
+  contents: read
+
+# One deployment at a time. A push that lands while one is under way waits for
+# it rather than cutting it off halfway; a third replaces the second in line.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Nothing here pushes; the packages installed below need no token.
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+
+      - name: Install
+        working-directory: site
+        run: npm ci --no-audit --no-fund
+
+      # Copies the pages in (a relative link to a file that is not there stops
+      # it), builds the site, then checks every link the site makes to itself,
+      # anchors included.
+      - name: Build
+        working-directory: site
+        env:
+          ASTRO_TELEMETRY_DISABLED: 1
+        run: npm run build
+
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: site/dist
+
+  deploy:
+    name: Deploy
+    needs: build
+    # From main only, whoever starts the run.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      # Says, before anything is deployed, whether the repository publishes
+      # Pages from Actions at all.
+      - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

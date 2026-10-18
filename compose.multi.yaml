@@ -15,7 +15,7 @@
 # serve the one certificate the authority in the database issued. The
 # instances themselves carry none of those names, so their own calls to
 # TMDB, Skyhook and Radarr reach the real ones. See docs/integration.md for
-# the clients' side, and the README's "Several instances".
+# the clients' side, and docs/instances.md.
 
 x-metadata: &metadata
   build: .
@@ -158,7 +158,7 @@ services:
 
   # The cache and the bus: a memory ceiling, the least recently used evicted,
   # no persistence — nothing durable lives here. Sized so that it never
-  # fills: a server evicting keys may forget who leads (see the README).
+  # fills: a server evicting keys may forget who leads (see docs/instances.md).
   cache:
     image: valkey/valkey:8-alpine
     container_name: arr-metadata-cache

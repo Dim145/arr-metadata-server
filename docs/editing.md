@@ -194,6 +194,13 @@ is done. The day each episode aired moves, and its broadcast instant (`airDateUt
 where there is one; each is locked at its new value, episode by episode, and stays so until
 its lock is lifted.
 
+### Importing a work on purpose
+
+The catalogue otherwise fills itself — a client asks for a work, this server
+fetches it. **Import** searches the providers directly and pulls in the one you
+meant, down the same path a client's request takes, so an imported work is
+indistinguishable from one that arrived on its own.
+
 ### Entering a work by hand
 
 *New entry* takes every field `POST /api/v1/items` does: the kind, the title, the year, the
@@ -225,7 +232,7 @@ trusted first, separated by commas —
 left out comes after the rest. The setting refuses a name it does not know and a name given
 twice. The numbering providers (TheTVDB, Skyhook) still lead the episode list whatever the
 order says, and an authority (AniList and MyAnimeList, for a studio) still replaces the rest;
-see *Whose episode numbering wins* in the [README](../README.md#whose-episode-numbering-wins).
+see [Whose episode numbering wins](sources.md#whose-episode-numbering-wins).
 
 An administrator puts it in order on the **Sources** page: a source moves a rank with its
 arrows, or is dragged onto another's place, and the matrix's columns follow. A run of moves is

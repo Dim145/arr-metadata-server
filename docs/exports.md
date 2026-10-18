@@ -1,12 +1,14 @@
-# Exports: Kometa, selections, and `.nfo` documents
+# Exports: Kometa, selections, feeds and `.nfo` documents
 
-This server hands its catalogue to other tools in files. Three exports are
+This server hands its catalogue to other tools in files and feeds. Four exports are
 documented here:
 
 - **Kometa's metadata file**, for a Plex library run by [Kometa](https://kometa.wiki):
   what has been locked here, to lay over what Plex's own agent found;
 - **a selection as a list**, as a text file of identifiers, an Atom feed or one of
   the import lists Sonarr and Radarr read;
+- **calendars and feeds**: the schedule and a work's dates for a calendar app, and what
+  arrives, airs and comes out for a feed reader;
 - **`.nfo` documents with their artwork**, for Plex, Kodi and Jellyfin.
 
 For a Plex Media Server that can call this server, the live route is the
@@ -106,9 +108,38 @@ in, under `/api/v1/lists/{slug or id}/`:
 | `ids.txt?kind=movie` or `?kind=series` | one Kometa library | only the films, or only the series |
 | `feed.atom` | a feed reader | Atom, the works that joined the selection most recently first |
 
-The first three are described with the other lists in the
-[README](../README.md#lists). The addresses of all of them are on the selection's
-page and in its editor, with a button to copy each.
+The first three are described with how a selection is composed, just below. The addresses
+of all of them are on the selection's page and in its editor, with a button to copy each.
+
+### Composing a selection, and importing it
+
+Whoever maintains the catalogue composes lists under *Lists* in the
+administration: a name, a description, what the list holds (series, films or
+both), and either its members by hand, in an order, or a filter — genres,
+keyword, years, score, status, language, network, order, how many — evaluated
+whenever the list is read. Each is a page on the site, under *Selections*,
+unless it is marked private; a work's own page says which hand-made
+selections hold it.
+
+Each list is also served in the shapes the clients import, so a selection
+made here becomes what those clients add on their own:
+
+| Client | Import list to add | Address | Shape |
+|---|---|---|---|
+| Sonarr | Settings → Import Lists → *Custom List* | `/api/v1/lists/{slug}/sonarr.json` | `[{ "title", "tvdbId" }]` — the series with a TheTVDB id |
+| Radarr | Settings → Lists → *Custom Lists* | `/api/v1/lists/{slug}/radarr.json` | `[{ "id", "title" }]` — the films with a TMDB id, `id` being it |
+| Radarr | Settings → Lists → *StevenLu Custom* | `/api/v1/lists/{slug}/stevenlu.json` | `[{ "title", "imdb_id" }]` — the films with an IMDb id |
+
+The addresses are on each list's page, with a button to copy them. They are
+read under the same rule as the page: open under public browsing, otherwise
+with a key appended (`?apikey=…` — that spelling, which Sonarr's and Radarr's
+logs redact; `api_key` works too but would be logged). A private list answers
+only whoever maintains the catalogue: an editor or an administrator, in person
+or through a key of theirs — a key limited to the `read` scope will do, so
+importing one asks for no key that could edit the catalogue — and a key that
+belongs to nobody, only with the `write` scope. Make the list public instead
+where neither is wanted. The whole list API is under `/api/v1/lists` and in
+the OpenAPI document.
 
 ### The text file for Kometa
 
@@ -158,6 +189,34 @@ Through the API, `cover` on `POST /api/v1/lists` and `PUT /api/v1/lists/{key}` t
 `https://` address of at most 2048 characters, or the `upload:` origin of a picture
 sent up; empty, it takes the cover away; left out, it stays. An `http://` address is
 refused with a `400` and says why: the site loads no picture over `http`.
+
+## Calendars and feeds
+
+The schedule — episodes and film releases — and one work's dates, as
+calendars a phone or a desktop subscribes to; what arrives, airs and comes
+out as Atom feeds a reader follows.
+Read under the same rule as the pages they mirror: open under public
+browsing, otherwise with a key, which a calendar app carries in the address
+(`?apikey=…`).
+
+| Feed | Path |
+|---|---|
+| The schedule: seven days back and twenty-eight ahead unless asked otherwise, at most sixty-two together | `/api/v1/calendar.ics?pastDays=7&futureDays=28&language=fr` |
+| One work: a series' dated episodes, or a film's releases, a day each | `/api/v1/items/{id}/calendar.ics` |
+| The fifty works most recently added | `/api/v1/feed/added.atom` |
+| The episodes airing and the films coming out from yesterday to a week ahead | `/api/v1/feed/airing.atom` |
+
+An episode whose time a provider knew is a timed event, as long as its runtime;
+one with only a date is an all-day event on it. Under public browsing the
+interface offers them — *Subscribe* on the schedule, *Add to my calendar* on a
+work, the feeds in the footer — as `webcal://` addresses where a calendar app
+expects one; otherwise it does not, since the app would arrive without a
+credential, and the addresses take a key as above. Links in a feed point at
+`AMS_PUBLIC_URL` when it is set — set it behind a [reverse proxy](reverse-proxy.md) — otherwise at
+the host and scheme the request came to, as the proxy forwarded them if it is
+among `AMS_TRUSTED_PROXIES`, or as the socket saw them. A window holding more
+episodes or releases than one answer carries is cut short and says so in an
+`X-AMS-Truncated` header.
 
 ## `.nfo` documents and their artwork
 

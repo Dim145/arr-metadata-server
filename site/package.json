@@ -1,0 +1,19 @@
+{
+  "name": "arr-metadata-server-docs",
+  "private": true,
+  "type": "module",
+  "description": "The documentation site, built from README.md and docs/*.md.",
+  "scripts": {
+    "sync": "node scripts/sync-docs.mjs",
+    "dev": "node scripts/sync-docs.mjs && astro dev",
+    "build": "node scripts/sync-docs.mjs && astro build && node scripts/check-links.mjs",
+    "preview": "astro preview"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "0.42.5",
+    "astro": "7.3.5"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}

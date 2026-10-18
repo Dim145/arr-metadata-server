@@ -3,6 +3,8 @@ target/
 frontend/dist/
 frontend/node_modules/
 node_modules/
+# The documentation site: built and published apart, never in the image.
+site/
 
 # Runtime state — never bake a database into an image
 data/

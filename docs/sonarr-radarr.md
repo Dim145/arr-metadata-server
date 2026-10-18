@@ -16,7 +16,7 @@ under them.
 Sonarr v4 asks `skyhook.sonarr.tv` under `/v1/`: `/v1/tvdb/shows/{language}/{id}`
 and `/v1/tvdb/search/{language}`. Its request builder pins the language to `en`
 whatever its own interface says: see *Languages* in the
-[README](../README.md#languages) for what it is answered in, and
+[Languages](languages.md) for what it is answered in, and
 [A note on languages](integration.md#a-note-on-languages).
 
 ### Sonarr v5
