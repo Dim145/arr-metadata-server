@@ -526,6 +526,35 @@ test.describe('settings', () => {
     }
   })
 
+  /**
+   * Failed refreshes are grouped for the kinds people read, and not for a
+   * program: the switch follows the kind chosen for a new destination until
+   * it is set by hand. Nothing is saved.
+   */
+  test('a new destination groups failed refreshes for people and not for a program', async ({ page }) => {
+    await signIn(page)
+    await page.goto('/admin/notifications')
+    await page.getByRole('button', { name: /add a destination|ajouter une destination/i }).click()
+
+    const editor = page.getByRole('dialog')
+    const kind = editor.getByLabel(/^(kind|sorte)$/i)
+    const grouped = editor.getByRole('switch', { name: /group failed refreshes|regrouper les échecs/i })
+
+    await kind.selectOption('discord')
+    await expect(grouped).toHaveAttribute('aria-checked', 'true')
+    await kind.selectOption('json')
+    await expect(grouped).toHaveAttribute('aria-checked', 'false')
+
+    // Set by hand, it stays whatever the kind.
+    await grouped.click()
+    await expect(grouped).toHaveAttribute('aria-checked', 'true')
+    await kind.selectOption('standard')
+    await expect(grouped).toHaveAttribute('aria-checked', 'true')
+
+    await page.keyboard.press('Escape')
+    await expect(editor).toHaveCount(0)
+  })
+
   /** The webhook moved to its own page; the settings say where. */
   test('the settings lead to the notifications', async ({ page }) => {
     await signIn(page)

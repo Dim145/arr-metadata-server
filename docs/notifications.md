@@ -42,7 +42,10 @@ Each destination ticks its own events:
 
 - **Every event** (`*`), those added in later versions included.
 - **What happens on its own**, three facts nobody did: `refresh.failed`, once, when a
-  work starts failing — not at each try while it goes on; `media.failed`, a picture or
+  work starts failing — not at each try while it goes on, and not for a supplement
+  that did not answer (TVmaze, Fanart.tv, AniList, MyAnimeList): the work is
+  refreshed all the same ([grouped](#failed-refreshes-grouped) for the kinds people
+  read); `media.failed`, a picture or
   a theme whose every fetch failed; `update.available`, once per version, while the
   check for a newer version (`updates.check`) is on.
 - **Any action of the audit trail**: `item.imported`, `item.created`, `item.deleted`,
@@ -60,6 +63,30 @@ token. Changes to the destinations are in the audit trail too —
 `notification.created`, `notification.updated`, `notification.deleted` — by name, never
 with the address or the token, and can be told to a destination like any other
 action.
+
+## Failed refreshes, grouped
+
+A destination with **Group failed refreshes** on is not posted a message for each work
+whose refresh failed. The failures wait five minutes from the first, then go as one
+`refresh.failed` message: how many, counted by cause — the source and the kind of
+failure — and the first works named.
+
+```
+34 refreshes failed since 2026-10-18T02:10:04Z
+TheTVDB — timed out: 31
+TMDB — 404 Not Found: 3
+“Breaking Bad” (series 01…), “Dark” (series 01…), …, and 26 more
+```
+
+An outage of a source is one message rather than one per work it touched; a failure
+alone in its five minutes goes as it came. The message's title carries the count
+(`refresh.failed × 34`), and its JSON a `count` field, without a `target`.
+
+It is on by default for the kinds people read — Discord, Slack, ntfy, Gotify,
+Apprise — and off for `standard` and `json`, read by programs that want an event per
+work; the destination's form switches it, and the API takes `grouped`. What waits is
+held in memory: a restart within the five minutes loses it, and each of several
+instances groups its own.
 
 ## Verifying a Standard Webhooks signature
 
@@ -185,8 +212,8 @@ All of it for administrators, under `/api/v1`, and in the OpenAPI document:
 | Route | What it does |
 |---|---|
 | `GET /admin/webhooks/events` | The facts, the audit trail's actions, the default events and the kinds. |
-| `GET /admin/notifications` | Every destination: `address` masked past the host, `secretSet`, `events`, `enabled`, `disabledReason`, and the counts of its log. |
-| `POST /admin/notifications` | Add one: `{name, kind, address, token?, events?, enabled?}`. A `standard` one's `secret` is in this answer only. |
+| `GET /admin/notifications` | Every destination: `address` masked past the host, `secretSet`, `events`, `enabled`, `grouped`, `disabledReason`, and the counts of its log. |
+| `POST /admin/notifications` | Add one: `{name, kind, address, token?, events?, enabled?, grouped?}` — `grouped` left out follows the kind. A `standard` one's `secret` is in this answer only. |
 | `PATCH /admin/notifications/{id}` | Change one; each field left out stays. An empty `address` keeps it; `token` left out keeps it, empty removes it. Made `standard`, its new `secret` is in the answer. |
 | `DELETE /admin/notifications/{id}` | Delete one, with its log. |
 | `POST /admin/notifications/{id}/secret` | Make a standard destination's signing secret anew; shown in the answer only. |

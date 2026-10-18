@@ -672,6 +672,10 @@ when AniList or MyAnimeList, which often alone set it, did not answer. The
 work is then marked as refreshed in part: its refresh error, which editors
 see, names the providers that failed, and it is tried again within six
 hours, or sooner near an air date, rather than a full interval later.
+A supplement that fails — TVmaze, Fanart.tv, AniList, MyAnimeList, the
+Fankai wiki — has what it gave before put back all the same, but leaves
+the work refreshed: no refresh error, no `refresh.failed`. The log says
+which did not answer.
 
 A provider that answers `429` — or `503` with a `Retry-After` — is left
 alone for as long as it asks, a minute at most, by every request at once;

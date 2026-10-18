@@ -60,6 +60,9 @@ pub struct Destination {
     /// The names of the events it is told of; `*` for every one.
     pub events: Vec<String>,
     pub enabled: bool,
+    /// Whether failed refreshes are told to it together, a few minutes'
+    /// worth in one message, rather than one message per work.
+    pub grouped: bool,
     /// Why the server switched it off, when it did.
     pub disabled_reason: Option<String>,
     pub disabled_at: Option<String>,
@@ -67,8 +70,8 @@ pub struct Destination {
     pub updated_at: String,
 }
 
-const DESTINATION_COLUMNS: &str = "id, name, kind, url, secret, events, enabled, disabled_reason, \
-     disabled_at, created_at, updated_at";
+const DESTINATION_COLUMNS: &str = "id, name, kind, url, secret, events, enabled, grouped, \
+     disabled_reason, disabled_at, created_at, updated_at";
 
 fn destination(row: &AnyRow) -> Result<Destination, sqlx::Error> {
     Ok(Destination {
@@ -79,6 +82,7 @@ fn destination(row: &AnyRow) -> Result<Destination, sqlx::Error> {
         secret: row.opt_text("secret")?,
         events: row.text_list("events")?,
         enabled: row.flag("enabled")?,
+        grouped: row.flag("grouped")?,
         disabled_reason: row.opt_text("disabled_reason")?,
         disabled_at: row.opt_text("disabled_at")?,
         created_at: row.text("created_at")?,
@@ -94,6 +98,7 @@ pub struct NewDestination<'a> {
     pub secret: Option<&'a str>,
     pub events: &'a [String],
     pub enabled: bool,
+    pub grouped: bool,
 }
 
 pub async fn create(db: &Db, new: &NewDestination<'_>) -> Result<Destination> {
@@ -101,8 +106,8 @@ pub async fn create(db: &Db, new: &NewDestination<'_>) -> Result<Destination> {
     let at = now();
     sqlx::query(db.sql(
         "INSERT INTO webhook_destination
-             (id, name, kind, url, secret, events, enabled, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             (id, name, kind, url, secret, events, enabled, grouped, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     ))
     .bind(&id)
     .bind(new.name)
@@ -111,6 +116,7 @@ pub async fn create(db: &Db, new: &NewDestination<'_>) -> Result<Destination> {
     .bind(new.secret)
     .bind(text_list(new.events))
     .bind(from_bool(new.enabled))
+    .bind(from_bool(new.grouped))
     .bind(&at)
     .bind(&at)
     .execute(db.pool())
@@ -124,6 +130,7 @@ pub async fn create(db: &Db, new: &NewDestination<'_>) -> Result<Destination> {
         secret: new.secret.map(str::to_string),
         events: new.events.to_vec(),
         enabled: new.enabled,
+        grouped: new.grouped,
         disabled_reason: None,
         disabled_at: None,
         created_at: at.clone(),
@@ -182,7 +189,7 @@ pub async fn save(db: &Db, destination: &Destination) -> Result<bool> {
     let mut tx = db.begin_write().await?;
     let written = sqlx::query(db.sql(
         "UPDATE webhook_destination
-         SET name = ?, kind = ?, url = ?, secret = ?, events = ?, enabled = ?,
+         SET name = ?, kind = ?, url = ?, secret = ?, events = ?, enabled = ?, grouped = ?,
              disabled_reason = ?, disabled_at = ?, updated_at = ?
          WHERE id = ?",
     ))
@@ -192,6 +199,7 @@ pub async fn save(db: &Db, destination: &Destination) -> Result<bool> {
     .bind(destination.secret.as_deref())
     .bind(text_list(&destination.events))
     .bind(from_bool(destination.enabled))
+    .bind(from_bool(destination.grouped))
     .bind(destination.disabled_reason.as_deref())
     .bind(destination.disabled_at.as_deref())
     .bind(now())

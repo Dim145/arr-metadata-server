@@ -28,6 +28,7 @@
 //! topic, the secret that lets anyone post there: like a signing secret or a
 //! token, it is kept out of the log, and the API shows only its host.
 
+mod digest;
 mod kinds;
 
 use std::{
@@ -189,6 +190,9 @@ pub struct Hooks {
     wake: Notify,
     /// The events of each destination switched on, as last read.
     wanted: parking_lot::RwLock<Vec<Vec<String>>>,
+    /// The failed refreshes waiting to be told together, for each
+    /// destination that groups them.
+    digest: digest::Digest,
 }
 
 impl Hooks {
@@ -219,6 +223,7 @@ impl Hooks {
             client,
             wake: Notify::new(),
             wanted: parking_lot::RwLock::new(Vec::new()),
+            digest: digest::Digest::default(),
         })
     }
 
@@ -269,6 +274,7 @@ pub async fn notify(state: &AppState, happening: Happening) {
         target: happening.target,
         detail: happening.detail,
         at: at_now(),
+        count: None,
     };
     owe(state, &told).await;
 }
@@ -282,6 +288,7 @@ pub fn tell(state: &AppState, fact: Fact, target: Option<String>, detail: Option
         target,
         detail,
         at: at_now(),
+        count: None,
     };
     let state = state.clone();
     tokio::spawn(async move { owe(&state, &told).await });
@@ -305,15 +312,25 @@ pub fn refresh_failed(state: &AppState, id: &str, work: Option<&MediaItem>, erro
         Some(work) => named_work(id, &work.title, work.kind),
         None => id.to_string(),
     };
-    tell(
-        state,
-        Fact::RefreshFailed,
-        Some(id.to_string()),
-        Some(format!(
+    let told = Told {
+        event: Fact::RefreshFailed.as_str().to_string(),
+        actor: Some(SYSTEM.to_string()),
+        target: Some(id.to_string()),
+        detail: Some(format!(
             "{named}: {}",
             crate::providers::clip(error, ERROR_CHARS)
         )),
-    );
+        at: at_now(),
+        count: None,
+    };
+    // Held a few minutes for a destination that groups failures, and told
+    // with the others then (see `digest`); owed at once to the rest.
+    let failure = digest::Failure {
+        cause: digest::cause(error),
+        named,
+    };
+    let state = state.clone();
+    tokio::spawn(async move { owe_holding(&state, &told, Some(&failure)).await });
 }
 
 /// A medium given up on, its tries spent: `media.failed`, with the address
@@ -426,6 +443,13 @@ fn at_now() -> String {
 /// Owe what is told to every destination switched on that wants it: a
 /// delivery each, under one message id, and the worker woken.
 async fn owe(state: &AppState, told: &Told) {
+    owe_holding(state, told, None).await;
+}
+
+/// Owe a fact to every destination that wants it — or, a failed refresh
+/// (`failure`) for a destination that groups them, hold it to be told with
+/// the others.
+async fn owe_holding(state: &AppState, told: &Told, failure: Option<&digest::Failure>) {
     // Alone, the destinations as last read are the destinations: every
     // change to them is made here, and read again at once. Among several,
     // one may have been added elsewhere a moment ago, and the table is asked.
@@ -457,6 +481,15 @@ async fn owe(state: &AppState, told: &Told) {
     let message_id = kinds::message_id();
     let mut owed = false;
     for destination in wanting {
+        if destination.grouped
+            && let Some(failure) = failure
+        {
+            state
+                .webhooks
+                .digest
+                .hold(&destination.id, told, failure.clone());
+            continue;
+        }
         match repo::webhook::enqueue(
             &state.db,
             &destination.id,
@@ -548,6 +581,8 @@ async fn adopt_the_settings(state: &AppState) -> anyhow::Result<()> {
                     secret: None,
                     events: &names,
                     enabled: true,
+                    // A program reads it: an event per work.
+                    grouped: false,
                 },
             )
             .await?;
@@ -613,6 +648,10 @@ pub async fn run(state: AppState) {
             Err(e) => tracing::warn!(error = %e, "could not give up on spent deliveries"),
         }
 
+        // What waited its window to be told together, owed now: the batch
+        // just below sends it.
+        tell_grouped(&state).await;
+
         loop {
             match batch(&state).await {
                 Ok(taken) if taken < BATCH as usize => break,
@@ -633,8 +672,47 @@ pub async fn run(state: AppState) {
             pruned = Some(Instant::now());
         }
 
-        let pause = until_next(&state).await;
+        let pause = until_next(&state)
+            .await
+            .min(state.webhooks.digest.until_due().unwrap_or(LOOK_EVERY))
+            .max(SHORTEST_PAUSE);
         let _ = tokio::time::timeout(pause, state.webhooks.wake.notified()).await;
+    }
+}
+
+/// Owe each destination that groups failed refreshes the message its
+/// window made, once the window is past.
+async fn tell_grouped(state: &AppState) {
+    owe_grouped(state, state.webhooks.digest.due()).await;
+}
+
+/// Owe each destination its grouped message.
+async fn owe_grouped(state: &AppState, due: Vec<(String, Told)>) {
+    for (destination, told) in due {
+        let payload = match serde_json::to_string(&told) {
+            Ok(payload) => payload,
+            Err(e) => {
+                tracing::warn!(error = %e, "the grouped failures could not be written");
+                continue;
+            }
+        };
+        match repo::webhook::enqueue(
+            &state.db,
+            &destination,
+            &kinds::message_id(),
+            &told.event,
+            &payload,
+            MOST_PENDING,
+        )
+        .await
+        {
+            Ok(_) => {}
+            // Removed while its failures waited, as like as not.
+            Err(e) => tracing::warn!(
+                error = %e,
+                "the grouped failures could not be owed to their destination"
+            ),
+        }
     }
 }
 
@@ -1167,6 +1245,7 @@ pub async fn test(state: &AppState, destination: &Destination, by: &str) -> Outc
         target: None,
         detail: Some(TEST_DETAIL.to_string()),
         at: at_now(),
+        count: None,
     };
     match kinds::post(
         kind,
@@ -1461,10 +1540,103 @@ mod tests {
                     .then_some("whsec_C2FVsBQIhrscChlQIMV+b5sSYspob7oD"),
                 events: &names(events),
                 enabled: true,
+                grouped: false,
             },
         )
         .await
         .expect("a destination")
+    }
+
+    #[tokio::test]
+    async fn failed_refreshes_are_held_together_for_who_groups_them_and_owed_at_once_to_the_rest() {
+        let state = crate::api::native::testing::server().await;
+        let people = repo::webhook::create(
+            &state.db,
+            &NewDestination {
+                name: "phone",
+                kind: Kind::Ntfy.as_str(),
+                url: "https://ntfy.example.com/ams",
+                secret: None,
+                events: &names(&["refresh.failed"]),
+                enabled: true,
+                grouped: true,
+            },
+        )
+        .await
+        .expect("a destination");
+        let program = destination(&state, Kind::Json, &["refresh.failed"]).await;
+        state.webhooks.reload(&state.db).await.expect("read");
+
+        for (id, error) in [
+            (
+                "w1",
+                "refreshed in part; kept what these gave before — tvdb: timed out",
+            ),
+            (
+                "w2",
+                "refreshed in part; kept what these gave before — tvdb: timed out",
+            ),
+            (
+                "w3",
+                "refreshed in part; kept what these gave before — tmdb: TMDB returned 404 Not Found for /3/tv/1: {}",
+            ),
+        ] {
+            let named = format!("“Work {id}” (series {id})");
+            let told = Told {
+                event: Fact::RefreshFailed.as_str().to_string(),
+                actor: Some(SYSTEM.to_string()),
+                target: Some(id.to_string()),
+                detail: Some(format!("{named}: {error}")),
+                at: at_now(),
+                count: None,
+            };
+            let failure = digest::Failure {
+                cause: digest::cause(error),
+                named,
+            };
+            owe_holding(&state, &told, Some(&failure)).await;
+        }
+
+        // A program wants an event per work, and is owed each at once.
+        let (owed, total) = repo::webhook::log(&state.db, &program.id, 10, 0)
+            .await
+            .expect("log");
+        assert_eq!(total, 3);
+        let told: Told = serde_json::from_str(&owed[0].payload).expect("what was told");
+        assert_eq!(told.count, None);
+        // The phone waits for the window.
+        let (_, total) = repo::webhook::log(&state.db, &people.id, 10, 0)
+            .await
+            .expect("log");
+        assert_eq!(total, 0);
+
+        // Its window past, one message, counting the three by cause.
+        owe_grouped(
+            &state,
+            state
+                .webhooks
+                .digest
+                .due_at(Instant::now() + digest::WINDOW),
+        )
+        .await;
+        let (owed, total) = repo::webhook::log(&state.db, &people.id, 10, 0)
+            .await
+            .expect("log");
+        assert_eq!(total, 1);
+        let told: Told = serde_json::from_str(&owed[0].payload).expect("what was told");
+        assert_eq!(told.event, "refresh.failed");
+        assert_eq!(told.count, Some(3));
+        assert_eq!(told.target, None);
+        let detail = told.detail.unwrap_or_default();
+        assert!(detail.starts_with("3 refreshes failed since "), "{detail}");
+        assert!(
+            detail.contains("\nTheTVDB — timed out: 2\nTMDB — 404 Not Found: 1\n"),
+            "{detail}"
+        );
+        assert!(
+            detail.ends_with("“Work w1” (series w1), “Work w2” (series w2), “Work w3” (series w3)"),
+            "{detail}"
+        );
     }
 
     #[test]
@@ -1913,6 +2085,7 @@ mod tests {
                 secret: None,
                 events: &names(&["*"]),
                 enabled: true,
+                grouped: false,
             },
         )
         .await
@@ -2095,6 +2268,7 @@ mod tests {
                     secret: None,
                     events: &names(&["*"]),
                     enabled: true,
+                    grouped: false,
                 },
             )
             .await

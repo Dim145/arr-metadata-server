@@ -94,8 +94,10 @@ Sonarr's metadata service — and does what both did, from one catalogue.
   each for the events ticked for it. To begin with, the events are what enters
   and leaves the catalogue: `item.imported`, `item.created`, `item.deleted` and
   `dataset.imported`; `*` is every one. Three facts nobody did are among them:
-  `refresh.failed`, once when a work starts failing; `media.failed`, a picture
-  or theme whose every try failed; `update.available`. What a destination does
+  `refresh.failed`, once when a work starts failing — grouped into one
+  message every five minutes for Discord, Slack, ntfy, Gotify and Apprise;
+  `media.failed`, a picture or theme whose every try failed;
+  `update.available`. What a destination does
   not take is tried again for a day and more, and what it was told is kept
   thirty days in its log, with a test and a replay for each. A failed sign-in is
   posted without the name that was typed, and a destination's address and

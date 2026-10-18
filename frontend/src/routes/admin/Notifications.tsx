@@ -69,6 +69,9 @@ const MOST_ATTEMPTS = 8
 /** The kinds that keep a token their service gave. */
 const TOKEN_KINDS: WebhookKind[] = ['ntfy', 'gotify']
 
+/** The kinds people read — a chat, a phone — told of failed refreshes together by default. */
+const READ_BY_PEOPLE: WebhookKind[] = ['discord', 'slack', 'ntfy', 'gotify', 'apprise']
+
 /**
  * The origin an address is at — its scheme, host and port — or null for what
  * is no address. The address a destination is listed with is masked after
@@ -401,6 +404,10 @@ function Editor({
   const [dropToken, setDropToken] = useState(false)
   const [events, setEvents] = useState<string[]>(destination?.events ?? known.defaults)
   const [enabled, setEnabled] = useState(destination?.enabled ?? true)
+  // Failed refreshes told together: by default for the kinds people read,
+  // following the kind chosen for a new one until it is set by hand.
+  const [grouped, setGrouped] = useState(destination?.grouped ?? READ_BY_PEOPLE.includes(kind))
+  const [groupedSet, setGroupedSet] = useState(Boolean(destination))
   const [rotating, setRotating] = useState(false)
 
   const takesToken = TOKEN_KINDS.includes(kind)
@@ -420,7 +427,7 @@ function Editor({
 
   const save = useMutation({
     mutationFn: () => {
-      const body: WebhookDestinationInput = { name: name.trim(), kind, events, enabled }
+      const body: WebhookDestinationInput = { name: name.trim(), kind, events, enabled, grouped }
       if (address.trim()) body.address = address.trim()
       if (takesToken) {
         if (dropping) body.token = ''
@@ -474,7 +481,9 @@ function Editor({
               id="notification-kind"
               value={kind}
               onChange={(event) => {
-                setKind(event.target.value as WebhookKind)
+                const next = event.target.value as WebhookKind
+                setKind(next)
+                if (!groupedSet) setGrouped(READ_BY_PEOPLE.includes(next))
                 if (save.isError) save.reset()
               }}
             >
@@ -605,6 +614,24 @@ function Editor({
           <label htmlFor="notification-enabled" className="text-sm text-bone">
             {n.on}
           </label>
+        </div>
+
+        <div className="flex items-start gap-3">
+          <Toggle
+            id="notification-grouped"
+            checked={grouped}
+            label={n.grouped}
+            onChange={(next) => {
+              setGrouped(next)
+              setGroupedSet(true)
+            }}
+          />
+          <div className="min-w-0">
+            <label htmlFor="notification-grouped" className="block text-sm text-bone">
+              {n.grouped}
+            </label>
+            <p className="mt-0.5 max-w-prose text-xs leading-relaxed text-bone-faint">{n.groupedHint}</p>
+          </div>
         </div>
 
         <EventPicker value={events} known={known} onChange={setEvents} disabled={save.isPending} />

@@ -658,6 +658,8 @@ export interface WebhookDestination {
   /** The events it is told of; `*` for every one. */
   events: string[]
   enabled: boolean
+  /** Whether failed refreshes are told to it together, a few minutes' worth in one message. */
+  grouped: boolean
   /** Why the server switched it off: an address that answered 410 Gone. */
   disabledReason?: string
   disabledAt?: string
@@ -676,6 +678,8 @@ export interface WebhookDestinationInput {
   token?: string
   events?: string[]
   enabled?: boolean
+  /** Left out on a new one: on for the kinds people read, off for standard and json. */
+  grouped?: boolean
 }
 
 /** One thing told, as a delivery keeps it. */

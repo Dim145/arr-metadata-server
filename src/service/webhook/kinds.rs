@@ -100,6 +100,18 @@ impl Kind {
     }
 }
 
+impl Kind {
+    /// Whether people read what it is posted — a chat, a phone — rather
+    /// than a program: they are told of failed refreshes together, by
+    /// default (see `digest`).
+    pub fn read_by_people(self) -> bool {
+        matches!(
+            self,
+            Self::Discord | Self::Slack | Self::Ntfy | Self::Gotify | Self::Apprise
+        )
+    }
+}
+
 /// One thing told, as a delivery keeps it: the event, who did it, to what,
 /// what is worth saying of it, and when.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -112,6 +124,10 @@ pub struct Told {
     pub detail: Option<String>,
     /// When it happened, in RFC 3339.
     pub at: String,
+    /// How many things it tells of together — failed refreshes grouped for
+    /// a destination — when there are more than one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub count: Option<u32>,
 }
 
 /// A post, ready to send.
@@ -315,7 +331,10 @@ pub fn line(told: &Told) -> String {
 
 /// A notification's title: what it is about.
 fn title(told: &Told) -> String {
-    format!("{NAME} · {}", told.event)
+    match told.count {
+        Some(count) if count > 1 => format!("{NAME} · {} × {count}", told.event),
+        _ => format!("{NAME} · {}", told.event),
+    }
 }
 
 /// A notification's body: to what, what, by whom. The target is left out
@@ -427,6 +446,7 @@ mod tests {
             target: target.map(String::from),
             detail: detail.map(String::from),
             at: "2026-10-11T08:00:00Z".into(),
+            count: None,
         }
     }
 

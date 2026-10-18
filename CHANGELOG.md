@@ -7,6 +7,28 @@ may change what the API or the configuration means, and says so here.
 
 ## [Unreleased]
 
+### Added
+
+- **Failed refreshes, grouped.** A notification destination can be told of
+  failed refreshes together: they wait five minutes from the first, then go
+  as one `refresh.failed` message — how many, counted by cause (the source
+  and the kind of failure: `TheTVDB — timed out: 31`), the first works
+  named — rather than one message per work; an outage of a source is one
+  message. On by default for Discord, Slack, ntfy, Gotify and Apprise, and
+  for the destinations of those kinds already made; off for `standard` and
+  `json`, read by programs that want an event per work. Switched on the
+  destination's form, `grouped` in the API; the message's JSON carries a
+  `count`.
+
+### Changed
+
+- A supplement that does not answer — TVmaze, Fanart.tv, AniList,
+  MyAnimeList, the Fankai wiki — no longer makes a work's refresh a failed
+  one. What it gave before is kept, as it was, and the log says it did not
+  answer; but the work is refreshed: no refresh error, not counted among the
+  works whose refresh failed, and no `refresh.failed`. A hiccup of TVmaze
+  flagged and told of every series refreshed meanwhile.
+
 ### Fixed
 
 - TVmaze is given a minute in a background task — a refresh, a seed — and

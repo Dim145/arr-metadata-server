@@ -99,6 +99,9 @@ pub struct DestinationView {
     /// The events it is told of; `*` for every one.
     pub events: Vec<String>,
     pub enabled: bool,
+    /// Whether failed refreshes are told to it together: a few minutes'
+    /// worth in one message, counted by cause, rather than one per work.
+    pub grouped: bool,
     /// Why the server switched it off, when it did: an address that
     /// answered 410 Gone.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -122,6 +125,7 @@ fn view(destination: Destination, counts: Counts, secret: Option<String>) -> Des
         kind: destination.kind,
         events: destination.events,
         enabled: destination.enabled,
+        grouped: destination.grouped,
         disabled_reason: destination.disabled_reason,
         disabled_at: destination.disabled_at,
         created_at: destination.created_at,
@@ -180,6 +184,12 @@ pub struct DestinationInput {
     /// what enters and leaves the catalogue.
     pub events: Option<Vec<String>>,
     pub enabled: Option<bool>,
+    /// Whether failed refreshes are told to it together: a few minutes'
+    /// worth in one message, counted by cause. Left out on a new one, on for
+    /// the kinds people read — discord, slack, ntfy, gotify, apprise — and
+    /// off for standard and json, read by programs that want an event per
+    /// work; left out on a change, it stays as it is.
+    pub grouped: Option<bool>,
 }
 
 /// The kind asked for, or why it is not one.
@@ -249,6 +259,7 @@ async fn create(
             secret: secret.as_deref(),
             events: &events,
             enabled: input.enabled.unwrap_or(true),
+            grouped: input.grouped.unwrap_or(kind.read_by_people()),
         },
     )
     .await?;
@@ -348,6 +359,10 @@ async fn change(
     let (secret, shown) = secret_to_keep(next)?;
     after.secret = secret;
 
+    if let Some(grouped) = input.grouped {
+        after.grouped = grouped;
+    }
+
     if let Some(enabled) = input.enabled
         && enabled != before.enabled
     {
@@ -364,6 +379,7 @@ async fn change(
         ("address", after.url != before.url),
         ("secret", after.secret != before.secret),
         ("events", after.events != before.events),
+        ("grouping", after.grouped != before.grouped),
     ] {
         if differs {
             changed.push(what);
@@ -768,6 +784,7 @@ mod tests {
             token: None,
             events: None,
             enabled: None,
+            grouped: None,
         }
     }
 
@@ -779,6 +796,7 @@ mod tests {
             token: None,
             events: None,
             enabled: None,
+            grouped: None,
         }
     }
 
@@ -953,6 +971,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn failed_refreshes_are_grouped_for_people_and_not_for_programs_unless_asked() {
+        let state = crate::api::native::testing::server().await;
+        let made = |kind: &'static str| {
+            let state = state.clone();
+            async move {
+                let (_, Json(made)) = create(
+                    State(state.clone()),
+                    admin(),
+                    ip(&state).await,
+                    Json(input(kind, kind, "https://hooks.example.com/in")),
+                )
+                .await
+                .expect("made");
+                made
+            }
+        };
+        // Read by people: grouped. Read by a program: an event per work.
+        assert!(made("discord").await.grouped);
+        let json = made("json").await;
+        assert!(!json.grouped);
+
+        // Asked for, it is; left out on a change, it stays.
+        let Json(changed) = change(
+            State(state.clone()),
+            admin(),
+            ip(&state).await,
+            Path(json.id.clone()),
+            Json(DestinationInput {
+                grouped: Some(true),
+                ..nothing()
+            }),
+        )
+        .await
+        .expect("changed");
+        assert!(changed.grouped);
+        let Json(renamed) = change(
+            State(state.clone()),
+            admin(),
+            ip(&state).await,
+            Path(json.id.clone()),
+            Json(DestinationInput {
+                name: Some("Renamed".into()),
+                ..nothing()
+            }),
+        )
+        .await
+        .expect("changed");
+        assert!(renamed.grouped);
+    }
+
+    #[tokio::test]
     async fn a_token_is_kept_unseen_and_the_address_stays_when_left_out() {
         let state = crate::api::native::testing::server().await;
         let (_, Json(made)) = create(
@@ -1046,6 +1115,7 @@ mod tests {
                 secret: None,
                 events: &["*".to_string()],
                 enabled: true,
+                grouped: false,
             },
         )
         .await

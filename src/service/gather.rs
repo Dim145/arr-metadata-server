@@ -493,8 +493,16 @@ async fn store(state: &AppState, gathered: Gathered) -> Result<Option<MediaItem>
         .map(|a| (a.provider.to_string(), a.payload.clone()))
         .collect();
 
-    let failure = failure_note(&failed, &answers);
-    let before = match &failure {
+    // Everything that did not answer in full: what is kept from before, and
+    // what the log says.
+    let missing = failure_note(&failed, &answers, |_| true);
+    // What the work is said to have failed by — its refresh error, and the
+    // notification of it — counts the sources it is made from. A supplement
+    // that did not answer leaves it refreshed, with what it gave before.
+    let failure = failure_note(&failed, &answers, |provider| {
+        !SUPPLEMENTS.contains(&provider)
+    });
+    let before = match &missing {
         Some(_) => held_before(state, &answers).await,
         None => None,
     };
@@ -540,10 +548,10 @@ async fn store(state: &AppState, gathered: Gathered) -> Result<Option<MediaItem>
         return Ok(None);
     }
 
-    if let Some(failure) = &failure {
+    if let Some(missing) = &missing {
         tracing::warn!(
             title = %merged.title,
-            failure = %failure,
+            failure = %missing,
             "a refresh some providers did not answer; what they gave before is kept"
         );
     }
@@ -552,14 +560,22 @@ async fn store(state: &AppState, gathered: Gathered) -> Result<Option<MediaItem>
     Ok(Some(stored))
 }
 
-/// What did not answer, as the work's `refreshError` says it — `None` when
-/// everything asked answered in full.
-fn failure_note(failed: &[Failure], answers: &[Answer]) -> Option<String> {
+/// What did not answer among the providers `counts` names, as the work's
+/// `refreshError` says it — `None` when all of those asked answered in full.
+fn failure_note(
+    failed: &[Failure],
+    answers: &[Answer],
+    counts: impl Fn(&str) -> bool,
+) -> Option<String> {
     let mut parts: Vec<String> = failed
         .iter()
+        .filter(|f| counts(f.provider))
         .map(|f| format!("{}: {}", f.provider, f.error))
         .collect();
-    for answer in answers.iter().filter(|a| !a.unanswered_seasons.is_empty()) {
+    for answer in answers
+        .iter()
+        .filter(|a| counts(a.provider) && !a.unanswered_seasons.is_empty())
+    {
         let seasons: Vec<String> = answer
             .unanswered_seasons
             .iter()
@@ -1774,6 +1790,38 @@ mod tests {
         }];
         keep_adult(&mut answered, &stored, &other);
         assert!(!answered.is_adult);
+    }
+
+    #[test]
+    fn a_supplement_that_did_not_answer_is_kept_from_before_and_fails_nothing() {
+        let principal = |provider: &str| !SUPPLEMENTS.contains(&provider);
+        let tvmaze = [Failure {
+            provider: names::TVMAZE,
+            error: "timed out".into(),
+        }];
+        // What it gave before is kept, and the log says why…
+        assert!(
+            failure_note(&tvmaze, &[], |_| true)
+                .is_some_and(|note| note.contains("tvmaze: timed out"))
+        );
+        // …but the work did not fail: no error on it, nobody told.
+        assert_eq!(failure_note(&tvmaze, &[], principal), None);
+
+        // A source the work is made from failing is the work's failure, and
+        // it is said alone.
+        let both = [
+            Failure {
+                provider: names::TVDB,
+                error: "401 Unauthorized".into(),
+            },
+            Failure {
+                provider: names::FANART,
+                error: "timed out".into(),
+            },
+        ];
+        let said = failure_note(&both, &[], principal).expect("TheTVDB's failure is the work's");
+        assert!(said.contains("tvdb: 401 Unauthorized"), "{said}");
+        assert!(!said.contains("fanart"), "{said}");
     }
 
     /// A season the provider lists again after a person added it by hand,

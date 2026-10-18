@@ -1508,6 +1508,9 @@ export const fr: Dict = {
       rotateConfirm: 'Le créer',
       on: 'Active',
       off: 'Coupée',
+      grouped: 'Regrouper les échecs de rafraîchissement',
+      groupedHint:
+        'Les échecs attendent cinq minutes à partir du premier et arrivent en un seul message, comptés par cause, plutôt qu’un message par fiche. Laissez-le désactivé pour un programme qui attend un événement par fiche.',
       sendTo: (name: string) => `Envoyer à ${name}`,
       offWhy: 'Coupée par le serveur :',
       editFor: (name: string) => `Modifier ${name}`,

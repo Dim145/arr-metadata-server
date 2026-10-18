@@ -1499,6 +1499,9 @@ export const en = {
       rotateConfirm: 'Make it',
       on: 'On',
       off: 'Off',
+      grouped: 'Group failed refreshes',
+      groupedHint:
+        'Failed refreshes wait five minutes from the first and come as one message, counted by cause, rather than one message per work. Leave it off for a program that wants an event per work.',
       sendTo: (name: string) => `Send to ${name}`,
       offWhy: 'Switched off by the server:',
       editFor: (name: string) => `Change ${name}`,
