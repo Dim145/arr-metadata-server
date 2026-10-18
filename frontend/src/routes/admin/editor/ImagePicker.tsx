@@ -96,7 +96,7 @@ export function ImagePicker({
   /** An address chosen or typed: the caller keeps it. Rejects with what to say. */
   onChoose: (url: string) => Promise<unknown>
   /** A file kept by the server: the caller claims it, where the server has not already. */
-  onUploaded?: (uploaded: Uploaded) => Promise<unknown>
+  onUploaded?: (uploaded: Uploaded) => Promise<unknown> | void
   /** The words on the button, per source; "choose and lock" by default. */
   confirm?: Partial<Record<Source, string>>
   /** The line under the panel, per source. */
@@ -269,6 +269,7 @@ export function ImagePicker({
 
         {/* Where the picture comes from: tabs, where there is more than one. */}
         {sources.length > 1 ? (
+          // eslint-disable-next-line jsx-a11y/interactive-supports-focus -- the tabs take the focus, one at a time; the list hears their arrows
           <div
             role="tablist"
             aria-label={title}

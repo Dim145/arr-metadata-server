@@ -514,7 +514,7 @@ export function SeasonsTab({
           uploadFields={{ episode: `${picking.episode.seasonNumber}x${picking.episode.episodeNumber}` }}
           onChoose={(address) => chooseStill(picking.episode, address)}
           // A still sent as a file locks the field as it lands: nothing more to claim.
-          onUploaded={async () => onChanged()}
+          onUploaded={() => onChanged()}
         />
       ) : (
         <ImagePicker

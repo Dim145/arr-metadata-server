@@ -43,6 +43,7 @@ export function Segmented<T extends string>({
   const name = useId()
 
   return (
+    // eslint-disable-next-line jsx-a11y/interactive-supports-focus -- the radios take the focus, one at a time; the group hears their keys
     <div
       role="radiogroup"
       aria-label={label}

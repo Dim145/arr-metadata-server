@@ -24,9 +24,10 @@ import { Link, NavLink, useLocation } from 'react-router'
 import { api, query } from '../lib/api'
 import { cn } from '../lib/cn'
 import { useHasLists } from '../lib/hooks'
-import { LANGS, LANGUAGES, useI18n, type Dict } from '../lib/i18n'
+import { useI18n, type Dict } from '../lib/i18n'
 import { genreLabel } from '../lib/labels'
 import type { Facets, Me } from '../lib/types'
+import { LanguageToggle } from './LanguageToggle'
 import { SignOut } from './SignOut'
 import { ThemeToggle } from './ThemeToggle'
 import { Glyph, Skeleton, type GlyphName } from './ui'
@@ -153,6 +154,7 @@ export function BrowseTab() {
   const movies = useKindFacets('movie', armed)
 
   return (
+    // eslint-disable-next-line jsx-a11y/no-static-element-interactions -- the group only listens to its controls: a mouse over them, Escape, the focus leaving
     <div
       ref={group}
       className="relative"
@@ -170,7 +172,7 @@ export function BrowseTab() {
         }
       }}
       onBlur={(event) => {
-        if (!group.current?.contains(event.relatedTarget as Node | null)) setOpen(false)
+        if (!group.current?.contains(event.relatedTarget)) setOpen(false)
       }}
     >
       <div className="flex items-center">
@@ -555,39 +557,6 @@ function MoreSheet({ id, open, onClose, me }: { id: string; open: boolean; onClo
 }
 
 /* ── Controls the bar at the top and the sheet share ──────────────────────── */
-
-export function LanguageToggle() {
-  const { lang, setLang, t } = useI18n()
-
-  return (
-    <div
-      role="group"
-      aria-label={t.nav.language}
-      className="flex items-center rounded-card border border-rule"
-    >
-      {LANGS.map((code) => (
-        <button
-          key={code}
-          type="button"
-          onClick={() => setLang(code)}
-          aria-pressed={lang === code}
-          title={LANGUAGES[code].name}
-          lang={code}
-          className={cn(
-            // Each half is a target in its own right, so each half gets the
-            // full 44px rather than the pair sharing one.
-            'flex min-h-11 min-w-11 items-center justify-center rounded-card px-2',
-            'font-mono text-[0.6875rem] font-medium tracking-wider uppercase',
-            'cursor-pointer transition-colors duration-200',
-            lang === code ? 'bg-bone text-ink' : 'text-bone-faint hover:text-bone',
-          )}
-        >
-          {code}
-        </button>
-      ))}
-    </div>
-  )
-}
 
 export function AdminLink({ me, labelled = false }: { me?: Me; labelled?: boolean }) {
   const { t } = useI18n()

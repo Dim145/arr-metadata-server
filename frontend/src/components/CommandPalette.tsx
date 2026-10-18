@@ -274,6 +274,7 @@ export function CommandPalette({ canWrite, isAdmin }: { canWrite: boolean; isAdm
             options.map((option, index) => {
               const heads = index === 0 || options[index - 1]?.kind !== option.kind
               return (
+                // eslint-disable-next-line jsx-a11y/click-events-have-key-events -- the keys are the field's: the arrows move along the options, Enter opens one
                 <li
                   key={option.id}
                   id={`${listId}-${index}`}

@@ -28,7 +28,7 @@ import { cn } from '../lib/cn'
 import * as fmt from '../lib/format'
 import { useI18n } from '../lib/i18n'
 import { airTime, episodeCode, poster } from '../lib/media'
-import { seasonOf, seasonPath, type SeasonRef } from '../lib/seasons'
+import { mondayOf, seasonOf, seasonPath, type SeasonRef } from '../lib/seasons'
 import type { Airing, Calendar as CalendarData, CalendarEntry, Me, MediaItem, Release } from '../lib/types'
 
 type View = 'week' | 'month'
@@ -42,12 +42,13 @@ type Day = { episodes: Episodic[]; releases: Releasing[] }
 /** How many of a day's entries the month grid lists before "+ n more". */
 const SHOWN_A_DAY = 3
 
-/** Midnight at the start of the Monday of `date`'s week, local time. */
-function mondayOf(date: Date): Date {
-  const monday = new Date(date.getFullYear(), date.getMonth(), date.getDate())
-  const weekday = (monday.getDay() + 6) % 7 // Monday is 0
-  monday.setDate(monday.getDate() - weekday)
-  return monday
+/**
+ * Midnight at the start of the Monday of `date`'s week, local time: the
+ * reader's own day, its Monday found by the one rule the season charts use
+ * too. A date and a time with no offset is read as local time.
+ */
+function weekStart(date: Date): Date {
+  return new Date(`${mondayOf(fmt.localDay(date))}T00:00`)
 }
 
 /** `2026-09-21`, in local time — what a week is addressed by in the URL. */
@@ -63,9 +64,9 @@ function weekFrom(raw: string | null): Date {
   const match = raw && /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw)
   if (match) {
     const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]))
-    if (!Number.isNaN(date.getTime())) return mondayOf(date)
+    if (!Number.isNaN(date.getTime())) return weekStart(date)
   }
-  return mondayOf(new Date())
+  return weekStart(new Date())
 }
 
 /** The first day of the month the URL asks for, or of this one. */
@@ -151,8 +152,8 @@ function filed(listing: CalendarData | undefined): { works: Map<string, MediaIte
 
 /** The week view's address for a day: its week, opened at the day. */
 function weekAddress(day: Date): string {
-  const monday = mondayOf(day)
-  const thisWeek = localDate(monday) === localDate(mondayOf(new Date()))
+  const monday = weekStart(day)
+  const thisWeek = localDate(monday) === localDate(weekStart(new Date()))
   return `/calendar${thisWeek ? '' : `?week=${localDate(monday)}`}#day-${localDate(day)}`
 }
 
@@ -186,11 +187,11 @@ function Week() {
   const { works, byDay } = filed(listing.data)
 
   const today = localDate(new Date())
-  const thisWeek = localDate(mondayOf(new Date())) === localDate(monday)
+  const thisWeek = localDate(weekStart(new Date())) === localDate(monday)
   const move = (weeks: number) => {
     const next = new Date(monday)
     next.setDate(monday.getDate() + weeks * 7)
-    setParams(localDate(next) === localDate(mondayOf(new Date())) ? {} : { week: localDate(next) })
+    setParams(localDate(next) === localDate(weekStart(new Date())) ? {} : { week: localDate(next) })
   }
 
   const range = new Intl.DateTimeFormat(locale, { day: 'numeric', month: 'long', year: 'numeric' }).formatRange(
@@ -525,8 +526,8 @@ function Month() {
 
   const first = monthFrom(params.get('month'))
   const last = new Date(first.getFullYear(), first.getMonth() + 1, 0)
-  const start = mondayOf(first)
-  const end = mondayOf(last)
+  const start = weekStart(first)
+  const end = weekStart(last)
   end.setDate(end.getDate() + 7)
   const days = daysBetween(start, end)
   const { from, to } = windowOf(start, end)
@@ -553,7 +554,7 @@ function Month() {
   const weekdays = daysBetween(start, new Date(start.getFullYear(), start.getMonth(), start.getDate() + 7))
   // The season the month is in — the middle of it, where a month always is.
   const season = seasonOf(new Date(first.getFullYear(), first.getMonth(), 15))
-  const weekTo = thisMonth ? '/calendar' : `/calendar?week=${localDate(mondayOf(first))}`
+  const weekTo = thisMonth ? '/calendar' : `/calendar?week=${localDate(weekStart(first))}`
 
   return (
     <div className="pt-10 pb-12">

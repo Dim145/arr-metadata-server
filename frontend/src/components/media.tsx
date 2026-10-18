@@ -106,6 +106,7 @@ export function Score({
 export function Artwork({
   url,
   role,
+  alt,
   eager = false,
   sizes,
   fallback,
@@ -113,12 +114,14 @@ export function Artwork({
 }: {
   url: string
   role: ImageRole
+  /** What the picture shows, for whoever cannot see it; empty for one that only decorates. */
+  alt: string
   eager?: boolean
   /** The width it is drawn at, where the role's own does not say. */
   sizes?: string
   /** What stands in once the image and its original have both failed. */
   fallback?: ReactNode
-} & Omit<ImgHTMLAttributes<HTMLImageElement>, 'src' | 'srcSet' | 'sizes'>) {
+} & Omit<ImgHTMLAttributes<HTMLImageElement>, 'src' | 'srcSet' | 'sizes' | 'alt'>) {
   const image = sized(url, role)
   const retry = image.src === image.original ? undefined : fallBackToOriginal(image.original)
   // Remembered by address, so a card that moves on to another work starts
@@ -132,6 +135,7 @@ export function Artwork({
   return (
     <img
       {...rest}
+      alt={alt}
       src={image.src}
       srcSet={image.srcSet}
       sizes={image.srcSet ? (sizes ?? image.sizes) : undefined}

@@ -630,7 +630,9 @@ export function readable(value: unknown, t: Dict): string {
   if (value === null || value === undefined) return ''
   if (Array.isArray(value)) return listed(value)
   if (typeof value === 'boolean') return value ? t.common.yes : t.common.no
-  return String(value)
+  if (typeof value === 'string' || typeof value === 'number') return String(value)
+  // A value locked as an object reads as its JSON, not as "[object Object]".
+  return JSON.stringify(value)
 }
 
 /** Turn what was typed into the JSON shape the field expects. */

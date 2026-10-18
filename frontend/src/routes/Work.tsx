@@ -559,6 +559,7 @@ function Seasons({ item }: { item: MediaItem }) {
     // Where the card sits along the shelf, whatever it is measured from.
     const left = at.getBoundingClientRect().left - list.getBoundingClientRect().left + list.scrollLeft
     list.scrollLeft = left - list.clientWidth + at.offsetWidth * 2
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once, as the page opens: a refresh must not move the shelf under the reader
   }, [])
 
   if (!numbers.length) return null
@@ -870,6 +871,7 @@ function Gallery({ item }: { item: MediaItem }) {
     <section>
       <SectionTitle>{t.gallery.title}</SectionTitle>
 
+      {/* eslint-disable-next-line jsx-a11y/interactive-supports-focus -- the tabs take the focus, one at a time; the list hears their arrows */}
       <div role="tablist" aria-label={t.gallery.kinds} onKeyDown={onTabKey} className="mb-5 flex flex-wrap gap-2">
         {kinds.map((value, index) => (
           <button
@@ -1072,6 +1074,7 @@ function ThemeMusic({ url }: { url: string }) {
         <Glyph name={failed ? 'alert' : playing ? 'pause' : 'play'} className="size-4" />
         {failed ? t.work.themeFailed : t.work.theme}
       </Button>
+      {/* eslint-disable-next-line jsx-a11y/media-has-caption -- a theme tune, which no source captions */}
       <audio
         ref={audio}
         src={url}
@@ -1499,7 +1502,7 @@ function Identifiers({ item }: { item: MediaItem }) {
           <Field key={source} label={providerName(source)}>
             <IdentifierValues
               source={source}
-              values={Array.isArray(value) ? value : [value as string | number]}
+              values={Array.isArray(value) ? value : [value]}
               kind={item.kind}
             />
           </Field>

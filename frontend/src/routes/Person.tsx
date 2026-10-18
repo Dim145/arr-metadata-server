@@ -301,7 +301,7 @@ function Entry({ work, roles }: { work: MediaItem; roles: Role[] }) {
   // A job in words: TMDB files a director with no job title of its own, and
   // "director" is the name of a type, not how either language says it.
   const jobs = t.admin.editor.children as unknown as Record<string, unknown>
-  const job = (type: string) => (typeof jobs[type] === 'string' ? (jobs[type] as string) : type)
+  const job = (type: string) => (typeof jobs[type] === 'string' ? jobs[type] : type)
 
   const parts = roles
     .map((role) =>

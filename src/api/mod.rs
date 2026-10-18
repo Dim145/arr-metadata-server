@@ -557,4 +557,35 @@ mod tests {
             "Plex's matches should carry no security requirement"
         );
     }
+
+    /// The interface's types are generated from a copy of the spec kept in
+    /// `frontend/openapi.json` (`npm run types` there writes
+    /// `src/lib/api.gen.d.ts`), so a field added here reaches the pages' types
+    /// without anybody copying it by hand — as long as the copy is current.
+    /// `UPDATE_OPENAPI=1` rewrites it; otherwise a stale copy fails here.
+    ///
+    /// The version is left out of the copy: a release would make it stale
+    /// without a single shape having changed.
+    #[test]
+    fn the_interfaces_openapi_copy_is_current() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("frontend/openapi.json");
+        let mut json = serde_json::to_value(openapi_only()).unwrap();
+        json["info"]["version"] = "see Cargo.toml".into();
+        let fresh = serde_json::to_string_pretty(&json).unwrap() + "\n";
+
+        if std::env::var_os("UPDATE_OPENAPI").is_some_and(|value| value == "1") {
+            std::fs::write(&path, &fresh).expect("frontend/openapi.json must be writable");
+            return;
+        }
+
+        let kept = std::fs::read_to_string(&path).unwrap_or_default();
+        // Not `assert_eq!`: both sides are the whole spec, and the diff that
+        // matters is the one git shows once the copy is refreshed.
+        assert!(
+            kept == fresh,
+            "frontend/openapi.json is not the spec this server builds. Refresh it with \
+             `UPDATE_OPENAPI=1 cargo test openapi`, then `npm run types` in frontend/, \
+             and commit both files."
+        );
+    }
 }

@@ -425,6 +425,7 @@ export function WorkEditor() {
 
       {/* ── The tabs ───────────────────────────────────────────────── */}
       <nav className="sticky top-14 z-20 -mx-4 mb-6 border-b border-rule bg-ink/95 px-4 backdrop-blur sm:-mx-6 sm:px-6 lg:top-0 lg:mx-0 lg:px-0">
+        {/* eslint-disable-next-line jsx-a11y/interactive-supports-focus -- the tabs take the focus, one at a time; the list hears their arrows */}
         <div role="tablist" aria-label={e.tabs.label} onKeyDown={onTabKey} className="flex gap-1 overflow-x-auto [scrollbar-width:none]">
           {tabs.map((one) => {
             const selected = one === shown

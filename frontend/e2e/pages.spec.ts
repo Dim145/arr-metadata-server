@@ -111,7 +111,7 @@ function firstSeason(work: Work) {
 /** The Monday of a date's week, as the schedule addresses weeks. */
 function mondayOf(date: string): string {
   const [year, month, day] = date.split('-').map(Number)
-  const at = new Date(Date.UTC(year!, month! - 1, day!))
+  const at = new Date(Date.UTC(year!, month! - 1, day))
   at.setUTCDate(at.getUTCDate() - ((at.getUTCDay() + 6) % 7))
   return at.toISOString().slice(0, 10)
 }

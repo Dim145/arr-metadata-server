@@ -44,7 +44,7 @@ export async function startSonarr(library: Held[]): Promise<ArrStub> {
   const key = `e2e-${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`
   const commands: ArrStub['commands'] = []
 
-  const server = createServer(async (request, response) => {
+  const answer = async (request: IncomingMessage, response: ServerResponse) => {
     if (request.headers['x-api-key'] !== key) return json(response, 401, { message: 'Unauthorized' })
     const url = new URL(request.url ?? '/', 'http://stub')
 
@@ -61,7 +61,9 @@ export async function startSonarr(library: Held[]): Promise<ArrStub> {
       return json(response, 201, { id: commands.length, name: command.name, status: 'queued' })
     }
     return json(response, 404, { message: 'NotFound' })
-  })
+  }
+  // Answered in its own time: the listener's return is waited on by nobody.
+  const server = createServer((request, response) => void answer(request, response))
 
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   const { port } = server.address() as AddressInfo

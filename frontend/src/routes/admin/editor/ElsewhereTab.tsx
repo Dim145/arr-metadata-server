@@ -172,7 +172,7 @@ function IdentifiersEditor({ work, lock, onChanged }: { work: MediaItem; lock?: 
           <dl className="divide-y divide-rule">
             {held.length ? (
               held.map(([source, value]) => {
-                const values = Array.isArray(value) ? value : [value as string | number]
+                const values = Array.isArray(value) ? value : [value]
                 return (
                   <Field key={source} label={providerName(source)}>
                     <span className="inline-flex flex-wrap items-baseline justify-end gap-x-2 gap-y-1 font-mono text-[0.8125rem] tabular-nums">

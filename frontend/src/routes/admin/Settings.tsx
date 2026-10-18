@@ -28,6 +28,7 @@ import {
   OnThisPage,
   Panel,
   PanelHead,
+  PolicyChip,
   SectionTitle,
   Skeleton,
   Spinner,
@@ -46,7 +47,6 @@ import { ApiError, api, query } from '../../lib/api'
 import { cn } from '../../lib/cn'
 import { useI18n } from '../../lib/i18n'
 import type { ExportStarted, JobsResponse, Settings as Config } from '../../lib/types'
-import { PolicyChip } from './Dashboard'
 
 /** The groups of settings the page draws, in the order it draws them. */
 const SETTING_GROUPS: GroupId[] = ['answering', 'providers', 'sources', 'refresh', 'adult', 'other']

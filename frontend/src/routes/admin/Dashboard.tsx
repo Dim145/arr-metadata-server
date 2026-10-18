@@ -15,13 +15,13 @@ import { useId, useRef, useState } from 'react'
 import { Link } from 'react-router'
 
 import {
-  Chip,
   EmptyState,
   Glyph,
   Label,
   Lamp,
   Panel,
   PanelHead,
+  PolicyChip,
   Skeleton,
   type GlyphName,
 } from '../../components/ui'
@@ -30,7 +30,7 @@ import { cn } from '../../lib/cn'
 import * as fmt from '../../lib/format'
 import { useMe } from '../../lib/hooks'
 import { useI18n, type Dict } from '../../lib/i18n'
-import { policyLabel, providerName } from '../../lib/labels'
+import { providerName } from '../../lib/labels'
 import type {
   Errands,
   JobsResponse,
@@ -133,7 +133,8 @@ function Metric({
   className,
 }: {
   label: string
-  value: number
+  /** Absent where the server does not tell this reader how it is run: a dash. */
+  value: number | undefined
   hint?: string
   /** A figure that is context rather than news: smaller, and a tier dimmer. */
   quiet?: boolean
@@ -409,23 +410,6 @@ function Surfaces({ settings }: { settings?: Settings }) {
         ))}
       </ul>
     </Panel>
-  )
-}
-
-/**
- * A policy, in a word.
- *
- * `open` is the one worth the accent: it means anyone who can reach the port is
- * served, which on a machine with a port forward is the whole internet.
- */
-export function PolicyChip({ policy }: { policy: string }) {
-  const { t } = useI18n()
-
-  return (
-    <Chip tone={policy === 'open' ? 'accent' : policy === 'allowlist' ? 'provider' : 'neutral'}>
-      <Glyph name={policy === 'open' ? 'alert' : policy === 'allowlist' ? 'globe' : 'key'} className="size-3" />
-      {policyLabel(policy, t)}
-    </Chip>
   )
 }
 

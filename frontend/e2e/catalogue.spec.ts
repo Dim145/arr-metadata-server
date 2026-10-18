@@ -574,9 +574,11 @@ test.describe('the bar on a tablet', () => {
 test.describe('reaching the interface', () => {
   test('offers a skip link before anything else', async ({ page }) => {
     await page.goto('/')
+    const skip = page.getByRole('link', { name: /skip to content|aller au contenu/i })
+    // The page is drawn once its language is in: a Tab before that lands nowhere.
+    await expect(skip).toBeAttached()
     await page.keyboard.press('Tab')
 
-    const skip = page.getByRole('link', { name: /skip to content|aller au contenu/i })
     await expect(skip).toBeFocused()
   })
 

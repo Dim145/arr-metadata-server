@@ -58,7 +58,7 @@ export async function startProvider(): Promise<Provider> {
   const codes = new Map<string, { person: Person; nonce: string; challenge: string; redirect: string }>()
   const tokens = new Map<string, Person>()
 
-  const server = createServer(async (request, response) => {
+  const answer = async (request: IncomingMessage, response: ServerResponse) => {
     const url = new URL(request.url ?? '/', issuer)
 
     if (url.pathname === '/.well-known/openid-configuration') {
@@ -152,7 +152,9 @@ export async function startProvider(): Promise<Provider> {
 
     response.writeHead(404)
     response.end()
-  })
+  }
+  // Answered in its own time: the listener's return is waited on by nobody.
+  const server = createServer((request, response) => void answer(request, response))
 
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   issuer = `http://127.0.0.1:${(server.address() as AddressInfo).port}`

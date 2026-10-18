@@ -271,7 +271,7 @@ export function ArtworkTab({ work, onChanged }: { work: MediaItem; onChanged: ()
             })
             .then(done)
         }
-        onUploaded={async () => done()}
+        onUploaded={() => done()}
         confirm={{ file: p.add, address: p.add }}
         hints={{ file: p.addHint, address: p.addHint }}
         extra={

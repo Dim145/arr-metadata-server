@@ -27,6 +27,7 @@ export function SignOut({ className, iconOnly }: { className?: string; iconOnly?
       type="button"
       aria-label={iconOnly ? t.nav.signOut : undefined}
       className={cn('cursor-pointer', className)}
+      // eslint-disable-next-line @typescript-eslint/no-misused-promises -- it cannot reject: everything is caught below
       onClick={async () => {
         // Whatever the server says, the session is over here: everything cached
         // was answered for somebody who is now gone, and so was the shelf of

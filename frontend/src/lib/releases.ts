@@ -50,11 +50,23 @@ function rank(kind: ReleaseKind | undefined): number {
   return at === -1 ? RANK.length : at
 }
 
+/**
+ * Earliest first, a release with no day after every dated one. Compared as
+ * text, which a `YYYY-MM-DD` day sorts by: `localeCompare` put the `~` that
+ * used to stand in for a missing day before the digits, not after them.
+ */
+function byDay(a: string | undefined, b: string | undefined): number {
+  if (a === b) return 0
+  if (a === undefined) return 1
+  if (b === undefined) return -1
+  return a < b ? -1 : 1
+}
+
 /** One country's releases, earliest first; a rating with no day after the dated ones. */
 export function releasesIn(item: MediaItem, country: string): CountryRelease[] {
   return (item.releases ?? [])
     .filter((r) => r.country.toUpperCase() === country)
-    .sort((a, b) => (a.date ?? '~').localeCompare(b.date ?? '~') || rank(a.releaseType) - rank(b.releaseType))
+    .sort((a, b) => byDay(a.date, b.date) || rank(a.releaseType) - rank(b.releaseType))
 }
 
 /**
@@ -68,7 +80,7 @@ export function certificationIn(item: MediaItem, country: string): string | unde
   }
   const rated = releasesIn(item, country)
     .filter((r) => r.certification?.trim())
-    .sort((a, b) => rank(a.releaseType) - rank(b.releaseType) || (a.date ?? '~').localeCompare(b.date ?? '~'))
+    .sort((a, b) => rank(a.releaseType) - rank(b.releaseType) || byDay(a.date, b.date))
   return rated[0]?.certification?.trim()
 }
 

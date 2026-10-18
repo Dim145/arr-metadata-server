@@ -170,6 +170,8 @@ test.describe('a visitor with no credential', () => {
 
   test('is offered a way in rather than an admin link', async ({ page }) => {
     await page.goto('/')
+    // Drawn once its language is in: what is on screen is asked after that.
+    await expect(page.getByRole('main')).toBeVisible()
 
     // On a phone the way in is inside the sheet of the bar along the foot of
     // the screen; see catalogue.spec.ts.

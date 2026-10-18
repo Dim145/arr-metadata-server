@@ -7,6 +7,52 @@ may change what the API or the configuration means, and says so here.
 
 ## [Unreleased]
 
+### Added
+
+- A documentation site, https://dim145.github.io/arr-metadata-server/, built
+  with Starlight from `docs/` and the README and published on GitHub Pages by
+  `.github/workflows/docs.yml`. Each page is written once and stays readable
+  on GitHub: the build rewrites the links between pages and stops on one that
+  leads nowhere.
+- `docs/settings.md`: every setting — what it holds, its default, where it
+  may be set, the variable that seeds it — written from the settings registry
+  by `UPDATE_DOCS=1 cargo test settings_reference`; `cargo test` fails when
+  the page and the code disagree. `docs/reverse-proxy.md`: nginx, Traefik and
+  Caddy in front of the server — `AMS_PUBLIC_URL`, `AMS_TRUSTED_PROXIES`, the
+  headers read, the paths to keep off the internet.
+
+### Changed
+
+- The README is down to what the server is, what it serves, a quick start
+  and the first steps for Sonarr, Radarr and Plex. The rest moved, unchanged
+  in substance, to new pages under `docs/`: installing, configuration (every
+  environment variable), sources, languages, media, caching, several
+  instances, accounts and access, security, the API.
+- The interface loads only the language it is read in: English and French
+  are separate files, the reader's fetched before the first paint and the
+  other only when chosen. The first download is a third lighter: 489 kB
+  instead of 746 (148 kB compressed instead of 235).
+- An API's access policy reads the same, in the same colour, on the
+  dashboard, the configuration page and the access page; the public bar's
+  language switch takes the administration's segmented look.
+- Internal, with nothing to see from outside: the interface's types are
+  generated from the server's own OpenAPI document (`frontend/openapi.json`,
+  kept current by `cargo test`, `UPDATE_OPENAPI=1` rewriting it, and turned
+  into types by `npm run types`), and CI lints the interface (ESLint with
+  typescript-eslint, react-hooks and jsx-a11y), runs its unit tests (Vitest)
+  and fails when the generated types fall behind. The works' repository, one
+  file of some five thousand lines, is six, each with its tests; the native
+  API's handlers guard with `Identity::require_admin` and a new
+  `Identity::require_write` instead of ten private copies of either.
+
+### Fixed
+
+- A film's releases in a country listed those with no date first, and an
+  undated rating could stand for the country instead of the dated cinema
+  release's.
+- A field locked to an object shows its JSON in the editor, not
+  `[object Object]`.
+
 ## [0.8.2] — 2026-10-18
 
 ### Added

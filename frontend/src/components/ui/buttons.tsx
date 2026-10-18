@@ -57,6 +57,7 @@ export function ButtonLink({
   variant = 'ghost',
   size = 'md',
   className,
+  children,
   ...props
 }: React.AnchorHTMLAttributes<HTMLAnchorElement> & {
   variant?: ButtonProps['variant']
@@ -72,7 +73,9 @@ export function ButtonLink({
         'no-underline',
         className,
       )}
-    />
+    >
+      {children}
+    </a>
   )
 }
 

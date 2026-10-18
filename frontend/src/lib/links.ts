@@ -142,6 +142,7 @@ export function isWebAddress(href: string): boolean {
  */
 export function sitePath(next: string | null | undefined): string | undefined {
   if (!next || !next.startsWith('/') || next.startsWith('//')) return undefined
+  // eslint-disable-next-line no-control-regex -- control characters are what it looks for
   if (/[\\\u0000-\u001f\u007f]/.test(next)) return undefined
 
   const path = next.split(/[?#]/, 1)[0] ?? ''

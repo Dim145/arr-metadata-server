@@ -18,7 +18,8 @@ import { Link, NavLink, Navigate, Outlet, useLocation } from 'react-router'
 import { api } from '../lib/api'
 import { useNavigationReset } from '../lib/hooks'
 import { cn } from '../lib/cn'
-import { LANGS, LANGUAGES, useI18n, type Dict } from '../lib/i18n'
+import { useI18n, type Dict } from '../lib/i18n'
+import { LanguageToggle } from './LanguageToggle'
 import { ThemeToggle } from './ThemeToggle'
 import { describeIdentity } from '../lib/labels'
 import type { Health, Me, Settings, UsersPage } from '../lib/types'
@@ -360,7 +361,7 @@ function TopBar({ title }: { title: string }) {
         {title}
       </p>
 
-      <ThemeToggle /><LanguageToggle compact />
+      <ThemeToggle /><LanguageToggle />
       <SignOut
         iconOnly
         className="grid size-11 shrink-0 place-items-center rounded-card text-bone-dim transition-colors duration-150 hover:bg-ink-high hover:text-vermillion"
@@ -404,39 +405,3 @@ function TabBar({ me }: { me: Me }) {
   )
 }
 
-/* ── Controls shared by both ──────────────────────────────────────────────── */
-
-function LanguageToggle({ compact }: { compact?: boolean }) {
-  const { lang, setLang, t } = useI18n()
-
-  return (
-    <div
-      role="group"
-      aria-label={t.nav.language}
-      // A segmented control rather than the public bar's inset pills: it has to
-      // be hit with a thumb here, and the inset was costing the 44px.
-      className={cn(
-        'flex h-12 shrink-0 items-center overflow-hidden rounded-card border border-rule',
-        compact ? '' : 'w-fit',
-      )}
-    >
-      {LANGS.map((code) => (
-        <button
-          key={code}
-          type="button"
-          onClick={() => setLang(code)}
-          aria-pressed={lang === code}
-          title={LANGUAGES[code].name}
-          lang={code}
-          className={cn(
-            'h-full min-w-11 cursor-pointer px-2.5 font-mono text-[0.6875rem] font-medium tracking-wider uppercase',
-            'transition-colors duration-150',
-            lang === code ? 'bg-bone text-ink' : 'text-bone-faint hover:text-bone',
-          )}
-        >
-          {code}
-        </button>
-      ))}
-    </div>
-  )
-}

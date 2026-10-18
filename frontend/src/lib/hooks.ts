@@ -8,7 +8,7 @@
 
 import { useQuery } from '@tanstack/react-query'
 import { useEffect, useRef } from 'react'
-import { useLocation, useNavigationType } from 'react-router'
+import { NavigationType, useLocation, useNavigationType } from 'react-router'
 
 import { api, query, segment } from './api'
 import { useI18n } from './i18n'
@@ -96,7 +96,7 @@ export function useNavigationReset(mainId: string) {
     // different query, keep their place.
     if (seen.current === pathname) return
     seen.current = pathname
-    if (type === 'POP') return
+    if (type === NavigationType.Pop) return
 
     window.scrollTo(0, 0)
     document.getElementById(mainId)?.focus({ preventScroll: true })

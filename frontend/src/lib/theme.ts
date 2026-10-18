@@ -51,7 +51,7 @@ function chosen(): Theme | undefined {
 }
 
 export function useTheme(): [Theme, (theme: Theme) => void] {
-  const theme = useSyncExternalStore(subscribe, current, () => 'dark' as Theme)
+  const theme = useSyncExternalStore<Theme>(subscribe, current, () => 'dark')
   return [theme, applyTheme]
 }
 

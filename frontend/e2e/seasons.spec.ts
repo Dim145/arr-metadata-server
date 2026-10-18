@@ -86,7 +86,7 @@ test.describe('the season chart', () => {
       const now = new Date()
       return [now.getFullYear(), Math.floor(now.getMonth() / 3)]
     })
-    expect(page.url()).toMatch(pattern(`/seasons/${year}/${SEASONS[quarter!]}$`))
+    expect(page.url()).toMatch(pattern(`/seasons/${year}/${SEASONS[quarter]}$`))
     await expect(page.getByRole('heading', { level: 1 })).toContainText(String(year))
 
     // Already there: nothing offers to go back to it.
@@ -121,7 +121,7 @@ test.describe('the season chart', () => {
       const now = new Date()
       return [now.getFullYear(), Math.floor(now.getMonth() / 3)]
     })
-    await expect(page).toHaveURL(pattern(`/seasons/${year}/${SEASONS[quarter!]}$`))
+    await expect(page).toHaveURL(pattern(`/seasons/${year}/${SEASONS[quarter]}$`))
   })
 
   test('lists a series in the quarter it began, and leads to it', async ({ page, request }) => {
@@ -152,7 +152,7 @@ test.describe('the season chart', () => {
 
     // The first kind the season has, by the count it shows.
     const kind = kinds.getByRole('radio').nth(1)
-    const label = (await kind.evaluate((input) => input.closest('label')!.textContent))!
+    const label = await kind.evaluate((input) => input.closest('label')!.textContent)
     const shown = Number(label.match(/(\d+)\s*$/)![1])
     expect(shown).toBeLessThan(total)
     // By its label, as a pointer chooses it: the radio itself is drawn as

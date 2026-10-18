@@ -13,13 +13,13 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router'
 
 import {
-  Chip,
   Glyph,
   IconButton,
   Label,
   Lamp,
   Panel,
   PanelHead,
+  PolicyChip,
   Segmented,
   Skeleton,
   Toggle,
@@ -244,7 +244,7 @@ export function Access() {
                 <span className="justify-self-end max-md:col-start-2 max-md:row-start-1">
                   <Toggle
                     checked={x.enabled}
-                    label={a.toggle(a.apis[x.api as ApiName])}
+                    label={a.toggle(a.apis[x.api])}
                     onChange={(next) => set(`api.${x.api}`, String(next))}
                     disabled={write.isPending}
                   />
@@ -444,16 +444,5 @@ function RelayCredential({
         className="justify-self-start max-sm:flex max-sm:w-full max-sm:flex-col max-sm:rounded-card"
       />
     </div>
-  )
-}
-
-function PolicyChip({ policy }: { policy: AccessReport['apis'][number]['policy'] }) {
-  const { t } = useI18n()
-
-  return (
-    <Chip tone={policy === 'open' ? 'accent' : undefined} className="whitespace-nowrap">
-      <Glyph name={policy === 'apikey' ? 'key' : policy === 'allowlist' ? 'shield' : 'alert'} className="size-3" />
-      {t.admin.access.policies[policy]}
-    </Chip>
   )
 }

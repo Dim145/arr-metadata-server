@@ -30,7 +30,7 @@ test.describe('the numbers and the health', () => {
 
     // A tongue the providers spell two ways is one bar.
     const languages = page.getByRole('heading', { name: /by original language|par langue originale/i }).locator('xpath=ancestor::section[1]')
-    const names = (await languages.getByRole('link').allTextContents()).map((text) => text.replace(/\s*[\d   ]+$/, '').trim())
+    const names = (await languages.getByRole('link').allTextContents()).map((text) => text.replace(/\s*[\d\u202f\u00a0 ]+$/, '').trim())
     expect(new Set(names).size).toBe(names.length)
 
     // And every bar is a way into the catalogue it counts.
@@ -96,7 +96,9 @@ test.describe('the health, read by the administrator', () => {
     const exported = await page.request.get('/api/v1/admin/locks')
     expect(exported.status()).toBe(200)
     const locks = await exported.json()
-    expect(locks.version).toBe(1)
+    // Version 2 while another test holds a lock for one language or on a
+    // provider's credit, 1 otherwise: both read back.
+    expect([1, 2]).toContain(locks.version)
     expect(locks.locks.length).toBeGreaterThan(0)
     const travelling = locks.locks.find(
       (l: { work: { id: string }; field: string }) => l.work.id === work.id && l.field === 'sortTitle',

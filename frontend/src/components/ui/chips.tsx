@@ -1,14 +1,15 @@
 /**
- * Small marks: chips, genre tints and where a value came from.
+ * Small marks: chips, genre tints, where a value came from and what an API
+ * asks for.
  */
 
 import { type ReactNode } from 'react'
 import { Link } from 'react-router'
 import { cn } from '../../lib/cn'
 import { useI18n } from '../../lib/i18n'
-import { genreLabel } from '../../lib/labels'
+import { genreLabel, policyLabel } from '../../lib/labels'
 
-import { Glyph } from './glyphs'
+import { Glyph, type GlyphName } from './glyphs'
 
 type ChipTone = 'neutral' | 'manual' | 'provider' | 'accent'
 
@@ -110,6 +111,27 @@ export function Provenance({ manual, label }: { manual: boolean; label: string }
     <Chip tone={manual ? 'manual' : 'provider'}>
       <Glyph name={manual ? 'lock' : 'cloud'} className="size-3" />
       {label}
+    </Chip>
+  )
+}
+
+/**
+ * What an API asks of a caller, in a word: one chip for the dashboard, the
+ * configuration and the access page, which had two between them and drew the
+ * same policy in two colours, with two glyphs and two sets of words.
+ *
+ * `open` is the one worth the accent: it means anyone who can reach the port is
+ * served, which on a machine with a port forward is the whole internet.
+ */
+export function PolicyChip({ policy }: { policy: string }) {
+  const { t } = useI18n()
+  const glyph: GlyphName =
+    policy === 'open' ? 'alert' : policy === 'allowlist' ? 'globe' : policy === 'disabled' ? 'power' : 'key'
+
+  return (
+    <Chip tone={policy === 'open' ? 'accent' : 'neutral'} className="whitespace-nowrap">
+      <Glyph name={glyph} className="size-3" />
+      {policyLabel(policy, t)}
     </Chip>
   )
 }

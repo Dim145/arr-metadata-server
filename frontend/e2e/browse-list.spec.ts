@@ -108,6 +108,7 @@ test.describe('the catalogue as a list', () => {
   test('works where the browser will not say what was remembered', async ({ page }) => {
     // A store that refuses the read — private browsing, disabled storage.
     await page.addInitScript((key) => {
+      // eslint-disable-next-line @typescript-eslint/unbound-method -- called below, with the storage as `this`
       const original = Storage.prototype.getItem
       Storage.prototype.getItem = function (name: string) {
         if (name === key) throw new Error('denied')

@@ -1,0 +1,7 @@
+{
+  // The end-to-end suite, as the editor and the lint's type-aware rules read
+  // it. Playwright compiles the specs itself and `tsc -b` checks the
+  // interface alone, so nothing builds this project.
+  "extends": "../tsconfig.json",
+  "include": ["."]
+}

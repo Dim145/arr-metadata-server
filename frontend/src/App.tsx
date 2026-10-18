@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query'
 import { lazy, Suspense } from 'react'
-import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router'
+import { BrowserRouter, Navigate, Route, Routes, useLocation, type NavigateOptions, type To } from 'react-router'
 
 import { PageBoundary } from './components/PageBoundary'
 import { PublicShell } from './components/PublicShell'
@@ -176,4 +176,15 @@ function Loading() {
       <Spinner className="size-6 text-bone-dim" />
     </div>
   )
+}
+
+// Under `<BrowserRouter>`, `navigate` returns nothing: the promise its type
+// allows for is the data routers', which this interface does not use. Said
+// here, as React Router's own documentation has it, so that a page calls it
+// without a `void` and the lint still flags a promise that is left floating.
+declare module 'react-router' {
+  interface NavigateFunction {
+    (to: To, options?: NavigateOptions): void
+    (delta: number): void
+  }
 }

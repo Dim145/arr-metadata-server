@@ -6,14 +6,21 @@
  * type error at the moment it is introduced. Any other language may be
  * partial — what it lacks is shown in English — so a translation can start
  * small and grow. See `lang/README.md` to add one.
+ *
+ * Each dictionary is a file of its own, fetched when its language is first
+ * wanted: the reader's before anything is drawn (`main.tsx` waits for it), any
+ * other once it is chosen. Both used to be in the first bundle: a quarter of
+ * a megabyte of words sent to every visitor, who reads one language of them.
  */
 
-import { createContext, use, useCallback, useEffect, useMemo, useState } from 'react'
+import { createContext, use, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import { en, type Dict, type Translation } from './lang/en'
-import { fr } from './lang/fr'
+import type { Dict, Translation } from './lang/en'
 
 export type { Dict, Translation } from './lang/en'
+
+/** A language's words: the whole dictionary, or a translation English completes. */
+type Words = { whole: Dict } | { part: Translation }
 
 /** A language the interface speaks. */
 interface Language {
@@ -21,7 +28,8 @@ interface Language {
   name: string
   /** The BCP-47 tag Intl formats dates and numbers with, and the server's `?language=`. */
   locale: string
-  dictionary: Translation
+  /** Its words, fetched the first time the language is wanted. */
+  words: () => Promise<Words>
 }
 
 /**
@@ -29,8 +37,8 @@ interface Language {
  * The toggles list these; the browser's preference is matched against them.
  */
 export const LANGUAGES = {
-  en: { name: 'English', locale: 'en-GB', dictionary: {} },
-  fr: { name: 'Français', locale: 'fr-FR', dictionary: fr },
+  en: { name: 'English', locale: 'en-GB', words: () => import('./lang/en').then(({ en }) => ({ whole: en })) },
+  fr: { name: 'Français', locale: 'fr-FR', words: () => import('./lang/fr').then(({ fr }) => ({ whole: fr })) },
 } satisfies Record<string, Language>
 
 export type Lang = keyof typeof LANGUAGES
@@ -43,7 +51,7 @@ const STORAGE_KEY = 'ams.lang'
  * A translation laid over English: every key it carries, and English for the
  * rest, down to the leaves. A function or an array is a leaf.
  */
-function completed(base: unknown, over: unknown): unknown {
+export function completed(base: unknown, over: unknown): unknown {
   if (over === undefined) return base
   if (typeof base !== 'object' || base === null || Array.isArray(base)) return over
   if (typeof over !== 'object' || over === null) return over
@@ -63,23 +71,39 @@ function completed(base: unknown, over: unknown): unknown {
  * folds or sorts as if it were a word. With no prototype, a key the table
  * does not hold finds nothing, and the `?? key` after it says the key itself.
  */
-function bare(value: unknown): unknown {
+export function bare(value: unknown): unknown {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return value
   const out = Object.create(null) as Record<string, unknown>
   for (const [key, inner] of Object.entries(value)) out[key] = bare(inner)
   return out
 }
 
-const DICTIONARIES = Object.fromEntries(
-  LANGS.map((lang) => [lang, bare(completed(en, LANGUAGES[lang].dictionary)) as Dict]),
-) as Record<Lang, Dict>
+/** Every dictionary asked for, by language. */
+const fetched = new Map<Lang, Promise<Dict>>()
+
+/**
+ * A language's dictionary, ready to read: completed from English where the
+ * language is partial, and without a prototype. Fetched once; a fetch that
+ * failed is tried again the next time it is asked for.
+ */
+export function dictionary(lang: Lang): Promise<Dict> {
+  let found = fetched.get(lang)
+  if (!found) {
+    found = LANGUAGES[lang]
+      .words()
+      .then(async (words) => bare('whole' in words ? words.whole : completed(await dictionary('en'), words.part)) as Dict)
+    fetched.set(lang, found)
+    found.catch(() => fetched.delete(lang))
+  }
+  return found
+}
 
 function isLang(value: unknown): value is Lang {
   return typeof value === 'string' && LANGS.includes(value as Lang)
 }
 
 /** What the browser asked for, if this interface speaks it. */
-function preferred(): Lang {
+export function preferred(): Lang {
   try {
     const stored = localStorage.getItem(STORAGE_KEY)
     if (isLang(stored)) return stored
@@ -98,6 +122,26 @@ function preferred(): Lang {
   return 'en'
 }
 
+/** The language the page opened in, and its words, once `ready` has them. */
+let opening: { lang: Lang; t: Dict } | undefined
+
+/**
+ * The reader's language, fetched before the first render so that the first
+ * paint is already in it: `main.tsx` waits for this. English stands in for a
+ * language whose file could not be fetched.
+ */
+export async function ready(): Promise<void> {
+  const lang = preferred()
+  try {
+    opening = { lang, t: await dictionary(lang) }
+  } catch (error) {
+    if (lang === 'en') throw error
+    opening = { lang: 'en', t: await dictionary('en') }
+  }
+  // Said before anything is drawn, rather than once the page has been.
+  document.documentElement.lang = opening.lang
+}
+
 type Value = {
   lang: Lang
   t: Dict
@@ -109,30 +153,46 @@ type Value = {
 const Context = createContext<Value | null>(null)
 
 export function I18nProvider({ children }: { children: React.ReactNode }) {
-  const [lang, setLangState] = useState<Lang>(() => preferred())
+  const [shown, setShown] = useState(() => {
+    if (!opening) throw new Error('<I18nProvider> is drawn once ready() has fetched the dictionary')
+    return opening
+  })
+  // The language asked for last: one that was slower to arrive is not shown
+  // over it.
+  const asked = useRef(shown.lang)
 
   const setLang = useCallback((next: Lang) => {
-    setLangState(next)
+    asked.current = next
     try {
       localStorage.setItem(STORAGE_KEY, next)
     } catch {
       // The choice still applies to this visit.
     }
+    // The page stays in the language it is in until the other has arrived.
+    dictionary(next).then(
+      (t) => {
+        if (asked.current === next) setShown((current) => (current.lang === next ? current : { lang: next, t }))
+      },
+      // The server was updated beneath a tab that was already open, and the
+      // file is no longer there: the page read again finds the new one, in
+      // the language just chosen.
+      () => window.location.reload(),
+    )
   }, [])
 
   // Assistive technology reads the page in the language the document claims.
   useEffect(() => {
-    document.documentElement.lang = lang
-  }, [lang])
+    document.documentElement.lang = shown.lang
+  }, [shown.lang])
 
   const value = useMemo<Value>(
     () => ({
-      lang,
-      t: DICTIONARIES[lang],
+      lang: shown.lang,
+      t: shown.t,
       setLang,
-      locale: LANGUAGES[lang].locale,
+      locale: LANGUAGES[shown.lang].locale,
     }),
-    [lang, setLang],
+    [shown, setLang],
   )
 
   return <Context value={value}>{children}</Context>
