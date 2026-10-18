@@ -29,13 +29,14 @@ async function pages(dir) {
   return found
 }
 
+// `&amp;` last: decoded first, `&amp;lt;` would become `<` rather than `&lt;`.
 const decode = (text) =>
   text
-    .replaceAll('&amp;', '&')
     .replaceAll('&quot;', '"')
     .replaceAll('&#39;', "'")
     .replaceAll('&lt;', '<')
     .replaceAll('&gt;', '>')
+    .replaceAll('&amp;', '&')
 
 /** The file a path of the site is served from, or nothing for one outside it. */
 function fileOf(pathname) {

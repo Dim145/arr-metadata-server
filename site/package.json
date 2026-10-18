@@ -15,5 +15,10 @@
   },
   "engines": {
     "node": ">=22.12.0"
+  },
+  "overrides": {
+    "postcss-nested": {
+      "postcss-selector-parser": "7.1.6"
+    }
   }
 }
