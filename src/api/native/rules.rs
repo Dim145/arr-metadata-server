@@ -57,6 +57,7 @@ pub struct SourceRules {
 /// it runs: a work takes a new order at its next refresh.
 #[utoipa::path(
     get, path = "/sources/rules", tag = TAG,
+    operation_id = "rules_source_rules",
     responses(
         (status = 200, body = SourceRules),
         (status = 403, description = "The caller may not write"),

@@ -146,8 +146,8 @@ jobs:
         working-directory: frontend
         run: |
           npm run types
-          git diff --exit-code -- src/lib/api.gen.d.ts || {
-            echo "::error file=frontend/src/lib/api.gen.d.ts::Not what openapi.json generates: run npm run types in frontend/ and commit the result."
+          git diff --exit-code -- src/lib/api.gen.ts || {
+            echo "::error file=frontend/src/lib/api.gen.ts::Not what openapi.json generates: run npm run types in frontend/ and commit the result."
             exit 1
           }
 

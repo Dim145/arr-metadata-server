@@ -18,6 +18,9 @@ use crate::db::{Db, RowExt, new_id, now};
 /// What an asset is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
+// Named explicitly: what a setting holds is a `Kind` too, and utoipa keys
+// schemas on the leaf name alone.
+#[schema(as = AssetKind)]
 pub enum Kind {
     Image,
     Audio,
@@ -88,6 +91,10 @@ impl Thumb {
 /// Where an asset stands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
+// Named explicitly: an account, a delivery and the answer of a Sonarr or a
+// Radarr each have a `Status` too, and utoipa keys schemas on the leaf name
+// alone.
+#[schema(as = AssetStatus)]
 pub enum Status {
     /// Waiting to be fetched, or to be tried again.
     Pending,
@@ -721,6 +728,9 @@ pub async fn unreferenced(
 /// The tallies the media page opens on.
 #[derive(Debug, Default, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
+// Named explicitly: the accounts and the deliveries are counted in a `Counts`
+// too, and utoipa keys schemas on the leaf name alone.
+#[schema(as = AssetCounts)]
 pub struct Counts {
     pub pending: i64,
     pub stored: i64,

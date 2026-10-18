@@ -10,7 +10,7 @@
     "typecheck": "tsc -b --noEmit",
     "lint": "eslint --max-warnings 0 .",
     "test": "vitest run",
-    "types": "openapi-typescript openapi.json --empty-objects-unknown --exclude-deprecated --output src/lib/api.gen.d.ts",
+    "types": "openapi-typescript openapi.json --empty-objects-unknown --exclude-deprecated --default-non-nullable false --output src/lib/api.gen.ts",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui"
   },

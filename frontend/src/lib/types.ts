@@ -2,17 +2,17 @@
  * The shapes the native API sends, as the interface reads them.
  *
  * Derived from the server's own OpenAPI document rather than copied from it:
- * `api.gen.d.ts` is written from `frontend/openapi.json` by `npm run types`,
+ * `api.gen.ts` is written from `frontend/openapi.json` by `npm run types`,
  * and `cargo test` fails while that copy differs from what the server builds.
  * So a field added on the server reaches these types without anybody copying
- * it, and one taken away is a type error wherever a page still reads it.
+ * it, and one taken away is a type error wherever a page still reads it. The
+ * document's `required` is what says a field is always sent: a default only
+ * says what a field left out stands for, and the generator is told so
+ * (`--default-non-nullable false`).
  *
- * What is still said here is said more exactly than the document can — a
- * string the server only ever fills from a fixed set, a list it always sends —
- * or where the document is wrong: seven of its schema names each stand for
- * two Rust types of the same name (`Role`, `Mode`, `Counts`, `Status`,
- * `Entry`, `Kind`, `Source`), and a field pointing at the other one is given
- * its real shape below.
+ * What is still said here is said more exactly than the document can: a
+ * string the server only ever fills from a fixed set is given that set, and
+ * a type holding one is given the narrower type.
  */
 
 import type { components } from './api.gen'
@@ -25,8 +25,9 @@ type Schemas = components['schemas']
  * utoipa documents a Rust `Option` as optional and nullable both, while the
  * server leaves a `None` out (`skip_serializing_if`): an optional field is
  * absent rather than `null`. So the `null` of an optional field is dropped, at
- * every depth; a required one that can be `null` keeps it, and the few
- * optional ones still sent as `null` say so below where a page cares.
+ * every depth. A field the server always sends is documented as required —
+ * `cargo test` fails on one that is not — and keeps its `null` where it can
+ * be one.
  */
 type Sent<T> = T extends readonly (infer U)[]
   ? Sent<U>[]
@@ -79,12 +80,8 @@ export type ReleaseKind = Schema<'ReleaseKind'>
 /** What a work was given in one country: a day it came out there and how, its rating there, or both. */
 export type CountryRelease = Schema<'CountryRelease'>
 
-/**
- * A work. Its genres and keywords are always sent: `#[serde(default)]` lets
- * a client that writes one leave them out, which the document reads as
- * optional.
- */
-export type MediaItem = Refined<'MediaItem', { genres: string[]; keywords: string[] }>
+/** A work. */
+export type MediaItem = Schema<'MediaItem'>
 
 /** What a person hid of what the sources gave a work. */
 export type HiddenChildren = Schema<'Hidden'>
@@ -96,30 +93,27 @@ export type FieldDef = Schema<'FieldDef'>
 export type FieldRegistry = Schema<'FieldRegistry'>
 
 /** One stored manual edit. Its value is always sent: `null` where the field was cleared and locked so. */
-export type Override = Refined<'Override', { value: unknown }>
+export type Override = Schema<'Override'>
 
 export type ApiClient = Schema<'ApiClient'>
 
-/**
- * What an account may do, least first. Said here: the document's `Role` is
- * the part a person played in a work, the other Rust type of that name.
- */
-export type AccountRole = 'member' | 'editor' | 'admin'
+/** What an account may do, least first. */
+export type AccountRole = Schema<'AccountRole'>
 
-export type AccountStatus = Schema<'Status'>
+export type AccountStatus = Schema<'AccountStatus'>
 
 /** The signed-in person, as every page needs them. */
-export type SessionUser = Refined<'MeUser', { role: AccountRole }>
+export type SessionUser = Schema<'MeUser'>
 
-export type User = Refined<'User', { role: AccountRole }>
+export type User = Schema<'User'>
 
-export type ListedUser = Refined<'Listed', { role: AccountRole }>
+export type ListedUser = Schema<'Listed'>
 
-export type UsersPage = Refined<'UsersPage', { users: ListedUser[] }>
+export type UsersPage = Schema<'UsersPage'>
 
 export type AccountSession = Schema<'Session'>
 
-export type UserDetail = Refined<'UserDetail', { user: User }>
+export type UserDetail = Schema<'UserDetail'>
 
 export type AccountKeys = Schema<'AccountKeys'>
 
@@ -149,22 +143,19 @@ export type ArrPush = Refined<'ArrPush', { app: ArrApp; outcome: 'sent' | 'absen
 /** The Sonarr & Radarr page: both connections, the switch, what was told lately. */
 export type ArrConfiguration = Refined<'ArrConfiguration', { pushes: ArrPush[] }>
 
-/**
- * What the test button found: who answered, or why nobody did. The
- * document's `status` is an account's, the other Rust type of that name.
- */
-export type ArrTest = Refined<'ArrTestOutcome', { status?: { appName: string; version: string; instanceName?: string } }>
+/** What the test button found: who answered, or why nobody did. */
+export type ArrTest = Schema<'ArrTestOutcome'>
 
 /** What the provider's discovery document said. */
 export type OidcDiscovery = Schema<'Discovery'>
 
-export type InvitationOffer = Refined<'InvitationOffer', { role: AccountRole }>
+export type InvitationOffer = Schema<'InvitationOffer'>
 
-export type Invitation = Refined<'Invitation', { role: AccountRole }>
+export type Invitation = Schema<'Invitation'>
 
-export type Invitations = Refined<'Invitations', { invitations: Invitation[] }>
+export type Invitations = Schema<'Invitations'>
 
-export type IssuedInvitation = Refined<'IssuedInvitation', { invitation: Invitation }>
+export type IssuedInvitation = Schema<'IssuedInvitation'>
 
 export type ApiName = Schema<'Api'>
 
@@ -176,12 +167,7 @@ export type ApiState = Refined<'ApiState', { policy: SurfacePolicyName }>
 /** The way in, on one page. */
 export type AccessReport = Refined<
   'Access',
-  {
-    site: 'public' | 'private'
-    registrationRole: AccountRole
-    apis: ApiState[]
-    relayCredentials: RelayCredentialState[]
-  }
+  { site: 'public' | 'private'; apis: ApiState[]; relayCredentials: RelayCredentialState[] }
 >
 
 /** Whose key a relay asks its service with (`tmdb.relayCredential`, `tvdb.relayCredential`). */
@@ -209,16 +195,11 @@ export type TaskId =
   | 'update.check'
   | 'arr.seed'
 
-/**
- * A background task as it stands: when it runs, how it last went. The
- * document's `mode` is how many instances there are, the other Rust type of
- * that name.
- */
+/** A background task as it stands: when it runs, how it last went. */
 export type Task = Refined<
   'TaskState',
   {
     id: TaskId
-    mode: 'scheduled' | 'manual' | 'off'
     last?: Job
     running?: Job
     /** Why it cannot run now. */
@@ -235,56 +216,24 @@ export type WebhookKind = 'standard' | 'json' | 'discord' | 'slack' | 'ntfy' | '
 /** What a test post to a destination came to. */
 export type WebhookTest = Refined<'WebhookTest', { refused?: 'not_web' | 'internal' | 'unsent' }>
 
-/**
- * Where what happens is told: never its secret, its address masked past the
- * host. The document's `deliveries` are the users page's counts, the other
- * Rust type of that name.
- */
-export type WebhookDestination = Refined<
-  'WebhookDestination',
-  { kind: WebhookKind; deliveries: { pending: number; delivered: number; failed: number } }
->
+/** Where what happens is told: never its secret, its address masked past the host. */
+export type WebhookDestination = Refined<'WebhookDestination', { kind: WebhookKind }>
 
 /** A destination to make, or what to change of one: each field left out stays. */
 export type WebhookDestinationInput = Refined<'WebhookDestinationInput', { kind?: WebhookKind }>
 
 /** One thing told, as a delivery keeps it: who, on what and how, each sent as `null` when there is none. */
-export type WebhookMessage = Refined<
-  'WebhookMessage',
-  { actor: string | null; target: string | null; detail: string | null }
->
+export type WebhookMessage = Schema<'WebhookMessage'>
 
-/**
- * One event owed to a destination, and how its tries went. The document's
- * `status` is an account's, the other Rust type of that name.
- */
-export type WebhookDelivery = Refined<
-  'WebhookDelivery',
-  { status: 'pending' | 'delivered' | 'failed'; told?: WebhookMessage }
->
+/** One event owed to a destination, and how its tries went. */
+export type WebhookDelivery = Schema<'WebhookDelivery'>
 
-export type WebhookDeliveries = Refined<'WebhookDeliveries', { deliveries: WebhookDelivery[] }>
+export type WebhookDeliveries = Schema<'WebhookDeliveries'>
 
 export type JobsResponse = Refined<'JobsResponse', { jobs: Job[] }>
 
-/**
- * What a run did to one work: the detail behind its summary. Said whole
- * here: the document's `Entry` is a line of a season chart, the other Rust
- * type of that name.
- */
-export interface JobEntry {
-  id: string
-  /** The work's id, which may name nothing any more. */
-  mediaId?: string
-  /** Its title and kind when the run took it. */
-  title?: string
-  kind?: MediaKind
-  /** `imported` is the seed's: a work of Sonarr's or Radarr's library fetched for the first time. */
-  outcome: 'ok' | 'failed' | 'skipped' | 'imported'
-  /** One of the fixed notes the interface knows, or the error as the provider said it. */
-  note?: string
-  createdAt: string
-}
+/** What a run did to one work: the detail behind its summary. */
+export type JobEntry = Refined<'JobEntry', { kind?: MediaKind; outcome: 'ok' | 'failed' | 'skipped' | 'imported' }>
 
 /** One run, with what it did to each work — the first five hundred of them. */
 export type JobDetail = Refined<'JobDetail', { job: Job; entries: JobEntry[] }>
@@ -305,12 +254,12 @@ export type FurtherSources = Refined<'FurtherSources', { malVia: 'official' | 'j
 /** Where the data comes from, for the credits: only what is switched on. */
 export type Sources = Schema<'Sources'>
 
-export type Me = Refined<'MeResponse', { user?: SessionUser }>
+export type Me = Schema<'MeResponse'>
 
 export type Snapshot = Schema<'SnapshotSummary'>
 
 /** Who gave one of a work's values, as its last merge worked out. */
-export type ValueSource = Schema<'Source'>
+export type ValueSource = Schema<'ValueSource'>
 
 /** Where a work's values came from. */
 export type WorkProvenance = Schema<'Provenance'>
@@ -320,7 +269,7 @@ export type SyncSource = Schema<'SyncSource'>
 
 export type ProvenanceReport = Schema<'ProvenanceReport'>
 
-export type SyncOutcome = Refined<'SyncOutcome', { item: MediaItem }>
+export type SyncOutcome = Schema<'SyncOutcome'>
 
 /** What each source gives a work, and which wins. */
 export type SourceRules = Schema<'SourceRules'>
@@ -333,37 +282,21 @@ export type MalReach = Schema<'Reach'>
 
 export type SourceRule = Schema<'Laid'>
 
-/**
- * How the media store stands. The document's `counts` are the users page's,
- * the other Rust type of that name.
- */
-export type MediaStatus = Refined<
-  'MediaStatus',
-  {
-    backend: 'off' | 'filesystem' | 's3'
-    counts: { pending: number; stored: number; failed: number; bytes: number }
-  }
->
+/** How the media store stands. */
+export type MediaStatus = Refined<'MediaStatus', { backend: 'off' | 'filesystem' | 's3' }>
 
-/**
- * One medium kept, or in line to be. The document's `kind` and `status` are
- * a setting's kind and an account's status, the other Rust types of those
- * names.
- */
-export type MediaAsset = Refined<'Asset', { kind: 'image' | 'audio'; status: 'pending' | 'stored' | 'failed' }>
+/** One medium kept, or in line to be. */
+export type MediaAsset = Schema<'Asset'>
 
-/** One address a work points at, and what is kept of it. The document's `kind` is a setting's. */
-export type WorkMedium = Refined<
-  'WorkMedium',
-  { kind: 'image' | 'audio'; status: 'stored' | 'pending' | 'failed' | 'absent' }
->
+/** One address a work points at, and what is kept of it. */
+export type WorkMedium = Refined<'WorkMedium', { status: 'stored' | 'pending' | 'failed' | 'absent' }>
 
 /** A work's media, and whether a store is configured at all. */
 export type WorkMedia = Refined<'WorkMedia', { media: WorkMedium[] }>
 
-export type Uploaded = Refined<'Uploaded', { item: MediaItem }>
+export type Uploaded = Schema<'Uploaded'>
 
-export type ItemPage = Refined<'ItemListResponse', { items: MediaItem[] }>
+export type ItemPage = Schema<'ItemListResponse'>
 
 /** A service that carries a work in a country, as TMDB lists it from JustWatch. */
 export type WatchProvider = Schema<'WatchProvider'>
@@ -371,7 +304,7 @@ export type WatchProvider = Schema<'WatchProvider'>
 export type WhereToWatch = Schema<'WhereToWatch'>
 
 /** The catalogue's own works in the same vein as one. */
-export type Similar = Refined<'Similar', { items: MediaItem[] }>
+export type Similar = Schema<'Similar'>
 
 /** What TMDB recommends beside a work, for whoever maintains the catalogue. */
 export type Suggestion = Schema<'Suggestion'>
@@ -384,7 +317,7 @@ export type Collections = Schema<'Collections'>
 
 export type CollectionPart = Schema<'CollectionPart'>
 
-export type CollectionPage = Refined<'CollectionPage', { items: MediaItem[] }>
+export type CollectionPage = Schema<'CollectionPage'>
 
 export type Count = Schema<'Count'>
 
@@ -393,27 +326,17 @@ export type Figures = Schema<'Figures'>
 
 export type CacheFigures = Schema<'CacheFigures'>
 
-/**
- * A lock, as it travels: the work by every id it can be found by, the field
- * and its value — any JSON value, where the document says an object.
- */
-export type Lock = Refined<'Lock', { value?: unknown }>
+/** A lock, as it travels: the work by every id it can be found by, the field and its value. */
+export type Lock = Schema<'Lock'>
 
-/** Every lock, as a document. Its date is always sent: only an import may leave it out. */
-export type Locks = Refined<'Locks', { exportedAt: string; locks: Lock[] }>
+/** Every lock, as a document. */
+export type Locks = Schema<'Locks'>
 
 /** What an import did. */
 export type LocksImported = Schema<'LocksImported'>
 
-/**
- * How the server is. Its `sources` are said here — the document's `Source` is
- * who gave a value, the other Rust type of that name — and `updateAvailable`
- * is always sent, `null` while there is no newer release.
- */
-export type Health = Refined<
-  'Health',
-  { sources: { name: string; on: boolean }[]; jobs: Job[]; updateAvailable: UpdateAvailable | null }
->
+/** How the server is. */
+export type Health = Refined<'Health', { jobs: Job[] }>
 
 /** A release newer than the version running, and its page on GitHub. */
 export type UpdateAvailable = Schema<'UpdateAvailable'>
@@ -428,21 +351,17 @@ export type ListKind = Schema<'ListKind'>
 
 export type ListMode = Schema<'ListMode'>
 
-/**
- * A filter kept with a list, in the list query's own vocabulary: any field
- * may be left out, and none is `null`. The struct is `#[serde(default)]` with
- * its `None`s skipped, which the document reads as every field required.
- */
-export type ListFilter = { [K in keyof Schema<'ListFilter'>]?: Exclude<Schema<'ListFilter'>[K], null> }
+/** A filter kept with a list, in the list query's own vocabulary. */
+export type ListFilter = Schema<'ListFilter'>
 
 /** A curated list: a selection composed by hand, or by a filter kept current. */
-export type CuratedList = Refined<'CuratedList', { filter?: ListFilter }>
+export type CuratedList = Schema<'CuratedList'>
 
-export type CuratedLists = Refined<'CuratedLists', { lists: CuratedList[] }>
+export type CuratedLists = Schema<'CuratedLists'>
 
-export type CuratedListPage = Refined<'CuratedListPage', { list: CuratedList; items: MediaItem[] }>
+export type CuratedListPage = Schema<'CuratedListPage'>
 
-export type CuratedListRequest = Refined<'CuratedListRequest', { filter?: ListFilter }>
+export type CuratedListRequest = Schema<'CuratedListRequest'>
 
 /** One value a list can be narrowed to, and how many works it would leave. */
 export type Facet = Schema<'Facet'>
@@ -465,14 +384,15 @@ export type CalendarEntry = Schema<'CalendarEntry'>
  * whoever read it before it held films; it is deprecated, so the generated
  * types leave it out (`--exclude-deprecated`) and this site reads `entries`.
  */
-export type Calendar = Refined<'Calendar', { works: MediaItem[] }>
+export type Calendar = Schema<'Calendar'>
 
-export type Role = Schema<'Role'>
+/** One part a person played, or one job they did, on one work. */
+export type Role = Schema<'PersonRole'>
 
 /** Somebody as TMDB knows them, beside what this catalogue holds of theirs. */
 export type PersonDetails = Schema<'PersonDetails'>
 
-export type Person = Refined<'Person', { works: MediaItem[] }>
+export type Person = Schema<'Person'>
 
 export type NetworkRule = Schema<'NetworkRule'>
 
@@ -485,7 +405,7 @@ export type NetworkCaller = Schema<'Caller'>
  * own, so a setting added to the server appears here without this code being
  * touched — which is the only reason the registry is served at all.
  */
-export type SettingKind = Schema<'Kind'>
+export type SettingKind = Schema<'SettingKind'>
 
 export type SettingScope = Schema<'Scope'>
 
@@ -499,9 +419,9 @@ export type Found = Schema<'Found'>
 /** What an entry of a season chart is. */
 export type SeasonEntryKind = Schema<'EntryKind'>
 
-export type SeasonEntry = Schema<'Entry'>
+export type SeasonEntry = Schema<'SeasonEntry'>
 
-export type SeasonChart = Refined<'Chart', { works: MediaItem[] }>
+export type SeasonChart = Schema<'Chart'>
 
 /** A work premiering in a season that the catalogue does not hold, by TMDB. */
 export type SeasonCandidate = Schema<'Candidate'>

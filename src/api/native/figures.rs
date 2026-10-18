@@ -73,6 +73,7 @@ pub struct Figures {
 /// shown it.
 #[utoipa::path(
     get, path = "/figures", tag = TAG,
+    operation_id = "figures_figures",
     responses((status = 200, body = Figures)),
 )]
 async fn figures(
@@ -174,8 +175,12 @@ pub struct CacheFigures {
     pub bytes: u64,
 }
 
+/// A source, and whether it is switched on and able to answer.
 #[derive(Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
+// Named explicitly: who gave one of a work's values is a `Source` too, and
+// utoipa keys schemas on the leaf name alone.
+#[schema(as = SourceState)]
 pub struct Source {
     pub name: &'static str,
     pub on: bool,
@@ -211,6 +216,7 @@ pub struct Health {
     /// The latest runs of the jobs, newest first.
     pub jobs: Vec<Job>,
     /// A newer release, when the check is on and found one; `null` else.
+    #[schema(required)]
     pub update_available: Option<UpdateAvailable>,
 }
 
@@ -229,6 +235,7 @@ pub struct UpdateAvailable {
 /// what it keeps in memory, which sources are on and what its jobs did last.
 #[utoipa::path(
     get, path = "/admin/health", tag = TAG,
+    operation_id = "figures_health",
     responses(
         (status = 200, body = Health),
         (status = 403, description = "The caller is not an administrator"),
@@ -340,6 +347,7 @@ async fn health(
 /// matters most.
 #[utoipa::path(
     get, path = "/admin/metrics", tag = TAG,
+    operation_id = "figures_metrics",
     responses(
         (status = 200, description = "The Prometheus text exposition", content_type = "text/plain"),
         (status = 403, description = "The caller is not an administrator"),

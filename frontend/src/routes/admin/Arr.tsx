@@ -85,7 +85,7 @@ function keyMoves(kept: ArrConfiguration[ArrApp], typed: string): boolean {
  * `12 already here, 30 imported, 2 not found, 0 failed, of 44`, with
  * `{n} of {total}: ` before it while it runs and `stopped: ` once stopped.
  */
-function describeSeed(detail: string | undefined, t: Dict): string | null {
+function describeSeed(detail: string | null | undefined, t: Dict): string | null {
   if (!detail) return null
   const p = t.admin.arrPage
   const m = detail.match(

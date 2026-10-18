@@ -163,6 +163,8 @@ test.describe('the bar on the narrowest phone', () => {
     // French, where "Programme" is the widest word the bar carries.
     await page.addInitScript(() => localStorage.setItem('ams.lang', 'fr'))
     await page.goto('/')
+    // Drawn once its language is in: the bar's places are counted after that.
+    await expect(bar(page).getByRole('link')).toHaveCount(4)
 
     const controls = [...(await bar(page).getByRole('link').all()), bar(page).getByRole('button', { name: MORE })]
     expect(controls).toHaveLength(5)

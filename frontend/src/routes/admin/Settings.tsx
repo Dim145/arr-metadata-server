@@ -345,7 +345,7 @@ export function Settings() {
 
 /** Write a `.nfo` document for everything, for a library Plex reads. */
 /** `N works, N episodes, N failed`, as the server words an export's run. */
-function exportCounts(detail?: string) {
+function exportCounts(detail: string | null | undefined) {
   const match = detail?.match(/^(\d+) works, (\d+) episodes, (\d+) failed$/)
   return match ? { works: Number(match[1]), episodes: Number(match[2]), failed: Number(match[3]) } : undefined
 }

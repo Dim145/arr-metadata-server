@@ -60,7 +60,9 @@ pub struct Facets {
     /// The languages works were made in, as stored.
     pub languages: Vec<Facet>,
     pub statuses: Vec<Facet>,
+    #[schema(required)]
     pub year_min: Option<i32>,
+    #[schema(required)]
     pub year_max: Option<i32>,
 }
 

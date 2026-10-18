@@ -106,6 +106,7 @@ async fn expiring_keys(db: &Db, horizon_days: i64) -> anyhow::Result<i64> {
 /// shows only the ones above nought.
 #[utoipa::path(
     get, path = "/admin/todo", tag = TAG,
+    operation_id = "todo_todo",
     responses(
         (status = 200, body = Todo),
         (status = 403, description = "The caller is not an administrator"),

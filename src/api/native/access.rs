@@ -104,6 +104,7 @@ pub struct Access {
 
 #[utoipa::path(
     get, path = "/admin/access", tag = TAG,
+    operation_id = "access_access",
     responses(
         (status = 200, body = Access),
         (status = 403, description = "The caller is not an administrator"),

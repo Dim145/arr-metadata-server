@@ -19,7 +19,7 @@ export interface paths {
          * @description Only reached by the name `graphql.anilist.co`, on the clients' door: the
          *     interface's door serves its own page at this path.
          */
-        post: operations["relay"];
+        post: operations["anilist_relay"];
         delete?: never;
         options?: never;
         head?: never;
@@ -54,7 +54,7 @@ export interface paths {
          *     `/3/search/{movie,tv,multi}`, `/3/trending/{movie,tv,all}/{window}` and
          *     `/3/discover/{movie,tv}`.
          */
-        get: operations["proxy"];
+        get: operations["tmdb_proxy"];
         put?: never;
         post?: never;
         delete?: never;
@@ -74,7 +74,7 @@ export interface paths {
          * The v4 route, registered by hand as `/4/{*path}` like the v3 one: the same
          *     relay, with the checks above that hold it to the public lists.
          */
-        get: operations["proxy_v4"];
+        get: operations["tmdb_proxy_v4"];
         put?: never;
         post?: never;
         delete?: never;
@@ -90,7 +90,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get: operations["profile"];
+        get: operations["account_profile"];
         put?: never;
         post?: never;
         delete?: never;
@@ -100,7 +100,7 @@ export interface paths {
          * Change what you are called, your address and your language. The username
          *     and the role are not yours to change.
          */
-        patch: operations["update_profile"];
+        patch: operations["account_update_profile"];
         trace?: never;
     };
     "/api/v1/account/keys": {
@@ -110,13 +110,13 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get: operations["keys"];
+        get: operations["account_keys"];
         put?: never;
         /**
          * Make a key that acts in your name. Its secret is shown in this answer and
          *     never again.
          */
-        post: operations["create_key"];
+        post: operations["account_create_key"];
         delete?: never;
         options?: never;
         head?: never;
@@ -134,11 +134,11 @@ export interface paths {
         put?: never;
         post?: never;
         /** Revoke one of your keys. */
-        delete: operations["delete_key"];
+        delete: operations["account_delete_key"];
         options?: never;
         head?: never;
         /** Rename a key of yours, pause it, or change what it may do. */
-        patch: operations["update_key"];
+        patch: operations["account_update_key"];
         trace?: never;
     };
     "/api/v1/account/keys/{id}/rotate": {
@@ -154,7 +154,7 @@ export interface paths {
          * A new secret for one of your keys. The old one stops working at once;
          *     whatever used it must be given the new one.
          */
-        post: operations["rotate_key"];
+        post: operations["account_rotate_key"];
         delete?: never;
         options?: never;
         head?: never;
@@ -169,11 +169,11 @@ export interface paths {
             cookie?: never;
         };
         /** Where you are signed in, the device asking first among equals. */
-        get: operations["sessions"];
+        get: operations["account_sessions"];
         put?: never;
         post?: never;
         /** Sign out everywhere but here. */
-        delete: operations["sign_out_elsewhere"];
+        delete: operations["account_sign_out_elsewhere"];
         options?: never;
         head?: never;
         patch?: never;
@@ -190,7 +190,7 @@ export interface paths {
         put?: never;
         post?: never;
         /** Close one of your sessions. */
-        delete: operations["close_session"];
+        delete: operations["account_close_session"];
         options?: never;
         head?: never;
         patch?: never;
@@ -203,7 +203,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get: operations["access"];
+        get: operations["access_access"];
         put?: never;
         post?: never;
         delete?: never;
@@ -219,7 +219,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get: operations["configuration"];
+        get: operations["arr_configuration"];
         /**
          * Connect Sonarr and Radarr, and say whether a change is told to them. Each
          *     field left out stays; all of it is checked before any of it is written.
@@ -228,7 +228,7 @@ export interface paths {
          *     key comes with it (or is emptied); an address removed takes the key with
          *     it.
          */
-        put: operations["configure"];
+        put: operations["arr_configure"];
         post?: never;
         delete?: never;
         options?: never;
@@ -251,7 +251,7 @@ export interface paths {
          *     before relying on it. The key kept is tried only at the origin it was
          *     kept for: another address is tried with the key given with it.
          */
-        post: operations["test"];
+        post: operations["arr_test"];
         delete?: never;
         options?: never;
         head?: never;
@@ -265,7 +265,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get: operations["report"];
+        get: operations["cache_report"];
         put?: never;
         post?: never;
         delete?: never;
@@ -287,7 +287,7 @@ export interface paths {
          * Forget every space, in every tier: this server's keys on the shared
          *     server — never anybody else's — and every instance's memory.
          */
-        post: operations["flush_all"];
+        post: operations["cache_flush_all"];
         delete?: never;
         options?: never;
         head?: never;
@@ -304,7 +304,7 @@ export interface paths {
         get?: never;
         put?: never;
         /** Forget one space, in every tier. */
-        post: operations["flush_space"];
+        post: operations["cache_flush_space"];
         delete?: never;
         options?: never;
         head?: never;
@@ -322,7 +322,7 @@ export interface paths {
          * How the server is: its version and uptime, what it holds, what failed,
          *     what it keeps in memory, which sources are on and what its jobs did last.
          */
-        get: operations["health"];
+        get: operations["figures_health"];
         put?: never;
         post?: never;
         delete?: never;
@@ -339,7 +339,7 @@ export interface paths {
             cookie?: never;
         };
         /** Every lock in the catalogue, as a document to keep or carry elsewhere. */
-        get: operations["export"];
+        get: operations["locks_export"];
         put?: never;
         /**
          * Set the locks of a document on the works held here. A work is found by
@@ -351,7 +351,7 @@ export interface paths {
          *     refresh. At most two thousand locks a request; a longer document is sent
          *     in parts.
          */
-        post: operations["import"];
+        post: operations["locks_import"];
         delete?: never;
         options?: never;
         head?: never;
@@ -374,7 +374,7 @@ export interface paths {
          *     a scrape it cannot answer, rather than the whole scrape failing when it
          *     matters most.
          */
-        get: operations["metrics"];
+        get: operations["figures_metrics"];
         put?: never;
         post?: never;
         delete?: never;
@@ -391,13 +391,13 @@ export interface paths {
             cookie?: never;
         };
         /** Every destination, in the order they were added. */
-        get: operations["list"];
+        get: operations["webhooks_list"];
         put?: never;
         /**
          * Add a destination. A standard one's signing secret is made here and
          *     shown in this answer, and only in this one.
          */
-        post: operations["create"];
+        post: operations["webhooks_create"];
         delete?: never;
         options?: never;
         head?: never;
@@ -415,7 +415,7 @@ export interface paths {
         put?: never;
         post?: never;
         /** Delete a destination, and its log with it. */
-        delete: operations["remove"];
+        delete: operations["webhooks_remove"];
         options?: never;
         head?: never;
         /**
@@ -426,7 +426,7 @@ export interface paths {
          *     only. A token kept is not carried to another kind or origin: it is given
          *     again, or dropped — and a Gotify destination, which needs one, refused.
          */
-        patch: operations["change"];
+        patch: operations["webhooks_change"];
         trace?: never;
     };
     "/api/v1/admin/notifications/{id}/deliveries": {
@@ -440,7 +440,7 @@ export interface paths {
          * What was told to a destination, the newest first: kept thirty days, the
          *     newest thousand of it.
          */
-        get: operations["log"];
+        get: operations["webhooks_log"];
         put?: never;
         post?: never;
         delete?: never;
@@ -463,7 +463,7 @@ export interface paths {
          *     id, so a receiver that keeps them knows it for the same. A line of its
          *     own in the log, due at once.
          */
-        post: operations["replay"];
+        post: operations["webhooks_replay"];
         delete?: never;
         options?: never;
         head?: never;
@@ -483,7 +483,7 @@ export interface paths {
          * Make a standard destination's signing secret anew: the receiver needs the
          *     new one from now on. Shown in this answer only.
          */
-        post: operations["rotate"];
+        post: operations["webhooks_rotate"];
         delete?: never;
         options?: never;
         head?: never;
@@ -504,7 +504,7 @@ export interface paths {
          *     whether it is on, and say what came of it. Nothing is written: neither
          *     in the audit trail nor in its log.
          */
-        post: operations["test"];
+        post: operations["webhooks_test"];
         delete?: never;
         options?: never;
         head?: never;
@@ -518,12 +518,12 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get: operations["configuration"];
+        get: operations["oidc_configuration"];
         /**
          * Change how people sign in through the provider. Each field left out stays.
          *     All of it is checked before any of it is written.
          */
-        put: operations["configure"];
+        put: operations["oidc_configure"];
         post?: never;
         delete?: never;
         options?: never;
@@ -544,7 +544,7 @@ export interface paths {
          * Read the provider's discovery document, to check an issuer before relying
          *     on it. Answers what it found, or why it found nothing.
          */
-        post: operations["test"];
+        post: operations["oidc_test"];
         delete?: never;
         options?: never;
         head?: never;
@@ -558,7 +558,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get: operations["status"];
+        get: operations["tls_status"];
         put?: never;
         post?: never;
         delete?: never;
@@ -577,7 +577,7 @@ export interface paths {
         get?: never;
         put?: never;
         /** Issue the clients' certificate anew, now, whatever time it has left. */
-        post: operations["renew"];
+        post: operations["tls_renew"];
         delete?: never;
         options?: never;
         head?: never;
@@ -598,7 +598,7 @@ export interface paths {
          *     them, adult titles as the server's policy has them — and the dashboard
          *     shows only the ones above nought.
          */
-        get: operations["todo"];
+        get: operations["todo_todo"];
         put?: never;
         post?: never;
         delete?: never;
@@ -618,7 +618,7 @@ export interface paths {
          * The events a destination can be told of, for the Notifications page to
          *     offer.
          */
-        get: operations["events"];
+        get: operations["webhooks_events"];
         put?: never;
         post?: never;
         delete?: never;
@@ -639,7 +639,7 @@ export interface paths {
          * @description Administrative: it names who did what, so it requires an administrator or a
          *     key carrying the `admin` scope.
          */
-        get: operations["list"];
+        get: operations["audit_list"];
         put?: never;
         post?: never;
         delete?: never;
@@ -662,7 +662,7 @@ export interface paths {
          * @description A POST so the code travels in the body: a path or a query string is what
          *     access logs keep.
          */
-        post: operations["check_invitation"];
+        post: operations["signup_check_invitation"];
         delete?: never;
         options?: never;
         head?: never;
@@ -683,7 +683,7 @@ export interface paths {
          * @description A wrong username and a wrong password are indistinguishable, by design: the
          *     password is verified either way so the two take the same time.
          */
-        post: operations["login"];
+        post: operations["auth_login"];
         delete?: never;
         options?: never;
         head?: never;
@@ -700,7 +700,7 @@ export interface paths {
         get?: never;
         put?: never;
         /** Sign out, invalidating this session server-side. */
-        post: operations["logout"];
+        post: operations["auth_logout"];
         delete?: never;
         options?: never;
         head?: never;
@@ -715,7 +715,7 @@ export interface paths {
             cookie?: never;
         };
         /** Who this request is authenticated as, and what it may do. */
-        get: operations["me"];
+        get: operations["auth_me"];
         put?: never;
         post?: never;
         delete?: never;
@@ -736,7 +736,7 @@ export interface paths {
          * @description Signed in, a page that moves on to where the person was going; refused,
          *     the sign-in page, told why in a word (`?sso=`).
          */
-        get: operations["callback"];
+        get: operations["oidc_callback"];
         put?: never;
         post?: never;
         delete?: never;
@@ -756,7 +756,7 @@ export interface paths {
          * Go to the identity provider to sign in — or, with `link`, to tie the
          *     signed-in account to the person the provider knows.
          */
-        get: operations["start"];
+        get: operations["oidc_start"];
         put?: never;
         post?: never;
         delete?: never;
@@ -773,7 +773,7 @@ export interface paths {
             cookie?: never;
         };
         /** What the sign-in page offers: whether one may sign up, and how. */
-        get: operations["options"];
+        get: operations["signup_options"];
         put?: never;
         post?: never;
         delete?: never;
@@ -796,7 +796,7 @@ export interface paths {
          * @description Every existing session is invalidated: they were all authorised under the
          *     old password.
          */
-        post: operations["change_password"];
+        post: operations["auth_change_password"];
         delete?: never;
         options?: never;
         head?: never;
@@ -813,7 +813,7 @@ export interface paths {
         get?: never;
         put?: never;
         /** Open an account, and sign into it unless it has to wait for approval. */
-        post: operations["register"];
+        post: operations["signup_register"];
         delete?: never;
         options?: never;
         head?: never;
@@ -834,7 +834,7 @@ export interface paths {
          * @description The database is untouched — this only discards the in-process layer in front
          *     of it, so the next request re-reads and re-applies overrides.
          */
-        post: operations["clear_cache"];
+        post: operations["meta_clear_cache"];
         delete?: never;
         options?: never;
         head?: never;
@@ -860,7 +860,7 @@ export interface paths {
          *     caller's own day wherever it is. Switched off, or for adults where the
          *     reader would not be shown one, a work is left out of both.
          */
-        get: operations["calendar"];
+        get: operations["browse_calendar"];
         put?: never;
         post?: never;
         delete?: never;
@@ -884,7 +884,7 @@ export interface paths {
          *     salles`. Subscribe a calendar app to it — as `webcal://` — and the week's
          *     episodes and films are in it, refreshed as the app sees fit.
          */
-        get: operations["calendar_ics"];
+        get: operations["feeds_calendar_ics"];
         put?: never;
         post?: never;
         delete?: never;
@@ -901,14 +901,14 @@ export interface paths {
             cookie?: never;
         };
         /** Every issued key. The keys themselves are not recoverable. */
-        get: operations["list"];
+        get: operations["clients_list"];
         put?: never;
         /**
          * Issue a key.
          * @description The response carries the key in the clear. It is the only time it is ever
          *     shown: only a SHA-256 of it is stored.
          */
-        post: operations["create"];
+        post: operations["clients_create"];
         delete?: never;
         options?: never;
         head?: never;
@@ -923,15 +923,15 @@ export interface paths {
             cookie?: never;
         };
         /** One client. */
-        get: operations["detail"];
+        get: operations["clients_detail"];
         put?: never;
         post?: never;
         /** Revoke a key permanently. */
-        delete: operations["remove"];
+        delete: operations["clients_remove"];
         options?: never;
         head?: never;
         /** Enable or disable a key without revoking it. */
-        patch: operations["update"];
+        patch: operations["clients_update"];
         trace?: never;
     };
     "/api/v1/collections": {
@@ -942,7 +942,7 @@ export interface paths {
             cookie?: never;
         };
         /** The collections the catalogue's films belong to, most films first. */
-        get: operations["collections"];
+        get: operations["recommend_collections"];
         put?: never;
         post?: never;
         delete?: never;
@@ -959,7 +959,7 @@ export interface paths {
             cookie?: never;
         };
         /** One collection: what the catalogue holds of it, and what TMDB lists. */
-        get: operations["collection"];
+        get: operations["recommend_collection"];
         put?: never;
         post?: never;
         delete?: never;
@@ -984,7 +984,7 @@ export interface paths {
          *     longer than a request is given carries on after the answer, 202, and is
          *     followed under Jobs like any other.
          */
-        post: operations["import_dataset"];
+        post: operations["meta_import_dataset"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1005,7 +1005,7 @@ export interface paths {
          *     because fetching twenty in full to show a list would be twenty times the
          *     work for nineteen wasted.
          */
-        get: operations["search"];
+        get: operations["discover_search"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1028,7 +1028,7 @@ export interface paths {
          * @description Idempotent: importing something already held refreshes it rather than
          *     duplicating it, because the fetch path keys on the external id.
          */
-        post: operations["import"];
+        post: operations["discover_import"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1059,7 +1059,7 @@ export interface paths {
          *     `read` scope will do, since Kometa only reads. A key that belongs to nobody
          *     needs the `write` scope.
          */
-        get: operations["kometa_yml"];
+        get: operations["export_kometa_yml"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1091,7 +1091,7 @@ export interface paths {
          *     to stop the export wherever it had got to. The run is a job; its record
          *     says when it is done and what it wrote.
          */
-        post: operations["export_all"];
+        post: operations["export_export_all"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1113,7 +1113,7 @@ export interface paths {
          *     may see: an adult title's genre is not counted for somebody who would never
          *     be shown it.
          */
-        get: operations["facets"];
+        get: operations["browse_facets"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1130,7 +1130,7 @@ export interface paths {
             cookie?: never;
         };
         /** The works most recently added to the catalogue, as an Atom feed. */
-        get: operations["added_atom"];
+        get: operations["feeds_added_atom"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1151,7 +1151,7 @@ export interface paths {
          *     ahead, as an Atom feed: an entry an episode, and one a day a film comes
          *     out.
          */
-        get: operations["airing_atom"];
+        get: operations["feeds_airing_atom"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1172,7 +1172,7 @@ export interface paths {
          * @description This is the authority: an override naming a field absent from here is
          *     refused. The web UI builds its edit form from it.
          */
-        get: operations["field_registry"];
+        get: operations["meta_field_registry"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1193,7 +1193,7 @@ export interface paths {
          *     about, where it came from and how it is rated — counted as a reader is
          *     shown it.
          */
-        get: operations["figures"];
+        get: operations["figures_figures"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1209,10 +1209,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get: operations["list"];
+        get: operations["invitations_list"];
         put?: never;
         /** Make an invitation. Its code is in the answer, and nowhere else ever again. */
-        post: operations["create"];
+        post: operations["invitations_create"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1230,7 +1230,7 @@ export interface paths {
         put?: never;
         post?: never;
         /** Withdraw an invitation. The accounts it already opened stay. */
-        delete: operations["revoke"];
+        delete: operations["invitations_revoke"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1248,7 +1248,7 @@ export interface paths {
          * @description Searches this server's own store only — it does not reach out to a provider.
          *     Manual overrides are applied, so what you see here is what clients are served.
          */
-        get: operations["list"];
+        get: operations["items_list"];
         put?: never;
         /**
          * Create an entry by hand.
@@ -1257,7 +1257,7 @@ export interface paths {
          *     it by — Sonarr by its TheTVDB id, Radarr by its TMDB one — and what its
          *     links lead to; one another entry already goes by is refused.
          */
-        post: operations["create"];
+        post: operations["items_create"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1276,11 +1276,11 @@ export interface paths {
          * @description Seasons, episodes, images, credits and ratings are included, with every
          *     manual override applied. `lockedFields` lists what a human has claimed.
          */
-        get: operations["detail"];
+        get: operations["items_detail"];
         put?: never;
         post?: never;
         /** Delete an entry and everything attached to it, overrides included. */
-        delete: operations["remove"];
+        delete: operations["items_remove"];
         options?: never;
         head?: never;
         /**
@@ -1288,7 +1288,7 @@ export interface paths {
          * @description A disabled entry stays in the database and stops being served. Editing a
          *     *field* is a different operation — see the override endpoints.
          */
-        patch: operations["update"];
+        patch: operations["items_update"];
         trace?: never;
     };
     "/api/v1/items/{id}/alternative-titles": {
@@ -1305,7 +1305,7 @@ export interface paths {
          * @description Sonarr and Radarr match release names against these, so adding the spelling a
          *     release group actually uses is often what makes a download get recognised.
          */
-        post: operations["add_alternative_title"];
+        post: operations["children_add_alternative_title"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1323,7 +1323,7 @@ export interface paths {
         put?: never;
         post?: never;
         /** Remove an alternative title that was added by hand. */
-        delete: operations["remove_alternative_title"];
+        delete: operations["children_remove_alternative_title"];
         options?: never;
         head?: never;
         /**
@@ -1333,7 +1333,7 @@ export interface paths {
          *     against these, and a wrong one matches the wrong releases. A title added
          *     by hand is removed instead.
          */
-        patch: operations["edit_alternative_title"];
+        patch: operations["children_edit_alternative_title"];
         trace?: never;
     };
     "/api/v1/items/{id}/calendar.ics": {
@@ -1348,7 +1348,7 @@ export interface paths {
          *     film's releases, a day each — the same events the schedule's calendar
          *     carries for it.
          */
-        get: operations["work_ics"];
+        get: operations["feeds_work_ics"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1367,7 +1367,7 @@ export interface paths {
         get?: never;
         put?: never;
         /** Add a credit by hand. */
-        post: operations["add_credit"];
+        post: operations["children_add_credit"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1385,7 +1385,7 @@ export interface paths {
         put?: never;
         post?: never;
         /** Remove a credit that was added by hand. */
-        delete: operations["remove_credit"];
+        delete: operations["children_remove_credit"];
         options?: never;
         head?: never;
         /**
@@ -1398,7 +1398,7 @@ export interface paths {
          *     credit added by hand is corrected in its row, and removed rather than
          *     hidden.
          */
-        patch: operations["edit_credit"];
+        patch: operations["children_edit_credit"];
         trace?: never;
     };
     "/api/v1/items/{id}/episodes": {
@@ -1411,7 +1411,7 @@ export interface paths {
         get?: never;
         put?: never;
         /** Add an episode by hand. */
-        post: operations["add_episode"];
+        post: operations["children_add_episode"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1429,7 +1429,7 @@ export interface paths {
         put?: never;
         post?: never;
         /** Remove an episode that was added by hand. */
-        delete: operations["remove_episode"];
+        delete: operations["children_remove_episode"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1448,7 +1448,7 @@ export interface paths {
          * Add an image by hand.
          * @description Use `sortOrder: 0` to put it ahead of the provider's own artwork.
          */
-        post: operations["add_image"];
+        post: operations["children_add_image"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1466,7 +1466,7 @@ export interface paths {
         put?: never;
         post?: never;
         /** Remove an image that was added by hand. */
-        delete: operations["remove_image"];
+        delete: operations["children_remove_image"];
         options?: never;
         head?: never;
         /**
@@ -1477,7 +1477,7 @@ export interface paths {
          *     the work without it. An image added by hand is removed instead; the one
          *     chosen to lead with is shown whatever is hidden.
          */
-        patch: operations["edit_image"];
+        patch: operations["children_edit_image"];
         trace?: never;
     };
     "/api/v1/items/{id}/lists": {
@@ -1491,7 +1491,7 @@ export interface paths {
          * The hand-made lists a work is in — the public ones, for a reader who does
          *     not maintain them, and none at all for a work the reader may not see.
          */
-        get: operations["holding"];
+        get: operations["lists_holding"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1508,7 +1508,7 @@ export interface paths {
             cookie?: never;
         };
         /** Every address a work points at, and what is kept of each. */
-        get: operations["work_media"];
+        get: operations["media_work_media"];
         put?: never;
         /**
          * Put a picture or a theme on a work, from a file.
@@ -1519,7 +1519,7 @@ export interface paths {
          *     which no refresh replaces; a still or a theme locks the field it fills.
          *     The file is read for what it is, not for what it is called.
          */
-        post: operations["upload"];
+        post: operations["media_upload"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1544,7 +1544,7 @@ export interface paths {
          *     fetches it again. Only a copy of the work's own: an address its rows or
          *     its locks hold, or an upload made for it.
          */
-        delete: operations["forget"];
+        delete: operations["media_forget"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1563,7 +1563,7 @@ export interface paths {
          *     and point Plex's Personal Media agent — or Kodi, or Jellyfin — at the library.
          *     Of a work this caller may see, as its own page decides it.
          */
-        get: operations["item_nfo"];
+        get: operations["export_item_nfo"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1580,7 +1580,7 @@ export interface paths {
             cookie?: never;
         };
         /** The `.nfo` document for one episode. */
-        get: operations["episode_nfo"];
+        get: operations["export_episode_nfo"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1601,7 +1601,7 @@ export interface paths {
          *     order is the work's own and the one every client is served; these are for
          *     a reader who knows the series by its DVDs, or straight through.
          */
-        get: operations["orders"];
+        get: operations["orders_orders"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1623,7 +1623,7 @@ export interface paths {
          *     edit is said to whoever maintains the catalogue: to anybody else it would
          *     name accounts and keys.
          */
-        get: operations["list"];
+        get: operations["overrides_list"];
         /**
          * Record an edit, locking the field.
          * @description From this point every refresh leaves the field alone. Sending a `null` value
@@ -1637,10 +1637,10 @@ export interface paths {
          *     corrects a credit (`characterName`, `sortOrder`), whatever row a refresh
          *     writes it in next.
          */
-        put: operations["set"];
+        put: operations["overrides_set"];
         post?: never;
         /** Unlock every field of a work at once. */
-        delete: operations["clear"];
+        delete: operations["overrides_clear"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1662,7 +1662,7 @@ export interface paths {
          *     (`credit:actor:tmdb:17419`), percent-encoded; an image's, whose address
          *     holds slashes, is easier lifted from the image's own route.
          */
-        delete: operations["unset"];
+        delete: operations["overrides_unset"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1682,7 +1682,7 @@ export interface paths {
          *     the images by source; the provider of the episode list. For the people who
          *     keep the catalogue — a field locked by hand says so in the work itself.
          */
-        get: operations["provenance"];
+        get: operations["items_provenance"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1705,7 +1705,7 @@ export interface paths {
          * @description Provider data and provider-sourced children are replaced. Manual overrides
          *     are not touched — that is the point of them.
          */
-        post: operations["refresh"];
+        post: operations["items_refresh"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1725,7 +1725,7 @@ export interface paths {
          * Add a season by hand.
          * @description It is flagged manual, so no refresh will replace or remove it.
          */
-        post: operations["add_season"];
+        post: operations["children_add_season"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1743,7 +1743,7 @@ export interface paths {
         put?: never;
         post?: never;
         /** Remove a season that was added by hand. */
-        delete: operations["remove_season"];
+        delete: operations["children_remove_season"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1761,7 +1761,7 @@ export interface paths {
          *     genres, keywords, network or studio, language or decade, the most alike
          *     first. A film's own collection is left to the collection.
          */
-        get: operations["similar"];
+        get: operations["recommend_similar"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1782,7 +1782,7 @@ export interface paths {
          * @description Useful for diagnosing a mapping that produced the wrong canonical value.
          *     Of a work this caller may see, as its own page decides it.
          */
-        get: operations["snapshots"];
+        get: operations["items_snapshots"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1802,7 +1802,7 @@ export interface paths {
          * What TMDB recommends beside a work, for whoever maintains the catalogue
          *     to import from — each marked where it is already held.
          */
-        get: operations["suggestions"];
+        get: operations["recommend_suggestions"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1827,7 +1827,7 @@ export interface paths {
          *     nobody else changed their mind. Fields locked by hand are not touched, and
          *     the work's refresh schedule stands — this is not a refresh.
          */
-        post: operations["sync"];
+        post: operations["items_sync"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1842,7 +1842,7 @@ export interface paths {
             cookie?: never;
         };
         /** Where a work can be watched in a country. */
-        get: operations["where_to_watch"];
+        get: operations["watch_where_to_watch"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1864,7 +1864,7 @@ export interface paths {
          *     because twenty-five rows every fifteen minutes would bury the one that
          *     failed. A refresh someone asked for by hand gets its own row.
          */
-        get: operations["jobs"];
+        get: operations["meta_jobs"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1885,7 +1885,7 @@ export interface paths {
          *     took, and how each went. A run older than the detail, or of a task that
          *     keeps none, has an empty list.
          */
-        get: operations["detail"];
+        get: operations["tasks_detail"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1904,7 +1904,7 @@ export interface paths {
         get?: never;
         put?: never;
         /** Ask a run to stop at the next work. Only a run that can stop partway. */
-        post: operations["cancel"];
+        post: operations["tasks_cancel"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1919,13 +1919,13 @@ export interface paths {
             cookie?: never;
         };
         /** Every list — the public ones, for a reader who does not maintain them. */
-        get: operations["list"];
+        get: operations["lists_list"];
         put?: never;
         /**
          * Create a list. Nothing is written until everything in the request has
          *     been checked, the members included.
          */
-        post: operations["create"];
+        post: operations["lists_create"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1940,15 +1940,15 @@ export interface paths {
             cookie?: never;
         };
         /** One list with its works, by slug or by id. */
-        get: operations["detail"];
+        get: operations["lists_detail"];
         /**
          * Change a list, by id or by slug. A field left out stays as it is; the
          *     slug stays whatever the name becomes, since the clients hold the address.
          */
-        put: operations["update"];
+        put: operations["lists_update"];
         post?: never;
         /** Delete a list. The works stay. */
-        delete: operations["delete"];
+        delete: operations["lists_delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1969,7 +1969,7 @@ export interface paths {
          *     Readable as the selection's page is: open under public browsing,
          *     otherwise with a key, which a feed reader can carry in the query string.
          */
-        get: operations["list_atom"];
+        get: operations["feeds_list_atom"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1992,7 +1992,7 @@ export interface paths {
          *     title, for whoever reads the file. In the list's order, which the builder
          *     keeps for a collection ordered as the source is.
          */
-        get: operations["ids_txt"];
+        get: operations["lists_ids_txt"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2010,7 +2010,7 @@ export interface paths {
         };
         get?: never;
         /** Replace the members of a hand-made list, in order. */
-        put: operations["set_items"];
+        put: operations["lists_set_items"];
         post?: never;
         delete?: never;
         options?: never;
@@ -2029,7 +2029,7 @@ export interface paths {
          * The list as Radarr's "Custom Lists" import list reads it: the films, in
          *     TMDB's result shape, `id` being the TMDB id.
          */
-        get: operations["radarr_json"];
+        get: operations["lists_radarr_json"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2049,7 +2049,7 @@ export interface paths {
          * The list as Sonarr's "Custom List" import list reads it: the series, by
          *     TheTVDB id.
          */
-        get: operations["sonarr_json"];
+        get: operations["lists_sonarr_json"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2069,7 +2069,7 @@ export interface paths {
          * The list in the shape of the StevenLu lists Radarr reads: the films, by
          *     IMDb id.
          */
-        get: operations["stevenlu_json"];
+        get: operations["lists_stevenlu_json"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2088,7 +2088,7 @@ export interface paths {
         get?: never;
         put?: never;
         /** Ask again for one that could not be fetched. */
-        post: operations["retry"];
+        post: operations["media_retry"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2111,7 +2111,7 @@ export interface paths {
          *     providers again until "store everything" runs; the next sweep removes
          *     whatever files no row names.
          */
-        post: operations["reset"];
+        post: operations["media_reset"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2128,7 +2128,7 @@ export interface paths {
         get?: never;
         put?: never;
         /** Ask again for everything given up on. */
-        post: operations["retry_all"];
+        post: operations["media_retry_all"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2143,7 +2143,7 @@ export interface paths {
             cookie?: never;
         };
         /** How the media store stands. */
-        get: operations["status"];
+        get: operations["media_status"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2160,7 +2160,7 @@ export interface paths {
             cookie?: never;
         };
         /** What could not be fetched: given up on, or put off after a failure. */
-        get: operations["troubled"];
+        get: operations["media_troubled"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2182,7 +2182,7 @@ export interface paths {
          *     other trace, and its address — with whatever name the resolver and the hosts
          *     file give it — is what an operator needs to let it in.
          */
-        get: operations["callers"];
+        get: operations["network_callers"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2203,10 +2203,10 @@ export interface paths {
          * @description `AMS_ALLOWLIST` seeds this the first time the server starts against an empty
          *     table and is ignored afterwards — the list is editable here, like a key.
          */
-        get: operations["rules"];
+        get: operations["network_rules"];
         put?: never;
         /** Allow an address or a block. */
-        post: operations["add"];
+        post: operations["network_add"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2224,7 +2224,7 @@ export interface paths {
         put?: never;
         post?: never;
         /** Stop allowing an address or a block. */
-        delete: operations["remove"];
+        delete: operations["network_remove"];
         options?: never;
         head?: never;
         /**
@@ -2233,7 +2233,7 @@ export interface paths {
          *     handle on a client that presents no credential, since the address it calls
          *     from changes whenever its container restarts.
          */
-        patch: operations["rename"];
+        patch: operations["network_rename"];
         trace?: never;
     };
     "/api/v1/people/{tmdb_id}": {
@@ -2248,7 +2248,7 @@ export interface paths {
          * @description By TMDB's person id, which is how TMDB files cast and crew; TheTVDB's
          *     credits carry none and are not found here.
          */
-        get: operations["person"];
+        get: operations["browse_person"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2271,7 +2271,7 @@ export interface paths {
          * @description Only what this server holds. Episode dates are read with their
          *     corrections, as a work's page shows them.
          */
-        get: operations["chart"];
+        get: operations["seasons_chart"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2293,7 +2293,7 @@ export interface paths {
          * @description For whoever maintains the catalogue — a visitor sees only what it holds —
          *     and only where a TMDB key is configured.
          */
-        get: operations["candidates"];
+        get: operations["seasons_candidates"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2316,7 +2316,7 @@ export interface paths {
          *     takes which credential, whether authentication is off and whether anyone may
          *     browse is a map of the way in, and only the interface asks for it.
          */
-        get: operations["settings"];
+        get: operations["meta_settings"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2337,7 +2337,7 @@ export interface paths {
          * @description The interface renders from this rather than from a list of its own, so a
          *     setting added to the server appears without the interface being changed.
          */
-        get: operations["catalogue"];
+        get: operations["settings_catalogue"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2354,12 +2354,12 @@ export interface paths {
             cookie?: never;
         };
         /** What applies at a scope, and whether that scope sets it or inherits it. */
-        get: operations["effective"];
+        get: operations["settings_effective"];
         /** Set one setting at one scope. */
-        put: operations["put"];
+        put: operations["settings_put"];
         post?: never;
         /** Stop overriding everything at a scope, so it inherits again. */
-        delete: operations["clear"];
+        delete: operations["settings_clear"];
         options?: never;
         head?: never;
         patch?: never;
@@ -2379,7 +2379,7 @@ export interface paths {
          *     TVmaze's licence asks for a link, IMDb's for a line — so a visitor has to be
          *     able to read this too.
          */
-        get: operations["sources"];
+        get: operations["meta_sources"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2401,7 +2401,7 @@ export interface paths {
          * @description The order is the `sources.priority` setting, which every merge reads when
          *     it runs: a work takes a new order at its next refresh.
          */
-        get: operations["source_rules"];
+        get: operations["rules_source_rules"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2426,7 +2426,7 @@ export interface paths {
          *     server is run — keys, locks, the journal, the jobs, the caches — is told
          *     only to whoever maintains it, whose dashboard this is.
          */
-        get: operations["stats"];
+        get: operations["meta_stats"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2443,7 +2443,7 @@ export interface paths {
             cookie?: never;
         };
         /** Every background task: when it runs, how it last went, when it runs next. */
-        get: operations["list"];
+        get: operations["tasks_list"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2462,7 +2462,7 @@ export interface paths {
         get?: never;
         put?: never;
         /** Run a task now, in the background. */
-        post: operations["run"];
+        post: operations["tasks_run"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2477,10 +2477,10 @@ export interface paths {
             cookie?: never;
         };
         /** Every account, pending ones first. */
-        get: operations["list"];
+        get: operations["users_list"];
         put?: never;
         /** Open an account for someone. */
-        post: operations["create"];
+        post: operations["users_create"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2501,7 +2501,7 @@ export interface paths {
          *     your own account or the last administrator in a selection is left out and
          *     said, rather than failing the rest.
          */
-        post: operations["bulk"];
+        post: operations["users_bulk"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2515,14 +2515,14 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get: operations["detail"];
+        get: operations["users_detail"];
         put?: never;
         post?: never;
         /**
          * Close an account for good: its sessions and keys go with it. What it did
          *     stays in the journal, under its name.
          */
-        delete: operations["remove"];
+        delete: operations["users_remove"];
         options?: never;
         head?: never;
         /**
@@ -2530,7 +2530,7 @@ export interface paths {
          * @description Disabling an account, or sending it back to pending, closes its sessions
          *     at once; its keys stop working with it.
          */
-        patch: operations["update"];
+        patch: operations["users_update"];
         trace?: never;
     };
     "/api/v1/users/{id}/oidc": {
@@ -2548,7 +2548,7 @@ export interface paths {
          *     an account without a password of its own: untied, it could never sign in
          *     again — give it one first.
          */
-        delete: operations["unlink"];
+        delete: operations["oidc_unlink"];
         options?: never;
         head?: never;
         patch?: never;
@@ -2564,7 +2564,7 @@ export interface paths {
         get?: never;
         put?: never;
         /** Give an account a new password; its sessions are closed. */
-        post: operations["reset_password"];
+        post: operations["users_reset_password"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2582,7 +2582,7 @@ export interface paths {
         put?: never;
         post?: never;
         /** Close every session of an account, wherever it is signed in. */
-        delete: operations["revoke_sessions"];
+        delete: operations["users_revoke_sessions"];
         options?: never;
         head?: never;
         patch?: never;
@@ -2600,7 +2600,7 @@ export interface paths {
          * @description What a person adds to Plex is this address — under Settings › Metadata
          *     Agents › Add Provider. Plex reads the paths of its two features under it.
          */
-        get: operations["provider"];
+        get: operations["plex_provider"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2629,7 +2629,7 @@ export interface paths {
          *     best first. A season is matched by its series and number, an episode by
          *     its series and its place — or the day it aired.
          */
-        post: operations["matches"];
+        post: operations["plex_matches"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2649,7 +2649,7 @@ export interface paths {
          *     when `includeChildren` is `1`; a series' seasons as the order
          *     `episodeOrder` names lays them out — none for an order it has not.
          */
-        get: operations["metadata"];
+        get: operations["plex_metadata"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2671,7 +2671,7 @@ export interface paths {
          *     `X-Plex-Container-Size` how many it holds, 20 when left out. A film and
          *     an episode have none.
          */
-        get: operations["children"];
+        get: operations["plex_children"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2691,7 +2691,7 @@ export interface paths {
          * A series' episodes, every season's, a page at a time — paged as
          *     `/children` is.
          */
-        get: operations["grandchildren"];
+        get: operations["plex_grandchildren"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2711,7 +2711,7 @@ export interface paths {
          * An item's pictures: a work's posters, backgrounds and logos, the one it
          *     leads with first of each kind; a season's posters; an episode's still.
          */
-        get: operations["images"];
+        get: operations["plex_images"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2736,7 +2736,7 @@ export interface paths {
          *     TMDB ids out of it and then asks for each movie here, where the operator's
          *     edits apply. With the service switched off there is no list to give.
          */
-        get: operations["imdb_list"];
+        get: operations["radarr_imdb_list"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2753,7 +2753,7 @@ export interface paths {
             cookie?: never;
         };
         /** TMDB's popular movies. */
-        get: operations["popular"];
+        get: operations["radarr_popular"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2770,7 +2770,7 @@ export interface paths {
             cookie?: never;
         };
         /** TMDB's trending movies for the week. */
-        get: operations["trending"];
+        get: operations["radarr_trending"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2794,7 +2794,7 @@ export interface paths {
          *     which is what Radarr expects when one entry has gone away upstream. Capped
          *     at 100 ids per request.
          */
-        post: operations["bulk"];
+        post: operations["radarr_bulk"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2813,7 +2813,7 @@ export interface paths {
          *     refetch: those TMDB lists, and the films held here that changed since —
          *     fetched again, or a lock put on, changed or lifted.
          */
-        get: operations["changed"];
+        get: operations["radarr_changed"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2837,7 +2837,7 @@ export interface paths {
          *     the collection it names, and lists a collection's films by that — parts
          *     sent naming none were filed under none.
          */
-        get: operations["collection"];
+        get: operations["radarr_collection"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2857,7 +2857,7 @@ export interface paths {
          * Radarr expects an array here even though it only ever uses the first entry.
          *     A movie by IMDb id. Radarr expects an array even though it reads only the first.
          */
-        get: operations["by_imdb"];
+        get: operations["radarr_by_imdb"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2874,7 +2874,7 @@ export interface paths {
             cookie?: never;
         };
         /** A movie by TMDB id, in Radarr's format. */
-        get: operations["by_tmdb"];
+        get: operations["radarr_by_tmdb"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2896,7 +2896,7 @@ export interface paths {
          *     cannot be had, a `502` and nothing else: Sonarr then keeps the list it
          *     holds, where this catalogue's titles alone would replace it.
          */
-        get: operations["scene_mapping"];
+        get: operations["sonarr_services_scene_mapping"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2913,7 +2913,7 @@ export interface paths {
             cookie?: never;
         };
         /** Search movies, in Radarr's format. */
-        get: operations["search"];
+        get: operations["radarr_search"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2935,7 +2935,7 @@ export interface paths {
          *     `mal:` or `anilist:`. Results Sonarr could not address are omitted — showing
          *     one that fails on add is worse than showing nothing.
          */
-        get: operations["search"];
+        get: operations["sonarr_search"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2957,7 +2957,7 @@ export interface paths {
          *     TVDB does not; the response echoes back whichever id was asked for, because
          *     Sonarr has already stored it.
          */
-        get: operations["show"];
+        get: operations["sonarr_show"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2978,7 +2978,7 @@ export interface paths {
          *     real service answers a search. `term` is as for `/v1/`; Sonarr resolves
          *     `tvdb:` itself and sends `imdb:`, `tmdb:`, `mal:` and `anilist:` here.
          */
-        get: operations["search_v2"];
+        get: operations["sonarr_search_v2"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3007,7 +3007,7 @@ export interface paths {
          *     numbered by it; any other is answered with the aired order, as Skyhook
          *     answers it.
          */
-        get: operations["show_v2"];
+        get: operations["sonarr_show_v2"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3034,7 +3034,7 @@ export interface paths {
          *     (`tvdb.relayCredential = client`), a key issued here is refused with a
          *     401 that says why, and any other is signed in with at TheTVDB.
          */
-        post: operations["login"];
+        post: operations["thetvdb_login"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3068,7 +3068,7 @@ export interface paths {
          *     of a series' episodes in any of its orders, `[/{lang}]`; `seasons/{id}`
          *     and its `/extended`; one episode, `/extended` and `/translations/{lang}`.
          */
-        get: operations["relay"];
+        get: operations["thetvdb_relay"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3093,7 +3093,7 @@ export interface components {
             relayForMembers: boolean;
             registration: components["schemas"]["Registration"];
             /** @description The role of an account opened without an invitation. */
-            registrationRole: components["schemas"]["Role"];
+            registrationRole: components["schemas"]["AccountRole"];
             /**
              * Format: int64
              * @description Keys a member or an editor may hold.
@@ -3130,6 +3130,16 @@ export interface components {
             serverKeys: number;
             personalKeys: number;
         };
+        AccountCounts: {
+            /** Format: int64 */
+            total: number;
+            /** Format: int64 */
+            pending: number;
+            /** Format: int64 */
+            admins: number;
+            /** Format: int64 */
+            oidc: number;
+        };
         AccountKeys: {
             keys: components["schemas"]["ApiClient"][];
             /**
@@ -3145,6 +3155,16 @@ export interface components {
              */
             relay: boolean;
         };
+        /**
+         * @description What an account may do, least first.
+         * @enum {string}
+         */
+        AccountRole: "member" | "editor" | "admin";
+        /**
+         * @description Whether an account may sign in.
+         * @enum {string}
+         */
+        AccountStatus: "active" | "pending" | "disabled";
         ActorResource: {
             name: string;
             character?: string | null;
@@ -3163,7 +3183,13 @@ export interface components {
             isManual: boolean;
         };
         AlternativeTitleResource: {
-            title: string;
+            Title: string;
+            /**
+             * @description Where the title came from, in Radarr's spelling. Another enum it parses,
+             *     so it carries a value even when the provider did not name one.
+             */
+            Type?: string;
+            Language?: string | null;
         };
         /** @description An instance as the others last heard of it. */
         Announced: components["schemas"]["Instance"] & {
@@ -3184,11 +3210,11 @@ export interface components {
             keyPrefix: string;
             scopes: string[];
             isEnabled: boolean;
-            expiresAt?: string | null;
+            expiresAt: string | null;
             createdAt: string;
-            lastUsedAt?: string | null;
-            lastUsedIp?: string | null;
-            note?: string | null;
+            lastUsedAt: string | null;
+            lastUsedIp: string | null;
+            note: string | null;
             /** @description The account it belongs to; none for a server key. */
             ownerId?: string | null;
             ownerName?: string | null;
@@ -3262,6 +3288,14 @@ export interface components {
             /** @description The command it went in, or what went wrong. */
             detail?: string | null;
         };
+        /** @description What a status says of the one that answered. */
+        ArrStatus: {
+            /** @description `Sonarr` or `Radarr`. */
+            appName: string;
+            version: string;
+            /** @description The name it was given, when it was given one. */
+            instanceName?: string | null;
+        };
         ArrTest: {
             app: components["schemas"]["App"];
             /** @description The address to try; the stored one when left out. */
@@ -3275,7 +3309,7 @@ export interface components {
         };
         ArrTestOutcome: {
             ok: boolean;
-            status?: components["schemas"]["Status"] | null;
+            status?: components["schemas"]["ArrStatus"] | null;
             /** @description What went wrong, in words that name neither the address nor the key. */
             error?: string | null;
         };
@@ -3299,8 +3333,8 @@ export interface components {
             id: string;
             /** @description The address it was fetched from, or `upload:<id>` for an upload. */
             origin: string;
-            kind: components["schemas"]["Kind"];
-            status: components["schemas"]["Status"];
+            kind: components["schemas"]["AssetKind"];
+            status: components["schemas"]["AssetStatus"];
             /** @description Where the bytes are, once stored: `<sha256>.<ext>`. */
             key?: string | null;
             contentType?: string | null;
@@ -3322,16 +3356,40 @@ export interface components {
             createdAt: string;
             storedAt?: string | null;
         };
+        /** @description The tallies the media page opens on. */
+        AssetCounts: {
+            /** Format: int64 */
+            pending: number;
+            /** Format: int64 */
+            stored: number;
+            /** Format: int64 */
+            failed: number;
+            /**
+             * Format: int64
+             * @description Of what is stored, in bytes.
+             */
+            bytes: number;
+        };
+        /**
+         * @description What an asset is.
+         * @enum {string}
+         */
+        AssetKind: "image" | "audio";
+        /**
+         * @description Where an asset stands.
+         * @enum {string}
+         */
+        AssetStatus: "pending" | "stored" | "failed";
         AuditEntry: {
             id: string;
             at: string;
-            actor?: string | null;
+            actor: string | null;
             action: string;
             /** @description What was acted on: an item id, a client name, a field path. */
-            target?: string | null;
+            target: string | null;
             /** @description A short human-readable note. Never carries a secret. */
-            detail?: string | null;
-            ip?: string | null;
+            detail: string | null;
+            ip: string | null;
             work?: components["schemas"]["WorkRef"] | null;
         };
         AuditListResponse: {
@@ -3413,11 +3471,11 @@ export interface components {
         Caller: {
             ip: string;
             /** @description What the resolver and the hosts file call this address, if anything. */
-            hostname?: string | null;
+            hostname: string | null;
             /** @description What the caller called itself. Sonarr and Radarr say so plainly. */
-            userAgent?: string | null;
+            userAgent: string | null;
             lastSurface: string;
-            lastPath?: string | null;
+            lastPath: string | null;
             lastAllowed: boolean;
             /** Format: int64 */
             hits: number;
@@ -3484,7 +3542,7 @@ export interface components {
             from: string;
             to: string;
             /** @description In the order they premiered. */
-            entries: components["schemas"]["Entry"][];
+            entries: components["schemas"]["SeasonEntry"][];
             /**
              * @description Every work the entries belong to, drawn as a list draws them: artwork,
              *     scores and titles in the reader's language, no episodes.
@@ -3499,8 +3557,8 @@ export interface components {
             /** Format: int64 */
             tmdbId: number;
             /** @description TMDB's name for it, where a key lets it be asked. */
-            name?: string | null;
-            poster?: string | null;
+            name: string | null;
+            poster: string | null;
             /**
              * Format: int64
              * @description How many of its films the catalogue holds.
@@ -3510,10 +3568,10 @@ export interface components {
         CollectionPage: {
             /** Format: int64 */
             tmdbId: number;
-            name?: string | null;
-            overview?: string | null;
-            poster?: string | null;
-            backdrop?: string | null;
+            name: string | null;
+            overview: string | null;
+            poster: string | null;
+            backdrop: string | null;
             /** @description The films the catalogue holds, in release order, drawn as a list is. */
             items: components["schemas"]["MediaItem"][];
             /** @description Every film of the collection as TMDB lists it, marked where it is held. */
@@ -3524,10 +3582,10 @@ export interface components {
             tmdbId: number;
             title: string;
             /** Format: int32 */
-            year?: number | null;
-            poster?: string | null;
+            year: number | null;
+            poster: string | null;
             /** @description The catalogue's own id, where the film is in it. */
-            held?: string | null;
+            held: string | null;
         };
         CollectionResource: {
             Name: string;
@@ -3566,16 +3624,6 @@ export interface components {
             /** @description The source it came from: `tmdb`, `tvdb`, `radarr`. */
             source?: string | null;
         };
-        Counts: {
-            /** Format: int64 */
-            total: number;
-            /** Format: int64 */
-            pending: number;
-            /** Format: int64 */
-            admins: number;
-            /** Format: int64 */
-            oidc: number;
-        };
         /**
          * @description Cover types, using Sonarr and Radarr's spelling so the compatibility
          *     surfaces can emit them without a translation table.
@@ -3594,7 +3642,7 @@ export interface components {
         };
         CreateInvitationRequest: {
             /** @description `member` or `editor`. */
-            role: components["schemas"]["Role"];
+            role: components["schemas"]["AccountRole"];
             /**
              * Format: int64
              * @description How many accounts it may open; one when left out.
@@ -3628,7 +3676,7 @@ export interface components {
             username: string;
             displayName?: string | null;
             email?: string | null;
-            role: components["schemas"]["Role"];
+            role: components["schemas"]["AccountRole"];
             /**
              * @description Twelve characters at least. Left out, one is generated and returned —
              *     once.
@@ -3702,10 +3750,10 @@ export interface components {
             /** @description What the list is addressed by, derived from its name. */
             slug: string;
             name: string;
-            description?: string | null;
+            description: string | null;
             kind: components["schemas"]["ListKind"];
             mode: components["schemas"]["ListMode"];
-            filter?: components["schemas"]["ListFilter"] | null;
+            filter: components["schemas"]["ListFilter"] | null;
             /**
              * @description Whether a reader with no credential may see it, where public browsing
              *     is on at all.
@@ -3717,7 +3765,7 @@ export interface components {
              *     what a reader is given is the copy kept, where there is one, which is
              *     the API's to put in its place.
              */
-            cover?: string | null;
+            cover: string | null;
             /**
              * Format: int64
              * @description How many works a hand-made list holds, of those switched on; a
@@ -3774,7 +3822,7 @@ export interface components {
         };
         Definition: {
             key: string;
-            kind: components["schemas"]["Kind"];
+            kind: components["schemas"]["SettingKind"];
             /** @description Where this may be set. Anything narrower than the first entry overrides. */
             scopes: components["schemas"]["Scope"][];
         };
@@ -3782,8 +3830,8 @@ export interface components {
         Discovery: {
             issuer: string;
             authorizationEndpoint: string;
-            tokenEndpoint?: string | null;
-            userinfoEndpoint?: string | null;
+            tokenEndpoint: string | null;
+            userinfoEndpoint: string | null;
             /** @description Keys in the provider's key set. */
             keys: number;
             signingAlgorithms: string[];
@@ -3835,32 +3883,6 @@ export interface components {
              *     unset, whose reversal is to set nothing.
              */
             default?: string | null;
-        };
-        /** @description One line of the chart. */
-        Entry: {
-            workId: string;
-            kind: components["schemas"]["EntryKind"];
-            /**
-             * Format: int32
-             * @description The season, for a series whose episodes are known.
-             */
-            seasonNumber?: number | null;
-            /**
-             * @description The day it premiered, or will: `YYYY-MM-DD`. A season carrying on from
-             *     the quarter before gives the day it began.
-             */
-            starts: string;
-            /** @description The last known episode's date. */
-            ends?: string | null;
-            /**
-             * Format: int64
-             * @description The season's episodes, and how many had aired by today.
-             */
-            episodes?: number | null;
-            /** Format: int64 */
-            aired?: number | null;
-            nextEpisode?: components["schemas"]["NextEpisode"] | null;
-            sequelOf?: components["schemas"]["Kin"] | null;
         };
         /**
          * @description What an entry of the chart is.
@@ -3936,7 +3958,7 @@ export interface components {
             /** Format: int32 */
             runtime?: number | null;
             finaleType?: string | null;
-            rating?: components["schemas"]["RatingResource"] | null;
+            rating?: components["schemas"]["SkyhookRatingResource"] | null;
             overview?: string | null;
             image?: string | null;
         };
@@ -3967,7 +3989,7 @@ export interface components {
             /** Format: int32 */
             runtime?: number | null;
             finaleType?: string | null;
-            rating?: components["schemas"]["RatingResource"] | null;
+            rating?: components["schemas"]["SkyhookRatingResource"] | null;
             overview?: string | null;
             image?: string | null;
         };
@@ -3979,7 +4001,7 @@ export interface components {
              *     done, reads `N works, N episodes, N failed`; the settings page reads
              *     the counts out of it.
              */
-            jobId?: string | null;
+            jobId: string | null;
         };
         /** @description The identifiers known for one work, in the shape the compatibility surfaces need. */
         ExternalIds: {
@@ -4022,9 +4044,9 @@ export interface components {
             languages: components["schemas"]["Facet"][];
             statuses: components["schemas"]["Facet"][];
             /** Format: int32 */
-            yearMin?: number | null;
+            yearMin: number | null;
             /** Format: int32 */
-            yearMax?: number | null;
+            yearMax: number | null;
         };
         FieldDef: {
             /** @description The entity's serde name; also the key stored in `media_override.field`. */
@@ -4094,19 +4116,19 @@ export interface components {
             kind: components["schemas"]["MediaKind"];
             title: string;
             /** Format: int32 */
-            year?: number | null;
-            overview?: string | null;
-            poster?: string | null;
+            year: number | null;
+            overview: string | null;
+            poster: string | null;
             /** Format: int64 */
-            tmdbId?: number | null;
+            tmdbId: number | null;
             /** Format: int64 */
-            tvdbId?: number | null;
-            imdbId?: string | null;
+            tvdbId: number | null;
+            imdbId: string | null;
             /**
              * Format: int64
              * @description Fankai's id, for a Fan-Kai production.
              */
-            fankaiId?: number | null;
+            fankaiId: number | null;
             /**
              * @description Whether this server already holds it, so the interface can say "stored"
              *     rather than offering to import it twice.
@@ -4118,8 +4140,8 @@ export interface components {
         FurtherSources: {
             /** @description `official` when `AMS_MAL_CLIENT_ID` is set, `jikan` otherwise. */
             malVia: string;
-            animeList?: components["schemas"]["ListImport"] | null;
-            imdbRatings?: components["schemas"]["ListImport"] | null;
+            animeList: components["schemas"]["ListImport"] | null;
+            imdbRatings: components["schemas"]["ListImport"] | null;
         };
         /**
          * @description What a row is about, for grouping.
@@ -4132,7 +4154,7 @@ export interface components {
             uptimeSeconds: number;
             database: string;
             /** @description One instance, or several. */
-            mode: components["schemas"]["Mode"];
+            mode: components["schemas"]["ServerMode"];
             /** @description The instance that answered, by name. */
             instance: string;
             /** @description Whether it runs the schedules. */
@@ -4156,10 +4178,10 @@ export interface components {
             searchesCache: components["schemas"]["CacheFigures"];
             listsCache: components["schemas"]["CacheFigures"];
             /** @description The sources, and whether each is switched on and able to answer. */
-            sources: components["schemas"]["Source"][];
+            sources: components["schemas"]["SourceState"][];
             /** @description The latest runs of the jobs, newest first. */
             jobs: components["schemas"]["Job"][];
-            updateAvailable?: components["schemas"]["UpdateAvailable"] | null;
+            updateAvailable: components["schemas"]["UpdateAvailable"] | null;
         };
         /**
          * @description What the sources gave a work and a person hid. Served to nobody: kept
@@ -4191,8 +4213,8 @@ export interface components {
             isManual: boolean;
         };
         ImageResource: {
-            coverType: string;
-            url: string;
+            CoverType: string;
+            Url: string;
         };
         ImportRequest: {
             kind: string;
@@ -4254,7 +4276,7 @@ export interface components {
          *     the cache server.
          */
         Instances: {
-            mode: components["schemas"]["Mode"];
+            mode: components["schemas"]["ServerMode"];
             /** @description The instance that answered this request. */
             this: components["schemas"]["Instance"];
             /** @description Whether it is the one running the schedules. */
@@ -4268,7 +4290,7 @@ export interface components {
             id: string;
             /** @description The visible head of the code, `inv_4Q2F`. */
             codePrefix: string;
-            role: components["schemas"]["Role"];
+            role: components["schemas"]["AccountRole"];
             /** Format: int64 */
             maxUses: number;
             /** Format: int64 */
@@ -4291,7 +4313,7 @@ export interface components {
         };
         InvitationOffer: {
             /** @description The role the account will have. */
-            role: components["schemas"]["Role"];
+            role: components["schemas"]["AccountRole"];
             expiresAt?: string | null;
         };
         Invitations: {
@@ -4329,12 +4351,12 @@ export interface components {
             id: string;
             kind: string;
             /** @description What it acted on: an item id, or nothing for a sweep. */
-            target?: string | null;
+            target: string | null;
             status: string;
-            startedAt?: string | null;
-            finishedAt?: string | null;
-            error?: string | null;
-            detail?: string | null;
+            startedAt: string | null;
+            finishedAt: string | null;
+            error: string | null;
+            detail: string | null;
             createdAt: string;
             /** @description Who started it, as the journal names them; nothing for the schedule. */
             triggeredBy?: string | null;
@@ -4346,12 +4368,35 @@ export interface components {
         JobDetail: {
             job: components["schemas"]["Job"];
             /** @description The works taken, in order — the first five hundred of them. */
-            entries: components["schemas"]["Entry"][];
+            entries: components["schemas"]["JobEntry"][];
             /**
              * Format: int64
              * @description How many there were in all.
              */
             entriesTotal: number;
+        };
+        /**
+         * @description What a run did to one work: the detail behind its summary, one row a
+         *     work, in the order they were taken.
+         */
+        JobEntry: {
+            id: string;
+            /** @description The work's id — which may name nothing any more. */
+            mediaId?: string | null;
+            /** @description Its title and kind when the run took it. */
+            title?: string | null;
+            kind?: string | null;
+            /**
+             * @description `ok`, `failed`, `skipped` — or `imported`, the seed's: a work of
+             *     Sonarr's or Radarr's library fetched and stored for the first time.
+             */
+            outcome: string;
+            /**
+             * @description What happened: one of the fixed notes the interface knows, or the
+             *     error as the provider said it.
+             */
+            note?: string | null;
+            createdAt: string;
         };
         JobsResponse: {
             jobs: components["schemas"]["Job"][];
@@ -4371,27 +4416,6 @@ export interface components {
             title: string;
             workId?: string | null;
         };
-        Kind: {
-            /** @enum {string} */
-            type: "bool";
-        } | {
-            /** Format: int64 */
-            min: number;
-            /** Format: int64 */
-            max: number;
-            /** @enum {string} */
-            type: "int";
-        } | {
-            /** @enum {string} */
-            type: "text";
-        } | {
-            options: string[];
-            /** @enum {string} */
-            type: "choice";
-        } | {
-            /** @enum {string} */
-            type: "secret";
-        };
         /** @description A row as the page draws it. */
         Laid: {
             group: components["schemas"]["Group"];
@@ -4409,62 +4433,62 @@ export interface components {
          */
         ListFilter: {
             /** @default null */
-            term: string | null;
+            term?: string | null;
             /**
              * @description Works carrying every one of these genres.
              * @default []
              */
             genres: string[];
             /** @default null */
-            keyword: string | null;
+            keyword?: string | null;
             /**
              * Format: int32
              * @default null
              */
-            yearFrom: number | null;
+            yearFrom?: number | null;
             /**
              * Format: int32
              * @default null
              */
-            yearTo: number | null;
+            yearTo?: number | null;
             /** @default null */
-            status: string | null;
+            status?: string | null;
             /** @default null */
-            originalLanguage: string | null;
+            originalLanguage?: string | null;
             /**
              * @description A network or a studio, by name.
              * @default null
              */
-            network: string | null;
+            network?: string | null;
             /**
              * Format: int64
              * @default null
              */
-            collection: number | null;
+            collection?: number | null;
             /**
              * Format: double
              * @description A score out of ten the works must reach.
              * @default null
              */
-            minRating: number | null;
+            minRating?: number | null;
             /**
              * @description `popularity`, `rating`, `release`, `title` or `added`; popularity when
              *     absent.
              * @default null
              */
-            sort: string | null;
+            sort?: string | null;
             /**
              * @description The sort's own direction when absent — and absent, not null, when
              *     written out, so a form reads it back as the same thing.
              * @default null
              */
-            descending: boolean | null;
+            descending?: boolean | null;
             /**
              * Format: int64
              * @description How many works at most; a hundred when absent, five hundred at most.
              * @default null
              */
-            limit: number | null;
+            limit?: number | null;
         };
         /** @description A list downloaded whole: when it last landed, and how much of it was kept. */
         ListImport: {
@@ -4492,7 +4516,7 @@ export interface components {
         };
         Listeners: {
             web: components["schemas"]["Web"];
-            clients?: components["schemas"]["Door"] | null;
+            clients: components["schemas"]["Door"] | null;
         };
         /**
          * @description One lock: a field of a work, or of one of its seasons or episodes, and the
@@ -4509,11 +4533,12 @@ export interface components {
             /** @description The language a text is locked in alone, `fra`; absent for every one. */
             language?: string | null;
             /**
-             * @description The value the field is locked to, or `null` where it was cleared and
-             *     locked so. Left out altogether, the lock is refused: nothing is
-             *     guessed on a document's behalf.
+             * @description The value the field is locked to — any JSON value, as the field holds
+             *     it — or `null` where it was cleared and locked so. Left out
+             *     altogether, the lock is refused: nothing is guessed on a document's
+             *     behalf.
              */
-            value?: Record<string, unknown> | null;
+            value: unknown;
         };
         /**
          * @description A text a person locked, in one language or in every one: what a work
@@ -4548,7 +4573,11 @@ export interface components {
         Locks: {
             /** Format: int32 */
             version: number;
-            exportedAt?: string;
+            /**
+             * @description When the document was written. Always in an export; an import does
+             *     not read it, and may leave it out.
+             */
+            readonly exportedAt: string;
             locks: components["schemas"]["Lock"][];
         };
         /**
@@ -4572,7 +4601,7 @@ export interface components {
         LoginResponse: {
             username: string;
             expiresAt: string;
-            role: components["schemas"]["Role"];
+            role: components["schemas"]["AccountRole"];
             /**
              * @description Whether the account may maintain the catalogue, which decides where the
              *     interface takes it next.
@@ -4603,7 +4632,7 @@ export interface components {
             username: string;
             /** @description What to call them: the name they gave, or their username. */
             name: string;
-            role: components["schemas"]["Role"];
+            role: components["schemas"]["AccountRole"];
             locale?: string | null;
             hasPassword: boolean;
         };
@@ -4663,8 +4692,8 @@ export interface components {
             popularity?: number | null;
             /** Format: int64 */
             collectionTmdbId?: number | null;
-            genres?: string[];
-            keywords?: string[];
+            genres: string[];
+            keywords: string[];
             /**
              * @description Every country the work was made in, ISO 3166-1 alpha-2 in upper case
              *     — `US`, `GB` — in the order TMDB lists them.
@@ -4682,7 +4711,7 @@ export interface components {
              * @description What the provider that supplied this called it. Serving a catalogue
              *     means being able to decide per request who sees it.
              */
-            isAdult?: boolean;
+            isAdult: boolean;
             createdAt: string;
             updatedAt: string;
             refreshedAt?: string | null;
@@ -4745,7 +4774,7 @@ export interface components {
             audio: boolean;
             /** @description Whether the served addresses can be followed from elsewhere. */
             publicUrl: boolean;
-            counts: components["schemas"]["Counts"];
+            counts: components["schemas"]["AssetCounts"];
             /** @description Whether a fetch or a sweep is under way. */
             fetching: boolean;
             sweeping: boolean;
@@ -4757,18 +4786,6 @@ export interface components {
             /** Format: int64 */
             bytes?: number | null;
         };
-        /**
-         * @description How many of this server there are.
-         *
-         *     One, the default: SQLite or PostgreSQL, the media on disk or in a bucket,
-         *     every job scheduled by the process itself. Several: every instance reads
-         *     and writes the same PostgreSQL, keeps the media in the same bucket, and
-         *     coordinates through the cache server — which one schedules, which one is
-         *     fetching what, what the others must forget — so that a request may land
-         *     on any of them.
-         * @enum {string}
-         */
-        Mode: "single" | "multi";
         MovieResource: {
             /** Format: int64 */
             TmdbId: number;
@@ -4820,10 +4837,10 @@ export interface components {
              *     is what per-client settings hang off, because an address changes when a
              *     container restarts and a name does not.
              */
-            name?: string | null;
-            note?: string | null;
+            name: string | null;
+            note: string | null;
             createdAt: string;
-            createdBy?: string | null;
+            createdBy: string | null;
         };
         NewAlternativeTitle: {
             title: string;
@@ -4967,7 +4984,7 @@ export interface components {
              */
             language?: string | null;
             /** @description `None` means the user explicitly cleared the field. */
-            value?: unknown;
+            value: unknown;
             updatedAt: string;
             updatedBy?: string | null;
         };
@@ -4977,7 +4994,7 @@ export interface components {
             name: string;
             image?: string | null;
             /** @description Newest work first. */
-            roles: components["schemas"]["Role"][];
+            roles: components["schemas"]["PersonRole"][];
             works: components["schemas"]["MediaItem"][];
             details?: components["schemas"]["PersonDetails"] | null;
         };
@@ -5001,6 +5018,13 @@ export interface components {
             imdbId?: string | null;
             /** @description A few portraits, in TMDB's order. */
             photos?: string[];
+        };
+        /** @description One part a person played, or one job they did, on one work. */
+        PersonRole: {
+            workId: string;
+            creditType: components["schemas"]["CreditType"];
+            /** @description The character, or the job title for crew. */
+            character?: string | null;
         };
         /** @description Where one episode stands in an order. */
         PlacedEpisode: {
@@ -5068,80 +5092,80 @@ export interface components {
              * @description 1 a film, 2 a series, 3 a season, 4 an episode.
              * @default null
              */
-            type: number | null;
+            type?: number | null;
             /**
              * @description A film's or a series' title.
              * @default null
              */
-            title: string | null;
+            title?: string | null;
             /**
              * @description A season's series.
              * @default null
              */
-            parentTitle: string | null;
+            parentTitle?: string | null;
             /**
              * @description An episode's series.
              * @default null
              */
-            grandparentTitle: string | null;
+            grandparentTitle?: string | null;
             /**
              * Format: int64
              * @default null
              */
-            year: number | null;
+            year?: number | null;
             /**
              * @description One id of the item: this provider's GUID for it, or another's,
              *     `imdb://tt0133093`.
              * @default null
              */
-            guid: string | null;
+            guid?: string | null;
             /**
              * @description Every id Plex knows the item by, as Plex has said it will send them.
              * @default []
              */
-            guids: string[];
+            guids?: string[];
             /** @default null */
-            parentGuid: string | null;
+            parentGuid?: string | null;
             /** @default [] */
-            parentGuids: string[];
+            parentGuids?: string[];
             /** @default null */
-            grandparentGuid: string | null;
+            grandparentGuid?: string | null;
             /** @default [] */
-            grandparentGuids: string[];
+            grandparentGuids?: string[];
             /**
              * Format: int64
              * @description A season's number, or an episode's within its season.
              * @default null
              */
-            index: number | null;
+            index?: number | null;
             /**
              * Format: int64
              * @description An episode's season.
              * @default null
              */
-            parentIndex: number | null;
+            parentIndex?: number | null;
             /**
              * @description The day an episode aired, `YYYY-MM-DD`. Plex sends a file's name
              *     too, which a provider that does not see the files has no use for.
              * @default null
              */
-            date: string | null;
+            date?: string | null;
             /**
              * @description 1 for every likely match, best first — a person choosing one in
              *     Plex's *Fix Match* — rather than the best alone.
              * @default null
              */
-            manual: boolean | null;
+            manual?: boolean | null;
             /** @default null */
-            includeAdult: boolean | null;
+            includeAdult?: boolean | null;
             /** @default null */
-            includeChildren: boolean | null;
+            includeChildren?: boolean | null;
             /**
              * @description The order to number episodes by: a series' `SeasonType` id. Plex's
              *     documentation spells it `episodeOrdering` in one place too.
              * @default null
              */
-            episodeOrder: string | null;
+            episodeOrder?: string | null;
         };
         /**
          * @description A film, a series, a season or an episode, as Plex reads one
@@ -5310,7 +5334,7 @@ export interface components {
         Provenance: {
             /** @description Field name, as the field registry names it, to who gave its value. */
             fields?: {
-                [key: string]: components["schemas"]["Source"];
+                [key: string]: components["schemas"]["ValueSource"];
             };
             /** @description The images kept, counted by the provider they came from. */
             images?: {
@@ -5377,11 +5401,12 @@ export interface components {
              */
             Type?: string;
         };
-        /** @description Sonarr reads `value` as a string and parses it itself. */
         RatingResource: {
-            /** Format: int64 */
-            count: number;
-            value: string;
+            Tmdb?: components["schemas"]["RatingItem"] | null;
+            Imdb?: components["schemas"]["RatingItem"] | null;
+            Metacritic?: components["schemas"]["RatingItem"] | null;
+            RottenTomatoes?: components["schemas"]["RatingItem"] | null;
+            Trakt?: components["schemas"]["RatingItem"] | null;
         };
         RatingValue: {
             /** Format: double */
@@ -5520,7 +5545,7 @@ export interface components {
         };
         Renewal: {
             /** @description The run's id in the history. */
-            jobId?: string | null;
+            jobId: string | null;
         };
         Report: {
             server: components["schemas"]["Server"];
@@ -5555,13 +5580,6 @@ export interface components {
             /** Format: int64 */
             retried: number;
         };
-        /** @description One part a person played, or one job they did, on one work. */
-        Role: {
-            workId: string;
-            creditType: components["schemas"]["CreditType"];
-            /** @description The character, or the job title for crew. */
-            character?: string | null;
-        };
         /**
          * @description How a row's value is chosen.
          * @enum {string}
@@ -5588,6 +5606,32 @@ export interface components {
              */
             primaryImages?: components["schemas"]["PrimaryImages"];
         };
+        /** @description One line of the chart. */
+        SeasonEntry: {
+            workId: string;
+            kind: components["schemas"]["EntryKind"];
+            /**
+             * Format: int32
+             * @description The season, for a series whose episodes are known.
+             */
+            seasonNumber?: number | null;
+            /**
+             * @description The day it premiered, or will: `YYYY-MM-DD`. A season carrying on from
+             *     the quarter before gives the day it began.
+             */
+            starts: string;
+            /** @description The last known episode's date. */
+            ends?: string | null;
+            /**
+             * Format: int64
+             * @description The season's episodes, and how many had aired by today.
+             */
+            episodes?: number | null;
+            /** Format: int64 */
+            aired?: number | null;
+            nextEpisode?: components["schemas"]["NextEpisode"] | null;
+            sequelOf?: components["schemas"]["Kin"] | null;
+        };
         /**
          * @description A quarter of the calendar, by the name a season chart gives it.
          * @enum {string}
@@ -5596,7 +5640,7 @@ export interface components {
         SeasonResource: {
             /** Format: int32 */
             seasonNumber: number;
-            images?: components["schemas"]["ImageResource"][];
+            images?: components["schemas"]["SkyhookImageResource"][];
         };
         SeasonResourceV2: {
             /** Format: int32 */
@@ -5607,7 +5651,7 @@ export interface components {
              * @description The year the season first aired.
              */
             year?: number | null;
-            images: components["schemas"]["ImageResource"][];
+            images: components["schemas"]["SkyhookImageResource"][];
         };
         /** @description One order the series' episodes come in, as Sonarr offers it. */
         SeasonTypeResource: {
@@ -5649,6 +5693,18 @@ export interface components {
             keys?: number | null;
             info?: components["schemas"]["Info"] | null;
         };
+        /**
+         * @description How many of this server there are.
+         *
+         *     One, the default: SQLite or PostgreSQL, the media on disk or in a bucket,
+         *     every job scheduled by the process itself. Several: every instance reads
+         *     and writes the same PostgreSQL, keeps the media in the same bucket, and
+         *     coordinates through the cache server — which one schedules, which one is
+         *     fetching what, what the others must forget — so that a request may land
+         *     on any of them.
+         * @enum {string}
+         */
+        ServerMode: "single" | "multi";
         /** @description One of a person's sessions, as their device list shows it. */
         Session: {
             /** @description The SHA-256 of the token: names the row, reveals nothing usable. */
@@ -5683,6 +5739,27 @@ export interface components {
         SetResponse: {
             lockedFields: string[];
         };
+        SettingKind: {
+            /** @enum {string} */
+            type: "bool";
+        } | {
+            /** Format: int64 */
+            min: number;
+            /** Format: int64 */
+            max: number;
+            /** @enum {string} */
+            type: "int";
+        } | {
+            /** @enum {string} */
+            type: "text";
+        } | {
+            options: string[];
+            /** @enum {string} */
+            type: "choice";
+        } | {
+            /** @enum {string} */
+            type: "secret";
+        };
         SettingWrite: {
             key: string;
             /** @description The value, as text. `null` stops overriding at this scope. */
@@ -5690,10 +5767,10 @@ export interface components {
         };
         Settings: {
             version: string;
-            publicUrl?: string | null;
+            publicUrl: string | null;
             database: string;
             /** @description One instance, or several coordinating through the cache server. */
-            mode: components["schemas"]["Mode"];
+            mode: components["schemas"]["ServerMode"];
             tmdbConfigured: boolean;
             tmdbLanguage: string;
             skyhookFallback: boolean;
@@ -5757,10 +5834,10 @@ export interface components {
             network?: string | null;
             genres?: string[];
             contentRating?: string | null;
-            rating?: components["schemas"]["RatingResource"] | null;
-            alternativeTitles?: components["schemas"]["AlternativeTitleResource"][];
+            rating?: components["schemas"]["SkyhookRatingResource"] | null;
+            alternativeTitles?: components["schemas"]["SkyhookAlternativeTitleResource"][];
             actors?: components["schemas"]["ActorResource"][];
-            images?: components["schemas"]["ImageResource"][];
+            images?: components["schemas"]["SkyhookImageResource"][];
             seasons?: components["schemas"]["SeasonResource"][];
             episodes?: components["schemas"]["EpisodeResource"][];
         };
@@ -5816,8 +5893,8 @@ export interface components {
             network?: string | null;
             genres: string[];
             contentRating?: string | null;
-            rating?: components["schemas"]["RatingResource"] | null;
-            alternativeTitles: components["schemas"]["AlternativeTitleResource"][];
+            rating?: components["schemas"]["SkyhookRatingResource"] | null;
+            alternativeTitles: components["schemas"]["SkyhookAlternativeTitleResource"][];
             /**
              * @description Every language the catalogue holds the series' title in — the one it
              *     is stored in and its own among them — by language code.
@@ -5829,7 +5906,7 @@ export interface components {
              */
             seasonTypes: components["schemas"]["SeasonTypeResource"][];
             actors: components["schemas"]["ActorResource"][];
-            images: components["schemas"]["ImageResource"][];
+            images: components["schemas"]["SkyhookImageResource"][];
             seasons: components["schemas"]["SeasonResourceV2"][];
             /** @description Left out of a search result, as the real service leaves it. */
             episodes?: components["schemas"]["EpisodeResourceV2"][] | null;
@@ -5842,6 +5919,19 @@ export interface components {
         Similar: {
             /** @description The works, drawn as a list is: artwork and scores, no episodes. */
             items: components["schemas"]["MediaItem"][];
+        };
+        SkyhookAlternativeTitleResource: {
+            title: string;
+        };
+        SkyhookImageResource: {
+            coverType: string;
+            url: string;
+        };
+        /** @description Sonarr reads `value` as a string and parses it itself. */
+        SkyhookRatingResource: {
+            /** Format: int64 */
+            count: number;
+            value: string;
         };
         /**
          * @description The series' title and overview in one language. Named apart in the
@@ -5857,24 +5947,9 @@ export interface components {
         SnapshotSummary: {
             provider: string;
             fetchedAt: string;
-            etag?: string | null;
+            etag: string | null;
             /** @description Omitted when `payload=false` was asked for. */
             payload?: unknown;
-        };
-        /** @description Who gave one value, and who else had a say. */
-        Source: {
-            /** @description The provider whose value was kept. */
-            from: string;
-            /** @description Others that gave the same value. */
-            agreed?: string[];
-            /** @description Others that gave another value, and lost to it. */
-            differed?: string[];
-            /**
-             * @description Those ahead of it in priority that gave none: why a lower source's
-             *     value stands. Sources that describe nothing — artwork alone — are not
-             *     counted, or every field would name them.
-             */
-            passed?: string[];
         };
         SourceRules: {
             /**
@@ -5892,6 +5967,11 @@ export interface components {
              *     values are taken, and by which rule.
              */
             rows: components["schemas"]["Laid"][];
+        };
+        /** @description A source, and whether it is switched on and able to answer. */
+        SourceState: {
+            name: string;
+            on: boolean;
         };
         Sources: {
             /**
@@ -5937,24 +6017,19 @@ export interface components {
             /** Format: int64 */
             cachedSearches?: number | null;
         };
-        /**
-         * @description Whether an account may sign in.
-         * @enum {string}
-         */
-        Status: "active" | "pending" | "disabled";
         Suggestion: {
             /** Format: int64 */
             tmdbId: number;
             kind: components["schemas"]["MediaKind"];
             title: string;
             /** Format: int32 */
-            year?: number | null;
-            overview?: string | null;
-            poster?: string | null;
+            year: number | null;
+            overview: string | null;
+            poster: string | null;
             /** Format: double */
-            score?: number | null;
+            score: number | null;
             /** @description The catalogue's own id, where the work is already in it. */
-            held?: string | null;
+            held: string | null;
         };
         Suggestions: {
             suggestions: components["schemas"]["Suggestion"][];
@@ -5988,9 +6063,11 @@ export interface components {
             /** Format: int64 */
             misses: number;
         };
+        /** @enum {string} */
+        TaskMode: "scheduled" | "manual" | "off";
         TaskState: {
             id: string;
-            mode: components["schemas"]["Mode"];
+            mode: components["schemas"]["TaskMode"];
             /**
              * Format: int64
              * @description Seconds between runs, when it is scheduled.
@@ -6112,8 +6189,8 @@ export interface components {
             displayName?: string | null;
             /** @description Blank clears it. */
             email?: string | null;
-            role?: components["schemas"]["Role"] | null;
-            status?: components["schemas"]["Status"] | null;
+            role?: components["schemas"]["AccountRole"] | null;
+            status?: components["schemas"]["AccountStatus"] | null;
         };
         /** @description What an upload became. */
         Uploaded: {
@@ -6127,8 +6204,8 @@ export interface components {
             username: string;
             displayName?: string | null;
             email?: string | null;
-            role: components["schemas"]["Role"];
-            status: components["schemas"]["Status"];
+            role: components["schemas"]["AccountRole"];
+            status: components["schemas"]["AccountStatus"];
             /** @description The interface's language, when chosen: `fr`, `en`. */
             locale?: string | null;
             /** @description Whether an identity provider vouches for this account. */
@@ -6149,14 +6226,29 @@ export interface components {
             users: components["schemas"]["Listed"][];
             /** Format: int64 */
             total: number;
-            counts: components["schemas"]["Counts"];
+            counts: components["schemas"]["AccountCounts"];
+        };
+        /** @description Who gave one value, and who else had a say. */
+        ValueSource: {
+            /** @description The provider whose value was kept. */
+            from: string;
+            /** @description Others that gave the same value. */
+            agreed?: string[];
+            /** @description Others that gave another value, and lost to it. */
+            differed?: string[];
+            /**
+             * @description Those ahead of it in priority that gave none: why a lower source's
+             *     value stands. Sources that describe nothing — artwork alone — are not
+             *     counted, or every field would name them.
+             */
+            passed?: string[];
         };
         WatchProvider: {
             /** Format: int64 */
             id: number;
             name: string;
             /** @description The service's mark, as TMDB serves it. */
-            logo?: string | null;
+            logo: string | null;
         };
         /** @description The interface's and the native API's door. */
         Web: {
@@ -6177,7 +6269,7 @@ export interface components {
         WebhookDelivery: {
             id: string;
             event: string;
-            status: components["schemas"]["Status"];
+            status: components["schemas"]["WebhookDeliveryStatus"];
             /**
              * Format: int32
              * @description The tries made, of the eight it gets.
@@ -6204,6 +6296,20 @@ export interface components {
             updatedAt: string;
             deliveredAt?: string | null;
         };
+        /** @description How many deliveries of each standing a destination's log holds. */
+        WebhookDeliveryCounts: {
+            /** Format: int64 */
+            pending: number;
+            /** Format: int64 */
+            delivered: number;
+            /** Format: int64 */
+            failed: number;
+        };
+        /**
+         * @description Where a delivery stands.
+         * @enum {string}
+         */
+        WebhookDeliveryStatus: "pending" | "delivered" | "failed";
         /**
          * @description A destination, as the administration sees it: never its secret, and its
          *     address with what follows the host masked.
@@ -6246,7 +6352,7 @@ export interface components {
             createdAt: string;
             updatedAt: string;
             /** @description What its log holds. */
-            deliveries: components["schemas"]["Counts"];
+            deliveries: components["schemas"]["WebhookDeliveryCounts"];
         };
         /**
          * @description A destination to make, or what to change of one: each field left out
@@ -6306,9 +6412,9 @@ export interface components {
          */
         WebhookMessage: {
             event: string;
-            actor?: string | null;
-            target?: string | null;
-            detail?: string | null;
+            actor: string | null;
+            target: string | null;
+            detail: string | null;
             /** @description When it happened, in RFC 3339. */
             at: string;
             /**
@@ -6352,7 +6458,7 @@ export interface components {
              * @description TMDB's page for the work in that country, which carries JustWatch's
              *     own links to each service.
              */
-            link?: string | null;
+            link: string | null;
             /** @description Included with a subscription. */
             flatrate: components["schemas"]["WatchProvider"][];
             rent: components["schemas"]["WatchProvider"][];
@@ -6380,7 +6486,7 @@ export interface components {
             origin: string;
             /** @description Where it is read from now: the copy kept, or the provider. */
             url: string;
-            kind: components["schemas"]["Kind"];
+            kind: components["schemas"]["AssetKind"];
             /**
              * @description `stored`, `pending`, `failed` — or `absent`, when nothing has been
              *     asked of it: the store is off, or the address is not one it fetches.
@@ -6413,7 +6519,7 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
-    relay: {
+    anilist_relay: {
         parameters: {
             query?: never;
             header?: never;
@@ -6452,7 +6558,7 @@ export interface operations {
             };
         };
     };
-    proxy: {
+    tmdb_proxy: {
         parameters: {
             query?: never;
             header?: never;
@@ -6487,7 +6593,7 @@ export interface operations {
             };
         };
     };
-    proxy_v4: {
+    tmdb_proxy_v4: {
         parameters: {
             query?: never;
             header?: never;
@@ -6529,7 +6635,7 @@ export interface operations {
             };
         };
     };
-    profile: {
+    account_profile: {
         parameters: {
             query?: never;
             header?: never;
@@ -6555,7 +6661,7 @@ export interface operations {
             };
         };
     };
-    update_profile: {
+    account_update_profile: {
         parameters: {
             query?: never;
             header?: never;
@@ -6592,7 +6698,7 @@ export interface operations {
             };
         };
     };
-    keys: {
+    account_keys: {
         parameters: {
             query?: never;
             header?: never;
@@ -6618,7 +6724,7 @@ export interface operations {
             };
         };
     };
-    create_key: {
+    account_create_key: {
         parameters: {
             query?: never;
             header?: never;
@@ -6662,7 +6768,7 @@ export interface operations {
             };
         };
     };
-    delete_key: {
+    account_delete_key: {
         parameters: {
             query?: never;
             header?: never;
@@ -6688,7 +6794,7 @@ export interface operations {
             };
         };
     };
-    update_key: {
+    account_update_key: {
         parameters: {
             query?: never;
             header?: never;
@@ -6734,7 +6840,7 @@ export interface operations {
             };
         };
     };
-    rotate_key: {
+    account_rotate_key: {
         parameters: {
             query?: never;
             header?: never;
@@ -6762,7 +6868,7 @@ export interface operations {
             };
         };
     };
-    sessions: {
+    account_sessions: {
         parameters: {
             query?: never;
             header?: never;
@@ -6788,7 +6894,7 @@ export interface operations {
             };
         };
     };
-    sign_out_elsewhere: {
+    account_sign_out_elsewhere: {
         parameters: {
             query?: never;
             header?: never;
@@ -6812,7 +6918,7 @@ export interface operations {
             };
         };
     };
-    close_session: {
+    account_close_session: {
         parameters: {
             query?: never;
             header?: never;
@@ -6845,7 +6951,7 @@ export interface operations {
             };
         };
     };
-    access: {
+    access_access: {
         parameters: {
             query?: never;
             header?: never;
@@ -6871,7 +6977,7 @@ export interface operations {
             };
         };
     };
-    configuration: {
+    arr_configuration: {
         parameters: {
             query?: never;
             header?: never;
@@ -6897,7 +7003,7 @@ export interface operations {
             };
         };
     };
-    configure: {
+    arr_configure: {
         parameters: {
             query?: never;
             header?: never;
@@ -6934,7 +7040,7 @@ export interface operations {
             };
         };
     };
-    test: {
+    arr_test: {
         parameters: {
             query?: never;
             header?: never;
@@ -6971,7 +7077,7 @@ export interface operations {
             };
         };
     };
-    report: {
+    cache_report: {
         parameters: {
             query?: never;
             header?: never;
@@ -6997,7 +7103,7 @@ export interface operations {
             };
         };
     };
-    flush_all: {
+    cache_flush_all: {
         parameters: {
             query?: never;
             header?: never;
@@ -7023,7 +7129,7 @@ export interface operations {
             };
         };
     };
-    flush_space: {
+    cache_flush_space: {
         parameters: {
             query?: never;
             header?: never;
@@ -7059,7 +7165,7 @@ export interface operations {
             };
         };
     };
-    health: {
+    figures_health: {
         parameters: {
             query?: never;
             header?: never;
@@ -7085,7 +7191,7 @@ export interface operations {
             };
         };
     };
-    export: {
+    locks_export: {
         parameters: {
             query?: never;
             header?: never;
@@ -7111,7 +7217,7 @@ export interface operations {
             };
         };
     };
-    import: {
+    locks_import: {
         parameters: {
             query?: never;
             header?: never;
@@ -7148,7 +7254,7 @@ export interface operations {
             };
         };
     };
-    metrics: {
+    figures_metrics: {
         parameters: {
             query?: never;
             header?: never;
@@ -7175,7 +7281,7 @@ export interface operations {
             };
         };
     };
-    list: {
+    webhooks_list: {
         parameters: {
             query?: never;
             header?: never;
@@ -7201,7 +7307,7 @@ export interface operations {
             };
         };
     };
-    create: {
+    webhooks_create: {
         parameters: {
             query?: never;
             header?: never;
@@ -7238,7 +7344,7 @@ export interface operations {
             };
         };
     };
-    remove: {
+    webhooks_remove: {
         parameters: {
             query?: never;
             header?: never;
@@ -7273,7 +7379,7 @@ export interface operations {
             };
         };
     };
-    change: {
+    webhooks_change: {
         parameters: {
             query?: never;
             header?: never;
@@ -7320,7 +7426,7 @@ export interface operations {
             };
         };
     };
-    log: {
+    webhooks_log: {
         parameters: {
             query?: {
                 /** @description How many, fifty unless said: two hundred at the most. */
@@ -7360,7 +7466,7 @@ export interface operations {
             };
         };
     };
-    replay: {
+    webhooks_replay: {
         parameters: {
             query?: never;
             header?: never;
@@ -7405,7 +7511,7 @@ export interface operations {
             };
         };
     };
-    rotate: {
+    webhooks_rotate: {
         parameters: {
             query?: never;
             header?: never;
@@ -7448,7 +7554,7 @@ export interface operations {
             };
         };
     };
-    test: {
+    webhooks_test: {
         parameters: {
             query?: never;
             header?: never;
@@ -7484,7 +7590,7 @@ export interface operations {
             };
         };
     };
-    configuration: {
+    oidc_configuration: {
         parameters: {
             query?: never;
             header?: never;
@@ -7510,7 +7616,7 @@ export interface operations {
             };
         };
     };
-    configure: {
+    oidc_configure: {
         parameters: {
             query?: never;
             header?: never;
@@ -7554,7 +7660,7 @@ export interface operations {
             };
         };
     };
-    test: {
+    oidc_test: {
         parameters: {
             query?: never;
             header?: never;
@@ -7591,7 +7697,7 @@ export interface operations {
             };
         };
     };
-    status: {
+    tls_status: {
         parameters: {
             query?: never;
             header?: never;
@@ -7617,7 +7723,7 @@ export interface operations {
             };
         };
     };
-    renew: {
+    tls_renew: {
         parameters: {
             query?: never;
             header?: never;
@@ -7657,7 +7763,7 @@ export interface operations {
             };
         };
     };
-    todo: {
+    todo_todo: {
         parameters: {
             query?: never;
             header?: never;
@@ -7683,7 +7789,7 @@ export interface operations {
             };
         };
     };
-    events: {
+    webhooks_events: {
         parameters: {
             query?: never;
             header?: never;
@@ -7709,7 +7815,7 @@ export interface operations {
             };
         };
     };
-    list: {
+    audit_list: {
         parameters: {
             query?: {
                 action?: string;
@@ -7742,7 +7848,7 @@ export interface operations {
             };
         };
     };
-    check_invitation: {
+    signup_check_invitation: {
         parameters: {
             query?: never;
             header?: never;
@@ -7772,7 +7878,7 @@ export interface operations {
             };
         };
     };
-    login: {
+    auth_login: {
         parameters: {
             query?: never;
             header?: never;
@@ -7810,7 +7916,7 @@ export interface operations {
             };
         };
     };
-    logout: {
+    auth_logout: {
         parameters: {
             query?: never;
             header?: never;
@@ -7828,7 +7934,7 @@ export interface operations {
             };
         };
     };
-    me: {
+    auth_me: {
         parameters: {
             query?: never;
             header?: never;
@@ -7854,7 +7960,7 @@ export interface operations {
             };
         };
     };
-    callback: {
+    oidc_callback: {
         parameters: {
             query?: {
                 code?: string;
@@ -7884,7 +7990,7 @@ export interface operations {
             };
         };
     };
-    start: {
+    oidc_start: {
         parameters: {
             query?: {
                 /** @description The page of this site to come back to. */
@@ -7907,7 +8013,7 @@ export interface operations {
             };
         };
     };
-    options: {
+    signup_options: {
         parameters: {
             query?: never;
             header?: never;
@@ -7926,7 +8032,7 @@ export interface operations {
             };
         };
     };
-    change_password: {
+    auth_change_password: {
         parameters: {
             query?: never;
             header?: never;
@@ -7969,7 +8075,7 @@ export interface operations {
             };
         };
     };
-    register: {
+    signup_register: {
         parameters: {
             query?: never;
             header?: never;
@@ -8023,7 +8129,7 @@ export interface operations {
             };
         };
     };
-    clear_cache: {
+    meta_clear_cache: {
         parameters: {
             query?: never;
             header?: never;
@@ -8048,7 +8154,7 @@ export interface operations {
             };
         };
     };
-    calendar: {
+    browse_calendar: {
         parameters: {
             query: {
                 /** @description The first instant of the window, RFC 3339: `2026-09-21T22:00:00Z`. */
@@ -8088,7 +8194,7 @@ export interface operations {
             };
         };
     };
-    calendar_ics: {
+    feeds_calendar_ics: {
         parameters: {
             query?: {
                 /** @description Days behind today to include. 7 when absent, as Sonarr's feed has it. */
@@ -8123,7 +8229,7 @@ export interface operations {
             };
         };
     };
-    list: {
+    clients_list: {
         parameters: {
             query?: never;
             header?: never;
@@ -8149,7 +8255,7 @@ export interface operations {
             };
         };
     };
-    create: {
+    clients_create: {
         parameters: {
             query?: never;
             header?: never;
@@ -8194,7 +8300,7 @@ export interface operations {
             };
         };
     };
-    detail: {
+    clients_detail: {
         parameters: {
             query?: never;
             header?: never;
@@ -8230,7 +8336,7 @@ export interface operations {
             };
         };
     };
-    remove: {
+    clients_remove: {
         parameters: {
             query?: never;
             header?: never;
@@ -8272,7 +8378,7 @@ export interface operations {
             };
         };
     };
-    update: {
+    clients_update: {
         parameters: {
             query?: never;
             header?: never;
@@ -8312,7 +8418,7 @@ export interface operations {
             };
         };
     };
-    collections: {
+    recommend_collections: {
         parameters: {
             query?: {
                 /** @description Titles in this language, where a translation is held. */
@@ -8334,7 +8440,7 @@ export interface operations {
             };
         };
     };
-    collection: {
+    recommend_collection: {
         parameters: {
             query?: {
                 /** @description Titles in this language, where a translation is held. */
@@ -8366,7 +8472,7 @@ export interface operations {
             };
         };
     };
-    import_dataset: {
+    meta_import_dataset: {
         parameters: {
             query?: never;
             header?: never;
@@ -8425,7 +8531,7 @@ export interface operations {
             };
         };
     };
-    search: {
+    discover_search: {
         parameters: {
             query: {
                 /**
@@ -8468,7 +8574,7 @@ export interface operations {
             };
         };
     };
-    import: {
+    discover_import: {
         parameters: {
             query?: never;
             header?: never;
@@ -8512,7 +8618,7 @@ export interface operations {
             };
         };
     };
-    kometa_yml: {
+    export_kometa_yml: {
         parameters: {
             query?: {
                 /**
@@ -8559,7 +8665,7 @@ export interface operations {
             };
         };
     };
-    export_all: {
+    export_export_all: {
         parameters: {
             query?: {
                 /**
@@ -8613,7 +8719,7 @@ export interface operations {
             };
         };
     };
-    facets: {
+    browse_facets: {
         parameters: {
             query?: {
                 term?: string;
@@ -8701,7 +8807,7 @@ export interface operations {
             };
         };
     };
-    added_atom: {
+    feeds_added_atom: {
         parameters: {
             query?: {
                 /**
@@ -8725,7 +8831,7 @@ export interface operations {
             };
         };
     };
-    airing_atom: {
+    feeds_airing_atom: {
         parameters: {
             query?: {
                 /**
@@ -8749,7 +8855,7 @@ export interface operations {
             };
         };
     };
-    field_registry: {
+    meta_field_registry: {
         parameters: {
             query?: never;
             header?: never;
@@ -8768,7 +8874,7 @@ export interface operations {
             };
         };
     };
-    figures: {
+    figures_figures: {
         parameters: {
             query?: never;
             header?: never;
@@ -8787,7 +8893,7 @@ export interface operations {
             };
         };
     };
-    list: {
+    invitations_list: {
         parameters: {
             query?: never;
             header?: never;
@@ -8813,7 +8919,7 @@ export interface operations {
             };
         };
     };
-    create: {
+    invitations_create: {
         parameters: {
             query?: never;
             header?: never;
@@ -8850,7 +8956,7 @@ export interface operations {
             };
         };
     };
-    revoke: {
+    invitations_revoke: {
         parameters: {
             query?: never;
             header?: never;
@@ -8883,7 +8989,7 @@ export interface operations {
             };
         };
     };
-    list: {
+    items_list: {
         parameters: {
             query?: {
                 term?: string;
@@ -8972,7 +9078,7 @@ export interface operations {
             };
         };
     };
-    create: {
+    items_create: {
         parameters: {
             query?: never;
             header?: never;
@@ -9017,7 +9123,7 @@ export interface operations {
             };
         };
     };
-    detail: {
+    items_detail: {
         parameters: {
             query?: {
                 /**
@@ -9052,7 +9158,7 @@ export interface operations {
             };
         };
     };
-    remove: {
+    items_remove: {
         parameters: {
             query?: never;
             header?: never;
@@ -9087,7 +9193,7 @@ export interface operations {
             };
         };
     };
-    update: {
+    items_update: {
         parameters: {
             query?: never;
             header?: never;
@@ -9127,7 +9233,7 @@ export interface operations {
             };
         };
     };
-    add_alternative_title: {
+    children_add_alternative_title: {
         parameters: {
             query?: never;
             header?: never;
@@ -9181,7 +9287,7 @@ export interface operations {
             };
         };
     };
-    remove_alternative_title: {
+    children_remove_alternative_title: {
         parameters: {
             query?: never;
             header?: never;
@@ -9218,7 +9324,7 @@ export interface operations {
             };
         };
     };
-    edit_alternative_title: {
+    children_edit_alternative_title: {
         parameters: {
             query?: never;
             header?: never;
@@ -9266,7 +9372,7 @@ export interface operations {
             };
         };
     };
-    work_ics: {
+    feeds_work_ics: {
         parameters: {
             query?: {
                 /**
@@ -9300,7 +9406,7 @@ export interface operations {
             };
         };
     };
-    add_credit: {
+    children_add_credit: {
         parameters: {
             query?: never;
             header?: never;
@@ -9347,7 +9453,7 @@ export interface operations {
             };
         };
     };
-    remove_credit: {
+    children_remove_credit: {
         parameters: {
             query?: never;
             header?: never;
@@ -9384,7 +9490,7 @@ export interface operations {
             };
         };
     };
-    edit_credit: {
+    children_edit_credit: {
         parameters: {
             query?: never;
             header?: never;
@@ -9432,7 +9538,7 @@ export interface operations {
             };
         };
     };
-    add_episode: {
+    children_add_episode: {
         parameters: {
             query?: never;
             header?: never;
@@ -9486,7 +9592,7 @@ export interface operations {
             };
         };
     };
-    remove_episode: {
+    children_remove_episode: {
         parameters: {
             query?: never;
             header?: never;
@@ -9525,7 +9631,7 @@ export interface operations {
             };
         };
     };
-    add_image: {
+    children_add_image: {
         parameters: {
             query?: never;
             header?: never;
@@ -9572,7 +9678,7 @@ export interface operations {
             };
         };
     };
-    remove_image: {
+    children_remove_image: {
         parameters: {
             query?: never;
             header?: never;
@@ -9609,7 +9715,7 @@ export interface operations {
             };
         };
     };
-    edit_image: {
+    children_edit_image: {
         parameters: {
             query?: never;
             header?: never;
@@ -9657,7 +9763,7 @@ export interface operations {
             };
         };
     };
-    holding: {
+    lists_holding: {
         parameters: {
             query?: never;
             header?: never;
@@ -9686,7 +9792,7 @@ export interface operations {
             };
         };
     };
-    work_media: {
+    media_work_media: {
         parameters: {
             query?: never;
             header?: never;
@@ -9722,7 +9828,7 @@ export interface operations {
             };
         };
     };
-    upload: {
+    media_upload: {
         parameters: {
             query?: never;
             header?: never;
@@ -9784,7 +9890,7 @@ export interface operations {
             };
         };
     };
-    forget: {
+    media_forget: {
         parameters: {
             query?: never;
             header?: never;
@@ -9820,7 +9926,7 @@ export interface operations {
             };
         };
     };
-    item_nfo: {
+    export_item_nfo: {
         parameters: {
             query?: never;
             header?: never;
@@ -9850,7 +9956,7 @@ export interface operations {
             };
         };
     };
-    episode_nfo: {
+    export_episode_nfo: {
         parameters: {
             query?: never;
             header?: never;
@@ -9884,7 +9990,7 @@ export interface operations {
             };
         };
     };
-    orders: {
+    orders_orders: {
         parameters: {
             query?: never;
             header?: never;
@@ -9913,7 +10019,7 @@ export interface operations {
             };
         };
     };
-    list: {
+    overrides_list: {
         parameters: {
             query?: never;
             header?: never;
@@ -9942,7 +10048,7 @@ export interface operations {
             };
         };
     };
-    set: {
+    overrides_set: {
         parameters: {
             query?: never;
             header?: never;
@@ -9990,7 +10096,7 @@ export interface operations {
             };
         };
     };
-    clear: {
+    overrides_clear: {
         parameters: {
             query?: never;
             header?: never;
@@ -10019,7 +10125,7 @@ export interface operations {
             };
         };
     };
-    unset: {
+    overrides_unset: {
         parameters: {
             query?: {
                 /**
@@ -10071,7 +10177,7 @@ export interface operations {
             };
         };
     };
-    provenance: {
+    items_provenance: {
         parameters: {
             query?: never;
             header?: never;
@@ -10107,7 +10213,7 @@ export interface operations {
             };
         };
     };
-    refresh: {
+    items_refresh: {
         parameters: {
             query?: never;
             header?: never;
@@ -10151,7 +10257,7 @@ export interface operations {
             };
         };
     };
-    add_season: {
+    children_add_season: {
         parameters: {
             query?: never;
             header?: never;
@@ -10205,7 +10311,7 @@ export interface operations {
             };
         };
     };
-    remove_season: {
+    children_remove_season: {
         parameters: {
             query?: never;
             header?: never;
@@ -10242,7 +10348,7 @@ export interface operations {
             };
         };
     };
-    similar: {
+    recommend_similar: {
         parameters: {
             query?: {
                 /** @description Titles in this language, where a translation is held. */
@@ -10274,7 +10380,7 @@ export interface operations {
             };
         };
     };
-    snapshots: {
+    items_snapshots: {
         parameters: {
             query?: {
                 /**
@@ -10312,7 +10418,7 @@ export interface operations {
             };
         };
     };
-    suggestions: {
+    recommend_suggestions: {
         parameters: {
             query?: never;
             header?: never;
@@ -10355,7 +10461,7 @@ export interface operations {
             };
         };
     };
-    sync: {
+    items_sync: {
         parameters: {
             query?: never;
             header?: never;
@@ -10416,7 +10522,7 @@ export interface operations {
             };
         };
     };
-    where_to_watch: {
+    watch_where_to_watch: {
         parameters: {
             query?: {
                 /**
@@ -10465,7 +10571,7 @@ export interface operations {
             };
         };
     };
-    jobs: {
+    meta_jobs: {
         parameters: {
             query?: {
                 /**
@@ -10503,7 +10609,7 @@ export interface operations {
             };
         };
     };
-    detail: {
+    tasks_detail: {
         parameters: {
             query?: never;
             header?: never;
@@ -10538,7 +10644,7 @@ export interface operations {
             };
         };
     };
-    cancel: {
+    tasks_cancel: {
         parameters: {
             query?: never;
             header?: never;
@@ -10579,7 +10685,7 @@ export interface operations {
             };
         };
     };
-    list: {
+    lists_list: {
         parameters: {
             query?: never;
             header?: never;
@@ -10598,7 +10704,7 @@ export interface operations {
             };
         };
     };
-    create: {
+    lists_create: {
         parameters: {
             query?: never;
             header?: never;
@@ -10642,7 +10748,7 @@ export interface operations {
             };
         };
     };
-    detail: {
+    lists_detail: {
         parameters: {
             query?: {
                 /** @description Titles in this language, where a translation is held. */
@@ -10674,7 +10780,7 @@ export interface operations {
             };
         };
     };
-    update: {
+    lists_update: {
         parameters: {
             query?: never;
             header?: never;
@@ -10721,7 +10827,7 @@ export interface operations {
             };
         };
     };
-    delete: {
+    lists_delete: {
         parameters: {
             query?: never;
             header?: never;
@@ -10756,7 +10862,7 @@ export interface operations {
             };
         };
     };
-    list_atom: {
+    feeds_list_atom: {
         parameters: {
             query?: {
                 /**
@@ -10790,7 +10896,7 @@ export interface operations {
             };
         };
     };
-    ids_txt: {
+    lists_ids_txt: {
         parameters: {
             query?: {
                 /**
@@ -10834,7 +10940,7 @@ export interface operations {
             };
         };
     };
-    set_items: {
+    lists_set_items: {
         parameters: {
             query?: never;
             header?: never;
@@ -10881,7 +10987,7 @@ export interface operations {
             };
         };
     };
-    radarr_json: {
+    lists_radarr_json: {
         parameters: {
             query?: never;
             header?: never;
@@ -10902,7 +11008,7 @@ export interface operations {
             };
         };
     };
-    sonarr_json: {
+    lists_sonarr_json: {
         parameters: {
             query?: never;
             header?: never;
@@ -10923,7 +11029,7 @@ export interface operations {
             };
         };
     };
-    stevenlu_json: {
+    lists_stevenlu_json: {
         parameters: {
             query?: never;
             header?: never;
@@ -10944,7 +11050,7 @@ export interface operations {
             };
         };
     };
-    retry: {
+    media_retry: {
         parameters: {
             query?: never;
             header?: never;
@@ -10978,7 +11084,7 @@ export interface operations {
             };
         };
     };
-    reset: {
+    media_reset: {
         parameters: {
             query?: never;
             header?: never;
@@ -11004,7 +11110,7 @@ export interface operations {
             };
         };
     };
-    retry_all: {
+    media_retry_all: {
         parameters: {
             query?: never;
             header?: never;
@@ -11030,7 +11136,7 @@ export interface operations {
             };
         };
     };
-    status: {
+    media_status: {
         parameters: {
             query?: never;
             header?: never;
@@ -11056,7 +11162,7 @@ export interface operations {
             };
         };
     };
-    troubled: {
+    media_troubled: {
         parameters: {
             query?: {
                 limit?: number;
@@ -11084,7 +11190,7 @@ export interface operations {
             };
         };
     };
-    callers: {
+    network_callers: {
         parameters: {
             query?: {
                 limit?: number;
@@ -11112,7 +11218,7 @@ export interface operations {
             };
         };
     };
-    rules: {
+    network_rules: {
         parameters: {
             query?: never;
             header?: never;
@@ -11138,7 +11244,7 @@ export interface operations {
             };
         };
     };
-    add: {
+    network_add: {
         parameters: {
             query?: never;
             header?: never;
@@ -11182,7 +11288,7 @@ export interface operations {
             };
         };
     };
-    remove: {
+    network_remove: {
         parameters: {
             query?: never;
             header?: never;
@@ -11217,7 +11323,7 @@ export interface operations {
             };
         };
     };
-    rename: {
+    network_rename: {
         parameters: {
             query?: never;
             header?: never;
@@ -11257,7 +11363,7 @@ export interface operations {
             };
         };
     };
-    person: {
+    browse_person: {
         parameters: {
             query?: {
                 /** @description Titles in this language, where a translation is held. */
@@ -11289,7 +11395,7 @@ export interface operations {
             };
         };
     };
-    chart: {
+    seasons_chart: {
         parameters: {
             query?: {
                 /** @description Titles and synopses in this language, where a translation is held. */
@@ -11328,7 +11434,7 @@ export interface operations {
             };
         };
     };
-    candidates: {
+    seasons_candidates: {
         parameters: {
             query?: {
                 /** @description Titles and synopses in this language: `fr`, `en`… */
@@ -11385,7 +11491,7 @@ export interface operations {
             };
         };
     };
-    settings: {
+    meta_settings: {
         parameters: {
             query?: never;
             header?: never;
@@ -11411,7 +11517,7 @@ export interface operations {
             };
         };
     };
-    catalogue: {
+    settings_catalogue: {
         parameters: {
             query?: never;
             header?: never;
@@ -11430,7 +11536,7 @@ export interface operations {
             };
         };
     };
-    effective: {
+    settings_effective: {
         parameters: {
             query?: never;
             header?: never;
@@ -11468,7 +11574,7 @@ export interface operations {
             };
         };
     };
-    put: {
+    settings_put: {
         parameters: {
             query?: never;
             header?: never;
@@ -11510,7 +11616,7 @@ export interface operations {
             };
         };
     };
-    clear: {
+    settings_clear: {
         parameters: {
             query?: never;
             header?: never;
@@ -11547,7 +11653,7 @@ export interface operations {
             };
         };
     };
-    sources: {
+    meta_sources: {
         parameters: {
             query?: never;
             header?: never;
@@ -11566,7 +11672,7 @@ export interface operations {
             };
         };
     };
-    source_rules: {
+    rules_source_rules: {
         parameters: {
             query?: never;
             header?: never;
@@ -11592,7 +11698,7 @@ export interface operations {
             };
         };
     };
-    stats: {
+    meta_stats: {
         parameters: {
             query?: never;
             header?: never;
@@ -11611,7 +11717,7 @@ export interface operations {
             };
         };
     };
-    list: {
+    tasks_list: {
         parameters: {
             query?: never;
             header?: never;
@@ -11637,7 +11743,7 @@ export interface operations {
             };
         };
     };
-    run: {
+    tasks_run: {
         parameters: {
             query?: never;
             header?: never;
@@ -11687,7 +11793,7 @@ export interface operations {
             };
         };
     };
-    list: {
+    users_list: {
         parameters: {
             query?: {
                 term?: string;
@@ -11721,7 +11827,7 @@ export interface operations {
             };
         };
     };
-    create: {
+    users_create: {
         parameters: {
             query?: never;
             header?: never;
@@ -11765,7 +11871,7 @@ export interface operations {
             };
         };
     };
-    bulk: {
+    users_bulk: {
         parameters: {
             query?: never;
             header?: never;
@@ -11802,7 +11908,7 @@ export interface operations {
             };
         };
     };
-    detail: {
+    users_detail: {
         parameters: {
             query?: never;
             header?: never;
@@ -11836,7 +11942,7 @@ export interface operations {
             };
         };
     };
-    remove: {
+    users_remove: {
         parameters: {
             query?: never;
             header?: never;
@@ -11875,7 +11981,7 @@ export interface operations {
             };
         };
     };
-    update: {
+    users_update: {
         parameters: {
             query?: never;
             header?: never;
@@ -11927,7 +12033,7 @@ export interface operations {
             };
         };
     };
-    unlink: {
+    oidc_unlink: {
         parameters: {
             query?: never;
             header?: never;
@@ -11966,7 +12072,7 @@ export interface operations {
             };
         };
     };
-    reset_password: {
+    users_reset_password: {
         parameters: {
             query?: never;
             header?: never;
@@ -12011,7 +12117,7 @@ export interface operations {
             };
         };
     };
-    revoke_sessions: {
+    users_revoke_sessions: {
         parameters: {
             query?: never;
             header?: never;
@@ -12043,7 +12149,7 @@ export interface operations {
             };
         };
     };
-    provider: {
+    plex_provider: {
         parameters: {
             query?: never;
             header?: never;
@@ -12076,7 +12182,7 @@ export interface operations {
             };
         };
     };
-    matches: {
+    plex_matches: {
         parameters: {
             query?: {
                 /** @description `1` for a series' seasons, or a season's episodes, as `Children`. */
@@ -12146,7 +12252,7 @@ export interface operations {
             };
         };
     };
-    metadata: {
+    plex_metadata: {
         parameters: {
             query?: {
                 /** @description `1` for a series' seasons, or a season's episodes, as `Children`. */
@@ -12208,7 +12314,7 @@ export interface operations {
             };
         };
     };
-    children: {
+    plex_children: {
         parameters: {
             query?: {
                 /** @description `1` for a series' seasons, or a season's episodes, as `Children`. */
@@ -12270,7 +12376,7 @@ export interface operations {
             };
         };
     };
-    grandchildren: {
+    plex_grandchildren: {
         parameters: {
             query?: {
                 /** @description `1` for a series' seasons, or a season's episodes, as `Children`. */
@@ -12332,7 +12438,7 @@ export interface operations {
             };
         };
     };
-    images: {
+    plex_images: {
         parameters: {
             query?: {
                 /** @description `1` for a series' seasons, or a season's episodes, as `Children`. */
@@ -12394,7 +12500,7 @@ export interface operations {
             };
         };
     };
-    imdb_list: {
+    radarr_imdb_list: {
         parameters: {
             query?: never;
             header?: never;
@@ -12451,7 +12557,7 @@ export interface operations {
             };
         };
     };
-    popular: {
+    radarr_popular: {
         parameters: {
             query?: never;
             header?: never;
@@ -12470,7 +12576,7 @@ export interface operations {
             };
         };
     };
-    trending: {
+    radarr_trending: {
         parameters: {
             query?: never;
             header?: never;
@@ -12489,7 +12595,7 @@ export interface operations {
             };
         };
     };
-    bulk: {
+    radarr_bulk: {
         parameters: {
             query?: never;
             header?: never;
@@ -12512,7 +12618,7 @@ export interface operations {
             };
         };
     };
-    changed: {
+    radarr_changed: {
         parameters: {
             query: {
                 /** @description An instant — `2026-10-09T11:45:00`, UTC unless an offset says otherwise — or a date. TMDB is asked from its date */
@@ -12541,7 +12647,7 @@ export interface operations {
             };
         };
     };
-    collection: {
+    radarr_collection: {
         parameters: {
             query?: never;
             header?: never;
@@ -12570,7 +12676,7 @@ export interface operations {
             };
         };
     };
-    by_imdb: {
+    radarr_by_imdb: {
         parameters: {
             query?: never;
             header?: never;
@@ -12592,7 +12698,7 @@ export interface operations {
             };
         };
     };
-    by_tmdb: {
+    radarr_by_tmdb: {
         parameters: {
             query?: never;
             header?: never;
@@ -12628,7 +12734,7 @@ export interface operations {
             };
         };
     };
-    scene_mapping: {
+    sonarr_services_scene_mapping: {
         parameters: {
             query?: never;
             header?: never;
@@ -12660,7 +12766,7 @@ export interface operations {
             };
         };
     };
-    search: {
+    radarr_search: {
         parameters: {
             query?: {
                 /** @description Free text, or `tmdb:`/`imdb:` followed by an id */
@@ -12684,7 +12790,7 @@ export interface operations {
             };
         };
     };
-    search: {
+    sonarr_search: {
         parameters: {
             query?: {
                 /** @description Free text, or `prefix:id` */
@@ -12723,7 +12829,7 @@ export interface operations {
             };
         };
     };
-    show: {
+    sonarr_show: {
         parameters: {
             query?: never;
             header?: never;
@@ -12768,7 +12874,7 @@ export interface operations {
             };
         };
     };
-    search_v2: {
+    sonarr_search_v2: {
         parameters: {
             query?: {
                 /** @description Three-letter language code, as Sonarr writes it; English when left out */
@@ -12799,7 +12905,7 @@ export interface operations {
             };
         };
     };
-    show_v2: {
+    sonarr_show_v2: {
         parameters: {
             query?: never;
             header?: never;
@@ -12839,7 +12945,7 @@ export interface operations {
             };
         };
     };
-    login: {
+    thetvdb_login: {
         parameters: {
             query?: never;
             header?: never;
@@ -12889,7 +12995,7 @@ export interface operations {
             };
         };
     };
-    relay: {
+    thetvdb_relay: {
         parameters: {
             query?: never;
             header?: never;

@@ -86,7 +86,7 @@ export function shortDate(value: string | undefined, locale: string): string | u
 }
 
 /** `12/01/2008, 21:00`. For anything a machine timestamped. */
-export function dateTime(value: string | undefined, locale: string): string | undefined {
+export function dateTime(value: string | null | undefined, locale: string): string | undefined {
   const date = parse(value)
   if (!date) return undefined
 
@@ -196,7 +196,7 @@ export function dayDistance(day: string, locale: string, now = new Date()): stri
 /**
  * `3 days ago`. For a refresh time, where the exact minute is noise.
  */
-export function relative(value: string | undefined, locale: string): string | undefined {
+export function relative(value: string | null | undefined, locale: string): string | undefined {
   const date = parse(value)
   if (!date) return undefined
 
@@ -221,7 +221,7 @@ export function relative(value: string | undefined, locale: string): string | un
 }
 
 /** An ISO string the server may not have sent, or may have sent empty. */
-function parse(value: string | undefined): Date | undefined {
+function parse(value: string | null | undefined): Date | undefined {
   if (!value) return undefined
 
   const date = new Date(value)

@@ -106,12 +106,16 @@ impl std::fmt::Display for Action {
 pub struct Entry {
     pub id: String,
     pub at: String,
+    #[schema(required)]
     pub actor: Option<String>,
     pub action: String,
     /// What was acted on: an item id, a client name, a field path.
+    #[schema(required)]
     pub target: Option<String>,
     /// A short human-readable note. Never carries a secret.
+    #[schema(required)]
     pub detail: Option<String>,
+    #[schema(required)]
     pub ip: Option<String>,
     /// The work the target names, when it names one still held: its title,
     /// for a reader who does not know works by their ids.

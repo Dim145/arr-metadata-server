@@ -373,7 +373,7 @@ function ImportNow({ name }: { name: 'anime-lists' | 'imdb-ratings' }) {
 }
 
 /** A downloaded list: how much of it is kept, and how long ago it landed. */
-function Imported({ list, rows }: { list?: ListImport; rows: (n: string) => string }) {
+function Imported({ list, rows }: { list: ListImport | null; rows: (n: string) => string }) {
   const { t, locale } = useI18n()
 
   if (!list) {

@@ -59,6 +59,7 @@ pub struct WebhookEvents {
 /// offer.
 #[utoipa::path(
     get, path = "/admin/webhooks/events", tag = TAG,
+    operation_id = "webhooks_events",
     responses(
         (status = 200, body = WebhookEvents),
         (status = 403, description = "The caller is not an administrator"),
@@ -137,6 +138,7 @@ fn view(destination: Destination, counts: Counts, secret: Option<String>) -> Des
 /// Every destination, in the order they were added.
 #[utoipa::path(
     get, path = "/admin/notifications", tag = TAG,
+    operation_id = "webhooks_list",
     responses(
         (status = 200, body = Vec<DestinationView>),
         (status = 403, description = "The caller is not an administrator"),
@@ -223,6 +225,7 @@ fn secret_to_keep(next: NextSecret) -> AppResult<(Option<String>, Option<String>
 /// shown in this answer, and only in this one.
 #[utoipa::path(
     post, path = "/admin/notifications", tag = TAG,
+    operation_id = "webhooks_create",
     request_body = DestinationInput,
     responses(
         (status = 201, body = DestinationView),
@@ -298,6 +301,7 @@ async fn found(state: &AppState, id: &str) -> AppResult<Destination> {
 /// again, or dropped — and a Gotify destination, which needs one, refused.
 #[utoipa::path(
     patch, path = "/admin/notifications/{id}", tag = TAG,
+    operation_id = "webhooks_change",
     params(("id" = String, Path, description = "The destination's identifier")),
     request_body = DestinationInput,
     responses(
@@ -424,6 +428,7 @@ async fn change(
 /// Delete a destination, and its log with it.
 #[utoipa::path(
     delete, path = "/admin/notifications/{id}", tag = TAG,
+    operation_id = "webhooks_remove",
     params(("id" = String, Path, description = "The destination's identifier")),
     responses(
         (status = 204, description = "Deleted"),
@@ -462,6 +467,7 @@ async fn remove(
 /// new one from now on. Shown in this answer only.
 #[utoipa::path(
     post, path = "/admin/notifications/{id}/secret", tag = TAG,
+    operation_id = "webhooks_rotate",
     params(("id" = String, Path, description = "The destination's identifier")),
     responses(
         (status = 200, body = DestinationView),
@@ -540,6 +546,7 @@ pub struct WebhookTest {
 /// in the audit trail nor in its log.
 #[utoipa::path(
     post, path = "/admin/notifications/{id}/test", tag = TAG,
+    operation_id = "webhooks_test",
     params(("id" = String, Path, description = "The destination's identifier")),
     responses(
         (status = 200, body = WebhookTest),
@@ -682,6 +689,7 @@ pub struct DeliveriesPage {
 /// newest thousand of it.
 #[utoipa::path(
     get, path = "/admin/notifications/{id}/deliveries", tag = TAG,
+    operation_id = "webhooks_log",
     params(("id" = String, Path, description = "The destination's identifier"), LogQuery),
     responses(
         (status = 200, body = DeliveriesPage),
@@ -715,6 +723,7 @@ async fn log(
 /// own in the log, due at once.
 #[utoipa::path(
     post, path = "/admin/notifications/{id}/deliveries/{delivery}/replay", tag = TAG,
+    operation_id = "webhooks_replay",
     params(
         ("id" = String, Path, description = "The destination's identifier"),
         ("delivery" = String, Path, description = "The delivery's identifier"),

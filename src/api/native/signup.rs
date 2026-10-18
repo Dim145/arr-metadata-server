@@ -270,6 +270,7 @@ pub struct OidcButton {
 /// What the sign-in page offers: whether one may sign up, and how.
 #[utoipa::path(
     get, path = "/auth/options", tag = auth::TAG,
+    operation_id = "signup_options",
     responses((status = 200, body = AuthOptions)),
     security(),
 )]
@@ -314,6 +315,7 @@ pub struct InvitationOffer {
 /// access logs keep.
 #[utoipa::path(
     post, path = "/auth/invitations/check", tag = auth::TAG,
+    operation_id = "signup_check_invitation",
     request_body = InvitationCheck,
     responses(
         (status = 200, body = InvitationOffer),
@@ -362,6 +364,7 @@ pub struct Registered {
 /// Open an account, and sign into it unless it has to wait for approval.
 #[utoipa::path(
     post, path = "/auth/register", tag = auth::TAG,
+    operation_id = "signup_register",
     request_body = RegisterRequest,
     responses(
         (status = 200, description = "Signed in; a session cookie is set", body = auth::LoginResponse),

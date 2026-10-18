@@ -42,6 +42,9 @@ pub const ALL: [&str; 10] = [
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
+// Named explicitly: how many of this server there are is a `Mode` too, and
+// utoipa keys schemas on the leaf name alone.
+#[schema(as = TaskMode)]
 pub enum Mode {
     /// Runs on a schedule, and may be run now too.
     Scheduled,

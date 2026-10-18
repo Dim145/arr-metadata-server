@@ -49,6 +49,9 @@ impl FromStr for SurfacePolicy {
 /// on any of them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
+// Named explicitly: how a task runs is a `Mode` too, and utoipa keys schemas
+// on the leaf name alone.
+#[schema(as = ServerMode)]
 pub enum Mode {
     Single,
     Multi,

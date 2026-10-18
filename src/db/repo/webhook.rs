@@ -19,6 +19,10 @@ use crate::db::{Db, RowExt, from_bool, new_id, now, text_list};
 /// Where a delivery stands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
+// Named explicitly: an account, an asset and the answer of a Sonarr or a
+// Radarr each have a `Status` too, and utoipa keys schemas on the leaf name
+// alone.
+#[schema(as = WebhookDeliveryStatus)]
 pub enum Status {
     /// Not sent yet, or to be tried again.
     Pending,
@@ -631,6 +635,9 @@ pub async fn replay(db: &Db, original: &Delivery) -> Result<Delivery> {
 /// How many deliveries of each standing a destination's log holds.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
+// Named explicitly: the accounts and the media are counted in a `Counts` too,
+// and utoipa keys schemas on the leaf name alone.
+#[schema(as = WebhookDeliveryCounts)]
 pub struct Counts {
     pub pending: i64,
     pub delivered: i64,

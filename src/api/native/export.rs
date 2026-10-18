@@ -71,6 +71,7 @@ fn xml(body: String, filename: &str) -> Response {
 /// Of a work this caller may see, as its own page decides it.
 #[utoipa::path(
     get, path = "/items/{id}/nfo", tag = TAG,
+    operation_id = "export_item_nfo",
     params(("id" = String, Path, description = "The work's identifier")),
     responses(
         (status = 200, description = "A Kodi/XBMC .nfo document", content_type = "application/xml"),
@@ -158,6 +159,7 @@ async fn collection_of(
 /// The `.nfo` document for one episode.
 #[utoipa::path(
     get, path = "/items/{id}/nfo/{season}/{episode}", tag = TAG,
+    operation_id = "export_episode_nfo",
     params(
         ("id" = String, Path, description = "The work's identifier"),
         ("season" = i32, Path, description = "Season number"),
@@ -220,6 +222,7 @@ pub struct KometaQuery {
 /// needs the `write` scope.
 #[utoipa::path(
     get, path = "/export/kometa.yml", tag = TAG,
+    operation_id = "export_kometa_yml",
     params(KometaQuery),
     responses(
         (status = 200, description = "A Kometa metadata file", content_type = "application/yaml"),
@@ -337,6 +340,7 @@ pub struct ExportStarted {
     /// The run under `export.nfo` in the jobs list. Its detail, once it is
     /// done, reads `N works, N episodes, N failed`; the settings page reads
     /// the counts out of it.
+    #[schema(required)]
     pub job_id: Option<String>,
 }
 
@@ -382,6 +386,7 @@ pub struct ExportQuery {
 /// says when it is done and what it wrote.
 #[utoipa::path(
     post, path = "/export/nfo", tag = TAG,
+    operation_id = "export_export_all",
     params(ExportQuery),
     responses(
         (status = 202, body = ExportStarted),

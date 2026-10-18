@@ -15,7 +15,7 @@ import tseslint from 'typescript-eslint'
 
 export default defineConfig(
   // Built, recorded or generated: nobody's to correct by hand.
-  { ignores: ['dist/', 'test-results/', 'playwright-report/', 'blob-report/', 'src/lib/api.gen.d.ts'] },
+  { ignores: ['dist/', 'test-results/', 'playwright-report/', 'blob-report/', 'src/lib/api.gen.ts'] },
 
   js.configs.recommended,
   tseslint.configs.recommendedTypeChecked,

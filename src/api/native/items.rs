@@ -272,6 +272,7 @@ pub(super) fn to_query(
 /// Manual overrides are applied, so what you see here is what clients are served.
 #[utoipa::path(
     get, path = "/items", tag = TAG,
+    operation_id = "items_list",
     params(ListQuery),
     responses(
         (status = 200, description = "Matching works, newest first", body = ListResponse),
@@ -377,6 +378,7 @@ pub struct DetailQuery {
 /// manual override applied. `lockedFields` lists what a human has claimed.
 #[utoipa::path(
     get, path = "/items/{id}", tag = TAG,
+    operation_id = "items_detail",
     params(("id" = String, Path, description = "The work's identifier"), DetailQuery),
     responses(
         (status = 200, body = MediaItem),
@@ -449,6 +451,7 @@ pub struct CreateRequest {
 /// links lead to; one another entry already goes by is refused.
 #[utoipa::path(
     post, path = "/items", tag = TAG,
+    operation_id = "items_create",
     request_body = CreateRequest,
     responses(
         (status = 201, description = "Created", body = MediaItem),
@@ -540,6 +543,7 @@ pub struct UpdateRequest {
 /// *field* is a different operation — see the override endpoints.
 #[utoipa::path(
     patch, path = "/items/{id}", tag = TAG,
+    operation_id = "items_update",
     params(("id" = String, Path, description = "The work's identifier")),
     request_body = UpdateRequest,
     responses(
@@ -585,6 +589,7 @@ async fn update(
 /// Delete an entry and everything attached to it, overrides included.
 #[utoipa::path(
     delete, path = "/items/{id}", tag = TAG,
+    operation_id = "items_remove",
     params(("id" = String, Path, description = "The work's identifier")),
     responses(
         (status = 204, description = "Deleted"),
@@ -632,6 +637,7 @@ async fn remove(
 /// are not touched — that is the point of them.
 #[utoipa::path(
     post, path = "/items/{id}/refresh", tag = TAG,
+    operation_id = "items_refresh",
     params(("id" = String, Path, description = "The work's identifier")),
     responses(
         (status = 200, description = "The work as it now stands", body = MediaItem),
@@ -768,6 +774,7 @@ async fn refresh(
 pub struct SnapshotSummary {
     pub provider: String,
     pub fetched_at: String,
+    #[schema(required)]
     pub etag: Option<String>,
     /// Omitted when `payload=false` was asked for.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -829,6 +836,7 @@ pub struct ProvenanceReport {
 /// keep the catalogue — a field locked by hand says so in the work itself.
 #[utoipa::path(
     get, path = "/items/{id}/provenance", tag = TAG,
+    operation_id = "items_provenance",
     params(("id" = String, Path, description = "The work's identifier")),
     responses(
         (status = 200, body = ProvenanceReport),
@@ -897,6 +905,7 @@ pub struct SyncOutcome {
 /// the work's refresh schedule stands — this is not a refresh.
 #[utoipa::path(
     post, path = "/items/{id}/sync", tag = TAG,
+    operation_id = "items_sync",
     params(("id" = String, Path, description = "The work's identifier")),
     request_body = SyncRequest,
     responses(
@@ -1048,6 +1057,7 @@ async fn sync(
 /// Of a work this caller may see, as its own page decides it.
 #[utoipa::path(
     get, path = "/items/{id}/snapshots", tag = TAG,
+    operation_id = "items_snapshots",
     params(("id" = String, Path, description = "The work's identifier"), SnapshotQuery),
     responses(
         (status = 200, body = Vec<SnapshotSummary>),

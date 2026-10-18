@@ -49,6 +49,7 @@ pub fn router() -> OpenApiRouter<AppState> {
 /// be shown it.
 #[utoipa::path(
     get, path = "/facets", tag = TAG,
+    operation_id = "browse_facets",
     params(super::items::ListQuery),
     responses(
         (status = 200, body = Facets),
@@ -200,6 +201,7 @@ pub struct Calendar {
 /// reader would not be shown one, a work is left out of both.
 #[utoipa::path(
     get, path = "/calendar", tag = TAG,
+    operation_id = "browse_calendar",
     params(CalendarQuery),
     responses(
         (status = 200, body = Calendar),
@@ -545,6 +547,9 @@ pub struct PersonQuery {
 /// One part a person played, or one job they did, on one work.
 #[derive(Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
+// Named explicitly: what an account may do is a `Role` too, and utoipa keys
+// schemas on the leaf name alone.
+#[schema(as = PersonRole)]
 pub struct Role {
     pub work_id: String,
     pub credit_type: CreditType,
@@ -608,6 +613,7 @@ pub struct Person {
 /// credits carry none and are not found here.
 #[utoipa::path(
     get, path = "/people/{tmdb_id}", tag = TAG,
+    operation_id = "browse_person",
     params(("tmdb_id" = i64, Path, description = "The person's TMDB id"), PersonQuery),
     responses(
         (status = 200, body = Person),

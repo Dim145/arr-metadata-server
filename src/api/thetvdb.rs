@@ -161,6 +161,7 @@ fn users_own(path: &str) -> bool {
 /// 401 that says why, and any other is signed in with at TheTVDB.
 #[utoipa::path(
     post, path = "/v4/login", tag = TAG,
+    operation_id = "thetvdb_login",
     request_body = LoginRequest,
     responses(
         (status = 200, description = "A token to carry on every call after: a key issued here is answered as the token itself; another key is signed in with at TheTVDB, and its answer handed back"),
@@ -276,6 +277,7 @@ async fn sign_in(
 /// and its `/extended`; one episode, `/extended` and `/translations/{lang}`.
 #[utoipa::path(
     get, path = "/v4/{path}", tag = TAG,
+    operation_id = "thetvdb_relay",
     // Registered against axum as `/v4/{*path}`; see `router` above.
     params(("path" = String, Path, description = "A TheTVDB v4 path, e.g. `series/81189/extended` or `search?query=…`")),
     responses(

@@ -79,6 +79,7 @@ pub struct NewSeason {
 /// It is flagged manual, so no refresh will replace or remove it.
 #[utoipa::path(
     post, path = "/items/{id}/seasons", tag = TAG,
+    operation_id = "children_add_season",
     params(("id" = String, Path, description = "The work's identifier")),
     request_body = NewSeason,
     responses(
@@ -143,6 +144,7 @@ async fn add_season(
 /// Remove a season that was added by hand.
 #[utoipa::path(
     delete, path = "/items/{id}/seasons/{season}", tag = TAG,
+    operation_id = "children_remove_season",
     params(
         ("id" = String, Path, description = "The work's identifier"),
         ("season" = i32, Path, description = "Season number"),
@@ -195,6 +197,7 @@ pub struct NewEpisode {
 /// Add an episode by hand.
 #[utoipa::path(
     post, path = "/items/{id}/episodes", tag = TAG,
+    operation_id = "children_add_episode",
     params(("id" = String, Path, description = "The work's identifier")),
     request_body = NewEpisode,
     responses(
@@ -288,6 +291,7 @@ async fn add_episode(
 /// Remove an episode that was added by hand.
 #[utoipa::path(
     delete, path = "/items/{id}/episodes/{season}/{episode}", tag = TAG,
+    operation_id = "children_remove_episode",
     params(
         ("id" = String, Path, description = "The work's identifier"),
         ("season" = i32, Path, description = "Season number"),
@@ -343,6 +347,7 @@ pub struct NewImage {
 /// Use `sortOrder: 0` to put it ahead of the provider's own artwork.
 #[utoipa::path(
     post, path = "/items/{id}/images", tag = TAG,
+    operation_id = "children_add_image",
     params(("id" = String, Path, description = "The work's identifier")),
     request_body = NewImage,
     responses(
@@ -399,6 +404,7 @@ async fn add_image(
 /// Remove an image that was added by hand.
 #[utoipa::path(
     delete, path = "/items/{id}/images/{image_id}", tag = TAG,
+    operation_id = "children_remove_image",
     params(
         ("id" = String, Path, description = "The work's identifier"),
         ("image_id" = String, Path, description = "The image's identifier"),
@@ -445,6 +451,7 @@ pub struct NewCredit {
 /// Add a credit by hand.
 #[utoipa::path(
     post, path = "/items/{id}/credits", tag = TAG,
+    operation_id = "children_add_credit",
     params(("id" = String, Path, description = "The work's identifier")),
     request_body = NewCredit,
     responses(
@@ -500,6 +507,7 @@ async fn add_credit(
 /// Remove a credit that was added by hand.
 #[utoipa::path(
     delete, path = "/items/{id}/credits/{credit_id}", tag = TAG,
+    operation_id = "children_remove_credit",
     params(
         ("id" = String, Path, description = "The work's identifier"),
         ("credit_id" = String, Path, description = "The credit's identifier"),
@@ -544,6 +552,7 @@ pub struct NewAlternativeTitle {
 /// release group actually uses is often what makes a download get recognised.
 #[utoipa::path(
     post, path = "/items/{id}/alternative-titles", tag = TAG,
+    operation_id = "children_add_alternative_title",
     params(("id" = String, Path, description = "The work's identifier")),
     request_body = NewAlternativeTitle,
     responses(
@@ -604,6 +613,7 @@ async fn add_alternative_title(
 /// Remove an alternative title that was added by hand.
 #[utoipa::path(
     delete, path = "/items/{id}/alternative-titles/{title_id}", tag = TAG,
+    operation_id = "children_remove_alternative_title",
     params(
         ("id" = String, Path, description = "The work's identifier"),
         ("title_id" = String, Path, description = "The title's identifier"),
@@ -681,6 +691,7 @@ where
 /// hidden.
 #[utoipa::path(
     patch, path = "/items/{id}/credits/{credit_id}", tag = TAG,
+    operation_id = "children_edit_credit",
     params(
         ("id" = String, Path, description = "The work's identifier"),
         ("credit_id" = String, Path, description = "The credit's identifier, as the work is read"),
@@ -781,6 +792,7 @@ async fn edit_credit(
 /// chosen to lead with is shown whatever is hidden.
 #[utoipa::path(
     patch, path = "/items/{id}/images/{image_id}", tag = TAG,
+    operation_id = "children_edit_image",
     params(
         ("id" = String, Path, description = "The work's identifier"),
         ("image_id" = String, Path, description = "The image's identifier, as the work is read"),
@@ -829,6 +841,7 @@ async fn edit_image(
 /// by hand is removed instead.
 #[utoipa::path(
     patch, path = "/items/{id}/alternative-titles/{title_id}", tag = TAG,
+    operation_id = "children_edit_alternative_title",
     params(
         ("id" = String, Path, description = "The work's identifier"),
         ("title_id" = String, Path, description = "The title's identifier, as the work is read"),

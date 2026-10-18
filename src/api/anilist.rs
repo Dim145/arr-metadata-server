@@ -134,6 +134,7 @@ fn loop_refused() -> AppError {
 /// interface's door serves its own page at this path.
 #[utoipa::path(
     post, path = "/", tag = TAG,
+    operation_id = "anilist_relay",
     responses(
         (status = 200, description = "AniList's answer, with the fields locked here written into each entry that is a work of this catalogue. Reached by the name graphql.anilist.co on the clients' door; a GET with the query in the address is relayed too"),
         (status = 403, description = "The caller's address is not in the allowlist"),

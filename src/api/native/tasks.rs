@@ -52,6 +52,7 @@ pub struct JobDetail {
 /// keeps none, has an empty list.
 #[utoipa::path(
     get, path = "/jobs/{id}", tag = TAG,
+    operation_id = "tasks_detail",
     params(("id" = String, Path)),
     responses(
         (status = 200, body = JobDetail),
@@ -103,6 +104,7 @@ async fn detail(
 /// Every background task: when it runs, how it last went, when it runs next.
 #[utoipa::path(
     get, path = "/tasks", tag = TAG,
+    operation_id = "tasks_list",
     responses(
         (status = 200, body = Vec<tasks::TaskState>),
         (status = 403, description = "The caller is not an administrator"),
@@ -127,6 +129,7 @@ pub struct Started {
 /// Run a task now, in the background.
 #[utoipa::path(
     post, path = "/tasks/{id}/run", tag = TAG,
+    operation_id = "tasks_run",
     params(("id" = String, Path, description = "`refresh.sweep`, `refresh.all`, `import.anime`, `import.imdb`, `export.nfo`, `media.store`, `media.sweep`, `tls.renew`, `update.check` or `arr.seed`")),
     responses(
         (status = 202, body = Started),
@@ -187,6 +190,7 @@ async fn run(
 /// Ask a run to stop at the next work. Only a run that can stop partway.
 #[utoipa::path(
     post, path = "/jobs/{id}/cancel", tag = TAG,
+    operation_id = "tasks_cancel",
     params(("id" = String, Path)),
     responses(
         (status = 202, description = "Asked; it stops at the next work"),

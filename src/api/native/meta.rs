@@ -52,6 +52,7 @@ pub struct FieldRegistry {
 /// refused. The web UI builds its edit form from it.
 #[utoipa::path(
     get, path = "/fields", tag = TAG,
+    operation_id = "meta_field_registry",
     responses((status = 200, body = FieldRegistry)),
 )]
 async fn field_registry() -> Json<FieldRegistry> {
@@ -94,7 +95,11 @@ pub struct Stats {
 /// them, not for adults, as the lists and `/figures` count them. How the
 /// server is run — keys, locks, the journal, the jobs, the caches — is told
 /// only to whoever maintains it, whose dashboard this is.
-#[utoipa::path(get, path = "/stats", tag = TAG, responses((status = 200, body = Stats)))]
+#[utoipa::path(
+    get, path = "/stats", tag = TAG,
+    operation_id = "meta_stats",
+    responses((status = 200, body = Stats)),
+)]
 async fn stats(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
@@ -151,7 +156,11 @@ pub struct Sources {
 /// data free to use on the condition that it is credited where it is shown —
 /// TVmaze's licence asks for a link, IMDb's for a line — so a visitor has to be
 /// able to read this too.
-#[utoipa::path(get, path = "/sources", tag = TAG, responses((status = 200, body = Sources)))]
+#[utoipa::path(
+    get, path = "/sources", tag = TAG,
+    operation_id = "meta_sources",
+    responses((status = 200, body = Sources)),
+)]
 async fn sources(State(state): State<AppState>) -> Json<Sources> {
     use crate::providers::names;
 
@@ -194,8 +203,10 @@ pub struct FurtherSources {
     /// `official` when `AMS_MAL_CLIENT_ID` is set, `jikan` otherwise.
     pub mal_via: &'static str,
     /// The anime identifier list; absent until it has been downloaded once.
+    #[schema(required)]
     pub anime_list: Option<ListImport>,
     /// IMDb's ratings; absent until they have been downloaded once.
+    #[schema(required)]
     pub imdb_ratings: Option<ListImport>,
 }
 
@@ -203,6 +214,7 @@ pub struct FurtherSources {
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
     pub version: &'static str,
+    #[schema(required)]
     pub public_url: Option<String>,
     pub database: &'static str,
     /// One instance, or several coordinating through the cache server.
@@ -229,6 +241,7 @@ pub struct Settings {
 /// browse is a map of the way in, and only the interface asks for it.
 #[utoipa::path(
     get, path = "/settings", tag = TAG,
+    operation_id = "meta_settings",
     responses(
         (status = 200, body = Settings),
         (status = 403, description = "The caller is not an administrator"),
@@ -313,6 +326,7 @@ pub struct JobsResponse {
 /// failed. A refresh someone asked for by hand gets its own row.
 #[utoipa::path(
     get, path = "/jobs", tag = TAG,
+    operation_id = "meta_jobs",
     params(JobQuery),
     responses(
         (status = 200, body = JobsResponse),
@@ -360,6 +374,7 @@ async fn jobs(
 /// of it, so the next request re-reads and re-applies overrides.
 #[utoipa::path(
     post, path = "/cache/clear", tag = TAG,
+    operation_id = "meta_clear_cache",
     responses(
         (status = 204, description = "Cleared"),
         (status = 403, description = "The caller may not write"),
@@ -406,6 +421,7 @@ pub struct Imported {
 /// followed under Jobs like any other.
 #[utoipa::path(
     post, path = "/datasets/{name}/import", tag = TAG,
+    operation_id = "meta_import_dataset",
     params(("name" = String, Path, description = "`anime-lists` or `imdb-ratings`")),
     responses(
         (status = 200, body = Imported),

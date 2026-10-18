@@ -74,6 +74,7 @@ struct SearchQueryV2 {
 /// Sonarr has already stored it.
 #[utoipa::path(
     get, path = "/v1/tvdb/shows/{language}/{tvdb_id}", tag = TAG,
+    operation_id = "sonarr_show",
     params(
         ("language" = String, Path, description = "Two-letter language code, e.g. `en`"),
         ("tvdb_id" = i64, Path, description = "TVDB series id, or a synthesised one"),
@@ -114,6 +115,7 @@ async fn show(
 /// one that fails on add is worse than showing nothing.
 #[utoipa::path(
     get, path = "/v1/tvdb/search/{language}", tag = TAG,
+    operation_id = "sonarr_search",
     params(
         ("language" = String, Path, description = "Two-letter language code, e.g. `en`"),
         ("term" = Option<String>, Query, description = "Free text, or `prefix:id`"),
@@ -169,6 +171,7 @@ async fn search(
 /// answers it.
 #[utoipa::path(
     get, path = "/v2/tvdb/shows/{language}/{tvdb_id}/{season_type}", tag = TAG,
+    operation_id = "sonarr_show_v2",
     params(
         ("language" = String, Path, description = "Three-letter language code, as Sonarr writes it: `eng`, `fra`"),
         ("tvdb_id" = i64, Path, description = "TVDB series id, or a synthesised one"),
@@ -228,6 +231,7 @@ async fn show_v2(
 /// `tvdb:` itself and sends `imdb:`, `tmdb:`, `mal:` and `anilist:` here.
 #[utoipa::path(
     get, path = "/v2/tvdb/search", tag = TAG,
+    operation_id = "sonarr_search_v2",
     params(
         ("language" = Option<String>, Query, description = "Three-letter language code, as Sonarr writes it; English when left out"),
         ("term" = Option<String>, Query, description = "Free text, or `prefix:id`"),

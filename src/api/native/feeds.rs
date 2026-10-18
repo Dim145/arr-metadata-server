@@ -88,6 +88,7 @@ pub struct LanguageQuery {
 /// episodes and films are in it, refreshed as the app sees fit.
 #[utoipa::path(
     get, path = "/calendar.ics", tag = TAG,
+    operation_id = "feeds_calendar_ics",
     params(FeedQuery),
     responses(
         (status = 200, description = "An iCalendar document, as text/calendar"),
@@ -124,6 +125,7 @@ async fn calendar_ics(
 /// carries for it.
 #[utoipa::path(
     get, path = "/items/{id}/calendar.ics", tag = TAG,
+    operation_id = "feeds_work_ics",
     params(("id" = String, Path, description = "The work's id"), LanguageQuery),
     responses(
         (status = 200, description = "An iCalendar document, as text/calendar"),
@@ -179,6 +181,7 @@ async fn work_ics(
 /// The works most recently added to the catalogue, as an Atom feed.
 #[utoipa::path(
     get, path = "/feed/added.atom", tag = TAG,
+    operation_id = "feeds_added_atom",
     params(LanguageQuery),
     responses((status = 200, description = "An Atom feed, as application/atom+xml")),
 )]
@@ -248,6 +251,7 @@ async fn added_atom(
 /// out.
 #[utoipa::path(
     get, path = "/feed/airing.atom", tag = TAG,
+    operation_id = "feeds_airing_atom",
     params(LanguageQuery),
     responses((status = 200, description = "An Atom feed, as application/atom+xml")),
 )]
@@ -295,6 +299,7 @@ async fn airing_atom(
 /// otherwise with a key, which a feed reader can carry in the query string.
 #[utoipa::path(
     get, path = "/lists/{key}/feed.atom", tag = lists::TAG,
+    operation_id = "feeds_list_atom",
     params(("key" = String, Path, description = "The list's slug, or its id"), LanguageQuery),
     responses(
         (status = 200, description = "An Atom feed, as application/atom+xml"),

@@ -86,6 +86,7 @@ pub struct StartQuery {
 /// signed-in account to the person the provider knows.
 #[utoipa::path(
     get, path = "/auth/oidc/start", tag = auth::TAG,
+    operation_id = "oidc_start",
     params(StartQuery),
     responses(
         (status = 303, description = "To the identity provider, or back to the sign-in page saying why not"),
@@ -167,6 +168,7 @@ pub struct CallbackQuery {
 /// the sign-in page, told why in a word (`?sso=`).
 #[utoipa::path(
     get, path = "/auth/oidc/callback", tag = auth::TAG,
+    operation_id = "oidc_callback",
     params(CallbackQuery),
     responses(
         (status = 200, description = "Signed in; a session cookie is set, and the page moves on"),
@@ -681,6 +683,7 @@ fn read(state: &AppState) -> OidcConfiguration {
 
 #[utoipa::path(
     get, path = "/admin/oidc", tag = super::meta::TAG,
+    operation_id = "oidc_configuration",
     responses(
         (status = 200, body = OidcConfiguration),
         (status = 403, description = "The caller is not an administrator"),
@@ -715,6 +718,7 @@ pub struct OidcUpdate {
 /// All of it is checked before any of it is written.
 #[utoipa::path(
     put, path = "/admin/oidc", tag = super::meta::TAG,
+    operation_id = "oidc_configure",
     request_body = OidcUpdate,
     responses(
         (status = 200, body = OidcConfiguration),
@@ -876,6 +880,7 @@ pub struct TestOutcome {
 /// on it. Answers what it found, or why it found nothing.
 #[utoipa::path(
     post, path = "/admin/oidc/test", tag = super::meta::TAG,
+    operation_id = "oidc_test",
     request_body = TestRequest,
     responses(
         (status = 200, body = TestOutcome),
@@ -926,6 +931,7 @@ async fn test(
 /// again — give it one first.
 #[utoipa::path(
     delete, path = "/users/{id}/oidc", tag = users::TAG,
+    operation_id = "oidc_unlink",
     params(("id" = String, Path)),
     responses(
         (status = 204),

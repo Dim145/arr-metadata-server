@@ -97,6 +97,7 @@ fn served_with(
 /// A movie by TMDB id, in Radarr's format.
 #[utoipa::path(
     get, path = "/v1/movie/{tmdb_id}", tag = TAG,
+    operation_id = "radarr_by_tmdb",
     params(("tmdb_id" = i64, Path, description = "TMDB movie id")),
     responses(
         (status = 200, body = MovieResource),
@@ -123,6 +124,7 @@ async fn by_tmdb(
 /// A movie by IMDb id. Radarr expects an array even though it reads only the first.
 #[utoipa::path(
     get, path = "/v1/movie/imdb/{imdb_id}", tag = TAG,
+    operation_id = "radarr_by_imdb",
     params(("imdb_id" = String, Path, description = "IMDb id, with or without the `tt` prefix")),
     responses((status = 200, body = Vec<MovieResource>)),
     security(),
@@ -151,6 +153,7 @@ struct SearchQuery {
 /// Search movies, in Radarr's format.
 #[utoipa::path(
     get, path = "/v1/search", tag = TAG,
+    operation_id = "radarr_search",
     params(
         ("q" = Option<String>, Query, description = "Free text, or `tmdb:`/`imdb:` followed by an id"),
         ("year" = Option<i32>, Query, description = "Narrow to a release year"),
@@ -177,6 +180,7 @@ async fn search(
 /// at 100 ids per request.
 #[utoipa::path(
     post, path = "/v1/movie/bulk", tag = TAG,
+    operation_id = "radarr_bulk",
     request_body = Vec<i64>,
     responses((status = 200, body = Vec<MovieResource>)),
     security(),
@@ -201,6 +205,7 @@ struct ChangedQuery {
 /// fetched again, or a lock put on, changed or lifted.
 #[utoipa::path(
     get, path = "/v1/movie/changed", tag = TAG,
+    operation_id = "radarr_changed",
     params(("since" = String, Query, description = "An instant — `2026-10-09T11:45:00`, UTC unless an offset says otherwise — or a date. TMDB is asked from its date")),
     responses(
         (status = 200, body = Vec<i64>),
@@ -235,6 +240,7 @@ async fn changed(
 /// sent naming none were filed under none.
 #[utoipa::path(
     get, path = "/v1/movie/collection/{tmdb_id}", tag = TAG,
+    operation_id = "radarr_collection",
     params(("tmdb_id" = i64, Path, description = "TMDB collection id")),
     responses(
         (status = 200, body = CollectionResource),
@@ -279,6 +285,7 @@ async fn collection(
 /// TMDB's popular movies.
 #[utoipa::path(
     get, path = "/v1/list/tmdb/popular", tag = TAG,
+    operation_id = "radarr_popular",
     responses((status = 200, body = Vec<MovieResource>)),
     security(),
 )]
@@ -301,6 +308,7 @@ async fn popular(
 /// edits apply. With the service switched off there is no list to give.
 #[utoipa::path(
     get, path = "/v1/list/imdb/{id}", tag = TAG,
+    operation_id = "radarr_imdb_list",
     params(("id" = String, Path, description = "`top250`, `popular`, or an IMDb user id such as `ur12345678`")),
     responses(
         (status = 200, body = Vec<MovieResource>),
@@ -396,6 +404,7 @@ fn is_imdb_list(id: &str) -> bool {
 /// TMDB's trending movies for the week.
 #[utoipa::path(
     get, path = "/v1/list/tmdb/trending", tag = TAG,
+    operation_id = "radarr_trending",
     responses((status = 200, body = Vec<MovieResource>)),
     security(),
 )]

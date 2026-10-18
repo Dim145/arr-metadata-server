@@ -119,8 +119,11 @@ impl Kind {
 #[schema(as = WebhookMessage)]
 pub struct Told {
     pub event: String,
+    #[schema(required)]
     pub actor: Option<String>,
+    #[schema(required)]
     pub target: Option<String>,
+    #[schema(required)]
     pub detail: Option<String>,
     /// When it happened, in RFC 3339.
     pub at: String,

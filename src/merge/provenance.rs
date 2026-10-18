@@ -87,6 +87,9 @@ pub fn title_key(title: &AlternativeTitle) -> String {
 /// Who gave one value, and who else had a say.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
+// Named explicitly: a source the health page lists is a `Source` too, and
+// utoipa keys schemas on the leaf name alone.
+#[schema(as = ValueSource)]
 pub struct Source {
     /// The provider whose value was kept.
     pub from: String,

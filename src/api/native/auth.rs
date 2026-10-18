@@ -80,6 +80,7 @@ pub struct LoginResponse {
 /// password is verified either way so the two take the same time.
 #[utoipa::path(
     post, path = "/auth/login", tag = TAG,
+    operation_id = "auth_login",
     request_body = LoginRequest,
     responses(
         (status = 200, description = "Signed in; a session cookie is set", body = LoginResponse),
@@ -305,6 +306,7 @@ const DUMMY_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$c29tZXNhbHR2YWx1ZQ$\
 /// Sign out, invalidating this session server-side.
 #[utoipa::path(
     post, path = "/auth/logout", tag = TAG,
+    operation_id = "auth_logout",
     responses((status = 204, description = "Signed out")),
 )]
 async fn logout(
@@ -374,6 +376,7 @@ pub struct MeUser {
 /// Who this request is authenticated as, and what it may do.
 #[utoipa::path(
     get, path = "/auth/me", tag = TAG,
+    operation_id = "auth_me",
     responses(
         (status = 200, body = MeResponse),
         (status = 401, description = "No valid credential was presented"),
@@ -413,6 +416,7 @@ pub struct ChangePasswordRequest {
 /// old password.
 #[utoipa::path(
     post, path = "/auth/password", tag = TAG,
+    operation_id = "auth_change_password",
     request_body = ChangePasswordRequest,
     responses(
         (status = 204, description = "Changed; sign in again"),

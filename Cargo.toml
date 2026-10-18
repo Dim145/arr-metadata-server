@@ -131,6 +131,11 @@ serde_urlencoded = "0.7"
 # test says they are well-formed rather than that they look it; the version
 # the object store already brings.
 quick-xml = "0.41"
+# Reads the source for what the assembled spec no longer shows: two types
+# filed under one schema name, a field always written yet documented as
+# optional, a handler's operation id (src/api/mod.rs). The version utoipa's
+# derive already brings.
+syn = { version = "3.0.6", default-features = false, features = ["full", "parsing", "visit"] }
 
 [profile.release]
 opt-level = 3

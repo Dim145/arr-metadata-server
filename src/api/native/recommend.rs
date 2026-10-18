@@ -63,6 +63,7 @@ pub struct Similar {
 /// first. A film's own collection is left to the collection.
 #[utoipa::path(
     get, path = "/items/{id}/similar", tag = TAG,
+    operation_id = "recommend_similar",
     params(("id" = String, Path, description = "The work's id"), LanguageQuery),
     responses(
         (status = 200, body = Similar),
@@ -159,11 +160,16 @@ pub struct Suggestion {
     pub tmdb_id: i64,
     pub kind: MediaKind,
     pub title: String,
+    #[schema(required)]
     pub year: Option<i32>,
+    #[schema(required)]
     pub overview: Option<String>,
+    #[schema(required)]
     pub poster: Option<String>,
+    #[schema(required)]
     pub score: Option<f64>,
     /// The catalogue's own id, where the work is already in it.
+    #[schema(required)]
     pub held: Option<String>,
 }
 
@@ -177,6 +183,7 @@ pub struct Suggestions {
 /// to import from — each marked where it is already held.
 #[utoipa::path(
     get, path = "/items/{id}/suggestions", tag = TAG,
+    operation_id = "recommend_suggestions",
     params(("id" = String, Path, description = "The work's id")),
     responses(
         (status = 200, body = Suggestions),
@@ -264,7 +271,9 @@ fn summary(entry: &Value, kind: MediaKind) -> Option<Suggestion> {
 pub struct CollectionCard {
     pub tmdb_id: i64,
     /// TMDB's name for it, where a key lets it be asked.
+    #[schema(required)]
     pub name: Option<String>,
+    #[schema(required)]
     pub poster: Option<String>,
     /// How many of its films the catalogue holds.
     pub count: i64,
@@ -281,9 +290,12 @@ pub struct Collections {
 pub struct CollectionPart {
     pub tmdb_id: i64,
     pub title: String,
+    #[schema(required)]
     pub year: Option<i32>,
+    #[schema(required)]
     pub poster: Option<String>,
     /// The catalogue's own id, where the film is in it.
+    #[schema(required)]
     pub held: Option<String>,
 }
 
@@ -291,9 +303,13 @@ pub struct CollectionPart {
 #[serde(rename_all = "camelCase")]
 pub struct CollectionPage {
     pub tmdb_id: i64,
+    #[schema(required)]
     pub name: Option<String>,
+    #[schema(required)]
     pub overview: Option<String>,
+    #[schema(required)]
     pub poster: Option<String>,
+    #[schema(required)]
     pub backdrop: Option<String>,
     /// The films the catalogue holds, in release order, drawn as a list is.
     pub items: Vec<MediaItem>,
@@ -304,6 +320,7 @@ pub struct CollectionPage {
 /// The collections the catalogue's films belong to, most films first.
 #[utoipa::path(
     get, path = "/collections", tag = TAG,
+    operation_id = "recommend_collections",
     params(LanguageQuery),
     responses((status = 200, body = Collections)),
 )]
@@ -347,6 +364,7 @@ async fn collections(
 /// One collection: what the catalogue holds of it, and what TMDB lists.
 #[utoipa::path(
     get, path = "/collections/{tmdbId}", tag = TAG,
+    operation_id = "recommend_collection",
     params(("tmdbId" = i64, Path, description = "TMDB's id for the collection"), LanguageQuery),
     responses(
         (status = 200, body = CollectionPage),

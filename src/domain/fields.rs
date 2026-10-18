@@ -473,6 +473,7 @@ pub struct Override {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
     /// `None` means the user explicitly cleared the field.
+    #[schema(required)]
     pub value: Option<Value>,
     pub updated_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]

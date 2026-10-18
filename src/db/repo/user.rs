@@ -22,6 +22,9 @@ pub const NO_PASSWORD: &str = "!";
 /// What an account may do, least first.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
+// Named explicitly: the part a person played in a work is a `Role` too, and
+// utoipa keys schemas on the leaf name alone.
+#[schema(as = AccountRole)]
 pub enum Role {
     /// Browses, and manages their own profile, sessions and keys.
     Member,
@@ -73,6 +76,10 @@ impl FromStr for Role {
 /// Whether an account may sign in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
+// Named explicitly: a delivery, an asset and the answer of a Sonarr or a
+// Radarr each have a `Status` too, and utoipa keys schemas on the leaf name
+// alone.
+#[schema(as = AccountStatus)]
 pub enum Status {
     Active,
     /// Signed up where sign-ups wait for an administrator.
@@ -319,6 +326,9 @@ pub struct Query {
 
 #[derive(Clone, Debug, Default, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
+// Named explicitly: the deliveries and the media are counted in a `Counts`
+// too, and utoipa keys schemas on the leaf name alone.
+#[schema(as = AccountCounts)]
 pub struct Counts {
     pub total: i64,
     pub pending: i64,

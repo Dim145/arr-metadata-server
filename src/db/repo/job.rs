@@ -86,11 +86,16 @@ pub struct Job {
     pub id: String,
     pub kind: String,
     /// What it acted on: an item id, or nothing for a sweep.
+    #[schema(required)]
     pub target: Option<String>,
     pub status: String,
+    #[schema(required)]
     pub started_at: Option<String>,
+    #[schema(required)]
     pub finished_at: Option<String>,
+    #[schema(required)]
     pub error: Option<String>,
+    #[schema(required)]
     pub detail: Option<String>,
     pub created_at: String,
     /// Who started it, as the journal names them; nothing for the schedule.
@@ -387,6 +392,9 @@ pub struct Touched<'a> {
 /// work, in the order they were taken.
 #[derive(Clone, Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
+// Named explicitly: a line of a season's chart is an `Entry` too, and utoipa
+// keys schemas on the leaf name alone.
+#[schema(as = JobEntry)]
 pub struct Entry {
     pub id: String,
     /// The work's id — which may name nothing any more.
@@ -397,7 +405,8 @@ pub struct Entry {
     pub title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
-    /// `ok`, `failed` or `skipped`.
+    /// `ok`, `failed`, `skipped` — or `imported`, the seed's: a work of
+    /// Sonarr's or Radarr's library fetched and stored for the first time.
     pub outcome: String,
     /// What happened: one of the fixed notes the interface knows, or the
     /// error as the provider said it.

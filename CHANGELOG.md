@@ -23,6 +23,20 @@ may change what the API or the configuration means, and says so here.
 
 ### Changed
 
+- The OpenAPI document (`/api/openapi.json`) describes what the server sends.
+  Ten schema names stood for two types or more — `Role`, `Status`, `Counts`,
+  `Mode`, `Entry`, `Kind`, `Source`, and Radarr's `RatingResource`,
+  `ImageResource` and `AlternativeTitleResource`, which carried Skyhook's
+  shape — so twenty-five fields were documented with another type's shape:
+  each type has its own name now (`AccountRole` and `PersonRole`,
+  `AccountStatus`, `SkyhookRatingResource`…). Every operation has an id of its
+  own, `<module>_<handler>` (`users_list`), where fifty-three shared sixteen;
+  and the sixty-seven fields the native API always sends, `null` when empty,
+  are listed as required. Nothing the server sends has changed; a client
+  generated from the document gets the new names. `cargo test` fails when two
+  types share a name, when an operation lacks its id or shares one, or when a
+  field always sent is documented as optional; the interface's generated
+  types are a `.ts` the compiler checks.
 - The README is down to what the server is, what it serves, a quick start
   and the first steps for Sonarr, Radarr and Plex. The rest moved, unchanged
   in substance, to new pages under `docs/`: installing, configuration (every

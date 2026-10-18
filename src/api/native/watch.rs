@@ -50,6 +50,7 @@ pub struct WatchProvider {
     pub id: i64,
     pub name: String,
     /// The service's mark, as TMDB serves it.
+    #[schema(required)]
     pub logo: Option<String>,
 }
 
@@ -60,6 +61,7 @@ pub struct WhereToWatch {
     pub region: String,
     /// TMDB's page for the work in that country, which carries JustWatch's
     /// own links to each service.
+    #[schema(required)]
     pub link: Option<String>,
     /// Included with a subscription.
     pub flatrate: Vec<WatchProvider>,
@@ -77,6 +79,7 @@ pub struct WhereToWatch {
 /// Where a work can be watched in a country.
 #[utoipa::path(
     get, path = "/items/{id}/watch", tag = TAG,
+    operation_id = "watch_where_to_watch",
     params(("id" = String, Path, description = "The work's id"), WatchQuery),
     responses(
         (status = 200, body = WhereToWatch),

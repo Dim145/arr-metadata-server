@@ -73,6 +73,7 @@ pub fn is_services_host(headers: &HeaderMap, uri: &Uri) -> bool {
 /// holds, where this catalogue's titles alone would replace it.
 #[utoipa::path(
     get, path = "/v1/scenemapping", tag = crate::api::sonarr::TAG,
+    operation_id = "sonarr_services_scene_mapping",
     responses(
         (status = 200, description = "services.sonarr.tv's list, and a mapping for each title of this catalogue Sonarr may safely match by"),
         (status = 403, description = "The caller's address is not in the allowlist"),

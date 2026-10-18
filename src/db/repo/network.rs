@@ -23,9 +23,12 @@ pub struct NetworkRule {
     /// What the client behind this address is called, once somebody says. It
     /// is what per-client settings hang off, because an address changes when a
     /// container restarts and a name does not.
+    #[schema(required)]
     pub name: Option<String>,
+    #[schema(required)]
     pub note: Option<String>,
     pub created_at: String,
+    #[schema(required)]
     pub created_by: Option<String>,
 }
 
@@ -34,10 +37,13 @@ pub struct NetworkRule {
 pub struct Caller {
     pub ip: String,
     /// What the resolver and the hosts file call this address, if anything.
+    #[schema(required)]
     pub hostname: Option<String>,
     /// What the caller called itself. Sonarr and Radarr say so plainly.
+    #[schema(required)]
     pub user_agent: Option<String>,
     pub last_surface: String,
+    #[schema(required)]
     pub last_path: Option<String>,
     pub last_allowed: bool,
     pub hits: i64,

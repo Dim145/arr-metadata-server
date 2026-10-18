@@ -38,6 +38,9 @@ impl Scope {
 
 #[derive(Clone, Copy, Debug, Serialize, ToSchema)]
 #[serde(tag = "type", rename_all = "lowercase")]
+// Named explicitly: an asset's kind is a `Kind` too, and utoipa keys schemas
+// on the leaf name alone.
+#[schema(as = SettingKind)]
 pub enum Kind {
     Bool,
     /// A whole number, with the range the interface should offer.

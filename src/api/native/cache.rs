@@ -127,6 +127,7 @@ pub struct Shared {
 
 #[utoipa::path(
     get, path = "/admin/cache", tag = TAG,
+    operation_id = "cache_report",
     responses(
         (status = 200, body = Report),
         (status = 403, description = "The caller is not an administrator"),
@@ -261,6 +262,7 @@ pub struct Flushed {
 /// server — never anybody else's — and every instance's memory.
 #[utoipa::path(
     post, path = "/admin/cache/flush", tag = TAG,
+    operation_id = "cache_flush_all",
     responses(
         (status = 200, body = Flushed),
         (status = 403, description = "The caller is not an administrator"),
@@ -296,6 +298,7 @@ async fn flush_all(
 /// Forget one space, in every tier.
 #[utoipa::path(
     post, path = "/admin/cache/{space}/flush", tag = TAG,
+    operation_id = "cache_flush_space",
     params(("space" = String, Path, description = "`items`, `searches`, `lists`, `relay` or `sessions`")),
     responses(
         (status = 200, body = Flushed),

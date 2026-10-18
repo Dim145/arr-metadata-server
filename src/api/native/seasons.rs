@@ -109,6 +109,9 @@ pub struct NextEpisode {
 /// One line of the chart.
 #[derive(Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
+// Named explicitly: what a run did to one work is an `Entry` too, and utoipa
+// keys schemas on the leaf name alone.
+#[schema(as = SeasonEntry)]
 pub struct Entry {
     pub work_id: String,
     pub kind: EntryKind,
@@ -189,6 +192,7 @@ fn filed_language(asked: Option<&str>) -> AppResult<Option<String>> {
 /// corrections, as a work's page shows them.
 #[utoipa::path(
     get, path = "/seasons/{year}/{season}", tag = TAG,
+    operation_id = "seasons_chart",
     params(
         ("year" = i32, Path, description = "The year: `2026`"),
         ("season" = String, Path, description = "`winter` (January–March), `spring`, `summer` or `autumn`"),
@@ -379,6 +383,7 @@ struct Listed {
 /// and only where a TMDB key is configured.
 #[utoipa::path(
     get, path = "/seasons/{year}/{season}/candidates", tag = TAG,
+    operation_id = "seasons_candidates",
     params(
         ("year" = i32, Path, description = "The year: `2026`"),
         ("season" = String, Path, description = "`winter`, `spring`, `summer` or `autumn`"),

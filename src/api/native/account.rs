@@ -49,6 +49,7 @@ pub fn router() -> OpenApiRouter<AppState> {
 
 #[utoipa::path(
     get, path = "/account", tag = TAG,
+    operation_id = "account_profile",
     responses(
         (status = 200, body = User),
         (status = 403, description = "A key cannot manage an account"),
@@ -81,6 +82,7 @@ pub struct ProfileUpdate {
 /// and the role are not yours to change.
 #[utoipa::path(
     patch, path = "/account", tag = TAG,
+    operation_id = "account_update_profile",
     request_body = ProfileUpdate,
     responses(
         (status = 200, body = User),
@@ -143,6 +145,7 @@ async fn update_profile(
 /// Where you are signed in, the device asking first among equals.
 #[utoipa::path(
     get, path = "/account/sessions", tag = TAG,
+    operation_id = "account_sessions",
     responses(
         (status = 200, body = Vec<Session>),
         (status = 403, description = "A key cannot manage an account"),
@@ -164,6 +167,7 @@ async fn sessions(
 /// Sign out everywhere but here.
 #[utoipa::path(
     delete, path = "/account/sessions", tag = TAG,
+    operation_id = "account_sign_out_elsewhere",
     responses(
         (status = 204),
         (status = 403, description = "A key cannot manage an account"),
@@ -202,6 +206,7 @@ async fn sign_out_elsewhere(
 /// Close one of your sessions.
 #[utoipa::path(
     delete, path = "/account/sessions/{id}", tag = TAG,
+    operation_id = "account_close_session",
     params(("id" = String, Path)),
     responses(
         (status = 204),
@@ -251,6 +256,7 @@ fn limit_for(state: &AppState, me: &User) -> Option<i64> {
 
 #[utoipa::path(
     get, path = "/account/keys", tag = TAG,
+    operation_id = "account_keys",
     responses(
         (status = 200, body = AccountKeys),
         (status = 403, description = "A key cannot manage an account"),
@@ -323,6 +329,7 @@ fn clean_key_name(raw: &str) -> AppResult<String> {
 /// never again.
 #[utoipa::path(
     post, path = "/account/keys", tag = TAG,
+    operation_id = "account_create_key",
     request_body = NewKey,
     responses(
         (status = 201, body = IssuedKey),
@@ -419,6 +426,7 @@ pub struct KeyUpdate {
 /// Rename a key of yours, pause it, or change what it may do.
 #[utoipa::path(
     patch, path = "/account/keys/{id}", tag = TAG,
+    operation_id = "account_update_key",
     params(("id" = String, Path)),
     request_body = KeyUpdate,
     responses(
@@ -502,6 +510,7 @@ async fn update_key(
 /// whatever used it must be given the new one.
 #[utoipa::path(
     post, path = "/account/keys/{id}/rotate", tag = TAG,
+    operation_id = "account_rotate_key",
     params(("id" = String, Path)),
     responses(
         (status = 200, body = IssuedKey),
@@ -545,6 +554,7 @@ async fn rotate_key(
 /// Revoke one of your keys.
 #[utoipa::path(
     delete, path = "/account/keys/{id}", tag = TAG,
+    operation_id = "account_delete_key",
     params(("id" = String, Path)),
     responses(
         (status = 204),

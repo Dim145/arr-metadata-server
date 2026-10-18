@@ -77,11 +77,12 @@ pub struct Lock {
     /// The language a text is locked in alone, `fra`; absent for every one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
-    /// The value the field is locked to, or `null` where it was cleared and
-    /// locked so. Left out altogether, the lock is refused: nothing is
-    /// guessed on a document's behalf.
+    /// The value the field is locked to — any JSON value, as the field holds
+    /// it — or `null` where it was cleared and locked so. Left out
+    /// altogether, the lock is refused: nothing is guessed on a document's
+    /// behalf.
     #[serde(default, deserialize_with = "given", serialize_with = "given_or_null")]
-    #[schema(value_type = Option<Object>)]
+    #[schema(value_type = Value, required)]
     pub value: Option<Option<Value>>,
 }
 
@@ -104,7 +105,10 @@ fn given_or_null<S: Serializer>(
 #[serde(rename_all = "camelCase")]
 pub struct Locks {
     pub version: u32,
+    /// When the document was written. Always in an export; an import does
+    /// not read it, and may leave it out.
     #[serde(default)]
+    #[schema(required, read_only)]
     pub exported_at: String,
     pub locks: Vec<Lock>,
 }
@@ -128,6 +132,7 @@ pub struct Imported {
 /// Every lock in the catalogue, as a document to keep or carry elsewhere.
 #[utoipa::path(
     get, path = "/admin/locks", tag = TAG,
+    operation_id = "locks_export",
     responses(
         (status = 200, body = Locks),
         (status = 403, description = "The caller is not an administrator"),
@@ -200,6 +205,7 @@ async fn export(
 /// in parts.
 #[utoipa::path(
     post, path = "/admin/locks", tag = TAG,
+    operation_id = "locks_import",
     request_body = Locks,
     responses(
         (status = 200, body = Imported),

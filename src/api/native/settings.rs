@@ -36,6 +36,7 @@ pub fn router() -> OpenApiRouter<AppState> {
 /// setting added to the server appears without the interface being changed.
 #[utoipa::path(
     get, path = "/settings/registry", tag = TAG,
+    operation_id = "settings_catalogue",
     responses((status = 200, body = Vec<Definition>)),
 )]
 async fn catalogue(
@@ -49,6 +50,7 @@ async fn catalogue(
 /// What applies at a scope, and whether that scope sets it or inherits it.
 #[utoipa::path(
     get, path = "/settings/{scope}/{id}", tag = TAG,
+    operation_id = "settings_effective",
     params(
         ("scope" = String, Path, description = "server, client or peer"),
         ("id" = String, Path, description = "The key's or rule's id; `-` for the server"),
@@ -82,6 +84,7 @@ pub struct SettingWrite {
 /// Set one setting at one scope.
 #[utoipa::path(
     put, path = "/settings/{scope}/{id}", tag = TAG,
+    operation_id = "settings_put",
     params(
         ("scope" = String, Path, description = "server, client or peer"),
         ("id" = String, Path, description = "The key's or rule's id; `-` for the server"),
@@ -173,6 +176,7 @@ async fn put(
 /// Stop overriding everything at a scope, so it inherits again.
 #[utoipa::path(
     delete, path = "/settings/{scope}/{id}", tag = TAG,
+    operation_id = "settings_clear",
     params(
         ("scope" = String, Path, description = "client or peer"),
         ("id" = String, Path, description = "The key's or rule's id"),

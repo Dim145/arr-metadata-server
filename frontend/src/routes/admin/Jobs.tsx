@@ -58,7 +58,7 @@ const TASKS: TaskId[] = [
  * each — `3 refreshed, 0 failed`, `12 works, 340 episodes, 0 failed` — and
  * they are read back here; anything else is shown as it came.
  */
-export function describeDetail(detail: string | undefined, t: Dict): string {
+export function describeDetail(detail: string | null | undefined, t: Dict): string {
   if (!detail) return ''
   const s = t.admin.tasks.summaries
   const n = (text: string | undefined) => Number(text ?? 0)
@@ -626,7 +626,7 @@ export function JobTable({ jobs }: { jobs: Job[] }) {
                         {job.work.title}
                       </Link>
                     ) : null}
-                    <span className={job.error ? 'block truncate text-vermillion' : 'block truncate text-bone-dim'} title={job.error ?? job.detail}>
+                    <span className={job.error ? 'block truncate text-vermillion' : 'block truncate text-bone-dim'} title={job.error ?? job.detail ?? undefined}>
                       {job.error ? describeDetail(job.error, t) : job.detail ? describeDetail(job.detail, t) : job.work ? '' : '—'}
                     </span>
                   </Td>

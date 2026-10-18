@@ -51,6 +51,7 @@ pub struct Invitations {
 
 #[utoipa::path(
     get, path = "/invitations", tag = TAG,
+    operation_id = "invitations_list",
     responses(
         (status = 200, body = Invitations),
         (status = 403, description = "The caller is not an administrator"),
@@ -101,6 +102,7 @@ pub struct IssuedInvitation {
 /// Make an invitation. Its code is in the answer, and nowhere else ever again.
 #[utoipa::path(
     post, path = "/invitations", tag = TAG,
+    operation_id = "invitations_create",
     request_body = CreateInvitationRequest,
     responses(
         (status = 201, body = IssuedInvitation),
@@ -208,6 +210,7 @@ async fn create(
 /// Withdraw an invitation. The accounts it already opened stay.
 #[utoipa::path(
     delete, path = "/invitations/{id}", tag = TAG,
+    operation_id = "invitations_revoke",
     params(("id" = String, Path)),
     responses(
         (status = 204, description = "Withdrawn"),

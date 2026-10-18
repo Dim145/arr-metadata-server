@@ -170,6 +170,7 @@ pub struct ListResponse {
 /// key carrying the `admin` scope.
 #[utoipa::path(
     get, path = "/audit", tag = TAG,
+    operation_id = "audit_list",
     params(ListQuery),
     responses(
         (status = 200, body = ListResponse),

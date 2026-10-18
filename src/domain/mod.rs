@@ -124,9 +124,12 @@ pub struct MediaItem {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub collection_tmdb_id: Option<i64>,
 
+    // Always written; the defaults only let a reader do without them.
     #[serde(default)]
+    #[schema(required)]
     pub genres: Vec<String>,
     #[serde(default)]
+    #[schema(required)]
     pub keywords: Vec<String>,
     /// Every country the work was made in, ISO 3166-1 alpha-2 in upper case
     /// — `US`, `GB` — in the order TMDB lists them.
@@ -144,6 +147,7 @@ pub struct MediaItem {
     /// What the provider that supplied this called it. Serving a catalogue
     /// means being able to decide per request who sees it.
     #[serde(default)]
+    #[schema(required)]
     pub is_adult: bool,
 
     pub created_at: String,

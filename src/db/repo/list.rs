@@ -73,6 +73,7 @@ pub struct ListFilter {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub term: Option<String>,
     /// Works carrying every one of these genres.
+    #[schema(required)]
     pub genres: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub keyword: Option<String>,
@@ -112,10 +113,12 @@ pub struct CuratedList {
     /// What the list is addressed by, derived from its name.
     pub slug: String,
     pub name: String,
+    #[schema(required)]
     pub description: Option<String>,
     pub kind: ListKind,
     pub mode: ListMode,
     /// The filter, for a list composed by one.
+    #[schema(required)]
     pub filter: Option<ListFilter>,
     /// Whether a reader with no credential may see it, where public browsing
     /// is on at all.
@@ -124,6 +127,7 @@ pub struct CuratedList {
     /// a provider's, or an upload's `upload:` origin. The store holds it so;
     /// what a reader is given is the copy kept, where there is one, which is
     /// the API's to put in its place.
+    #[schema(required)]
     pub cover: Option<String>,
     /// How many works a hand-made list holds, of those switched on; a
     /// filter's are counted as they are read, and this is nought.

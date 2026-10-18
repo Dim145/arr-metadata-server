@@ -83,7 +83,7 @@ export function Lists() {
         kind,
         mode,
         isPublic: true,
-        filter: mode === 'filter' ? {} : undefined,
+        filter: mode === 'filter' ? { genres: [] } : undefined,
       } satisfies CuratedListRequest),
     onSuccess: (list) => {
       setName('')
@@ -295,7 +295,7 @@ interface Form {
 }
 
 function toForm(list: CuratedList): Form {
-  const f = list.filter ?? {}
+  const f = list.filter ?? { genres: [] }
   return {
     name: list.name,
     description: list.description ?? '',
@@ -304,7 +304,7 @@ function toForm(list: CuratedList): Form {
     isPublic: list.isPublic,
     filter: {
       term: f.term ?? '',
-      genres: (f.genres ?? []).join(', '),
+      genres: f.genres.join(', '),
       keyword: f.keyword ?? '',
       yearFrom: f.yearFrom?.toString() ?? '',
       yearTo: f.yearTo?.toString() ?? '',
@@ -753,7 +753,7 @@ function Editor({ id, onClose, onSaved }: { id: string; onClose: () => void; onS
         work={{ id: list.id }}
         shape="wide"
         candidates={covers.length ? covers : undefined}
-        current={list.cover}
+        current={list.cover ?? undefined}
         uploadFields={false}
         onChoose={(address) => setCover.mutateAsync(address)}
         confirm={{ own: t.admin.curated.coverUse, address: t.admin.curated.coverUse }}

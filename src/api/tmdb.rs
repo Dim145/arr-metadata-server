@@ -161,6 +161,7 @@ enum Asking {
 /// `/3/discover/{movie,tv}`.
 #[utoipa::path(
     get, path = "/3/{path}", tag = TAG,
+    operation_id = "tmdb_proxy",
     // Registered against axum as `/3/{*path}`; see `router` above.
     params(("path" = String, Path, description = "A TMDB v3 path, e.g. `tv/1396` or `search/movie`")),
     responses(
@@ -545,6 +546,7 @@ fn upstream_url(base: &str, uri: &Uri, asking: &Asking, include_adult: bool) -> 
 /// relay, with the checks above that hold it to the public lists.
 #[utoipa::path(
     get, path = "/4/{path}", tag = TAG,
+    operation_id = "tmdb_proxy_v4",
     params(("path" = String, Path, description = "A TMDB v4 list path: `list/{id}`")),
     responses(
         (status = 200, description = "TMDB's own response"),

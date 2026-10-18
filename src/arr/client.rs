@@ -145,6 +145,9 @@ impl std::fmt::Debug for Connection {
 /// What a status says of the one that answered.
 #[derive(Clone, Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
+// Named explicitly: an account, a delivery and an asset each have a `Status`
+// too, and utoipa keys schemas on the leaf name alone.
+#[schema(as = ArrStatus)]
 pub struct Status {
     /// `Sonarr` or `Radarr`.
     pub app_name: String,

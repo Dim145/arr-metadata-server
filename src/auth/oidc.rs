@@ -642,7 +642,9 @@ fn merge(
 pub struct Discovery {
     pub issuer: String,
     pub authorization_endpoint: String,
+    #[schema(required)]
     pub token_endpoint: Option<String>,
+    #[schema(required)]
     pub userinfo_endpoint: Option<String>,
     /// Keys in the provider's key set.
     pub keys: usize,

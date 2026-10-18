@@ -170,6 +170,7 @@ pub struct UsersPage {
 /// Every account, pending ones first.
 #[utoipa::path(
     get, path = "/users", tag = TAG,
+    operation_id = "users_list",
     params(ListQuery),
     responses(
         (status = 200, body = UsersPage),
@@ -222,6 +223,7 @@ pub struct UserDetail {
 
 #[utoipa::path(
     get, path = "/users/{id}", tag = TAG,
+    operation_id = "users_detail",
     params(("id" = String, Path)),
     responses(
         (status = 200, body = UserDetail),
@@ -273,6 +275,7 @@ pub struct CreatedUser {
 /// Open an account for someone.
 #[utoipa::path(
     post, path = "/users", tag = TAG,
+    operation_id = "users_create",
     request_body = CreateUserRequest,
     responses(
         (status = 201, body = CreatedUser),
@@ -358,6 +361,7 @@ pub struct UpdateUserRequest {
 /// at once; its keys stop working with it.
 #[utoipa::path(
     patch, path = "/users/{id}", tag = TAG,
+    operation_id = "users_update",
     params(("id" = String, Path)),
     request_body = UpdateUserRequest,
     responses(
@@ -483,6 +487,7 @@ async fn change(
 /// stays in the journal, under its name.
 #[utoipa::path(
     delete, path = "/users/{id}", tag = TAG,
+    operation_id = "users_remove",
     params(("id" = String, Path)),
     responses(
         (status = 204),
@@ -573,6 +578,7 @@ pub struct ResetPassword {
 /// Give an account a new password; its sessions are closed.
 #[utoipa::path(
     post, path = "/users/{id}/password", tag = TAG,
+    operation_id = "users_reset_password",
     params(("id" = String, Path)),
     request_body = ResetPasswordRequest,
     responses(
@@ -634,6 +640,7 @@ async fn reset_password(
 /// Close every session of an account, wherever it is signed in.
 #[utoipa::path(
     delete, path = "/users/{id}/sessions", tag = TAG,
+    operation_id = "users_revoke_sessions",
     params(("id" = String, Path)),
     responses(
         (status = 204),
@@ -700,6 +707,7 @@ pub struct BulkOutcome {
 /// said, rather than failing the rest.
 #[utoipa::path(
     post, path = "/users/bulk", tag = TAG,
+    operation_id = "users_bulk",
     request_body = BulkRequest,
     responses(
         (status = 200, body = BulkOutcome),

@@ -77,6 +77,7 @@ pub struct MediaStatus {
 /// How the media store stands.
 #[utoipa::path(
     get, path = "/media/status", tag = TAG,
+    operation_id = "media_status",
     responses(
         (status = 200, body = MediaStatus),
         (status = 403, description = "The caller is not an administrator"),
@@ -113,6 +114,7 @@ pub struct TroubledQuery {
 /// What could not be fetched: given up on, or put off after a failure.
 #[utoipa::path(
     get, path = "/media/troubled", tag = TAG,
+    operation_id = "media_troubled",
     params(TroubledQuery),
     responses(
         (status = 200, body = Vec<Asset>),
@@ -133,6 +135,7 @@ async fn troubled(
 /// Ask again for one that could not be fetched.
 #[utoipa::path(
     post, path = "/media/assets/{id}/retry", tag = TAG,
+    operation_id = "media_retry",
     params(("id" = String, Path)),
     responses(
         (status = 202, description = "In line again"),
@@ -162,6 +165,7 @@ pub struct Retried {
 /// Ask again for everything given up on.
 #[utoipa::path(
     post, path = "/media/retry", tag = TAG,
+    operation_id = "media_retry_all",
     responses(
         (status = 200, body = Retried),
         (status = 403, description = "The caller is not an administrator"),
@@ -192,6 +196,7 @@ pub struct Forgotten {
 /// whatever files no row names.
 #[utoipa::path(
     post, path = "/media/reset", tag = TAG,
+    operation_id = "media_reset",
     responses(
         (status = 200, body = Forgotten),
         (status = 403, description = "The caller is not an administrator"),
@@ -265,6 +270,7 @@ pub struct WorkMedium {
 /// Every address a work points at, and what is kept of each.
 #[utoipa::path(
     get, path = "/items/{id}/media", tag = TAG,
+    operation_id = "media_work_media",
     params(("id" = String, Path, description = "The work's identifier")),
     responses(
         (status = 200, body = WorkMedia),
@@ -425,6 +431,7 @@ pub struct Uploaded {
 /// The file is read for what it is, not for what it is called.
 #[utoipa::path(
     post, path = "/items/{id}/media", tag = TAG,
+    operation_id = "media_upload",
     params(("id" = String, Path, description = "The work's identifier")),
     request_body(content_type = "multipart/form-data", description = "`file`, and `kind`, `coverType`, `seasonNumber` or `episode`"),
     responses(
@@ -667,6 +674,7 @@ async fn upload(
 /// its locks hold, or an upload made for it.
 #[utoipa::path(
     delete, path = "/items/{id}/media/{asset_id}", tag = TAG,
+    operation_id = "media_forget",
     params(
         ("id" = String, Path, description = "The work's identifier"),
         ("asset_id" = String, Path),

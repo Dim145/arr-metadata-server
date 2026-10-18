@@ -26,10 +26,14 @@ pub struct ApiClient {
     pub key_prefix: String,
     pub scopes: Vec<String>,
     pub is_enabled: bool,
+    #[schema(required)]
     pub expires_at: Option<String>,
     pub created_at: String,
+    #[schema(required)]
     pub last_used_at: Option<String>,
+    #[schema(required)]
     pub last_used_ip: Option<String>,
+    #[schema(required)]
     pub note: Option<String>,
     /// The account it belongs to; none for a server key.
     #[serde(skip_serializing_if = "Option::is_none")]

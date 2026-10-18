@@ -64,13 +64,20 @@ pub struct SearchQuery {
 pub struct Found {
     pub kind: MediaKind,
     pub title: String,
+    #[schema(required)]
     pub year: Option<i32>,
+    #[schema(required)]
     pub overview: Option<String>,
+    #[schema(required)]
     pub poster: Option<String>,
+    #[schema(required)]
     pub tmdb_id: Option<i64>,
+    #[schema(required)]
     pub tvdb_id: Option<i64>,
+    #[schema(required)]
     pub imdb_id: Option<String>,
     /// Fankai's id, for a Fan-Kai production.
+    #[schema(required)]
     pub fankai_id: Option<i64>,
     /// Whether this server already holds it, so the interface can say "stored"
     /// rather than offering to import it twice.
@@ -86,6 +93,7 @@ pub struct Found {
 /// work for nineteen wasted.
 #[utoipa::path(
     get, path = "/discover", tag = TAG,
+    operation_id = "discover_search",
     params(SearchQuery),
     responses(
         (status = 200, body = Vec<Found>),
@@ -192,6 +200,7 @@ pub struct ImportRequest {
 /// duplicating it, because the fetch path keys on the external id.
 #[utoipa::path(
     post, path = "/discover/import", tag = TAG,
+    operation_id = "discover_import",
     request_body = ImportRequest,
     responses(
         (status = 200, body = MediaItem),

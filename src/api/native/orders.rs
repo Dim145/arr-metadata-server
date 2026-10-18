@@ -37,6 +37,7 @@ pub struct Orders {
 /// a reader who knows the series by its DVDs, or straight through.
 #[utoipa::path(
     get, path = "/items/{id}/orders", tag = TAG,
+    operation_id = "orders_orders",
     params(("id" = String, Path, description = "The work's identifier")),
     responses(
         (status = 200, body = Orders),

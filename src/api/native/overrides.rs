@@ -48,6 +48,7 @@ pub fn router() -> OpenApiRouter<AppState> {
 /// name accounts and keys.
 #[utoipa::path(
     get, path = "/items/{id}/overrides", tag = TAG,
+    operation_id = "overrides_list",
     params(("id" = String, Path, description = "The work's identifier")),
     responses(
         (status = 200, body = Vec<Override>),
@@ -112,6 +113,7 @@ pub struct SetResponse {
 /// writes it in next.
 #[utoipa::path(
     put, path = "/items/{id}/overrides", tag = TAG,
+    operation_id = "overrides_set",
     params(("id" = String, Path, description = "The work's identifier")),
     request_body = SetRequest,
     responses(
@@ -302,6 +304,7 @@ pub struct UnsetQuery {
 /// holds slashes, is easier lifted from the image's own route.
 #[utoipa::path(
     delete, path = "/items/{id}/overrides/{scope}/{field}", tag = TAG,
+    operation_id = "overrides_unset",
     params(
         ("id" = String, Path, description = "The work's identifier"),
         ("scope" = String, Path, description = "`item`, `season:3` or `episode:3x7`, or a child's"),
@@ -464,6 +467,7 @@ pub struct ClearResponse {
 /// Unlock every field of a work at once.
 #[utoipa::path(
     delete, path = "/items/{id}/overrides", tag = TAG,
+    operation_id = "overrides_clear",
     params(("id" = String, Path, description = "The work's identifier")),
     responses(
         (status = 200, body = ClearResponse),

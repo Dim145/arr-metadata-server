@@ -108,6 +108,7 @@ async fn read(state: &AppState) -> AppResult<ArrConfiguration> {
 
 #[utoipa::path(
     get, path = "/admin/arr", tag = super::meta::TAG,
+    operation_id = "arr_configuration",
     responses(
         (status = 200, body = ArrConfiguration),
         (status = 403, description = "The caller is not an administrator"),
@@ -145,6 +146,7 @@ pub struct ArrUpdate {
 /// it.
 #[utoipa::path(
     put, path = "/admin/arr", tag = super::meta::TAG,
+    operation_id = "arr_configure",
     request_body = ArrUpdate,
     responses(
         (status = 200, body = ArrConfiguration),
@@ -305,6 +307,7 @@ pub struct ArrTestOutcome {
 /// kept for: another address is tried with the key given with it.
 #[utoipa::path(
     post, path = "/admin/arr/test", tag = super::meta::TAG,
+    operation_id = "arr_test",
     request_body = ArrTest,
     responses(
         (status = 200, body = ArrTestOutcome),

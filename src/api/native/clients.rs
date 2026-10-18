@@ -35,6 +35,7 @@ pub fn router() -> OpenApiRouter<AppState> {
 /// Every issued key. The keys themselves are not recoverable.
 #[utoipa::path(
     get, path = "/clients", tag = TAG,
+    operation_id = "clients_list",
     responses(
         (status = 200, body = Vec<ApiClient>),
         (status = 403, description = "The caller is not an administrator"),
@@ -54,6 +55,7 @@ async fn list(
 /// One client.
 #[utoipa::path(
     get, path = "/clients/{id}", tag = TAG,
+    operation_id = "clients_detail",
     params(("id" = String, Path, description = "The client's identifier")),
     responses(
         (status = 200, body = ApiClient),
@@ -107,6 +109,7 @@ pub struct CreateResponse {
 /// shown: only a SHA-256 of it is stored.
 #[utoipa::path(
     post, path = "/clients", tag = TAG,
+    operation_id = "clients_create",
     request_body = CreateRequest,
     responses(
         (status = 201, description = "The key, shown once", body = CreateResponse),
@@ -220,6 +223,7 @@ pub struct UpdateRequest {
 /// Enable or disable a key without revoking it.
 #[utoipa::path(
     patch, path = "/clients/{id}", tag = TAG,
+    operation_id = "clients_update",
     params(("id" = String, Path, description = "The client's identifier")),
     request_body = UpdateRequest,
     responses(
@@ -279,6 +283,7 @@ async fn update(
 /// Revoke a key permanently.
 #[utoipa::path(
     delete, path = "/clients/{id}", tag = TAG,
+    operation_id = "clients_remove",
     params(("id" = String, Path, description = "The client's identifier")),
     responses(
         (status = 204, description = "Revoked"),

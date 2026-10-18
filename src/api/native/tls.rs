@@ -32,6 +32,7 @@ pub fn router() -> OpenApiRouter<AppState> {
 pub struct Listeners {
     pub web: Web,
     /// None when no clients' listener is configured.
+    #[schema(required)]
     pub clients: Option<Door>,
 }
 
@@ -86,6 +87,7 @@ pub struct Authority {
 
 #[utoipa::path(
     get, path = "/admin/tls", tag = TAG,
+    operation_id = "tls_status",
     responses(
         (status = 200, body = Listeners),
         (status = 403, description = "The caller is not an administrator"),
@@ -137,12 +139,14 @@ async fn status(
 #[serde(rename_all = "camelCase")]
 pub struct Renewal {
     /// The run's id in the history.
+    #[schema(required)]
     pub job_id: Option<String>,
 }
 
 /// Issue the clients' certificate anew, now, whatever time it has left.
 #[utoipa::path(
     post, path = "/admin/tls/renew", tag = TAG,
+    operation_id = "tls_renew",
     responses(
         (status = 202, body = Renewal),
         (status = 403, description = "The caller is not an administrator"),

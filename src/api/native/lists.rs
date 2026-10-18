@@ -133,6 +133,7 @@ pub struct IdsQuery {
 /// Every list — the public ones, for a reader who does not maintain them.
 #[utoipa::path(
     get, path = "/lists", tag = TAG,
+    operation_id = "lists_list",
     responses((status = 200, body = CuratedLists)),
 )]
 async fn list(
@@ -148,6 +149,7 @@ async fn list(
 /// One list with its works, by slug or by id.
 #[utoipa::path(
     get, path = "/lists/{key}", tag = TAG,
+    operation_id = "lists_detail",
     params(("key" = String, Path, description = "The list's slug, or its id"), PageQuery),
     responses(
         (status = 200, body = CuratedListPage),
@@ -177,6 +179,7 @@ async fn detail(
 /// not maintain them, and none at all for a work the reader may not see.
 #[utoipa::path(
     get, path = "/items/{id}/lists", tag = TAG,
+    operation_id = "lists_holding",
     params(("id" = String, Path, description = "The work's id")),
     responses(
         (status = 200, body = CuratedLists),
@@ -210,6 +213,7 @@ async fn holding(
 /// TheTVDB id.
 #[utoipa::path(
     get, path = "/lists/{key}/sonarr.json", tag = TAG,
+    operation_id = "lists_sonarr_json",
     params(("key" = String, Path, description = "The list's slug, or its id")),
     responses((status = 200, description = "`[{ \"title\", \"tvdbId\" }]`")),
 )]
@@ -227,6 +231,7 @@ async fn sonarr_json(
 /// TMDB's result shape, `id` being the TMDB id.
 #[utoipa::path(
     get, path = "/lists/{key}/radarr.json", tag = TAG,
+    operation_id = "lists_radarr_json",
     params(("key" = String, Path, description = "The list's slug, or its id")),
     responses((status = 200, description = "`[{ \"id\", \"title\" }]`")),
 )]
@@ -244,6 +249,7 @@ async fn radarr_json(
 /// IMDb id.
 #[utoipa::path(
     get, path = "/lists/{key}/stevenlu.json", tag = TAG,
+    operation_id = "lists_stevenlu_json",
     params(("key" = String, Path, description = "The list's slug, or its id")),
     responses((status = 200, description = "`[{ \"title\", \"imdb_id\" }]`")),
 )]
@@ -264,6 +270,7 @@ async fn stevenlu_json(
 /// keeps for a collection ordered as the source is.
 #[utoipa::path(
     get, path = "/lists/{key}/ids.txt", tag = TAG,
+    operation_id = "lists_ids_txt",
     params(("key" = String, Path, description = "The list's slug, or its id"), IdsQuery),
     responses(
         (status = 200, description = "A work a line: `tmdb:949  # Heat (1995)`", content_type = "text/plain"),
@@ -394,6 +401,7 @@ fn kometa_ids(list: &CuratedList, items: &[MediaItem], kind: Option<MediaKind>) 
 /// been checked, the members included.
 #[utoipa::path(
     post, path = "/lists", tag = TAG,
+    operation_id = "lists_create",
     request_body = CuratedListRequest,
     responses(
         (status = 201, body = CuratedList),
@@ -443,6 +451,7 @@ async fn create(
 /// slug stays whatever the name becomes, since the clients hold the address.
 #[utoipa::path(
     put, path = "/lists/{key}", tag = TAG,
+    operation_id = "lists_update",
     params(("key" = String, Path, description = "The list's id, or its slug")),
     request_body = CuratedListRequest,
     responses(
@@ -507,6 +516,7 @@ async fn update(
 /// Replace the members of a hand-made list, in order.
 #[utoipa::path(
     put, path = "/lists/{key}/items", tag = TAG,
+    operation_id = "lists_set_items",
     params(("key" = String, Path, description = "The list's id, or its slug")),
     request_body = CuratedListItems,
     responses(
@@ -555,6 +565,7 @@ async fn set_items(
 /// Delete a list. The works stay.
 #[utoipa::path(
     delete, path = "/lists/{key}", tag = TAG,
+    operation_id = "lists_delete",
     params(("key" = String, Path, description = "The list's id, or its slug")),
     responses(
         (status = 204, description = "Deleted"),

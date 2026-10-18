@@ -121,12 +121,19 @@ pub struct TimeOfDay {
 
 /// Sonarr reads `value` as a string and parses it itself.
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+// Named apart in the spec: Radarr's surface has a `RatingResource` of its
+// own, in PascalCase, and utoipa files schemas by their short name.
+#[schema(as = SkyhookRatingResource)]
 pub struct RatingResource {
     pub count: i64,
     pub value: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+// Named apart in the spec: Radarr's surface has an
+// `AlternativeTitleResource` of its own, in PascalCase, and utoipa files
+// schemas by their short name.
+#[schema(as = SkyhookAlternativeTitleResource)]
 pub struct AlternativeTitleResource {
     pub title: String,
 }
@@ -142,6 +149,9 @@ pub struct ActorResource {
 
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
+// Named apart in the spec: Radarr's surface has an `ImageResource` of its
+// own, in PascalCase, and utoipa files schemas by their short name.
+#[schema(as = SkyhookImageResource)]
 pub struct ImageResource {
     pub cover_type: String,
     pub url: String,

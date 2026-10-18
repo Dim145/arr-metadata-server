@@ -18,6 +18,7 @@ export function work(over: Partial<MediaItem> = {}): MediaItem {
     updatedAt: '2026-01-01T00:00:00Z',
     genres: [],
     keywords: [],
+    isAdult: false,
     ...over,
   }
 }

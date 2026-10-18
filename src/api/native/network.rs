@@ -39,6 +39,7 @@ pub fn router() -> OpenApiRouter<AppState> {
 /// table and is ignored afterwards — the list is editable here, like a key.
 #[utoipa::path(
     get, path = "/network/rules", tag = TAG,
+    operation_id = "network_rules",
     responses(
         (status = 200, body = Vec<NetworkRule>),
         (status = 403, description = "The caller is not an administrator"),
@@ -67,6 +68,7 @@ pub struct NewRule {
 /// Allow an address or a block.
 #[utoipa::path(
     post, path = "/network/rules", tag = TAG,
+    operation_id = "network_add",
     request_body = NewRule,
     responses(
         (status = 201, body = NetworkRule),
@@ -131,6 +133,7 @@ async fn add(
 /// Stop allowing an address or a block.
 #[utoipa::path(
     delete, path = "/network/rules/{id}", tag = TAG,
+    operation_id = "network_remove",
     params(("id" = String, Path, description = "The rule's identifier")),
     responses(
         (status = 204, description = "Removed"),
@@ -192,6 +195,7 @@ pub struct Rename {
 /// from changes whenever its container restarts.
 #[utoipa::path(
     patch, path = "/network/rules/{id}", tag = TAG,
+    operation_id = "network_rename",
     params(("id" = String, Path, description = "The rule's identifier")),
     request_body = Rename,
     responses(
@@ -235,6 +239,7 @@ pub struct CallerQuery {
 /// file give it — is what an operator needs to let it in.
 #[utoipa::path(
     get, path = "/network/callers", tag = TAG,
+    operation_id = "network_callers",
     params(CallerQuery),
     responses(
         (status = 200, body = Vec<Caller>),

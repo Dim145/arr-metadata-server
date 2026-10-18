@@ -172,6 +172,7 @@ impl PlexQuery {
 /// Agents › Add Provider. Plex reads the paths of its two features under it.
 #[utoipa::path(
     get, path = "/plex", tag = TAG,
+    operation_id = "plex_provider",
     responses(
         (status = 200, body = PlexProviderResponse),
         (status = 403, description = "The caller's address is not in the allowlist"),
@@ -195,6 +196,7 @@ async fn provider() -> Json<PlexProviderResponse> {
 /// its series and its place — or the day it aired.
 #[utoipa::path(
     post, path = "/plex/library/metadata/matches", tag = TAG,
+    operation_id = "plex_matches",
     params(PlexQuery),
     request_body = PlexMatchRequest,
     responses(
@@ -260,6 +262,7 @@ async fn matches(
 /// `episodeOrder` names lays them out — none for an order it has not.
 #[utoipa::path(
     get, path = "/plex/library/metadata/{rating_key}", tag = TAG,
+    operation_id = "plex_metadata",
     params(
         ("rating_key" = String, Path, description = "`movie-tmdb-603`, `show-tvdb-81189`, `season-tvdb-81189-s1`, `episode-tvdb-81189-s1e3`; a season's or an episode's in another order ends with it, `-dvd`"),
         PlexQuery,
@@ -323,6 +326,7 @@ async fn metadata(
 /// an episode have none.
 #[utoipa::path(
     get, path = "/plex/library/metadata/{rating_key}/children", tag = TAG,
+    operation_id = "plex_children",
     params(
         ("rating_key" = String, Path, description = "A series' or a season's ratingKey"),
         PlexQuery,
@@ -380,6 +384,7 @@ async fn children(
 /// `/children` is.
 #[utoipa::path(
     get, path = "/plex/library/metadata/{rating_key}/grandchildren", tag = TAG,
+    operation_id = "plex_grandchildren",
     params(
         ("rating_key" = String, Path, description = "A series' ratingKey"),
         PlexQuery,
@@ -426,6 +431,7 @@ async fn grandchildren(
 /// leads with first of each kind; a season's posters; an episode's still.
 #[utoipa::path(
     get, path = "/plex/library/metadata/{rating_key}/images", tag = TAG,
+    operation_id = "plex_images",
     params(
         ("rating_key" = String, Path, description = "Any item's ratingKey"),
         PlexQuery,
