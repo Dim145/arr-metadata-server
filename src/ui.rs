@@ -14,7 +14,7 @@ use axum::{
     Router,
     body::Body,
     extract::{Request, State},
-    http::{HeaderValue, StatusCode, Uri, header},
+    http::{HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
     routing::any,
 };
@@ -135,12 +135,6 @@ fn not_found() -> Response {
 /// its roots on its own.
 fn is_api_path(path: &str) -> bool {
     API_PREFIXES.iter().any(|prefix| path.starts_with(prefix)) || API_ROOTS.contains(&path)
-}
-
-/// Whether a URI addresses the UI rather than the API.
-#[allow(dead_code)]
-pub fn is_ui_path(uri: &Uri) -> bool {
-    !is_api_path(uri.path())
 }
 
 // ─── link previews ───────────────────────────────────────────────────────────
@@ -370,22 +364,22 @@ mod tests {
             "/health",
             "/ready",
         ] {
-            assert!(!is_ui_path(&path.parse::<Uri>().unwrap()), "{path}");
+            assert!(is_api_path(path), "{path}");
         }
     }
 
     #[test]
     fn everything_else_is_a_ui_path() {
         for path in ["/", "/catalogue", "/catalogue/abc", "/assets/index-abc.js"] {
-            assert!(is_ui_path(&path.parse::<Uri>().unwrap()), "{path}");
+            assert!(!is_api_path(path), "{path}");
         }
     }
 
     #[test]
     fn a_path_that_merely_starts_like_an_api_path_is_still_ui() {
         // "/v1abc" is not under "/v1/", so it belongs to the client router.
-        assert!(is_ui_path(&"/v1abc".parse::<Uri>().unwrap()));
-        assert!(is_ui_path(&"/apifoo".parse::<Uri>().unwrap()));
+        assert!(!is_api_path("/v1abc"));
+        assert!(!is_api_path("/apifoo"));
     }
 
     #[test]
@@ -403,14 +397,14 @@ mod tests {
         // mistypes is told so, not handed the interface's page.
         assert!(is_api_path("/plex"));
         assert!(is_api_path("/plex/library/metadata/movie-tmdb-603"));
-        assert!(is_ui_path(&"/plexus".parse::<Uri>().unwrap()));
+        assert!(!is_api_path("/plexus"));
     }
 
     #[test]
     fn an_api_root_trimmed_of_its_slash_is_still_the_apis() {
         // `/api/` reaches here as `/api`, the trailing slash normalised away.
         for path in ["/api", "/v1", "/3", "/4", "/v4", "/media"] {
-            assert!(!is_ui_path(&path.parse::<Uri>().unwrap()), "{path}");
+            assert!(is_api_path(path), "{path}");
         }
     }
 

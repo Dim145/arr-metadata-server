@@ -22,7 +22,7 @@ mod parity;
 #[cfg(test)]
 pub(crate) mod testing;
 
-use std::{borrow::Cow, path::Path, time::Duration};
+use std::{borrow::Cow, path::Path};
 
 use anyhow::{Context, Result, bail};
 // `AnyPool` is re-exported at the crate root, `AnyPoolOptions` under `any`.
@@ -228,8 +228,10 @@ impl Db {
         Ok(Self {
             pool,
             dialect,
+            // A database src/db/testing.rs made for a server that opens its
+            // own is dropped with this handle's last clone.
             #[cfg(test)]
-            lease: None,
+            lease: testing::lease_of(&cfg.url),
         })
     }
 
@@ -490,9 +492,6 @@ pub fn to_bool(v: i64) -> bool {
 pub fn from_bool(v: bool) -> i64 {
     i64::from(v)
 }
-
-#[allow(dead_code)]
-pub const DEFAULT_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[cfg(test)]
 mod tests {

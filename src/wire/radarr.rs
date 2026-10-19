@@ -647,6 +647,7 @@ pub fn to_item(resource: &MovieResource) -> MediaItem {
             language: t.language.clone(),
             title: non_empty(Some(&t.title)),
             overview: non_empty(t.overview.as_deref()),
+            tagline: None,
             is_manual: false,
         })
         .collect();
@@ -1028,6 +1029,7 @@ mod tests {
             language: language.into(),
             title: title.map(String::from),
             overview: Some("A linguist is recruited when twelve ships land.".into()),
+            tagline: None,
             is_manual: false,
         }
     }

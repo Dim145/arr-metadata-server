@@ -128,7 +128,7 @@ naming the variable. Flags take `true`, `false`, `1`, `0`, `yes`, `no`, `on` and
 | `AMS_TVDB_ENABLED` | `true` | TheTVDB as a source; also the first value of `tvdb.searchFallback`. |
 | `AMS_FANART_API_KEY` (`FANARTTV_API_KEY`) | unset | Fanart.tv's key, for logos, clearart and banners. |
 | `AMS_FANART_ENABLED` | `true` | Fanart.tv as a source, once it has a key. |
-| `AMS_MAL_CLIENT_ID` (`MAL_CLIENT_ID`) | unset | MyAnimeList's client id: its own API is asked rather than Jikan. |
+| `AMS_MAL_CLIENT_ID` (`MAL_CLIENT_ID`) | unset | MyAnimeList's client id: its own API is asked rather than Tenrai. |
 | `AMS_TMDB_PASSTHROUGH` | `true` | The TMDB relay, `/3/` and `/4/`: `false` answers `503` to all of it. |
 | `AMS_TVDB_PASSTHROUGH` | `true` | The TheTVDB relay, `/v4/`: `false` answers `503` to all of it. |
 | `AMS_ANILIST_PASSTHROUGH` | `true` | The AniList relay, `graphql.anilist.co`: `false` answers `503` to all of it. |

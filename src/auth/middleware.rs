@@ -328,6 +328,15 @@ async fn identify(
         }
     };
 
+    // A scraper's key opens the figures and nothing else, on any surface:
+    // it was given the `metrics` scope alone, and it lives in a scraper's
+    // configuration file rather than in a person's hands.
+    if identity.only_scrapes()
+        && !(surface == Surface::Native && scrape(request.method(), request.uri().path()))
+    {
+        return Err(AppError::Forbidden);
+    }
+
     // A change carried by something the browser sends on its own — the
     // session cookie, or, on the native surface, the address it calls from
     // or nothing at all — has to be asked from this server's own pages. A
@@ -668,6 +677,11 @@ fn browsable(method: &axum::http::Method, path: &str) -> bool {
             !id.is_empty() && !id.contains('/')
         }),
     }
+}
+
+/// The one request a scraper's key is for: the figures, read.
+fn scrape(method: &axum::http::Method, path: &str) -> bool {
+    method == axum::http::Method::GET && path.trim_end_matches('/') == "/api/v1/admin/metrics"
 }
 
 /// What a member may reach, in person or with their key: what a visitor may,
@@ -1027,6 +1041,88 @@ mod tests {
         assert!(!member_may(&Method::POST, "/api/v1/items"));
         assert!(!member_may(&Method::GET, "/api/v1/accountant"));
         assert!(!member_may(&Method::GET, "/api/docs"));
+    }
+
+    #[test]
+    fn a_scrape_is_one_request_and_no_other() {
+        use axum::http::Method;
+
+        assert!(scrape(&Method::GET, "/api/v1/admin/metrics"));
+        assert!(scrape(&Method::GET, "/api/v1/admin/metrics/"));
+        assert!(!scrape(&Method::POST, "/api/v1/admin/metrics"));
+        assert!(!scrape(&Method::GET, "/api/v1/admin/health"));
+        assert!(!scrape(&Method::GET, "/api/v1/figures"));
+        assert!(!scrape(&Method::GET, "/api/v1/items"));
+    }
+
+    /// A key made with the `metrics` scope alone, presented as a scraper
+    /// presents it, is let through to the figures and refused everywhere
+    /// else — on the catalogue a visitor could read, too.
+    #[tokio::test]
+    async fn a_scrapers_key_opens_the_figures_and_nothing_else() {
+        use axum::{body::Body, http::Method};
+
+        let state = crate::api::native::testing::server().await;
+        let generated = secrets::generate_api_key().unwrap();
+        repo::client::create(
+            &state.db,
+            repo::client::NewClient {
+                name: "prometheus",
+                key_prefix: &generated.prefix,
+                key_hash: &generated.hash,
+                scopes: &["metrics".to_string()],
+                expires_at: None,
+                note: None,
+                owner_id: None,
+            },
+        )
+        .await
+        .unwrap();
+        let ask = |method: Method, path: &str| {
+            Request::builder()
+                .method(method)
+                .uri(path)
+                .header(API_KEY_HEADER, &generated.plaintext)
+                .body(Body::empty())
+                .unwrap()
+        };
+
+        let mut scrape = ask(Method::GET, "/api/v1/admin/metrics");
+        let identity = identify(
+            &state,
+            Surface::Native,
+            Api::Native,
+            None,
+            None,
+            &mut scrape,
+        )
+        .await
+        .expect("the figures are the scraper's to read");
+        assert!(identity.only_scrapes());
+
+        for (method, path) in [
+            (Method::GET, "/api/v1/items"),
+            (Method::GET, "/api/v1/figures"),
+            (Method::GET, "/api/v1/admin/health"),
+            (Method::GET, "/api/v1/clients"),
+            (Method::POST, "/api/v1/items"),
+        ] {
+            let mut request = ask(method.clone(), path);
+            let refused = identify(
+                &state,
+                Surface::Native,
+                Api::Native,
+                None,
+                None,
+                &mut request,
+            )
+            .await
+            .err();
+            assert!(
+                matches!(refused, Some(AppError::Forbidden)),
+                "{method} {path}: {refused:?}"
+            );
+        }
     }
 
     fn headers(pairs: &[(&str, &str)]) -> HeaderMap {

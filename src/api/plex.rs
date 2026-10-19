@@ -1200,7 +1200,7 @@ mod tests {
         domain::{CoverType, ExternalIds, Image, PlacedEpisode, Translation},
     };
 
-    /// The whole server on a database in memory, stored in English, with no
+    /// The whole server on a database of its own, stored in English, with no
     /// provider to ask: what a match falls back to finds nothing upstream.
     async fn server() -> AppState {
         server_asking(config::SurfacePolicy::Allowlist).await
@@ -1212,11 +1212,7 @@ mod tests {
         config.security.plex_policy = policy;
         config.security.auth_disabled = false;
         config.mode = config::Mode::Single;
-        config.database = config::Database {
-            url: "sqlite::memory:".into(),
-            max_connections: 1,
-            acquire_timeout: std::time::Duration::from_secs(5),
-        };
+        config.database = crate::db::testing::database().await;
         config.security.bootstrap_admin = None;
         config.cache.redis_url = None;
         config.media.storage = config::MediaStorage::Off;
@@ -1328,6 +1324,7 @@ mod tests {
             language: "fra".into(),
             title: Some("Matrix".into()),
             overview: Some("Un pirate apprend ce qu'est le monde.".into()),
+            tagline: None,
             is_manual: false,
         }];
         film.images = vec![Image {
@@ -1363,6 +1360,7 @@ mod tests {
             language: "fra".into(),
             title: Some("Kenshin le vagabond".into()),
             overview: None,
+            tagline: None,
             is_manual: false,
         }];
         for (number, title) in [(1, "東京編"), (2, "Season 2")] {

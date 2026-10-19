@@ -114,6 +114,10 @@ pub enum AppError {
     #[error("{message}")]
     Disabled { code: &'static str, message: String },
 
+    /// A provider that could have answered did not — a timeout, a 5xx, a
+    /// connection refused — and the catalogue holds nothing to answer with
+    /// instead. Told as a 502, never as a 404: Sonarr takes a series for
+    /// deleted on a 404 and keeps what it has on anything else.
     #[error("upstream provider unavailable")]
     UpstreamUnavailable(#[source] anyhow::Error),
 
@@ -148,10 +152,16 @@ pub enum AppError {
 /// has usually been through `anyhow`, so the original has to be dug back out.
 impl From<anyhow::Error> for AppError {
     fn from(e: anyhow::Error) -> Self {
-        match e.downcast::<sqlx::Error>() {
-            Ok(sql) => Self::from(sql),
-            Err(other) => Self::Internal(other),
+        let e = match e.downcast::<sqlx::Error>() {
+            Ok(sql) => return Self::from(sql),
+            Err(other) => other,
+        };
+        // A fetch that found nothing while a source that could have resolved
+        // the work did not answer: not a 404, which the client would act on.
+        if e.downcast_ref::<crate::providers::Unanswered>().is_some() {
+            return Self::UpstreamUnavailable(e);
         }
+        Self::Internal(e)
     }
 }
 

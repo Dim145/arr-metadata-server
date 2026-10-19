@@ -183,14 +183,15 @@ const GROUPS: &[Group] = &[
                 "mal.enabled",
                 &["AMS_MAL_ENABLED"],
                 "MyAnimeList, for anime: its score and its titles — through its own API when \
-                 `AMS_MAL_CLIENT_ID` is set, through Jikan otherwise, which needs no key but can \
-                 be months behind.",
+                 `AMS_MAL_CLIENT_ID` is set, through Tenrai otherwise, a mirror written to \
+                 Jikan's schema that needs no key. Uses the same identifier list as AniList.",
             ),
             set(
                 "mal.fallback",
                 "When the way into MyAnimeList that was asked does not answer — no connection, an \
-                 error of its own, a rate limit that outlasts the wait — ask the next: Jikan after \
-                 the official API, then Tenrai, a mirror written to Jikan's schema. One that did \
+                 error of its own, a rate limit that outlasts the wait — ask the next: Tenrai \
+                 after the official API, then Jikan, an instance of one's own \
+                 (`AMS_JIKAN_UPSTREAM`; the public service closed on 2026-10-01). One that did \
                  not answer is passed over for five minutes; a 404 is an answer, and asks no \
                  other. Off, only the first is asked.",
             ),
@@ -257,13 +258,20 @@ const GROUPS: &[Group] = &[
                 &["AMS_REFRESH_CONTINUING_TTL"],
                 "How long a work still changing — a series still airing, a film not out yet — \
                  keeps before it is fetched again, in seconds: `21600` is six hours. An episode \
-                 about to air brings it back sooner. A work takes a change at its next refresh.",
+                 about to air brings it back sooner. A work takes a change at its next refresh. \
+                 TMDB's terms of use allow what it answered to be kept six months at the most, \
+                 so past `15552000` — a hundred and eighty days — a work whose last refresh is \
+                 older than that is asked of TMDB again anyway, every six months, by a light \
+                 refresh: TMDB alone, the other sources keeping what they last gave, taken by \
+                 the sweep after the works that are due.",
             ),
             seeded(
                 "refresh.ttlEnded",
                 &["AMS_REFRESH_ENDED_TTL"],
                 "The same for a work done changing — an ended series, a released film: `604800` \
-                 is a week.",
+                 is a week, and ten years is the most. The six months TMDB allows hold here too: \
+                 past `15552000`, the sweep asks TMDB again every six months and keeps the rest \
+                 as it is.",
             ),
         ],
     },
@@ -777,11 +785,7 @@ async fn starting_values() -> HashMap<String, String> {
 
     let mut config = crate::config::Config::from_env().expect("a configuration");
     config.mode = crate::config::Mode::Single;
-    config.database = crate::config::Database {
-        url: "sqlite::memory:".into(),
-        max_connections: 1,
-        acquire_timeout: std::time::Duration::from_secs(5),
-    };
+    config.database = crate::db::testing::database().await;
     config.security.bootstrap_admin = None;
     config.cache.redis_url = None;
     config.media.storage = crate::config::MediaStorage::Off;
@@ -903,4 +907,21 @@ fn a_variable_is_read_as_a_word_of_its_own() {
     assert!(read_by_the_server("AMS_LOG"));
     // The start of AMS_TLS_DIR and AMS_TLS_CERT, and nothing on its own.
     assert!(!read_by_the_server("AMS_TLS"));
+}
+
+#[test]
+fn the_refresh_intervals_say_what_tmdb_allows() {
+    // TMDB's terms allow its answers to be kept six months at the most: both
+    // intervals say so, and name the figure past which the sweep makes up
+    // for the setting on its own.
+    for key in ["refresh.ttlContinuing", "refresh.ttlEnded"] {
+        let entry = GROUPS
+            .iter()
+            .flat_map(|group| group.entries)
+            .find(|entry| entry.key == key)
+            .expect("described");
+        assert!(entry.text.contains("six months"), "{key}: {}", entry.text);
+        assert!(entry.text.contains("`15552000`"), "{key}: {}", entry.text);
+        assert!(entry.text.contains("TMDB"), "{key}: {}", entry.text);
+    }
 }

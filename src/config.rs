@@ -429,16 +429,19 @@ pub struct Anilist {
     pub passthrough: bool,
 }
 
-/// MyAnimeList: its official API when a client id is set, Jikan otherwise —
-/// and Tenrai, written to Jikan's schema, when the one asked does not answer.
+/// MyAnimeList: its official API when a client id is set, Tenrai otherwise —
+/// a mirror written to Jikan's schema — and Jikan, an instance of one's own,
+/// when the one asked does not answer.
 #[derive(Clone)]
 pub struct Mal {
     pub upstream: String,
+    /// Jikan's public service closed on 2026-10-01; this is for an instance
+    /// of one's own, asked last.
     pub jikan_upstream: String,
     pub tenrai_upstream: String,
-    /// Free from myanimelist.net's API settings. Without one, Jikan is used —
-    /// an unofficial mirror that serves MAL from its own cache, which can be
-    /// weeks old and fails outright when MyAnimeList refuses it.
+    /// Free from myanimelist.net's API settings. Without one, Tenrai is used —
+    /// an unofficial mirror that serves MAL from its own cache, four requests
+    /// a second and a hundred and twenty a minute from one address.
     pub client_id: Option<String>,
     pub enabled: bool,
 }

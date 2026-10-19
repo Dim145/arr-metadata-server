@@ -20,8 +20,9 @@ use crate::{
     state::AppState,
 };
 
-/// Scopes a key may carry. `read` is implied by existing at all.
-const KNOWN_SCOPES: &[&str] = &["read", "write", "admin"];
+/// Scopes a key may carry. `read` is implied by existing at all; `metrics`
+/// alone makes a scraper's key, which reads the figures and nothing else.
+const KNOWN_SCOPES: &[&str] = &["read", "write", "admin", "metrics"];
 
 /// The tag every route here is filed under in the documentation.
 pub const TAG: &str = "Clients";

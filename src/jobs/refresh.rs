@@ -4,6 +4,12 @@
 //! follows its status: a running series changes weekly, an ended one never. The
 //! refresh replaces provider snapshots and provider-sourced children. It does
 //! not touch `media_override`, which is what makes a manual edit permanent.
+//!
+//! Whatever the schedule says, a work's copy of TMDB's answer is six months
+//! old at the most: TMDB's terms of use allow no longer. A work refreshed
+//! longer ago than that is given a light refresh by the sweep, after the
+//! works that are due — TMDB asked again alone, as a sync asks it, the other
+//! sources keeping what they last gave.
 
 use std::{
     sync::{Arc, LazyLock},
@@ -256,7 +262,7 @@ async fn everything(
                 )));
             }
 
-            if refresh_due(state, &id, &recorder).await {
+            if Box::pin(refresh_due(state, &id, &recorder)).await {
                 done += 1;
             } else {
                 failed += 1;
@@ -436,27 +442,59 @@ async fn run_sweep(state: &AppState, batch: i64) {
 
 /// Refresh what is due, returning a one-line summary of what happened; each
 /// work taken is written down for the run.
+///
+/// The works due by their own interval first, then — in what is left of the
+/// batch, so that they never take a due work's place — those whose copy of
+/// TMDB's answer is six months old ([`crate::service::SIX_MONTHS`]), each
+/// asked of TMDB alone. Nothing of the kind without a TMDB key: there is
+/// nobody to ask.
 async fn sweep(state: &AppState, batch: i64, recorder: &Recorder) -> Result<String> {
     let due = repo::item::due_for_refresh(&state.db, batch).await?;
 
-    if due.is_empty() {
+    let room = batch.clamp(1, 500) - i64::try_from(due.len()).unwrap_or(i64::MAX);
+    let aged = if room > 0 && state.tmdb.is_configured() {
+        let before = crate::service::six_months_before(chrono::Utc::now());
+        repo::item::due_for_light_refresh(&state.db, &before, room).await?
+    } else {
+        Vec::new()
+    };
+
+    if due.is_empty() && aged.is_empty() {
         return Ok("nothing was due".to_string());
     }
 
-    tracing::info!(count = due.len(), "refreshing entries");
+    tracing::info!(count = due.len(), aged = aged.len(), "refreshing entries");
 
     let mut succeeded = 0usize;
+    let mut light = 0usize;
     let mut failed = 0usize;
 
+    // Each work's branch on the heap, so that the sweep's own future — and
+    // the scheduler's task, which holds it — stays small whatever a refresh
+    // carries: see [`without_panicking`] for the stack it is polled on.
     for (id, _kind) in due {
-        if refresh_due(state, &id, recorder).await {
+        if Box::pin(refresh_due(state, &id, recorder)).await {
             succeeded += 1;
         } else {
             failed += 1;
         }
     }
 
-    tracing::info!(succeeded, failed, "refresh sweep finished");
+    for (id, _kind) in aged {
+        match Box::pin(light_refresh(state, &id, recorder)).await {
+            Light::Refreshed => {
+                succeeded += 1;
+                light += 1;
+            }
+            // Neither: refreshed meanwhile, or taken again next time.
+            Light::Passed => {}
+            Light::Failed => failed += 1,
+        }
+    }
+
+    tracing::info!(succeeded, light, failed, "refresh sweep finished");
+    // The light refreshes are refreshes: counted with the rest, and told
+    // apart in the run's entries.
     Ok(format!("{succeeded} refreshed, {failed} failed"))
 }
 
@@ -466,6 +504,169 @@ pub mod notes {
     pub const KEPT: &str = "no provider answered; the stored entry was kept";
     pub const UNRESOLVED: &str = "no provider could resolve this entry";
     pub const GONE: &str = "gone since it was listed";
+    /// A light refresh: TMDB asked again, alone, its copy being six months
+    /// old.
+    pub const LIGHT: &str = "refreshed from TMDB alone, its copy being six months old";
+    /// A light refresh TMDB did not answer.
+    pub const TMDB_SILENT: &str = "TMDB did not answer; the stored entry was kept";
+    /// A light refresh that found the work written meanwhile: nothing was
+    /// written, and it is taken again at the next sweep.
+    pub const CHANGED: &str = "changed while syncing; nothing written";
+}
+
+/// How a light refresh of one work ended.
+enum Light {
+    /// TMDB answered, and what it said is written.
+    Refreshed,
+    /// Nothing to do: gone meanwhile, refreshed meanwhile, or written by
+    /// something else while TMDB was asked.
+    Passed,
+    Failed,
+}
+
+/// Ask TMDB alone about a work whose copy of its answer is six months old,
+/// as a sync asks it: what it says is weighed against what every other
+/// source said last time, and the work's own schedule stands. What happened
+/// is written down for the run. Never `?`, for the reason [`refresh_due`]
+/// gives.
+///
+/// A work that never recorded who gave what — refreshed before the server
+/// began keeping it — cannot have TMDB's part told from the rest, and is
+/// refreshed in full instead, which records it. One TMDB does not answer is
+/// marked as a failed refresh is, and so tried again, in full, after the
+/// backoff: left as it was, it would head the aged works at every sweep.
+async fn light_refresh(state: &AppState, id: &str, recorder: &Recorder) -> Light {
+    let mut stored = match repo::item::get(&state.db, id).await {
+        Ok(Some(item)) => item,
+        Ok(None) => {
+            recorder
+                .note(&state.db, id, None, job::Outcome::Skipped, notes::GONE)
+                .await;
+            return Light::Passed;
+        }
+        Err(e) => {
+            tracing::warn!(%id, error = format_args!("{e:#}"), "could not read an entry due a light refresh");
+            let why = format!("could not be read: {e}");
+            mark_failure(state, id, None, &why).await;
+            recorder
+                .note(&state.db, id, None, job::Outcome::Failed, &why)
+                .await;
+            return Light::Failed;
+        }
+    };
+
+    // Still as the batch listed it: not refreshed since, by hand or by a
+    // client's request.
+    if !crate::service::due_light(&stored, chrono::Utc::now()) {
+        return Light::Passed;
+    }
+
+    let provenance = match repo::item::provenance(&state.db, id).await {
+        Ok(Some(provenance)) => provenance,
+        Ok(None) => {
+            return if refresh_due(state, id, recorder).await {
+                Light::Refreshed
+            } else {
+                Light::Failed
+            };
+        }
+        Err(e) => {
+            tracing::warn!(%id, error = format_args!("{e:#}"), "could not read where a work's values came from");
+            recorder
+                .note(
+                    &state.db,
+                    id,
+                    Some(&stored),
+                    job::Outcome::Failed,
+                    &e.to_string(),
+                )
+                .await;
+            return Light::Failed;
+        }
+    };
+
+    if let Err(e) = repo::item::load_children(&state.db, &mut stored).await {
+        tracing::warn!(%id, error = format_args!("{e:#}"), "could not read an entry due a light refresh");
+        recorder
+            .note(
+                &state.db,
+                id,
+                Some(&stored),
+                job::Outcome::Failed,
+                &e.to_string(),
+            )
+            .await;
+        return Light::Failed;
+    }
+
+    use crate::service::gather::{ResyncOutcome, resync};
+    let asking = [crate::providers::names::TMDB];
+    let outcome = without_panicking(crate::providers::unhurried(resync(
+        state,
+        &stored,
+        &provenance,
+        &asking,
+    )))
+    .await;
+
+    let (ended, outcome, note) = match outcome {
+        Ok(ResyncOutcome::Synced(done)) => {
+            if let Err(e) = repo::item::mark_lightly_refreshed(&state.db, id).await {
+                tracing::warn!(%id, error = %e, "could not record the light refresh");
+            }
+            state.caches.touched(id).await;
+            // Served differently since: told to the operator's Sonarr or
+            // Radarr, as a full refresh is.
+            crate::arr::push::refreshed(state, &stored, &done.item);
+            (Light::Refreshed, job::Outcome::Ok, notes::LIGHT.to_string())
+        }
+        Ok(ResyncOutcome::NoneAnswered) => {
+            mark_failure(state, id, Some(&stored), notes::TMDB_SILENT).await;
+            (
+                Light::Failed,
+                job::Outcome::Failed,
+                notes::TMDB_SILENT.to_string(),
+            )
+        }
+        Ok(ResyncOutcome::Changed) => (
+            Light::Passed,
+            job::Outcome::Skipped,
+            notes::CHANGED.to_string(),
+        ),
+        Ok(ResyncOutcome::Gone) => (
+            Light::Passed,
+            job::Outcome::Skipped,
+            notes::GONE.to_string(),
+        ),
+        Err(e) => {
+            tracing::warn!(%id, error = format_args!("{e:#}"), "light refresh failed");
+            let why = e.to_string();
+            mark_failure(state, id, Some(&stored), &why).await;
+            (Light::Failed, job::Outcome::Failed, why)
+        }
+    };
+    recorder
+        .note(&state.db, id, Some(&stored), outcome, &note)
+        .await;
+    ended
+}
+
+/// A refresh's future, its panic made an error: a panic refreshing one work
+/// — on a provider's answer, in the merge — fails that work, not the sweep.
+/// Unwound, it would end the loop that runs every sweep for good, and the
+/// work, still first by its deadline, would be the first of the next.
+async fn without_panicking<T>(refresh: impl std::future::Future<Output = Result<T>>) -> Result<T> {
+    std::panic::AssertUnwindSafe(refresh)
+        .catch_unwind()
+        .await
+        .unwrap_or_else(|panic| {
+            let what = panic
+                .downcast_ref::<&str>()
+                .map(|s| (*s).to_string())
+                .or_else(|| panic.downcast_ref::<String>().cloned())
+                .unwrap_or_default();
+            Err(anyhow::anyhow!("the refresh panicked: {what}"))
+        })
 }
 
 /// Refresh one work that is due; whether it came back from a provider. What
@@ -497,23 +698,8 @@ async fn refresh_due(state: &AppState, id: &str, recorder: &Recorder) -> bool {
         }
     };
 
-    // A panic refreshing one work — on a provider's answer, in the merge —
-    // fails that work, not the sweep: unwound, it would end the loop that
-    // runs every sweep for good, and the work, still first by its deadline,
-    // would be the first of the next.
     // Nobody waits on a sweep: a slow source is given its time here.
-    let refreshed =
-        std::panic::AssertUnwindSafe(crate::providers::unhurried(refresh_one(state, &item)))
-            .catch_unwind()
-            .await
-            .unwrap_or_else(|panic| {
-                let what = panic
-                    .downcast_ref::<&str>()
-                    .map(|s| (*s).to_string())
-                    .or_else(|| panic.downcast_ref::<String>().cloned())
-                    .unwrap_or_default();
-                Err(anyhow::anyhow!("the refresh panicked: {what}"))
-            });
+    let refreshed = without_panicking(crate::providers::unhurried(refresh_one(state, &item))).await;
 
     let (came_back, outcome, note) = match refreshed {
         // Answered with what was stored — no provider had it — and still due:
@@ -637,5 +823,398 @@ async fn mark_failure(state: &AppState, id: &str, item: Option<&MediaItem>, erro
     // Told when the work starts failing, not at each try while it goes on.
     if item.is_none_or(|item| item.refresh_error.is_none()) {
         crate::service::webhook::refresh_failed(state, id, item, &error);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use axum::{
+        Json, Router,
+        extract::State,
+        http::{StatusCode, Uri},
+        response::IntoResponse,
+    };
+    use chrono::{TimeDelta, Utc};
+
+    use super::*;
+    use crate::{
+        config,
+        db::repo::child::{blank_episode, blank_season},
+        domain::ExternalIds,
+        merge::provenance::{Provenance, Source},
+    };
+
+    /// Every provider's address: TMDB's answer for one series, and nothing
+    /// else — a 404 for every other path, TheTVDB's, Skyhook's, TVmaze's
+    /// included. Each path asked is written down, so a test can say who was
+    /// asked.
+    struct Providers {
+        at: String,
+        asked: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl Providers {
+        fn asked(&self) -> Vec<String> {
+            std::mem::take(&mut *self.asked.lock().expect("the list"))
+        }
+    }
+
+    async fn providers() -> Providers {
+        async fn answer(
+            State(asked): State<Arc<Mutex<Vec<String>>>>,
+            uri: Uri,
+        ) -> axum::response::Response {
+            asked.lock().expect("the list").push(uri.path().to_string());
+            if uri.path() == "/3/tv/1396" {
+                Json(serde_json::json!({
+                    "id": 1396,
+                    "name": "Breaking Bad",
+                    "overview": "New overview from TMDB.",
+                    "tagline": "All hail the king.",
+                    "status": "Ended",
+                    "first_air_date": "2008-01-20",
+                    "seasons": [],
+                }))
+                .into_response()
+            } else {
+                StatusCode::NOT_FOUND.into_response()
+            }
+        }
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("a port");
+        let at = format!("http://{}", listener.local_addr().expect("its address"));
+        let asked: Arc<Mutex<Vec<String>>> = Arc::default();
+        let app = Router::new()
+            .fallback(answer)
+            .with_state(Arc::clone(&asked));
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("served");
+        });
+        Providers { at, asked }
+    }
+
+    /// The server, every provider at `at`, TMDB and TheTVDB each given a key
+    /// so that both are switched on: as `service::testing::server` makes
+    /// one, with a provider that answers.
+    pub(super) async fn server(at: &str) -> AppState {
+        let mut config = config::Config::from_env().expect("a configuration");
+        config.mode = config::Mode::Single;
+        config.database = config::Database {
+            url: "sqlite::memory:".into(),
+            max_connections: 1,
+            acquire_timeout: Duration::from_secs(5),
+        };
+        config.security.bootstrap_admin = None;
+        config.cache.redis_url = None;
+        config.media.storage = config::MediaStorage::Off;
+        config.clients = None;
+        config.tmdb.api_key = Some("key".into());
+        config.tmdb.language = "en-US".into();
+        config.tvdb.api_key = Some("key".into());
+        config.tvdb.enabled = true;
+        for upstream in [
+            &mut config.tmdb.upstream,
+            &mut config.tvdb.upstream,
+            &mut config.fanart.upstream,
+            &mut config.skyhook.upstream,
+            &mut config.sonarr_services.upstream,
+            &mut config.sonarr_services.xem_upstream,
+            &mut config.radarr_metadata.upstream,
+            &mut config.tvmaze.upstream,
+            &mut config.anilist.upstream,
+            &mut config.mal.upstream,
+            &mut config.mal.jikan_upstream,
+            &mut config.mal.tenrai_upstream,
+            &mut config.fankai.upstream,
+            &mut config.fankai_wiki.upstream,
+            &mut config.imdb.datasets,
+            &mut config.anime_mapping.url,
+        ] {
+            *upstream = at.to_string();
+        }
+
+        AppState::bootstrap(config).await.expect("a server")
+    }
+
+    fn from(provider: &str) -> Source {
+        Source {
+            from: provider.into(),
+            agreed: Vec::new(),
+            differed: Vec::new(),
+            passed: Vec::new(),
+        }
+    }
+
+    /// A series as TheTVDB and TMDB described it two hundred days ago —
+    /// TheTVDB naming it and numbering its two episodes, TMDB giving the
+    /// overview — refreshed then, and due again in a month.
+    async fn aged_series(state: &AppState, title: &str, tvdb: i64, tmdb: i64) -> MediaItem {
+        let mut item = MediaItem::empty(MediaKind::Series);
+        item.id = crate::db::new_id();
+        item.title = title.into();
+        item.slug = crate::domain::make_slug(title, Some(2008));
+        item.overview = Some("Old overview.".into());
+        item.status = Some("ended".into());
+        item.is_enabled = true;
+        item.created_at = crate::db::now();
+        item.updated_at = crate::db::now();
+        item.external_ids = ExternalIds {
+            tvdb: Some(tvdb),
+            tmdb: Some(tmdb),
+            ..Default::default()
+        };
+        let given = |season: i32, number: i32| {
+            let mut episode = blank_episode(season, number);
+            episode.is_manual = false;
+            episode
+        };
+        let mut season = blank_season(1);
+        season.is_manual = false;
+        item.seasons = vec![season];
+        item.episodes = vec![given(1, 1), given(1, 2)];
+        item.refreshed_at = Some(to_rfc3339(Utc::now() - TimeDelta::days(200)));
+        item.refresh_after = Some(to_rfc3339(Utc::now() + TimeDelta::days(30)));
+
+        let provenance = Provenance {
+            fields: [
+                ("title".to_string(), from("tvdb")),
+                ("overview".to_string(), from("tmdb")),
+                ("status".to_string(), from("tmdb")),
+            ]
+            .into_iter()
+            .collect(),
+            episodes: Some("tvdb".into()),
+            ..Default::default()
+        };
+        repo::item::upsert_traced(
+            &state.db,
+            repo::item::ItemWrite {
+                item: &item,
+                replace_children: true,
+            },
+            &provenance,
+        )
+        .await
+        .expect("stored");
+        item
+    }
+
+    /// One sweep, as the scheduler runs it: a task of its own, polled on a
+    /// worker thread with the two megabytes of stack tokio gives one — the
+    /// same room a sweep has in a running server, which a test's own body,
+    /// run under `block_on` on the test thread, would not show.
+    async fn swept(state: &AppState, batch: i64, run: Option<&str>) -> String {
+        let state = state.clone();
+        let run = run.map(str::to_string);
+        tokio::spawn(async move {
+            let recorder = Recorder::for_run(run.as_deref());
+            sweep(&state, batch, &recorder).await.expect("swept")
+        })
+        .await
+        .expect("the sweep's task")
+    }
+
+    async fn held(state: &AppState, id: &str) -> MediaItem {
+        let mut item = repo::item::get(&state.db, id)
+            .await
+            .expect("read")
+            .expect("held");
+        repo::item::load_children(&state.db, &mut item)
+            .await
+            .expect("its children");
+        item
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_sweep_asks_tmdb_alone_about_a_work_whose_copy_of_it_is_six_months_old() {
+        let providers = providers().await;
+        let state = server(&providers.at).await;
+        let series = aged_series(&state, "Breaking Bad", 81189, 1396).await;
+        assert_eq!(
+            held(&state, &series.id).await.episodes.len(),
+            2,
+            "stored with its episodes"
+        );
+        let run = job::start(&state.db, job::kinds::REFRESH_SWEEP, None)
+            .await
+            .expect("a run");
+        providers.asked();
+        let started = crate::db::now();
+
+        // Not due by its own interval, and taken all the same: its copy of
+        // TMDB's answer is too old.
+        assert_eq!(swept(&state, 25, Some(&run)).await, "1 refreshed, 0 failed");
+
+        // Asked of TMDB, and of nobody else: TheTVDB, switched on and
+        // numbering the episodes, Skyhook and the rest were left alone.
+        let asked = providers.asked();
+        assert!(asked.iter().any(|path| path == "/3/tv/1396"), "{asked:?}");
+        assert!(
+            asked.iter().all(|path| path.starts_with("/3/")),
+            "{asked:?}"
+        );
+
+        // What TMDB says stands over what it gave before; the list TheTVDB
+        // numbers stands as it was.
+        let now = held(&state, &series.id).await;
+        assert_eq!(now.overview.as_deref(), Some("New overview from TMDB."));
+        assert_eq!(now.tagline.as_deref(), Some("All hail the king."));
+        assert_eq!(now.title, "Breaking Bad");
+        assert_eq!(now.episodes.len(), 2);
+
+        // Its copy is of now, its own schedule stands, and the run says what
+        // was done to it.
+        assert!(
+            now.refreshed_at
+                .as_deref()
+                .is_some_and(|at| at >= started.as_str())
+        );
+        assert_eq!(now.refresh_after, series.refresh_after);
+        assert_eq!(now.refresh_error, None);
+        let entries = job::entries(&state.db, &run, 10).await.expect("entries");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].outcome, "ok");
+        assert_eq!(entries[0].note.as_deref(), Some(notes::LIGHT));
+
+        // And not again for another six months.
+        assert_eq!(swept(&state, 25, Some(&run)).await, "nothing was due");
+        assert!(providers.asked().is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_aged_work_tmdb_does_not_answer_for_is_tried_again_as_a_failed_refresh_is() {
+        let providers = providers().await;
+        let state = server(&providers.at).await;
+        // One TMDB has nothing for: a 404, as for a series deleted there.
+        let series = aged_series(&state, "Gone from TMDB", 81190, 1397).await;
+        let run = job::start(&state.db, job::kinds::REFRESH_SWEEP, None)
+            .await
+            .expect("a run");
+        providers.asked();
+        let started = Utc::now();
+
+        assert_eq!(swept(&state, 25, Some(&run)).await, "0 refreshed, 1 failed");
+        let asked = providers.asked();
+        assert!(asked.iter().any(|path| path == "/3/tv/1397"), "{asked:?}");
+        assert!(
+            asked.iter().all(|path| path.starts_with("/3/")),
+            "{asked:?}"
+        );
+
+        // Marked as a failed refresh is: the failure on the work, and its
+        // next refresh — a full one — brought forward to the backoff rather
+        // than left a month away, so that it does not head the aged works at
+        // every sweep.
+        let now = held(&state, &series.id).await;
+        assert_eq!(now.overview.as_deref(), Some("Old overview."));
+        assert_eq!(now.refresh_error.as_deref(), Some(notes::TMDB_SILENT));
+        let due = now
+            .refresh_after
+            .as_deref()
+            .and_then(crate::db::parse_rfc3339)
+            .expect("scheduled");
+        assert!(due > started && due <= started + TimeDelta::hours(6) + TimeDelta::minutes(1));
+        let entries = job::entries(&state.db, &run, 10).await.expect("entries");
+        assert_eq!(entries[0].outcome, "failed");
+        assert_eq!(entries[0].note.as_deref(), Some(notes::TMDB_SILENT));
+
+        // Nor is it among the aged works any more.
+        let before = crate::service::six_months_before(Utc::now());
+        assert!(
+            repo::item::due_for_light_refresh(&state.db, &before, 10)
+                .await
+                .expect("listed")
+                .is_empty()
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_aged_works_take_only_the_room_the_due_ones_leave() {
+        let providers = providers().await;
+        let state = server(&providers.at).await;
+        let aged = aged_series(&state, "Breaking Bad", 81189, 1396).await;
+        // A Fan-Kai due by its own interval: with Fankai switched off there
+        // is nothing to refresh it from, so it takes its slot and fails
+        // without asking anybody.
+        let mut due = MediaItem::empty(MediaKind::Series);
+        due.id = crate::db::new_id();
+        due.title = "Horimiya Kaï".into();
+        due.slug = crate::domain::make_slug("Horimiya Kaï", None);
+        due.is_enabled = true;
+        due.created_at = crate::db::now();
+        due.updated_at = crate::db::now();
+        due.external_ids = ExternalIds {
+            fankai: Some(42),
+            ..Default::default()
+        };
+        due.refreshed_at = Some(to_rfc3339(Utc::now() - TimeDelta::days(1)));
+        due.refresh_after = Some(to_rfc3339(Utc::now() - TimeDelta::hours(1)));
+        repo::item::upsert(
+            &state.db,
+            repo::item::ItemWrite {
+                item: &due,
+                replace_children: true,
+            },
+        )
+        .await
+        .expect("stored");
+        providers.asked();
+
+        // A batch of one: the due work takes it, and the aged one waits.
+        assert_eq!(swept(&state, 1, None).await, "0 refreshed, 1 failed");
+        assert!(
+            providers.asked().is_empty(),
+            "nobody was asked about the aged work"
+        );
+        let before = crate::service::six_months_before(Utc::now());
+        let waiting = repo::item::due_for_light_refresh(&state.db, &before, 10)
+            .await
+            .expect("listed");
+        assert_eq!(waiting, [(aged.id.clone(), MediaKind::Series)]);
+
+        // The next sweep, with the due work pushed out to its backoff, has
+        // room for it.
+        assert_eq!(swept(&state, 1, None).await, "1 refreshed, 0 failed");
+        assert!(
+            providers.asked().iter().any(|path| path == "/3/tv/1396"),
+            "asked of TMDB"
+        );
+    }
+}
+
+#[cfg(test)]
+mod size_tests {
+    use super::*;
+
+    /// The sweep's future is what the scheduler's task holds and polls, on
+    /// a worker thread with two megabytes of stack: in a debug build an
+    /// `async fn` keeps every awaited future inline, and with a work's
+    /// whole refresh — the providers' fan-out, the merge, the write — in
+    /// it, a sweep's future weighed a hundred kilobytes and a refresh of
+    /// everything's the same. The per-work branches are boxed, so the
+    /// futures the task holds stay at a few hundred bytes whatever a
+    /// refresh grows to.
+    #[tokio::test]
+    async fn the_sweeps_future_stays_small_whatever_a_refresh_carries() {
+        let state = super::tests::server("http://127.0.0.1:9").await;
+        let recorder = Recorder::for_run(None);
+        let flag = super::super::cancel::register("run");
+
+        let small = |what: &str, size: usize| {
+            assert!(size < 4096, "{what}: {size} bytes");
+        };
+        small(
+            "sweep",
+            std::mem::size_of_val(&sweep(&state, 25, &recorder)),
+        );
+        small("run_sweep", std::mem::size_of_val(&run_sweep(&state, 25)));
+        small(
+            "everything",
+            std::mem::size_of_val(&everything(&state, 1, "run", &flag)),
+        );
     }
 }

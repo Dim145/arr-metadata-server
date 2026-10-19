@@ -216,7 +216,9 @@ pub const REGISTRY: &[Definition] = &[
     },
     Definition {
         // On by default, unlike the switches around it: the next way into
-        // MyAnimeList, when the one asked does not answer.
+        // MyAnimeList, when the one asked does not answer — Tenrai after the
+        // official API, then a Jikan of one's own, the public one having
+        // closed on 2026-10-01.
         key: "mal.fallback",
         kind: Kind::Bool,
         scopes: SERVER_ONLY,
@@ -481,7 +483,10 @@ pub const REGISTRY: &[Definition] = &[
         // How long a work still changing — a running series, a film not out
         // yet — keeps before it is fetched again, in seconds: a minute to a
         // year. Read when the work is scheduled, so a change applies from the
-        // next refresh of each.
+        // next refresh of each. TMDB's terms allow its answers to be kept six
+        // months at the most, so past 180 days (`service::SIX_MONTHS`) the
+        // sweep asks TMDB again anyway, by a light refresh of it alone,
+        // whatever either of these says.
         key: "refresh.ttlContinuing",
         kind: Kind::Int {
             min: 60,
@@ -491,7 +496,7 @@ pub const REGISTRY: &[Definition] = &[
     },
     Definition {
         // And a work done changing — an ended series, a released film: a
-        // minute to ten years.
+        // minute to ten years, the six months TMDB allows holding here too.
         key: "refresh.ttlEnded",
         kind: Kind::Int {
             min: 60,

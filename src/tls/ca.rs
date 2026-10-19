@@ -1073,14 +1073,7 @@ mod tests {
     /// authority a directory held from before is taken in, not replaced.
     #[tokio::test]
     async fn in_the_database_every_instance_holds_the_same() {
-        let db = crate::db::Db::connect(&crate::config::Database {
-            url: "sqlite::memory:".into(),
-            max_connections: 1,
-            acquire_timeout: std::time::Duration::from_secs(5),
-        })
-        .await
-        .unwrap();
-        db.migrate().await.unwrap();
+        let db = crate::db::testing::db().await;
         let made_for = names(&["skyhook.sonarr.tv", "ams.lan"]);
 
         // From before: an authority in files.
@@ -1140,14 +1133,7 @@ mod tests {
         assert!(again.info.covers(&made_for));
 
         // Without files to take from, an authority is made.
-        let other = crate::db::Db::connect(&crate::config::Database {
-            url: "sqlite::memory:".into(),
-            max_connections: 1,
-            acquire_timeout: std::time::Duration::from_secs(5),
-        })
-        .await
-        .unwrap();
-        other.migrate().await.unwrap();
+        let other = crate::db::testing::db().await;
         let fresh = Authority::open(
             Keep::Store {
                 db: other,
@@ -1244,14 +1230,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_authority_in_the_database_is_replaced_as_well() {
-        let db = crate::db::Db::connect(&crate::config::Database {
-            url: "sqlite::memory:".into(),
-            max_connections: 1,
-            acquire_timeout: std::time::Duration::from_secs(5),
-        })
-        .await
-        .unwrap();
-        db.migrate().await.unwrap();
+        let db = crate::db::testing::db().await;
         let keep = Keep::Store {
             db: db.clone(),
             from: scratch(),

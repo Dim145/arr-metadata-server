@@ -147,9 +147,10 @@ test.describe('the way in', () => {
       await expect(page.getByRole('link', { name: /members|membres/i }).first()).toContainText(/\d/)
       const found = await page.request.get(`/api/v1/users?term=${username}`)
       const { users } = (await found.json()) as { users: { id: string; status: string }[] }
-      expect(users[0]?.status).toBe('pending')
+      const [waiting] = users
+      expect(waiting?.status).toBe('pending')
       const approved = await page.request.post('/api/v1/users/bulk', {
-        data: { ids: [users[0].id], action: 'status', value: 'active' },
+        data: { ids: [waiting!.id], action: 'status', value: 'active' },
       })
       expect(approved.ok()).toBe(true)
 

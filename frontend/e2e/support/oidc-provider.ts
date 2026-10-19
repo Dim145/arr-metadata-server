@@ -105,7 +105,7 @@ export async function startProvider(): Promise<Provider> {
       const form = new URLSearchParams(await body(request))
       const basic = /^Basic (.+)$/.exec(request.headers.authorization ?? '')
       const [id, secret] = basic
-        ? Buffer.from(basic[1], 'base64').toString().split(':').map(decodeURIComponent)
+        ? Buffer.from(basic[1] ?? '', 'base64').toString().split(':').map(decodeURIComponent)
         : [form.get('client_id'), form.get('client_secret')]
       if (id !== clientId || secret !== clientSecret) return json(response, 401, { error: 'invalid_client' })
 

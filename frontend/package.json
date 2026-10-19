@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "typecheck": "tsc -b --noEmit",
+    "typecheck:e2e": "tsc -p e2e --noEmit",
     "lint": "eslint --max-warnings 0 .",
     "test": "vitest run",
     "types": "openapi-typescript openapi.json --empty-objects-unknown --exclude-deprecated --default-non-nullable false --output src/lib/api.gen.ts",

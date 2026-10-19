@@ -279,22 +279,42 @@ mod tests {
 
             for line in sql.lines() {
                 let lowered = line.trim().to_ascii_lowercase();
+                let first_word = |text: &str| {
+                    text.split([' ', '(', ';'])
+                        .next()
+                        .filter(|name| !name.is_empty())
+                        .map(str::to_string)
+                };
                 // A table built again around a new check is made under one
-                // name and renamed: the name it was made under is gone.
+                // name and renamed: the name it was made under is gone, and
+                // the one it took is there.
                 if let Some(rest) = lowered.strip_prefix("alter table ")
-                    && let Some((old, _)) = rest.split_once(" rename to ")
+                    && let Some((old, new)) = rest.split_once(" rename to ")
                 {
                     in_schema.retain(|name| name != old.trim());
+                    in_schema.extend(first_word(new.trim()));
                     continue;
                 }
-                let Some(rest) = lowered.strip_prefix("create table ") else {
+                // A table dropped is gone too: the one a rebuild replaces,
+                // and the one made for the length of a migration — 0031
+                // holds the overrides aside while it builds their table
+                // again — which no transfer will ever meet.
+                if let Some(rest) = lowered.strip_prefix("drop table ") {
+                    let rest = rest.strip_prefix("if exists ").unwrap_or(rest);
+                    if let Some(dropped) = first_word(rest) {
+                        in_schema.retain(|name| name != &dropped);
+                    }
+                    continue;
+                }
+                let Some(rest) = lowered
+                    .strip_prefix("create table ")
+                    .or_else(|| lowered.strip_prefix("create temp table "))
+                    .or_else(|| lowered.strip_prefix("create temporary table "))
+                else {
                     continue;
                 };
                 let rest = rest.strip_prefix("if not exists ").unwrap_or(rest);
-
-                if let Some(name) = rest.split([' ', '(']).next().filter(|n| !n.is_empty()) {
-                    in_schema.push(name.to_string());
-                }
+                in_schema.extend(first_word(rest));
             }
         }
 

@@ -2,8 +2,9 @@
 # latency, the calls made to providers, what the caches answer from each
 # tier, the cache server's memory and evictions, the catalogue's size, the
 # jobs. The endpoint is administrative — it says which surfaces are open and
-# how the caches are doing — so the scrape carries an administrator's key,
-# made under Keys & network and kept out of this file:
+# how the caches are doing — so the scrape carries a key, made under Keys &
+# network with the `metrics` scope alone, which opens the figures and nothing
+# else, and kept out of this file:
 #
 #   echo 'ams_…' > /etc/prometheus/ams.key   (mode 600)
 #

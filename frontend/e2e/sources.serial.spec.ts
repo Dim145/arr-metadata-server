@@ -73,9 +73,10 @@ test.describe('where values come from', () => {
       rows: { field: string; suppliers: string[]; authorities?: string[] }[]
     }
     expect(rules.providers.map((p) => p.rank)).toEqual(rules.providers.map((_, i) => i + 1))
-    // MyAnimeList says how it is reached: its ways in, its own API or Jikan first.
+    // MyAnimeList says how it is reached: its ways in, its own API or Tenrai
+    // first — Jikan's public service is gone, and an own instance comes last.
     const mal = rules.providers.find((provider) => provider.id === 'mal')
-    expect(['official', 'jikan']).toContain(mal?.reach?.bases[0]?.base)
+    expect(['official', 'tenrai']).toContain(mal?.reach?.bases[0]?.base)
     expect(rules.providers.filter((provider) => provider.reach)).toHaveLength(1)
     const studio = rules.rows.find((row) => row.field === 'studio')
     expect(studio?.authorities).toEqual(['anilist', 'mal'])

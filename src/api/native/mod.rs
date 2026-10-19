@@ -123,17 +123,14 @@ pub fn public_router() -> OpenApiRouter<AppState> {
 pub(crate) mod testing {
     use crate::{config, state::AppState};
 
-    /// The whole server, on a database in memory: no provider to ask, no
-    /// cache server, nothing kept on disk, and adult titles hidden, as a new
-    /// server has them.
+    /// The whole server, on a database of its own — of whichever engine
+    /// `src/db/testing.rs` picks: no provider to ask, no cache server,
+    /// nothing kept on disk, and adult titles hidden, as a new server has
+    /// them.
     pub async fn server() -> AppState {
         let mut config = config::Config::from_env().expect("a configuration");
         config.mode = config::Mode::Single;
-        config.database = config::Database {
-            url: "sqlite::memory:".into(),
-            max_connections: 1,
-            acquire_timeout: std::time::Duration::from_secs(5),
-        };
+        config.database = crate::db::testing::database().await;
         config.security.bootstrap_admin = None;
         config.cache.redis_url = None;
         config.media.storage = config::MediaStorage::Off;

@@ -28,6 +28,26 @@ import type { MalReach, SourceRule, SourceRules } from '../../lib/types'
 
 const GROUPS = ['identity', 'release', 'classification', 'people', 'episodes'] as const
 
+/**
+ * Each source's terms of use, where they are published: what the catalogue
+ * holds of them is said in a line, and the rest is theirs to say. Sonarr's
+ * and Radarr's own services republish TheTVDB and TMDB under those two's
+ * terms, and publish none of their own.
+ */
+const TERMS: { id: string; name?: string; url?: string }[] = [
+  { id: 'tmdb', url: 'https://www.themoviedb.org/api-terms-of-use' },
+  { id: 'tvdb', url: 'https://thetvdb.com/api-information' },
+  { id: 'tvmaze', url: 'https://www.tvmaze.com/api' },
+  { id: 'anilist', url: 'https://docs.anilist.co/guide/terms-of-use' },
+  { id: 'mal', url: 'https://myanimelist.net/static/apiagreement.html' },
+  { id: 'tenrai', name: 'Tenrai', url: 'https://tenrai.org/terms' },
+  { id: 'fanart', url: 'https://fanart.tv/' },
+  { id: 'imdb', url: 'https://data.imdb.com/non-commercial-datasets/' },
+  { id: 'fankai', url: 'https://fankai.fr' },
+  { id: 'skyhook' },
+  { id: 'radarr' },
+]
+
 type Mark =
   | { kind: 'first' }
   | { kind: 'rank'; rank: number }
@@ -160,7 +180,51 @@ export function Sources() {
           </Panel>
         ))}
       </div>
+
+      <Terms />
     </div>
+  )
+}
+
+/** Each source's terms of use, in a line, with the way to the whole of them. */
+function Terms() {
+  const { t } = useI18n()
+  const p = t.admin.sourcesPage.terms
+
+  return (
+    <Panel id="terms" label={p.title} className="rise mt-6" style={{ animationDelay: '320ms' }}>
+      <PanelHead
+        title={
+          <span className="inline-flex items-center gap-2">
+            <Glyph name="external" className="size-3.5" />
+            {p.title}
+          </span>
+        }
+      />
+      <p className="px-5 pt-4 pb-2 text-sm leading-relaxed text-bone-dim">{p.lead}</p>
+      <ul className="divide-y divide-rule border-t border-rule">
+        {TERMS.map(({ id, name, url }) => {
+          const source = name ?? providerName(id)
+          return (
+            <li key={id} className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-5 py-2.5 text-sm">
+              <span className="w-28 shrink-0 font-medium text-bone">{source}</span>
+              <span className="min-w-0 flex-1 text-bone-dim">{p.lines[id]}</span>
+              {url ? (
+                <a
+                  href={url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex min-h-9 shrink-0 items-center gap-1 text-xs text-vermillion underline-offset-4 hover:underline"
+                >
+                  {p.read(source)}
+                  <Glyph name="external" className="size-3" />
+                </a>
+              ) : null}
+            </li>
+          )
+        })}
+      </ul>
+    </Panel>
   )
 }
 

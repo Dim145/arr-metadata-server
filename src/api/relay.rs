@@ -674,11 +674,7 @@ pub(crate) mod testing {
     pub async fn server(stand_in: &StandIn) -> AppState {
         let mut config = config::Config::from_env().expect("a configuration");
         config.mode = config::Mode::Single;
-        config.database = config::Database {
-            url: "sqlite::memory:".into(),
-            max_connections: 1,
-            acquire_timeout: Duration::from_secs(5),
-        };
+        config.database = crate::db::testing::database().await;
         config.security.bootstrap_admin = None;
         config.security.auth_disabled = false;
         config.security.tmdb_policy = SurfacePolicy::ApiKey;

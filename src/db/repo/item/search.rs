@@ -408,7 +408,7 @@ pub async fn load_artwork(db: &Db, items: &mut [MediaItem]) -> Result<()> {
     // Without these a list asked for in French would come back in English while
     // the work's own page came back translated.
     let translation_sql = format!(
-        "SELECT media_id, language, title, overview, is_manual
+        "SELECT media_id, language, title, overview, tagline, is_manual
          FROM media_translation WHERE media_id IN ({holes})"
     );
 
@@ -441,6 +441,7 @@ pub async fn load_artwork(db: &Db, items: &mut [MediaItem]) -> Result<()> {
                 language: row.text("language")?,
                 title: row.opt_text("title")?,
                 overview: row.opt_text("overview")?,
+                tagline: row.opt_text("tagline")?,
                 is_manual: row.flag("is_manual")?,
             });
     }

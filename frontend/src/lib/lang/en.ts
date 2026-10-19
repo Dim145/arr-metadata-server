@@ -14,10 +14,14 @@ export const en = {
   },
   credits: {
     lead: 'Metadata from',
+    /** MyAnimeList, reached through a mirror: "MyAnimeList via Tenrai". */
+    via: 'via',
     // Kept in English in every language: these are the sentences each licence
     // asks for, word for word.
     tmdb: 'This product uses the TMDB API but is not endorsed or certified by TMDB.',
     imdb: 'Information courtesy of IMDb (https://www.imdb.com). Used with permission.',
+    /** The licence TVmaze publishes its data under, named beside it. */
+    tvmaze: 'CC BY-SA 4.0',
   },
   feeds: {
     label: 'Feeds',
@@ -447,6 +451,7 @@ export const en = {
       alternate: 'Alternate',
       regional: 'Regional',
       altdvd: 'Alternate DVD',
+      alttwo: 'Alternate 2',
     } as Record<string, string>,
     orderNote: 'As TheTVDB numbers them; the aired order is the one every client is served.',
   },
@@ -1418,6 +1423,24 @@ export const en = {
           'A Fan-Kai is described by Fankai alone, with its wiki for what it was cut from: no other source is mixed in, or the recut would be merged with the anime it came from.',
       },
       loadFailed: 'The rules could not be loaded.',
+      terms: {
+        title: 'Terms of use',
+        lead: 'Each source answers under terms of its own. This server keeps a copy of what they answered for the works held here, refreshes it, mirrors no catalogue and trains nothing on it; the rest is theirs to say, and every public page credits the sources that are on.',
+        read: (name: string) => `${name}’s terms`,
+        lines: {
+          tmdb: 'Non-commercial use; the notice shown to readers; nothing kept longer than six months, so a work is asked of TMDB again every six months whatever the refresh interval.',
+          tvdb: 'Free under $50,000 a year of revenue, with a credit and a direct link shown to readers.',
+          tvmaze: 'Data under CC BY-SA 4.0, credited on every page.',
+          anilist: 'Free for non-commercial use; no bulk collection, no use as a store or a backup, no competing list or tracker service.',
+          mal: 'The official API is not to be redistributed, and commercial use needs a written agreement.',
+          tenrai: 'A mirror written to Jikan’s schema, serving since Jikan’s public API closed on 1 October 2026: caching allowed, not to be offered to third parties as a competing API.',
+          fanart: 'A key per project, and credit where its pictures are shown.',
+          imdb: 'Datasets for personal, non-commercial use, with the sentence IMDb asks for on every page.',
+          fankai: 'Fankai’s metadata, for its own productions, asked about one at a time; the wiki’s content is CC BY-SA.',
+          skyhook: 'Sonarr’s own service, republishing TheTVDB, whose terms apply to what it carries.',
+          radarr: 'Radarr’s own service, republishing TMDB, whose terms apply to what it carries.',
+        } as Record<string, string>,
+      },
       reach: {
         official: 'Official API',
         jikan: 'Jikan',
@@ -2068,6 +2091,12 @@ export const en = {
         runtime: 'Runtime (minutes)',
         absolute: 'Absolute number',
         overview: 'Synopsis',
+        pictures: {
+          title: 'Pictures',
+          none: 'No picture attached to this season.',
+          hiddenCount: (n: number) => (n === 1 ? '1 hidden' : `${n} hidden`),
+          chosen: 'The chosen poster is shown whatever is hidden.',
+        },
         shift: {
           open: 'Shift the air dates…',
           title: (season: string) => `Shift the air dates of ${season}`,
@@ -2290,6 +2319,9 @@ export const en = {
       read: 'Read',
       write: 'Write',
       administer: 'Administer',
+      metrics: 'Scrape',
+      metricsHint:
+        'Scrape alone reads the figures at /api/v1/admin/metrics and nothing else: the key Prometheus keeps in its configuration file.',
       issued: 'Issued keys',
       keyFor: (name: string) => `The key for ${name}`,
       onlyOnce:
@@ -2481,6 +2513,8 @@ export const en = {
       /** The fixed notes the server leaves on a run or an entry, in words. */
       notes: {
         'refreshed from a provider': 'Refreshed from a provider',
+        'refreshed from TMDB alone, its copy being six months old': 'Refreshed from TMDB alone: its copy was six months old',
+        'TMDB did not answer; the stored entry was kept': 'TMDB did not answer; the stored entry was kept',
         'gone since it was listed': 'Removed since it was listed',
         'no provider answered; the stored entry was kept': 'No provider answered; the stored entry was kept',
         'changed while syncing; nothing written': 'Written by something else during the sync; nothing changed',
@@ -2580,6 +2614,12 @@ export const en = {
       changedNone: 'Nothing has been changed from what the server began with.',
       startup: 'Read at startup',
       startupLead: 'These come from the environment, once, when the server starts, and are shown here to be read. Changing one means changing its variable and restarting the server.',
+      /** A refresh interval past the six months TMDB's terms allow its answers to be kept. */
+      sixMonths: {
+        title: 'Kept longer than TMDB allows',
+        body: (keys: string) =>
+          `${keys}: more than six months. TMDB’s terms allow its answers to be kept six months at the most, so a work refreshed longer ago than that is asked of TMDB again by the sweep every six months — a light refresh, of TMDB alone, whatever the interval says.`,
+      },
       version: 'Version',
       database: 'Database',
       publicUrl: 'Public address',
@@ -2591,7 +2631,7 @@ export const en = {
       importRunning: 'Still downloading. It carries on in the background, and its result will be under Jobs.',
       importFailed: 'The download failed — the reason is under Jobs.',
       furtherHint:
-        'Each list is downloaded only while a source that needs it is on. Set AMS_MAL_CLIENT_ID to reach MyAnimeList through its own API rather than Jikan.',
+        'Each list is downloaded only while a source that needs it is on. Set AMS_MAL_CLIENT_ID to reach MyAnimeList through its own API rather than Tenrai.',
       furtherJobs: 'Every download is listed under',
       animeList: 'Anime identifier list',
       animeEntries: (n: string) => `${n} entries`,
@@ -2600,7 +2640,7 @@ export const en = {
       notImported: 'Not downloaded',
       malVia: 'MyAnimeList through',
       malOfficial: 'Its own API',
-      malJikan: 'Jikan',
+      malJikan: 'Tenrai',
       enabled: 'Enabled',
       disabled: 'Disabled',
       policy: 'Access policy',
@@ -2729,8 +2769,8 @@ export const en = {
       'radarr.enrich': 'Asked as well, every time, and merged into what TMDB said. Slower, steadier, and it makes the fallback above redundant.',
       'tvmaze.enabled': 'The moment each episode aired, wherever its date agrees with TheTVDB’s — so an episode moved to another slot reaches Sonarr on time. Never used for numbering. No key; its data is CC BY-SA and credited on every page.',
       'anilist.enabled': 'AniList’s score, and the romaji and native titles Radarr matches anime film releases against. Keeps the anime identifier list downloaded, which also lets Sonarr’s AniList and MyAnimeList import lists find series nobody has added yet. No key.',
-      'mal.enabled': 'MyAnimeList’s score and titles — through its own API when AMS_MAL_CLIENT_ID is set, through Jikan otherwise, which needs no key but can be months behind. Uses the same identifier list.',
-      'mal.fallback': 'When the way into MyAnimeList asked does not answer — no connection, an error of its own, a rate limit that outlasts the wait — the next is asked: Jikan after the official API, then Tenrai, another mirror written to Jikan’s schema. One that did not answer is passed over for five minutes; a 404 is an answer and asks no other. Off, only the first is asked.',
+      'mal.enabled': 'MyAnimeList’s score and titles — through its own API when AMS_MAL_CLIENT_ID is set, through Tenrai otherwise, a mirror written to Jikan’s schema that needs no key but can be days behind. Jikan’s own public API closed on 1 October 2026. Uses the same identifier list.',
+      'mal.fallback': 'When the way into MyAnimeList asked does not answer — no connection, an error of its own, a rate limit that outlasts the wait — the next is asked: Tenrai after the official API, then the Jikan at AMS_JIKAN_UPSTREAM, which is one of your own now that the public one has closed. One that did not answer is passed over for five minutes; a 404 is an answer and asks no other. Off, only the first is asked.',
       'imdb.enabled': 'IMDb’s own ratings, downloaded daily for the works held here. IMDb’s rating is also the one Sonarr is given, as Skyhook does. For personal, non-commercial use only.',
       'fankai.enabled': 'The Fan-Kai productions, from Fankai’s own metadata service: each recut anime as a series, its sagas as seasons and its films as episodes, numbered the way Fankai names its files — S02E08 is the eighth film overall, in the second saga. Found by title, or by ‘fankai:’ followed by an id, and fetched only when asked for. Sonarr is handed an id of this server’s own, TheTVDB having none for them. No key; Fankai is credited on every page. Switched off, what was fetched stays as it is.',
       'fankai.wiki': 'Each Fan-Kai’s page on the Fankai community’s wiki, fan-kai.fandom.com: the AniList and MyAnimeList entries it was cut from, and the Fan-Kai that follows it. A Fan-Kai’s page then leads to its anime, and the anime’s page — once Sonarr holds it — to its Fan-Kai. One call per Fan-Kai fetch, and only while Fankai is on; with AniList on, the anime’s title, year and poster come from there. No key; its content is CC BY-SA and credited on every page.',
@@ -2738,8 +2778,8 @@ export const en = {
       'refresh.enabled': 'Stored works are fetched again on a schedule as what is known about them ages.',
       'refresh.intervalSeconds': 'In seconds. A minute at the least, a week at the most.',
       'refresh.batchSize': 'How many works are re-fetched each time the scheduler wakes.',
-      'refresh.ttlContinuing': 'In seconds: how long a series still airing, or a film not out yet, keeps before it is fetched again — 21600 is six hours. An episode about to air brings it back sooner. A minute at the least, a year at the most; a work takes a change at its next refresh.',
-      'refresh.ttlEnded': 'In seconds: the same for an ended series or a released film — 604800 is a week. A minute at the least, ten years at the most.',
+      'refresh.ttlContinuing': 'In seconds: how long a series still airing, or a film not out yet, keeps before it is fetched again — 21600 is six hours. An episode about to air brings it back sooner. A minute at the least, a year at the most; a work takes a change at its next refresh. TMDB’s terms allow its answers to be kept six months at the most: past 15552000 — 180 days — a work is asked of TMDB again every six months anyway, by a light refresh of TMDB alone.',
+      'refresh.ttlEnded': 'In seconds: the same for an ended series or a released film — 604800 is a week. A minute at the least, ten years at the most. Past 15552000 — 180 days — TMDB is asked again every six months all the same, as its terms allow no longer.',
       'sources.priority': 'The providers, most trusted first, separated by commas. Put in order on the Sources page; a work takes a new order at its next refresh.',
       'updates.check': 'Once a day, and a minute after the start, this server asks GitHub for its latest release, and the dashboard says when a newer one is out. What is sent is one anonymous GET to api.github.com, with the name and version every request of this server carries — nothing about this instance or what it holds. Off until turned on.',
       'adult.mode': 'Hidden means nobody is served an adult title, whatever any client asks for.',

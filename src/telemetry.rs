@@ -1,7 +1,22 @@
-//! Tracing setup, and keeping secrets out of what is traced.
+//! Tracing setup, the id every request is given, and keeping secrets out of
+//! what is traced.
 
-use std::sync::{LazyLock, RwLock};
+use std::{
+    net::SocketAddr,
+    sync::{Arc, LazyLock, RwLock},
+};
 
+use axum::{
+    Router,
+    extract::{ConnectInfo, Request},
+    http::{HeaderName, HeaderValue},
+    middleware::Next,
+    response::Response,
+};
+use ipnet::IpNet;
+use tower_http::request_id::{
+    MakeRequestId, PropagateRequestIdLayer, RequestId, SetRequestIdLayer,
+};
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 /// Initialise the global subscriber.
@@ -29,20 +44,100 @@ pub fn init() {
 }
 
 /// The request span: what `tower_http`'s own records, but the address without
-/// the values of the parameters a key travels in. `?api_key=` and `?apikey=`
+/// the values of the parameters a key travels in — `?api_key=` and `?apikey=`
 /// are how TMDB clients, feeds and the import lists carry theirs, and the
-/// default span wrote every one of them to the log at `AMS_LOG=debug`.
+/// default span wrote every one of them to the log at `AMS_LOG=debug` — and
+/// the request's id, so that every line written while it is served names
+/// it. At `info`, where the default filter stands: a span under the filter's
+/// level is never entered, and what the default makes is at `debug`.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RequestSpan;
 
 impl<B> tower_http::trace::MakeSpan<B> for RequestSpan {
     fn make_span(&mut self, request: &axum::http::Request<B>) -> tracing::Span {
-        tracing::debug_span!(
+        let request_id = request
+            .extensions()
+            .get::<RequestId>()
+            .and_then(|id| id.header_value().to_str().ok())
+            .unwrap_or_default();
+        // Shown, not debugged: `request_id=…` in the text log rather than
+        // `request_id="…"`, which is what a `&str` field would be written as.
+        tracing::info_span!(
             "request",
             method = %request.method(),
             uri = %redact_uri(request.uri()),
             version = ?request.version(),
+            request_id = %request_id,
         )
+    }
+}
+
+/// The header a request's id travels in, in and out.
+pub const REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
+
+/// How long an id this server takes from outside may be.
+const LONGEST_ID: usize = 128;
+
+/// Give every request on `router` an id: carried by the request span, so
+/// that every line logged while the request is served names it, and sent
+/// back in `x-request-id`, so that whoever met an error can say which one.
+/// A trusted proxy's own id is kept, so that its log and this one name a
+/// request alike. Anybody else's is dropped and one is made here: a
+/// stranger's would be whatever they chose, as long as a header may be, and
+/// the same on every request they send. Applied outside the trace, which
+/// opens the span the id is read into.
+pub fn with_request_id(router: Router, trusted: Vec<IpNet>) -> Router {
+    let trusted: Arc<[IpNet]> = trusted.into();
+    router
+        // Innermost of the three: it copies to the answer the id the layer
+        // outside it put on the request.
+        .layer(PropagateRequestIdLayer::new(REQUEST_ID))
+        .layer(SetRequestIdLayer::new(REQUEST_ID, MakeId))
+        .layer(axum::middleware::from_fn(
+            move |request: Request, next: Next| {
+                let trusted = Arc::clone(&trusted);
+                async move { judge_request_id(&trusted, request, next).await }
+            },
+        ))
+}
+
+/// Take the `x-request-id` off a request unless it is a trusted proxy's,
+/// given once, and in a form the log can hold: at most [`LONGEST_ID`] bytes,
+/// of letters, digits and `-._:/`. `SetRequestIdLayer` keeps whatever header
+/// it finds, so what it must not keep is taken away before it looks.
+async fn judge_request_id(trusted: &[IpNet], mut request: Request, next: Next) -> Response {
+    let peer = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|ci| ci.0);
+    let kept = crate::auth::ip::is_trusted_peer(peer, trusted)
+        && request.headers().get_all(REQUEST_ID).iter().count() == 1
+        && request.headers().get(REQUEST_ID).is_some_and(acceptable_id);
+    if !kept {
+        request.headers_mut().remove(REQUEST_ID);
+    }
+    next.run(request).await
+}
+
+/// Whether an id from outside is one the log can hold.
+fn acceptable_id(value: &HeaderValue) -> bool {
+    let bytes = value.as_bytes();
+    (1..=LONGEST_ID).contains(&bytes.len())
+        && bytes
+            .iter()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b':' | b'/'))
+}
+
+/// An id made here: a UUID of the seventh version, which sorts by the time
+/// it was made, without its hyphens — the form nginx's `$request_id` takes.
+#[derive(Clone, Copy, Debug, Default)]
+struct MakeId;
+
+impl MakeRequestId for MakeId {
+    fn make_request_id<B>(&mut self, _request: &axum::http::Request<B>) -> Option<RequestId> {
+        HeaderValue::from_str(&uuid::Uuid::now_v7().simple().to_string())
+            .ok()
+            .map(RequestId::new)
     }
 }
 
@@ -418,5 +513,176 @@ mod tests {
         );
         let bare: axum::http::Uri = "/health".parse().unwrap();
         assert_eq!(redact_uri(&bare), "/health");
+    }
+
+    #[test]
+    fn an_id_from_outside_is_taken_in_one_shape_only() {
+        let ok = |text: &str| acceptable_id(&HeaderValue::from_str(text).unwrap());
+        assert!(ok("0192f5a2c1d07a3b9e4f2c6d8a1b3c5e"));
+        assert!(ok("nginx-2026.10.18/req:42"));
+        assert!(ok(&"x".repeat(LONGEST_ID)));
+        assert!(!ok(""));
+        assert!(!ok("two words"));
+        assert!(!ok("a\"quote"));
+        assert!(!ok(&"x".repeat(LONGEST_ID + 1)));
+    }
+
+    /// A router that answers with the id its handler saw, so that the
+    /// header on the answer and what the handler read can be compared.
+    fn ids(trusted: Vec<IpNet>) -> Router {
+        with_request_id(
+            Router::new().route(
+                "/",
+                axum::routing::get(|request: Request| async move {
+                    request
+                        .headers()
+                        .get(REQUEST_ID)
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or("none")
+                        .to_string()
+                }),
+            ),
+            trusted,
+        )
+    }
+
+    /// The id on the answer, and the one the handler saw.
+    async fn asked(router: Router, request: Request) -> (String, String) {
+        use tower::ServiceExt as _;
+        let response = router.oneshot(request).await.unwrap();
+        let answered = response
+            .headers()
+            .get(REQUEST_ID)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("none")
+            .to_string();
+        let body = axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap();
+        (answered, String::from_utf8(body.to_vec()).unwrap())
+    }
+
+    fn bare() -> Request {
+        Request::builder()
+            .uri("/")
+            .body(axum::body::Body::empty())
+            .unwrap()
+    }
+
+    fn from(peer: &str, id: &str) -> Request {
+        let mut request = Request::builder()
+            .uri("/")
+            .header(REQUEST_ID, id)
+            .body(axum::body::Body::empty())
+            .unwrap();
+        request
+            .extensions_mut()
+            .insert(ConnectInfo::<SocketAddr>(peer.parse().unwrap()));
+        request
+    }
+
+    #[tokio::test]
+    async fn every_request_is_given_an_id_and_answered_with_it() {
+        let (answered, seen) = asked(ids(Vec::new()), bare()).await;
+        assert_eq!(answered, seen);
+        assert_eq!(answered.len(), 32, "{answered}");
+        assert!(
+            answered.bytes().all(|b| b.is_ascii_hexdigit()),
+            "{answered}"
+        );
+
+        let (again, _) = asked(ids(Vec::new()), bare()).await;
+        assert_ne!(again, answered, "two requests, one id");
+    }
+
+    #[tokio::test]
+    async fn a_strangers_id_is_replaced_and_a_trusted_proxys_kept() {
+        let proxy: IpNet = "10.0.0.0/8".parse().unwrap();
+
+        // The proxy's, as it sent it.
+        let (answered, seen) = asked(ids(vec![proxy]), from("10.0.0.2:4000", "proxy-7")).await;
+        assert_eq!((answered.as_str(), seen.as_str()), ("proxy-7", "proxy-7"));
+
+        // A stranger's: replaced on the way in, so the handler and the
+        // answer carry the one made here.
+        let (answered, seen) = asked(ids(vec![proxy]), from("203.0.113.5:4000", "theirs")).await;
+        assert_eq!(answered, seen);
+        assert_ne!(answered, "theirs");
+
+        // The proxy's, but not one the log can hold.
+        let (answered, seen) = asked(ids(vec![proxy]), from("10.0.0.2:4000", "two words")).await;
+        assert_eq!(answered, seen);
+        assert_ne!(answered, "two words");
+
+        // A request with no peer at all — one a test makes — is nobody's
+        // to trust either.
+        let mut nobody = bare();
+        nobody
+            .headers_mut()
+            .insert(REQUEST_ID, HeaderValue::from_static("mine"));
+        let (answered, _) = asked(ids(vec![proxy]), nobody).await;
+        assert_ne!(answered, "mine");
+    }
+
+    #[test]
+    fn the_request_span_names_the_id_and_not_the_key() {
+        // Written as the span opens, with its fields, into a buffer: what
+        // the log shows beside every line of the request.
+        use std::sync::Mutex;
+        use tower_http::trace::MakeSpan as _;
+        use tracing_subscriber::fmt::format::FmtSpan;
+
+        #[derive(Clone, Default)]
+        struct Buffer(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for Buffer {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Buffer {
+            type Writer = Buffer;
+            fn make_writer(&'a self) -> Buffer {
+                self.clone()
+            }
+        }
+
+        let written = Buffer::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(written.clone())
+            .with_span_events(FmtSpan::NEW)
+            .with_ansi(false)
+            .finish();
+        let mut request = axum::http::Request::builder()
+            .uri("/api/v1/items?apikey=ams_secret")
+            .body(())
+            .unwrap();
+        request
+            .extensions_mut()
+            .insert(RequestId::new(HeaderValue::from_static(
+                "0192f5a2c1d07a3b9e4f2c6d8a1b3c5e",
+            )));
+
+        tracing::subscriber::with_default(subscriber, || {
+            let span = RequestSpan.make_span(&request);
+            let _entered = span.enter();
+        });
+
+        let log = String::from_utf8(written.0.lock().unwrap().clone()).unwrap();
+        assert!(
+            log.contains("request_id=0192f5a2c1d07a3b9e4f2c6d8a1b3c5e"),
+            "{log}"
+        );
+        assert!(log.contains("apikey=***"), "{log}");
+        assert!(!log.contains("ams_secret"), "{log}");
+    }
+
+    #[test]
+    fn a_request_id_is_no_secret_to_mask() {
+        let line = "request_id=0192f5a2c1d07a3b9e4f2c6d8a1b3c5e answered in 12ms";
+        assert_eq!(redact(line), line);
     }
 }

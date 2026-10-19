@@ -16,10 +16,6 @@ use serde::Deserialize;
 pub struct SearchResponse<T> {
     #[serde(default)]
     pub results: Vec<T>,
-    /// Unread: the pages are counted by `total_pages`.
-    #[allow(dead_code)]
-    #[serde(default)]
-    pub total_results: i64,
     #[serde(default)]
     pub total_pages: i64,
 }
@@ -276,24 +272,15 @@ pub struct Movie {
     pub translations: Option<Translations>,
 }
 
+/// The collection a film belongs to, by id alone: it is read in full from
+/// `/collection/{id}`, in the reader's language.
 #[derive(Debug, Clone, Deserialize)]
 pub struct CollectionRef {
     pub id: i64,
-    // Unread: a collection is read in full from `/collection/{id}`, in the
-    // reader's language.
-    #[allow(dead_code)]
-    pub name: Option<String>,
-    #[allow(dead_code)]
-    pub poster_path: Option<String>,
-    #[allow(dead_code)]
-    pub backdrop_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Collection {
-    /// Unread: the one it was asked by.
-    #[allow(dead_code)]
-    pub id: i64,
     #[serde(default)]
     pub name: String,
     pub overview: Option<String>,
@@ -318,10 +305,6 @@ pub struct ReleaseDate {
     #[serde(rename = "type")]
     pub release_type: Option<i32>,
     pub release_date: Option<String>,
-    /// The language of the copies shown, where one release is told from
-    /// another by it.
-    #[allow(dead_code)]
-    pub iso_639_1: Option<String>,
     /// What TMDB notes beside the release: a festival, a service.
     pub note: Option<String>,
 }
@@ -495,6 +478,9 @@ pub struct TranslationData {
     pub title: Option<String>,
     pub name: Option<String>,
     pub overview: Option<String>,
+    /// The line under the title, in this language: a film's and a series'
+    /// translations both carry one.
+    pub tagline: Option<String>,
 }
 
 /// `/movie/changes` and `/tv/changes`.
@@ -506,12 +492,11 @@ pub struct ChangesResponse {
     pub total_pages: i32,
 }
 
+/// A work `/movie/changes` or `/tv/changes` lists, by id alone: it is
+/// refreshed for whoever may see it, so whether it is adult is not read.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ChangedId {
     pub id: i64,
-    /// Unread: a changed work is refreshed for whoever may see it.
-    #[allow(dead_code)]
-    pub adult: Option<bool>,
 }
 
 #[cfg(test)]

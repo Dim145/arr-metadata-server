@@ -51,6 +51,21 @@ import type { ExportStarted, JobsResponse, Settings as Config } from '../../lib/
 /** The groups of settings the page draws, in the order it draws them. */
 const SETTING_GROUPS: GroupId[] = ['answering', 'providers', 'sources', 'refresh', 'adult', 'other']
 
+/**
+ * The six months TMDB's terms allow its answers to be kept, in seconds: a
+ * refresh interval set past it is said so, since the sweep asks TMDB again
+ * every six months whatever the interval says.
+ */
+const SIX_MONTHS_SECONDS = 15_552_000
+
+/** The refresh intervals, in the order the page draws them. */
+const REFRESH_INTERVALS = ['refresh.ttlContinuing', 'refresh.ttlEnded']
+
+/** The intervals set past six months, from the values as the server has them. */
+function pastSixMonths(valueOf: (key: string) => string | undefined): string[] {
+  return REFRESH_INTERVALS.filter((key) => Number(valueOf(key)) > SIX_MONTHS_SECONDS)
+}
+
 export function Settings() {
   const { t } = useI18n()
   const c = t.admin.config
@@ -96,6 +111,7 @@ export function Settings() {
     (def) => settingMatches(def, t, term) && (!changedOnly || isChanged(def, stateOf(def.key))),
   )
   const searching = term.trim() !== '' || changedOnly
+  const overSixMonths = pastSixMonths((key) => stateOf(key)?.value)
   // The groups with a setting left, for the index: the same grouping the
   // panels below are drawn by.
   const groups = SETTING_GROUPS.filter((group) => shown.some((def) => groupOf(def.key) === group))
@@ -121,6 +137,22 @@ export function Settings() {
           <span>
             <strong className="font-medium">{t.admin.config.authOffTitle}</strong>{' '}
             {t.admin.config.authOffBody}
+          </span>
+        </p>
+      ) : null}
+
+      {/* Brass, a person's doing: an interval longer than TMDB allows its
+          answers to be kept, which the sweep makes up for on its own. Said
+          here, above the settings, and worded under each of the two fields. */}
+      {overSixMonths.length ? (
+        <p
+          role="status"
+          className="rise mb-6 flex items-start gap-3 rounded-panel border border-brass-deep bg-brass/[0.06] px-5 py-4 text-sm leading-relaxed text-bone"
+        >
+          <Glyph name="clock" className="mt-0.5 size-4 shrink-0 text-brass" />
+          <span>
+            <strong className="font-medium">{c.sixMonths.title}</strong>{' '}
+            {c.sixMonths.body(overSixMonths.join(', '))}
           </span>
         </p>
       ) : null}

@@ -148,7 +148,76 @@ tokio::task_local! {
     /// Set over a background task's fetches — a refresh, a seed — which
     /// nobody is waiting on, as against a client's request.
     static UNHURRIED: ();
+
+    /// The providers that did not answer over a client's fetch, by their
+    /// names in the metrics, each once: set by [`noting`], written by every
+    /// door ([`Gate::send`]) and by a provider whose failure its door never
+    /// saw ([`went_unanswered`]).
+    static UNANSWERED: std::cell::RefCell<Vec<&'static str>>;
 }
+
+/// Run `work`, a client's fetch, and say afterwards which providers were
+/// asked over it and did not answer: a request that timed out, could not be
+/// sent, or was answered with a 5xx or a 429 — never one answered 404, which
+/// is a provider's word that there is no such work. What `work` came to, and
+/// those providers' names in the metrics (`tmdb`, `tvdb`, `skyhook`…).
+///
+/// The failures themselves are folded away inside `service::gather`, where
+/// one source being down must cost detail and not the answer, so a caller
+/// that found nothing could not otherwise tell "no such series" from "nobody
+/// could say" — and Sonarr deletes a series on the first and keeps it on the
+/// second. A provider that did not answer one request and answered another
+/// over the same fetch is counted as one that did not answer: better a 502
+/// that is asked again than a 404 that is acted on.
+pub async fn noting<F: std::future::Future>(work: F) -> (F::Output, Vec<&'static str>) {
+    // On the heap: `work` is the whole fan-out, every provider's state
+    // machine at once, and inline it would sit in the frame of the handler
+    // that awaits it — a thread with two megabytes of stack in a debug
+    // build, which the Plex match path overflowed.
+    let work = Box::pin(work);
+    UNANSWERED
+        .scope(std::cell::RefCell::new(Vec::new()), async {
+            let out = work.await;
+            let noted = UNANSWERED.with(|noted| noted.borrow().clone());
+            (out, noted)
+        })
+        .await
+}
+
+/// Note, for a [`noting`] caller, that `provider` was asked and did not
+/// answer. Outside one — a refresh, a seed — nothing.
+pub fn went_unanswered(provider: &'static str) {
+    let _ = UNANSWERED.try_with(|noted| {
+        let mut noted = noted.borrow_mut();
+        if !noted.contains(&provider) {
+            noted.push(provider);
+        }
+    });
+}
+
+/// Whether an answer with this status is no answer about the work: the
+/// provider is broken, overloaded or asking to be left alone, and may answer
+/// later — as against a 404, its word that there is no such work, and the
+/// other 4xx, which say the request was wrong.
+fn is_no_answer(status: reqwest::StatusCode) -> bool {
+    status.is_server_error()
+        || status == reqwest::StatusCode::TOO_MANY_REQUESTS
+        || status == reqwest::StatusCode::REQUEST_TIMEOUT
+}
+
+/// The providers that could have resolved a work and did not answer, for a
+/// fetch that found nothing: see [`noting`]. Told to a client as a 502
+/// (`AppError::UpstreamUnavailable`), never as a 404.
+#[derive(Debug)]
+pub struct Unanswered(pub Vec<&'static str>);
+
+impl std::fmt::Display for Unanswered {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} did not answer", self.0.join(", "))
+    }
+}
+
+impl std::error::Error for Unanswered {}
 
 /// Run `work` as a background task, which nobody is waiting on: a provider
 /// slow to answer is given longer, and asked again when it never did (see
@@ -194,8 +263,24 @@ impl Gate {
     /// places until the permit returned with the answer is dropped — after
     /// the body is read, so the cap covers the whole exchange. Errors carry
     /// the kind of failure, never the address; one that ran out of time is a
-    /// [`TimedOut`].
+    /// [`TimedOut`]. An exchange that ends without an answer — an error, or a
+    /// status that is none ([`is_no_answer`]) — is noted for a [`noting`]
+    /// caller.
     pub async fn send(
+        &self,
+        request: impl Fn() -> reqwest::RequestBuilder,
+    ) -> anyhow::Result<(reqwest::Response, tokio::sync::SemaphorePermit<'_>)> {
+        let sent = self.exchange(request).await;
+        match &sent {
+            Err(_) => went_unanswered(self.metric),
+            Ok((response, _)) if is_no_answer(response.status()) => went_unanswered(self.metric),
+            Ok(_) => {}
+        }
+        sent
+    }
+
+    /// [`send`](Self::send), before what it notes.
+    async fn exchange(
         &self,
         request: impl Fn() -> reqwest::RequestBuilder,
     ) -> anyhow::Result<(reqwest::Response, tokio::sync::SemaphorePermit<'_>)> {
@@ -566,6 +651,49 @@ mod tests {
         assert!(!is_unhurried());
     }
     const FINE: &str = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}";
+
+    #[tokio::test]
+    async fn what_did_not_answer_over_a_fetch_is_noted_and_an_answer_is_not() {
+        const BROKEN: &str =
+            "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        const MISSING: &str =
+            "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        let (at, _) = answering(vec![BROKEN, MISSING, FINE]).await;
+        let tvdb = Gate::new("tvdb", "TheTVDB", 4);
+        let skyhook = Gate::new("skyhook", "Skyhook", 4);
+        let http = reqwest::Client::new();
+
+        // Broken is no answer; said to be missing, and answered, are.
+        let ((), noted) = noting(async {
+            let (broken, _) = tvdb.send(|| http.get(&at)).await.unwrap();
+            assert_eq!(broken.status(), reqwest::StatusCode::INTERNAL_SERVER_ERROR);
+            let (missing, _) = skyhook.send(|| http.get(&at)).await.unwrap();
+            assert_eq!(missing.status(), reqwest::StatusCode::NOT_FOUND);
+            let (fine, _) = skyhook.send(|| http.get(&at)).await.unwrap();
+            assert_eq!(fine.status(), reqwest::StatusCode::OK);
+        })
+        .await;
+        assert_eq!(noted, ["tvdb"]);
+
+        // Nobody listening is no answer either, noted once however often;
+        // and a provider's own word, outside the door, is taken too.
+        let closed = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap();
+        let ((), noted) = noting(async {
+            for _ in 0..2 {
+                let _ = skyhook.send(|| http.get(format!("http://{closed}"))).await;
+            }
+            went_unanswered("fankai");
+        })
+        .await;
+        assert_eq!(noted, ["skyhook", "fankai"]);
+
+        // Outside a noting caller — a refresh, a seed — nothing is kept, and
+        // nothing minds.
+        went_unanswered("tmdb");
+    }
 
     #[tokio::test]
     async fn a_provider_that_asks_for_a_second_is_asked_again_after_it() {

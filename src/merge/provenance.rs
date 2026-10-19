@@ -1031,6 +1031,7 @@ mod tests {
             language: language.into(),
             title: Some(title.into()),
             overview: None,
+            tagline: None,
             is_manual: false,
         }
     }

@@ -483,21 +483,38 @@ const HOMES: Record<string, string> = {
   tvmaze: 'https://www.tvmaze.com',
   anilist: 'https://anilist.co',
   mal: 'https://myanimelist.net',
+  tenrai: 'https://tenrai.org',
   imdb: 'https://www.imdb.com',
   fankai: 'https://fankai.fr',
   fankaiwiki: 'https://fan-kai.fandom.com/fr/',
 }
 
+/** The licence TVmaze publishes its data under, which its credit names. */
+const TVMAZE_LICENCE = 'https://creativecommons.org/licenses/by-sa/4.0/'
+
+/** A source the labels do not name: a mirror, credited beside what it mirrors. */
+const NAMED: Record<string, string> = { tenrai: 'Tenrai' }
+
+const CREDIT_LINK = 'text-bone-dim underline decoration-rule-bright underline-offset-2 transition-colors duration-150 hover:text-bone'
+
 /**
  * Who the data on these pages comes from.
  *
- * Owed, not decorative: TMDB's terms ask for their notice, TVmaze's licence
- * for a link, IMDb's for a line. Only what is switched on is named, so the
- * footer never credits a source that contributed nothing.
+ * Owed, not decorative: TMDB's terms ask for their notice, TheTVDB's for a
+ * credit with a direct link, TVmaze's licence for a link and its name,
+ * IMDb's for a line. Only what is switched on is named, so the footer never
+ * credits a source that contributed nothing; Tenrai, which answers for
+ * MyAnimeList while Jikan's public API is gone, is named beside it.
  */
 function Credits({ active }: { active: string[] }) {
   const { t } = useI18n()
-  const linked = active.filter((key) => lookup(HOMES, key))
+  const named = (key: string) => lookup(NAMED, key) ?? providerName(key)
+  const link = (key: string, label: string) => (
+    <a href={lookup(HOMES, key)} target="_blank" rel="noreferrer" className={CREDIT_LINK}>
+      {label}
+    </a>
+  )
+  const linked = active.filter((key) => key !== 'tenrai' && lookup(HOMES, key))
 
   return (
     <div className="max-w-xl text-xs leading-relaxed text-bone-faint sm:text-right">
@@ -508,14 +525,16 @@ function Credits({ active }: { active: string[] }) {
             {/* The dot rides with the name before it, so a line never starts
                 with one. */}
             <span className="whitespace-nowrap">
-              <a
-                href={lookup(HOMES, key)}
-                target="_blank"
-                rel="noreferrer"
-                className="text-bone-dim underline decoration-rule-bright underline-offset-2 transition-colors duration-150 hover:text-bone"
-              >
-                {providerName(key)}
-              </a>
+              {link(key, named(key))}
+              {key === 'mal' && active.includes('tenrai') ? <> {t.credits.via} {link('tenrai', named('tenrai'))}</> : null}
+              {key === 'tvmaze' ? (
+                <>
+                  {' '}
+                  <a href={TVMAZE_LICENCE} target="_blank" rel="noreferrer" className={CREDIT_LINK}>
+                    {t.credits.tvmaze}
+                  </a>
+                </>
+              ) : null}
               {index < linked.length - 1 ? <span aria-hidden> ·</span> : null}
             </span>{' '}
           </Fragment>

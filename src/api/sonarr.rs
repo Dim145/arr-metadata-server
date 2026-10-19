@@ -72,6 +72,13 @@ struct SearchQueryV2 {
 /// The id may also be one this server synthesised for a work TMDB indexes and
 /// TVDB does not; the response echoes back whichever id was asked for, because
 /// Sonarr has already stored it.
+///
+/// A series the catalogue holds is answered from the catalogue, as it was,
+/// when the sources do not answer. An id nobody holds is a 404 only when every
+/// source that could resolve it answered that there is no such series; when
+/// one did not answer — a timeout, a 5xx, a refused connection — it is a 502,
+/// never a 404: Sonarr takes a series for deleted on a 404, and keeps what it
+/// has on anything else.
 #[utoipa::path(
     get, path = "/v1/tvdb/shows/{language}/{tvdb_id}", tag = TAG,
     operation_id = "sonarr_show",
@@ -83,7 +90,8 @@ struct SearchQueryV2 {
         (status = 200, body = ShowResource),
         (status = 400, description = "The language is not a language tag"),
         (status = 403, description = "The caller's address is not in the allowlist"),
-        (status = 404, description = "No provider could resolve this id"),
+        (status = 404, description = "Every source that could resolve this id answered that there is no such series"),
+        (status = 502, description = "A source that could have resolved this id did not answer, and nothing is held to answer with"),
     ),
     security(),
 )]
@@ -113,6 +121,10 @@ async fn show(
 /// `term` may be free text or a provider lookup: `tvdb:`, `tmdb:`, `imdb:`,
 /// `mal:` or `anilist:`. Results Sonarr could not address are omitted — showing
 /// one that fails on add is worse than showing nothing.
+///
+/// A search nothing answered while a source that could have did not is a 502
+/// rather than an empty list, which Sonarr reads as "no such series"; what the
+/// catalogue holds by that name is answered whether or not the sources do.
 #[utoipa::path(
     get, path = "/v1/tvdb/search/{language}", tag = TAG,
     operation_id = "sonarr_search",
@@ -124,6 +136,7 @@ async fn show(
         (status = 200, body = Vec<ShowResource>),
         (status = 400, description = "The language is not a language tag"),
         (status = 403, description = "The caller's address is not in the allowlist"),
+        (status = 502, description = "No source that could answer this search did, and the catalogue holds nothing by that name"),
     ),
     security(),
 )]
@@ -169,18 +182,24 @@ async fn search(
 /// `official` or one of the orders `seasonTypes` lists, and the episodes are
 /// numbered by it; any other is answered with the aired order, as Skyhook
 /// answers it.
+///
+/// Not found and not answered are told apart as `/v1/` tells them: a 404
+/// only when every source that could resolve the id answered that there is
+/// no such series, a 502 when one did not answer, and the catalogue's copy
+/// whenever it holds one.
 #[utoipa::path(
     get, path = "/v2/tvdb/shows/{language}/{tvdb_id}/{season_type}", tag = TAG,
     operation_id = "sonarr_show_v2",
     params(
         ("language" = String, Path, description = "Three-letter language code, as Sonarr writes it: `eng`, `fra`"),
         ("tvdb_id" = i64, Path, description = "TVDB series id, or a synthesised one"),
-        ("season_type" = String, Path, description = "`official`, or an order of `seasonTypes`: `dvd`, `absolute`…"),
+        ("season_type" = String, Path, description = "`official`, or an order of `seasonTypes`: `dvd`, `absolute`, `altdvd`, `alttwo`…"),
     ),
     responses(
         (status = 200, body = ShowResourceV2),
         (status = 403, description = "The caller's address is not in the allowlist"),
-        (status = 404, description = "No provider could resolve this id"),
+        (status = 404, description = "Every source that could resolve this id answered that there is no such series"),
+        (status = 502, description = "A source that could have resolved this id did not answer, and nothing is held to answer with"),
     ),
     security(),
 )]
@@ -228,7 +247,9 @@ async fn show_v2(
 
 /// Search series, as Sonarr v5 reads them: without their episodes, as the
 /// real service answers a search. `term` is as for `/v1/`; Sonarr resolves
-/// `tvdb:` itself and sends `imdb:`, `tmdb:`, `mal:` and `anilist:` here.
+/// `tvdb:` itself and sends `imdb:`, `tmdb:`, `mal:` and `anilist:` here. A
+/// search nothing answered while a source did not is a 502, as for `/v1/`,
+/// rather than an empty list.
 #[utoipa::path(
     get, path = "/v2/tvdb/search", tag = TAG,
     operation_id = "sonarr_search_v2",
@@ -239,6 +260,7 @@ async fn show_v2(
     responses(
         (status = 200, body = Vec<ShowResourceV2>),
         (status = 403, description = "The caller's address is not in the allowlist"),
+        (status = 502, description = "No source that could answer this search did, and the catalogue holds nothing by that name"),
     ),
     security(),
 )]
@@ -343,6 +365,11 @@ async fn name_for_sonarr(state: &AppState, item: &mut MediaItem, tvdb_id: i64) {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use axum::{http::StatusCode, response::IntoResponse};
+    use serde_json::json;
+
     use super::*;
     use crate::{
         config,
@@ -353,17 +380,14 @@ mod tests {
         domain::{EpisodeOrder, ExternalIds, MediaKind, PlacedEpisode, Translation},
     };
 
-    /// The whole server on a database in memory, as `native::testing::server`
-    /// builds it, stored in English: what the tests here count on when they
-    /// ask in another language.
-    async fn server() -> AppState {
+    /// What the tests' server is made from: a database in memory, as
+    /// `native::testing::server` builds it, stored in English — what the
+    /// tests here count on when they ask in another language — and every
+    /// source off, so that nothing here reaches past this process.
+    async fn configured() -> config::Config {
         let mut config = config::Config::from_env().expect("a configuration");
         config.mode = config::Mode::Single;
-        config.database = config::Database {
-            url: "sqlite::memory:".into(),
-            max_connections: 1,
-            acquire_timeout: std::time::Duration::from_secs(5),
-        };
+        config.database = crate::db::testing::database().await;
         config.security.bootstrap_admin = None;
         config.cache.redis_url = None;
         config.media.storage = config::MediaStorage::Off;
@@ -373,8 +397,111 @@ mod tests {
         config.tmdb.language = "en-US".into();
         config.tvdb.api_key = None;
         config.tvdb.enabled = false;
+        config.skyhook.enrich = false;
+        config.skyhook.fallback = false;
+        config.fanart.api_key = None;
+        config.tvmaze.enabled = false;
+        config.anilist.enabled = false;
+        config.mal.enabled = false;
+        config
+    }
 
+    /// The whole server, with no source to ask.
+    async fn server() -> AppState {
+        AppState::bootstrap(configured().await)
+            .await
+            .expect("a server")
+    }
+
+    /// The whole server with TheTVDB keyed and Skyhook asked, both at `at` —
+    /// the providers of [`providers`] — and TMDB keyed there too when asked.
+    async fn server_at(at: &str, tmdb: bool) -> AppState {
+        let mut config = configured().await;
+        config.tmdb.api_key = tmdb.then(|| "key".to_string());
+        config.tmdb.upstream = at.into();
+        config.tvdb.api_key = Some("key".into());
+        config.tvdb.enabled = true;
+        config.tvdb.upstream = at.into();
+        config.skyhook.upstream = at.into();
+        config.skyhook.enrich = true;
+        config.skyhook.fallback = true;
         AppState::bootstrap(config).await.expect("a server")
+    }
+
+    /// What the providers answer, by path — the query left aside — as a
+    /// status and a body, 404 for a path not listed; and the paths asked,
+    /// in order.
+    type Routes = Vec<(&'static str, u16, serde_json::Value)>;
+
+    /// Every provider at one address, answering what `routes` says.
+    async fn providers(routes: Routes) -> (String, Arc<parking_lot::Mutex<Vec<String>>>) {
+        let asked = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let app = axum::Router::new().fallback({
+            let asked = asked.clone();
+            move |uri: axum::http::Uri| {
+                let path = uri.path().to_string();
+                asked.lock().push(path.clone());
+                let found = routes
+                    .iter()
+                    .find(|(at, _, _)| *at == path)
+                    .map(|(_, status, body)| (*status, body.clone()));
+                async move {
+                    match found {
+                        Some((status, body)) => (
+                            StatusCode::from_u16(status).expect("a status"),
+                            axum::Json(body),
+                        )
+                            .into_response(),
+                        None => StatusCode::NOT_FOUND.into_response(),
+                    }
+                }
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("a port");
+        let at = format!("http://{}", listener.local_addr().expect("its address"));
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        (at, asked)
+    }
+
+    /// TheTVDB signing this server in, and holding the series `routes` say.
+    fn thetvdb(routes: Routes) -> Routes {
+        let mut all = vec![("/login", 200, json!({ "data": { "token": "t" } }))];
+        all.extend(routes);
+        all
+    }
+
+    /// *Rurouni Kenshin* as TheTVDB answers for it, the least of it.
+    fn thetvdbs_kenshin() -> Routes {
+        thetvdb(vec![
+            (
+                "/series/416802/extended",
+                200,
+                json!({ "data": {
+                    "id": 416802, "name": "Rurouni Kenshin", "slug": "rurouni-kenshin-2023",
+                    "seasons": [{ "id": 1, "number": 1, "type": { "type": "official" } }]
+                } }),
+            ),
+            (
+                "/series/416802/episodes/official/eng",
+                200,
+                json!({ "data": { "episodes": [
+                    { "id": 1001, "seasonNumber": 1, "number": 1, "name": "東京編", "aired": "2023-07-07" }
+                ] }, "links": { "next": null } }),
+            ),
+        ])
+    }
+
+    /// The stored series made due a refresh, so that a request for it asks
+    /// the sources again.
+    async fn made_due(state: &AppState, work: &MediaItem) {
+        repo::item::mark_refreshed(&state.db, &work.id, Some("2000-01-01T00:00:00Z"), None)
+            .await
+            .expect("due");
+        state.caches.touched(&work.id).await;
     }
 
     fn translation(language: &str, title: &str) -> Translation {
@@ -382,6 +509,7 @@ mod tests {
             language: language.into(),
             title: Some(title.into()),
             overview: None,
+            tagline: None,
             is_manual: false,
         }
     }
@@ -621,11 +749,167 @@ mod tests {
         assert_eq!(shows[0].title, "Rurouni Kenshin");
     }
 
+    /// TheTVDB and Skyhook both answering that there is no series under the
+    /// id, nothing held: not found — the one answer Sonarr deletes a series
+    /// on, given only when every source said so.
     #[tokio::test]
     async fn a_series_nobody_holds_is_not_found() {
-        let state = server().await;
-        let refused = asked(&state, "eng", 1, "official").await;
-        assert!(matches!(refused, Err(AppError::NotFound)));
+        let (at, _) = providers(thetvdb(Vec::new())).await;
+        let state = server_at(&at, false).await;
+        let Err(refused) = asked(&state, "eng", 1, "official").await else {
+            panic!("answered");
+        };
+        assert!(matches!(refused, AppError::NotFound), "{refused}");
+    }
+
+    /// TheTVDB broken — a 500, as a timeout or a refused connection would
+    /// be — and nothing held: a 502, which Sonarr keeps the series on, never
+    /// the 404 it would delete it on. On both editions of the surface.
+    #[tokio::test]
+    async fn a_source_that_did_not_answer_is_a_502_never_a_404() {
+        let (at, _) = providers(thetvdb(vec![(
+            "/series/1/extended",
+            500,
+            json!({ "message": "down" }),
+        )]))
+        .await;
+        let state = server_at(&at, false).await;
+
+        let Err(refused) = asked(&state, "eng", 1, "official").await else {
+            panic!("answered");
+        };
+        assert!(
+            matches!(refused, AppError::UpstreamUnavailable(_)),
+            "{refused}"
+        );
+
+        let Err(refused) = show(
+            State(state.clone()),
+            Path(ShowPath {
+                language: "en".into(),
+                tvdb_id: 1,
+            }),
+        )
+        .await
+        else {
+            panic!("answered");
+        };
+        assert!(
+            matches!(refused, AppError::UpstreamUnavailable(_)),
+            "{refused}"
+        );
+    }
+
+    /// A series the catalogue holds, due a refresh, while TheTVDB is broken:
+    /// answered from the catalogue as it was, whatever the sources say — and
+    /// the failed refresh recorded, so that the next request is answered at
+    /// once and asks nobody.
+    #[tokio::test]
+    async fn a_series_the_catalogue_holds_is_answered_from_it_whatever_the_sources_say() {
+        let (at, paths) = providers(thetvdb(vec![(
+            "/series/416802/extended",
+            500,
+            json!({ "message": "down" }),
+        )]))
+        .await;
+        let state = server_at(&at, false).await;
+        let work = stored(&state).await;
+        made_due(&state, &work).await;
+
+        let Json(show) = asked(&state, "eng", 416802, "official")
+            .await
+            .expect("answered from the catalogue");
+        assert_eq!(show.title, "Rurouni Kenshin");
+        assert!(paths.lock().iter().any(|p| p == "/series/416802/extended"));
+
+        let asked_before = paths.lock().len();
+        let Json(again) = asked(&state, "eng", 416802, "official")
+            .await
+            .expect("answered");
+        assert_eq!(again.title, "Rurouni Kenshin");
+        assert_eq!(paths.lock().len(), asked_before, "{:?}", paths.lock());
+    }
+
+    /// A search no source could answer — TMDB broken, nothing held by that
+    /// name — is a 502, not the empty list Sonarr reads as "no such series";
+    /// a name the catalogue holds is answered with what it holds.
+    #[tokio::test]
+    async fn a_search_no_source_could_answer_is_a_502_not_an_empty_list() {
+        let (at, _) = providers(thetvdb(vec![(
+            "/3/search/tv",
+            500,
+            json!({ "status_message": "down" }),
+        )]))
+        .await;
+        let state = server_at(&at, true).await;
+        let searched = |term: &str| {
+            search_v2(
+                State(state.clone()),
+                Extension(Identity::Network(None)),
+                Query(SearchQueryV2 {
+                    language: None,
+                    term: Some(term.into()),
+                }),
+            )
+        };
+
+        let Err(refused) = searched("breaking bad").await else {
+            panic!("answered");
+        };
+        assert!(
+            matches!(refused, AppError::UpstreamUnavailable(_)),
+            "{refused}"
+        );
+        let Err(refused) = search(
+            State(state.clone()),
+            Path(SearchPath {
+                language: "en".into(),
+            }),
+            Query(SearchQuery {
+                term: Some("breaking bad".into()),
+            }),
+        )
+        .await
+        else {
+            panic!("answered");
+        };
+        assert!(
+            matches!(refused, AppError::UpstreamUnavailable(_)),
+            "{refused}"
+        );
+
+        stored(&state).await;
+        let Json(shows) = searched("Rurouni Kenshin").await.expect("answered");
+        assert_eq!(shows.len(), 1);
+        assert_eq!(shows[0].tvdb_id, 416802);
+    }
+
+    /// Two requests for one series due a refresh, together — a library's
+    /// refresh after the upgrade to Sonarr v5 asks for every series at once
+    /// — fetch it once: the second waits for the first and is answered with
+    /// what it stored.
+    #[tokio::test]
+    async fn two_requests_for_the_same_stale_series_fetch_it_once() {
+        let (at, paths) = providers(thetvdbs_kenshin()).await;
+        let state = server_at(&at, false).await;
+        let work = stored(&state).await;
+        made_due(&state, &work).await;
+
+        let (first, second) = tokio::join!(
+            asked(&state, "eng", 416802, "official"),
+            asked(&state, "eng", 416802, "official")
+        );
+        let Json(first) = first.expect("answered");
+        let Json(second) = second.expect("answered");
+        assert_eq!(first.title, "Rurouni Kenshin");
+        assert_eq!(second.title, "Rurouni Kenshin");
+
+        let fetched = paths
+            .lock()
+            .iter()
+            .filter(|p| p.as_str() == "/series/416802/episodes/official/eng")
+            .count();
+        assert_eq!(fetched, 1, "{:?}", paths.lock());
     }
 
     /// Locks for the series, in a language or in every one, read afresh.

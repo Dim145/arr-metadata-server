@@ -22,6 +22,7 @@ cargo test
 cd frontend
 npm ci
 npx tsc -b
+npx tsc -p e2e --noEmit
 npx vite build
 ```
 
@@ -94,3 +95,34 @@ One logical change to a commit: a summary in the imperative, in sentence case an
 with no prefix (`git log` has the tone), and a body that says why when the diff
 cannot. The pull request template is a short checklist of the above; fill it in
 rather than delete it.
+
+## Releasing
+
+A release is a commit, a tag and a release page, in that order, each waiting
+on the one before.
+
+1. **The version**, in three places: `version` in `Cargo.toml` (`Cargo.lock`
+   follows on the next `cargo build`); `frontend/package.json` and its
+   lockfile, which `npm version X --no-git-tag-version` run in `frontend/`
+   writes together; and the placeholder of the version field in
+   `.github/ISSUE_TEMPLATE/bug_report.yml`.
+2. **The changelog**: the `## [Unreleased]` section becomes `## [X] — YYYY-MM-DD`,
+   an empty `## [Unreleased]` goes above it, and the compare links at the foot
+   gain the new version's line, `[Unreleased]` now comparing from `vX`.
+3. **The commit**, "Release X", with a prose summary of what the release holds.
+   Push it and wait for CI, CodeQL and Audit to pass on that commit: CI's clippy
+   is the latest stable, which may know a lint yours does not.
+4. **The tag**, annotated: `git tag -a vX -m "arr-metadata-server X"`, then
+   `git push origin vX`. The tag runs *Publish the image*
+   (`.github/workflows/docker.yml`): amd64 and arm64, signed, tagged `X`, `X.Y`
+   and `latest`.
+5. **The release page**, once the image is published and not before — a
+   running server's update check reads the releases, and would announce a
+   version with no image to pull: `gh release create vX --title X`, with the
+   changelog's section for `X` as the notes.
+
+Before a minor, two checks CI does not run, each needing Docker and the
+internet: `scripts/e2e-stack.sh`, the whole stack with the real software — this
+server, Sonarr 4, the latest Sonarr v5 build, Radarr and a Plex Media Server —
+and `scripts/e2e-skyhook-v2.sh`, which compares what this server answers Sonarr
+v5 with the real Skyhook's second edition, series by series.

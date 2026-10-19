@@ -341,23 +341,25 @@ async fn health(
 /// What the server counts about itself, in the text Prometheus reads:
 /// requests by surface, calls upstream by provider, what the caches keep,
 /// what the catalogue holds, what the jobs did, and how long it has been up.
-/// For an administrator, or a key with the `admin` scope — which a scraper
-/// sends as `Authorization: Bearer`. What the database holds is left out of
-/// a scrape it cannot answer, rather than the whole scrape failing when it
-/// matters most.
+/// For an administrator, or a key with the `metrics` scope — a scraper's,
+/// which opens nothing else and is sent as `Authorization: Bearer`. What the
+/// database holds is left out of a scrape it cannot answer, rather than the
+/// whole scrape failing when it matters most.
 #[utoipa::path(
     get, path = "/admin/metrics", tag = TAG,
     operation_id = "figures_metrics",
     responses(
         (status = 200, description = "The Prometheus text exposition", content_type = "text/plain"),
-        (status = 403, description = "The caller is not an administrator"),
+        (status = 403, description = "The caller is neither an administrator nor a key with the `metrics` scope"),
     ),
 )]
 async fn metrics(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
 ) -> AppResult<([(header::HeaderName, &'static str); 1], String)> {
-    identity.require_admin()?;
+    // An administrator's key does, and so does one made for the scraper
+    // with the `metrics` scope alone, which opens nothing else.
+    identity.require_scrape()?;
     use crate::metrics::{Metric, label};
 
     let mut gauges = match held(&state).await {
@@ -597,4 +599,48 @@ async fn held(state: &AppState) -> anyhow::Result<Vec<crate::metrics::Metric>> {
                 .collect(),
         },
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{auth::testing::key, db::repo::user::Role, error::AppError};
+
+    /// The figures are read by whoever manages the server and by a key with
+    /// the `metrics` scope — a scraper's — and by nobody else, a key that
+    /// reads or edits the catalogue included.
+    #[tokio::test]
+    async fn the_figures_are_read_by_a_scrapers_key_and_by_an_administrator() {
+        let state = super::super::testing::server().await;
+
+        for identity in [
+            key(&["metrics"], None),
+            key(&["read", "metrics"], None),
+            key(&["admin"], None),
+            Identity::Anonymous,
+        ] {
+            let (headers, body) = metrics(State(state.clone()), Extension(identity.clone()))
+                .await
+                .unwrap_or_else(|e| panic!("{}: {e:?}", identity.label()));
+            assert_eq!(headers[0].1, "text/plain; version=0.0.4; charset=utf-8");
+            assert!(body.contains("ams_uptime_seconds"), "{body}");
+            assert!(body.contains("ams_works{"), "{body}");
+        }
+
+        for identity in [
+            key(&["read"], None),
+            key(&["read", "write"], Some(Role::Editor)),
+            Identity::Visitor,
+            Identity::Network(None),
+        ] {
+            let refused = metrics(State(state.clone()), Extension(identity.clone()))
+                .await
+                .err();
+            assert!(
+                matches!(refused, Some(AppError::Forbidden)),
+                "{}: {refused:?}",
+                identity.label()
+            );
+        }
+    }
 }

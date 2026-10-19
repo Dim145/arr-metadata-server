@@ -146,8 +146,9 @@ Sonarr's metadata service — and does what both did, from one catalogue.
 The metadata comes from [TMDB](https://www.themoviedb.org), [TheTVDB](https://thetvdb.com),
 Sonarr's and Radarr's own metadata services, [Fanart.tv](https://fanart.tv), and, when they are
 switched on, [TVmaze](https://www.tvmaze.com), [AniList](https://anilist.co),
-[MyAnimeList](https://myanimelist.net) through its API, [Jikan](https://jikan.moe) or
-[Tenrai](https://api.tenrai.org/documentation), IMDb's datasets, [Fankai](https://fankai.fr)
+[MyAnimeList](https://myanimelist.net) through its API or through
+[Tenrai](https://api.tenrai.org/documentation), a mirror written to Jikan's schema (a Jikan of
+your own last, the public one having closed), IMDb's datasets, [Fankai](https://fankai.fr)
 and its community's wiki; the [Fribb anime-lists](https://github.com/Fribb/anime-lists) map
 anime between them. Each provider's terms apply to what is fetched and kept, and every public
 page credits the sources that are on. This product uses the TMDB API but is not endorsed or

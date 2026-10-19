@@ -130,8 +130,8 @@ pub struct TranslationResource {
 pub struct SeasonTypeResource {
     /// `Aired Order`, `DVD Order`…: what Sonarr shows.
     pub name: String,
-    /// `official`, `dvd`, `absolute`, `alternate`, `regional`, `altdvd`:
-    /// what Sonarr asks the series in.
+    /// `official`, `dvd`, `absolute`, `alternate`, `regional`, `altdvd`,
+    /// `alttwo`: what Sonarr asks the series in.
     #[serde(rename = "type")]
     pub kind: String,
     pub season_numbers: Vec<i32>,
@@ -411,7 +411,10 @@ fn season_types(item: &MediaItem, orders: &[EpisodeOrder]) -> Vec<SeasonTypeReso
     types
 }
 
-/// What Sonarr shows an order as, in Skyhook's words.
+/// What Sonarr shows an order as: TheTVDB's own names for its orders, as its
+/// site shows them. The real service names a series' alternate orders by
+/// what the series calls them — *BluRay Order*, *Superfan Order* — which the
+/// catalogue does not keep.
 fn order_name(kind: &str) -> String {
     match kind {
         OFFICIAL => "Aired Order".to_string(),
@@ -420,6 +423,7 @@ fn order_name(kind: &str) -> String {
         "alternate" => "Alternate Order".to_string(),
         "regional" => "Regional Order".to_string(),
         "altdvd" => "Alternate DVD Order".to_string(),
+        "alttwo" => "Alternate Order 2".to_string(),
         other => format!("{} Order", sonarr::capitalize(other)),
     }
 }
@@ -654,6 +658,7 @@ mod tests {
             language: language.into(),
             title: Some(title.into()),
             overview: overview.map(str::to_string),
+            tagline: None,
             is_manual: false,
         }
     }
@@ -828,6 +833,7 @@ mod tests {
             language: "ita".into(),
             title: Some("  ".into()),
             overview: Some("Un vagabondo.".into()),
+            tagline: None,
             is_manual: false,
         });
         let show = from_item(&it, &asked(&own, &[], OFFICIAL));
@@ -863,6 +869,7 @@ mod tests {
             language: "ita".into(),
             title: None,
             overview: Some("Un vagabondo.".into()),
+            tagline: None,
             is_manual: false,
         });
         let show = from_item(&it, &asked(&own, &[], OFFICIAL));
@@ -1093,6 +1100,14 @@ mod tests {
             ]
         );
         assert_eq!(show.season_types[0].season_numbers, [0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn an_order_is_named_as_thetvdb_names_it() {
+        assert_eq!(order_name("altdvd"), "Alternate DVD Order");
+        assert_eq!(order_name("alttwo"), "Alternate Order 2");
+        // One this server has no name for is still offered, by its kind.
+        assert_eq!(order_name("story"), "Story Order");
     }
 
     #[test]

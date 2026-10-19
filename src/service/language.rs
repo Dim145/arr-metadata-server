@@ -174,10 +174,10 @@ pub fn holds_title(item: &MediaItem, language: &str) -> bool {
         })
 }
 
-/// What somebody wrote for the work's `title` or `overview` in one language
-/// — a lock made in that language alone — when it says something. One made
-/// in every language is the work's own text already, and its path is among
-/// the locked fields as that.
+/// What somebody wrote for the work's `title`, `overview` or `tagline` in
+/// one language — a lock made in that language alone — when it says
+/// something. One made in every language is the work's own text already,
+/// and its path is among the locked fields as that.
 fn written<'a>(item: &'a MediaItem, field: &str, language: &str) -> Option<&'a str> {
     if language.is_empty() {
         return None;
@@ -233,14 +233,14 @@ fn fall_back(state: &AppState, item: &mut MediaItem, asked: &str, own: &str) {
     }
 }
 
-/// Say locked, as the work is now served, the title and the overview
-/// somebody wrote for the language it was laid from. [`fields::mark`] said
-/// which texts are locked for the language asked, and counted the others as
-/// another language's (`item/title@eng`); a text laid from the language fallen
-/// back to is that language's, and the one this answer carries. What the
-/// language asked had locked stays as it was.
+/// Say locked, as the work is now served, the title, the overview and the
+/// tagline somebody wrote for the language it was laid from. [`fields::mark`]
+/// said which texts are locked for the language asked, and counted the
+/// others as another language's (`item/title@eng`); a text laid from the
+/// language fallen back to is that language's, and the one this answer
+/// carries. What the language asked had locked stays as it was.
 fn claim(item: &mut MediaItem, language: &str) {
-    for field in ["title", "overview"] {
+    for field in fields::TRANSLATED {
         let path = format!("item/{field}");
         if written(item, field, language).is_some() && !locked(item, &path) {
             item.locked_fields
@@ -470,10 +470,10 @@ pub fn apply_shallow(state: &AppState, item: &mut MediaItem, requested: &str) {
     fields::lay(item, &language);
 }
 
-/// Replace the work's own title and overview from a stored translation — or
-/// by what somebody wrote for the language, which a provider's text does not
-/// outrank, whether or not [`fields::fold_translations`] has carried it into
-/// the translation yet.
+/// Replace the work's own title, overview and tagline from a stored
+/// translation — or by what somebody wrote for the language, which a
+/// provider's text does not outrank, whether or not
+/// [`fields::fold_translations`] has carried it into the translation yet.
 fn overlay_item(item: &mut MediaItem, language: &str) {
     let translation = item.translations.iter().find(|t| t.language == language);
 
@@ -491,6 +491,13 @@ fn overlay_item(item: &mut MediaItem, language: &str) {
                 .and_then(|t| t.overview.clone())
                 .filter(|o| !o.trim().is_empty())
         });
+    let tagline = written(item, "tagline", language)
+        .map(str::to_string)
+        .or_else(|| {
+            translation
+                .and_then(|t| t.tagline.clone())
+                .filter(|t| !t.trim().is_empty())
+        });
 
     if let Some(title) = title
         && !locked(item, "item/title")
@@ -503,6 +510,28 @@ fn overlay_item(item: &mut MediaItem, language: &str) {
     {
         item.overview = Some(overview);
     }
+
+    if let Some(tagline) = tagline
+        && !locked(item, "item/tagline")
+    {
+        item.tagline = Some(tagline);
+    }
+}
+
+/// Whether the work's tagline is held in a language: TMDB's translation
+/// carries one, or somebody wrote one for it. The language the work's own
+/// text is in is no translation and is not counted here. What Plex is told
+/// the tagline by: in a language the work has none in, it is given no
+/// tagline rather than the stored language's under a title laid over in
+/// its own.
+pub fn holds_tagline(item: &MediaItem, language: &str) -> bool {
+    written(item, "tagline", language).is_some()
+        || item.translations.iter().any(|t| {
+            t.language == language
+                && t.tagline
+                    .as_deref()
+                    .is_some_and(|tagline| !tagline.trim().is_empty())
+        })
 }
 
 /// Whether a person has claimed this field for the language being laid.
@@ -1030,12 +1059,14 @@ mod tests {
                 language: "fra".into(),
                 title: Some("Breaking Bad".into()),
                 overview: Some("Un professeur et un élève.".into()),
+                tagline: None,
                 is_manual: false,
             },
             Translation {
                 language: "deu".into(),
                 title: Some(String::new()),
                 overview: None,
+                tagline: None,
                 is_manual: false,
             },
         ];
@@ -1689,5 +1720,93 @@ mod tests {
             [((1, 2), some("Le Chat est dans le sac"), None)]
         );
         assert_eq!(recorded(&state, &series.id).await, Some(None), "fetched");
+    }
+
+    /// The work with its tagline, and TMDB's French for it.
+    fn with_french_tagline() -> MediaItem {
+        let mut item = item_with_translation();
+        item.tagline = Some("A teacher and a student, in business.".into());
+        item.translations[0].tagline = Some("Un professeur et un élève, en affaires.".into());
+        item
+    }
+
+    #[test]
+    fn a_translations_tagline_is_laid_over_the_work_as_its_title_is() {
+        let mut item = with_french_tagline();
+        overlay_item(&mut item, "fra");
+        assert_eq!(
+            item.tagline.as_deref(),
+            Some("Un professeur et un élève, en affaires.")
+        );
+
+        // No tagline held in German: the stored one stands, as the title
+        // does when a translation lacks one.
+        let mut german = with_french_tagline();
+        overlay_item(&mut german, "deu");
+        assert_eq!(
+            german.tagline.as_deref(),
+            Some("A teacher and a student, in business.")
+        );
+
+        // Locked in every language: nothing is laid over it.
+        let mut locked = with_french_tagline();
+        locked.tagline = Some("Mine.".into());
+        locked.locked_fields = vec!["item/tagline".into()];
+        overlay_item(&mut locked, "fra");
+        assert_eq!(locked.tagline.as_deref(), Some("Mine."));
+    }
+
+    #[test]
+    fn a_tagline_written_for_one_language_outranks_its_translation_and_is_claimed() {
+        let mut item = with_french_tagline();
+        item.locked_texts = vec![fields::LockedText {
+            scope: "item".into(),
+            field: "tagline".into(),
+            language: "fra".into(),
+            value: Some("La version verrouillée".into()),
+        }];
+        // As asked in German leaves it: French's, counted and not claimed.
+        item.locked_fields = vec!["item/tagline@fra".into()];
+
+        overlay_item(&mut item, "fra");
+        assert_eq!(item.tagline.as_deref(), Some("La version verrouillée"));
+
+        // Laid from French for a reader in German: said locked, as a title
+        // written for the language fallen back to is.
+        claim(&mut item, "fra");
+        assert_eq!(item.locked_fields, ["item/tagline"]);
+    }
+
+    #[test]
+    fn a_language_holds_a_tagline_by_its_translation_or_by_what_was_written() {
+        assert!(holds_tagline(&with_french_tagline(), "fra"));
+        assert!(
+            !holds_tagline(&with_french_tagline(), "deu"),
+            "the German translation has none"
+        );
+        assert!(
+            !holds_tagline(&item_with_translation(), "fra"),
+            "French has a title and no tagline"
+        );
+        assert!(
+            !holds_tagline(&with_french_tagline(), ""),
+            "no language is none's"
+        );
+
+        let mut blank = with_french_tagline();
+        blank.translations[0].tagline = Some("  ".into());
+        assert!(!holds_tagline(&blank, "fra"), "a blank one is none");
+
+        let mut written = item_with_translation();
+        written.locked_texts = vec![fields::LockedText {
+            scope: "item".into(),
+            field: "tagline".into(),
+            language: "jpn".into(),
+            value: Some("先生と生徒".into()),
+        }];
+        assert!(
+            holds_tagline(&written, "jpn"),
+            "written, with no translation at all"
+        );
     }
 }

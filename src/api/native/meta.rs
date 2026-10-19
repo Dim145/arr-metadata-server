@@ -145,8 +145,10 @@ async fn stats(
 
 #[derive(Serialize, ToSchema)]
 pub struct Sources {
-    /// `tmdb`, `tvdb`, `fanart`, `tvmaze`, `anilist`, `mal`, `imdb`, `fankai`, `fankaiwiki`: those
-    /// switched on and able to answer, in that order.
+    /// `tmdb`, `tvdb`, `fanart`, `tvmaze`, `anilist`, `mal`, `tenrai`, `imdb`, `fankai`,
+    /// `fankaiwiki`: those switched on and able to answer, in that order. `tenrai` stands
+    /// beside `mal` while MyAnimeList is reached through Tenrai, the mirror that serves
+    /// since Jikan's public API closed, so that it is credited for what it serves.
     pub sources: Vec<&'static str>,
 }
 
@@ -162,7 +164,11 @@ pub struct Sources {
     responses((status = 200, body = Sources)),
 )]
 async fn sources(State(state): State<AppState>) -> Json<Sources> {
-    use crate::providers::names;
+    use crate::providers::{mal, names};
+
+    let mal_on = state.flag("mal.enabled", false);
+    let through_tenrai = mal_on
+        && state.mal.reach(state.flag("mal.fallback", true)).serving == Some(mal::Base::Tenrai);
 
     let candidates = [
         (names::TMDB, state.tmdb.is_configured()),
@@ -170,7 +176,8 @@ async fn sources(State(state): State<AppState>) -> Json<Sources> {
         (names::FANART, state.fanart.is_enabled()),
         (names::TVMAZE, state.flag("tvmaze.enabled", false)),
         (names::ANILIST, state.flag("anilist.enabled", false)),
-        (names::MAL, state.flag("mal.enabled", false)),
+        (names::MAL, mal_on),
+        ("tenrai", through_tenrai),
         (names::IMDB, state.flag("imdb.enabled", false)),
         (names::FANKAI, state.flag("fankai.enabled", false)),
         // Asked only in the course of a Fankai fetch.

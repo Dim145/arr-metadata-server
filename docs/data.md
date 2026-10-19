@@ -92,7 +92,9 @@ page's strip, counted apart: *15 episodes · 2 releases*.
 
 ## The tagline, the countries and the companies
 
-TMDB's **tagline** is kept, in the language the catalogue is stored in, and shown under the title.
+TMDB's **tagline** is kept in every language TMDB gives it in — the catalogue's own, and each of the
+work's translations — and shown under the title in the language a page or a client asks for, as the
+title and the overview are; a tagline locked for one language stands over TMDB's in that language.
 Every **country** a work was made in and every **company** that made it are kept, where only the first
 of each was; the studio is the first company, or the one an anime source names instead. They are on the
 work's page, and in its NFO as `<tagline>`, a `<country>` each, by its English name, and a `<studio>`
