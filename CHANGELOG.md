@@ -7,6 +7,124 @@ may change what the API or the configuration means, and says so here.
 
 ## [Unreleased]
 
+### Added
+
+- The tagline in every language TMDB describes a work in. `media_translation`
+  carries it (migration 0035), and it is laid over the work as the title and
+  the overview are — by the native API's `language`, Sonarr's and Radarr's
+  answers, the `.nfo` export and the Kometa file — a tagline locked for one
+  language standing over TMDB's in it. Plex is given the tagline in the
+  language it asks for when the catalogue holds one in it, where it was given
+  none outside the stored language.
+- A work's copy of TMDB's answer is six months old at the most, as TMDB's
+  terms of use ask. A work refreshed longer ago than 180 days — an ended
+  series kept for a year, or ten — is given a light refresh by the sweep,
+  after the works that are due and within the same batch: TMDB alone, as a
+  sync asks it, the other sources keeping what they last gave; the run's
+  entries say which works were refreshed so. `refresh.ttlContinuing` and
+  `refresh.ttlEnded` say it in their description, and the Settings page says
+  it when either is set past six months.
+- Each source's terms of use, in a line with a link, on Administration ›
+  Sources; `docs/sources.md` says what the server does with each source's
+  data, and what it never does.
+- The editor's Seasons tab lists every picture attached to a season, the
+  hidden ones struck through with a way to show them again, and hides a
+  source's picture as the Artwork tab hides the work's own: a season's
+  hidden picture could be shown again by the API alone.
+- Sonarr v5 is offered TheTVDB's two further alternate orders, `altdvd` and
+  `alttwo` ("Alternate DVD Order", "Alternate Order 2"), which TheTVDB's own
+  episodes endpoint answers empty for (thetvdb/v4-api#340): when it does,
+  the order is read season by season from each season's own record, one
+  call a season, as the real Skyhook serves it.
+- `.github/workflows/parity.yml`: every Monday, and on demand, the real
+  Skyhook's second edition is set beside this server's for four real series
+  by `scripts/e2e-skyhook-v2.sh`, and any difference that is not an addition
+  fails the run. The Office (US) joins the script's default series for its
+  two alternate orders; an order made entirely of episode records the aired
+  list does not hold — TheTVDB files The Office's "Superfan" cuts as
+  episodes of their own — is printed as a known limit rather than a
+  failure, until the orders keep such records. It needs the same repository
+  secrets as the end-to-end job, and stands aside, saying so, without them.
+- `docs/sonarr-radarr.md` says what happens when Sonarr is upgraded to v5 —
+  every series refreshed once, the requests coalesced, the limit per address
+  and how to raise it for the day — and tells "not found" from "not
+  answered".
+- A key with the new `metrics` scope reads `GET /api/v1/admin/metrics` and
+  nothing else — not the catalogue, not the settings, not the other keys, on
+  any surface — so what sits in Prometheus's configuration file can read the
+  figures and no more. Made under **Keys & network** by ticking *Scrape*; a
+  person's own key cannot carry the scope. An administrator's key reads them
+  as before.
+- Every request is given an id, answered in `x-request-id` and written
+  beside every log line the request produces (`request_id` on the request
+  span, which the JSON format files under `span`). The `x-request-id` a
+  proxy in `AMS_TRUSTED_PROXIES` sends is kept, so its log and the server's
+  name a request alike; anybody else's is replaced.
+- CI measures how much of the crate the tests reach (`cargo llvm-cov`),
+  informatively: the summary is in the job's log and `lcov.info` is kept a
+  week as an artifact. It never fails the run.
+
+### Changed
+
+- MyAnimeList is reached through Tenrai before Jikan: the official API when
+  `AMS_MAL_CLIENT_ID` is set, Tenrai otherwise, and Jikan — whose public
+  service closed on 1 October 2026; `AMS_JIKAN_UPSTREAM` is for an instance
+  of your own — only as the last way in while `mal.fallback` is on. The
+  hints, the Sources page and the documentation say so.
+- The public footer credits each source on its own terms: TheTVDB with a
+  direct link, TVmaze with its licence named (CC BY-SA 4.0), MyAnimeList
+  "via Tenrai" while the mirror serves — `GET /api/v1/sources` lists
+  `tenrai` then — beside the notices TMDB and IMDb require.
+- The interface ships its fonts as woff2 alone. Libre Bodoni's faces are
+  declared by the interface rather than imported from the package, whose
+  stylesheets listed a woff beside every woff2 — twelve files for browsers
+  nobody runs it in.
+- The lines a request writes to the log carry its method, address and id
+  at the default level: the request span is at `info`, where it was
+  `debug` and never entered.
+- Internal, with nothing to see from outside: CI's PostgreSQL job runs every
+  test that opens a database or builds the whole server — the native API's
+  handlers, the Plex provider, the relays, the services, the clients'
+  authority, the update check, the settings reference, the arr history —
+  where it ran the repositories and the parity test alone, each server a
+  test builds given a PostgreSQL database of its own; CI typechecks the
+  end-to-end suite (`npm run typecheck:e2e`), which Playwright compiles
+  without checking, and the fourteen strictness errors nobody saw are
+  fixed; four functions and a constant kept under `#[allow(dead_code)]` are
+  gone, and six fields TMDB's models read nowhere; the transfer's own test
+  follows `DROP TABLE`, `CREATE TEMP TABLE` and the name a renamed table
+  takes; the provider fan-out a refresh awaits is boxed, so a debug build's
+  futures stay small; `CONTRIBUTING.md` says how a release is cut.
+
+### Fixed
+
+- Sonarr is never told that a series does not exist when a source could not
+  be asked. A series the catalogue holds is answered from it, as before; an
+  id nobody holds is a `404` only when every source that could resolve it —
+  TheTVDB, Skyhook, TMDB — answered that there is no such series, and a
+  `502` when one of them timed out, failed or refused the connection: Sonarr
+  takes a series for deleted on a `404` and keeps what it has on anything
+  else. A search nothing answered while a source did not is a `502` rather
+  than an empty list, which Sonarr reads as "no results"; a name the
+  catalogue holds is still answered. On both editions of the surface.
+- An `imdb:` lookup for a series is fetched once when asked for twice at
+  once, as a lookup by the other ids already was.
+- The page says which language it is read in from its first paint: the
+  stored choice sets `<html lang>` before the interface loads, where it was
+  `en` until it had.
+
+### Security
+
+- The content security policy allows no inline styles: `style-src 'self'`,
+  where it was `'self' 'unsafe-inline'`. The interface's styles are its
+  stylesheet, and what React writes through a `style` prop goes through the
+  CSSOM, which the policy does not judge; nothing was ever inline. The API's
+  documentation alone, `/api/docs`, keeps the allowance for the styles
+  Swagger UI writes as it draws — chosen by path, scripts this origin's
+  there as everywhere.
+- A scrape no longer needs an administrator's key: see the `metrics` scope
+  above.
+
 ## [0.8.3] — 2026-10-18
 
 ### Added

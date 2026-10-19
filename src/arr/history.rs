@@ -144,19 +144,7 @@ pub async fn latest(db: &Db, limit: i64) -> Result<Vec<Push>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config;
-
-    async fn db() -> Db {
-        let db = Db::connect(&config::Database {
-            url: "sqlite::memory:".into(),
-            max_connections: 1,
-            acquire_timeout: std::time::Duration::from_secs(5),
-        })
-        .await
-        .expect("in-memory database");
-        db.migrate().await.expect("migrations");
-        db
-    }
+    use crate::db::testing::db;
 
     #[tokio::test]
     async fn the_newest_are_listed_first_and_the_oldest_let_go() {

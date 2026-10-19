@@ -238,9 +238,10 @@ impl Keep<'_> {
 /// What every answer of the interface's door goes through, inside out: the
 /// name it was addressed to, CORS, the body limit, compression, the timeout,
 /// a panic turned into a 500 — and only then the security headers, so that
-/// a 504 or a 500 made by those carries them too — the trace and the count.
+/// a 504 or a 500 made by those carries them too — the trace, the request's
+/// id, and the count.
 fn protect(state: &AppState, router: Router) -> Router {
-    router
+    let router = router
         // Before any guard: a request for a name this server does not answer
         // to should not reach one, let alone a handler.
         .layer(axum::middleware::from_fn_with_state(
@@ -262,10 +263,28 @@ fn protect(state: &AppState, router: Router) -> Router {
             state.config.server.request_timeout,
         ))
         .layer(CatchPanicLayer::new())
-        .layer(SetResponseHeaderLayer::overriding(
-            header::CONTENT_SECURITY_POLICY,
-            content_security_policy(state),
-        ))
+        // One policy for the interface, and one for the API's documentation
+        // alone: Swagger UI styles the page it draws inline, which the
+        // policy refuses everywhere else. Chosen by path, so the exception
+        // never reaches a page a reader is served.
+        .layer(axum::middleware::from_fn({
+            let policy = content_security_policy(state);
+            let docs = docs_content_security_policy(&policy);
+            move |request: Request, next: axum::middleware::Next| {
+                let chosen = if is_docs(request.uri().path()) {
+                    docs.clone()
+                } else {
+                    policy.clone()
+                };
+                async move {
+                    let mut response = next.run(request).await;
+                    response
+                        .headers_mut()
+                        .insert(header::CONTENT_SECURITY_POLICY, chosen);
+                    response
+                }
+            }
+        }))
         .layer(header_layer(header::REFERRER_POLICY, "no-referrer"))
         .layer(header_layer(header::X_CONTENT_TYPE_OPTIONS, "nosniff"))
         .layer(header_layer(PERMISSIONS_POLICY, PERMISSIONS))
@@ -273,7 +292,9 @@ fn protect(state: &AppState, router: Router) -> Router {
             state.clone(),
             transport_headers,
         ))
-        .layer(TraceLayer::new_for_http().make_span_with(crate::telemetry::RequestSpan))
+        .layer(TraceLayer::new_for_http().make_span_with(crate::telemetry::RequestSpan));
+    // Outside the trace, whose span is where the id is read into.
+    crate::telemetry::with_request_id(router, state.config.server.trusted_proxies.clone())
         // Counted last of all, so what is counted is what was answered.
         .layer(axum::middleware::from_fn(crate::metrics::observe))
 }
@@ -378,7 +399,8 @@ fn build_clients_router(state: AppState) -> Router {
             .unwrap_or_default(),
     );
 
-    Router::new()
+    let trusted = state.config.server.trusted_proxies.clone();
+    let router = Router::new()
         .route("/health", get(health))
         .route("/ca.crt", get(crate::tls::ca_certificate))
         .route("/trust-ca.sh", get(crate::tls::trust_script))
@@ -420,7 +442,8 @@ fn build_clients_router(state: AppState) -> Router {
             "default-src 'none'; frame-ancestors 'none'; sandbox",
         ))
         .layer(header_layer(header::REFERRER_POLICY, "no-referrer"))
-        .layer(TraceLayer::new_for_http().make_span_with(crate::telemetry::RequestSpan))
+        .layer(TraceLayer::new_for_http().make_span_with(crate::telemetry::RequestSpan));
+    crate::telemetry::with_request_id(router, trusted)
         .layer(axum::middleware::from_fn(crate::metrics::observe_door))
 }
 
@@ -509,19 +532,23 @@ fn strip_port(host: &str) -> &str {
 /// What a page here may load, and who may embed it.
 ///
 /// The interface is served from this same origin and pulls in no third-party
-/// code, so everything is `'self'`. Two exceptions, both forced:
+/// code, so everything is `'self'`. Three exceptions, all forced:
 ///
 /// * **images** come from wherever a provider filed them — TMDB, TheTVDB,
 ///   Fanart.tv and whatever host a manual entry names — and, as `blob:`, from
 ///   the file an editor has just picked, previewed before it is uploaded;
-/// * **inline styles** are how React writes a `style` attribute, and the
-///   interface uses them for per-card animation delays and accent colours.
-///
 /// * **media** from the same hosts, for a work's theme music, fetched only
 ///   once somebody presses play;
 /// * **one frame**: a work's trailer, played from YouTube's no-cookie domain —
 ///   and only once somebody presses play, so the page itself sends nobody to
 ///   YouTube.
+///
+/// Styles are `'self'` alone. The interface's are one stylesheet the build
+/// writes, loaded by a `<link>`, and the per-card delays and accent colours
+/// React writes through a `style` prop go through the CSSOM, which the policy
+/// does not judge — only a `<style>` element and a `style=""` attribute in
+/// markup do, and neither is written anywhere here. Swagger UI's are its own
+/// stylesheets, loaded the same way.
 ///
 /// `frame-ancestors 'none'` is the one that earns its place on a server on a
 /// home network: it is what stops a page elsewhere framing this one and
@@ -530,7 +557,7 @@ fn strip_port(host: &str) -> &str {
 const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; \
      img-src 'self' data: blob: https:; \
      media-src 'self' https:; \
-     style-src 'self' 'unsafe-inline'; \
+     style-src 'self'; \
      script-src 'self'; \
      connect-src 'self'; \
      frame-src https://www.youtube-nocookie.com; \
@@ -566,6 +593,25 @@ fn content_security_policy(state: &AppState) -> HeaderValue {
         );
     HeaderValue::from_str(&policy)
         .unwrap_or_else(|_| HeaderValue::from_static(CONTENT_SECURITY_POLICY))
+}
+
+/// The policy the API's documentation is served under: the same, but for
+/// the styles Swagger UI writes inline as it draws its page. `/api/docs` is
+/// opened by an administrator with a credential, and renders this server's
+/// own document; scripts stay this origin's there as everywhere.
+fn docs_content_security_policy(policy: &HeaderValue) -> HeaderValue {
+    let relaxed = policy
+        .to_str()
+        .unwrap_or(CONTENT_SECURITY_POLICY)
+        .replace("style-src 'self';", "style-src 'self' 'unsafe-inline';");
+    HeaderValue::from_str(&relaxed)
+        .unwrap_or_else(|_| HeaderValue::from_static(CONTENT_SECURITY_POLICY))
+}
+
+/// Whether a path is the API documentation's: the page and what it loads,
+/// and no path that merely begins with the same letters.
+fn is_docs(path: &str) -> bool {
+    path == "/api/docs" || path.starts_with("/api/docs/")
 }
 
 /// The origins a bucket's presigned addresses are on, when they are not on
@@ -787,7 +833,8 @@ mod policy_tests {
     fn the_policy_keeps_its_closed_doors() {
         for directive in [
             "default-src 'self'",
-            "script-src 'self'",
+            "script-src 'self';",
+            "style-src 'self';",
             "object-src 'none'",
             "base-uri 'self'",
             "form-action 'self'",
@@ -798,6 +845,33 @@ mod policy_tests {
         assert!(HeaderValue::from_str(PERMISSIONS).is_ok());
         assert!(HeaderValue::from_str(HSTS).is_ok());
         assert!(!HSTS.contains("preload"));
+    }
+
+    /// Nothing inline runs or styles a page here: a `<style>` or a
+    /// `style=""` an injection managed to write would be refused, as a
+    /// `<script>` is.
+    #[test]
+    fn nothing_inline_is_allowed() {
+        for keyword in ["'unsafe-inline'", "'unsafe-eval'", "'unsafe-hashes'"] {
+            assert!(!CONTENT_SECURITY_POLICY.contains(keyword), "{keyword}");
+        }
+        assert!(CONTENT_SECURITY_POLICY.contains("style-src 'self';"));
+    }
+
+    /// Swagger UI styles its page inline, which the policy refuses
+    /// everywhere else: the documentation's paths alone are allowed it, and
+    /// nothing more — scripts stay this origin's, and a path that merely
+    /// begins with the same letters is a page like any other.
+    #[test]
+    fn the_documentation_alone_may_style_inline() {
+        let policy = HeaderValue::from_static(CONTENT_SECURITY_POLICY);
+        let docs = docs_content_security_policy(&policy);
+        let docs = docs.to_str().unwrap();
+        assert!(docs.contains("style-src 'self' 'unsafe-inline';"));
+        assert!(docs.contains("script-src 'self';"));
+        assert_eq!(docs.matches("'unsafe-inline'").count(), 1);
+        assert!(is_docs("/api/docs") && is_docs("/api/docs/index.html"));
+        assert!(!is_docs("/api/docs-like") && !is_docs("/api/v1/items") && !is_docs("/"));
     }
 
     #[test]

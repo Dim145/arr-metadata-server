@@ -642,9 +642,10 @@ fn names_a_text(path: &str, texts: &[LockedText]) -> bool {
 /// work's languages are made from these, so each entry says what a request
 /// in its language is answered with. Laid again leaves them as they are.
 pub fn fold_translations(item: &mut MediaItem) {
-    // What a translation carries: the work's title and overview.
-    let own =
-        |t: &&LockedText| t.scope == "item" && matches!(t.field.as_str(), "title" | "overview");
+    // What a translation carries: the work's title, overview and tagline.
+    let own = |t: &&LockedText| {
+        t.scope == "item" && matches!(t.field.as_str(), "title" | "overview" | "tagline")
+    };
     if !item.locked_texts.iter().any(|t| own(&t)) {
         return;
     }
@@ -666,6 +667,7 @@ pub fn fold_translations(item: &mut MediaItem) {
             language,
             title: None,
             overview: None,
+            tagline: None,
             is_manual: true,
         }));
 
@@ -677,10 +679,12 @@ pub fn fold_translations(item: &mut MediaItem) {
         .map(|t| {
             let title = text_lock(item, "item", "title", &t.language);
             let overview = text_lock(item, "item", "overview", &t.language);
+            let tagline = text_lock(item, "item", "tagline", &t.language);
             Laid {
                 title: title.map(|lock| lock.value.clone()),
                 overview: overview.map(|lock| lock.value.clone()),
-                in_it: [title, overview]
+                tagline: tagline.map(|lock| lock.value.clone()),
+                in_it: [title, overview, tagline]
                     .into_iter()
                     .flatten()
                     .any(|lock| lock.language == t.language),
@@ -694,18 +698,22 @@ pub fn fold_translations(item: &mut MediaItem) {
         if let Some(overview) = laid.overview {
             translation.overview = overview;
         }
+        if let Some(tagline) = laid.tagline {
+            translation.tagline = tagline;
+        }
         if laid.in_it {
             translation.is_manual = true;
         }
     }
 }
 
-/// What a translation is given of the work's locks: its title and its
-/// overview where one is locked for its language, and whether one was locked
-/// in that language itself.
+/// What a translation is given of the work's locks: its title, its overview
+/// and its tagline where one is locked for its language, and whether one was
+/// locked in that language itself.
 struct Laid {
     title: Option<Option<String>>,
     overview: Option<Option<String>>,
+    tagline: Option<Option<String>>,
     in_it: bool,
 }
 
@@ -2036,12 +2044,14 @@ mod tests {
                 language: "fra".into(),
                 title: Some("Titre du fournisseur".into()),
                 overview: Some("Résumé du fournisseur".into()),
+                tagline: None,
                 is_manual: false,
             },
             Translation {
                 language: "deu".into(),
                 title: Some("Anbietertitel".into()),
                 overview: None,
+                tagline: None,
                 is_manual: false,
             },
         ];
@@ -2311,5 +2321,52 @@ mod tests {
                 .as_deref(),
             Some("Jesse Pinkman")
         );
+    }
+
+    /// The tagline is text in a language as the title is: a lock in one
+    /// language is folded into that language's translation, and laid over
+    /// the work when it is served in it.
+    #[test]
+    fn a_tagline_locked_in_one_language_is_the_translations_and_is_laid_in_it() {
+        let mut it = item();
+        it.tagline = Some("Nothing stays buried.".into());
+        it.translations = vec![Translation {
+            language: "fra".into(),
+            title: None,
+            overview: None,
+            tagline: Some("Rien ne reste enterré.".into()),
+            is_manual: false,
+        }];
+        apply_in(
+            &mut it,
+            &[
+                in_language("item", "tagline", "fra", "La phrase verrouillée"),
+                in_language("item", "tagline", "deu", "Der Satz"),
+            ],
+            "eng",
+        )
+        .unwrap();
+        fold_translations(&mut it);
+
+        let of = |language: &str| {
+            it.translations
+                .iter()
+                .find(|t| t.language == language)
+                .expect("held")
+        };
+        assert_eq!(of("fra").tagline.as_deref(), Some("La phrase verrouillée"));
+        assert!(of("fra").is_manual);
+        // A language locked in without a translation of its own is given
+        // one, with the tagline and nothing else.
+        assert_eq!(of("deu").tagline.as_deref(), Some("Der Satz"));
+        assert_eq!(of("deu").title, None);
+
+        // The stored text stands in the stored language; served in French,
+        // what was written for it.
+        assert_eq!(it.tagline.as_deref(), Some("Nothing stays buried."));
+        mark(&mut it, "fra");
+        lay(&mut it, "fra");
+        assert_eq!(it.tagline.as_deref(), Some("La phrase verrouillée"));
+        assert!(it.locked_fields.iter().any(|f| f == "item/tagline"));
     }
 }

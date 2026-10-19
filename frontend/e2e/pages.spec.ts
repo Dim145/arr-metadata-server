@@ -542,7 +542,7 @@ test.describe('related works', () => {
     await page.goto(`/work/${related!.id}`)
     await expect(page.getByText(/^(related works|œuvres liées)$/i)).toBeVisible()
 
-    const first = related!.relations[0]
+    const first = related!.relations[0]!
     const card = page.getByRole('link', { name: first.title.slice(0, 24) }).first()
     await expect(card).toBeVisible()
     if (first.workId) {
@@ -575,8 +575,8 @@ test.describe('the other orders', () => {
     }
     test.skip(!found, 'no series here is numbered another way; refresh one with TheTVDB on')
 
-    const order = found!.orders[0]
-    const season = order.episodes[0].seasonNumber
+    const order = found!.orders[0]!
+    const season = order.episodes[0]?.seasonNumber
     await page.goto(`/work/${found!.id}/season/${season}?order=${order.kind}`)
     const tabs = page.getByRole('group', { name: /numbering|numérotation/i })
     await expect(tabs).toBeVisible()

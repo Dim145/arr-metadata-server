@@ -92,8 +92,9 @@ Sonarr's metadata service — and does what both did, from one catalogue.
   server counting itself in the text Prometheus reads — requests by surface
   and status, calls upstream by provider and outcome with their latency,
   what the caches keep, what the catalogue holds, what the jobs did — for an
-  administrator or a key with the `admin` scope, which a scraper sends as
-  `Authorization: Bearer`. Every edit made by hand can be downloaded as one
+  administrator or a key with the `metrics` scope, a scraper's, which opens
+  nothing else and is sent as `Authorization: Bearer`. Every edit made by
+  hand can be downloaded as one
   JSON document and imported into another catalogue (`GET`/`POST
   /api/v1/admin/locks`), each lock finding its work of the same kind by the
   TMDB, TheTVDB or IMDb id it shares; a request takes two thousand locks at

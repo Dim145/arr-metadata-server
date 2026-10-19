@@ -570,16 +570,12 @@ mod tests {
     };
     use serde_json::json;
 
-    /// The whole server on a database in memory, its works stored in
+    /// The whole server on a database of its own, its works stored in
     /// English: what the languages asked for here are told apart from.
     async fn server() -> AppState {
         let mut config = config::Config::from_env().expect("a configuration");
         config.mode = config::Mode::Single;
-        config.database = config::Database {
-            url: "sqlite::memory:".into(),
-            max_connections: 1,
-            acquire_timeout: std::time::Duration::from_secs(5),
-        };
+        config.database = crate::db::testing::database().await;
         config.security.bootstrap_admin = None;
         config.cache.redis_url = None;
         config.media.storage = config::MediaStorage::Off;
@@ -604,12 +600,14 @@ mod tests {
                 language: "fra".into(),
                 title: Some("Heat (TMDB)".into()),
                 overview: Some("Un groupe de braqueurs.".into()),
+                tagline: None,
                 is_manual: false,
             },
             Translation {
                 language: "deu".into(),
                 title: Some("Heat (Deutsch)".into()),
                 overview: None,
+                tagline: None,
                 is_manual: false,
             },
         ];

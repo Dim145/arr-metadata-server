@@ -369,10 +369,10 @@ export interface paths {
          * What the server counts about itself, in the text Prometheus reads:
          *     requests by surface, calls upstream by provider, what the caches keep,
          *     what the catalogue holds, what the jobs did, and how long it has been up.
-         *     For an administrator, or a key with the `admin` scope — which a scraper
-         *     sends as `Authorization: Bearer`. What the database holds is left out of
-         *     a scrape it cannot answer, rather than the whole scrape failing when it
-         *     matters most.
+         *     For an administrator, or a key with the `metrics` scope — a scraper's,
+         *     which opens nothing else and is sent as `Authorization: Bearer`. What the
+         *     database holds is left out of a scrape it cannot answer, rather than the
+         *     whole scrape failing when it matters most.
          */
         get: operations["figures_metrics"];
         put?: never;
@@ -2934,6 +2934,10 @@ export interface paths {
          * @description `term` may be free text or a provider lookup: `tvdb:`, `tmdb:`, `imdb:`,
          *     `mal:` or `anilist:`. Results Sonarr could not address are omitted — showing
          *     one that fails on add is worse than showing nothing.
+         *
+         *     A search nothing answered while a source that could have did not is a 502
+         *     rather than an empty list, which Sonarr reads as "no such series"; what the
+         *     catalogue holds by that name is answered whether or not the sources do.
          */
         get: operations["sonarr_search"];
         put?: never;
@@ -2956,6 +2960,13 @@ export interface paths {
          * @description The id may also be one this server synthesised for a work TMDB indexes and
          *     TVDB does not; the response echoes back whichever id was asked for, because
          *     Sonarr has already stored it.
+         *
+         *     A series the catalogue holds is answered from the catalogue, as it was,
+         *     when the sources do not answer. An id nobody holds is a 404 only when every
+         *     source that could resolve it answered that there is no such series; when
+         *     one did not answer — a timeout, a 5xx, a refused connection — it is a 502,
+         *     never a 404: Sonarr takes a series for deleted on a 404, and keeps what it
+         *     has on anything else.
          */
         get: operations["sonarr_show"];
         put?: never;
@@ -2976,7 +2987,9 @@ export interface paths {
         /**
          * Search series, as Sonarr v5 reads them: without their episodes, as the
          *     real service answers a search. `term` is as for `/v1/`; Sonarr resolves
-         *     `tvdb:` itself and sends `imdb:`, `tmdb:`, `mal:` and `anilist:` here.
+         *     `tvdb:` itself and sends `imdb:`, `tmdb:`, `mal:` and `anilist:` here. A
+         *     search nothing answered while a source did not is a 502, as for `/v1/`,
+         *     rather than an empty list.
          */
         get: operations["sonarr_search_v2"];
         put?: never;
@@ -3006,6 +3019,11 @@ export interface paths {
          *     `official` or one of the orders `seasonTypes` lists, and the episodes are
          *     numbered by it; any other is answered with the aired order, as Skyhook
          *     answers it.
+         *
+         *     Not found and not answered are told apart as `/v1/` tells them: a 404
+         *     only when every source that could resolve the id answered that there is
+         *     no such series, a 502 when one did not answer, and the catalogue's copy
+         *     whenever it holds one.
          */
         get: operations["sonarr_show_v2"];
         put?: never;
@@ -3419,7 +3437,7 @@ export interface components {
          * @description One of the ways into MyAnimeList.
          * @enum {string}
          */
-        Base: "official" | "jikan" | "tenrai";
+        Base: "official" | "tenrai" | "jikan";
         BaseReach: {
             base: components["schemas"]["Base"];
             /** @description When it last failed to answer, while it is passed over for it. */
@@ -5658,8 +5676,8 @@ export interface components {
             /** @description `Aired Order`, `DVD Order`…: what Sonarr shows. */
             name: string;
             /**
-             * @description `official`, `dvd`, `absolute`, `alternate`, `regional`, `altdvd`:
-             *     what Sonarr asks the series in.
+             * @description `official`, `dvd`, `absolute`, `alternate`, `regional`, `altdvd`,
+             *     `alttwo`: what Sonarr asks the series in.
              */
             type: string;
             seasonNumbers: number[];
@@ -5975,8 +5993,10 @@ export interface components {
         };
         Sources: {
             /**
-             * @description `tmdb`, `tvdb`, `fanart`, `tvmaze`, `anilist`, `mal`, `imdb`, `fankai`, `fankaiwiki`: those
-             *     switched on and able to answer, in that order.
+             * @description `tmdb`, `tvdb`, `fanart`, `tvmaze`, `anilist`, `mal`, `tenrai`, `imdb`, `fankai`,
+             *     `fankaiwiki`: those switched on and able to answer, in that order. `tenrai` stands
+             *     beside `mal` while MyAnimeList is reached through Tenrai, the mirror that serves
+             *     since Jikan's public API closed, so that it is credited for what it serves.
              */
             sources: string[];
         };
@@ -6151,6 +6171,11 @@ export interface components {
             language: string;
             title?: string | null;
             overview?: string | null;
+            /**
+             * @description The line under the title in this language, where the source gives
+             *     one: TMDB does, in each of its translations.
+             */
+            tagline?: string | null;
             isManual: boolean;
         };
         TranslationResource: {
@@ -7272,7 +7297,7 @@ export interface operations {
                     "text/plain": unknown;
                 };
             };
-            /** @description The caller is not an administrator */
+            /** @description The caller is neither an administrator nor a key with the `metrics` scope */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -12827,6 +12852,13 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description No source that could answer this search did, and the catalogue holds nothing by that name */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     sonarr_show: {
@@ -12865,8 +12897,15 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description No provider could resolve this id */
+            /** @description Every source that could resolve this id answered that there is no such series */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A source that could have resolved this id did not answer, and nothing is held to answer with */
+            502: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12903,6 +12942,13 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description No source that could answer this search did, and the catalogue holds nothing by that name */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     sonarr_show_v2: {
@@ -12914,7 +12960,7 @@ export interface operations {
                 language: string;
                 /** @description TVDB series id, or a synthesised one */
                 tvdb_id: number;
-                /** @description `official`, or an order of `seasonTypes`: `dvd`, `absolute`… */
+                /** @description `official`, or an order of `seasonTypes`: `dvd`, `absolute`, `altdvd`, `alttwo`… */
                 season_type: string;
             };
             cookie?: never;
@@ -12936,8 +12982,15 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description No provider could resolve this id */
+            /** @description Every source that could resolve this id answered that there is no such series */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A source that could have resolved this id did not answer, and nothing is held to answer with */
+            502: {
                 headers: {
                     [name: string]: unknown;
                 };

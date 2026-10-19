@@ -15,7 +15,14 @@ use crate::{
 
 /// The orders in the order they are offered: the DVDs first, since that is
 /// the one a reader most often knows, then straight numbering, then the rest.
-const OFFERED: &[&str] = &["dvd", "absolute", "alternate", "regional", "altdvd"];
+const OFFERED: &[&str] = &[
+    "dvd",
+    "absolute",
+    "alternate",
+    "regional",
+    "altdvd",
+    "alttwo",
+];
 
 /// Replace what is kept for a work with these orders, whole.
 pub async fn replace(db: &Db, media_id: &str, orders: &[EpisodeOrder]) -> Result<()> {

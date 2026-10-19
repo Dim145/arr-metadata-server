@@ -89,6 +89,7 @@ export function Clients() {
     ['read', t.admin.keys.read],
     ['write', t.admin.keys.write],
     ['admin', t.admin.keys.administer],
+    ['metrics', t.admin.keys.metrics],
   ] as const
 
   return (
@@ -156,6 +157,9 @@ export function Clients() {
                 )
               })}
             </div>
+            {scopes.includes('metrics') ? (
+              <p className="mt-1.5 text-xs text-bone-dim">{t.admin.keys.metricsHint}</p>
+            ) : null}
           </fieldset>
 
           <Button

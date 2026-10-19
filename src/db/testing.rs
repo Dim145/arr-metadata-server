@@ -37,9 +37,15 @@
 //! when the test ends however it ends — a failed assertion unwinds and drops
 //! it like anything else. A run that is killed leaves its databases behind;
 //! the next one takes away any of ours that are over an hour old.
+//!
+//! A test that builds the whole server gives its configuration what
+//! [`database`] returns in place of `sqlite::memory:`: `AppState::bootstrap`
+//! opens the database by itself, so what the test hands over is an address,
+//! and the lease waits here for the connection that will hold it.
 
 use std::{
-    sync::Arc,
+    collections::HashMap,
+    sync::{Arc, LazyLock, Mutex},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -94,6 +100,56 @@ pub async fn postgres() -> Option<Db> {
     Some(fresh(&server).await.0)
 }
 
+/// What a test gives the configuration of a server it builds whole, where
+/// `sqlite::memory:` stood: the address of an empty database of whichever
+/// engine the environment picks, for `AppState::bootstrap` to open and
+/// migrate by itself. On PostgreSQL the database is made here and dropped
+/// with the server's last handle to it — its lease waits in [`WAITING`] for
+/// [`Db::connect`] to take with the connection. SQLite in memory is held on
+/// one connection: a second would be a second, empty, database.
+pub async fn database() -> config::Database {
+    let Some(server) = server() else {
+        return config::Database {
+            url: "sqlite::memory:".into(),
+            max_connections: 1,
+            acquire_timeout: Duration::from_secs(5),
+        };
+    };
+
+    // On the heap: a test's future holds every future it awaits, and one
+    // that builds the whole server is already most of what a test thread's
+    // stack holds — the connection and the queries made here, in a debug
+    // build, were what overflowed it.
+    Box::pin(async move {
+        let (name, lease) = made(&server).await;
+        let url = address_of(&server, &name);
+        waiting().insert(url.clone(), lease);
+        config::Database {
+            url,
+            max_connections: 4,
+            acquire_timeout: Duration::from_secs(10),
+        }
+    })
+    .await
+}
+
+/// The lease of a database [`database`] made for the server that opens
+/// `url`, for the connection that will hold it; nothing for any other
+/// address.
+pub(super) fn lease_of(url: &str) -> Option<Arc<Lease>> {
+    waiting().remove(url)
+}
+
+/// The leases of the databases made by [`database`], by address, until the
+/// connection each was made for is opened.
+static WAITING: LazyLock<Mutex<HashMap<String, Arc<Lease>>>> = LazyLock::new(Mutex::default);
+
+fn waiting() -> std::sync::MutexGuard<'static, HashMap<String, Arc<Lease>>> {
+    WAITING
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// The address of the PostgreSQL the tests may use, if there is one.
 pub fn server() -> Option<String> {
     let given = std::env::var(VARIABLE).ok()?;
@@ -114,6 +170,23 @@ pub fn server() -> Option<String> {
 
 /// A new database on `server`, migrated, and the name it was given.
 async fn fresh(server: &str) -> (Db, String) {
+    let (name, lease) = made(server).await;
+
+    let mut db = Db::connect(&config::Database {
+        url: address_of(server, &name),
+        max_connections: 4,
+        acquire_timeout: Duration::from_secs(10),
+    })
+    .await
+    .expect("a connection to the database just made");
+    db.lease = Some(lease);
+
+    db.migrate().await.expect("the PostgreSQL migrations");
+    (db, name)
+}
+
+/// A new, empty database on `server`: its name, and what takes it away.
+async fn made(server: &str) -> (String, Arc<Lease>) {
     sqlx::any::install_default_drivers();
     take_away_leftovers(server).await;
 
@@ -140,18 +213,7 @@ async fn fresh(server: &str) -> (Db, String) {
         server: server.to_string(),
         name: name.clone(),
     });
-
-    let mut db = Db::connect(&config::Database {
-        url: address_of(server, &name),
-        max_connections: 4,
-        acquire_timeout: Duration::from_secs(10),
-    })
-    .await
-    .expect("a connection to the database just made");
-    db.lease = Some(lease);
-
-    db.migrate().await.expect("the PostgreSQL migrations");
-    (db, name)
+    (name, lease)
 }
 
 /// `server`'s address with the database in its path replaced by `name`.
@@ -314,6 +376,36 @@ mod tests {
         assert!(exists(&server, &name).await, "dropped with a handle left");
         drop(kept);
         assert!(!exists(&server, &name).await, "left behind by the last one");
+    }
+
+    #[tokio::test]
+    async fn a_server_that_opens_its_own_database_is_given_one_and_lets_it_go() {
+        let Some(server) = server() else {
+            eprintln!("skipped: {VARIABLE} is not set");
+            return;
+        };
+
+        let given = database().await;
+        let name = url::Url::parse(&given.url)
+            .expect("an address")
+            .path()
+            .trim_start_matches('/')
+            .to_string();
+        assert!(name.starts_with(PREFIX), "{name}");
+        assert!(exists(&server, &name).await, "not made before it was named");
+
+        // Taken with the connection, as `AppState::bootstrap` opens it; and
+        // let go of with it.
+        let db = Db::connect(&given).await.expect("the database just made");
+        assert!(
+            lease_of(&given.url).is_none(),
+            "the lease went with the connection"
+        );
+        drop(db);
+        assert!(
+            !exists(&server, &name).await,
+            "left behind by the last handle"
+        );
     }
 
     async fn exists(server: &str, name: &str) -> bool {

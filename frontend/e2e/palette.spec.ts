@@ -70,6 +70,9 @@ test.describe('the command palette', () => {
   test('keeps the keyboard inside while it is open', async ({ page, isMobile }) => {
     test.skip(isMobile, 'a keyboard shortcut is a desktop thing')
     await page.goto('/')
+    // Drawn once its language is in: a shortcut pressed before that lands
+    // on a page with nothing listening.
+    await expect(page.locator('a[href^="/work/"]').first()).toBeVisible()
     await page.keyboard.press('ControlOrMeta+k')
     const box = page.getByRole('combobox', { name: /command palette|palette de commandes/i })
     await expect(box).toBeFocused()

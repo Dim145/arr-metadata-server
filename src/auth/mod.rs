@@ -98,6 +98,32 @@ impl Identity {
         }
     }
 
+    /// Whether this identity may read what the server counts about itself,
+    /// `/admin/metrics`: whoever manages it, and a key with the `metrics`
+    /// scope — a scraper's, made for that and, given no other scope, able to
+    /// do nothing else ([`Self::only_scrapes`]).
+    pub fn can_scrape(&self) -> bool {
+        self.is_admin()
+            || matches!(self, Self::Client(c) if c.scopes.iter().any(|s| s == "metrics"))
+    }
+
+    /// Whether this is a scraper's key: one given the `metrics` scope and no
+    /// other. A key reads the catalogue by existing at all, and this one is
+    /// not to: it sits in a scraper's configuration file, read by more eyes
+    /// than a person's key ever is, and what it opens is the figures alone.
+    pub fn only_scrapes(&self) -> bool {
+        match self {
+            Self::Client(c) => {
+                c.scopes.iter().any(|s| s == "metrics")
+                    && !c
+                        .scopes
+                        .iter()
+                        .any(|s| matches!(s.as_str(), "read" | "write" | "admin"))
+            }
+            _ => false,
+        }
+    }
+
     /// The API key this is, if it is one. Settings resolve against it.
     pub fn client_id(&self) -> Option<&str> {
         match self {
@@ -156,6 +182,12 @@ impl Identity {
     /// ([`Self::is_admin`]); see [`Self::require_write`].
     pub fn require_admin(&self) -> AppResult<()> {
         self.is_admin().then_some(()).ok_or(AppError::Forbidden)
+    }
+
+    /// A refusal, unless this identity may read the server's own figures
+    /// ([`Self::can_scrape`]); see [`Self::require_write`].
+    pub fn require_scrape(&self) -> AppResult<()> {
+        self.can_scrape().then_some(()).ok_or(AppError::Forbidden)
     }
 
     /// The allowlist rule this came through, if any.
@@ -226,5 +258,35 @@ mod tests {
         assert!(!Identity::Visitor.can_read_private());
         assert!(!Identity::Network(Some("lan".into())).can_read_private());
         assert!(Identity::Anonymous.can_read_private());
+    }
+
+    #[test]
+    fn a_scrapers_key_reads_the_figures_and_nothing_else() {
+        // What a Prometheus is given: the figures, and no say over anything.
+        let scraper = key(&["metrics"], None);
+        assert!(scraper.can_scrape());
+        assert!(scraper.only_scrapes());
+        assert!(!scraper.can_write());
+        assert!(!scraper.is_admin());
+        assert!(!scraper.can_read_private());
+
+        // With a scope beside it, a key that reads as any key does and
+        // scrapes too; an administrator's scrapes as it does everything.
+        let reads = key(&["read", "metrics"], None);
+        assert!(reads.can_scrape() && !reads.only_scrapes());
+        let admin = key(&["admin"], None);
+        assert!(admin.can_scrape() && !admin.only_scrapes());
+        assert!(
+            key(&["read", "write"], Some(Role::Admin))
+                .require_scrape()
+                .is_err()
+        );
+
+        // The people: whoever manages the server, and nobody else.
+        assert!(Identity::Anonymous.can_scrape());
+        for other in [Identity::Visitor, Identity::Network(None)] {
+            assert!(!other.can_scrape());
+            assert!(!other.only_scrapes());
+        }
     }
 }

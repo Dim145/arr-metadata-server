@@ -6,11 +6,15 @@ latency, calls made to each provider and how they ended, what every cache
 answered from each tier, the cache server's memory, evictions and round
 trip, the catalogue's size, the jobs' runs. The endpoint is administrative
 — it says which surfaces are open and how the caches are doing — so the
-scrape carries an administrator's key.
+scrape carries a key: a scraper's own, or an administrator's.
 
-1. Make a key under **Keys & network** for the scraper — with the `admin`
-   scope, since the endpoint is administrative — and put it in a file
-   Prometheus can read, mode 600.
+1. Make a key under **Keys & network** for the scraper, with the `metrics`
+   scope and no other, and put it in a file Prometheus can read, mode 600.
+   A key made with `metrics` alone reads the figures and nothing else: not
+   the catalogue, not the settings, not the other keys. It sits in a file
+   more eyes read than a person's key ever is, and what it opens, should
+   it be read, is the figures. (A key with the `admin` scope scrapes too,
+   and opens everything; a person's own key cannot carry `metrics`.)
 2. Add the job in [`prometheus.yml`](prometheus.yml) to your Prometheus
    configuration; it sends the key as a bearer token, which the server takes
    like `X-Api-Key`.

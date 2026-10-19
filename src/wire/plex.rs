@@ -804,8 +804,21 @@ pub struct Drawn<'a> {
     /// a work is given.
     pub country: Option<&'a str>,
     /// Whether the text is served in the language the catalogue is stored
-    /// in. Only then is the tagline, which no translation holds, said.
+    /// in. The tagline is said then, and otherwise only when the language
+    /// asked holds one — TMDB's translation of it, or one somebody wrote:
+    /// the stored language's under a title laid over in another would read
+    /// as a line nobody translated.
     pub stored_language: bool,
+}
+
+/// The tagline, where it is in the language the answer is in: the stored
+/// language's as it is, another's when a translation or a lock holds one in
+/// it — laid over the work already, by the language overlay — and nothing
+/// otherwise.
+fn tagline_said(item: &MediaItem, drawn: &Drawn<'_>) -> Option<String> {
+    let in_language =
+        drawn.stored_language || crate::service::language::holds_tagline(item, drawn.language);
+    in_language.then(|| text(item.tagline.as_deref())).flatten()
 }
 
 /// A film, as Plex reads one.
@@ -832,10 +845,7 @@ pub fn movie(item: &MediaItem, work: &Work, drawn: &Drawn<'_>) -> PlexMetadata {
         summary: text(item.overview.as_deref()),
         is_adult: Some(item.is_adult),
         duration: milliseconds(item.runtime),
-        tagline: drawn
-            .stored_language
-            .then(|| text(item.tagline.as_deref()))
-            .flatten(),
+        tagline: tagline_said(item, drawn),
         studio: text(item.studio.as_deref()),
         theme: theme(item, drawn),
         genres: genres(item),
@@ -1057,11 +1067,7 @@ impl<'a> Series<'a> {
             summary: text(item.overview.as_deref()),
             is_adult: Some(item.is_adult),
             duration: milliseconds(item.runtime),
-            tagline: self
-                .drawn
-                .stored_language
-                .then(|| text(item.tagline.as_deref()))
-                .flatten(),
+            tagline: tagline_said(item, self.drawn),
             studio: text(item.studio.as_deref()),
             theme: theme(item, self.drawn),
             genres: genres(item),
@@ -1556,6 +1562,7 @@ fn season_types(item: &MediaItem, orders: &[EpisodeOrder]) -> Vec<PlexSeasonType
             "alternate" => "Alternate".to_string(),
             "regional" => "Regional".to_string(),
             "altdvd" => "Alternate DVD".to_string(),
+            "alttwo" => "Alternate 2".to_string(),
             other => super::sonarr::capitalize(other),
         };
         types.push(PlexSeasonType {

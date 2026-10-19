@@ -676,7 +676,7 @@
         "tags": [
           "Server"
         ],
-        "summary": "What the server counts about itself, in the text Prometheus reads:\nrequests by surface, calls upstream by provider, what the caches keep,\nwhat the catalogue holds, what the jobs did, and how long it has been up.\nFor an administrator, or a key with the `admin` scope — which a scraper\nsends as `Authorization: Bearer`. What the database holds is left out of\na scrape it cannot answer, rather than the whole scrape failing when it\nmatters most.",
+        "summary": "What the server counts about itself, in the text Prometheus reads:\nrequests by surface, calls upstream by provider, what the caches keep,\nwhat the catalogue holds, what the jobs did, and how long it has been up.\nFor an administrator, or a key with the `metrics` scope — a scraper's,\nwhich opens nothing else and is sent as `Authorization: Bearer`. What the\ndatabase holds is left out of a scrape it cannot answer, rather than the\nwhole scrape failing when it matters most.",
         "operationId": "figures_metrics",
         "responses": {
           "200": {
@@ -686,7 +686,7 @@
             }
           },
           "403": {
-            "description": "The caller is not an administrator"
+            "description": "The caller is neither an administrator nor a key with the `metrics` scope"
           }
         }
       }
@@ -7031,7 +7031,7 @@
           "Sonarr compatibility"
         ],
         "summary": "Search series, in Skyhook's format.",
-        "description": "`term` may be free text or a provider lookup: `tvdb:`, `tmdb:`, `imdb:`,\n`mal:` or `anilist:`. Results Sonarr could not address are omitted — showing\none that fails on add is worse than showing nothing.",
+        "description": "`term` may be free text or a provider lookup: `tvdb:`, `tmdb:`, `imdb:`,\n`mal:` or `anilist:`. Results Sonarr could not address are omitted — showing\none that fails on add is worse than showing nothing.\n\nA search nothing answered while a source that could have did not is a 502\nrather than an empty list, which Sonarr reads as \"no such series\"; what the\ncatalogue holds by that name is answered whether or not the sources do.",
         "operationId": "sonarr_search",
         "parameters": [
           {
@@ -7071,6 +7071,9 @@
           },
           "403": {
             "description": "The caller's address is not in the allowlist"
+          },
+          "502": {
+            "description": "No source that could answer this search did, and the catalogue holds nothing by that name"
           }
         },
         "security": []
@@ -7082,7 +7085,7 @@
           "Sonarr compatibility"
         ],
         "summary": "A series by TVDB id, in Skyhook's format.",
-        "description": "The id may also be one this server synthesised for a work TMDB indexes and\nTVDB does not; the response echoes back whichever id was asked for, because\nSonarr has already stored it.",
+        "description": "The id may also be one this server synthesised for a work TMDB indexes and\nTVDB does not; the response echoes back whichever id was asked for, because\nSonarr has already stored it.\n\nA series the catalogue holds is answered from the catalogue, as it was,\nwhen the sources do not answer. An id nobody holds is a 404 only when every\nsource that could resolve it answered that there is no such series; when\none did not answer — a timeout, a 5xx, a refused connection — it is a 502,\nnever a 404: Sonarr takes a series for deleted on a 404, and keeps what it\nhas on anything else.",
         "operationId": "sonarr_show",
         "parameters": [
           {
@@ -7122,7 +7125,10 @@
             "description": "The caller's address is not in the allowlist"
           },
           "404": {
-            "description": "No provider could resolve this id"
+            "description": "Every source that could resolve this id answered that there is no such series"
+          },
+          "502": {
+            "description": "A source that could have resolved this id did not answer, and nothing is held to answer with"
           }
         },
         "security": []
@@ -7133,7 +7139,7 @@
         "tags": [
           "Sonarr compatibility"
         ],
-        "summary": "Search series, as Sonarr v5 reads them: without their episodes, as the\nreal service answers a search. `term` is as for `/v1/`; Sonarr resolves\n`tvdb:` itself and sends `imdb:`, `tmdb:`, `mal:` and `anilist:` here.",
+        "summary": "Search series, as Sonarr v5 reads them: without their episodes, as the\nreal service answers a search. `term` is as for `/v1/`; Sonarr resolves\n`tvdb:` itself and sends `imdb:`, `tmdb:`, `mal:` and `anilist:` here. A\nsearch nothing answered while a source did not is a 502, as for `/v1/`,\nrather than an empty list.",
         "operationId": "sonarr_search_v2",
         "parameters": [
           {
@@ -7170,6 +7176,9 @@
           },
           "403": {
             "description": "The caller's address is not in the allowlist"
+          },
+          "502": {
+            "description": "No source that could answer this search did, and the catalogue holds nothing by that name"
           }
         },
         "security": []
@@ -7181,7 +7190,7 @@
           "Sonarr compatibility"
         ],
         "summary": "A series by TVDB id, as Sonarr v5 reads it.",
-        "description": "What `/v1/` answers, and what v5 reads besides: every language the\ncatalogue holds the series in, the orders its episodes come in, a\nseason's title and year. The language is three letters, as Sonarr writes\nit — `eng`, `fra` — and the series is answered in it when the catalogue\nholds it so, else in the caller's own language (`tmdb.language` for their\nkey or their address's rule), then in English, then as it is stored; a\ncode that names no language is read as `eng`. The season type is\n`official` or one of the orders `seasonTypes` lists, and the episodes are\nnumbered by it; any other is answered with the aired order, as Skyhook\nanswers it.",
+        "description": "What `/v1/` answers, and what v5 reads besides: every language the\ncatalogue holds the series in, the orders its episodes come in, a\nseason's title and year. The language is three letters, as Sonarr writes\nit — `eng`, `fra` — and the series is answered in it when the catalogue\nholds it so, else in the caller's own language (`tmdb.language` for their\nkey or their address's rule), then in English, then as it is stored; a\ncode that names no language is read as `eng`. The season type is\n`official` or one of the orders `seasonTypes` lists, and the episodes are\nnumbered by it; any other is answered with the aired order, as Skyhook\nanswers it.\n\nNot found and not answered are told apart as `/v1/` tells them: a 404\nonly when every source that could resolve the id answered that there is\nno such series, a 502 when one did not answer, and the catalogue's copy\nwhenever it holds one.",
         "operationId": "sonarr_show_v2",
         "parameters": [
           {
@@ -7206,7 +7215,7 @@
           {
             "name": "season_type",
             "in": "path",
-            "description": "`official`, or an order of `seasonTypes`: `dvd`, `absolute`…",
+            "description": "`official`, or an order of `seasonTypes`: `dvd`, `absolute`, `altdvd`, `alttwo`…",
             "required": true,
             "schema": {
               "type": "string"
@@ -7227,7 +7236,10 @@
             "description": "The caller's address is not in the allowlist"
           },
           "404": {
-            "description": "No provider could resolve this id"
+            "description": "Every source that could resolve this id answered that there is no such series"
+          },
+          "502": {
+            "description": "A source that could have resolved this id did not answer, and nothing is held to answer with"
           }
         },
         "security": []
@@ -8289,8 +8301,8 @@
         "description": "One of the ways into MyAnimeList.",
         "enum": [
           "official",
-          "jikan",
-          "tenrai"
+          "tenrai",
+          "jikan"
         ]
       },
       "BaseReach": {
@@ -14914,7 +14926,7 @@
           },
           "type": {
             "type": "string",
-            "description": "`official`, `dvd`, `absolute`, `alternate`, `regional`, `altdvd`:\nwhat Sonarr asks the series in."
+            "description": "`official`, `dvd`, `absolute`, `alternate`, `regional`, `altdvd`,\n`alttwo`: what Sonarr asks the series in."
           },
           "seasonNumbers": {
             "type": "array",
@@ -15896,7 +15908,7 @@
             "items": {
               "type": "string"
             },
-            "description": "`tmdb`, `tvdb`, `fanart`, `tvmaze`, `anilist`, `mal`, `imdb`, `fankai`, `fankaiwiki`: those\nswitched on and able to answer, in that order."
+            "description": "`tmdb`, `tvdb`, `fanart`, `tvmaze`, `anilist`, `mal`, `tenrai`, `imdb`, `fankai`,\n`fankaiwiki`: those switched on and able to answer, in that order. `tenrai` stands\nbeside `mal` while MyAnimeList is reached through Tenrai, the mirror that serves\nsince Jikan's public API closed, so that it is credited for what it serves."
           }
         }
       },
@@ -16401,6 +16413,13 @@
               "string",
               "null"
             ]
+          },
+          "tagline": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The line under the title in this language, where the source gives\none: TMDB does, in each of its translations."
           },
           "isManual": {
             "type": "boolean"

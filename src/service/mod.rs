@@ -830,6 +830,40 @@ fn retry_at(item: Option<&MediaItem>, now: DateTime<Utc>) -> DateTime<Utc> {
     item.map_or(due, |item| sooner(due, near_air(item, now)))
 }
 
+/// The most of its age a work's copy of TMDB's answer is allowed to reach:
+/// TMDB's terms of use allow what it answered to be kept six months at the
+/// most. A work whose interval is longer — an ended series kept for a year,
+/// ten — is asked of TMDB again by the sweep once its copy is this old, in a
+/// light refresh (`jobs::refresh`): TMDB alone, as a sync asks it, the other
+/// sources keeping what they last gave.
+pub const SIX_MONTHS: TimeDelta = TimeDelta::days(180);
+
+/// The moment a work refreshed before is due a light refresh, as of `now`:
+/// what the sweep lists the aged works by.
+pub fn six_months_before(now: DateTime<Utc>) -> String {
+    to_rfc3339(now - SIX_MONTHS)
+}
+
+/// Whether a stored work is due a light refresh, as of `now`: its copy of
+/// TMDB's answer is [`SIX_MONTHS`] old, it carries the TMDB id to be asked
+/// by, and its own refresh is not due — that one asks every source, and the
+/// sweep takes it first. Never for an entry made by hand, which has no
+/// source behind it, nor one switched off, which is served as it is held;
+/// nor one never refreshed, which has no copy to be too old.
+pub fn due_light(item: &MediaItem, now: DateTime<Utc>) -> bool {
+    if item.is_manual || !item.is_enabled || item.external_ids.tmdb.is_none() {
+        return false;
+    }
+    let Some(refreshed) = item
+        .refreshed_at
+        .as_deref()
+        .and_then(crate::db::parse_rfc3339)
+    else {
+        return false;
+    };
+    now - refreshed >= SIX_MONTHS && !is_stale(item, now)
+}
+
 /// Whether a stored series should be fetched again because a client asks for
 /// it now, though its refresh is not due.
 ///
@@ -1331,6 +1365,7 @@ mod card_tests {
             language: "fra".into(),
             title: Some("Le Parrain".into()),
             overview: None,
+            tagline: None,
             is_manual: false,
         }];
 
@@ -1638,11 +1673,7 @@ mod testing {
 
         let mut config = config::Config::from_env().expect("a configuration");
         config.mode = config::Mode::Single;
-        config.database = config::Database {
-            url: "sqlite::memory:".into(),
-            max_connections: 1,
-            acquire_timeout: std::time::Duration::from_secs(5),
-        };
+        config.database = crate::db::testing::database().await;
         config.security.bootstrap_admin = None;
         config.cache.redis_url = None;
         config.media.storage = config::MediaStorage::Off;
@@ -1711,21 +1742,7 @@ mod testing {
 #[cfg(test)]
 mod switched_off_tests {
     use super::{testing::overdue, *};
-    use crate::{config, db::Db, domain::ExternalIds};
-
-    /// A real database, in memory, with the real migrations applied.
-    async fn db() -> Db {
-        let db = Db::connect(&config::Database {
-            url: "sqlite::memory:".into(),
-            max_connections: 1,
-            acquire_timeout: std::time::Duration::from_secs(5),
-        })
-        .await
-        .expect("in-memory database");
-
-        db.migrate().await.expect("migrations");
-        db
-    }
+    use crate::{db::testing::db, domain::ExternalIds};
 
     #[tokio::test]
     async fn a_work_switched_off_is_answered_from_the_store_and_never_fetched() {
@@ -1814,5 +1831,74 @@ mod switched_off_tests {
             .await
             .expect("listed");
         assert_eq!(everything, due);
+    }
+}
+
+#[cfg(test)]
+mod light_refresh_tests {
+    use super::*;
+
+    fn at(value: &str) -> DateTime<Utc> {
+        crate::db::parse_rfc3339(value).expect("a date-time")
+    }
+
+    /// A film with a TMDB id, refreshed `days_ago` days before `now` and due
+    /// again in a month: as an ended work kept for a year stands between
+    /// two of its refreshes.
+    fn film(now: DateTime<Utc>, days_ago: i64) -> MediaItem {
+        let mut item = MediaItem::empty(MediaKind::Movie);
+        item.is_enabled = true;
+        item.external_ids.tmdb = Some(603);
+        item.refreshed_at = Some(to_rfc3339(now - TimeDelta::days(days_ago)));
+        item.refresh_after = Some(to_rfc3339(now + TimeDelta::days(30)));
+        item
+    }
+
+    #[test]
+    fn a_work_is_due_a_light_refresh_once_its_copy_of_tmdb_is_six_months_old() {
+        let now = at("2026-10-18T12:00:00Z");
+        assert!(due_light(&film(now, 180), now));
+        assert!(due_light(&film(now, 400), now));
+        assert!(!due_light(&film(now, 179), now));
+        assert!(!due_light(&film(now, 1), now));
+
+        // The sweep lists them by this: six months before now.
+        assert_eq!(six_months_before(now), "2026-04-21T12:00:00.000Z");
+    }
+
+    #[test]
+    fn not_when_its_own_refresh_is_due_nor_without_a_tmdb_id_by_hand_switched_off_or_never_refreshed()
+     {
+        let now = at("2026-10-18T12:00:00Z");
+
+        // Due by its own interval: every source is asked, and the sweep
+        // takes it first.
+        let mut due = film(now, 200);
+        due.refresh_after = Some(to_rfc3339(now - TimeDelta::hours(1)));
+        assert!(!due_light(&due, now));
+
+        // Nothing to ask TMDB by.
+        let mut elsewhere = film(now, 200);
+        elsewhere.external_ids.tmdb = None;
+        elsewhere.external_ids.imdb = Some("tt0133093".into());
+        assert!(!due_light(&elsewhere, now));
+
+        let mut by_hand = film(now, 200);
+        by_hand.is_manual = true;
+        assert!(!due_light(&by_hand, now));
+
+        let mut off = film(now, 200);
+        off.is_enabled = false;
+        assert!(!due_light(&off, now));
+
+        // No copy to be too old.
+        let mut never = film(now, 200);
+        never.refreshed_at = None;
+        assert!(!due_light(&never, now));
+
+        // Never scheduled, with a copy that is: due.
+        let mut unscheduled = film(now, 200);
+        unscheduled.refresh_after = None;
+        assert!(due_light(&unscheduled, now));
     }
 }

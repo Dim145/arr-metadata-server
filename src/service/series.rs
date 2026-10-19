@@ -1,15 +1,20 @@
 //! Series resolution, for Sonarr's surface and the native API.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use futures::future::join_all;
 
 use crate::{
     db::repo,
     domain::{ExternalSource, MediaItem, MediaKind},
-    providers::{names, skyhook, tmdb::map as tmdb_map},
+    providers::{self, names, skyhook, tmdb::map as tmdb_map},
     service::{FETCHING, Found, cached_search, gather, held, ids, load, local, or_held, persist},
     state::AppState,
 };
+
+/// The sources that can resolve a series by an id a client asks by — as
+/// against those that only add to one, `gather`'s supplements. A fetch that
+/// found nothing while one of these did not answer found nothing *yet*.
+const RESOLVING: &[&str] = &[names::TMDB, names::TVDB, names::SKYHOOK, names::FANKAI];
 
 /// Resolve a series by the id Sonarr asked for.
 ///
@@ -19,6 +24,10 @@ use crate::{
 /// No language: a work is stored once, in the language the server fetches in,
 /// and [`crate::service::language`] overlays the one the caller asked for on
 /// the way out. Resolution is the same work whoever is asking.
+///
+/// `None` only when every source that could resolve the id answered that
+/// there is no such series; an error when nothing is held and a source did
+/// not answer, which a client is told as a 502 (see [`resolved`]).
 pub async fn by_client_id(state: &AppState, requested_id: i64) -> Result<Option<MediaItem>> {
     if let Some(fankai_id) = ids::from_fankai(requested_id) {
         return by_fankai_id(state, fankai_id).await;
@@ -62,8 +71,43 @@ pub async fn refetch_by_tvdb_id(state: &AppState, tvdb_id: i64) -> Result<Option
     fetch_by_tvdb_id(state, tvdb_id).await
 }
 
+/// What a client's fetch came to: what the sources said — or, when nothing
+/// was found while a source that could have resolved the work did not
+/// answer, the error that says so, which the client is answered 502 with.
+///
+/// The rule: a series the catalogue holds is answered from it whatever the
+/// sources say ([`or_held`]); an id nobody holds is not found only when every
+/// source that could resolve it answered that there is no such series; a
+/// source that did not answer — a timeout, a 5xx, a refused connection — is
+/// never a "not found". Sonarr takes a series for deleted on a 404 and keeps
+/// what it has on anything else, so the doubt goes to the 502, which is asked
+/// again. The failures themselves are folded away by `gather`, where a source
+/// being down costs detail rather than the answer; what is read here is what
+/// the providers' doors noted over the fetch ([`providers::noting`]).
+async fn resolved<F>(fetch: F) -> Result<Option<MediaItem>>
+where
+    F: std::future::Future<Output = Result<Option<MediaItem>>>,
+{
+    let (fetched, unanswered) = providers::noting(fetch).await;
+    let unanswered: Vec<&'static str> = unanswered
+        .into_iter()
+        .filter(|provider| RESOLVING.contains(provider))
+        .collect();
+    match fetched {
+        Ok(None) if !unanswered.is_empty() => Err(providers::Unanswered(unanswered).into()),
+        Err(e) if !unanswered.is_empty() => Err(e.context(providers::Unanswered(unanswered))),
+        other => other,
+    }
+}
+
 /// Ask the providers for a series by its TVDB id, and store what they say.
 async fn fetch_by_tvdb_id(state: &AppState, tvdb_id: i64) -> Result<Option<MediaItem>> {
+    resolved(ask_by_tvdb_id(state, tvdb_id))
+        .await
+        .with_context(|| format!("tvdb:{tvdb_id} could not be resolved"))
+}
+
+async fn ask_by_tvdb_id(state: &AppState, tvdb_id: i64) -> Result<Option<MediaItem>> {
     // TMDB indexes by its own ids, so ask it which work this TVDB id is before
     // gathering: knowing both lets every provider be asked at once.
     let tmdb_id = if state.tmdb.is_configured() {
@@ -71,6 +115,9 @@ async fn fetch_by_tvdb_id(state: &AppState, tvdb_id: i64) -> Result<Option<Media
             Ok(found) => found.tv_results.first().map(|r| r.id),
             Err(e) => {
                 tracing::warn!(tvdb_id, error = %e, "TMDB lookup failed");
+                // Noted here besides at its door: a key TMDB refuses is no
+                // word about the series either.
+                providers::went_unanswered(names::TMDB);
                 None
             }
         }
@@ -135,6 +182,14 @@ pub async fn by_imdb_id(state: &AppState, imdb_id: &str) -> Result<Option<MediaI
         return Ok(Some(item));
     }
 
+    // One fetch per work at a time, as by the other ids; see `FETCHING`.
+    let _fetching = FETCHING.lock(&format!("series:imdb:{imdb_id}")).await;
+    if let Some(item) = local(state, ExternalSource::Imdb, imdb_id).await?
+        && item.kind == MediaKind::Series
+    {
+        return Ok(Some(item));
+    }
+
     let fetched = fetch_by_imdb_id(state, imdb_id).await;
     or_held(
         state,
@@ -151,12 +206,23 @@ async fn fetch_by_imdb_id(state: &AppState, imdb_id: &str) -> Result<Option<Medi
         return Ok(None);
     }
 
-    let found = state.tmdb.find("imdb_id", imdb_id).await?;
-    let Some(summary) = found.tv_results.first() else {
-        return Ok(None);
-    };
+    resolved(async {
+        let found = match state.tmdb.find("imdb_id", imdb_id).await {
+            Ok(found) => found,
+            Err(e) => {
+                tracing::warn!(imdb_id, error = %e, "TMDB lookup failed");
+                providers::went_unanswered(names::TMDB);
+                return Ok(None);
+            }
+        };
+        let Some(summary) = found.tv_results.first() else {
+            return Ok(None);
+        };
 
-    fetch_from_tmdb(state, summary.id).await
+        ask_from_tmdb(state, summary.id).await
+    })
+    .await
+    .with_context(|| format!("imdb:{imdb_id} could not be resolved"))
 }
 
 /// A Fan-Kai production, by Fankai's id for it.
@@ -184,7 +250,9 @@ pub async fn by_fankai_id(state: &AppState, fankai_id: i64) -> Result<Option<Med
         return Ok(Some(item));
     }
 
-    let fetched = gather::fankai_series(state, fankai_id).await;
+    let fetched = resolved(gather::fankai_series(state, fankai_id))
+        .await
+        .with_context(|| format!("fankai:{fankai_id} could not be resolved"));
     or_held(
         state,
         MediaKind::Series,
@@ -287,16 +355,18 @@ pub async fn search(state: &AppState, term: &str) -> Result<Vec<MediaItem>> {
         term,
     );
 
-    cached_search(state, key, || async {
+    // The sources that did not answer: an answer they would have added to is
+    // not kept, and one nothing else gave is not given as "no results".
+    let mut unanswered: Vec<&'static str> = Vec::new();
+    let items = cached_search(state, key, || async {
         let mut results = local_search(state, term).await?;
-        let mut degraded = false;
 
         if state.tmdb.is_configured() {
             match tmdb_search(state, term).await {
                 Ok(remote) => merge_results(&mut results, remote),
                 Err(e) => {
                     tracing::warn!(term, error = %e, "TMDB search failed");
-                    degraded = true;
+                    unanswered.push(names::TMDB);
                 }
             }
         }
@@ -311,7 +381,7 @@ pub async fn search(state: &AppState, term: &str) -> Result<Vec<MediaItem>> {
                 Ok(hits) => merge_results(&mut results, hits),
                 Err(e) => {
                     tracing::warn!(term, error = format_args!("{e:#}"), "TheTVDB search failed");
-                    degraded = true;
+                    unanswered.push(names::TVDB);
                 }
             }
         }
@@ -325,7 +395,7 @@ pub async fn search(state: &AppState, term: &str) -> Result<Vec<MediaItem>> {
                 }
                 Err(e) => {
                     tracing::warn!(term, error = %e, "Skyhook search failed");
-                    degraded = true;
+                    unanswered.push(names::SKYHOOK);
                 }
             }
         }
@@ -339,17 +409,28 @@ pub async fn search(state: &AppState, term: &str) -> Result<Vec<MediaItem>> {
                 Ok(hits) => merge_results(&mut results, hits),
                 Err(e) => {
                     tracing::warn!(term, error = format_args!("{e:#}"), "Fankai search failed");
-                    degraded = true;
+                    unanswered.push(names::FANKAI);
                 }
             }
         }
 
         Ok(Found {
             items: results,
-            degraded,
+            degraded: !unanswered.is_empty(),
         })
     })
-    .await
+    .await?;
+
+    // Nothing found, and a source that could have found it did not answer:
+    // a 502, which a client asks again on, rather than the empty list Sonarr
+    // reads as "no such series". What the catalogue holds by that name is
+    // answered, with or without the sources (see [`resolved`]).
+    if items.is_empty() && !unanswered.is_empty() {
+        return Err(providers::Unanswered(unanswered))
+            .with_context(|| format!("the search for {term:?} could not be answered"));
+    }
+
+    Ok(items)
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -378,10 +459,17 @@ async fn local_search(state: &AppState, term: &str) -> Result<Vec<MediaItem>> {
 ///
 /// Its TVDB id comes from TMDB's own external ids, so Skyhook can be asked too.
 async fn fetch_from_tmdb(state: &AppState, tmdb_id: i64) -> Result<Option<MediaItem>> {
+    resolved(ask_from_tmdb(state, tmdb_id))
+        .await
+        .with_context(|| format!("tmdb:{tmdb_id} could not be resolved"))
+}
+
+async fn ask_from_tmdb(state: &AppState, tmdb_id: i64) -> Result<Option<MediaItem>> {
     let tvdb_id = match state.tmdb.tv_external_ids(tmdb_id).await {
         Ok(ids) => ids.tvdb_id,
         Err(e) => {
             tracing::warn!(tmdb_id, error = %e, "could not resolve the TVDB id");
+            providers::went_unanswered(names::TMDB);
             None
         }
     };

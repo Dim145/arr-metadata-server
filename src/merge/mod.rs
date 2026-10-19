@@ -24,8 +24,8 @@ pub mod provenance;
 pub mod rules;
 
 use crate::domain::{
-    AlternativeTitle, CountryRelease, CoverType, Episode, ExternalIds, Image, MediaItem, Rating,
-    Season, Translation,
+    AlternativeTitle, CountryRelease, Episode, ExternalIds, Image, MediaItem, Rating, Season,
+    Translation,
 };
 
 /// What one provider had to say.
@@ -692,33 +692,10 @@ fn merge_episodes(into: &mut [Episode], other: Vec<Episode>) {
     }
 }
 
-/// Artwork a provider contributed that nothing else did, for logging.
-#[allow(dead_code)]
-pub fn image_summary(images: &[Image]) -> String {
-    use std::collections::BTreeMap;
-
-    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
-    for image in images {
-        *counts.entry(image.cover_type.as_str()).or_default() += 1;
-    }
-
-    counts
-        .into_iter()
-        .map(|(kind, n)| format!("{n} {kind}"))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-/// A cover type's place in the display order, for callers building artwork.
-#[allow(dead_code)]
-pub fn cover_priority(cover_type: CoverType) -> u8 {
-    cover_type.priority()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{CreditType, MediaKind, RatingValue};
+    use crate::domain::{CoverType, CreditType, MediaKind, RatingValue};
 
     fn priority() -> Vec<String> {
         ["tmdb", "tvdb", "skyhook", "fanart"]

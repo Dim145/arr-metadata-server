@@ -21,8 +21,10 @@ export const fr: Dict = {
   },
   credits: {
     lead: 'Métadonnées :',
+    via: 'via',
     tmdb: 'This product uses the TMDB API but is not endorsed or certified by TMDB.',
     imdb: 'Information courtesy of IMDb (https://www.imdb.com). Used with permission.',
+    tvmaze: 'CC BY-SA 4.0',
   },
   feeds: {
     label: 'Flux',
@@ -451,6 +453,7 @@ export const fr: Dict = {
       alternate: 'Alternative',
       regional: 'Régionale',
       altdvd: 'DVD alternative',
+      alttwo: 'Alternative 2',
     },
     orderNote: 'Telle que TheTVDB les numérote ; l’ordre de diffusion est celui servi aux clients.',
   },
@@ -1427,6 +1430,24 @@ export const fr: Dict = {
           'Un Fan-Kai n’est décrit que par Fankai, avec son wiki pour ce dont il est tiré : aucune autre source ne s’y mêle, sinon le remontage serait fondu dans l’anime d’origine.',
       },
       loadFailed: 'Les règles n’ont pas pu être chargées.',
+      terms: {
+        title: 'Conditions d’utilisation',
+        lead: 'Chaque source répond sous ses propres conditions. Ce serveur garde une copie de ce qu’elles ont répondu pour les œuvres qu’il détient, la rafraîchit, ne recopie aucun catalogue et n’entraîne rien dessus ; le reste est à elles de le dire, et chaque page publique crédite les sources actives.',
+        read: (name: string) => `Conditions de ${name}`,
+        lines: {
+          tmdb: 'Usage non commercial ; la mention montrée aux lecteurs ; rien de gardé plus de six mois, si bien qu’une œuvre est redemandée à TMDB tous les six mois quel que soit l’intervalle de rafraîchissement.',
+          tvdb: 'Gratuit sous 50 000 $ de revenus par an, avec un crédit et un lien direct montrés aux lecteurs.',
+          tvmaze: 'Données sous CC BY-SA 4.0, créditées sur chaque page.',
+          anilist: 'Gratuit pour un usage non commercial ; ni collecte en masse, ni usage comme stockage ou sauvegarde, ni service concurrent de liste ou de suivi.',
+          mal: 'L’API officielle ne se redistribue pas, et un usage commercial demande un accord écrit.',
+          tenrai: 'Un miroir écrit au schéma de Jikan, qui sert depuis la fermeture de l’API publique de Jikan le 1er octobre 2026 : cache autorisé, pas d’offre à des tiers comme API concurrente.',
+          fanart: 'Une clé par projet, et un crédit là où ses images sont montrées.',
+          imdb: 'Jeux de données pour un usage personnel et non commercial, avec la phrase qu’IMDb demande sur chaque page.',
+          fankai: 'Les métadonnées de Fankai, pour ses propres productions, demandées une à la fois ; le contenu du wiki est sous CC BY-SA.',
+          skyhook: 'Le service de Sonarr, qui republie TheTVDB, dont les conditions s’appliquent à ce qu’il porte.',
+          radarr: 'Le service de Radarr, qui republie TMDB, dont les conditions s’appliquent à ce qu’il porte.',
+        },
+      },
       reach: {
         official: 'API officielle',
         jikan: 'Jikan',
@@ -2082,6 +2103,12 @@ export const fr: Dict = {
         runtime: 'Durée (minutes)',
         absolute: 'Numéro absolu',
         overview: 'Synopsis',
+        pictures: {
+          title: 'Images',
+          none: 'Aucune image attachée à cette saison.',
+          hiddenCount: (n: number) => (n <= 1 ? `${n} masquée` : `${n} masquées`),
+          chosen: 'L’affiche choisie est montrée quoi qu’il soit masqué.',
+        },
         shift: {
           open: 'Décaler les dates…',
           title: (season: string) => `Décaler les dates de ${season}`,
@@ -2306,6 +2333,9 @@ export const fr: Dict = {
       read: 'Lecture',
       write: 'Écriture',
       administer: 'Administration',
+      metrics: 'Relevé',
+      metricsHint:
+        'Relevé seul lit les chiffres de /api/v1/admin/metrics et rien d’autre : la clé que Prometheus garde dans son fichier de configuration.',
       issued: 'Clés émises',
       keyFor: (name: string) => `La clé de ${name}`,
       onlyOnce:
@@ -2497,6 +2527,8 @@ export const fr: Dict = {
       /** The fixed notes the server leaves on a run or an entry, in words. */
       notes: {
         'refreshed from a provider': 'Rafraîchie depuis une source',
+        'refreshed from TMDB alone, its copy being six months old': 'Rafraîchie depuis TMDB seul : sa copie avait six mois',
+        'TMDB did not answer; the stored entry was kept': 'TMDB n’a pas répondu ; la fiche conservée a été gardée',
         'gone since it was listed': 'Supprimée depuis qu’elle a été listée',
         'no provider answered; the stored entry was kept': 'Aucune source n’a répondu ; la fiche conservée a été gardée',
         'changed while syncing; nothing written': 'Écrite par autre chose pendant la synchronisation : rien n’a changé',
@@ -2596,6 +2628,11 @@ export const fr: Dict = {
       changedNone: 'Rien n’a été changé par rapport à ce que le serveur avait au départ.',
       startup: 'Lus au démarrage',
       startupLead: 'Ces valeurs viennent de l’environnement, lues une seule fois au démarrage du serveur, et ne sont montrées ici que pour être lues. En changer une, c’est changer sa variable et redémarrer le serveur.',
+      sixMonths: {
+        title: 'Gardé plus longtemps que TMDB ne l’autorise',
+        body: (keys: string) =>
+          `${keys} : plus de six mois. Les conditions de TMDB n’autorisent pas à garder ses réponses plus de six mois, si bien qu’une œuvre rafraîchie il y a plus longtemps est redemandée à TMDB par le balayage tous les six mois — un rafraîchissement léger, de TMDB seul, quoi que dise l’intervalle.`,
+      },
       version: 'Version',
       database: 'Base de données',
       publicUrl: 'Adresse publique',
@@ -2607,7 +2644,7 @@ export const fr: Dict = {
       importRunning: 'Téléchargement toujours en cours : il continue en arrière-plan, et son résultat sera dans Tâches.',
       importFailed: 'Le téléchargement a échoué — la raison est dans Tâches.',
       furtherHint:
-        'Chaque liste n’est téléchargée que tant qu’une source qui en a besoin est active. Définissez AMS_MAL_CLIENT_ID pour interroger MyAnimeList par son API officielle plutôt que par Jikan.',
+        'Chaque liste n’est téléchargée que tant qu’une source qui en a besoin est active. Définissez AMS_MAL_CLIENT_ID pour interroger MyAnimeList par son API officielle plutôt que par Tenrai.',
       furtherJobs: 'Chaque téléchargement est consigné dans',
       animeList: 'Liste d’identifiants anime',
       animeEntries: (n: string) => `${n} entrées`,
@@ -2616,7 +2653,7 @@ export const fr: Dict = {
       notImported: 'Pas téléchargée',
       malVia: 'MyAnimeList par',
       malOfficial: 'Son API officielle',
-      malJikan: 'Jikan',
+      malJikan: 'Tenrai',
       enabled: 'Activé',
       disabled: 'Désactivé',
       policy: 'Politique d’accès',
@@ -2739,8 +2776,8 @@ export const fr: Dict = {
       'radarr.enrich': 'Interrogé en plus, à chaque fois, et fusionné avec ce que TMDB a dit. Plus lent, plus sûr, et cela rend le secours ci-dessus inutile.',
       'tvmaze.enabled': 'L’heure exacte de diffusion de chaque épisode, partout où sa date concorde avec celle de TheTVDB — un épisode déplacé sur un autre créneau arrive ainsi à l’heure dans Sonarr. Jamais utilisé pour la numérotation. Sans clé ; ses données sont sous CC BY-SA et créditées sur chaque page.',
       'anilist.enabled': 'La note d’AniList, et les titres romaji et originaux auxquels Radarr compare les sorties de films d’animation japonaise. Tient à jour la liste d’identifiants anime, qui permet aussi aux listes d’import AniList et MyAnimeList de Sonarr de trouver des séries que personne n’a encore ajoutées. Sans clé.',
-      'mal.enabled': 'La note et les titres de MyAnimeList — par son API officielle si AMS_MAL_CLIENT_ID est défini, par Jikan sinon, qui ne demande pas de clé mais peut avoir des mois de retard. Utilise la même liste d’identifiants.',
-      'mal.fallback': 'Quand la voie vers MyAnimeList interrogée ne répond pas — pas de connexion, une erreur de sa part, une limite de débit qui dure au-delà de l’attente —, la suivante l’est : Jikan après l’API officielle, puis Tenrai, un autre miroir au schéma de Jikan. Celle qui n’a pas répondu est écartée cinq minutes ; un 404 est une réponse et n’en fait interroger aucune autre. Désactivé, seule la première est interrogée.',
+      'mal.enabled': 'La note et les titres de MyAnimeList — par son API officielle si AMS_MAL_CLIENT_ID est défini, par Tenrai sinon, un miroir au schéma de Jikan qui ne demande pas de clé mais peut avoir quelques jours de retard. L’API publique de Jikan a fermé le 1er octobre 2026. Utilise la même liste d’identifiants.',
+      'mal.fallback': 'Quand la voie vers MyAnimeList interrogée ne répond pas — pas de connexion, une erreur de sa part, une limite de débit qui dure au-delà de l’attente —, la suivante l’est : Tenrai après l’API officielle, puis le Jikan de AMS_JIKAN_UPSTREAM, le vôtre désormais que le public a fermé. Celle qui n’a pas répondu est écartée cinq minutes ; un 404 est une réponse et n’en fait interroger aucune autre. Désactivé, seule la première est interrogée.',
       'imdb.enabled': 'Les notes d’IMDb, téléchargées chaque jour pour les œuvres présentes ici. C’est aussi la note transmise à Sonarr, comme le fait Skyhook. Pour un usage personnel et non commercial uniquement.',
       'fankai.enabled': 'Les productions Fan-Kai, depuis le service de métadonnées de Fankai : chaque anime remonté comme une série, ses arcs comme des saisons et ses films comme des épisodes, numérotés comme Fankai nomme ses fichiers — S02E08 est le huitième film en tout, dans le deuxième arc. Trouvées par leur titre, ou par « fankai: » suivi d’un identifiant, et récupérées seulement à la demande. Sonarr reçoit un identifiant propre à ce serveur, TheTVDB n’en ayant aucun pour elles. Sans clé ; Fankai est crédité sur chaque page. Désactivée, ce qui a été récupéré reste tel quel.',
       'fankai.wiki': 'La page de chaque Fan-Kai sur le wiki de la communauté Fankai, fan-kai.fandom.com : les entrées AniList et MyAnimeList dont il est tiré, et le Fan-Kai qui lui fait suite. La fiche d’un Fan-Kai mène alors à son anime, et celle de l’anime — une fois que Sonarr la détient — à ses Fan-Kai. Un appel par récupération d’un Fan-Kai, et seulement tant que Fankai est actif ; avec AniList actif, le titre, l’année et l’affiche de l’anime viennent de là. Sans clé ; son contenu est sous CC BY-SA et crédité sur chaque page.',
@@ -2748,8 +2785,8 @@ export const fr: Dict = {
       'refresh.enabled': 'Les œuvres stockées sont récupérées à nouveau, régulièrement, à mesure que ce qu’on en sait vieillit.',
       'refresh.intervalSeconds': 'En secondes. Une minute au minimum, une semaine au maximum.',
       'refresh.batchSize': 'Le nombre d’œuvres récupérées à nouveau à chaque réveil du planificateur.',
-      'refresh.ttlContinuing': 'En secondes : combien de temps une série encore diffusée, ou un film pas encore sorti, est gardé avant d’être récupéré à nouveau — 21600, c’est six heures. Un épisode sur le point d’être diffusé le fait revenir plus tôt. Une minute au moins, un an au plus ; une œuvre prend un changement à son prochain rafraîchissement.',
-      'refresh.ttlEnded': 'En secondes : de même pour une série terminée ou un film sorti — 604800, c’est une semaine. Une minute au moins, dix ans au plus.',
+      'refresh.ttlContinuing': 'En secondes : combien de temps une série encore diffusée, ou un film pas encore sorti, est gardé avant d’être récupéré à nouveau — 21600, c’est six heures. Un épisode sur le point d’être diffusé le fait revenir plus tôt. Une minute au moins, un an au plus ; une œuvre prend un changement à son prochain rafraîchissement. Les conditions de TMDB n’autorisent pas à garder ses réponses plus de six mois : au-delà de 15552000 — 180 jours — une œuvre est de toute façon redemandée à TMDB tous les six mois, par un rafraîchissement léger de TMDB seul.',
+      'refresh.ttlEnded': 'En secondes : de même pour une série terminée ou un film sorti — 604800, c’est une semaine. Une minute au moins, dix ans au plus. Au-delà de 15552000 — 180 jours — TMDB est tout de même redemandé tous les six mois, ses conditions n’autorisant pas plus.',
       'sources.priority': 'Les sources, la plus fiable d’abord, séparées par des virgules. Elles se mettent en ordre sur la page Sources ; une œuvre prend un nouvel ordre à son prochain rafraîchissement.',
       'updates.check': 'Une fois par jour, et une minute après le démarrage, ce serveur demande à GitHub sa dernière version, et le tableau de bord signale quand une plus récente est sortie. Ce qui part est une seule requête GET anonyme vers api.github.com, avec le nom et la version que porte chaque requête de ce serveur — rien sur cette instance ni sur ce qu’elle contient. Coupé tant qu’on ne l’active pas.',
       'adult.mode': 'Masquées : personne ne reçoit d’œuvre pour adultes, quoi que demande un client.',

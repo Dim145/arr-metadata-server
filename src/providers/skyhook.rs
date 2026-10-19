@@ -177,7 +177,19 @@ impl SkyhookClient {
             .collect())
     }
 
+    /// [`exchange`](Self::exchange), noting for a `providers::noting` caller
+    /// when Skyhook did not answer. Here besides at its door: a body that
+    /// could not be read, or this server answering itself, is no word about
+    /// the series either.
     async fn fetch(&self, url: &str, query: &[(&str, &str)]) -> Result<Option<Value>> {
+        let fetched = self.exchange(url, query).await;
+        if fetched.is_err() {
+            crate::providers::went_unanswered(crate::providers::names::SKYHOOK);
+        }
+        fetched
+    }
+
+    async fn exchange(&self, url: &str, query: &[(&str, &str)]) -> Result<Option<Value>> {
         let (response, _permit) = self
             .gate
             .send(|| {
@@ -273,6 +285,7 @@ fn read(value: &Value) -> Result<Show> {
             language,
             title,
             overview,
+            tagline: None,
             is_manual: false,
         });
     }

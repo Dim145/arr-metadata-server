@@ -187,23 +187,12 @@ pub async fn after_write(state: &AppState, id: &str) {
 mod tests {
     use super::*;
     use crate::{
-        config,
-        db::repo::item::{Query, Sort},
+        db::{
+            repo::item::{Query, Sort},
+            testing::db,
+        },
         domain::{ExternalIds, MediaItem, MediaKind, Rating, fields::Scope},
     };
-
-    async fn db() -> Db {
-        let db = Db::connect(&config::Database {
-            url: "sqlite::memory:".into(),
-            max_connections: 1,
-            acquire_timeout: std::time::Duration::from_secs(5),
-        })
-        .await
-        .expect("in-memory database");
-
-        db.migrate().await.expect("migrations");
-        db
-    }
 
     async fn stored(db: &Db, adjust: impl FnOnce(&mut MediaItem)) -> MediaItem {
         let mut item = MediaItem::empty(MediaKind::Series);

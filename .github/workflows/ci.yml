@@ -78,7 +78,8 @@ jobs:
   # (src/db/parity.rs), which needs both engines.
   #
   # Named by module path: `db::` alone would take `tvdb::` and `tmdb::` with
-  # it. A module whose tests open a database through src/db/testing.rs joins
+  # it. A module whose tests open a database through src/db/testing.rs — or
+  # build the whole server on one, as the native API's handlers do — joins
   # the list when it is written.
   test-postgres:
     name: Tests on PostgreSQL
@@ -116,7 +117,47 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: Test
-        run: 'cargo test --locked -- db::repo:: db::parity:: db::testing::'
+        run: >-
+          cargo test --locked --
+          db::repo:: db::parity:: db::testing::
+          api::native:: api::plex:: api::relay::
+          arr::history:: jobs::update_check::
+          service:: settings::reference:: tls::ca::
+
+  # How much of the crate its tests reach, for whoever wonders: informative,
+  # never a gate — a threshold on a figure nobody has read only gets switched
+  # off. The summary is in the log and `lcov.info` is kept a week, for an
+  # editor or `genhtml` to read. On SQLite, as the backend job's tests are.
+  coverage:
+    name: Coverage (informative)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install the toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          components: llvm-tools-preview
+
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-llvm-cov
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Measure
+        run: cargo llvm-cov --locked --lcov --output-path lcov.info
+
+      - name: Summarise
+        run: cargo llvm-cov report --summary-only
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage-lcov
+          path: lcov.info
+          retention-days: 7
 
   frontend:
     name: Web UI
@@ -138,6 +179,12 @@ jobs:
       - name: Typecheck
         working-directory: frontend
         run: npm run typecheck
+
+      # Playwright compiles the suite without checking its types, and `tsc -b`
+      # above reads the interface's project alone: this reads the suite's.
+      - name: Typecheck the end-to-end suite
+        working-directory: frontend
+        run: npm run typecheck:e2e
 
       # The interface's types are generated from the server's spec. `cargo test`
       # fails while frontend/openapi.json is not the spec the server builds;

@@ -449,14 +449,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_version_is_told_once_whichever_instance_finds_it() {
-        let db = Db::connect(&crate::config::Database {
-            url: "sqlite::memory:".into(),
-            max_connections: 1,
-            acquire_timeout: Duration::from_secs(5),
-        })
-        .await
-        .unwrap();
-        db.migrate().await.unwrap();
+        let db = crate::db::testing::db().await;
 
         assert!(told_first(&db, "0.8.0").await.unwrap());
         assert!(!told_first(&db, "0.8.0").await.unwrap());

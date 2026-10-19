@@ -879,6 +879,10 @@ pub struct Translation {
     pub title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub overview: Option<String>,
+    /// The line under the title in this language, where the source gives
+    /// one: TMDB does, in each of its translations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tagline: Option<String>,
     pub is_manual: bool,
 }
 

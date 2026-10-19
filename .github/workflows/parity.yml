@@ -1,0 +1,106 @@
+# Read by both GitHub Actions and Gitea/Forgejo Actions.
+name: Skyhook parity
+
+# The real Skyhook's second edition beside this server's, for a few real
+# series, once a week and on demand: scripts/e2e-skyhook-v2.sh fetches each
+# from skyhook.sonarr.tv and from a server built here, and fails on every
+# difference that is not an addition — a key the real service sends and this
+# server does not, a season type or a season missing here, an episode without
+# one of its ids. Sonarr v5 reads the real service's shape, and that shape
+# moved twice in October 2026 without a word: a run that fails is the notice
+# that it moved again.
+on:
+  schedule:
+    # Monday, early: a week of the real service's changes, read before the
+    # week's work.
+    - cron: '17 5 * * 1'
+  workflow_dispatch:
+
+# Least privilege: nothing here writes to the repository.
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # Debug info is the bulk of the target directory and nothing here reads it.
+  CARGO_PROFILE_DEV_DEBUG: 0
+
+jobs:
+  parity:
+    name: Skyhook v2 parity
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      # The server answers the series from TheTVDB and TMDB, so the run needs
+      # their keys, as the end-to-end tests do: the repository secrets
+      # TMDB_API_KEY and TVDB_API_KEY. Said before anything is fetched or
+      # built, so that a run without them costs a few seconds. A secret
+      # cannot be tested in an `if`, which is why it is an environment
+      # variable here, and why the answer is an output.
+      - name: Look for the provider keys
+        id: keys
+        env:
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+          TVDB_API_KEY: ${{ secrets.TVDB_API_KEY }}
+        run: |
+          if [ -n "$TMDB_API_KEY" ] && [ -n "$TVDB_API_KEY" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Skyhook parity skipped::TMDB_API_KEY and TVDB_API_KEY are repository secrets, and this run was not given them."
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.keys.outputs.present == 'true'
+
+      - name: Install the toolchain
+        if: steps.keys.outputs.present == 'true'
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: steps.keys.outputs.present == 'true'
+
+      # As the end-to-end job builds it: the crate a debug build, its
+      # dependencies optimised. The web UI is not built — the Sonarr surface
+      # does not serve it, and the binary embeds a placeholder page without.
+      - name: Build the server
+        if: steps.keys.outputs.present == 'true'
+        run: cargo build --locked --config 'profile.dev.package."*".opt-level = 2'
+
+      # On a database of its own, with no refresh schedule — nothing but what
+      # the comparison asks for — and reached on the loopback address, which
+      # the Sonarr surface admits by default. In the background, its log kept
+      # for the step that shows it when something failed.
+      - name: Start the server
+        if: steps.keys.outputs.present == 'true'
+        env:
+          AMS_TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+          AMS_TVDB_API_KEY: ${{ secrets.TVDB_API_KEY }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/parity"
+          echo "PARITY_DIR=$RUNNER_TEMP/parity" >> "$GITHUB_ENV"
+          AMS_DATABASE_URL="sqlite://$RUNNER_TEMP/parity/parity.db?mode=rwc" \
+          AMS_BIND_ADDRESS=127.0.0.1:8479 \
+          AMS_PUBLIC_URL=http://127.0.0.1:8479 \
+          AMS_REFRESH_ENABLED=false \
+            nohup ./target/debug/arr-metadata-server > "$RUNNER_TEMP/parity/server.log" 2>&1 &
+
+          for _ in $(seq 1 90); do
+            curl -sf -o /dev/null http://127.0.0.1:8479/health && break
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:8479/ready | grep -q '"database":true'
+
+      - name: Compare with the real service
+        if: steps.keys.outputs.present == 'true'
+        run: ./scripts/e2e-skyhook-v2.sh http://127.0.0.1:8479
+
+      # What the server said, in the log of the run, where a secret it might
+      # have named is masked.
+      - name: Show the server's log
+        if: ${{ failure() && steps.keys.outputs.present == 'true' }}
+        run: |
+          echo "::group::server.log"
+          cat "$PARITY_DIR/server.log" || true
+          echo "::endgroup::"

@@ -343,6 +343,13 @@ impl TvdbClient {
     /// straight through, an alternate or a regional one — each the same
     /// episodes, by id, placed in seasons and numbers of its own. The aired
     /// order is not among them: it is the work's own.
+    ///
+    /// Each is read from the episodes endpoint of its type. One that answers
+    /// empty for a type the series has seasons of is read season by season
+    /// instead, from each season's own record (`/seasons/{id}/extended`, one
+    /// call per season of the type), which is how TheTVDB's own site lists
+    /// it: the endpoint answers an empty list for `altdvd` and `alttwo`
+    /// (thetvdb/v4-api#340), and the real Skyhook serves both whole.
     pub async fn orders(&self, tvdb_id: i64) -> Result<Vec<EpisodeOrder>> {
         if !self.is_enabled() {
             return Ok(Vec::new());
@@ -355,35 +362,77 @@ impl TvdbClient {
             return Ok(Vec::new());
         };
 
-        let mut kinds: Vec<String> = body
+        // The seasons of each other order, by type: their ids are the way
+        // round an endpoint that answers empty.
+        let mut seasons_of: BTreeMap<String, Vec<SeasonRecord>> = BTreeMap::new();
+        for season in body
             .pointer("/data/seasons")
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
-            .filter_map(|s| s.pointer("/type/type").and_then(Value::as_str))
-            .filter(|kind| OTHER_ORDERS.contains(kind))
-            .map(str::to_string)
-            .collect();
-        kinds.sort_unstable();
-        kinds.dedup();
+        {
+            let Ok(record) = serde_json::from_value::<SeasonRecord>(season.clone()) else {
+                continue;
+            };
+            let Some(kind) = record.season_type.as_ref().map(|t| t.kind.as_str()) else {
+                continue;
+            };
+            if OTHER_ORDERS.contains(&kind) {
+                seasons_of.entry(kind.to_string()).or_default().push(record);
+            }
+        }
 
         // No falling back to the untranslated episodes here, as the aired
         // fetch does: a language TVDB does not hold blanks the names, and a
         // place is made of ids and numbers alone.
-        let mut orders = Vec::with_capacity(kinds.len());
-        for kind in kinds {
-            let episodes: Vec<PlacedEpisode> = self
+        let mut orders = Vec::with_capacity(seasons_of.len());
+        for (kind, mut seasons) in seasons_of {
+            let mut episodes: Vec<PlacedEpisode> = self
                 .episodes_of(tvdb_id, &kind, &self.language)
                 .await?
                 .into_iter()
                 .filter_map(|raw| placed(&raw))
                 .collect();
+            if episodes.is_empty() {
+                seasons.sort_by_key(|season| season.number);
+                episodes = self.placed_by_season(&seasons).await?;
+            }
             if !episodes.is_empty() {
                 orders.push(EpisodeOrder { kind, episodes });
             }
         }
 
         Ok(orders)
+    }
+
+    /// An order's episodes read season by season, each from its season's
+    /// own record: where one stands is the season's number and the episode's
+    /// within it, as the record gives it. A season answered 404 places
+    /// nothing.
+    async fn placed_by_season(&self, seasons: &[SeasonRecord]) -> Result<Vec<PlacedEpisode>> {
+        let mut placed_all = Vec::new();
+        for season in seasons {
+            let (Some(id), Some(number)) = (season.id, season.number) else {
+                continue;
+            };
+            let Some(body) = self.get(&format!("seasons/{id}/extended")).await? else {
+                continue;
+            };
+            let mut of_season: Vec<PlacedEpisode> = body
+                .pointer("/data/episodes")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(placed)
+                .map(|mut place| {
+                    place.season_number = number;
+                    place
+                })
+                .collect();
+            of_season.sort_by_key(|place| place.episode_number);
+            placed_all.extend(of_season);
+        }
+        Ok(placed_all)
     }
 
     /// Every episode in one language and one order, following TVDB's paging.
@@ -456,11 +505,23 @@ impl TvdbClient {
         }
     }
 
+    /// [`fetch`](Self::fetch), noting for a `providers::noting` caller when
+    /// TheTVDB did not answer. Here besides at its door: a sign-in that
+    /// failed within the minute is refused without a request, and a body
+    /// that could not be read is no word about the series either.
+    async fn get(&self, path: &str) -> Result<Option<Value>> {
+        let got = self.fetch(path).await;
+        if got.is_err() {
+            crate::providers::went_unanswered(crate::providers::names::TVDB);
+        }
+        got
+    }
+
     /// A GET with the current token, retried once after re-authenticating —
     /// at most once a minute: a path the operator's key may not read is
     /// refused whatever the token, and asking for a new one on every such
     /// call would sign the operator in on every call.
-    async fn get(&self, path: &str) -> Result<Option<Value>> {
+    async fn fetch(&self, path: &str) -> Result<Option<Value>> {
         let token = self.token().await?;
 
         match self.try_get(path, &token).await? {
@@ -758,8 +819,18 @@ struct ArtworkRecord {
 // ─── mapping ─────────────────────────────────────────────────────────────────
 
 /// The season types TVDB numbers a series by besides the aired order, as
-/// they are named in a season's `type` and in the episodes path.
-const OTHER_ORDERS: &[&str] = &["dvd", "absolute", "alternate", "regional", "altdvd"];
+/// they are named in a season's `type` and in the episodes path. The last
+/// two are the further alternate orders — a Blu-ray's, a streaming
+/// service's — that the real Skyhook offers Sonarr v5 and TheTVDB's own
+/// episodes endpoint answers empty for (see [`TvdbClient::orders`]).
+const OTHER_ORDERS: &[&str] = &[
+    "dvd",
+    "absolute",
+    "alternate",
+    "regional",
+    "altdvd",
+    "alttwo",
+];
 
 /// Where one episode record stands in the order it was read from.
 fn placed(raw: &Value) -> Option<PlacedEpisode> {
@@ -839,6 +910,7 @@ fn blank_translation(language: &str) -> Translation {
         language: language.to_string(),
         title: None,
         overview: None,
+        tagline: None,
         is_manual: false,
     }
 }
@@ -1526,6 +1598,155 @@ mod tests {
             lines.iter().any(|l| l.starts_with(
                 "GET /series/81189/episodes/official/..%2F..%2Flogin%3Fx%3D1%23?page=0 "
             )),
+            "{lines:?}"
+        );
+    }
+
+    /// A server answering each request by the start of its path — the first
+    /// route that matches, 404 for none — and the request line of each.
+    async fn answering_by_path(
+        routes: Vec<(&'static str, String)>,
+    ) -> (String, std::sync::Arc<parking_lot::Mutex<Vec<String>>>) {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+        const MISSING: &str =
+            "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let at = format!("http://{}", listener.local_addr().unwrap());
+        let asked = std::sync::Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let seen = asked.clone();
+        tokio::spawn(async move {
+            while let Ok((mut connection, _)) = listener.accept().await {
+                let mut request = vec![0u8; 8192];
+                let read = connection.read(&mut request).await.unwrap_or(0);
+                let line = String::from_utf8_lossy(&request[..read])
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+                    .to_string();
+                let path = line.split(' ').nth(1).unwrap_or_default().to_string();
+                seen.lock().push(line);
+                let answer = routes
+                    .iter()
+                    .find(|(prefix, _)| path.starts_with(prefix))
+                    .map_or(MISSING, |(_, answer)| answer.as_str());
+                let _ = connection.write_all(answer.as_bytes()).await;
+                let _ = connection.shutdown().await;
+            }
+        });
+        (at, asked)
+    }
+
+    fn json_reply(body: &str) -> String {
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    /// An episode's id and where it stands: its season, its number, its
+    /// absolute number.
+    type Placement = (i64, i32, i32, Option<i32>);
+
+    /// The Office (US), as TheTVDB answers for it: a DVD order the episodes
+    /// endpoint lists, and a second alternate order it answers empty for
+    /// (thetvdb/v4-api#340) whose seasons' own records list it — read
+    /// season by season, one call each, and placed by the season's number
+    /// whatever the record says.
+    #[tokio::test]
+    async fn an_order_the_endpoint_answers_empty_is_read_season_by_season() {
+        let (at, asked) = answering_by_path(vec![
+            ("/login", json_reply(r#"{"data":{"token":"t"}}"#)),
+            (
+                "/series/73244/extended",
+                json_reply(
+                    r#"{"data":{"id":73244,"seasons":[
+                        {"id":10,"number":1,"type":{"type":"official"}},
+                        {"id":20,"number":1,"type":{"type":"dvd"}},
+                        {"id":31,"number":2,"type":{"type":"alttwo"}},
+                        {"id":30,"number":1,"type":{"type":"alttwo"}}
+                    ]}}"#,
+                ),
+            ),
+            (
+                "/series/73244/episodes/dvd/eng",
+                json_reply(
+                    r#"{"data":{"episodes":[{"id":110413,"seasonNumber":1,"number":1}]},"links":{"next":null}}"#,
+                ),
+            ),
+            (
+                "/series/73244/episodes/alttwo/eng",
+                json_reply(r#"{"data":{"episodes":[]},"links":{}}"#),
+            ),
+            (
+                "/seasons/30/extended",
+                json_reply(
+                    r#"{"data":{"id":30,"number":1,"type":{"type":"alttwo"},"episodes":[
+                        {"id":10718410,"seasonNumber":99,"number":2,"absoluteNumber":2},
+                        {"id":10718411,"seasonNumber":99,"number":1}
+                    ]}}"#,
+                ),
+            ),
+            (
+                "/seasons/31/extended",
+                json_reply(
+                    r#"{"data":{"id":31,"number":2,"episodes":[{"id":10718412,"seasonNumber":2,"number":1}]}}"#,
+                ),
+            ),
+        ])
+        .await;
+        let tvdb = client_at(&at);
+
+        let orders = tvdb.orders(73244).await.expect("the orders");
+        let placed: Vec<(&str, Vec<Placement>)> = orders
+            .iter()
+            .map(|order| {
+                (
+                    order.kind.as_str(),
+                    order
+                        .episodes
+                        .iter()
+                        .map(|p| {
+                            (
+                                p.tvdb_id,
+                                p.season_number,
+                                p.episode_number,
+                                p.absolute_number,
+                            )
+                        })
+                        .collect(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            placed,
+            [
+                (
+                    "alttwo",
+                    vec![
+                        (10718411, 1, 1, None),
+                        (10718410, 1, 2, Some(2)),
+                        (10718412, 2, 1, None)
+                    ]
+                ),
+                ("dvd", vec![(110413, 1, 1, None)]),
+            ]
+        );
+
+        // One call per season of the order answered empty, and none for the
+        // order the endpoint listed.
+        let lines = asked.lock().clone();
+        let seasons_read: Vec<&str> = lines
+            .iter()
+            .filter(|line| line.starts_with("GET /seasons/"))
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            seasons_read,
+            [
+                "GET /seasons/30/extended HTTP/1.1",
+                "GET /seasons/31/extended HTTP/1.1"
+            ],
             "{lines:?}"
         );
     }

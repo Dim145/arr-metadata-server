@@ -112,7 +112,7 @@ None needs a key.
 | --- | --- | --- |
 | **TVmaze** | the moment each episode aired | two calls per series fetch |
 | **AniList** | its score, the romaji, native and English titles and synonyms, the main studio, an adult flag — for anime | one call per anime fetch |
-| **MyAnimeList** | its score and titles — for anime; through its own API when `AMS_MAL_CLIENT_ID` is set, through [Jikan](https://jikan.moe) otherwise, and through [Tenrai](https://api.tenrai.org/documentation), a mirror written to Jikan's schema, when the one asked does not answer (`mal.fallback`, on; `AMS_TENRAI_UPSTREAM`) | one call per anime fetch |
+| **MyAnimeList** | its score and titles — for anime; through its own API when `AMS_MAL_CLIENT_ID` is set, through [Tenrai](https://api.tenrai.org/documentation) otherwise, a mirror written to Jikan's schema (`AMS_TENRAI_UPSTREAM`), and through a Jikan of your own (`AMS_JIKAN_UPSTREAM`) when neither answers (`mal.fallback`, on) — Jikan's public API closed on 1 October 2026 | one call per anime fetch |
 | **IMDb** | IMDb's rating, for every work with an IMDb id | one download a day |
 | **Fankai** | the Fan-Kai productions — anime recut into films, each as a series with its sagas as seasons — from Fankai's own metadata service | one call per saga, and three more per production fetch |
 | **Wiki Fankai** | for each Fan-Kai, the anime it was cut from and the Fan-Kai that follows it — only while Fankai is on | one call per Fan-Kai fetch |
@@ -191,9 +191,62 @@ anime's title, year and poster come from there. The ids are never given to the
 Fan-Kai itself: sharing one would merge it into the anime.
 
 The lists and their last download are shown under the switches, with a button
-to download one now rather than wait for its turn, and every download is a job. Their terms: TVmaze's data is CC BY-SA; IMDb's datasets are
-for personal, non-commercial use; AniList's API is free for non-commercial use
-and asks not to be crawled or stored wholesale — this server asks only about
-works a client requested; Fankai publishes its metadata for its own productions,
-and is asked about one at a time; the Fankai wiki's content is CC BY-SA. Every public page credits the sources that
-are on, with the notices TMDB and IMDb require.
+to download one now rather than wait for its turn, and every download is a job.
+
+## Terms of use
+
+Each source answers under terms of its own, and the catalogue is built to stay
+within them. What this server does with a source's data is the same for every
+one: it keeps a copy of what the source answered for the works it holds — a
+work is fetched when a client or a person asks for it, never a catalogue
+wholesale — refreshes that copy on the schedule above, hands it to the clients
+it serves, and never feeds it to a model or uses it to train one. Since 0.8.0
+the TMDB, TheTVDB and AniList relays can also pass a client's own key through,
+so a client that holds one answers under its own agreement rather than the
+operator's. Every public page credits the sources that are on, with the
+notices TMDB and IMDb require; **Administration › Sources** names each source's
+terms with a link to them.
+
+- **TMDB** allows non-commercial use with its notice shown to readers, and
+  nothing kept for longer than six months. The refresh intervals can be set
+  longer than that — an ended series is kept a week by default and may be kept
+  ten years — so the sweep makes up the difference on its own: a work whose
+  last refresh is more than 180 days old is asked of TMDB again, by a *light
+  refresh* — TMDB alone, as a sync asks it, the other sources keeping what they
+  last gave — taken after the works that are due, within the same batch. A work
+  without a TMDB id, one entered by hand or one switched off is left alone, and
+  one TMDB does not answer for is tried again, in full, after the usual backoff.
+  The run's entries say which works were refreshed lightly, and the
+  [`refresh.ttlContinuing`](settings.md#refreshttlcontinuing) and
+  [`refresh.ttlEnded`](settings.md#refreshttlended) settings say so under the
+  field. TMDB's logo, which its terms ask for beside the notice, is a brand
+  asset TMDB distributes itself; the footer carries the notice and a link.
+- **TheTVDB** is free below $50,000 a year of revenue, with a credit and a
+  direct link shown to end users: the footer carries both.
+- **TVmaze**'s data is CC BY-SA 4.0, credited on every page with the licence
+  named.
+- **AniList**'s API is free for non-commercial use, and forbids hoarding or mass
+  collection, use as a backup or a data store, and use within a competing list
+  or tracker service: this server asks about one work at a time, for the works
+  its clients hold, and lists nothing of a person's.
+- **MyAnimeList**'s API agreement forbids redistributing the API. Jikan, the
+  unofficial mirror this server asked when no client id was set, closed its
+  public API on 1 October 2026; the chain is now the official API, then
+  [Tenrai](https://tenrai.org), a mirror written to Jikan's schema, then a Jikan
+  address for whoever runs their own. Tenrai's terms allow caching and private
+  proxies and forbid offering it to third parties as a competing API; the footer
+  names it while it serves.
+- **Fanart.tv** asks for a project key and credit where its pictures are shown.
+- **IMDb**'s datasets are for personal, non-commercial use, with the sentence
+  IMDb asks for on every page.
+- **Fankai** publishes its metadata for its own productions, and is asked about
+  one at a time; the Fankai wiki's content is CC BY-SA.
+
+Each source has its own switch, and a source switched off is asked nothing and
+credited nowhere; what it gave while on stays as it is. The further sources are
+settings — `tvmaze.enabled`, `anilist.enabled`, `mal.enabled`, `imdb.enabled`,
+`fankai.enabled` and `fankai.wiki`, under **Settings › Further sources** — as
+are Skyhook's and Radarr's services (`skyhook.enrich`, `skyhook.fallback`,
+`radarr.enrich`, `radarr.fallback`). TheTVDB and Fanart.tv are on while they
+have a key and `AMS_TVDB_ENABLED` or `AMS_FANART_ENABLED` is not `false`; TMDB
+is on while it has a key.

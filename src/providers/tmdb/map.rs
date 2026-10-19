@@ -937,9 +937,10 @@ fn translations(entries: &[models::Translation]) -> Vec<Translation> {
 
         let title = non_empty(data.title.as_deref().or(data.name.as_deref()));
         let overview = non_empty(data.overview.as_deref());
+        let tagline = non_empty(data.tagline.as_deref());
 
-        // A translation with neither field is noise.
-        if title.is_none() && overview.is_none() {
+        // A translation with none of the three is noise.
+        if title.is_none() && overview.is_none() && tagline.is_none() {
             continue;
         }
 
@@ -952,6 +953,7 @@ fn translations(entries: &[models::Translation]) -> Vec<Translation> {
             language,
             title,
             overview,
+            tagline,
             is_manual: false,
         };
 
@@ -1075,6 +1077,31 @@ mod tests {
 
         assert_eq!(kept.len(), 1);
         assert_eq!(kept[0].title.as_deref(), Some("Fiction pulpeuse"));
+    }
+
+    #[test]
+    fn a_translations_tagline_is_kept_beside_its_title() {
+        let with_tagline = |language: &str, title: Option<&str>, tagline: &str| {
+            serde_json::from_value::<models::Translation>(serde_json::json!({
+                "iso_639_1": language,
+                "iso_3166_1": language.to_uppercase(),
+                "data": { "title": title, "tagline": tagline }
+            }))
+            .expect("a translation")
+        };
+        let kept = translations(&[
+            with_tagline("fr", Some("Premier Contact"), "Pourquoi sont-ils ici ?"),
+            // A tagline alone is still a translation; nothing at all is not.
+            with_tagline("de", None, "Warum sind sie hier?"),
+            with_tagline("it", None, ""),
+        ]);
+
+        assert_eq!(kept.len(), 2);
+        assert_eq!(kept[0].language, "fra");
+        assert_eq!(kept[0].tagline.as_deref(), Some("Pourquoi sont-ils ici ?"));
+        assert_eq!(kept[1].language, "deu");
+        assert_eq!(kept[1].title, None);
+        assert_eq!(kept[1].tagline.as_deref(), Some("Warum sind sie hier?"));
     }
 
     use super::*;

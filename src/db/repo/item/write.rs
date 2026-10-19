@@ -663,16 +663,18 @@ async fn replace_children(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaIt
             continue;
         }
         sqlx::query(db.sql(
-            "INSERT INTO media_translation (media_id, language, title, overview, is_manual)
-             VALUES (?, ?, ?, ?, 0)
+            "INSERT INTO media_translation (media_id, language, title, overview, tagline, is_manual)
+             VALUES (?, ?, ?, ?, ?, 0)
              ON CONFLICT (media_id, language) DO UPDATE SET
                  title = excluded.title,
-                 overview = excluded.overview",
+                 overview = excluded.overview,
+                 tagline = excluded.tagline",
         ))
         .bind(&item.id)
         .bind(&tr.language)
         .bind(&tr.title)
         .bind(&tr.overview)
+        .bind(&tr.tagline)
         .execute(&mut **tx)
         .await
         .context("failed to write translation")?;

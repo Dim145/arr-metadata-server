@@ -42,7 +42,8 @@ import type { Episode, FieldRegistry, Image, MediaItem, Override, ProvenanceRepo
 
 import { FieldRow, hasValue } from './FieldRow'
 import { ImagePicker, type Candidate } from './ImagePicker'
-import { AddForm, Count, Empty, Facts, LockBadge, useRemove } from './shared'
+import { seasonPictures } from './pictures'
+import { AddForm, Count, Empty, Facts, LockBadge, Yours, hostOf, useRemove } from './shared'
 
 /** The kinds of picture an episode's still is cut from: the wide ones. */
 const WIDE = new Set(['landscape', 'fanart', 'screenshot'])
@@ -395,6 +396,8 @@ export function SeasonsTab({
           )}
         </Panel>
 
+        <SeasonPictures work={work} season={season} chosen={meta?.primaryImages?.poster ?? undefined} ask={ask} onChanged={onChanged} />
+
         <Panel id="episodes" label={c.episodes} className="rise" style={{ animationDelay: '40ms' }}>
           {/* The filter beside the head where there is room, and under it on
               a phone, where the two shared one line badly. */}
@@ -533,6 +536,132 @@ export function SeasonsTab({
         />
       )}
     </div>
+  )
+}
+
+/* ── A season's pictures ──────────────────────────────────────────────────── */
+
+/**
+ * Every picture attached to the season, hidden ones included. A source's is
+ * hidden rather than removed, as the work's own are on the Artwork tab — a
+ * lock on its address, kept through every refresh — and this is the one
+ * place a season's are listed, so the one place a hidden one is shown again.
+ * The poster chosen for the season is served whatever is hidden, as the
+ * server has it, so it offers no hide; a picture added by hand is removed
+ * instead.
+ */
+function SeasonPictures({
+  work,
+  season,
+  chosen,
+  ask,
+  onChanged,
+}: {
+  work: MediaItem
+  season: number
+  /** The id of the poster chosen for the season, when one was. */
+  chosen?: string
+  ask: (target: { path: string; label: string }) => void
+  onChanged: () => void
+}) {
+  const { t } = useI18n()
+  const c = t.admin.editor.children
+  const s = t.admin.editor.seasonsTab.pictures
+  const hide = useMutation({
+    mutationFn: ({ id, hidden }: { id: string; hidden: boolean }) => api.patch(`/items/${work.id}/images/${id}`, { hidden }),
+    onSuccess: onChanged,
+  })
+  const pictures = seasonPictures(work, season)
+  const hiddenCount = pictures.filter((picture) => picture.hidden).length
+  const kindLabel = (value: string) => (t.gallery.kind as Record<string, string>)[value] ?? value
+
+  return (
+    <Panel id="season-pictures" label={s.title} className="rise" style={{ animationDelay: '20ms' }}>
+      <PanelHead
+        title={
+          <span className="flex items-center gap-2">
+            {s.title}
+            <Count>{pictures.length}</Count>
+          </span>
+        }
+        action={hiddenCount ? <span className="label hidden sm:inline">{s.hiddenCount(hiddenCount)}</span> : undefined}
+      />
+      {pictures.length === 0 ? (
+        <Empty>{s.none}</Empty>
+      ) : (
+        <ul className="divide-y divide-rule">
+          {pictures.map(({ image, hidden }) => {
+            const isChosen = image.id === chosen
+            const wide = image.coverType !== 'poster'
+            const from = image.isManual ? c.yours : image.source && image.source !== 'manual' && image.source !== 'unknown' ? providerName(image.source) : undefined
+            const name = [kindLabel(image.coverType), image.language].filter(Boolean).join(' · ')
+            const busy = hide.isPending && hide.variables?.id === image.id
+            return (
+              <li
+                key={image.id}
+                data-hidden={hidden || undefined}
+                className={cn(
+                  'flex items-center gap-3 px-5 py-2.5',
+                  (image.isManual || hidden) && 'border-l-2 border-brass bg-brass/[0.05] pl-[calc(1.25rem-2px)]',
+                )}
+              >
+                <span
+                  className={cn(
+                    'shrink-0 overflow-hidden rounded-[4px] border border-rule bg-ink-high',
+                    wide ? 'aspect-video w-14' : 'aspect-2/3 w-9',
+                    hidden && 'opacity-40 grayscale',
+                  )}
+                >
+                  <Artwork url={image.url} role="thumb" alt="" className="size-full object-cover" />
+                </span>
+                {/* Faded and struck through when hidden: the row stays, to be
+                    read and shown again, and reads as what it is. */}
+                <span className={cn('min-w-0 flex-1', hidden && 'opacity-60')}>
+                  <span className={cn('block truncate text-sm text-bone', hidden && 'line-through decoration-bone-faint')}>{name}</span>
+                  <span className="block truncate font-mono text-[0.6875rem] text-bone-faint" title={image.url}>
+                    {[from, hostOf(image.url)].filter(Boolean).join(' · ')}
+                  </span>
+                </span>
+                {isChosen ? (
+                  <Chip tone="manual">
+                    <Glyph name="star" className="size-3" />
+                    {t.admin.editor.picker.chosenPoster}
+                  </Chip>
+                ) : null}
+                {hidden ? (
+                  <Chip tone="manual">
+                    <Glyph name="lock" className="size-3" />
+                    {c.hidden}
+                  </Chip>
+                ) : null}
+                {image.isManual ? (
+                  <Yours onRemove={() => ask({ path: `images/${image.id}`, label: image.url })} />
+                ) : isChosen ? null : (
+                  <Button
+                    size="sm"
+                    variant={hidden ? undefined : 'quiet'}
+                    disabled={busy}
+                    aria-label={hidden ? c.showNamed(name) : c.hideNamed(name)}
+                    onClick={() => hide.mutate({ id: image.id, hidden: !hidden })}
+                  >
+                    {busy ? <Spinner className="size-4" /> : <Glyph name={hidden ? 'unlock' : 'lock'} className="size-4" />}
+                    {hidden ? c.showAgain : c.hide}
+                  </Button>
+                )}
+              </li>
+            )
+          })}
+        </ul>
+      )}
+      {hide.isError ? (
+        <p role="alert" className="border-t border-rule px-5 py-3 text-xs text-vermillion">
+          {hide.error.message || t.common.actionFailed}
+        </p>
+      ) : null}
+      <p className="border-t border-rule px-5 py-3 text-xs leading-relaxed text-bone-faint">
+        {c.hiddenHint} {s.chosen}
+      </p>
+    </Panel>
   )
 }
 

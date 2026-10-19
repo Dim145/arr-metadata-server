@@ -1,12 +1,14 @@
 //! MyAnimeList: the largest anime audience's score, and the titles it files.
 //!
 //! Three ways in. MyAnimeList's own API, when an operator has registered a
-//! client id for it (`AMS_MAL_CLIENT_ID`) — authoritative and current. Jikan
-//! otherwise: an unofficial mirror that needs no key, but serves what it last
-//! managed to scrape, which can be months old, and answers 504 when
-//! MyAnimeList turns it away. Tenrai behind either, while `mal.fallback` is
-//! on: another mirror, written to Jikan's schema — Jikan has said it will
-//! close. Each way in describes the work the same.
+//! client id for it (`AMS_MAL_CLIENT_ID`) — authoritative and current. Tenrai
+//! otherwise: an unofficial mirror that needs no key, written to Jikan's
+//! schema, four requests a second from one address. Jikan behind either,
+//! while `mal.fallback` is on: the mirror Tenrai took over from, whose public
+//! service closed on 2026-10-01 — an instance of one's own
+//! (`AMS_JIKAN_UPSTREAM`) is what is left of it — which serves what it last
+//! managed to scrape and answers 504 when MyAnimeList turns it away. Each way
+//! in describes the work the same.
 //!
 //! The next way in is asked when one does not answer — no connection, an
 //! error of its own, a rate limit that outlasts the wait — and that one is
@@ -44,16 +46,16 @@ const PASSED_OVER_FOR: Duration = Duration::from_secs(5 * 60);
 pub enum Base {
     /// MyAnimeList's own API, with the operator's client id.
     Official,
-    Jikan,
     Tenrai,
+    Jikan,
 }
 
 impl Base {
     fn label(self) -> &'static str {
         match self {
             Self::Official => "MyAnimeList's API",
-            Self::Jikan => "Jikan",
             Self::Tenrai => "Tenrai",
+            Self::Jikan => "Jikan",
         }
     }
 }
@@ -169,17 +171,18 @@ impl MalClient {
     }
 
     /// The ways in, in the order they are tried: the official API with a
-    /// client id, Jikan without — and, while `fallback` is on, those behind.
+    /// client id, Tenrai without — and, while `fallback` is on, those behind,
+    /// Jikan last.
     fn ways(&self, fallback: bool) -> Vec<&Way> {
         let mut ways = Vec::with_capacity(3);
         if self.client_id.is_some() {
             ways.push(&self.official);
         }
         if self.client_id.is_none() || fallback {
-            ways.push(&self.jikan);
+            ways.push(&self.tenrai);
         }
         if fallback {
-            ways.push(&self.tenrai);
+            ways.push(&self.jikan);
         }
         ways
     }
@@ -773,9 +776,9 @@ mod tests {
         )
     }
 
-    /// Attack on Titan as Tenrai writes it: Jikan's schema, a nought for the
-    /// score it does not know, a `null` for a name.
-    fn tenrais_entry() -> String {
+    /// Attack on Titan as the mirrors write it: Jikan's schema, with Tenrai's
+    /// nought for the score it does not know and `null` for a name.
+    fn mirrors_entry() -> String {
         reply(
             "200 OK",
             "Content-Type: application/json\r\n",
@@ -829,12 +832,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn when_jikan_does_not_answer_tenrai_does_and_jikan_is_passed_over() {
+    async fn when_tenrai_does_not_answer_jikan_does_and_tenrai_is_passed_over() {
         // A rate limit that outlasts the one wait the door allows.
-        let (jikan, to_jikan) =
+        let (tenrai, to_tenrai) =
             answering(reply("429 Too Many Requests", "Retry-After: 1\r\n", "")).await;
-        let (tenrai, to_tenrai) = answering(tenrais_entry()).await;
-        let mal = client(&jikan, &jikan, &tenrai, None);
+        let (jikan, to_jikan) = answering(mirrors_entry()).await;
+        let mal = client(&tenrai, &jikan, &tenrai, None);
 
         let (raw, item) = mal
             .anime(16498, MediaKind::Series, true)
@@ -844,38 +847,42 @@ mod tests {
         assert_eq!(raw["data"]["mal_id"], 16498);
         assert_eq!(item.title, "Attack on Titan");
         assert_eq!(item.genres, ["Action"]);
-        // Tenrai's nought is no score.
+        // A mirror's nought is no score.
         assert!(item.rating("mal").is_none());
         assert!(
             item.alternative_titles
                 .iter()
                 .any(|t| t.language.as_deref() == Some("fra"))
         );
-        assert_eq!(to_jikan.lock().len(), 2, "asked again once, after the wait");
-        assert!(to_tenrai.lock()[0].starts_with("GET /anime/16498 "));
+        assert_eq!(
+            to_tenrai.lock().len(),
+            2,
+            "asked again once, after the wait"
+        );
+        assert!(to_jikan.lock()[0].starts_with("GET /anime/16498 "));
 
         assert_eq!(
             reached(&mal, true),
             (
-                vec![(Base::Jikan, true), (Base::Tenrai, false)],
-                Some(Base::Tenrai)
+                vec![(Base::Tenrai, true), (Base::Jikan, false)],
+                Some(Base::Jikan)
             )
         );
 
-        // The next fetch goes straight to Tenrai.
+        // The next fetch goes straight to Jikan.
         mal.anime(16498, MediaKind::Series, true)
             .await
             .expect("answered")
             .expect("found");
-        assert_eq!(to_jikan.lock().len(), 2, "Jikan is passed over");
-        assert_eq!(to_tenrai.lock().len(), 2);
+        assert_eq!(to_tenrai.lock().len(), 2, "Tenrai is passed over");
+        assert_eq!(to_jikan.lock().len(), 2);
     }
 
     #[tokio::test]
     async fn a_404_is_an_answer_and_asks_no_other() {
-        let (jikan, _) = answering(json_error("404 Not Found")).await;
-        let (tenrai, to_tenrai) = answering(tenrais_entry()).await;
-        let mal = client(&jikan, &jikan, &tenrai, None);
+        let (tenrai, _) = answering(json_error("404 Not Found")).await;
+        let (jikan, to_jikan) = answering(mirrors_entry()).await;
+        let mal = client(&tenrai, &jikan, &tenrai, None);
 
         assert!(
             mal.anime(1, MediaKind::Series, true)
@@ -883,8 +890,8 @@ mod tests {
                 .expect("answered")
                 .is_none()
         );
-        assert!(to_tenrai.lock().is_empty());
-        assert_eq!(reached(&mal, true).1, Some(Base::Jikan));
+        assert!(to_jikan.lock().is_empty());
+        assert_eq!(reached(&mal, true).1, Some(Base::Tenrai));
 
         // A 404 that is a page of the server's own is no word of the entry:
         // the way in is not where it is looked for.
@@ -894,28 +901,28 @@ mod tests {
             "<html>Not Found</html>",
         ))
         .await;
-        let mal = client(&gone, &gone, &tenrai, None);
+        let mal = client(&gone, &jikan, &gone, None);
         assert!(
             mal.anime(16498, MediaKind::Series, true)
                 .await
                 .expect("answered")
                 .is_some()
         );
-        assert_eq!(to_tenrai.lock().len(), 1);
+        assert_eq!(to_jikan.lock().len(), 1);
     }
 
     #[tokio::test]
-    async fn with_the_fallback_off_jikan_alone_is_asked_and_its_failure_kept() {
-        let (jikan, to_jikan) = answering(reply("503 Service Unavailable", "", "")).await;
-        let (tenrai, to_tenrai) = answering(tenrais_entry()).await;
-        let mal = client(&jikan, &jikan, &tenrai, None);
+    async fn with_the_fallback_off_tenrai_alone_is_asked_and_its_failure_kept() {
+        let (tenrai, to_tenrai) = answering(reply("503 Service Unavailable", "", "")).await;
+        let (jikan, to_jikan) = answering(mirrors_entry()).await;
+        let mal = client(&tenrai, &jikan, &tenrai, None);
 
         let first = mal
             .anime(16498, MediaKind::Series, false)
             .await
             .unwrap_err();
         assert!(format!("{first:#}").contains("503"), "{first:#}");
-        assert_eq!(reached(&mal, false), (vec![(Base::Jikan, true)], None));
+        assert_eq!(reached(&mal, false), (vec![(Base::Tenrai, true)], None));
 
         // Not asked again for a few minutes: the fetches meanwhile fail with
         // the reason, at once.
@@ -927,16 +934,16 @@ mod tests {
             format!("{second:#}").contains("did not answer a moment ago"),
             "{second:#}"
         );
-        assert_eq!(to_jikan.lock().len(), 1);
-        assert!(to_tenrai.lock().is_empty());
+        assert_eq!(to_tenrai.lock().len(), 1);
+        assert!(to_jikan.lock().is_empty());
     }
 
     #[tokio::test]
-    async fn with_a_client_id_the_official_api_is_asked_first_then_jikan() {
+    async fn with_a_client_id_the_official_api_is_asked_first_then_tenrai() {
         let (official, to_official) =
             answering(reply("500 Internal Server Error", "", "down")).await;
-        let (jikan, to_jikan) = answering(tenrais_entry()).await;
-        let (tenrai, to_tenrai) = answering(tenrais_entry()).await;
+        let (jikan, to_jikan) = answering(mirrors_entry()).await;
+        let (tenrai, to_tenrai) = answering(mirrors_entry()).await;
         let mal = client(&official, &jikan, &tenrai, Some("an id"));
 
         assert_eq!(
@@ -951,17 +958,17 @@ mod tests {
             .expect("found");
         assert_eq!(item.title, "Attack on Titan");
         assert!(to_official.lock()[0].contains("fields="));
-        assert_eq!(to_jikan.lock().len(), 1);
-        assert!(to_tenrai.lock().is_empty());
+        assert_eq!(to_tenrai.lock().len(), 1);
+        assert!(to_jikan.lock().is_empty());
         assert_eq!(
             reached(&mal, true),
             (
                 vec![
                     (Base::Official, true),
-                    (Base::Jikan, false),
-                    (Base::Tenrai, false)
+                    (Base::Tenrai, false),
+                    (Base::Jikan, false)
                 ],
-                Some(Base::Jikan)
+                Some(Base::Tenrai)
             )
         );
 
@@ -970,22 +977,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn jikans_504_is_about_the_one_entry_and_jikan_is_not_passed_over() {
+        // Tenrai says nothing of the entry, so Jikan is asked, and Jikan has
+        // nothing cached and MyAnimeList turned it away: nobody answered,
+        // and neither is passed over for the next entry.
+        let (tenrai, to_tenrai) = answering(reply("502 Bad Gateway", "", "")).await;
+        let (jikan, to_jikan) = answering(reply("504 Gateway Timeout", "", "")).await;
+        let mal = client(&tenrai, &jikan, &tenrai, None);
+
+        let failed = mal.anime(16498, MediaKind::Series, true).await.unwrap_err();
+        let said = format!("{failed:#}");
+        assert!(said.contains("Jikan could not reach MyAnimeList"), "{said}");
+        assert_eq!(
+            reached(&mal, true),
+            (
+                vec![(Base::Tenrai, true), (Base::Jikan, false)],
+                Some(Base::Jikan)
+            )
+        );
+        assert_eq!((to_tenrai.lock().len(), to_jikan.lock().len()), (1, 1));
+    }
+
+    #[tokio::test]
     async fn when_no_way_in_answers_it_is_said() {
-        let (jikan, _) = answering(reply("502 Bad Gateway", "", "")).await;
+        let (tenrai, _) = answering(reply("502 Bad Gateway", "", "")).await;
         // Nothing listens there.
         let closed = {
             let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
             format!("http://{}", listener.local_addr().unwrap())
         };
-        let mal = client(&jikan, &jikan, &closed, None);
+        let mal = client(&tenrai, &closed, &tenrai, None);
 
         let failed = mal.anime(16498, MediaKind::Series, true).await.unwrap_err();
         let said = format!("{failed:#}");
-        assert!(said.contains("Jikan returned 502"), "{said}");
-        assert!(said.contains("Tenrai request failed"), "{said}");
+        assert!(said.contains("Tenrai returned 502"), "{said}");
+        assert!(said.contains("Jikan request failed"), "{said}");
         assert_eq!(
             reached(&mal, true),
-            (vec![(Base::Jikan, true), (Base::Tenrai, true)], None)
+            (vec![(Base::Tenrai, true), (Base::Jikan, true)], None)
         );
     }
 }

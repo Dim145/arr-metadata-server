@@ -61,7 +61,7 @@ export type Relation = Schema<'Relation'>
 /** Where one episode stands in one of the other orders TheTVDB keeps. */
 export type PlacedEpisode = Schema<'PlacedEpisode'>
 
-/** One of the other orders a series' episodes come in: dvd, absolute, alternate, regional, altdvd. */
+/** One of the other orders a series' episodes come in: dvd, absolute, alternate, regional, altdvd, alttwo. */
 export type EpisodeOrder = Schema<'EpisodeOrder'>
 
 export type Orders = Schema<'Orders'>

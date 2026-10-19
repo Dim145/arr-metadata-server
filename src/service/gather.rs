@@ -141,13 +141,21 @@ pub async fn series(
     tmdb_id: Option<i64>,
     tvdb_id: Option<i64>,
 ) -> Result<Option<MediaItem>> {
-    let (from_tmdb, from_tvdb, from_skyhook, from_fanart, from_tvmaze) = tokio::join!(
-        series_from_tmdb(state, tmdb_id),
-        series_from_tvdb(state, tvdb_id),
-        series_from_skyhook(state, tvdb_id),
-        series_from_fanart(state, tvdb_id),
-        series_from_tvmaze(state, tvdb_id, tmdb_id),
-    );
+    // The fan-out on the heap: every provider's state machine at once, which
+    // inline would sit in the future of whoever awaits this — a client's
+    // handler, the sweep — on a thread with two megabytes of stack in a
+    // debug build, which the Plex match path overflowed. Boxed here, it is
+    // boxed for every caller.
+    let (from_tmdb, from_tvdb, from_skyhook, from_fanart, from_tvmaze) = Box::pin(async {
+        tokio::join!(
+            series_from_tmdb(state, tmdb_id),
+            series_from_tvdb(state, tvdb_id),
+            series_from_skyhook(state, tvdb_id),
+            series_from_fanart(state, tvdb_id),
+            series_from_tvmaze(state, tvdb_id, tmdb_id),
+        )
+    })
+    .await;
 
     let mut gathered = Gathered::default();
     for asked in [from_tmdb, from_tvdb, from_skyhook, from_fanart, from_tvmaze] {
@@ -190,11 +198,15 @@ pub async fn movie(
     tmdb_id: Option<i64>,
     imdb_id: Option<&str>,
 ) -> Result<Option<MediaItem>> {
-    let (from_tmdb, from_radarr, from_fanart) = tokio::join!(
-        movie_from_tmdb(state, tmdb_id),
-        movie_from_radarr(state, tmdb_id, imdb_id),
-        movie_from_fanart(state, tmdb_id, imdb_id),
-    );
+    // On the heap, as a series' fan-out is.
+    let (from_tmdb, from_radarr, from_fanart) = Box::pin(async {
+        tokio::join!(
+            movie_from_tmdb(state, tmdb_id),
+            movie_from_radarr(state, tmdb_id, imdb_id),
+            movie_from_fanart(state, tmdb_id, imdb_id),
+        )
+    })
+    .await;
 
     let mut gathered = Gathered::default();
     for asked in [from_tmdb, from_radarr, from_fanart] {
@@ -1509,16 +1521,12 @@ mod tests {
         (at, routes)
     }
 
-    /// The server, on a database in memory, TMDB and TheTVDB keyed, every
+    /// The server, on a database of its own, TMDB and TheTVDB keyed, every
     /// provider at `at`, the anime sites, TVmaze and Fanart.tv off.
     async fn server(at: &str) -> AppState {
         let mut config = config::Config::from_env().expect("a configuration");
         config.mode = config::Mode::Single;
-        config.database = config::Database {
-            url: "sqlite::memory:".into(),
-            max_connections: 1,
-            acquire_timeout: std::time::Duration::from_secs(5),
-        };
+        config.database = crate::db::testing::database().await;
         config.security.bootstrap_admin = None;
         config.cache.redis_url = None;
         config.media.storage = config::MediaStorage::Off;
@@ -1828,14 +1836,7 @@ mod tests {
     /// and an episode likewise, stay as the person wrote them.
     #[tokio::test]
     async fn a_refresh_does_not_write_over_what_was_added_by_hand() {
-        let db = &crate::db::Db::connect(&config::Database {
-            url: "sqlite::memory:".into(),
-            max_connections: 1,
-            acquire_timeout: std::time::Duration::from_secs(5),
-        })
-        .await
-        .expect("in-memory database");
-        db.migrate().await.expect("migrations");
+        let db = &crate::db::testing::db().await;
 
         let mut work = MediaItem::empty(MediaKind::Series);
         work.id = crate::db::new_id();

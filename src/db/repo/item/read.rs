@@ -675,7 +675,7 @@ pub(super) fn map_rating(row: &sqlx::any::AnyRow) -> Result<Rating> {
 
 async fn load_translations(db: &Db, media_id: &str) -> Result<Vec<Translation>> {
     let rows = sqlx::query(db.sql(
-        "SELECT language, title, overview, is_manual FROM media_translation WHERE media_id = ?",
+        "SELECT language, title, overview, tagline, is_manual FROM media_translation WHERE media_id = ?",
     ))
     .bind(media_id)
     .fetch_all(db.pool())
@@ -687,6 +687,7 @@ async fn load_translations(db: &Db, media_id: &str) -> Result<Vec<Translation>> 
                 language: row.text("language")?,
                 title: row.opt_text("title")?,
                 overview: row.opt_text("overview")?,
+                tagline: row.opt_text("tagline")?,
                 is_manual: row.flag("is_manual")?,
             })
         })

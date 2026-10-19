@@ -86,9 +86,9 @@ test.describe('the health, read by the administrator', () => {
 
     // A lock to travel: the first series' sort title, set by hand.
     const { items } = await (await page.request.get('/api/v1/items?kind=series&limit=1')).json()
-    const work = (items as { id: string }[])[0]
+    const [work] = items as { id: string }[]
     expect(work).toBeTruthy()
-    const locked = await page.request.put(`/api/v1/items/${work.id}/overrides`, {
+    const locked = await page.request.put(`/api/v1/items/${work!.id}/overrides`, {
       data: { scope: 'item', field: 'sortTitle', value: 'zz travelling lock' },
     })
     expect(locked.status()).toBe(200)
@@ -101,7 +101,7 @@ test.describe('the health, read by the administrator', () => {
     expect([1, 2]).toContain(locks.version)
     expect(locks.locks.length).toBeGreaterThan(0)
     const travelling = locks.locks.find(
-      (l: { work: { id: string }; field: string }) => l.work.id === work.id && l.field === 'sortTitle',
+      (l: { work: { id: string }; field: string }) => l.work.id === work!.id && l.field === 'sortTitle',
     )
     expect(travelling.value).toBe('zz travelling lock')
     expect(travelling.work.kind).toBe('series')
@@ -126,7 +126,7 @@ test.describe('the health, read by the administrator', () => {
     expect((await cleared.json()).refused.length).toBe(1)
 
     // And the lock is taken off again, so the list keeps its order.
-    expect((await page.request.delete(`/api/v1/items/${work.id}/overrides/item/sortTitle`)).status()).toBe(204)
+    expect((await page.request.delete(`/api/v1/items/${work!.id}/overrides/item/sortTitle`)).status()).toBe(204)
 
     // A lock on a work nobody holds is named, not set.
     const stray = await page.request.post('/api/v1/admin/locks', {

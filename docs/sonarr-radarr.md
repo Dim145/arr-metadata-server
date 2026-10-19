@@ -33,9 +33,17 @@ reading: the same series, with what v5 reads besides.
   title the answer gives.
 - **Orders.** `seasonTypes` lists the orders the episodes come in: the aired
   order (`official`), then the DVD, absolute, alternate and regional orders
-  TheTVDB keeps for the series. Asked in an order the series has, the episodes are
-  numbered by it; asked in one it has not, they are numbered as they aired, as
-  Skyhook answers.
+  TheTVDB keeps for the series, and its two further alternate orders (`altdvd`,
+  `alttwo` — a Blu-ray's, a streaming service's), which TheTVDB's own episodes
+  endpoint answers empty for (thetvdb/v4-api#340) and this server reads season
+  by season instead, as the real service serves them. Asked in an order the
+  series has, the episodes are numbered by it; asked in one it has not, they are
+  numbered as they aired, as Skyhook answers. An order places the episodes the
+  aired list holds: an episode TheTVDB files in one order alone — a DVD's
+  hour-long cut of two aired parts, the extended cuts that make up The Office
+  (US)'s Superfan order — is not served yet, and an order made of those alone is
+  not offered, where the real service serves such records as episodes of their
+  own.
 - **Seasons.** A season's title and year. A title that only says the season's
   number is kept back, as the real service keeps it.
 - **Episodes.** An episode's ids under both names the service and the client
@@ -50,11 +58,52 @@ language is every language's name for the work in `translations`; the original
 title stays the one the work was made under, unless the original title is locked
 too. See [Editing](editing.md#locking-a-text-for-one-language).
 
+**Not found, or not answered.** A series the catalogue holds is answered from
+the catalogue, as it was, when the sources do not answer. An id nobody holds is
+a `404` only when every source that could resolve it — TheTVDB, Skyhook, TMDB —
+answered that there is no such series; when one of them did not answer (a
+timeout, a 5xx, a refused connection) the answer is a `502`, never a `404`.
+Sonarr takes a series for deleted on a `404` and keeps what it has on anything
+else, so the doubt goes to the `502`, which it asks again at its next refresh. A
+search is the same: nothing found while a source did not answer is a `502`, not
+the empty list Sonarr reads as "no such series", and a name the catalogue holds
+is answered whether or not the sources do. On both editions.
+
 Sonarr v5 is a pre-release: this was checked against 5.0.0.2635
 ([Verified against](integration.md#verified-against)).
 [`scripts/e2e-skyhook-v2.sh`](../scripts/e2e-skyhook-v2.sh) sets the real
 service's second edition beside this server's for a few real series and tells
 every difference apart as an addition or a failure.
+[`.github/workflows/parity.yml`](../.github/workflows/parity.yml) runs it every
+Monday morning, and on demand, against a server built from `main` with the
+repository's TMDB and TheTVDB keys, and fails — a notification from GitHub — on
+any difference that is not an addition: the real service's shape moved twice in
+October 2026 without a word.
+
+### Upgrading Sonarr to v5
+
+A library migrated to v5 refreshes every series once: Sonarr's migration 208
+resets the date each series was last synced, so its first scheduled refresh
+after the upgrade asks for every series — one request each,
+`/v2/tvdb/shows/{language}/{id}/{seasonType}`, at once. A series that is not
+due a refresh here is answered from the catalogue straight away; one that is
+due is fetched from the sources once, and two requests for it arriving together
+cost one fetch: the second waits for the first and is answered with what it
+stored. The wave costs the sources no more than the series that were due.
+
+The limit per address (`AMS_RATE_LIMIT_PER_MINUTE`, 600 a minute by default;
+see [Configuration](configuration.md)) can be reached by a large library on
+that day: past it, Sonarr is answered `429` with a `Retry-After`, and the series
+it was refused for wait for its next refresh. Raise it for the day —
+`AMS_RATE_LIMIT_PER_MINUTE=6000` and a restart — and put it back after, or leave
+it: the rest of the time Sonarr is nowhere near it.
+
+A v5 search is answered with whole series documents, without their episodes —
+every language the series is named in, its actors, its seasons and its orders
+— as the real service answers one: some ten kilobytes a result, a few hundred
+for a term many series match. The search cache (`cache.searches`) matters more
+than it did: a search is answered from it for its lifetime, and only a complete
+answer — one every source answered — is kept.
 
 ### Scene mappings
 

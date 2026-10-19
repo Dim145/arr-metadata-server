@@ -942,7 +942,7 @@ test.describe('the poster and the background to lead with', () => {
       const chosen = await read()
       const two = chosen.images.find((image) => image.url.includes('two.example.invalid'))!
       expect(chosen.primaryImages?.poster).toBe(two.id)
-      expect(chosen.images.filter((image) => image.coverType === 'poster')[0].id).toBe(two.id)
+      expect(chosen.images.filter((image) => image.coverType === 'poster')[0]?.id).toBe(two.id)
 
       await star('two').click()
       await expect(star('two')).toHaveAttribute('aria-pressed', 'false')
