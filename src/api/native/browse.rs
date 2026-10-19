@@ -161,8 +161,8 @@ pub struct Release {
 #[derive(Clone, Serialize, ToSchema)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum CalendarEntry {
-    /// An episode, as `episodes` lists it. Boxed: an episode is four times
-    /// a release, and a window holds hundreds of either.
+    /// An episode, and the work it belongs to. Boxed: an episode is four
+    /// times a release, and a window holds hundreds of either.
     Episode(Box<Airing>),
     /// A film's release: in cinemas, digitally, on disc.
     Release(Release),
@@ -170,12 +170,6 @@ pub enum CalendarEntry {
 
 #[derive(Serialize, ToSchema)]
 pub struct Calendar {
-    /// Deprecated: the episodes alone, earliest first — the schedule as it
-    /// was answered before it held films, which `entries` repeats beside
-    /// them. Kept for whoever reads it so, and to be removed in a later
-    /// version.
-    #[schema(deprecated)]
-    pub episodes: Vec<Airing>,
     /// The episodes and the films' releases together, earliest first: an
     /// episode at its moment, a release at midnight UTC on its day, and of
     /// two at the same moment the episode first.
@@ -425,16 +419,7 @@ pub(super) async fn window_in(
         .collect();
     works.retain(|w| listed.contains(w.id.as_str()));
 
-    let episodes = entries
-        .iter()
-        .filter_map(|entry| match entry {
-            CalendarEntry::Episode(a) => Some(Airing::clone(a)),
-            CalendarEntry::Release(_) => None,
-        })
-        .collect();
-
     Ok(Calendar {
-        episodes,
         entries,
         works,
         truncated: episodes_cut || releases_cut,
@@ -1041,12 +1026,10 @@ mod tests {
         expected.sort_unstable();
         assert_eq!(drawn, expected);
 
-        // The episodes alone stay where whoever read them before reads them,
-        // in the shape they had; the entries say which kind each is.
+        // The entries say which kind each is. The episodes alone, which
+        // repeated them, are no longer sent.
         let json = serde_json::to_value(&calendar).expect("serialised");
-        assert_eq!(json["episodes"].as_array().map(Vec::len), Some(1));
-        assert!(json["episodes"][0].get("kind").is_none());
-        assert_eq!(json["episodes"][0]["workId"], dark.id.as_str());
+        assert!(json.get("episodes").is_none(), "{json}");
         assert_eq!(
             json["entries"][0],
             serde_json::json!({

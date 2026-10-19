@@ -13,7 +13,7 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::{
     api::{
-        native::{figures, meta},
+        native::{figures, meta::Policy},
         relay,
     },
     auth::Identity,
@@ -29,20 +29,50 @@ pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new().routes(routes!(access))
 }
 
+/// Who may browse the catalogue: `site.access`, unless
+/// `AMS_PUBLIC_BROWSE=false` keeps the site private whatever it says.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum SiteAccess {
+    /// Anyone browses the catalogue.
+    Public,
+    /// Every page asks to sign in first.
+    Private,
+}
+
+impl SiteAccess {
+    /// As it applies now.
+    pub fn of(state: &AppState) -> Self {
+        if state.public_site() {
+            Self::Public
+        } else {
+            Self::Private
+        }
+    }
+}
+
 #[derive(Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ApiState {
     pub api: Api,
     /// Whether an administrator left it on.
     pub enabled: bool,
-    /// What it asks of a caller: `apikey`, `allowlist` or `open`. Set by the
-    /// deployment's environment, not here — except that a relay asked with
-    /// each client's own key asks for a listed address where the
-    /// environment says a key.
-    pub policy: &'static str,
+    /// What it asks of a caller. Set by the deployment's environment, not
+    /// here — except that a relay asked with each client's own key asks for
+    /// a listed address where the environment says a key.
+    pub policy: Policy,
     /// Calls answered and refused since the server started.
     pub served: u64,
     pub refused: u64,
+}
+
+/// A relay whose service takes a key of its own: TMDB's and TheTVDB's.
+/// AniList's takes none, and has no credential to choose.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum RelayApi {
+    Tmdb,
+    Tvdb,
 }
 
 /// Whose key a relay asks its service with (`tmdb.relayCredential`,
@@ -50,25 +80,23 @@ pub struct ApiState {
 #[derive(Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RelayCredentialState {
-    /// `tmdb` or `tvdb`.
-    pub api: Api,
+    pub api: RelayApi,
     /// `server`: this server's key in place of the client's. `client`: the
     /// client's own, as it came.
-    pub credential: &'static str,
+    pub credential: relay::RelayCredential,
     /// Whether this server holds a key of the service's own to stand in
     /// with: without one, `server` answers 503.
     pub operator_key: bool,
     /// What the environment asks of a caller (`AMS_TMDB_AUTH`,
     /// `AMS_TVDB_AUTH`), before the choice above reads a key policy as the
     /// address list.
-    pub configured_policy: &'static str,
+    pub configured_policy: Policy,
 }
 
 #[derive(Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Access {
-    /// `public` or `private`.
-    pub site: &'static str,
+    pub site: SiteAccess,
     /// AMS_PUBLIC_BROWSE=false keeps the site private whatever is chosen here.
     pub site_locked: bool,
     /// Whether members may use the relays — TMDB's, TheTVDB's, AniList's —
@@ -145,7 +173,7 @@ async fn access(
         apis.push(ApiState {
             api,
             enabled: state.api_on(api),
-            policy: meta::policy_name(relay::policy(&state, surface)),
+            policy: relay::policy(&state, surface).into(),
             served,
             refused,
         });
@@ -153,18 +181,18 @@ async fn access(
 
     let relay_credentials = [
         (
-            Api::Tmdb,
+            RelayApi::Tmdb,
             Surface::Tmdb,
             state.config.tmdb.api_key.is_some(),
         ),
-        (Api::Tvdb, Surface::Tvdb, state.tvdb.is_configured()),
+        (RelayApi::Tvdb, Surface::Tvdb, state.tvdb.is_configured()),
     ]
     .into_iter()
     .map(|(api, surface, operator_key)| RelayCredentialState {
         api,
-        credential: relay::credential(&state, surface).as_str(),
+        credential: relay::credential(&state, surface),
         operator_key,
-        configured_policy: meta::policy_name(state.config.policy_for(surface)),
+        configured_policy: state.config.policy_for(surface).into(),
     })
     .collect();
 
@@ -173,11 +201,7 @@ async fn access(
     let personal_keys = keys.iter().filter(|k| k.owner_id.is_some()).count();
 
     Ok(Json(Access {
-        site: if state.public_site() {
-            "public"
-        } else {
-            "private"
-        },
+        site: SiteAccess::of(&state),
         site_locked: state.site_locked(),
         relay_for_members: state.relay_for_members(),
         registration: state.registration(),

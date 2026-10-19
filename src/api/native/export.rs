@@ -98,7 +98,12 @@ async fn item_nfo(
     state.media.for_clients(&mut item);
     let collection = collection_of(&state, &item, &mut HashMap::new()).await;
     let set = collection.as_ref().map(Named::as_set);
-    Ok(xml(nfo::for_item_in(&item, set.as_ref()), filename))
+    // A series names the order frozen as its aired numbering, when one is.
+    let orders = repo::order::list(&state.db, &item.id).await?;
+    Ok(xml(
+        nfo::for_item_in(&item, set.as_ref(), &orders),
+        filename,
+    ))
 }
 
 /// A collection's name, and what it is about, as TMDB has them.
@@ -179,6 +184,10 @@ async fn episode_nfo(
 
     let mut item = item;
     state.media.for_clients(&mut item);
+    // Numbered as the aired order answers: by the order frozen as it, when
+    // one is, as the files are named after Sonarr renumbers them.
+    let orders = repo::order::list(&state.db, &item.id).await?;
+    service::orders::number_as_official(&mut item, &orders);
     let episode = item
         .episodes
         .iter()
@@ -186,7 +195,7 @@ async fn episode_nfo(
         .ok_or(AppError::NotFound)?;
 
     Ok(xml(
-        nfo::for_episode(&item, episode),
+        nfo::for_episode(&item, episode, &orders),
         &format!("S{season:02}E{number:02}.nfo"),
     ))
 }
@@ -603,11 +612,16 @@ async fn write_everything(
         state.media.for_clients(&mut named);
         let collection = collection_of(state, &named, &mut collections).await;
         let set = collection.as_ref().map(Named::as_set);
+        // The episodes numbered as the aired order answers, by the order
+        // frozen as it when one is; the specials an order places among the
+        // seasons said where.
+        let orders = repo::order::list(&state.db, &item.id).await?;
+        service::orders::number_as_official(&mut named, &orders);
 
         match write_one(
             root,
             &nfo::relative_path(&named),
-            &nfo::for_item_in(&named, set.as_ref()),
+            &nfo::for_item_in(&named, set.as_ref(), &orders),
         )
         .await
         {
@@ -621,7 +635,7 @@ async fn write_everything(
 
         for episode in &named.episodes {
             let path = nfo::episode_relative_path(&named, episode);
-            match write_one(root, &path, &nfo::for_episode(&named, episode)).await {
+            match write_one(root, &path, &nfo::for_episode(&named, episode, &orders)).await {
                 Ok(()) => summary.episodes += 1,
                 Err(e) => {
                     tracing::warn!(id = %item.id, %path, error = %e, "could not write an episode nfo");

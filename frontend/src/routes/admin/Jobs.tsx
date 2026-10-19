@@ -51,14 +51,16 @@ const TASKS: TaskId[] = [
   'tls.renew',
   'update.check',
   'arr.seed',
+  'backup.run',
 ]
 
 /**
  * A run's note in words. The server writes its summaries in one fixed form
  * each — `3 refreshed, 0 failed`, `12 works, 340 episodes, 0 failed` — and
- * they are read back here; anything else is shown as it came.
+ * they are read back here; anything else is shown as it came. `locale`
+ * writes an archive's size as the reader counts bytes.
  */
-export function describeDetail(detail: string | null | undefined, t: Dict): string {
+export function describeDetail(detail: string | null | undefined, t: Dict, locale: string): string {
   if (!detail) return ''
   const s = t.admin.tasks.summaries
   const n = (text: string | undefined) => Number(text ?? 0)
@@ -86,6 +88,12 @@ export function describeDetail(detail: string | null | undefined, t: Dict): stri
   // could not be found or failed, of how many.
   if ((m = detail.match(/^(\d+) already here, (\d+) imported, (\d+) not found, (\d+) failed, of (\d+)$/)))
     return s.seeded(...(m.slice(1, 6).map(Number) as [number, number, number, number, number]))
+  // An archive made: its name, what it weighs, and how many of the
+  // schedule's oldest went; a restore: what it put back, and what undoes it.
+  if ((m = detail.match(/^(ams-\S+), (\d+) bytes, (\d+) removed$/)))
+    return s.backedUp(m[1] ?? '', fmt.bytes(n(m[2]), locale), n(m[3]))
+  if ((m = detail.match(/^(\d+) rows, (\d+) media put back(?:; undone by restoring (\S+))?$/)))
+    return s.restored(n(m[1]), n(m[2]), m[3])
   return t.admin.runs.notes[detail] ?? detail
 }
 
@@ -189,7 +197,7 @@ function TaskCard({ task, delay }: { task: Task; delay: number }) {
             <dd className="mt-1 space-y-1">
               <Lamp tone="brass">{t.admin.runs.running}</Lamp>
               {task.running.detail ? (
-                <p className="font-mono text-xs text-bone-dim tabular-nums">{describeDetail(task.running.detail, t)}</p>
+                <p className="font-mono text-xs text-bone-dim tabular-nums">{describeDetail(task.running.detail, t, locale)}</p>
               ) : null}
             </dd>
           </div>
@@ -206,7 +214,7 @@ function TaskCard({ task, delay }: { task: Task; delay: number }) {
                     </span>
                   </div>
                   <p className={last.error ? 'text-xs break-words text-vermillion' : 'text-xs text-bone-dim'}>
-                    {describeDetail(last.error ?? last.detail, t)}
+                    {describeDetail(last.error ?? last.detail, t, locale)}
                   </p>
                   {last.status === 'failed' && task.lastSuccessAt ? (
                     <p className="text-xs text-bone-faint">
@@ -553,7 +561,7 @@ export function JobTable({ jobs }: { jobs: Job[] }) {
                     </Link>
                   ) : null}
                   <p className={job.error ? 'text-xs break-words text-vermillion' : 'text-xs text-bone-dim'}>
-                    {describeDetail(job.error ?? job.detail, t)}
+                    {describeDetail(job.error ?? job.detail, t, locale)}
                   </p>
                   <p className="font-mono text-[0.6875rem] text-bone-faint tabular-nums">
                     {fmt.relative(job.createdAt, locale)} · {who(job)} · {took(job, locale)}
@@ -627,7 +635,7 @@ export function JobTable({ jobs }: { jobs: Job[] }) {
                       </Link>
                     ) : null}
                     <span className={job.error ? 'block truncate text-vermillion' : 'block truncate text-bone-dim'} title={job.error ?? job.detail ?? undefined}>
-                      {job.error ? describeDetail(job.error, t) : job.detail ? describeDetail(job.detail, t) : job.work ? '' : '—'}
+                      {job.error ? describeDetail(job.error, t, locale) : job.detail ? describeDetail(job.detail, t, locale) : job.work ? '' : '—'}
                     </span>
                   </Td>
                   <Td className="whitespace-nowrap">
@@ -723,7 +731,7 @@ function JobDetailPanel({ job }: { job: Job }) {
       <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 text-sm">
         <dt className="label pt-0.5">{t.admin.runs.colDetail}</dt>
         <dd className={cn('break-words', run.error ? 'text-vermillion' : 'text-bone')}>
-          {run.error ? describeDetail(run.error, t) : describeDetail(run.detail, t) || '—'}
+          {run.error ? describeDetail(run.error, t, locale) : describeDetail(run.detail, t, locale) || '—'}
         </dd>
         <dt className="label pt-0.5">{k.startedAt}</dt>
         <dd className="font-mono text-xs text-bone-dim tabular-nums">{run.startedAt ? fmt.dateTime(run.startedAt, locale) : '—'}</dd>

@@ -10,7 +10,10 @@ use serde::Serialize;
 use utoipa::ToSchema;
 
 use crate::{
-    db::repo::{self, job::Job},
+    db::repo::{
+        self,
+        job::{Job, Status},
+    },
     state::AppState,
 };
 
@@ -25,20 +28,93 @@ pub const MEDIA_SWEEP: &str = repo::job::kinds::MEDIA_SWEEP;
 pub const TLS_RENEW: &str = repo::job::kinds::TLS_RENEW;
 pub const UPDATE_CHECK: &str = repo::job::kinds::UPDATE_CHECK;
 pub const ARR_SEED: &str = crate::arr::seed::KIND;
+pub const BACKUP_RUN: &str = crate::jobs::backup::KIND;
 
-/// Every task, in the order the page shows them.
-pub const ALL: [&str; 10] = [
-    REFRESH_SWEEP,
-    REFRESH_ALL,
-    IMPORT_ANIME,
-    IMPORT_IMDB,
-    EXPORT_NFO,
-    MEDIA_STORE,
-    MEDIA_SWEEP,
-    TLS_RENEW,
-    UPDATE_CHECK,
-    ARR_SEED,
-];
+/// A task, sent under the name the history files its runs by.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
+pub enum TaskId {
+    #[serde(rename = "refresh.sweep")]
+    RefreshSweep,
+    #[serde(rename = "refresh.all")]
+    RefreshAll,
+    #[serde(rename = "import.anime")]
+    ImportAnime,
+    #[serde(rename = "import.imdb")]
+    ImportImdb,
+    #[serde(rename = "export.nfo")]
+    ExportNfo,
+    #[serde(rename = "media.store")]
+    MediaStore,
+    #[serde(rename = "media.sweep")]
+    MediaSweep,
+    #[serde(rename = "tls.renew")]
+    TlsRenew,
+    #[serde(rename = "update.check")]
+    UpdateCheck,
+    #[serde(rename = "arr.seed")]
+    ArrSeed,
+    #[serde(rename = "backup.run")]
+    BackupRun,
+}
+
+impl TaskId {
+    /// Every task, in the order the page shows them.
+    pub const ALL: [TaskId; 11] = [
+        Self::RefreshSweep,
+        Self::RefreshAll,
+        Self::ImportAnime,
+        Self::ImportImdb,
+        Self::ExportNfo,
+        Self::MediaStore,
+        Self::MediaSweep,
+        Self::TlsRenew,
+        Self::UpdateCheck,
+        Self::ArrSeed,
+        Self::BackupRun,
+    ];
+
+    /// Its name, as the history files its runs.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::RefreshSweep => REFRESH_SWEEP,
+            Self::RefreshAll => REFRESH_ALL,
+            Self::ImportAnime => IMPORT_ANIME,
+            Self::ImportImdb => IMPORT_IMDB,
+            Self::ExportNfo => EXPORT_NFO,
+            Self::MediaStore => MEDIA_STORE,
+            Self::MediaSweep => MEDIA_SWEEP,
+            Self::TlsRenew => TLS_RENEW,
+            Self::UpdateCheck => UPDATE_CHECK,
+            Self::ArrSeed => ARR_SEED,
+            Self::BackupRun => BACKUP_RUN,
+        }
+    }
+}
+
+/// Why a task cannot be run now.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+// Named explicitly: utoipa keys schemas on the leaf name alone, and a
+// `Blocked` could be anything's.
+#[schema(as = TaskBlocked)]
+pub enum Blocked {
+    /// The source it reads is switched off.
+    SourceOff,
+    /// What it needs is not configured: the export's path.
+    NotConfigured,
+    /// It is running.
+    Running,
+    /// A task under the same lock is.
+    Busy,
+    /// No media store is configured.
+    MediaOff,
+    /// The server issues no certificate of its own.
+    NoAuthority,
+    /// The check for a newer version is off.
+    UpdatesOff,
+    /// Neither Sonarr nor Radarr is connected.
+    ArrOff,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
@@ -57,7 +133,7 @@ pub enum Mode {
 #[derive(Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskState {
-    pub id: &'static str,
+    pub id: TaskId,
     pub mode: Mode,
     /// Seconds between runs, when it is scheduled.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -78,14 +154,14 @@ pub struct TaskState {
     pub cancelable: bool,
     /// Why it cannot be run now, when it cannot.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub blocked: Option<&'static str>,
+    pub blocked: Option<Blocked>,
 }
 
 /// Every task as it stands.
 pub async fn states(state: &AppState) -> anyhow::Result<Vec<TaskState>> {
-    let mut out = Vec::with_capacity(ALL.len());
-    for id in ALL {
-        out.push(state_of(state, id).await?);
+    let mut out = Vec::with_capacity(TaskId::ALL.len());
+    for task in TaskId::ALL {
+        out.push(state_of(state, task).await?);
     }
     Ok(out)
 }
@@ -103,6 +179,7 @@ fn lock_busy(id: &str) -> bool {
         TLS_RENEW => crate::tls::is_renewing(),
         UPDATE_CHECK => crate::jobs::update_check::is_checking(),
         ARR_SEED => crate::arr::seed::is_busy(),
+        BACKUP_RUN => crate::jobs::backup::is_busy(),
         _ => false,
     }
 }
@@ -117,6 +194,7 @@ pub fn hold_of(id: &str) -> Option<&'static str> {
         MEDIA_SWEEP => Some(repo::job::kinds::MEDIA_SWEEP),
         TLS_RENEW => Some(repo::job::kinds::TLS_RENEW),
         ARR_SEED => Some(crate::arr::seed::HOLD),
+        BACKUP_RUN => Some(crate::jobs::backup::HOLD),
         _ => None,
     }
 }
@@ -126,7 +204,8 @@ pub fn stops_partway(kind: &str) -> bool {
     matches!(kind, REFRESH_ALL | MEDIA_STORE | ARR_SEED)
 }
 
-async fn state_of(state: &AppState, id: &'static str) -> anyhow::Result<TaskState> {
+async fn state_of(state: &AppState, task: TaskId) -> anyhow::Result<TaskState> {
+    let id = task.as_str();
     let (last, last_success_at) = repo::job::latest(&state.db, id).await?;
     // Held here, or — among several instances — held elsewhere.
     let busy = lock_busy(id)
@@ -144,7 +223,7 @@ async fn state_of(state: &AppState, id: &'static str) -> anyhow::Result<TaskStat
     let running = last
         .as_ref()
         .filter(|job| {
-            job.status == "running"
+            job.status == Status::Running
                 && if mine(job) {
                     lock_busy(id)
                 } else {
@@ -170,7 +249,7 @@ async fn state_of(state: &AppState, id: &'static str) -> anyhow::Result<TaskStat
             (
                 if on { Mode::Scheduled } else { Mode::Off },
                 on.then(|| crate::jobs::datasets::ANIME_EVERY.num_seconds()),
-                (!on).then_some("source_off"),
+                (!on).then_some(Blocked::SourceOff),
             )
         }
         IMPORT_IMDB => {
@@ -178,7 +257,7 @@ async fn state_of(state: &AppState, id: &'static str) -> anyhow::Result<TaskStat
             (
                 if on { Mode::Scheduled } else { Mode::Off },
                 on.then(|| crate::jobs::datasets::IMDB_EVERY.num_seconds()),
-                (!on).then_some("source_off"),
+                (!on).then_some(Blocked::SourceOff),
             )
         }
         EXPORT_NFO => {
@@ -186,7 +265,7 @@ async fn state_of(state: &AppState, id: &'static str) -> anyhow::Result<TaskStat
             (
                 if set { Mode::Manual } else { Mode::Off },
                 None,
-                (!set).then_some("not_configured"),
+                (!set).then_some(Blocked::NotConfigured),
             )
         }
         MEDIA_STORE => {
@@ -194,7 +273,7 @@ async fn state_of(state: &AppState, id: &'static str) -> anyhow::Result<TaskStat
             (
                 if on { Mode::Manual } else { Mode::Off },
                 None,
-                (!on).then_some("media_off"),
+                (!on).then_some(Blocked::MediaOff),
             )
         }
         MEDIA_SWEEP => {
@@ -202,7 +281,7 @@ async fn state_of(state: &AppState, id: &'static str) -> anyhow::Result<TaskStat
             (
                 if on { Mode::Scheduled } else { Mode::Off },
                 on.then(|| crate::media::worker::SWEEP_EVERY.as_secs() as i64),
-                (!on).then_some("media_off"),
+                (!on).then_some(Blocked::MediaOff),
             )
         }
         TLS_RENEW => {
@@ -210,7 +289,7 @@ async fn state_of(state: &AppState, id: &'static str) -> anyhow::Result<TaskStat
             (
                 if on { Mode::Scheduled } else { Mode::Off },
                 on.then(|| crate::tls::RENEW_EVERY.as_secs() as i64),
-                (!on).then_some("no_authority"),
+                (!on).then_some(Blocked::NoAuthority),
             )
         }
         UPDATE_CHECK => {
@@ -218,7 +297,7 @@ async fn state_of(state: &AppState, id: &'static str) -> anyhow::Result<TaskStat
             (
                 if on { Mode::Scheduled } else { Mode::Off },
                 on.then(|| crate::jobs::update_check::EVERY.as_secs() as i64),
-                (!on).then_some("updates_off"),
+                (!on).then_some(Blocked::UpdatesOff),
             )
         }
         // By hand only: the library is read when somebody is about to point
@@ -228,9 +307,15 @@ async fn state_of(state: &AppState, id: &'static str) -> anyhow::Result<TaskStat
             (
                 if on { Mode::Manual } else { Mode::Off },
                 None,
-                (!on).then_some("arr_off"),
+                (!on).then_some(Blocked::ArrOff),
             )
         }
+        // Off, it can still be run by hand: an archive before a change is
+        // what somebody who backs up some other way still wants.
+        BACKUP_RUN => match crate::jobs::backup::interval(state) {
+            Some(every) => (Mode::Scheduled, Some(every.as_secs() as i64), None),
+            None => (Mode::Manual, None, None),
+        },
         _ => (Mode::Off, None, None),
     };
 
@@ -253,7 +338,7 @@ async fn state_of(state: &AppState, id: &'static str) -> anyhow::Result<TaskStat
                         .map(|at| at + chrono::Duration::seconds(seconds));
                     let retry = last
                         .as_ref()
-                        .filter(|job| job.status == "failed")
+                        .filter(|job| job.status == Status::Failed)
                         .and_then(|job| job.finished_at.as_deref())
                         .and_then(crate::db::parse_rfc3339)
                         .and_then(|at| {
@@ -269,6 +354,8 @@ async fn state_of(state: &AppState, id: &'static str) -> anyhow::Result<TaskStat
                 // Its own schedule says: a minute after the start, then a
                 // day after the last check, whoever asked for it.
                 UPDATE_CHECK => crate::jobs::update_check::next_at(),
+                // An interval after the newest archive, whoever made it.
+                BACKUP_RUN => crate::jobs::backup::next_at(state).await?,
                 _ => last
                     .as_ref()
                     .and_then(|job| job.started_at.as_deref())
@@ -287,15 +374,15 @@ async fn state_of(state: &AppState, id: &'static str) -> anyhow::Result<TaskStat
 
     // Its own run, or its sibling's under the same lock: either way not now.
     let blocked = off.or(if running.is_some() {
-        Some("running")
+        Some(Blocked::Running)
     } else if busy {
-        Some("busy")
+        Some(Blocked::Busy)
     } else {
         None
     });
 
     Ok(TaskState {
-        id,
+        id: task,
         mode,
         every_seconds: every,
         blocked,
@@ -305,4 +392,25 @@ async fn state_of(state: &AppState, id: &'static str) -> anyhow::Result<TaskStat
         running,
         cancelable,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_task_is_sent_under_the_name_its_runs_are_filed_by() {
+        for task in TaskId::ALL {
+            assert_eq!(serde_json::to_value(task).unwrap(), task.as_str());
+        }
+        let names: Vec<&str> = TaskId::ALL.iter().map(|task| task.as_str()).collect();
+        let mut distinct = names.clone();
+        distinct.sort_unstable();
+        distinct.dedup();
+        assert_eq!(distinct.len(), names.len(), "{names:?}");
+        assert_eq!(
+            serde_json::to_value(Blocked::NotConfigured).unwrap(),
+            "not_configured"
+        );
+    }
 }

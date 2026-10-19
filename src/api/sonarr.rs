@@ -19,7 +19,7 @@ use crate::{
     db::repo,
     domain::MediaItem,
     error::{AppError, AppResult},
-    service::{language, scene, series},
+    service::{language, orders, scene, series},
     state::AppState,
     wire::{
         sonarr::{ShowResource, from_item},
@@ -109,6 +109,18 @@ async fn show(
     // is fetched here, once, and stored.
     language::apply(&state, &mut item, &language).await?;
     name_for_sonarr(&state, &mut item, tvdb_id).await;
+    // Sonarr v4 knows the aired order alone: numbered by the order frozen as
+    // it, when one is.
+    let orders = repo::order::list(&state.db, &item.id).await?;
+    let own = orders::number_as_official(&mut item, &orders);
+    // It reads a TheTVDB id on every episode: one of the frozen order's own
+    // is given TheTVDB's when its record carries one, and the id Sonarr v5
+    // is given otherwise, so that a series moved to v5 keeps its episodes.
+    for episode in &mut item.episodes {
+        if episode.tvdb_id.is_none() && own.contains(&episode.id) {
+            episode.tvdb_id = Some(orders::own_episode_id(episode));
+        }
+    }
 
     // Echo back the id the client asked for: Sonarr has already stored it, and
     // a different one in the response would orphan the series.
@@ -229,7 +241,9 @@ async fn show_v2(
         &state.language(identity.client_id(), identity.peer_id()),
     )
     .await?;
-    let orders = repo::order::list(&state.db, &item.id).await?;
+    // The order asked in, read from its source first when it is a TMDB
+    // group not read yet.
+    let orders = orders::for_clients(&state, &item, Some(&season_type)).await?;
 
     state.media.for_clients(&mut item);
     Ok(Json(sonarr_v2::from_item(
@@ -377,7 +391,10 @@ mod tests {
             child::{blank_episode, blank_season},
             item::ItemWrite,
         },
-        domain::{EpisodeOrder, ExternalIds, MediaKind, PlacedEpisode, Translation},
+        domain::{
+            EpisodeOrder, ExternalIds, MediaKind, OrderKind, OrderRecord, PlacedEpisode,
+            Translation,
+        },
     };
 
     /// What the tests' server is made from: a database in memory, as
@@ -515,12 +532,7 @@ mod tests {
     }
 
     fn placed(tvdb_id: i64, season: i32, number: i32) -> PlacedEpisode {
-        PlacedEpisode {
-            tvdb_id,
-            season_number: season,
-            episode_number: number,
-            absolute_number: None,
-        }
+        PlacedEpisode::of_tvdb(tvdb_id, season, number)
     }
 
     /// *Rurouni Kenshin* (2023), stored: two seasons, three episodes, named
@@ -571,11 +583,20 @@ mod tests {
         )
         .await
         .expect("stored");
-        repo::order::replace(
+        repo::order::replace_source(
             &state.db,
             &work.id,
+            "tvdb",
             &[EpisodeOrder {
-                kind: "dvd".into(),
+                key: "dvd".into(),
+                kind: OrderKind::Dvd,
+                source: "tvdb".into(),
+                source_ref: None,
+                label: "DVD Order".into(),
+                is_default: false,
+                is_frozen: false,
+                announced: None,
+                updated_at: crate::db::now(),
                 episodes: vec![placed(1002, 1, 1), placed(1001, 1, 2), placed(2001, 2, 1)],
             }],
         )
@@ -649,6 +670,160 @@ mod tests {
         assert_eq!(sent["metadataSource"], "tvdb");
         assert_eq!(sent["seasonTypes"][1]["type"], "dvd");
         assert_eq!(sent["seasonTypes"][1]["name"], "DVD Order");
+    }
+
+    /// An order frozen as the aired numbering is what both editions are
+    /// given for the aired order: Sonarr v5 asking for `official`, and Sonarr
+    /// v4, which knows no other. Thawed, the work's own numbering is back.
+    #[tokio::test]
+    async fn a_frozen_order_numbers_the_series_for_both_editions_until_it_is_thawed() {
+        let state = server().await;
+        let work = stored(&state).await;
+        let numbers = |episodes: Vec<(i32, i32, Option<i64>)>| episodes;
+
+        assert!(
+            repo::order::freeze(&state.db, &work.id, Some("dvd"))
+                .await
+                .expect("frozen")
+        );
+        state.caches.touched(&work.id).await;
+
+        let Json(v5) = asked(&state, "eng", 416802, "official")
+            .await
+            .expect("answered");
+        let v5_numbers = numbers(
+            v5.episodes
+                .as_deref()
+                .unwrap()
+                .iter()
+                .map(|e| (e.season_number, e.episode_number, e.tvdb_id))
+                .collect(),
+        );
+        assert_eq!(
+            v5_numbers,
+            [(1, 1, Some(1002)), (1, 2, Some(1001)), (2, 1, Some(2001))]
+        );
+        assert_eq!(v5.season_types[0].kind, "official");
+
+        let Json(v4) = show(
+            State(state.clone()),
+            Path(ShowPath {
+                language: "en".into(),
+                tvdb_id: 416802,
+            }),
+        )
+        .await
+        .expect("answered");
+        let v4_numbers = numbers(
+            v4.episodes
+                .iter()
+                .map(|e| (e.season_number, e.episode_number, e.tvdb_id))
+                .collect(),
+        );
+        assert_eq!(v4_numbers, v5_numbers);
+
+        assert!(
+            repo::order::freeze(&state.db, &work.id, None)
+                .await
+                .expect("thawed")
+        );
+        let Json(v4) = show(
+            State(state.clone()),
+            Path(ShowPath {
+                language: "en".into(),
+                tvdb_id: 416802,
+            }),
+        )
+        .await
+        .expect("answered");
+        assert_eq!(v4.episodes[0].tvdb_id, Some(1001));
+    }
+
+    /// An episode a frozen order carries as its own, which the work does not
+    /// hold: Sonarr v4, which reads a TheTVDB id on every episode, is given
+    /// the one Sonarr v5 is — or TheTVDB's, when the record carries one.
+    #[tokio::test]
+    async fn an_episode_a_frozen_order_carries_as_its_own_has_one_id_for_both_editions() {
+        let state = server().await;
+        let work = stored(&state).await;
+        let own = |tvdb_id: Option<i64>, number: i32, title: &str| PlacedEpisode {
+            tvdb_id,
+            record: Some(OrderRecord {
+                title: title.into(),
+                overview: None,
+                aired: Some("2023-12-01".into()),
+                runtime: Some(24),
+                image: None,
+                finale_type: None,
+            }),
+            ..placed(0, 0, number)
+        };
+        repo::order::replace_source(
+            &state.db,
+            &work.id,
+            "tvdb",
+            &[EpisodeOrder {
+                key: "dvd".into(),
+                kind: OrderKind::Dvd,
+                source: "tvdb".into(),
+                source_ref: None,
+                label: "DVD Order".into(),
+                is_default: false,
+                is_frozen: false,
+                announced: None,
+                updated_at: crate::db::now(),
+                episodes: vec![
+                    placed(1002, 1, 1),
+                    placed(1001, 1, 2),
+                    placed(2001, 2, 1),
+                    own(None, 9, "Recap: the Tokyo arc"),
+                    own(Some(7007), 10, "Director's cut"),
+                ],
+            }],
+        )
+        .await
+        .expect("the order kept");
+        assert!(
+            repo::order::freeze(&state.db, &work.id, Some("dvd"))
+                .await
+                .expect("frozen")
+        );
+        state.caches.touched(&work.id).await;
+
+        let Json(v5) = asked(&state, "eng", 416802, "official")
+            .await
+            .expect("answered");
+        let id_in_v5 = |number: i32| {
+            v5.episodes
+                .as_deref()
+                .unwrap()
+                .iter()
+                .find(|e| e.season_number == 0 && e.episode_number == number)
+                .and_then(|e| e.tvdb_id)
+        };
+        let made = id_in_v5(9).expect("an id made for it");
+        assert!(made < 0, "never one of TheTVDB's: {made}");
+        assert_eq!(id_in_v5(10), Some(7007));
+
+        let Json(v4) = show(
+            State(state.clone()),
+            Path(ShowPath {
+                language: "en".into(),
+                tvdb_id: 416802,
+            }),
+        )
+        .await
+        .expect("answered");
+        let id_in_v4 = |number: i32| {
+            v4.episodes
+                .iter()
+                .find(|e| e.season_number == 0 && e.episode_number == number)
+                .and_then(|e| e.tvdb_id)
+        };
+        assert_eq!(id_in_v4(9), Some(made));
+        assert_eq!(id_in_v4(10), Some(7007));
+        // Every episode carries one.
+        assert!(v4.episodes.iter().all(|e| e.tvdb_id.is_some()));
     }
 
     #[tokio::test]

@@ -33,3 +33,17 @@ label is not called `instance`, which Prometheus reserves for the target — and
 `ams_instances` says how many were heard of lately — an alert on
 `sum(ams_leader) != 1` for more than a minute catches a cluster with no
 leader, or two.
+
+`ams_backup_age_seconds` is how long ago the newest archive of the database was made
+([Backups](../install.md#backups)), offered while the schedule is on and once an archive
+exists. An alert for backups that stopped, at the weekly default:
+
+```yaml
+- alert: ArrMetadataBackupStale
+  # Two schedules missed, or none ever made while the schedule is on.
+  expr: max(ams_backup_age_seconds) > 2 * 7 * 86400 or absent(ams_backup_age_seconds)
+  for: 1h
+```
+
+Drop the `absent()` half where the schedule is off on purpose; the webhook's `backup.failed`
+says why a run failed, as it happens.

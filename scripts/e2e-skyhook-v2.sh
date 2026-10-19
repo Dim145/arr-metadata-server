@@ -5,8 +5,9 @@
 # top and what kind of value each holds, the season types, the seasons and
 # how many episodes each has, the languages the series is named in, the two
 # names of an episode's ids — every difference an addition this server makes
-# or a failure, but for an order made of episodes the aired list does not
-# hold, which is a limit this server has yet and is said to be one.
+# or a failure. A season type the real service offers is one this server
+# offers too, an order made of episodes the aired list does not hold among
+# them: it keeps the records TheTVDB files in one order alone.
 #
 # Reaches the internet, for Skyhook's side. The server is one already
 # running, given by address, that admits this host on the Sonarr surface:
@@ -41,7 +42,7 @@ import json, os, ssl, sys, urllib.error, urllib.request
 
 SKYHOOK, SERVER, LANGUAGE = os.environ["SKYHOOK"], os.environ["SERVER"], os.environ["LANGUAGE"]
 SERIES = [int(s) for s in os.environ["SERIES"].split()]
-failures, additions, limits = [], [], []
+failures, additions = [], []
 
 # The server's own certificate is one it made for itself; the real service's
 # is checked as a browser would.
@@ -64,10 +65,6 @@ def fail(message):
 def add(message):
     additions.append(message)
     print(f"    + {message}")
-
-def limit(message):
-    limits.append(message)
-    print(f"    limit: {message}")
 
 def kind(value):
     if value is None:
@@ -117,31 +114,22 @@ for tvdb in SERIES:
             print(f"    differs: {field}: ours {ours.get(field)!r}, real {real.get(field)!r}")
 
     # The orders Sonarr may ask the series in. One the real service offers
-    # and this server does not is a failure when the aired list holds any of
-    # its episodes — this server places an order's episodes among the ones
-    # it holds — and a limit when it holds none: TheTVDB files some orders'
+    # and this server does not is a failure, an order made of episodes the
+    # aired list does not hold as much as any: TheTVDB files some orders'
     # episodes as records of their own (The Office (US)'s Superfan order is
-    # 194 extended cuts), which the catalogue does not keep yet. See
-    # docs/sonarr-radarr.md, "Orders".
+    # 194 extended cuts), which the catalogue keeps with the order and serves
+    # as episodes. See docs/sonarr-radarr.md, "Orders". A TMDB group or an
+    # order made here is one this server adds.
     ours_types = {t["type"]: t for t in ours.get("seasonTypes") or []}
     real_types = {t["type"]: t for t in real.get("seasonTypes") or []}
-    aired_ids = {e.get("tvdbId") for e in real.get("episodes") or []}
     for name in sorted(set(real_types) - set(ours_types)):
-        try:
-            order = fetch(SKYHOOK, f"/v2/tvdb/shows/{LANGUAGE}/{tvdb}/{name}", lenient=False)
-        except (RuntimeError, OSError) as e:
-            fail(f"tvdb:{tvdb}: season type missing here: {name} (and the real service did not answer for it: {e})")
-            continue
-        episodes = order.get("episodes") or []
-        held = [e for e in episodes if e.get("tvdbId") in aired_ids]
-        if held or not episodes:
-            fail(f"tvdb:{tvdb}: season type missing here: {name} ({len(held)} of its {len(episodes)} episodes are in the aired list)")
-        else:
-            limit(f"tvdb:{tvdb}: season type {name} is {len(episodes)} episodes the aired list does not hold; not kept here yet")
+        fail(f"tvdb:{tvdb}: season type missing here: {name} ({real_types[name].get('episodeCount')} episodes there)")
     for name in sorted(set(ours_types) - set(real_types)):
         add(f"tvdb:{tvdb}: season type the real one lacks: {name}")
     for name in sorted(set(ours_types) & set(real_types)):
         mine, theirs = ours_types[name], real_types[name]
+        if mine.get("name") != theirs.get("name"):
+            print(f"    differs: seasonTypes[{name}].name: ours {mine.get('name')!r}, real {theirs.get('name')!r}")
         if sorted(mine.get("seasonNumbers") or []) != sorted(theirs.get("seasonNumbers") or []):
             print(f"    differs: seasonTypes[{name}].seasonNumbers: ours {mine.get('seasonNumbers')}, real {theirs.get('seasonNumbers')}")
         if mine.get("episodeCount") != theirs.get("episodeCount"):
@@ -202,7 +190,7 @@ for tvdb in SERIES:
     if real_finales != ours_finales:
         print(f"    differs: episodes with a finaleType: ours {ours_finales}, real {real_finales}")
 
-print(f"  {len(failures)} failures, {len(additions)} additions, {len(limits)} known limits")
+print(f"  {len(failures)} failures, {len(additions)} additions")
 sys.exit(1 if failures else 0)
 PY
 

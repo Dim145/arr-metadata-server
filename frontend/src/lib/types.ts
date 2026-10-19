@@ -8,11 +8,16 @@
  * it, and one taken away is a type error wherever a page still reads it. The
  * document's `required` is what says a field is always sent: a default only
  * says what a field left out stands for, and the generator is told so
- * (`--default-non-nullable false`).
+ * (`--default-non-nullable false`). A string the server fills from a fixed
+ * set is an enum in the document, so the set reaches these types too.
  *
- * What is still said here is said more exactly than the document can: a
- * string the server only ever fills from a fixed set is given that set, and
- * a type holding one is given the narrower type.
+ * What is still said here is what the document cannot say: how the server
+ * sends what it documents — `Sent`, below, drops the `null` utoipa gives
+ * every optional field, since the server leaves one out instead — and the
+ * names the pages know these shapes by, where the document's are its Rust
+ * types' (`SessionUser` for `MeUser`). Nothing else: a set written out here
+ * by hand would be one the server could change without the compiler
+ * noticing.
  */
 
 import type { components } from './api.gen'
@@ -37,9 +42,6 @@ type Sent<T> = T extends readonly (infer U)[]
 
 /** One of the document's schemas, as sent. */
 type Schema<N extends keyof Schemas> = Sent<Schemas[N]>
-
-/** A schema with the fields in `R` said here instead, and the rest as the document has them. */
-type Refined<N extends keyof Schemas, R> = Omit<Schema<N>, keyof R> & R
 
 export type MediaKind = Schema<'MediaKind'>
 
@@ -123,7 +125,7 @@ export type IssuedKey = Schema<'IssuedKey'>
 export type Registration = Schema<'Registration'>
 
 /** What the sign-in page offers, readable before anyone signs in. */
-export type AuthOptions = Refined<'AuthOptions', { site: 'public' | 'private' }>
+export type AuthOptions = Schema<'AuthOptions'>
 
 /** How people sign in through the identity provider, as an administrator sets it. */
 export type OidcConfiguration = Schema<'OidcConfiguration'>
@@ -138,10 +140,10 @@ export type ArrApp = Schema<'App'>
 export type ArrConnection = Schema<'ArrConnection'>
 
 /** One work told to Sonarr or Radarr, and how it went. */
-export type ArrPush = Refined<'ArrPush', { app: ArrApp; outcome: 'sent' | 'absent' | 'failed' }>
+export type ArrPush = Schema<'ArrPush'>
 
 /** The Sonarr & Radarr page: both connections, the switch, what was told lately. */
-export type ArrConfiguration = Refined<'ArrConfiguration', { pushes: ArrPush[] }>
+export type ArrConfiguration = Schema<'ArrConfiguration'>
 
 /** What the test button found: who answered, or why nobody did. */
 export type ArrTest = Schema<'ArrTestOutcome'>
@@ -159,68 +161,40 @@ export type IssuedInvitation = Schema<'IssuedInvitation'>
 
 export type ApiName = Schema<'Api'>
 
-/** What an API asks of a caller: a string in the document, always one of these. */
-export type SurfacePolicyName = 'apikey' | 'allowlist' | 'open'
-
-export type ApiState = Refined<'ApiState', { policy: SurfacePolicyName }>
+export type ApiState = Schema<'ApiState'>
 
 /** The way in, on one page. */
-export type AccessReport = Refined<
-  'Access',
-  { site: 'public' | 'private'; apis: ApiState[]; relayCredentials: RelayCredentialState[] }
->
+export type AccessReport = Schema<'Access'>
 
 /** Whose key a relay asks its service with (`tmdb.relayCredential`, `tvdb.relayCredential`). */
-export type RelayCredentialState = Refined<
-  'RelayCredentialState',
-  { api: 'tmdb' | 'tvdb'; credential: 'server' | 'client'; configuredPolicy: SurfacePolicyName }
->
+export type RelayCredentialState = Schema<'RelayCredentialState'>
 
 export type AuditEntry = Schema<'AuditEntry'>
 
 export type AuditResponse = Schema<'AuditListResponse'>
 
-export type Job = Refined<'Job', { status: 'running' | 'succeeded' | 'failed' | 'stopped' }>
+export type Job = Schema<'Job'>
 
-/** The background tasks, by the id the server knows each by: a string in the document. */
-export type TaskId =
-  | 'refresh.sweep'
-  | 'refresh.all'
-  | 'import.anime'
-  | 'import.imdb'
-  | 'export.nfo'
-  | 'media.store'
-  | 'media.sweep'
-  | 'tls.renew'
-  | 'update.check'
-  | 'arr.seed'
+/** The background tasks, by the name the history files their runs by. */
+export type TaskId = Schema<'TaskId'>
 
 /** A background task as it stands: when it runs, how it last went. */
-export type Task = Refined<
-  'TaskState',
-  {
-    id: TaskId
-    last?: Job
-    running?: Job
-    /** Why it cannot run now. */
-    blocked?: 'source_off' | 'not_configured' | 'running' | 'busy' | 'media_off' | 'no_authority' | 'updates_off' | 'arr_off'
-  }
->
+export type Task = Schema<'TaskState'>
 
 /** Every event a destination can be told of, besides `*`. */
-export type WebhookEvents = Refined<'WebhookEvents', { kinds: WebhookKind[] }>
+export type WebhookEvents = Schema<'WebhookEvents'>
 
-/** How a destination is posted to: a string in the document, always one of these. */
-export type WebhookKind = 'standard' | 'json' | 'discord' | 'slack' | 'ntfy' | 'gotify' | 'apprise'
+/** How a destination is posted to. */
+export type WebhookKind = Schema<'WebhookKind'>
 
 /** What a test post to a destination came to. */
-export type WebhookTest = Refined<'WebhookTest', { refused?: 'not_web' | 'internal' | 'unsent' }>
+export type WebhookTest = Schema<'WebhookTest'>
 
 /** Where what happens is told: never its secret, its address masked past the host. */
-export type WebhookDestination = Refined<'WebhookDestination', { kind: WebhookKind }>
+export type WebhookDestination = Schema<'WebhookDestination'>
 
 /** A destination to make, or what to change of one: each field left out stays. */
-export type WebhookDestinationInput = Refined<'WebhookDestinationInput', { kind?: WebhookKind }>
+export type WebhookDestinationInput = Schema<'WebhookDestinationInput'>
 
 /** One thing told, as a delivery keeps it: who, on what and how, each sent as `null` when there is none. */
 export type WebhookMessage = Schema<'WebhookMessage'>
@@ -230,13 +204,13 @@ export type WebhookDelivery = Schema<'WebhookDelivery'>
 
 export type WebhookDeliveries = Schema<'WebhookDeliveries'>
 
-export type JobsResponse = Refined<'JobsResponse', { jobs: Job[] }>
+export type JobsResponse = Schema<'JobsResponse'>
 
 /** What a run did to one work: the detail behind its summary. */
-export type JobEntry = Refined<'JobEntry', { kind?: MediaKind; outcome: 'ok' | 'failed' | 'skipped' | 'imported' }>
+export type JobEntry = Schema<'JobEntry'>
 
 /** One run, with what it did to each work — the first five hundred of them. */
-export type JobDetail = Refined<'JobDetail', { job: Job; entries: JobEntry[] }>
+export type JobDetail = Schema<'JobDetail'>
 
 /** An export under way, written in the background and recorded as a job. */
 export type ExportStarted = Schema<'ExportStarted'>
@@ -244,12 +218,12 @@ export type ExportStarted = Schema<'ExportStarted'>
 /** What the catalogue holds; how the server is run, only for whoever maintains it. */
 export type Stats = Schema<'Stats'>
 
-export type Settings = Refined<'Settings', { furtherSources: FurtherSources }>
+export type Settings = Schema<'Settings'>
 
 /** A list the server downloads whole: when it last landed, and what it kept. */
 export type ListImport = Schema<'ListImport'>
 
-export type FurtherSources = Refined<'FurtherSources', { malVia: 'official' | 'jikan' }>
+export type FurtherSources = Schema<'FurtherSources'>
 
 /** Where the data comes from, for the credits: only what is switched on. */
 export type Sources = Schema<'Sources'>
@@ -283,16 +257,16 @@ export type MalReach = Schema<'Reach'>
 export type SourceRule = Schema<'Laid'>
 
 /** How the media store stands. */
-export type MediaStatus = Refined<'MediaStatus', { backend: 'off' | 'filesystem' | 's3' }>
+export type MediaStatus = Schema<'MediaStatus'>
 
 /** One medium kept, or in line to be. */
 export type MediaAsset = Schema<'Asset'>
 
 /** One address a work points at, and what is kept of it. */
-export type WorkMedium = Refined<'WorkMedium', { status: 'stored' | 'pending' | 'failed' | 'absent' }>
+export type WorkMedium = Schema<'WorkMedium'>
 
 /** A work's media, and whether a store is configured at all. */
-export type WorkMedia = Refined<'WorkMedia', { media: WorkMedium[] }>
+export type WorkMedia = Schema<'WorkMedia'>
 
 export type Uploaded = Schema<'Uploaded'>
 
@@ -336,7 +310,7 @@ export type Locks = Schema<'Locks'>
 export type LocksImported = Schema<'LocksImported'>
 
 /** How the server is. */
-export type Health = Refined<'Health', { jobs: Job[] }>
+export type Health = Schema<'Health'>
 
 /** A release newer than the version running, and its page on GitHub. */
 export type UpdateAvailable = Schema<'UpdateAvailable'>
@@ -379,11 +353,7 @@ export type Release = Schema<'Release'>
 /** One thing the schedule lists: an episode airing, or a film coming out. */
 export type CalendarEntry = Schema<'CalendarEntry'>
 
-/**
- * The schedule. The server still sends `episodes`, the episodes alone, for
- * whoever read it before it held films; it is deprecated, so the generated
- * types leave it out (`--exclude-deprecated`) and this site reads `entries`.
- */
+/** The schedule: the episodes and the films' releases of a window, and the works they belong to. */
 export type Calendar = Schema<'Calendar'>
 
 /** One part a person played, or one job they did, on one work. */
@@ -411,7 +381,7 @@ export type SettingScope = Schema<'Scope'>
 
 export type SettingDef = Schema<'Definition'>
 
-export type EffectiveSetting = Refined<'Effective', { source: SettingScope }>
+export type EffectiveSetting = Schema<'Effective'>
 
 /** A work a provider has, before this server holds it. */
 export type Found = Schema<'Found'>
@@ -427,12 +397,12 @@ export type SeasonChart = Schema<'Chart'>
 export type SeasonCandidate = Schema<'Candidate'>
 
 /** The server's doors: the interface's, and the clients' — `null` when there is none. */
-export type Listeners = Refined<'Listeners', { clients: ClientsListener | null }>
+export type Listeners = Schema<'Listeners'>
 
-export type ClientsListener = Refined<'Door', { mode: 'authority' | 'own' }>
+export type ClientsListener = Schema<'Door'>
 
 /** The caches, as the Cache page reads them. */
-export type CacheReport = Refined<'Report', { spaces: CacheSpace[] }>
+export type CacheReport = Schema<'Report'>
 
 /** One instance of the server, as it introduces itself to the others. */
 export type Instance = Schema<'Instance'>
@@ -442,6 +412,15 @@ export type Instances = Schema<'Instances'>
 
 export type CacheServer = Schema<'Server'>
 
-export type CacheSpace = Refined<'SpaceReport', { id: 'items' | 'searches' | 'lists' | 'relay' | 'sessions' }>
+export type CacheSpace = Schema<'SpaceReport'>
 
 export type CacheFlushed = Schema<'Flushed'>
+
+/** The Backups page: the archives, where they are kept, and how the server makes them. */
+export type BackupList = Schema<'BackupList'>
+
+/** One archive, as the Backups page lists it. */
+export type Backup = Schema<'Backup'>
+
+/** Where the last restore stands. */
+export type BackupRestore = Schema<'BackupRestore'>

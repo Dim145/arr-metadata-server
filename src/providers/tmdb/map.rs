@@ -8,9 +8,9 @@
 use crate::{
     db::{new_id, now},
     domain::{
-        AlternativeTitle, CountryRelease, CoverType, Credit, CreditType, Episode, ExternalIds,
-        Image, MediaItem, MediaKind, Rating, RatingValue, ReleaseKind, Season, Translation,
-        make_slug,
+        AlternativeTitle, CountryRelease, CoverType, Credit, CreditType, Episode, EpisodeOrder,
+        ExternalIds, Image, MediaItem, MediaKind, OrderKind, OrderRecord, PlacedEpisode, Rating,
+        RatingValue, ReleaseKind, Season, Translation, make_slug,
     },
     providers::{
         lang::{iso_639_1_to_3, iso_3166_2_to_3},
@@ -233,6 +233,91 @@ fn episodes(seasons: &[models::Season]) -> Vec<Episode> {
     }
 
     out
+}
+
+// ─── episode groups ──────────────────────────────────────────────────────────
+
+/// The episode groups TMDB lists with a series, as orders still to be read:
+/// each under `tmdb-` and its id, of the kind its type says, named as it is
+/// on TMDB, with the count of episodes it says it holds. A group of a type
+/// this server does not know is left out. `None` when the answer lists no
+/// groups at all — one asked before they were — which is not the same as a
+/// series with none.
+pub fn episode_groups(raw: &serde_json::Value) -> Option<Vec<EpisodeOrder>> {
+    let listed = raw.get("episode_groups")?;
+    let groups: models::EpisodeGroups = serde_json::from_value(listed.clone()).ok()?;
+    let at = now();
+    Some(
+        groups
+            .results
+            .into_iter()
+            .filter_map(|group| {
+                let kind = OrderKind::of_tmdb(group.group_type?)?;
+                let id = group.id.trim().to_ascii_lowercase();
+                let key = format!("{}{id}", crate::domain::orders::TMDB_GROUP);
+                crate::domain::orders::is_key(&key).then(|| EpisodeOrder {
+                    key,
+                    kind,
+                    source: crate::providers::names::TMDB.to_string(),
+                    source_ref: Some(group.id.clone()),
+                    label: non_empty(Some(&group.name))
+                        .unwrap_or_else(|| format!("TMDB group {}", group.id)),
+                    is_default: false,
+                    is_frozen: false,
+                    announced: group.episode_count,
+                    updated_at: at.clone(),
+                    episodes: Vec::new(),
+                })
+            })
+            .collect(),
+    )
+}
+
+/// An episode group's places: each of its groups a season, numbered by the
+/// group's `order`, and each episode numbered in it from one by its own —
+/// TMDB's record of it kept with it, and its TMDB id, which names the
+/// episode the work holds where it holds one. A group of the absolute type
+/// numbers its episodes straight through besides, the specials aside.
+pub fn episode_group_places(group: &models::EpisodeGroup) -> Vec<PlacedEpisode> {
+    let absolute = group.group_type == Some(2);
+    let mut seasons: Vec<&models::GroupSeason> = group.groups.iter().collect();
+    seasons.sort_by_key(|season| season.order.unwrap_or(i32::MAX));
+
+    let mut places = Vec::new();
+    let mut running = 0;
+    for season in seasons {
+        let Some(number) = season.order else { continue };
+        let mut episodes: Vec<&models::GroupEpisode> = season.episodes.iter().collect();
+        episodes.sort_by_key(|episode| episode.order.unwrap_or(i32::MAX));
+        for (at, entry) in episodes.into_iter().enumerate() {
+            let ep = &entry.episode;
+            let place_number = entry
+                .order
+                .unwrap_or_else(|| i32::try_from(at).unwrap_or(i32::MAX))
+                .saturating_add(1);
+            if absolute && number > 0 {
+                running += 1;
+            }
+            places.push(PlacedEpisode {
+                id: new_id(),
+                season_number: number,
+                episode_number: place_number,
+                absolute_number: (absolute && number > 0).then_some(running),
+                episode_id: None,
+                tvdb_id: None,
+                tmdb_id: ep.id,
+                record: Some(OrderRecord {
+                    title: ep.title().unwrap_or_default(),
+                    overview: non_empty(ep.overview.as_deref()),
+                    aired: non_empty(ep.air_date.as_deref()),
+                    runtime: ep.runtime.filter(|r| *r > 0),
+                    image: ep.still_path.as_deref().map(image_url),
+                    finale_type: finale_type(ep.episode_type.as_deref()),
+                }),
+            });
+        }
+    }
+    places
 }
 
 // ─── movie ───────────────────────────────────────────────────────────────────
@@ -1321,6 +1406,109 @@ mod tests {
             DEFAULT_CAST,
         );
         assert_eq!(item.runtime, Some(45));
+    }
+
+    #[test]
+    fn the_groups_tmdb_lists_are_orders_still_to_be_read() {
+        let raw = serde_json::json!({ "episode_groups": { "results": [
+            { "id": "66bd170e3990ba12fee9990d", "name": "Superfan Order", "type": 4, "episode_count": 186, "group_count": 9 },
+            { "id": "6054b076fab3fa003d4f10d7", "name": "Blu-ray Order", "type": 3, "episode_count": 281 },
+            // A type this server does not know is left out.
+            { "id": "abc", "name": "Mystery", "type": 9, "episode_count": 3 }
+        ] } });
+        let groups = episode_groups(&raw).expect("listed");
+        let read: Vec<(&str, OrderKind, &str, Option<i32>)> = groups
+            .iter()
+            .map(|g| (g.key.as_str(), g.kind, g.label.as_str(), g.announced))
+            .collect();
+        assert_eq!(
+            read,
+            [
+                (
+                    "tmdb-66bd170e3990ba12fee9990d",
+                    OrderKind::Digital,
+                    "Superfan Order",
+                    Some(186)
+                ),
+                (
+                    "tmdb-6054b076fab3fa003d4f10d7",
+                    OrderKind::Dvd,
+                    "Blu-ray Order",
+                    Some(281)
+                ),
+            ]
+        );
+        assert!(
+            groups
+                .iter()
+                .all(|g| g.source == "tmdb" && g.episodes.is_empty())
+        );
+        assert_eq!(
+            groups[0].source_ref.as_deref(),
+            Some("66bd170e3990ba12fee9990d")
+        );
+        // A series asked for before groups were: nothing said, not none.
+        assert!(episode_groups(&serde_json::json!({ "id": 2316 })).is_none());
+        assert_eq!(
+            episode_groups(&serde_json::json!({ "episode_groups": { "results": [] } })),
+            Some(Vec::new())
+        );
+    }
+
+    #[test]
+    fn a_groups_seasons_are_its_groups_and_its_episodes_numbered_from_one() {
+        let group: models::EpisodeGroup = serde_json::from_value(serde_json::json!({
+            "id": "g", "type": 2,
+            "groups": [
+                { "id": "s2", "name": "Season 2", "order": 2, "locked": false, "episodes": [
+                    { "id": 21, "season_number": 2, "episode_number": 1, "order": 0, "name": "Two", "air_date": "2006-09-21", "runtime": 22 }
+                ] },
+                { "id": "s1", "name": "Season 1", "order": 1, "locked": false, "episodes": [
+                    { "id": 12, "season_number": 1, "episode_number": 2, "order": 1, "name": "Diversity Day", "still_path": "/d.jpg", "episode_type": "finale" },
+                    { "id": 11, "season_number": 1, "episode_number": 1, "order": 0, "name": "Pilot", "overview": "It begins." }
+                ] },
+                { "id": "s0", "name": "Specials", "order": 0, "episodes": [
+                    { "id": 1, "season_number": 0, "episode_number": 1, "order": 0, "name": "Episode 1" }
+                ] }
+            ]
+        }))
+        .expect("a group");
+        let places = episode_group_places(&group);
+        /// A place: its season, number and absolute number, its episode's
+        /// TMDB id and its title.
+        type Read<'a> = (i32, i32, Option<i32>, Option<i64>, &'a str);
+        let read: Vec<Read<'_>> = places
+            .iter()
+            .map(|p| {
+                (
+                    p.season_number,
+                    p.episode_number,
+                    p.absolute_number,
+                    p.tmdb_id,
+                    p.record.as_ref().map_or("", |r| r.title.as_str()),
+                )
+            })
+            .collect();
+        assert_eq!(
+            read,
+            [
+                // TMDB's stand-in for a name it has none for is no title.
+                (0, 1, None, Some(1), ""),
+                (1, 1, Some(1), Some(11), "Pilot"),
+                (1, 2, Some(2), Some(12), "Diversity Day"),
+                (2, 1, Some(3), Some(21), "Two"),
+            ]
+        );
+        let diversity = places[2].record.as_ref().unwrap();
+        assert_eq!(
+            diversity.image.as_deref(),
+            Some("https://image.tmdb.org/t/p/original/d.jpg")
+        );
+        assert_eq!(diversity.finale_type.as_deref(), Some("series"));
+        assert_eq!(
+            places[3].record.as_ref().unwrap().aired.as_deref(),
+            Some("2006-09-21")
+        );
     }
 
     #[test]

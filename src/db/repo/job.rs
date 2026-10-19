@@ -11,7 +11,10 @@ use anyhow::Result;
 use serde::Serialize;
 use utoipa::ToSchema;
 
-use crate::db::{Db, RowExt, new_id, now};
+use crate::{
+    db::{Db, RowExt, new_id, now},
+    domain::MediaKind,
+};
 
 /// What this instance is called, written on every run it opens: set once at
 /// start. Before that, runs are opened with no instance — the tests', say.
@@ -36,7 +39,12 @@ pub fn process_started() -> Option<&'static str> {
     STARTED.get().map(String::as_str)
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Where a run stands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+// Named explicitly: an account, an asset, a delivery and a restore each have
+// a `Status` too, and utoipa keys schemas on the leaf name alone.
+#[schema(as = JobStatus)]
 pub enum Status {
     Running,
     Succeeded,
@@ -52,6 +60,19 @@ impl Status {
             Self::Succeeded => "succeeded",
             Self::Failed => "failed",
             Self::Stopped => "stopped",
+        }
+    }
+
+    /// A status as the history stores it. One this version does not know —
+    /// none was ever written but these four, though the table's check
+    /// admits `queued` — reads as a failure: not running, so nothing waits
+    /// on it, and not a success either.
+    fn parse(text: &str) -> Self {
+        match text {
+            "running" => Self::Running,
+            "succeeded" => Self::Succeeded,
+            "stopped" => Self::Stopped,
+            _ => Self::Failed,
         }
     }
 }
@@ -88,7 +109,7 @@ pub struct Job {
     /// What it acted on: an item id, or nothing for a sweep.
     #[schema(required)]
     pub target: Option<String>,
-    pub status: String,
+    pub status: Status,
     #[schema(required)]
     pub started_at: Option<String>,
     #[schema(required)]
@@ -177,7 +198,7 @@ fn map(row: &sqlx::any::AnyRow) -> Result<Job> {
         id: row.text("id")?,
         kind: row.text("kind")?,
         target: row.opt_text("target")?,
-        status: row.text("status")?,
+        status: Status::parse(&row.text("status")?),
         started_at: row.opt_text("started_at")?,
         finished_at: row.opt_text("finished_at")?,
         error: row.opt_text("error")?,
@@ -356,7 +377,11 @@ pub async fn prune(db: &Db, cutoff: &str) -> Result<u64> {
 // ── What a run did to each work ─────────────────────────────────────────
 
 /// How a run's work on one entry ended.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+// Named explicitly: a push to Sonarr or Radarr and a test of a destination
+// each end in an `Outcome` too, and utoipa keys schemas on the leaf name alone.
+#[schema(as = JobOutcome)]
 pub enum Outcome {
     /// Done: refreshed from a provider.
     Ok,
@@ -366,6 +391,10 @@ pub enum Outcome {
     /// Fetched and stored for the first time: the seed's, from the
     /// operator's own library.
     Imported,
+    /// An archive made: a backup's.
+    Written,
+    /// An archive taken away, past those the schedule keeps.
+    Removed,
 }
 
 impl Outcome {
@@ -375,6 +404,22 @@ impl Outcome {
             Self::Failed => "failed",
             Self::Skipped => "skipped",
             Self::Imported => "imported",
+            Self::Written => "written",
+            Self::Removed => "removed",
+        }
+    }
+
+    /// An outcome as the history stores it. One this version does not
+    /// know — a later version's — reads as skipped: something was done
+    /// that this one cannot say, and nothing it should count as a failure.
+    fn parse(text: &str) -> Self {
+        match text {
+            "ok" => Self::Ok,
+            "failed" => Self::Failed,
+            "imported" => Self::Imported,
+            "written" => Self::Written,
+            "removed" => Self::Removed,
+            _ => Self::Skipped,
         }
     }
 }
@@ -385,7 +430,7 @@ pub struct Touched<'a> {
     /// Empty for a work not held here — one of a library no provider had.
     pub id: &'a str,
     pub title: Option<&'a str>,
-    pub kind: Option<&'a str>,
+    pub kind: Option<MediaKind>,
 }
 
 /// What a run did to one work: the detail behind its summary, one row a
@@ -404,10 +449,12 @@ pub struct Entry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub kind: Option<String>,
+    pub kind: Option<MediaKind>,
     /// `ok`, `failed`, `skipped` — or `imported`, the seed's: a work of
-    /// Sonarr's or Radarr's library fetched and stored for the first time.
-    pub outcome: String,
+    /// Sonarr's or Radarr's library fetched and stored for the first time;
+    /// `written` and `removed`, a backup's: the archive it made, and those
+    /// past the ones its schedule keeps.
+    pub outcome: Outcome,
     /// What happened: one of the fixed notes the interface knows, or the
     /// error as the provider said it.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -445,7 +492,7 @@ pub async fn add_entry(
     .bind(position)
     .bind((!work.id.is_empty()).then_some(work.id))
     .bind(work.title)
-    .bind(work.kind)
+    .bind(work.kind.map(MediaKind::as_str))
     .bind(outcome.as_str())
     .bind(note)
     .bind(now())
@@ -471,8 +518,10 @@ pub async fn entries(db: &Db, job_id: &str, limit: i64) -> Result<Vec<Entry>> {
                 id: row.text("id")?,
                 media_id: row.opt_text("media_id")?,
                 title: row.opt_text("title")?,
-                kind: row.opt_text("kind")?,
-                outcome: row.text("outcome")?,
+                // Only ever written from a work's kind; another word is no
+                // kind this version can name, and is left out.
+                kind: row.opt_text("kind")?.and_then(|kind| kind.parse().ok()),
+                outcome: Outcome::parse(&row.text("outcome")?),
                 note: row.opt_text("note")?,
                 created_at: row.text("created_at")?,
             })
@@ -502,7 +551,7 @@ mod entry_tests {
         let touched = |id: &'static str, title: &'static str| Touched {
             id,
             title: Some(title),
-            kind: Some("series"),
+            kind: Some(MediaKind::Series),
         };
         add_entry(
             &db,
@@ -547,8 +596,8 @@ mod entry_tests {
         assert_eq!(count_entries(&db, &run).await.unwrap(), 3);
         assert_eq!(listed.len(), 3);
         assert_eq!(listed[0].title.as_deref(), Some("First"));
-        assert_eq!(listed[0].outcome, "ok");
-        assert_eq!(listed[1].outcome, "failed");
+        assert_eq!(listed[0].outcome, Outcome::Ok);
+        assert_eq!(listed[1].outcome, Outcome::Failed);
         // A long error is kept to its first lines, and marked as cut.
         let note = listed[1].note.as_deref().unwrap();
         assert_eq!(note.chars().count(), NOTE_LIMIT + 1);
@@ -636,6 +685,59 @@ mod tests {
     use super::*;
     use crate::db::testing::db;
 
+    #[test]
+    fn a_status_and_an_outcome_are_sent_as_they_are_stored() {
+        for status in [
+            Status::Running,
+            Status::Succeeded,
+            Status::Failed,
+            Status::Stopped,
+        ] {
+            assert_eq!(serde_json::to_value(status).unwrap(), status.as_str());
+            assert_eq!(Status::parse(status.as_str()), status);
+        }
+        for outcome in [
+            Outcome::Ok,
+            Outcome::Failed,
+            Outcome::Skipped,
+            Outcome::Imported,
+            Outcome::Written,
+            Outcome::Removed,
+        ] {
+            assert_eq!(serde_json::to_value(outcome).unwrap(), outcome.as_str());
+            assert_eq!(Outcome::parse(outcome.as_str()), outcome);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_run_in_words_this_version_does_not_know_still_reads() {
+        let db = db().await;
+        let run = start(&db, kinds::REFRESH_SWEEP, None).await.unwrap();
+        // The table's check admits `queued`, though no version wrote it; an
+        // entry's outcome and kind are checked by nothing but the server.
+        sqlx::query(db.sql("UPDATE job_run SET status = 'queued' WHERE id = ?"))
+            .bind(&run)
+            .execute(db.pool())
+            .await
+            .unwrap();
+        sqlx::query(db.sql(
+            "INSERT INTO job_entry (id, job_id, position, title, kind, outcome, created_at)
+             VALUES ('later', ?, 0, 'From a later version', 'anime', 'archived', ?)",
+        ))
+        .bind(&run)
+        .bind(now())
+        .execute(db.pool())
+        .await
+        .unwrap();
+
+        let read = get(&db, &run).await.unwrap().expect("the run");
+        assert_eq!(read.status, Status::Failed);
+        let listed = entries(&db, &run, 10).await.unwrap();
+        assert_eq!(listed[0].outcome, Outcome::Skipped);
+        assert_eq!(listed[0].kind, None);
+        assert_eq!(listed[0].title.as_deref(), Some("From a later version"));
+    }
+
     #[tokio::test]
     async fn runs_are_counted_by_kind_and_state() {
         let db = db().await;
@@ -685,13 +787,13 @@ mod tests {
         .unwrap();
         assert_eq!(jobs.len(), 2);
 
-        let failed = jobs.iter().find(|j| j.status == "failed").unwrap();
+        let failed = jobs.iter().find(|j| j.status == Status::Failed).unwrap();
         assert_eq!(failed.kind, kinds::REFRESH_ITEM);
         assert_eq!(failed.target.as_deref(), Some("item-1"));
         assert_eq!(failed.error.as_deref(), Some("the provider timed out"));
         assert!(failed.finished_at.is_some());
 
-        let succeeded = jobs.iter().find(|j| j.status == "succeeded").unwrap();
+        let succeeded = jobs.iter().find(|j| j.status == Status::Succeeded).unwrap();
         assert_eq!(succeeded.detail.as_deref(), Some("12 refreshed"));
         assert!(succeeded.error.is_none());
     }
@@ -752,7 +854,7 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(jobs[0].status, "failed");
+        assert_eq!(jobs[0].status, Status::Failed);
         assert!(jobs[0].error.as_deref().unwrap().contains("stopped"));
 
         // Running it again must not touch the row it already closed.
@@ -778,8 +880,14 @@ mod tests {
         let started = "2001-01-01T00:00:00Z";
         assert_eq!(fail_orphaned(&db, false, Some(started)).await.unwrap(), 1);
         assert_eq!(fail_orphaned(&db, true, Some(started)).await.unwrap(), 0);
-        assert_eq!(get(&db, &left).await.unwrap().unwrap().status, "failed");
-        assert_eq!(get(&db, &alive).await.unwrap().unwrap().status, "running");
+        assert_eq!(
+            get(&db, &left).await.unwrap().unwrap().status,
+            Status::Failed
+        );
+        assert_eq!(
+            get(&db, &alive).await.unwrap().unwrap().status,
+            Status::Running
+        );
     }
 
     /// Another instance's run is its own: alone every run is closed at the
@@ -805,6 +913,6 @@ mod tests {
         assert!(running_elsewhere(&db, "b").await.unwrap().is_empty());
         assert_eq!(fail_gone(&db, &id).await.unwrap(), 1);
         assert_eq!(fail_gone(&db, &id).await.unwrap(), 0, "closed already");
-        assert_eq!(get(&db, &id).await.unwrap().unwrap().status, "failed");
+        assert_eq!(get(&db, &id).await.unwrap().unwrap().status, Status::Failed);
     }
 }

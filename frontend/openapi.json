@@ -509,6 +509,198 @@
         }
       }
     },
+    "/api/v1/admin/backups": {
+      "get": {
+        "tags": [
+          "Server"
+        ],
+        "summary": "Every archive, newest first, and how the server makes them.",
+        "operationId": "backup_list",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupList"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller is not an administrator"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Server"
+        ],
+        "summary": "Make an archive now, in the background: its run's id at once, the\narchive in the list once it is whole.",
+        "operationId": "backup_create",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BackupRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Started"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller is not an administrator"
+          },
+          "409": {
+            "description": "An archive is being made, or one restored"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/backups/restore": {
+      "get": {
+        "tags": [
+          "Server"
+        ],
+        "summary": "Where the last restore stands: the one this instance ran, else the last\nthe history holds. While one runs the server answers 503 to everything,\nthis included, with the step it is at.",
+        "operationId": "backup_restore_state",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupRestore"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller is not an administrator"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/backups/{name}": {
+      "delete": {
+        "tags": [
+          "Server"
+        ],
+        "summary": "Take an archive away, and forget it.",
+        "operationId": "backup_remove",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The archive's name, as listed",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Taken away"
+          },
+          "403": {
+            "description": "The caller is not an administrator"
+          },
+          "404": {
+            "description": "No such archive"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/backups/{name}/download": {
+      "get": {
+        "tags": [
+          "Server"
+        ],
+        "summary": "An archive's bytes, as kept: streamed, never held whole, and checked by\nits SHA-256 — the `ETag` — when the server made it.",
+        "operationId": "backup_download",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The archive's name, as listed",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The archive",
+            "content": {
+              "application/octet-stream": {}
+            }
+          },
+          "403": {
+            "description": "The caller is not an administrator"
+          },
+          "404": {
+            "description": "No such archive is kept"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/backups/{name}/restore": {
+      "post": {
+        "tags": [
+          "Server"
+        ],
+        "summary": "Restore an archive over the database, in the background. An archive of\nthe database is made first — what undoes it — and every door of this\ninstance answers 503 until it is done: the interface, the API, Sonarr's\nand Radarr's surfaces, the relays. Everybody is signed out but those\nwhose session the archive holds. An archive this server cannot read\nwhole, or a passphrase that does not open it, is refused before anything\nstarts.",
+        "operationId": "backup_restore",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The archive's name, as listed",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BackupRestoreRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Started: follow it at /admin/backups/restore"
+          },
+          "400": {
+            "description": "The archive cannot be read: encrypted with another passphrase, or damaged"
+          },
+          "403": {
+            "description": "The caller is not an administrator"
+          },
+          "404": {
+            "description": "No such archive is kept"
+          },
+          "409": {
+            "description": "An archive is being made or restored, or this one was made by a later version"
+          }
+        }
+      }
+    },
     "/api/v1/admin/cache": {
       "get": {
         "tags": [
@@ -565,10 +757,10 @@
           {
             "name": "space",
             "in": "path",
-            "description": "`items`, `searches`, `lists`, `relay` or `sessions`",
+            "description": "The space to forget",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/CacheSpace"
             }
           }
         ],
@@ -3821,12 +4013,56 @@
         }
       }
     },
+    "/api/v1/items/{id}/numbering/restore": {
+      "post": {
+        "tags": [
+          "Catalogue"
+        ],
+        "summary": "Give the numbering back to TheTVDB: the series is refreshed at once, and\nnumbered by TheTVDB again when it answers — even with an order frozen,\nwhich a return of TheTVDB's own accord leaves with TMDB. When it still\ndoes not answer, TMDB keeps the numbering, as before.",
+        "operationId": "orders_restore",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The work's identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Refreshed: the orders as they stand, and who numbers the series",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Orders"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller may not write"
+          },
+          "404": {
+            "description": "No such work"
+          },
+          "409": {
+            "description": "A series TMDB does not number, or one with no TheTVDB id"
+          },
+          "502": {
+            "description": "The refresh failed altogether"
+          }
+        }
+      }
+    },
     "/api/v1/items/{id}/orders": {
       "get": {
         "tags": [
           "Catalogue"
         ],
-        "summary": "How else a series' episodes are numbered, as TheTVDB keeps them. The aired\norder is the work's own and the one every client is served; these are for\na reader who knows the series by its DVDs, or straight through.",
+        "summary": "How else a series' episodes are numbered: by TheTVDB, by TMDB's episode\ngroups, by orders made here. The aired order is the work's own and the\none every client is served unless it asks for another, or one is frozen\nas it. As kept: a TMDB group not read yet — its places are read when the\nseries is refreshed, or when a client asks in it — says only how many\nepisodes TMDB lists it with (`announced`).",
         "operationId": "orders_orders",
         "parameters": [
           {
@@ -3851,6 +4087,260 @@
           },
           "404": {
             "description": "No such work"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Catalogue"
+        ],
+        "summary": "Make an order: empty, or a copy of another — the aired order as the\nwork numbers its episodes now, one of TheTVDB's, a TMDB group, another\nmade here — to change as one likes. It is offered to Sonarr v5 and Plex\nat once, under `ams-` and its name.",
+        "operationId": "orders_create",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The work's identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewOrder"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Made",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EpisodeOrder"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No name, or an order to copy the work does not have"
+          },
+          "403": {
+            "description": "The caller may not write"
+          },
+          "404": {
+            "description": "No such work"
+          },
+          "409": {
+            "description": "A film, or a series with as many orders made here as it may keep"
+          }
+        }
+      }
+    },
+    "/api/v1/items/{id}/orders/{key}": {
+      "put": {
+        "tags": [
+          "Catalogue"
+        ],
+        "summary": "Write an order made here, whole: its name and its places, each an\nepisode the work holds or a record of its own, a season and a number once\neach. An order read from TheTVDB or TMDB is read again at every refresh\nand is not written here: make an order from it to change it.",
+        "operationId": "orders_save",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The work's identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "description": "The order's key, `ams-…`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrderWrite"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Written",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EpisodeOrder"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A place that names no episode the work holds and carries no record, one given twice, a number out of range"
+          },
+          "403": {
+            "description": "The caller may not write"
+          },
+          "404": {
+            "description": "No such work, or no such order"
+          },
+          "409": {
+            "description": "An order read from a source, which is not written here"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Catalogue"
+        ],
+        "summary": "Forget an order made here. Frozen as the aired numbering, the aired order\nanswers as the work numbers its episodes again.",
+        "operationId": "orders_remove",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The work's identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "description": "The order's key, `ams-…`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Forgotten"
+          },
+          "403": {
+            "description": "The caller may not write"
+          },
+          "404": {
+            "description": "No such work, or no such order"
+          },
+          "409": {
+            "description": "An order read from a source, which comes back at the next refresh"
+          }
+        }
+      }
+    },
+    "/api/v1/items/{id}/orders/{key}/freeze": {
+      "post": {
+        "tags": [
+          "Catalogue"
+        ],
+        "summary": "Freeze an order as the aired numbering: what Sonarr asking for the aired\norder (`official`) is given from now on, and Sonarr v4, Plex with no\norder named, the TheTVDB relay and the `.nfo` documents with it. Sonarr\nrenumbers its episodes at its next refresh, and files it matched by the\nold numbers stand for other episodes; XEM's mappings, made for TheTVDB's\naired numbers, no longer fit. One order at the most is frozen: freezing\none thaws any other. Undone by thawing it.",
+        "operationId": "orders_freeze",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The work's identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "description": "The order's key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Frozen: the orders as they stand",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Orders"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The aired order itself, which a frozen order stands in for"
+          },
+          "403": {
+            "description": "The caller may not write"
+          },
+          "404": {
+            "description": "No such work, or no such order"
+          },
+          "409": {
+            "description": "An order that places no episode"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Catalogue"
+        ],
+        "summary": "Thaw the order frozen as the aired numbering: the aired order answers as\nthe work numbers its episodes again, and Sonarr renumbers at its next\nrefresh.",
+        "operationId": "orders_thaw",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The work's identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "description": "The key of the order frozen",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Thawed: the orders as they stand",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Orders"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller may not write"
+          },
+          "404": {
+            "description": "No such work, or that order is not the one frozen"
           }
         }
       }
@@ -5775,10 +6265,10 @@
           {
             "name": "id",
             "in": "path",
-            "description": "`refresh.sweep`, `refresh.all`, `import.anime`, `import.imdb`, `export.nfo`, `media.store`, `media.sweep`, `tls.renew`, `update.check` or `arr.seed`",
+            "description": "The task to run",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/TaskId"
             }
           }
         ],
@@ -5799,7 +6289,7 @@
             "description": "No such task"
           },
           "409": {
-            "description": "It is running already"
+            "description": "It is running already, or a backup is being restored"
           },
           "503": {
             "description": "Its source or its switch is off: no media store, no export path, no certificate of the server's own, the check for a newer version off, neither Sonarr nor Radarr connected"
@@ -7351,8 +7841,7 @@
         ],
         "properties": {
           "site": {
-            "type": "string",
-            "description": "`public` or `private`."
+            "$ref": "#/components/schemas/SiteAccess"
           },
           "siteLocked": {
             "type": "boolean",
@@ -7735,8 +8224,8 @@
             "description": "Whether an administrator left it on."
           },
           "policy": {
-            "type": "string",
-            "description": "What it asks of a caller: `apikey`, `allowlist` or `open`. Set by the\ndeployment's environment, not here — except that a relay asked with\neach client's own key asks for a listed address where the\nenvironment says a key."
+            "$ref": "#/components/schemas/SurfacePolicy",
+            "description": "What it asks of a caller. Set by the deployment's environment, not\nhere — except that a relay asked with each client's own key asks for\na listed address where the environment says a key."
           },
           "served": {
             "type": "integer",
@@ -7838,8 +8327,7 @@
             "type": "string"
           },
           "app": {
-            "type": "string",
-            "description": "`sonarr` or `radarr`."
+            "$ref": "#/components/schemas/App"
           },
           "mediaId": {
             "type": [
@@ -7870,8 +8358,7 @@
             "description": "Its own id there, when it holds the work."
           },
           "outcome": {
-            "type": "string",
-            "description": "`sent`, `absent` or `failed`."
+            "$ref": "#/components/schemas/ArrPushOutcome"
           },
           "reasons": {
             "type": "array",
@@ -7888,6 +8375,15 @@
             "description": "The command it went in, or what went wrong."
           }
         }
+      },
+      "ArrPushOutcome": {
+        "type": "string",
+        "description": "How telling one work went.",
+        "enum": [
+          "sent",
+          "absent",
+          "failed"
+        ]
       },
       "ArrStatus": {
         "type": "object",
@@ -8254,7 +8750,7 @@
         ],
         "properties": {
           "site": {
-            "type": "string",
+            "$ref": "#/components/schemas/SiteAccess",
             "description": "`public`: anyone browses the catalogue. `private`: every page asks to\nsign in first."
           },
           "registration": {
@@ -8293,6 +8789,500 @@
           },
           "notAfter": {
             "type": "string"
+          }
+        }
+      },
+      "Backup": {
+        "type": "object",
+        "description": "An archive, as the Backups page lists it.",
+        "required": [
+          "name",
+          "createdAt",
+          "reason",
+          "sizeBytes",
+          "encrypted",
+          "engine",
+          "serverVersion",
+          "migration",
+          "includesMedia",
+          "mediaFiles",
+          "createdBy",
+          "sha256",
+          "present",
+          "described",
+          "upgradeTo"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/BackupReason"
+          },
+          "sizeBytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Its size where it is kept, in bytes.",
+            "minimum": 0
+          },
+          "encrypted": {
+            "type": "boolean"
+          },
+          "engine": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The engine its database was read from — `sqlite` or `postgres` —\nwhen this database describes it."
+          },
+          "serverVersion": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The version of the server that made it, the same way."
+          },
+          "migration": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The last migration its database had, the same way."
+          },
+          "includesMedia": {
+            "type": "boolean"
+          },
+          "mediaFiles": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "createdBy": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who asked for it, as the journal names them; `null` for the schedule\nand for one this database does not describe."
+          },
+          "sha256": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The SHA-256 of the archive as kept, when this database describes it:\nwhat a copy taken elsewhere is checked against."
+          },
+          "present": {
+            "type": "boolean",
+            "description": "Whether it is where the archives are kept. One removed by hand is\nstill listed while this database describes it, and can only be\nforgotten."
+          },
+          "described": {
+            "type": "boolean",
+            "description": "Whether this database describes it. One put where the archives are\nkept by hand — or made before a restore brought back an older list —\nis listed from its name alone; its manifest says the rest."
+          },
+          "upgradeTo": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "For an archive made before an upgrade, the migration the start went\non to apply: the database in it is at `migration`, the one before."
+          }
+        }
+      },
+      "BackupFile": {
+        "type": "object",
+        "description": "A file of the archive.",
+        "required": [
+          "path",
+          "size",
+          "sha256"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "sha256": {
+            "type": "string"
+          }
+        }
+      },
+      "BackupList": {
+        "type": "object",
+        "description": "The archives, where they are kept, and how the server makes them.",
+        "required": [
+          "archives",
+          "place",
+          "location",
+          "encrypted",
+          "mediaOnDisk",
+          "mediaStore",
+          "schedule",
+          "keep",
+          "includeMedia",
+          "lastAt",
+          "nextAt",
+          "overdue",
+          "running",
+          "restore"
+        ],
+        "properties": {
+          "archives": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Backup"
+            },
+            "description": "Newest first."
+          },
+          "place": {
+            "type": "string",
+            "description": "`directory`, or `bucket` among several instances whose media are in\none."
+          },
+          "location": {
+            "type": "string",
+            "description": "Where: the directory's path, or the bucket and its folder."
+          },
+          "encrypted": {
+            "type": "boolean",
+            "description": "Whether the archives the server makes are encrypted:\n`AMS_BACKUP_PASSPHRASE` is set."
+          },
+          "mediaOnDisk": {
+            "type": "boolean",
+            "description": "Whether an archive can carry the media: they are kept on disk."
+          },
+          "mediaStore": {
+            "type": "string",
+            "description": "Where the media are kept: `off`, `filesystem` or `s3`."
+          },
+          "schedule": {
+            "type": "string",
+            "description": "`off`, `daily`, `weekly` or `monthly`."
+          },
+          "keep": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many of the schedule's archives are kept."
+          },
+          "includeMedia": {
+            "type": "boolean",
+            "description": "Whether the schedule's archives carry the media kept on disk."
+          },
+          "lastAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the newest archive was made."
+          },
+          "nextAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the schedule makes the next; `null` while it is off."
+          },
+          "overdue": {
+            "type": "boolean",
+            "description": "Whether the newest archive is older than twice the schedule's\ninterval, or there is none, while the schedule is on."
+          },
+          "running": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Job",
+                "description": "The run making one now, when one is."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "restore": {
+            "$ref": "#/components/schemas/BackupRestore",
+            "description": "Where the last restore stands."
+          }
+        }
+      },
+      "BackupManifest": {
+        "type": "object",
+        "required": [
+          "format",
+          "server",
+          "migration",
+          "createdAt",
+          "engine",
+          "reason",
+          "files",
+          "media"
+        ],
+        "properties": {
+          "format": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The archive's layout: [`FORMAT`] when this server wrote it.",
+            "minimum": 0
+          },
+          "server": {
+            "type": "string",
+            "description": "The version of the server that made it."
+          },
+          "migration": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The last migration its database had."
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "engine": {
+            "type": "string",
+            "description": "The engine the database was read from: `sqlite` or `postgres`.\nRestored onto either."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why it was made: `scheduled`, `manual`, `safety`, `command`, or\n`upgrade` — by a start, before the migrations it went on to apply."
+          },
+          "upgradeTo": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "For an archive made before an upgrade, the last migration the start\nwent on to apply."
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BackupFile"
+            },
+            "description": "Each file but the media, with its size and SHA-256."
+          },
+          "media": {
+            "$ref": "#/components/schemas/BackupMedia"
+          }
+        }
+      },
+      "BackupMedia": {
+        "type": "object",
+        "description": "What the archive holds of the media.",
+        "required": [
+          "included",
+          "store",
+          "files",
+          "bytes"
+        ],
+        "properties": {
+          "included": {
+            "type": "boolean",
+            "description": "Whether the media kept on disk are in it, under `media/`."
+          },
+          "store": {
+            "type": "string",
+            "description": "Where the server it was made of kept them: `off`, `filesystem` or\n`s3`."
+          },
+          "files": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What a restore has to know: where the media are when they are not\nhere."
+          }
+        }
+      },
+      "BackupMediaCheck": {
+        "type": "object",
+        "description": "The media the database names, against the media the store holds.",
+        "required": [
+          "missing",
+          "unreferenced"
+        ],
+        "properties": {
+          "missing": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Named by a row, not in the store: served from its provider's\naddress until it is fetched again.",
+            "minimum": 0
+          },
+          "unreferenced": {
+            "type": "integer",
+            "format": "int64",
+            "description": "In the store, named by no row: the sweep takes these away.",
+            "minimum": 0
+          }
+        }
+      },
+      "BackupReason": {
+        "type": "string",
+        "description": "Why an archive was made: said in its name, and in its row.",
+        "enum": [
+          "scheduled",
+          "manual",
+          "safety",
+          "command",
+          "upgrade"
+        ]
+      },
+      "BackupRequest": {
+        "type": "object",
+        "description": "What an archive made now is to hold.",
+        "properties": {
+          "includeMedia": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "The media kept on disk with the database. Left out, as the\nschedule's archives have them."
+          }
+        }
+      },
+      "BackupRestore": {
+        "type": "object",
+        "description": "Where the last restore this instance ran stands.",
+        "required": [
+          "state",
+          "archive",
+          "startedAt",
+          "finishedAt",
+          "error",
+          "restored"
+        ],
+        "properties": {
+          "state": {
+            "$ref": "#/components/schemas/BackupRestoreStatus"
+          },
+          "archive": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "startedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "finishedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What went wrong; the database is as it was before."
+          },
+          "restored": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/BackupRestored",
+                "description": "What was restored, once it was."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "BackupRestoreRequest": {
+        "type": "object",
+        "description": "What opens the archive to restore.",
+        "properties": {
+          "passphrase": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its passphrase, when it is encrypted with another than the server's\nown. Never kept, never logged."
+          }
+        }
+      },
+      "BackupRestoreStatus": {
+        "type": "string",
+        "description": "How a restore stands.",
+        "enum": [
+          "idle",
+          "running",
+          "succeeded",
+          "failed"
+        ]
+      },
+      "BackupRestored": {
+        "type": "object",
+        "description": "What a restore did.",
+        "required": [
+          "archive",
+          "manifest",
+          "safety",
+          "rows",
+          "mediaRestored",
+          "mediaSkipped",
+          "media"
+        ],
+        "properties": {
+          "archive": {
+            "type": "string",
+            "description": "The archive restored, by its name or its path."
+          },
+          "manifest": {
+            "$ref": "#/components/schemas/BackupManifest",
+            "description": "What it said of itself."
+          },
+          "safety": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The archive made of the database before it was replaced: what\nundoes this restore. `null` when the database was empty."
+          },
+          "rows": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The rows copied into the database.",
+            "minimum": 0
+          },
+          "mediaRestored": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The media the archive held that were put back into the store.",
+            "minimum": 0
+          },
+          "mediaSkipped": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Those it held that were not: the store already had them, or there\nis no store to put them in.",
+            "minimum": 0
+          },
+          "media": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/BackupMediaCheck",
+                "description": "How the media the restored rows name stand in the store, when there\nis one."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
@@ -8389,23 +9379,25 @@
           }
         }
       },
+      "CacheSpace": {
+        "type": "string",
+        "description": "One of the caches, by the name it is filed under.",
+        "enum": [
+          "items",
+          "searches",
+          "lists",
+          "relay",
+          "sessions"
+        ]
+      },
       "Calendar": {
         "type": "object",
         "required": [
-          "episodes",
           "entries",
           "works",
           "truncated"
         ],
         "properties": {
-          "episodes": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Airing"
-            },
-            "description": "Deprecated: the episodes alone, earliest first — the schedule as it\nwas answered before it held films, which `entries` repeats beside\nthem. Kept for whoever reads it so, and to be removed in a later\nversion.",
-            "deprecated": true
-          },
           "entries": {
             "type": "array",
             "items": {
@@ -8432,7 +9424,7 @@
             "allOf": [
               {
                 "$ref": "#/components/schemas/Airing",
-                "description": "An episode, as `episodes` lists it. Boxed: an episode is four times\na release, and a window holds hundreds of either."
+                "description": "An episode, and the work it belongs to. Boxed: an episode is four\ntimes a release, and a window holds hundreds of either."
               },
               {
                 "type": "object",
@@ -8449,7 +9441,7 @@
                 }
               }
             ],
-            "description": "An episode, as `episodes` lists it. Boxed: an episode is four times\na release, and a window holds hundreds of either."
+            "description": "An episode, and the work it belongs to. Boxed: an episode is four\ntimes a release, and a window holds hundreds of either."
           },
           {
             "allOf": [
@@ -9686,7 +10678,7 @@
             "type": "string"
           },
           "mode": {
-            "type": "string",
+            "$ref": "#/components/schemas/DoorMode",
             "description": "`authority`: a certificate this server issues itself; `own`: the\noperator's files."
           },
           "names": {
@@ -9733,6 +10725,14 @@
           }
         }
       },
+      "DoorMode": {
+        "type": "string",
+        "description": "Whose certificate the clients' door shows.",
+        "enum": [
+          "authority",
+          "own"
+        ]
+      },
       "Effective": {
         "type": "object",
         "description": "One setting as the interface shows it: what it is, and where the answer\ncurrently comes from.",
@@ -9750,7 +10750,7 @@
             "type": "string"
           },
           "source": {
-            "type": "string",
+            "$ref": "#/components/schemas/Scope",
             "description": "The scope the value was found at — `server` unless something narrower\noverrode it."
           },
           "overridden": {
@@ -9896,20 +10896,66 @@
       },
       "EpisodeOrder": {
         "type": "object",
-        "description": "One of the other orders a series' episodes come in — `dvd`, `absolute`,\n`alternate`, `regional` — as TheTVDB keeps it: the work's episodes, by\ntheir TVDB id, in seasons and numbers of that order's own.",
+        "description": "One of the orders a series' episodes come in: one of TheTVDB's besides\nthe aired one, a TMDB episode group, one made here — or the aired order\nitself, whose places are the work's own episodes and are not listed.",
         "required": [
+          "key",
           "kind",
+          "source",
+          "label",
+          "isDefault",
+          "isFrozen",
+          "updatedAt",
           "episodes"
         ],
         "properties": {
+          "key": {
+            "type": "string",
+            "description": "What a client asks for it by — Sonarr v5's season type, Plex's\nepisode order, the TheTVDB relay's season type: `official` for the\naired order, TheTVDB's own type for its others (`dvd`, `absolute`,\n`alternate`, `regional`, `altdvd`, `alttwo`), `tmdb-` and the id of a\nTMDB episode group, `ams-` and a name for one made here."
+          },
           "kind": {
-            "type": "string"
+            "$ref": "#/components/schemas/OrderKind"
+          },
+          "source": {
+            "type": "string",
+            "description": "Where it was read: `tvdb`, `tmdb`, or `local` for one made here. The\naired order's is whoever numbers the work's episodes — `tmdb` while\nTMDB numbers a series TheTVDB stopped answering for."
+          },
+          "sourceRef": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The order's id at its source: a TMDB episode group's."
+          },
+          "label": {
+            "type": "string",
+            "description": "Its name: the series' own for one of TheTVDB's (\"Superfan Order\",\n\"BluRay Order\") or TheTVDB's for the type (\"DVD Order\"), the group's\non TMDB, the one it was given here."
+          },
+          "isDefault": {
+            "type": "boolean",
+            "description": "Whether it is the aired order."
+          },
+          "isFrozen": {
+            "type": "boolean",
+            "description": "Whether it is what the aired order answers with: Sonarr asking for\n`official`, Sonarr v4, Plex with no order named and the TheTVDB relay\nare given its numbering, frozen until it is thawed. One order of a\nwork at the most."
+          },
+          "announced": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "How many episodes its source says it holds, where they are yet to be\nread: a TMDB group's are read the first time it is served or shown."
+          },
+          "updatedAt": {
+            "type": "string",
+            "description": "When it was last written: read from its source, saved, frozen. An\nepisode that airs after it is served in a frozen or a home-made order\nunder its aired numbers, where the order leaves them free."
           },
           "episodes": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/PlacedEpisode"
-            }
+            },
+            "description": "Its places, in its own sequence. None for the aired order: its\nplaces are the work's episodes."
           }
         }
       },
@@ -10479,7 +11525,7 @@
           "spaces": {
             "type": "array",
             "items": {
-              "type": "string"
+              "$ref": "#/components/schemas/CacheSpace"
             },
             "description": "Which spaces were forgotten."
           },
@@ -10592,7 +11638,7 @@
         ],
         "properties": {
           "malVia": {
-            "type": "string",
+            "$ref": "#/components/schemas/MalVia",
             "description": "`official` when `AMS_MAL_CLIENT_ID` is set, `jikan` otherwise."
           },
           "animeList": {
@@ -10649,7 +11695,8 @@
           "listsCache",
           "sources",
           "jobs",
-          "updateAvailable"
+          "updateAvailable",
+          "lastBackupAt"
         ],
         "properties": {
           "version": {
@@ -10737,6 +11784,13 @@
                 "type": "null"
               }
             ]
+          },
+          "lastBackupAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the newest archive of the database was made; `null` when none\nwas."
           }
         }
       },
@@ -11233,7 +12287,7 @@
             "description": "What it acted on: an item id, or nothing for a sweep."
           },
           "status": {
-            "type": "string"
+            "$ref": "#/components/schemas/JobStatus"
           },
           "startedAt": {
             "type": [
@@ -11342,14 +12396,18 @@
             "description": "Its title and kind when the run took it."
           },
           "kind": {
-            "type": [
-              "string",
-              "null"
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MediaKind"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "outcome": {
-            "type": "string",
-            "description": "`ok`, `failed`, `skipped` — or `imported`, the seed's: a work of\nSonarr's or Radarr's library fetched and stored for the first time."
+            "$ref": "#/components/schemas/JobOutcome",
+            "description": "`ok`, `failed`, `skipped` — or `imported`, the seed's: a work of\nSonarr's or Radarr's library fetched and stored for the first time;\n`written` and `removed`, a backup's: the archive it made, and those\npast the ones its schedule keeps."
           },
           "note": {
             "type": [
@@ -11362,6 +12420,28 @@
             "type": "string"
           }
         }
+      },
+      "JobOutcome": {
+        "type": "string",
+        "description": "How a run's work on one entry ended.",
+        "enum": [
+          "ok",
+          "failed",
+          "skipped",
+          "imported",
+          "written",
+          "removed"
+        ]
+      },
+      "JobStatus": {
+        "type": "string",
+        "description": "Where a run stands.",
+        "enum": [
+          "running",
+          "succeeded",
+          "failed",
+          "stopped"
+        ]
       },
       "JobsResponse": {
         "type": "object",
@@ -11879,6 +12959,14 @@
           }
         }
       },
+      "MalVia": {
+        "type": "string",
+        "description": "How MyAnimeList is asked first.",
+        "enum": [
+          "official",
+          "jikan"
+        ]
+      },
       "MeResponse": {
         "type": "object",
         "required": [
@@ -11955,6 +13043,15 @@
             "type": "boolean"
           }
         }
+      },
+      "MediaBackend": {
+        "type": "string",
+        "description": "Where the media are kept, as `AMS_MEDIA_STORAGE` says.",
+        "enum": [
+          "off",
+          "filesystem",
+          "s3"
+        ]
       },
       "MediaItem": {
         "type": "object",
@@ -12318,8 +13415,7 @@
         ],
         "properties": {
           "backend": {
-            "type": "string",
-            "description": "`off`, `filesystem` or `s3`."
+            "$ref": "#/components/schemas/MediaBackend"
           },
           "storing": {
             "type": "boolean",
@@ -12350,6 +13446,16 @@
             "type": "boolean"
           }
         }
+      },
+      "MediumStatus": {
+        "type": "string",
+        "description": "What is kept of one address a work points at: where its asset stands,\nor that it has none.",
+        "enum": [
+          "pending",
+          "stored",
+          "failed",
+          "absent"
+        ]
       },
       "Memory": {
         "allOf": [
@@ -12783,6 +13889,26 @@
           }
         }
       },
+      "NewOrder": {
+        "type": "object",
+        "description": "A new order, made here.",
+        "required": [
+          "label"
+        ],
+        "properties": {
+          "label": {
+            "type": "string",
+            "description": "What it is called: what Sonarr's list of orders, Plex's and the\neditor show. Its key is made of it — `ams-` and its words."
+          },
+          "from": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The key of the order its places are copied from: `official` for the\naired order, as the work numbers its episodes now. Empty without."
+          }
+        }
+      },
       "NewRule": {
         "type": "object",
         "required": [
@@ -13019,18 +14145,163 @@
           }
         }
       },
+      "OrderKind": {
+        "type": "string",
+        "description": "What an order is, whatever its source calls it. TheTVDB's further orders\nare slots — `alternate`, `regional`, `altdvd`, `alttwo` — whose meaning\nis the series' own name for each, so they are one kind here; TMDB types\nits episode groups one to seven.",
+        "enum": [
+          "aired",
+          "dvd",
+          "absolute",
+          "digital",
+          "production",
+          "story_arc",
+          "tv",
+          "tvdb_alt",
+          "custom"
+        ]
+      },
+      "OrderNumbering": {
+        "type": "object",
+        "description": "Who numbers a series, and what its clients are offered.",
+        "required": [
+          "heldByTmdb",
+          "silent",
+          "fallbackAfter",
+          "offered"
+        ],
+        "properties": {
+          "heldByTmdb": {
+            "type": "boolean",
+            "description": "Whether TMDB numbers a series TheTVDB lists: while TheTVDB does not\nanswer for it, or until somebody gives the numbering back."
+          },
+          "fallbackSince": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Since when TMDB numbers it in TheTVDB's place, after TheTVDB left it\nunanswered refresh after refresh."
+          },
+          "silent": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many refreshes in a row, the most part of a day apart, TheTVDB\nhas not answered for it."
+          },
+          "fallbackAfter": {
+            "type": "integer",
+            "format": "int64",
+            "description": "After how many TMDB numbers a series in TheTVDB's place: the\n`numbering.fallbackAfter` setting, `0` when it never does."
+          },
+          "frozen": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The key of the order frozen as its aired numbering: what Sonarr\nasking for the aired order, Sonarr v4, Plex with no order named and\nthe TheTVDB relay are given."
+          },
+          "offered": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The keys of the orders Sonarr v5 and Plex are offered, the aired one\naside: the same order kept by TheTVDB and by TMDB is offered once."
+          }
+        }
+      },
+      "OrderRecord": {
+        "type": "object",
+        "description": "An episode as an order's source describes it, kept with its place: the\nrecord served where no episode the work holds stands for the place.",
+        "required": [
+          "title"
+        ],
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "overview": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "aired": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The day it aired, `YYYY-MM-DD`."
+          },
+          "runtime": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "In minutes."
+          },
+          "image": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its still, an address."
+          },
+          "finaleType": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`season`, `midseason` or `series`, as TheTVDB marks a finale."
+          }
+        }
+      },
+      "OrderWrite": {
+        "type": "object",
+        "description": "An order made here, written whole.",
+        "required": [
+          "label",
+          "places"
+        ],
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "places": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlaceWrite"
+            },
+            "description": "Its places, in its own sequence: each an episode the work holds, or\na record of the order's own. A season and a number once each."
+          }
+        }
+      },
       "Orders": {
         "type": "object",
         "required": [
-          "orders"
+          "orders",
+          "numbering"
         ],
         "properties": {
+          "aired": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/EpisodeOrder",
+                "description": "The aired order: the work's own episodes, as whoever its `source`\nnames numbers them. Absent for a film."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "orders": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/EpisodeOrder"
             },
-            "description": "Each order TheTVDB keeps besides the aired one — `dvd`, `absolute`,\n`alternate`, `regional` — with the work's episodes placed in it by\ntheir TVDB id. Empty for a film, or a series numbered one way only."
+            "description": "Every other order — TheTVDB's first, the DVDs' at their head, then\nTMDB's episode groups, then those made here — each with its places:\nan episode the work holds by its id as the work gives it now, or the\nrecord the order carries of one it does not. Empty for a film, or a\nseries numbered one way only."
+          },
+          "numbering": {
+            "$ref": "#/components/schemas/OrderNumbering",
+            "description": "Who numbers the series, and what its clients are offered."
           }
         }
       },
@@ -13215,18 +14486,20 @@
           }
         }
       },
-      "PlacedEpisode": {
+      "PlaceWrite": {
         "type": "object",
-        "description": "Where one episode stands in an order.",
+        "description": "One place of an order made here.",
         "required": [
-          "tvdbId",
           "seasonNumber",
           "episodeNumber"
         ],
         "properties": {
-          "tvdbId": {
-            "type": "integer",
-            "format": "int64"
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The place's id, as the order gave it: what keeps the id a record of\nthe order's own is served under the same from one save to the next."
           },
           "seasonNumber": {
             "type": "integer",
@@ -13242,6 +14515,104 @@
               "null"
             ],
             "format": "int32"
+          },
+          "episodeId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "An episode the work holds, by its id as the work gives it."
+          },
+          "tvdbId": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Its TheTVDB id, as the order gave it: names the episode when the id\nabove is one a refresh has written again since."
+          },
+          "tmdbId": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Its TMDB id, likewise."
+          },
+          "record": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OrderRecord",
+                "description": "A record of the order's own, for an episode the work does not hold."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "PlacedEpisode": {
+        "type": "object",
+        "description": "Where one episode stands in an order: a season and a number, and either\nan episode the work holds or the record the order carries of one it does\nnot.",
+        "required": [
+          "id",
+          "seasonNumber",
+          "episodeNumber"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The place's own id: what a record a person wrote is known by from one\nsave to the next."
+          },
+          "seasonNumber": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "episodeNumber": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "absoluteNumber": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "episodeId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The held episode the place names, by the row it is kept in. A\nrefresh writes a source's episodes again under new rows, so the ids\nbelow are what name one of those; the row names one made by hand."
+          },
+          "tvdbId": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The episode's id on TheTVDB."
+          },
+          "tmdbId": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The episode's id on TMDB."
+          },
+          "record": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OrderRecord",
+                "description": "What the order says of an episode the work does not hold: served in\nits place, as an episode of its own."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
@@ -14515,6 +15886,22 @@
           }
         }
       },
+      "RelayApi": {
+        "type": "string",
+        "description": "A relay whose service takes a key of its own: TMDB's and TheTVDB's.\nAniList's takes none, and has no credential to choose.",
+        "enum": [
+          "tmdb",
+          "tvdb"
+        ]
+      },
+      "RelayCredential": {
+        "type": "string",
+        "description": "Whose credential a relay asks its service with: an administrator's\nchoice on the access page, `tmdb.relayCredential` for TMDB's relay and\n`tvdb.relayCredential` for TheTVDB's. AniList has no key to choose.",
+        "enum": [
+          "server",
+          "client"
+        ]
+      },
       "RelayCredentialState": {
         "type": "object",
         "description": "Whose key a relay asks its service with (`tmdb.relayCredential`,\n`tvdb.relayCredential`), and what stands around that choice.",
@@ -14526,11 +15913,10 @@
         ],
         "properties": {
           "api": {
-            "$ref": "#/components/schemas/Api",
-            "description": "`tmdb` or `tvdb`."
+            "$ref": "#/components/schemas/RelayApi"
           },
           "credential": {
-            "type": "string",
+            "$ref": "#/components/schemas/RelayCredential",
             "description": "`server`: this server's key in place of the client's. `client`: the\nclient's own, as it came."
           },
           "operatorKey": {
@@ -14538,7 +15924,7 @@
             "description": "Whether this server holds a key of the service's own to stand in\nwith: without one, `server` answers 503."
           },
           "configuredPolicy": {
-            "type": "string",
+            "$ref": "#/components/schemas/SurfacePolicy",
             "description": "What the environment asks of a caller (`AMS_TMDB_AUTH`,\n`AMS_TVDB_AUTH`), before the choice above reads a key policy as the\naddress list."
           }
         }
@@ -14922,23 +16308,24 @@
         "properties": {
           "name": {
             "type": "string",
-            "description": "`Aired Order`, `DVD Order`…: what Sonarr shows."
+            "description": "`Aired Order`, `DVD Order`, `Superfan Order`…: what Sonarr shows."
           },
           "type": {
             "type": "string",
-            "description": "`official`, `dvd`, `absolute`, `alternate`, `regional`, `altdvd`,\n`alttwo`: what Sonarr asks the series in."
+            "description": "What Sonarr asks the series in, and writes into the address it asks\nfor it at: `official`; TheTVDB's `dvd`, `absolute`, `alternate`,\n`regional`, `altdvd`, `alttwo`; `tmdb-` and a TMDB episode group's\nid; `ams-` and a name for an order made here."
           },
           "seasonNumbers": {
             "type": "array",
             "items": {
               "type": "integer",
               "format": "int32"
-            }
+            },
+            "description": "Empty for a TMDB group not read yet, which is read when the series is\nfirst asked for in it."
           },
           "episodeCount": {
             "type": "integer",
             "format": "int32",
-            "description": "The episodes of the regular seasons; the specials are not counted,\nas the real service does not count them."
+            "description": "The episodes of the regular seasons; the specials are not counted,\nas the real service does not count them. For a TMDB group not read\nyet, the count TMDB lists it with."
           }
         }
       },
@@ -15273,19 +16660,19 @@
             "type": "boolean"
           },
           "nativePolicy": {
-            "type": "string"
+            "$ref": "#/components/schemas/SurfacePolicy"
           },
           "tmdbPolicy": {
-            "type": "string"
+            "$ref": "#/components/schemas/SurfacePolicy"
           },
           "tvdbPolicy": {
-            "type": "string"
+            "$ref": "#/components/schemas/SurfacePolicy"
           },
           "anilistPolicy": {
-            "type": "string"
+            "$ref": "#/components/schemas/SurfacePolicy"
           },
           "arrPolicy": {
-            "type": "string"
+            "$ref": "#/components/schemas/SurfacePolicy"
           },
           "furtherSources": {
             "$ref": "#/components/schemas/FurtherSources"
@@ -15708,7 +17095,7 @@
             "items": {
               "$ref": "#/components/schemas/SeasonTypeResource"
             },
-            "description": "The aired order first, then each other order the catalogue keeps for\nthe series."
+            "description": "The aired order first, then each other order the catalogue keeps for\nthe series: TheTVDB's, TMDB's episode groups, those made here."
           },
           "actors": {
             "type": "array",
@@ -15740,7 +17127,7 @@
           },
           "metadataSource": {
             "type": "string",
-            "description": "`tvdb`; `tmdb` or `fankai` for an id this server made for a work\nTheTVDB does not list (see [`ids`])."
+            "description": "Who numbers the episodes: `tvdb`; `tmdb` for a series TMDB numbers —\none TheTVDB does not list, under an id this server made for it (see\n[`ids`]), or one TheTVDB stopped answering for; `fankai` for a\nFan-Kai."
           }
         }
       },
@@ -15758,6 +17145,14 @@
             "description": "The works, drawn as a list is: artwork and scores, no episodes."
           }
         }
+      },
+      "SiteAccess": {
+        "type": "string",
+        "description": "Who may browse the catalogue: `site.access`, unless\n`AMS_PUBLIC_BROWSE=false` keeps the site private whatever it says.",
+        "enum": [
+          "public",
+          "private"
+        ]
       },
       "SkyhookAlternativeTitleResource": {
         "type": "object",
@@ -15922,7 +17317,7 @@
         ],
         "properties": {
           "id": {
-            "type": "string"
+            "$ref": "#/components/schemas/CacheSpace"
           },
           "enabled": {
             "type": "boolean"
@@ -16099,6 +17494,15 @@
           }
         }
       },
+      "SurfacePolicy": {
+        "type": "string",
+        "description": "What an API asks of a caller, as the configuration, the access page and\nthe dashboard name it.",
+        "enum": [
+          "apikey",
+          "allowlist",
+          "open"
+        ]
+      },
       "SyncOutcome": {
         "type": "object",
         "required": [
@@ -16200,6 +17604,37 @@
           }
         }
       },
+      "TaskBlocked": {
+        "type": "string",
+        "description": "Why a task cannot be run now.",
+        "enum": [
+          "source_off",
+          "not_configured",
+          "running",
+          "busy",
+          "media_off",
+          "no_authority",
+          "updates_off",
+          "arr_off"
+        ]
+      },
+      "TaskId": {
+        "type": "string",
+        "description": "A task, sent under the name the history files its runs by.",
+        "enum": [
+          "refresh.sweep",
+          "refresh.all",
+          "import.anime",
+          "import.imdb",
+          "export.nfo",
+          "media.store",
+          "media.sweep",
+          "tls.renew",
+          "update.check",
+          "arr.seed",
+          "backup.run"
+        ]
+      },
       "TaskMode": {
         "type": "string",
         "enum": [
@@ -16217,7 +17652,7 @@
         ],
         "properties": {
           "id": {
-            "type": "string"
+            "$ref": "#/components/schemas/TaskId"
           },
           "mode": {
             "$ref": "#/components/schemas/TaskMode"
@@ -16271,11 +17706,15 @@
             "description": "Whether a run in progress can be stopped."
           },
           "blocked": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Why it cannot be run now, when it cannot."
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TaskBlocked",
+                "description": "Why it cannot be run now, when it cannot."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
@@ -16347,7 +17786,9 @@
           "neverRefreshed",
           "expiringKeys",
           "keyHorizonDays",
-          "failedMedia"
+          "failedMedia",
+          "backupOverdue",
+          "lastBackupAt"
         ],
         "properties": {
           "refreshFailed": {
@@ -16389,6 +17830,17 @@
             "type": "integer",
             "format": "int64",
             "description": "Pictures and themes every try at fetching failed for."
+          },
+          "backupOverdue": {
+            "type": "boolean",
+            "description": "Whether the newest archive of the database is older than twice the\nschedule's interval, or none was ever made — while the schedule is\non."
+          },
+          "lastBackupAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the newest archive was made; `null` when none was."
           }
         }
       },
@@ -16945,8 +18397,8 @@
             "type": "string"
           },
           "kind": {
-            "type": "string",
-            "description": "`standard`, `json`, `discord`, `slack`, `ntfy`, `gotify` or `apprise`."
+            "$ref": "#/components/schemas/WebhookKind",
+            "description": "A kind this server does not know — a destination a later version\nmade — is sent as it was stored, and nothing is posted to it."
           },
           "address": {
             "type": "string",
@@ -17014,11 +18466,15 @@
             ]
           },
           "kind": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "`standard`, `json`, `discord`, `slack`, `ntfy`, `gotify` or `apprise`."
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WebhookKind",
+                "description": "Needed for a new one; left out on a change, the kind stays. Another\nword is refused with a 400 that names the kinds there are."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "address": {
             "type": [
@@ -17093,11 +18549,24 @@
           "kinds": {
             "type": "array",
             "items": {
-              "type": "string"
+              "$ref": "#/components/schemas/WebhookKind"
             },
             "description": "The kinds of destination, in the order they are offered."
           }
         }
+      },
+      "WebhookKind": {
+        "type": "string",
+        "description": "The kinds of destination.",
+        "enum": [
+          "standard",
+          "json",
+          "discord",
+          "slack",
+          "ntfy",
+          "gotify",
+          "apprise"
+        ]
       },
       "WebhookMessage": {
         "type": "object",
@@ -17146,6 +18615,15 @@
           }
         }
       },
+      "WebhookRefusal": {
+        "type": "string",
+        "description": "Why a test was not sent.",
+        "enum": [
+          "not_web",
+          "internal",
+          "unsent"
+        ]
+      },
       "WebhookTest": {
         "type": "object",
         "description": "What a test of a destination came to.",
@@ -17175,11 +18653,15 @@
             "description": "Why it was not reached, or what it said when it refused — in words\nthat name no address."
           },
           "refused": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Why nothing was sent: `not_web`, not an http(s) address or one that\nnames this machine; `internal`, a name that resolves to an address\nonly reachable from here; `unsent`, the post could not be made — a\nstandard destination without its secret — as `error` says."
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WebhookRefusal",
+                "description": "Why nothing was sent: `not_web`, not an http(s) address or one that\nnames this machine; `internal`, a name that resolves to an address\nonly reachable from here; `unsent`, the post could not be made — a\nstandard destination without its secret — as `error` says."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "millis": {
             "type": "integer",
@@ -17301,7 +18783,7 @@
             "$ref": "#/components/schemas/AssetKind"
           },
           "status": {
-            "type": "string",
+            "$ref": "#/components/schemas/MediumStatus",
             "description": "`stored`, `pending`, `failed` — or `absent`, when nothing has been\nasked of it: the store is off, or the address is not one it fetches."
           },
           "assetId": {

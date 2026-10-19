@@ -194,6 +194,45 @@ is done. The day each episode aired moves, and its broadcast instant (`airDateUt
 where there is one; each is locked at its new value, episode by episode, and stays so until
 its lock is lifted.
 
+### Orders
+
+At the foot of the editor's **Seasons** tab, *Orders* lists every order the series' episodes
+come in: the aired one, the work's own; TheTVDB's — its DVD and absolute orders, and the
+further ones the series names, *Superfan Order*, *BluRay Order*; TMDB's episode groups, each
+with the count TMDB lists it with until a refresh reads it; and those made here. Each says where it
+comes from, how many seasons and episodes it holds, whether it is frozen, and whether clients
+are offered it — the same order kept by TheTVDB and by TMDB is offered once. *See* opens a
+season's page in it.
+
+*Make an order of it* — or the form below the list — makes an order of the aired one, of any
+other, or of nothing, under the name given: its key is `ams-` and the name's words,
+`ams-my-dvd-order`, and Sonarr v5 and Plex are offered it at once. An order made here is
+written in place, a season at a time:
+
+- **Up** and **down** swap what two places hold, their numbers staying where they are: the
+  quickest way to put two episodes the other way round;
+- a place's season and number are typed in, and a season and a number are given once each;
+- *Place an episode of the work* adds one the order does not place yet, at the end of the
+  season shown; *Add an episode of its own* adds one the work does not hold — a cut, an extra —
+  by its title: it is served in this order alone, under an id of its own;
+- an episode of the order's own, or one the work no longer holds, is taken out with the bin.
+
+No episode is cut in two or joined to another. TheTVDB's orders and TMDB's groups are read
+again at every refresh and are not written here; make an order of one to change it. An order
+made here is deleted with the bin beside it.
+
+*Freeze* makes an order the series' aired numbering: what Sonarr asking for the aired order is
+given from then on, and Sonarr v4, Plex with no order named, the TheTVDB relay and the
+`.nfo` documents with it. The dialog says what follows — Sonarr renumbers at its next refresh,
+its files then stand for other episodes, XEM's mappings no longer fit — before anything is
+done; *Thaw* undoes it. See [Orders](sonarr-radarr.md#orders). While TMDB numbers the series
+in TheTVDB's place, a banner at the top of the tab, and on the work's page, says since when,
+with *Back to TheTVDB*: see [Who numbers a series](sonarr-radarr.md#who-numbers-a-series).
+
+The *Other numberings* panel of the **Elsewhere** tab lists the same orders and leads here.
+Through the API: `GET`/`POST /api/v1/items/{id}/orders`, `PUT`/`DELETE
+/api/v1/items/{id}/orders/{key}`, `POST`/`DELETE /api/v1/items/{id}/orders/{key}/freeze`.
+
 ### Importing a work on purpose
 
 The catalogue otherwise fills itself — a client asks for a work, this server

@@ -126,3 +126,20 @@ internet: `scripts/e2e-stack.sh`, the whole stack with the real software — thi
 server, Sonarr 4, the latest Sonarr v5 build, Radarr and a Plex Media Server —
 and `scripts/e2e-skyhook-v2.sh`, which compares what this server answers Sonarr
 v5 with the real Skyhook's second edition, series by series.
+
+**Deprecating.** Something of the API or of the configuration goes in two
+minors, never in one, as
+[`docs/api.md`](docs/api.md#what-stays-and-how-something-goes) promises. In
+the first it is marked in the document — `#[schema(deprecated)]` on a field,
+Rust's `#[deprecated]` on a route's handler — with a doc comment that says
+what to read instead, so the interface's types leave it out
+(`--exclude-deprecated`) and the interface stops reading it first; its answers
+carry a `Deprecation` header; the page under `docs/` that describes it says it
+is deprecated; and the changelog says under *Deprecated* what goes, what
+replaces it, and from which version it is gone. A setting or a variable that
+is renamed is read under both names, the old one with a warning in the log. In
+a later minor it goes: from the code, from `frontend/openapi.json` and the
+generated types (`UPDATE_OPENAPI=1 cargo test openapi`, then `npm run types`),
+from the documentation, from whatever under `frontend/src` or `frontend/e2e`
+still read it, with a line under *Removed*. What Sonarr, Radarr and Plex read
+is never deprecated here: it goes when they stop reading it.

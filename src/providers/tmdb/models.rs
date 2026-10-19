@@ -115,6 +115,54 @@ pub struct Tv {
     pub translations: Option<Translations>,
 }
 
+/// The episode groups a series has: other orders of its episodes that
+/// TMDB's members made — a DVD's, an absolute one, a story's — appended to
+/// the series (`episode_groups`), without their episodes. Read off the
+/// answer kept whole, as the snapshot is (`map::episode_groups`).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct EpisodeGroups {
+    #[serde(default)]
+    pub results: Vec<EpisodeGroupSummary>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct EpisodeGroupSummary {
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    /// 1 original air date, 2 absolute, 3 DVD, 4 digital, 5 story arc,
+    /// 6 production, 7 TV.
+    #[serde(rename = "type")]
+    pub group_type: Option<i64>,
+    pub episode_count: Option<i32>,
+}
+
+/// One episode group with its episodes, `/tv/episode_group/{id}`: its
+/// groups are its seasons, each in its `order`, each episode in its own.
+#[derive(Debug, Clone, Deserialize)]
+pub struct EpisodeGroup {
+    #[serde(rename = "type")]
+    pub group_type: Option<i64>,
+    #[serde(default)]
+    pub groups: Vec<GroupSeason>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct GroupSeason {
+    pub order: Option<i32>,
+    #[serde(default)]
+    pub episodes: Vec<GroupEpisode>,
+}
+
+/// An episode of a group: TMDB's record of it, and where the group puts it
+/// in its season, from zero.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GroupEpisode {
+    pub order: Option<i32>,
+    #[serde(flatten)]
+    pub episode: Episode,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct SeasonSummary {
     pub id: Option<i64>,

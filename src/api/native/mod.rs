@@ -8,6 +8,7 @@ pub mod access;
 pub mod account;
 pub mod arr;
 pub mod auth;
+pub mod backup;
 pub mod browse;
 pub mod cache;
 pub mod children;
@@ -106,6 +107,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(rules::router())
         .merge(media::router())
         .merge(webhooks::router())
+        .merge(backup::router())
         .merge(auth::authenticated_router())
         .merge(crate::api::audit::router())
 }

@@ -37,6 +37,7 @@ import {
 import { airsWhenOn, releaseDay, releasedNotAired } from '../lib/platforms'
 import type { Episode, EpisodeOrder, MediaItem, PlacedEpisode } from '../lib/types'
 import { NotFound, Unavailable } from './NotFound'
+import { orderName, orderNames, orderSeasons, placedEpisode } from './admin/editor/orders'
 
 export function Season() {
   const { id = '', season = '' } = useParams()
@@ -57,7 +58,7 @@ export function Season() {
   // yet, the page waits rather than judge the season by the wrong numbers.
   const asked = params.get('order')
   if (asked && orders.isPending) return <SeasonSkeleton />
-  const order = asked ? orders.data?.orders.find((o) => o.kind === asked) : undefined
+  const order = asked ? orders.data?.orders.find((o) => o.key === asked) : undefined
   const numbers = order ? orderSeasons(order) : seasonNumbers(item)
   if (!Number.isInteger(number) || !numbers.includes(number)) {
     return <NotFound />
@@ -67,7 +68,7 @@ export function Season() {
   // afresh rather than inheriting whatever the last one's had to fall back to.
   return (
     <SeasonSheet
-      key={`${number}:${order?.kind ?? ''}`}
+      key={`${number}:${order?.key ?? ''}`}
       item={item}
       number={number}
       order={order}
@@ -76,29 +77,24 @@ export function Season() {
   )
 }
 
-/** The seasons an order has, specials last. */
-function orderSeasons(order: EpisodeOrder): number[] {
-  const numbers = [...new Set(order.episodes.map((e) => e.seasonNumber))]
-  return numbers.sort((a, b) => (a === 0 ? 1 : b === 0 ? -1 : a - b))
-}
-
 /**
- * The work's episodes as an order places them in one of its seasons, each
- * with its place. An episode the work does not hold — a DVD extra TheTVDB
- * numbers and no provider aired — is left out.
+ * The episodes an order places in one of its seasons, each with its place:
+ * the work's own, and the records the order carries of episodes the work does
+ * not hold — a DVD's cut of two aired parts, an extended cut — which have no
+ * page of their own.
  */
 function placedIn(
   item: MediaItem,
   order: EpisodeOrder,
   season: number,
-): { episode: Episode; placed: PlacedEpisode }[] {
-  const byTvdb = new Map((item.episodes ?? []).filter((e) => e.tvdbId).map((e) => [e.tvdbId!, e]))
+): { episode: Episode; placed: PlacedEpisode; own: boolean }[] {
+  const byId = new Map((item.episodes ?? []).map((e) => [e.id, e]))
   return order.episodes
     .filter((p) => p.seasonNumber === season)
     .sort((a, b) => a.episodeNumber - b.episodeNumber)
     .flatMap((placed) => {
-      const episode = byTvdb.get(placed.tvdbId)
-      return episode ? [{ episode, placed }] : []
+      const found = placedEpisode(placed, byId)
+      return found ? [{ ...found, placed }] : []
     })
 }
 
@@ -130,15 +126,29 @@ function SeasonSheet({
   const meta = order ? undefined : item.seasons?.find((s) => s.seasonNumber === number)
   const rows = order
     ? placedIn(item, order, number)
-    : episodesOf(item, number).map((episode) => ({ episode, placed: undefined }))
+    : episodesOf(item, number).map((episode) => ({ episode, placed: undefined, own: false }))
   const episodes = rows.map((r) => r.episode)
   const name = seasonName(meta?.title, number, t.work.season)
   const sheet = seasonPoster(item, number)
   const numbers = order ? orderSeasons(order) : seasonNumbers(item)
   const { before, after } = order ? adjacent(numbers, number) : adjacentSeasons(item, number)
-  const suffix = order ? `?order=${encodeURIComponent(order.kind)}` : ''
-  const orderLabel = (kind?: string) => (kind ? (t.season.order[kind] ?? kind) : t.season.order.official)
-  useTitle(order ? `${name} · ${orderLabel(order.kind)}` : name, item.title)
+  const suffix = order ? `?order=${encodeURIComponent(order.key)}` : ''
+  // The orders a reader may choose from, each named apart from the others.
+  const shown = orders.filter((o) => o.episodes.length)
+  const names = orderNames(shown, t.season.order, t.season.orderSource)
+  const orderLabel = (o?: EpisodeOrder) => (o && names.get(o.key)) || orderName(o, t.season.order)
+  useTitle(order ? `${name} · ${orderLabel(order)}` : name, item.title)
+  // What the note under the orders says of the one shown: where it comes
+  // from, and that it is what the aired order answers with when it is.
+  const note = !order
+    ? undefined
+    : order.isFrozen
+      ? t.season.orderNoteFrozen
+      : order.source === 'tmdb'
+        ? t.season.orderNoteTmdb
+        : order.source === 'local'
+          ? t.season.orderNoteLocal
+          : t.season.orderNote
 
   // The earliest date and the latest, whatever order the numbers put them in:
   // specials are numbered as they were found, not as they aired.
@@ -184,7 +194,7 @@ function SeasonSheet({
           <h1 className="font-display text-3xl leading-tight font-medium text-bone sm:text-4xl">{name}</h1>
           <p className="mt-2 font-mono text-xs text-bone-faint tabular-nums">
             {[
-              order ? orderLabel(order.kind) : undefined,
+              order ? orderLabel(order) : undefined,
               t.work.episodeCount(episodes.length),
               first ? (last && fmt.year(last) !== fmt.year(first) ? `${fmt.year(first)}–${fmt.year(last)}` : fmt.year(first)) : undefined,
               minutes ? t.season.watchTime(fmt.runtime(minutes, locale) ?? '') : undefined,
@@ -220,22 +230,23 @@ function SeasonSheet({
         className="rise mt-8 border-y border-rule py-3"
         style={{ animationDelay: '60ms' }}
       >
-        {/* Where TheTVDB numbers the series more than one way, the way a
-            reader knows it: the DVDs, straight through. The aired order stays
-            the page's own, and the one every client is served. */}
+        {/* Where the series is numbered more than one way, the way a reader
+            knows it: TheTVDB's DVDs, straight through, TMDB's groups, an
+            order made here. The aired order stays the page's own, and the one
+            a client is served unless it asks for another. */}
         {orders.length ? (
           <div className="mb-3">
             <div role="group" aria-label={t.season.orders} className="flex flex-wrap items-center gap-1.5">
               <span className="label mr-1">{t.season.orders}</span>
-              {[undefined, ...orders].map((o) => {
-                const kind = o?.kind
-                const current = order?.kind === kind
+              {[undefined, ...shown].map((o) => {
+                const key = o?.key
+                const current = order?.key === key
                 const seasons = o ? orderSeasons(o) : seasonNumbers(item)
                 const target = seasons.includes(number) ? number : seasons[0]
                 return (
                   <Link
-                    key={kind ?? 'official'}
-                    to={`/work/${item.id}/season/${target}${kind ? `?order=${encodeURIComponent(kind)}` : ''}`}
+                    key={key ?? 'official'}
+                    to={`/work/${item.id}/season/${target}${key ? `?order=${encodeURIComponent(key)}` : ''}`}
                     aria-current={current ? 'page' : undefined}
                     className={cn(
                       'inline-flex min-h-11 items-center rounded-full border px-3 text-sm transition-colors duration-150',
@@ -244,12 +255,12 @@ function SeasonSheet({
                         : 'border-rule text-bone-dim hover:border-rule-bright hover:text-bone',
                     )}
                   >
-                    {orderLabel(kind)}
+                    {orderLabel(o)}
                   </Link>
                 )
               })}
             </div>
-            {order ? <p className="mt-2 text-xs text-bone-faint">{t.season.orderNote}</p> : null}
+            {note ? <p className="mt-2 text-xs text-bone-faint">{note}</p> : null}
           </div>
         ) : null}
         <div className="flex items-center justify-between gap-3">
@@ -301,8 +312,8 @@ function SeasonSheet({
 
       {rows.length ? (
         <ol className="stagger mt-8 space-y-4">
-          {rows.map(({ episode, placed }) => (
-            <EpisodeEntry key={episode.id} item={item} episode={episode} placed={placed} />
+          {rows.map(({ episode, placed, own }) => (
+            <EpisodeEntry key={episode.id} item={item} episode={episode} placed={placed} own={own} />
           ))}
         </ol>
       ) : (
@@ -363,11 +374,14 @@ function EpisodeEntry({
   item,
   episode,
   placed,
+  own = false,
 }: {
   item: MediaItem
   episode: Episode
   /** Where the episode stands in the order the sheet is numbered in. */
   placed?: PlacedEpisode
+  /** Whether it is the order's own record, an episode the work does not hold: it has no page to lead to. */
+  own?: boolean
 }) {
   const { t, locale } = useI18n()
 
@@ -386,79 +400,94 @@ function EpisodeEntry({
   const day = fmt.weekdayDate(when && released ? releaseDay(when) : airValue(when), locale)
   const time = !released && when?.moment ? fmt.clock(when.moment.toISOString(), locale) : undefined
 
+  const frame = cn(
+    'group grid gap-4 rounded-panel border border-rule bg-ink-raised p-3 sm:grid-cols-[14rem_minmax(0,1fr)] sm:p-4',
+    !own && 'transition-colors duration-150 hover:border-rule-bright hover:bg-ink-high',
+  )
+  const body = (
+    <>
+      <div className="relative aspect-video overflow-hidden rounded-card bg-ink-high">
+        {episode.image ? (
+          <Artwork
+            url={episode.image}
+            role="still"
+            alt=""
+            className="size-full object-cover"
+          />
+        ) : (
+          <div className="grid size-full place-items-center">
+            <Glyph name="film" className="size-5 text-bone-faint" />
+          </div>
+        )}
+        {/* Edge print: the code as a film strip carries its frame numbers. */}
+        <span className="absolute bottom-1.5 left-1.5 rounded-card bg-ink/85 px-1.5 py-0.5 font-mono text-[0.6875rem] font-medium tracking-wider text-bone tabular-nums">
+          {episodeCode(shown)}
+        </span>
+      </div>
+
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-2">
+          {episode.finaleType ? <Chip tone="accent">{finaleLabel(episode.finaleType, t)}</Chip> : null}
+          {upcoming && when ? (
+            <Chip tone="provider">
+              <Glyph name="clock" className="size-3" />
+              {airsWhenOn(item.network, when, locale)}
+            </Chip>
+          ) : null}
+          {episode.isManual ? (
+            <Chip tone="manual">
+              <Glyph name="lock" className="size-3" />
+              {t.work.manualEntry}
+            </Chip>
+          ) : null}
+          {own ? <Chip tone="provider">{t.season.ownRecord}</Chip> : null}
+        </div>
+
+        <h2
+          className={cn(
+            'mt-1 text-base leading-snug font-medium text-bone',
+            !own && 'transition-colors duration-150 group-hover:text-vermillion',
+          )}
+        >
+          {episode.title || t.episode.untitled(shown.episodeNumber)}
+        </h2>
+
+        <p className="mt-1 font-mono text-[0.6875rem] text-bone-faint tabular-nums">
+          {[
+            released && day ? t.episode.availableOn(day) : day,
+            time,
+            fmt.runtime(episode.runtime, locale),
+            episode.rating?.value ? `★ ${fmt.score(episode.rating.value, locale)}` : undefined,
+            // Last, and only where it says something the code does not: in
+            // a first season the two are the same number. Above the title,
+            // on every episode after the first season, it read as a heading.
+            absolute && absolute !== shown.episodeNumber ? t.episode.absolute(absolute) : undefined,
+          ]
+            .filter(Boolean)
+            .join(' · ') || t.episode.noDate}
+        </p>
+
+        {episode.overview ? (
+          <p className="mt-2 line-clamp-3 max-w-[70ch] text-sm leading-relaxed text-bone-dim">{episode.overview}</p>
+        ) : null}
+
+        <Placement episode={episode} className="mt-2" />
+      </div>
+    </>
+  )
+
   return (
     // An anchor only in the aired order: another order can number two
-    // episodes the same, and an id has to be one thing.
+    // episodes the same, and an id has to be one thing. An episode the
+    // order carries as its own has no page to lead to.
     <li id={placed ? undefined : `episode-${episode.episodeNumber}`}>
-      <Link
-        to={to}
-        className={cn(
-          'group grid gap-4 rounded-panel border border-rule bg-ink-raised p-3 sm:grid-cols-[14rem_minmax(0,1fr)] sm:p-4',
-          'transition-colors duration-150 hover:border-rule-bright hover:bg-ink-high',
-        )}
-      >
-        <div className="relative aspect-video overflow-hidden rounded-card bg-ink-high">
-          {episode.image ? (
-            <Artwork
-              url={episode.image}
-              role="still"
-              alt=""
-              className="size-full object-cover"
-            />
-          ) : (
-            <div className="grid size-full place-items-center">
-              <Glyph name="film" className="size-5 text-bone-faint" />
-            </div>
-          )}
-          {/* Edge print: the code as a film strip carries its frame numbers. */}
-          <span className="absolute bottom-1.5 left-1.5 rounded-card bg-ink/85 px-1.5 py-0.5 font-mono text-[0.6875rem] font-medium tracking-wider text-bone tabular-nums">
-            {episodeCode(shown)}
-          </span>
-        </div>
-
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            {episode.finaleType ? <Chip tone="accent">{finaleLabel(episode.finaleType, t)}</Chip> : null}
-            {upcoming && when ? (
-              <Chip tone="provider">
-                <Glyph name="clock" className="size-3" />
-                {airsWhenOn(item.network, when, locale)}
-              </Chip>
-            ) : null}
-            {episode.isManual ? (
-              <Chip tone="manual">
-                <Glyph name="lock" className="size-3" />
-                {t.work.manualEntry}
-              </Chip>
-            ) : null}
-          </div>
-
-          <h2 className="mt-1 text-base leading-snug font-medium text-bone transition-colors duration-150 group-hover:text-vermillion">
-            {episode.title || t.episode.untitled(shown.episodeNumber)}
-          </h2>
-
-          <p className="mt-1 font-mono text-[0.6875rem] text-bone-faint tabular-nums">
-            {[
-              released && day ? t.episode.availableOn(day) : day,
-              time,
-              fmt.runtime(episode.runtime, locale),
-              episode.rating?.value ? `★ ${fmt.score(episode.rating.value, locale)}` : undefined,
-              // Last, and only where it says something the code does not: in
-              // a first season the two are the same number. Above the title,
-              // on every episode after the first season, it read as a heading.
-              absolute && absolute !== shown.episodeNumber ? t.episode.absolute(absolute) : undefined,
-            ]
-              .filter(Boolean)
-              .join(' · ') || t.episode.noDate}
-          </p>
-
-          {episode.overview ? (
-            <p className="mt-2 line-clamp-3 max-w-[70ch] text-sm leading-relaxed text-bone-dim">{episode.overview}</p>
-          ) : null}
-
-          <Placement episode={episode} className="mt-2" />
-        </div>
-      </Link>
+      {own ? (
+        <div className={frame}>{body}</div>
+      ) : (
+        <Link to={to} className={frame}>
+          {body}
+        </Link>
+      )}
     </li>
   )
 }

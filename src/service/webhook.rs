@@ -76,6 +76,14 @@ pub enum Fact {
     MediaFailed,
     /// A release newer than the one running is out.
     UpdateAvailable,
+    /// TheTVDB has not answered for a series long enough that TMDB numbers
+    /// it in its place (`service::gather`).
+    NumberingFallback,
+    /// An archive of the server was made: by the schedule, by somebody, or
+    /// before a restore.
+    BackupCompleted,
+    /// An archive could not be made.
+    BackupFailed,
 }
 
 impl Fact {
@@ -84,6 +92,9 @@ impl Fact {
         Self::RefreshFailed,
         Self::MediaFailed,
         Self::UpdateAvailable,
+        Self::NumberingFallback,
+        Self::BackupCompleted,
+        Self::BackupFailed,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -91,6 +102,9 @@ impl Fact {
             Self::RefreshFailed => "refresh.failed",
             Self::MediaFailed => "media.failed",
             Self::UpdateAvailable => "update.available",
+            Self::NumberingFallback => "numbering.fallback",
+            Self::BackupCompleted => "backup.completed",
+            Self::BackupFailed => "backup.failed",
         }
     }
 }
@@ -382,6 +396,30 @@ pub fn update_available(state: &AppState, release: &crate::jobs::update_check::R
             env!("CARGO_PKG_VERSION"),
             release.url
         )),
+    );
+}
+
+/// An archive made: `backup.completed`, with its name, what it weighs and
+/// why it was made.
+pub fn backup_completed(state: &AppState, name: &str, detail: &str) {
+    tell(
+        state,
+        Fact::BackupCompleted,
+        Some(name.to_string()),
+        Some(detail.to_string()),
+    );
+}
+
+/// An archive that could not be made: `backup.failed`, with why it was
+/// asked for and the start of what went wrong. Told, because a schedule
+/// that stopped making archives is otherwise found out on the day one is
+/// needed.
+pub fn backup_failed(state: &AppState, why: &str, error: &str) {
+    tell(
+        state,
+        Fact::BackupFailed,
+        Some(why.to_string()),
+        Some(crate::providers::clip(error, ERROR_CHARS)),
     );
 }
 
@@ -1142,14 +1180,6 @@ pub enum Refusal {
 }
 
 impl Refusal {
-    /// The code an interface reads.
-    pub const fn code(self) -> &'static str {
-        match self {
-            Self::NotWeb => "not_web",
-            Self::Internal => "internal",
-        }
-    }
-
     /// What the log of a delivery says of it.
     const fn says(self) -> &'static str {
         match self {

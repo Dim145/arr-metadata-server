@@ -53,6 +53,25 @@ bucket, two instances, Caddy in front — and [`scripts/e2e-multi.sh`](../script
 two instances against a PostgreSQL of its own and checks that they agree,
 pass on what changes, count together and hand the lead over.
 
+The archives of the database ([Backups](install.md#backups)) are kept in the media's bucket
+among several instances, under `backups/` — beside the media's prefix when `AMS_S3_PREFIX`
+sets one — where every instance lists, downloads and restores them; the leader keeps the
+schedule, and one archive or one restore is under way at a time across all of them. An archive is
+put together in `AMS_BACKUP_DIR` first — `data/backups` unless it says otherwise — and needs room
+there for a copy of the database; only where that cannot be written is the system's temporary
+directory used instead, with a warning. [`compose.multi.yaml`](../compose.multi.yaml) gives each
+instance a 64 MB `/tmp` and nothing else to write to on its own, so it mounts a volume at `/data`
+for the two to share and sets `AMS_BACKUP_DIR=/data/backups`. The archive a new version makes
+before its migrations ([Backups](install.md#backups)) is made by whichever instance applies them
+— the first to start, the other waiting its turn — row by row through SQLite: on a large
+catalogue, `backup.beforeUpgrade` off and a `pg_dump` of one's own is the quicker way. With the
+media kept nowhere (`AMS_MEDIA_STORAGE=off`) the archives are each instance's own, in its
+`AMS_BACKUP_DIR`. A restore started from one instance's Backups page shuts that instance's
+doors; the others wait for the rows to be copied
+— their writes held until the copy commits, their reads served the rows as they were — and are
+then told to read the settings and the rules again. Restart them afterwards all the same: the
+media's index and the authority each keeps in memory are read at the start.
+
 What it does not do: a `multi` deployment scales the requests, not the
 database or the bucket, which become the ceiling; with the cache server
 away, the caches keep to memory as before, but no instance leads and

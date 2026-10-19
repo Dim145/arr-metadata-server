@@ -46,6 +46,13 @@ actions! {
     ItemRefreshed => "item.refreshed",
     ItemSynced => "item.synced",
     ItemRenumbered => "item.renumbered",
+    ItemNumberingFallback => "item.numbering_fallback",
+    ItemNumberingRestored => "item.numbering_restored",
+    OrderCreated => "order.created",
+    OrderUpdated => "order.updated",
+    OrderDeleted => "order.deleted",
+    OrderFrozen => "order.frozen",
+    OrderThawed => "order.thawed",
     MediaUploaded => "media.uploaded",
     MediaRemoved => "media.removed",
     CertificateRenewed => "tls.renewed",
@@ -89,6 +96,8 @@ actions! {
     CacheCleared => "cache.cleared",
     NfoExported => "export.nfo",
     DatasetImported => "dataset.imported",
+    BackupDeleted => "backup.deleted",
+    BackupRestored => "backup.restored",
 }
 
 impl std::fmt::Display for Action {

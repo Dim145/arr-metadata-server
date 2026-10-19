@@ -54,6 +54,15 @@ x-metadata: &metadata
     # Caddy alone is trusted for the caller's address: its own, pinned below.
     AMS_TRUSTED_PROXIES: 172.30.0.10/32
     AMS_LOG: ${AMS_LOG:-info}
+    # The archives of the database go to the bucket, under backups/, where
+    # either instance lists them. Each is put together here first: a copy of
+    # the database, more than the 64 MB /tmp below would hold.
+    AMS_BACKUP_DIR: /data/backups
+    # A new version archives the database before it applies its migrations,
+    # row by row through SQLite, which a large catalogue takes a while over
+    # (Settings › Backups turns it off for those who `pg_dump` instead).
+    # `false` starts without it, should the archive be what stops a start.
+    AMS_BACKUP_BEFORE_UPGRADE: ${AMS_BACKUP_BEFORE_UPGRADE:-true}
     TZ: ${TZ:-UTC}
   depends_on:
     postgres:
@@ -62,13 +71,20 @@ x-metadata: &metadata
       condition: service_started
     bucket:
       condition: service_healthy
-  # Nothing is written to disk in multi mode: the authority lives in the
-  # database, the media in the bucket. An authority an earlier, single
-  # deployment kept can be handed over once by mounting its directory read
-  # only at /data/tls; it is taken into the database at the first start.
+  # Nothing else is written to disk in multi mode: the authority lives in
+  # the database, the media and the archives in the bucket. An authority an
+  # earlier, single deployment kept can be handed over once by mounting its
+  # directory read only at /data/tls; it is taken into the database at the
+  # first start.
   read_only: true
   tmpfs:
     - /tmp:size=64m,mode=1777
+  # Where the archives are put together (see AMS_BACKUP_DIR), each in a
+  # directory of its own, so the two instances share it. Mounted at /data,
+  # which the image gives the server's user: a volume made there takes that
+  # ownership, where one at /data/backups would be root's.
+  volumes:
+    - backups-work:/data
   security_opt:
     - no-new-privileges:true
   cap_drop:
@@ -252,3 +268,4 @@ volumes:
   postgres-data:
   bucket-meta:
   bucket-data:
+  backups-work:

@@ -59,6 +59,7 @@ export default defineConfig({
             page('reverse-proxy', 'Behind a reverse proxy'),
             page('caching', 'Caching'),
             page('instances', 'Several instances'),
+            page('cli', 'The command line'),
           ],
         },
         {

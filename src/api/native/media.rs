@@ -54,12 +54,36 @@ pub fn router() -> OpenApiRouter<AppState> {
         )
 }
 
+/// Where the media are kept, as `AMS_MEDIA_STORAGE` says.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+// Named explicitly: utoipa keys schemas on the leaf name alone, and a
+// `Backend` could be anything's.
+#[schema(as = MediaBackend)]
+pub enum Backend {
+    /// Nothing is kept: every picture stays a link to its provider.
+    Off,
+    /// Files under `AMS_MEDIA_DIR`, served by this server.
+    Filesystem,
+    /// An S3 bucket, served through this server or by the bucket itself.
+    S3,
+}
+
+impl From<crate::config::MediaStorage> for Backend {
+    fn from(storage: crate::config::MediaStorage) -> Self {
+        match storage {
+            crate::config::MediaStorage::Off => Self::Off,
+            crate::config::MediaStorage::Filesystem => Self::Filesystem,
+            crate::config::MediaStorage::S3 => Self::S3,
+        }
+    }
+}
+
 /// How the store stands.
 #[derive(Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct MediaStatus {
-    /// `off`, `filesystem` or `s3`.
-    pub backend: &'static str,
+    pub backend: Backend,
     /// Whether the media are fetched as works are stored.
     pub storing: bool,
     /// `proxy` or `redirect`: through this server, or sent to the bucket.
@@ -89,11 +113,7 @@ async fn status(
 ) -> AppResult<Json<MediaStatus>> {
     identity.require_admin()?;
     Ok(Json(MediaStatus {
-        backend: match state.media.config.storage {
-            crate::config::MediaStorage::Off => "off",
-            crate::config::MediaStorage::Filesystem => "filesystem",
-            crate::config::MediaStorage::S3 => "s3",
-        },
+        backend: state.media.config.storage.into(),
         storing: state.flag("media.store", true),
         serve: state.text("media.serve").unwrap_or_else(|| "proxy".into()),
         people: state.flag("media.people", true),
@@ -239,6 +259,31 @@ pub struct WorkMedia {
     pub media: Vec<WorkMedium>,
 }
 
+/// What is kept of one address a work points at: where its asset stands,
+/// or that it has none.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum MediumStatus {
+    /// Waiting to be fetched, or to be tried again.
+    Pending,
+    Stored,
+    /// Given up on, until somebody asks again.
+    Failed,
+    /// Nothing has been asked of it: the store is off, or the address is not
+    /// one it fetches.
+    Absent,
+}
+
+impl From<repo::asset::Status> for MediumStatus {
+    fn from(status: repo::asset::Status) -> Self {
+        match status {
+            repo::asset::Status::Pending => Self::Pending,
+            repo::asset::Status::Stored => Self::Stored,
+            repo::asset::Status::Failed => Self::Failed,
+        }
+    }
+}
+
 /// One address a work points at, and what is kept of it.
 #[derive(Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
@@ -250,7 +295,7 @@ pub struct WorkMedium {
     pub kind: Kind,
     /// `stored`, `pending`, `failed` — or `absent`, when nothing has been
     /// asked of it: the store is off, or the address is not one it fetches.
-    pub status: String,
+    pub status: MediumStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub asset_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -309,7 +354,7 @@ async fn work_media(
                 url: state.media.localized(&origin),
                 origin,
                 kind: asset.kind,
-                status: asset.status.as_str().to_string(),
+                status: asset.status.into(),
                 asset_id: Some(asset.id.clone()),
                 bytes: asset.bytes,
                 width: asset.width,
@@ -328,7 +373,7 @@ async fn work_media(
                 url: origin.clone(),
                 origin,
                 kind,
-                status: "absent".into(),
+                status: MediumStatus::Absent,
                 asset_id: None,
                 bytes: None,
                 width: None,

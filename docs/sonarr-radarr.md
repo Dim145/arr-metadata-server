@@ -32,22 +32,24 @@ reading: the same series, with what v5 reads besides.
   the name out where it is the one the series already goes by, is listed under the
   title the answer gives.
 - **Orders.** `seasonTypes` lists the orders the episodes come in: the aired
-  order (`official`), then the DVD, absolute, alternate and regional orders
-  TheTVDB keeps for the series, and its two further alternate orders (`altdvd`,
-  `alttwo` — a Blu-ray's, a streaming service's), which TheTVDB's own episodes
-  endpoint answers empty for (thetvdb/v4-api#340) and this server reads season
-  by season instead, as the real service serves them. Asked in an order the
-  series has, the episodes are numbered by it; asked in one it has not, they are
-  numbered as they aired, as Skyhook answers. An order places the episodes the
-  aired list holds: an episode TheTVDB files in one order alone — a DVD's
+  order (`official`), then TheTVDB's — DVD, absolute, alternate, regional, and
+  its two further alternate orders (`altdvd`, `alttwo` — a Blu-ray's, a
+  streaming service's), which TheTVDB's own episodes endpoint answers empty for
+  (thetvdb/v4-api#340) and this server reads season by season instead — then
+  TMDB's episode groups and the orders made here, each under the series' own
+  name for it. Asked in an order the series has, the episodes are numbered by
+  it, an episode TheTVDB files in that order alone among them — a DVD's
   hour-long cut of two aired parts, the extended cuts that make up The Office
-  (US)'s Superfan order — is not served yet, and an order made of those alone is
-  not offered, where the real service serves such records as episodes of their
-  own.
+  (US)'s Superfan order — as the real service serves them; asked in one it has
+  not, they are numbered as they aired, as Skyhook answers. See
+  [Orders](#orders).
 - **Seasons.** A season's title and year. A title that only says the season's
   number is kept back, as the real service keeps it.
 - **Episodes.** An episode's ids under both names the service and the client
   use (`tvdbId` and `metadataId`).
+- **Who numbers it.** `metadataSource` is `tvdb`, or `tmdb` for a series TMDB
+  numbers — one TheTVDB does not list, or one it stopped answering for (see
+  [Who numbers a series](#who-numbers-a-series)) — or `fankai`.
 
 The language is three letters, as Sonarr writes it (`eng`, `fra`). The series is
 answered in it when the catalogue holds it so; otherwise in the caller's own
@@ -255,6 +257,131 @@ A [notification destination](notifications.md) can be told of `item.renumbered`
 like any action of the trail. An episode added or gone, one made by hand, and a
 numbering kept because TheTVDB did not answer are not moves.
 
+To keep a series numbered as it stands while TheTVDB renumbers it, make an order
+from its aired one and freeze it: see
+[Freezing an order](#freezing-an-order-as-the-aired-numbering).
+
+## Orders
+
+A series aired in one order, and every client is served that one unless it asks
+for another: Sonarr v4 always, Sonarr v5 in the season type chosen when the series
+was added. The catalogue keeps the series' other orders beside it:
+
+- **TheTVDB's**: its DVD and absolute orders and its further ones — `alternate`,
+  `regional`, `altdvd`, `alttwo` — read at each refresh of the series, the last
+  two season by season, since TheTVDB's own episodes endpoint answers empty for
+  them. Each is named as the series names it on TheTVDB — *Superfan Order*,
+  *BluRay Order* — or as TheTVDB names the type.
+- **TMDB's episode groups**, listed with the series at each refresh and read from
+  TMDB by the refresh that lists one, or changes its count: see
+  [Where the data comes from](sources.md#tmdbs-episode-groups).
+- **Those made here**, in the editor's **Seasons** tab: see
+  [Editing](editing.md#orders).
+
+An order is a sequence of places, a season and a number each. A place names an
+episode the series holds, or carries the record its source gave of one it does
+not: TheTVDB files a DVD's hour-long cut of two aired parts, or the 194 extended
+cuts of The Office (US), as episodes of their own, which the aired list does not
+hold. Such an episode is served in the order, with its own title, date and
+runtime, under the TheTVDB id it carries — or, for one written here or a TMDB
+group's the series does not hold, under a negative id made of what names it, the
+same at every answer, and for Sonarr v4 and v5 alike.
+
+After an upgrade from 0.8.3 or before, the orders are read again at each series'
+next refresh, which the upgrade brings forward: a series whose orders were kept
+before is due at once, and the automatic refresh takes it among the first works it
+finds due. Until then its orders are served as they were kept, under the names
+TheTVDB gives its types and without the episodes TheTVDB files in one order alone.
+
+### What Sonarr v5 is offered
+
+`seasonTypes` lists the aired order (`official`), then each order the series has:
+its `type` is the order's key, its `name` the order's own — with its source after
+it where another order listed goes by the same name and this one is not from the
+source numbering the series: The Office's *Superfan Order* is TheTVDB's, and
+TMDB's group of that name is *Superfan Order (TMDB)*. Two of one source still
+alike say how many episodes each holds as well. Plex's list names them the same
+way; the order keeps its own name everywhere else.
+
+| Key | Order |
+|---|---|
+| `dvd`, `absolute`, `alternate`, `regional`, `altdvd`, `alttwo` | TheTVDB's, as TheTVDB types them |
+| `tmdb-5acf93e60e0a26346d0000ce` | a TMDB episode group, by its id |
+| `ams-my-dvd-order` | an order made here: `ams-` and its name |
+
+Sonarr writes the type into the address it asks for the series at —
+`/v2/tvdb/shows/eng/73244/ams-my-dvd-order` — and is answered in that order. The
+same order kept by TheTVDB and by TMDB — an absolute order both keep — is offered
+once: the one from the source that numbers the series always is, and the other's
+beside it only when it holds more episodes, another order then, a Blu-ray's with
+its extras. One not offered is still answered when it is asked for by its key. A
+TMDB group is read by the refresh that lists it, or changes its count; one that
+could not be read then is offered with the count TMDB lists it with and no
+seasons, and read when Sonarr first asks for the series in it, or at the next
+refresh.
+
+Before choosing one in Sonarr:
+
+- **The order is chosen when the series is added.** Sonarr v5 changes it
+  afterwards only while the series has no files (Sonarr's pull request #9055).
+  To number a series that has files otherwise, freeze an order as its aired
+  numbering instead.
+- **An order other than the aired one skips XEM.** Sonarr maps scene numbering
+  through XEM and the scene-mapping list for the aired order alone: a series set
+  to another matches releases by that order's numbers only.
+- **The key is free.** Sonarr v5 takes any word as a season type, one it was not
+  built with too: [`scripts/e2e-stack.sh`](../scripts/e2e-stack.sh) adds a series
+  in an order made here and checks that Sonarr numbers it so.
+
+### Freezing an order as the aired numbering
+
+An order — TheTVDB's, a TMDB group, one made here — can be frozen as the series'
+aired numbering: what the aired order answers with from then on, for Sonarr v5
+asking for `official`, for Sonarr v4, which knows no other, for Plex with no order
+named, for the TheTVDB relay's `official` pages and the episodes a series' record
+carries there (`meta=episodes`), and for the `.nfo` documents. One
+order at the most is frozen; freezing another thaws the first. Sonarr follows at
+its next refresh — at once when it is told of changes, see
+[Telling them of a change](#telling-them-of-a-change) — and the files it matched
+by the old numbers then stand for other episodes, as when TheTVDB renumbers.
+XEM's mappings are made for TheTVDB's aired numbers: a frozen numbering that moves
+episodes makes them point at others.
+
+A frozen order does not keep what airs next from Sonarr: an episode the series
+holds that the order does not place, and that airs after the order was last
+written or frozen — or is not dated yet — is served under its aired numbers
+wherever the order leaves them free. An order made here works so too when it is
+asked for by its key. Thawing gives the aired numbering back. The audit trail
+says each, `order.frozen` and `order.thawed`.
+
+### Who numbers a series
+
+TheTVDB numbers a series, and a refresh it does not answer keeps the numbering it
+gave last. When it has not answered for a series for `numbering.fallbackAfter`
+refreshes in a row — three unless set, counted twenty hours apart at the least so
+that an outage of an afternoon counts once; `0`, never — and TMDB answers for the
+series, TMDB numbers it in TheTVDB's place: its seasons and episodes, or its group
+of the original air date where that one numbers the same episodes and puts more of
+them where TheTVDB had them — Stranger Things' cuts its fifth season in three, by
+the parts it aired in, where TMDB's seasons keep it whole as TheTVDB does — each
+episode keeping the TheTVDB id it had. The audit trail says so
+(`item.numbering_fallback`, by `system`), a
+[notification destination](notifications.md) that wants `numbering.fallback` is
+told, `metadataSource` says `tmdb` in what Sonarr v5 is sent, and the work's page
+and its editor carry a banner, *Numbered by TMDB since …*, with
+**Back to TheTVDB**.
+
+It lasts until TheTVDB answers again, when its numbering is taken back of itself
+(`item.numbering_restored`) — unless an order of the series was frozen as its
+aired numbering meanwhile: that was TMDB's numbering, and stays so until it is
+given back by hand. **Back to TheTVDB** clears the fallback and refreshes the
+series at once; TheTVDB still silent, TMDB keeps it. Through the API:
+`POST /api/v1/items/{id}/numbering/restore`.
+
+Sonarr renumbers a series TMDB numbers otherwise than TheTVDB: TMDB cuts some
+series' seasons its own way, One Piece's into more seasons than TheTVDB's. The
+setting is how long TheTVDB is waited for before that.
+
 ## Skyhook as a source
 
 This server also asks Skyhook, as a source of its own. It reads the second
@@ -276,7 +403,8 @@ applies.
 [`scripts/e2e-stack.sh`](../scripts/e2e-stack.sh) runs real Sonarr 4, Sonarr 5,
 Radarr and Plex against this server, from the tree's binary on a catalogue of its
 own: it searches and adds real series and films and compares what they hold with
-what is served, adds a series in French and in its DVD order on Sonarr 5, locks a
-title and finds it in each client after a refresh, connects the server to Sonarr
+what is served, adds a series in French, one in its DVD order and one in an order
+made here on Sonarr 5, freezes an order of another and finds Sonarr following it,
+locks a title and finds it in each client after a refresh, connects the server to Sonarr
 and Radarr and finds the command a lock sends in their history, and seeds an empty
 catalogue from their libraries.

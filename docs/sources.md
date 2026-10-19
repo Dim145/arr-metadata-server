@@ -26,7 +26,10 @@ in order on the Sources page, and given its first value by `AMS_PROVIDER_PRIORIT
 
 The **list** of episodes and seasons always comes from TheTVDB, or from Skyhook
 which republishes its numbering. Every other provider may fill fields on those
-episodes; none may add one.
+episodes; none may add one. The one exception is a series TheTVDB stopped
+answering for, refresh after refresh: TMDB then numbers it in TheTVDB's place,
+until TheTVDB answers again — see
+[Who numbers a series](sonarr-radarr.md#who-numbers-a-series).
 
 This is not configurable, because it is not really a preference. A client
 addresses a series by its TVDB id and expects the numbering that goes with it,
@@ -75,6 +78,35 @@ still answers.
 > to itself and would call itself forever. It detects that and answers `508`
 > with the fix in the message — but point the upstreams elsewhere, or turn
 > enrichment off, when that is your setup.
+
+### TMDB's episode groups
+
+The aired order is not the only one a series is numbered by: TheTVDB keeps a
+DVD order and others beside it, and TMDB's members group a series' episodes
+otherwise too — an original air date, an absolute order, a DVD's, a streaming
+service's, a story's, a production order, a channel's: TMDB's types 1 to 7. The
+groups come with the series at each refresh, in the same call
+(`append_to_response=episode_groups`), each kept as an order still to be read,
+under `tmdb-` and its id, with its name and the count of episodes TMDB lists it
+with. A group is read — one more call to TMDB, once — by the refresh that lists
+it, four at a time; read again when the count TMDB lists it with moves. One that
+could not be read then is read the first time it is asked for, by Sonarr v5 in
+its season type, by Plex in its episode order or by the TheTVDB relay, or at the
+next refresh: the editor and a season's page show what is kept, and ask TMDB
+nothing. A group of a type this server does not know is left out.
+
+A group's episodes are TMDB's own: each names the episode the series holds by its
+TMDB id, or is served as TMDB describes it where the series holds none. A group
+cannot cut or join episodes, and neither can an order here.
+
+TheTVDB and TMDB often keep the same order twice — a DVD order, an absolute one.
+Clients are offered it once: the one from the source that numbers the series
+(TheTVDB, unless TMDB numbers it in its place) always is, and the other's beside
+it only when it holds more episodes; one of the aired kind is offered beside the
+aired order only when it holds more episodes than the series does. TheTVDB's further orders —
+`alternate`, `regional`, `altdvd`, `alttwo`, each the series' own — and the orders
+made here are each offered whatever else there is. One not offered is still
+answered when it is asked for by its key. See [Orders](sonarr-radarr.md#orders).
 
 ## Who gave what, and asking one source again
 

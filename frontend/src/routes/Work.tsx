@@ -30,7 +30,7 @@ import {
 } from '../components/ui'
 import { ApiError, api, query } from '../lib/api'
 import { feeds, webcal } from '../lib/feeds'
-import { useMe, useTitle, useWork } from '../lib/hooks'
+import { useMe, useOrders, useTitle, useWork } from '../lib/hooks'
 import { identifierLink } from '../lib/links'
 import { airsWhenOn, releaseDay, releasedNotAired } from '../lib/platforms'
 import { remember } from '../lib/recent'
@@ -83,11 +83,15 @@ import type {
   Similar,
 } from '../lib/types'
 import { NotFound, Unavailable } from './NotFound'
+import { NumberingBanner } from './admin/editor/NumberingBanner'
 
 export function Work() {
   const { id = '' } = useParams()
   const work = useWork(id)
   const me = useMe()
+  // A series' orders say who numbers it: TMDB, while TheTVDB does not answer
+  // for it, is said in a banner. A film has none to ask for.
+  const orders = useOrders(work.data?.kind === 'series' ? id : '')
   const { locale } = useI18n()
   useTitle(work.data?.title)
   // The country picked to see where the work is watched, kept in this
@@ -115,6 +119,12 @@ export function Work() {
     // afresh: the gallery's tab and the lists opened out were the last one's.
     <article key={item.id} className="pb-8">
       <Plate item={item} region={region} />
+
+      {/* Drawn while TMDB numbers the series, and kept once it is given back
+          to say so: the banner itself is nothing otherwise. */}
+      {orders.data ? (
+        <NumberingBanner workId={item.id} orders={orders.data} canWrite={me.data?.canWrite === true} className="mt-8" />
+      ) : null}
 
       {/* The facts sit beside the page on a wide screen, and straight after the
           synopsis on a phone: status, dates, network and identifiers are what

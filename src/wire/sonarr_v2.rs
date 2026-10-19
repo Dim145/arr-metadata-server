@@ -27,7 +27,7 @@ use crate::{
         language,
         // Where an order places the episodes is the same for every client
         // that numbers them by one; see `service::orders`.
-        orders::{named as order_named, placements},
+        orders::{self, Placed},
     },
 };
 
@@ -97,7 +97,7 @@ pub struct ShowResourceV2 {
     /// is stored in and its own among them — by language code.
     pub translations: Vec<TranslationResource>,
     /// The aired order first, then each other order the catalogue keeps for
-    /// the series.
+    /// the series: TheTVDB's, TMDB's episode groups, those made here.
     pub season_types: Vec<SeasonTypeResource>,
     pub actors: Vec<ActorResource>,
     pub images: Vec<ImageResource>,
@@ -105,8 +105,10 @@ pub struct ShowResourceV2 {
     /// Left out of a search result, as the real service leaves it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub episodes: Option<Vec<EpisodeResourceV2>>,
-    /// `tvdb`; `tmdb` or `fankai` for an id this server made for a work
-    /// TheTVDB does not list (see [`ids`]).
+    /// Who numbers the episodes: `tvdb`; `tmdb` for a series TMDB numbers —
+    /// one TheTVDB does not list, under an id this server made for it (see
+    /// [`ids`]), or one TheTVDB stopped answering for; `fankai` for a
+    /// Fan-Kai.
     pub metadata_source: String,
 }
 
@@ -128,15 +130,20 @@ pub struct TranslationResource {
 #[derive(Clone, Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SeasonTypeResource {
-    /// `Aired Order`, `DVD Order`…: what Sonarr shows.
+    /// `Aired Order`, `DVD Order`, `Superfan Order`…: what Sonarr shows.
     pub name: String,
-    /// `official`, `dvd`, `absolute`, `alternate`, `regional`, `altdvd`,
-    /// `alttwo`: what Sonarr asks the series in.
+    /// What Sonarr asks the series in, and writes into the address it asks
+    /// for it at: `official`; TheTVDB's `dvd`, `absolute`, `alternate`,
+    /// `regional`, `altdvd`, `alttwo`; `tmdb-` and a TMDB episode group's
+    /// id; `ams-` and a name for an order made here.
     #[serde(rename = "type")]
     pub kind: String,
+    /// Empty for a TMDB group not read yet, which is read when the series is
+    /// first asked for in it.
     pub season_numbers: Vec<i32>,
     /// The episodes of the regular seasons; the specials are not counted,
-    /// as the real service does not count them.
+    /// as the real service does not count them. For a TMDB group not read
+    /// yet, the count TMDB lists it with.
     pub episode_count: i32,
 }
 
@@ -221,7 +228,8 @@ pub struct Asked<'a> {
     pub season_type: &'a str,
     /// The work as it was fetched (see [`OwnText`]).
     pub own: &'a OwnText,
-    /// The other orders the catalogue keeps for the work.
+    /// The orders the catalogue keeps for the work, the aired one first:
+    /// `repo::order::list`.
     pub orders: &'a [EpisodeOrder],
     /// With the episodes, for a series asked for by id; without, for a
     /// search result.
@@ -262,12 +270,14 @@ pub fn from_item(item: &MediaItem, asked: &Asked<'_>) -> ShowResourceV2 {
     // An order the work has in name only — its places all name episodes the
     // work no longer holds, as after a refresh without TheTVDB — is no order
     // to answer in: a Sonarr set to it would be sent no episode at all, and
-    // would drop its own. The aired order stands in, as for a type unknown.
-    let (seasons, episodes) = match order_named(asked.orders, asked.season_type)
-        .filter(|order| !placements(item, order).is_empty())
-    {
-        Some(order) => placed(item, order, asked.client_id),
-        None => aired(item, asked.client_id),
+    // would drop its own. The aired order stands in, as for a type unknown,
+    // and the aired order answers with the order frozen as it, when one is.
+    let (seasons, episodes) = match orders::in_use(item, asked.orders, asked.season_type) {
+        Some(order) => placed(item, &orders::served(item, order), asked.client_id),
+        None => match orders::as_official(item, asked.orders) {
+            Some(frozen) => placed(item, &frozen, asked.client_id),
+            None => aired(item, asked.client_id),
+        },
     };
 
     ShowResourceV2 {
@@ -305,7 +315,7 @@ pub fn from_item(item: &MediaItem, asked: &Asked<'_>) -> ShowResourceV2 {
         images: base.images,
         seasons,
         episodes: asked.with_episodes.then_some(episodes),
-        metadata_source: metadata_source(asked.client_id).to_string(),
+        metadata_source: metadata_source(asked.client_id, asked.orders).to_string(),
     }
 }
 
@@ -378,53 +388,53 @@ fn translations(
     held.into_values().collect()
 }
 
-/// The orders Sonarr may ask the series in: the aired one, then each other
-/// order the catalogue keeps that places an episode the work still has.
+/// The orders Sonarr may ask the series in: the aired one — numbered by the
+/// order frozen as it, when one is — then each other order the catalogue
+/// offers for it (`orders::offered`), under its own name, told apart from
+/// another of the same name by its source (`orders::client_names`).
 fn season_types(item: &MediaItem, orders: &[EpisodeOrder]) -> Vec<SeasonTypeResource> {
-    let mut types = vec![SeasonTypeResource {
-        name: order_name(OFFICIAL),
-        kind: OFFICIAL.to_string(),
-        season_numbers: sorted_distinct(
-            item.seasons
-                .iter()
-                .map(|s| s.season_number)
-                .chain(item.episodes.iter().map(|e| e.season_number)),
-        ),
-        episode_count: regular(item.episodes.iter().map(|e| e.season_number)),
-    }];
-
-    for order in orders {
-        let placements = placements(item, order);
-        if placements.is_empty() {
-            continue;
-        }
-        types.push(SeasonTypeResource {
-            name: order_name(&order.kind),
-            kind: order.kind.clone(),
+    let official = match orders::as_official(item, orders) {
+        Some(frozen) => counted(OFFICIAL, orders::AIRED_LABEL, &frozen),
+        None => SeasonTypeResource {
+            name: orders::AIRED_LABEL.to_string(),
+            kind: OFFICIAL.to_string(),
             season_numbers: sorted_distinct(
-                placements.iter().map(|(place, _)| place.season_number),
+                item.seasons
+                    .iter()
+                    .map(|s| s.season_number)
+                    .chain(item.episodes.iter().map(|e| e.season_number)),
             ),
-            episode_count: regular(placements.iter().map(|(place, _)| place.season_number)),
+            episode_count: regular(item.episodes.iter().map(|e| e.season_number)),
+        },
+    };
+
+    let mut types = vec![official];
+    let offered = orders::offered(item, orders);
+    let names = orders::client_names(item, orders, &offered, orders::AIRED_LABEL);
+    for (order, name) in offered.into_iter().zip(names) {
+        types.push(if order.episodes.is_empty() {
+            // A TMDB group not read yet: what TMDB lists it with.
+            SeasonTypeResource {
+                name,
+                kind: order.key.clone(),
+                season_numbers: Vec::new(),
+                episode_count: order.announced.unwrap_or(0),
+            }
+        } else {
+            counted(&order.key, &name, &orders::served(item, order))
         });
     }
-
     types
 }
 
-/// What Sonarr shows an order as: TheTVDB's own names for its orders, as its
-/// site shows them. The real service names a series' alternate orders by
-/// what the series calls them — *BluRay Order*, *Superfan Order* — which the
-/// catalogue does not keep.
-fn order_name(kind: &str) -> String {
-    match kind {
-        OFFICIAL => "Aired Order".to_string(),
-        "dvd" => "DVD Order".to_string(),
-        "absolute" => "Absolute Order".to_string(),
-        "alternate" => "Alternate Order".to_string(),
-        "regional" => "Regional Order".to_string(),
-        "altdvd" => "Alternate DVD Order".to_string(),
-        "alttwo" => "Alternate Order 2".to_string(),
-        other => format!("{} Order", sonarr::capitalize(other)),
+/// An order as Sonarr is offered it: its seasons and how many regular
+/// episodes it places.
+fn counted(kind: &str, name: &str, placed: &[Placed<'_>]) -> SeasonTypeResource {
+    SeasonTypeResource {
+        name: name.to_string(),
+        kind: kind.to_string(),
+        season_numbers: sorted_distinct(placed.iter().map(|p| p.season_number)),
+        episode_count: regular(placed.iter().map(|p| p.season_number)),
     }
 }
 
@@ -471,8 +481,9 @@ fn aired(item: &MediaItem, client_id: i64) -> (Vec<SeasonResourceV2>, Vec<Episod
     (seasons.into_values().collect(), episodes)
 }
 
-/// The seasons and episodes as one of the work's other orders places them:
-/// the same episodes, by TVDB id, under that order's seasons and numbers.
+/// The seasons and episodes as one of the work's orders places them: the
+/// same episodes, under that order's seasons and numbers, and the records it
+/// carries of episodes the work does not hold, as episodes of their own.
 ///
 /// The order's seasons have names and pictures of their own on TheTVDB,
 /// which the catalogue does not keep: the aired season of the same number
@@ -480,14 +491,13 @@ fn aired(item: &MediaItem, client_id: i64) -> (Vec<SeasonResourceV2>, Vec<Episod
 /// placed in the season.
 fn placed(
     item: &MediaItem,
-    order: &EpisodeOrder,
+    placements: &[Placed<'_>],
     client_id: i64,
 ) -> (Vec<SeasonResourceV2>, Vec<EpisodeResourceV2>) {
-    let placements = placements(item, order);
     let first_years = first_years(
         placements
             .iter()
-            .map(|(place, episode)| (place.season_number, episode.air_date.as_deref())),
+            .map(|placed| (placed.season_number, placed.episode.air_date.as_deref())),
     );
     let mut aired: HashMap<i32, &Season> = HashMap::new();
     for season in &item.seasons {
@@ -496,23 +506,35 @@ fn placed(
 
     let mut seasons: BTreeMap<i32, SeasonResourceV2> = BTreeMap::new();
     let mut episodes = Vec::with_capacity(placements.len());
-    for (place, episode) in placements {
+    for placed in placements {
         seasons
-            .entry(place.season_number)
+            .entry(placed.season_number)
             .or_insert_with(|| SeasonResourceV2 {
-                season_number: place.season_number,
+                season_number: placed.season_number,
                 title: None,
-                year: first_years.get(&place.season_number).copied(),
+                year: first_years.get(&placed.season_number).copied(),
                 images: aired
-                    .get(&place.season_number)
+                    .get(&placed.season_number)
                     .map(|season| season_images(season))
                     .unwrap_or_default(),
             });
 
-        let mut resource = episode_resource(episode, client_id);
-        resource.season_number = place.season_number;
-        resource.episode_number = place.episode_number;
-        resource.absolute_episode_number = place.absolute_number;
+        let mut resource = episode_resource(&placed.episode, client_id);
+        resource.season_number = placed.season_number;
+        resource.episode_number = placed.episode_number;
+        resource.absolute_episode_number = placed.absolute_number;
+        // Where a special airs among the aired seasons says nothing of where
+        // the order puts it.
+        resource.aired_after_season_number = None;
+        resource.aired_before_season_number = None;
+        resource.aired_before_episode_number = None;
+        if placed.own && resource.tvdb_id.is_none() {
+            // An episode of the order's own that TheTVDB gave no id: one
+            // made of what names it, the same at every answer.
+            let id = Some(orders::own_episode_id(&placed.episode));
+            resource.tvdb_id = id;
+            resource.metadata_id = id;
+        }
         episodes.push(resource);
     }
 
@@ -577,9 +599,18 @@ fn formats(item: &MediaItem) -> Vec<String> {
     vec![if anime { "anime" } else { "unknown" }.to_string()]
 }
 
-/// Where the id Sonarr holds the series under comes from: TheTVDB, or this
-/// server's own ranges for a work TheTVDB does not list.
-fn metadata_source(client_id: i64) -> &'static str {
+/// Who numbers the episodes: whoever numbers the aired order, as the orders
+/// say — TMDB for a series it numbers while TheTVDB does not answer for it —
+/// and, where they say nothing, where the id Sonarr holds the series under
+/// comes from: TheTVDB, or this server's own ranges for a work TheTVDB does
+/// not list.
+fn metadata_source(client_id: i64, orders: &[EpisodeOrder]) -> &'static str {
+    match orders::aired(orders).map(|order| order.source.as_str()) {
+        Some("tvdb") => return "tvdb",
+        Some("tmdb") => return "tmdb",
+        Some("fankai") => return "fankai",
+        _ => {}
+    }
     if ids::from_fankai(client_id).is_some() {
         "fankai"
     } else if ids::from_synthetic(client_id).is_some() {
@@ -650,7 +681,10 @@ mod tests {
     use super::*;
     use crate::{
         db::repo::child::{blank_episode, blank_season},
-        domain::{CoverType, ExternalIds, Image, MediaKind, PlacedEpisode, Translation},
+        domain::{
+            CoverType, ExternalIds, Image, MediaKind, OrderKind, OrderRecord, PlacedEpisode,
+            Translation,
+        },
     };
 
     fn translation(language: &str, title: &str, overview: Option<&str>) -> Translation {
@@ -680,10 +714,34 @@ mod tests {
 
     fn placed(tvdb_id: i64, season: i32, number: i32, absolute: Option<i32>) -> PlacedEpisode {
         PlacedEpisode {
-            tvdb_id,
-            season_number: season,
-            episode_number: number,
             absolute_number: absolute,
+            ..PlacedEpisode::of_tvdb(tvdb_id, season, number)
+        }
+    }
+
+    /// An order of the catalogue's, as `repo::order::list` gives it.
+    fn order(key: &str, label: &str, episodes: Vec<PlacedEpisode>) -> EpisodeOrder {
+        EpisodeOrder {
+            key: key.into(),
+            kind: OrderKind::of_tvdb(key),
+            source: "tvdb".into(),
+            source_ref: None,
+            label: label.into(),
+            is_default: false,
+            is_frozen: false,
+            announced: None,
+            updated_at: "2026-10-19T00:00:00.000Z".into(),
+            episodes,
+        }
+    }
+
+    /// The aired order, numbered by `source`.
+    fn aired_order(source: &str) -> EpisodeOrder {
+        EpisodeOrder {
+            kind: OrderKind::Aired,
+            source: source.into(),
+            is_default: true,
+            ..order(OFFICIAL, "Aired Order", Vec::new())
         }
     }
 
@@ -738,9 +796,11 @@ mod tests {
 
     fn orders() -> Vec<EpisodeOrder> {
         vec![
-            EpisodeOrder {
-                kind: "dvd".into(),
-                episodes: vec![
+            aired_order("tvdb"),
+            order(
+                "dvd",
+                "DVD Order",
+                vec![
                     placed(4, 0, 1, None),
                     placed(2, 1, 1, None),
                     placed(1, 1, 2, None),
@@ -750,15 +810,16 @@ mod tests {
                     placed(99, 2, 2, None),
                     placed(1, 1, 2, None),
                 ],
-            },
-            EpisodeOrder {
-                kind: "absolute".into(),
-                episodes: vec![
+            ),
+            order(
+                "absolute",
+                "Absolute Order",
+                vec![
                     placed(1, 1, 1, Some(1)),
                     placed(2, 1, 2, Some(2)),
                     placed(3, 1, 3, Some(3)),
                 ],
-            },
+            ),
         ]
     }
 
@@ -929,12 +990,44 @@ mod tests {
         );
 
         // An order that places nothing the work has is not offered.
-        let orphan = vec![EpisodeOrder {
-            kind: "regional".into(),
-            episodes: vec![placed(99, 1, 1, None)],
-        }];
+        let orphan = vec![order(
+            "regional",
+            "Netflix Order",
+            vec![placed(99, 1, 1, None)],
+        )];
         let show = from_item(&it, &asked(&own, &orphan, OFFICIAL));
         assert_eq!(show.season_types.len(), 1);
+    }
+
+    #[test]
+    fn a_tmdb_group_named_as_one_of_thetvdbs_orders_says_its_source_in_sonarrs_list() {
+        let it = series();
+        let own = own(&it);
+        let mut orders = orders();
+        orders.push(EpisodeOrder {
+            kind: OrderKind::Digital,
+            source: "tmdb".into(),
+            source_ref: Some("a4".into()),
+            announced: Some(186),
+            ..order("tmdb-a4", "DVD Order", Vec::new())
+        });
+        let show = from_item(&it, &asked(&own, &orders, OFFICIAL));
+        let names: Vec<(&str, &str)> = show
+            .season_types
+            .iter()
+            .map(|t| (t.kind.as_str(), t.name.as_str()))
+            .collect();
+        assert_eq!(
+            names,
+            [
+                ("official", "Aired Order"),
+                ("dvd", "DVD Order"),
+                ("absolute", "Absolute Order"),
+                ("tmdb-a4", "DVD Order (TMDB)"),
+            ]
+        );
+        // The order itself keeps its name.
+        assert_eq!(orders[3].label, "DVD Order");
     }
 
     #[test]
@@ -1023,10 +1116,11 @@ mod tests {
         // asking in it: sent nothing, it would drop every episode it has.
         let it = series();
         let own = own(&it);
-        let orders = vec![EpisodeOrder {
-            kind: "dvd".into(),
-            episodes: vec![placed(98, 1, 1, None), placed(99, 1, 2, None)],
-        }];
+        let orders = vec![order(
+            "dvd",
+            "DVD Order",
+            vec![placed(98, 1, 1, None), placed(99, 1, 2, None)],
+        )];
 
         let show = from_item(&it, &asked(&own, &orders, "dvd"));
         let numbered: Vec<(i32, i32)> = show
@@ -1103,11 +1197,158 @@ mod tests {
     }
 
     #[test]
-    fn an_order_is_named_as_thetvdb_names_it() {
-        assert_eq!(order_name("altdvd"), "Alternate DVD Order");
-        assert_eq!(order_name("alttwo"), "Alternate Order 2");
-        // One this server has no name for is still offered, by its kind.
-        assert_eq!(order_name("story"), "Story Order");
+    fn an_order_of_records_the_aired_list_lacks_is_offered_and_served_whole() {
+        // The Office's Superfan order: extended cuts, each an episode of its
+        // own on TheTVDB; and an order made here with a record somebody
+        // wrote, which TheTVDB gave no id.
+        let it = series();
+        let own_text = own(&it);
+        let record = |title: &str| OrderRecord {
+            title: title.into(),
+            overview: None,
+            aired: Some("2023-07-07".into()),
+            runtime: Some(31),
+            image: None,
+            finale_type: None,
+        };
+        let superfan = order(
+            "alttwo",
+            "Superfan Order",
+            vec![
+                PlacedEpisode {
+                    record: Some(record("Pilot (Extended Cut)")),
+                    ..placed(10718410, 1, 1, None)
+                },
+                PlacedEpisode {
+                    record: Some(record("Diversity Day (Extended Cut)")),
+                    ..placed(10718411, 1, 2, None)
+                },
+            ],
+        );
+        let mut written = PlacedEpisode {
+            record: Some(record("A night at the cinema")),
+            tvdb_id: None,
+            ..placed(0, 0, 9, None)
+        };
+        written.id = "place-1".into();
+        let mine = EpisodeOrder {
+            kind: OrderKind::Custom,
+            source: "local".into(),
+            ..order("ams-mine", "Mine", vec![placed(2, 1, 1, None), written])
+        };
+        let orders = vec![aired_order("tvdb"), superfan, mine];
+
+        let show = from_item(&it, &asked(&own_text, &orders, OFFICIAL));
+        let offered: Vec<(&str, &str, i32)> = show
+            .season_types
+            .iter()
+            .map(|t| (t.kind.as_str(), t.name.as_str(), t.episode_count))
+            .collect();
+        assert_eq!(
+            offered,
+            [
+                ("official", "Aired Order", 3),
+                ("alttwo", "Superfan Order", 2),
+                // Its own record, a special, is not counted.
+                ("ams-mine", "Mine", 1),
+            ]
+        );
+
+        let show = from_item(&it, &asked(&own_text, &orders, "alttwo"));
+        let served: Vec<(i32, i32, Option<i64>, &str)> = show
+            .episodes
+            .as_deref()
+            .unwrap()
+            .iter()
+            .map(|e| {
+                (
+                    e.season_number,
+                    e.episode_number,
+                    e.tvdb_id,
+                    e.title.as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            served,
+            [
+                (1, 1, Some(10718410), "Pilot (Extended Cut)"),
+                (1, 2, Some(10718411), "Diversity Day (Extended Cut)")
+            ]
+        );
+
+        // A record TheTVDB gave no id is served under one of its own:
+        // negative, never one of TheTVDB's, and the same at every answer.
+        let show = from_item(&it, &asked(&own_text, &orders, "ams-mine"));
+        let night = show
+            .episodes
+            .as_deref()
+            .unwrap()
+            .iter()
+            .find(|e| e.title == "A night at the cinema")
+            .expect("served");
+        let id = night.tvdb_id.expect("an id");
+        assert!(id < 0, "{id}");
+        assert_eq!(night.metadata_id, Some(id));
+        let again = from_item(&it, &asked(&own_text, &orders, "ams-mine"));
+        assert!(
+            again
+                .episodes
+                .unwrap()
+                .iter()
+                .any(|e| e.tvdb_id == Some(id))
+        );
+    }
+
+    #[test]
+    fn a_frozen_order_is_what_the_aired_order_answers() {
+        let it = series();
+        let own = own(&it);
+        let mut orders = orders();
+        orders[1].is_frozen = true;
+
+        for season_type in [OFFICIAL, "nonsense"] {
+            let show = from_item(&it, &asked(&own, &orders, season_type));
+            let numbered: Vec<(i32, i32, Option<i64>)> = show
+                .episodes
+                .as_deref()
+                .unwrap()
+                .iter()
+                .map(|e| (e.season_number, e.episode_number, e.tvdb_id))
+                .collect();
+            assert_eq!(
+                numbered,
+                [
+                    (0, 1, Some(4)),
+                    (1, 1, Some(2)),
+                    (1, 2, Some(1)),
+                    (2, 1, Some(3))
+                ],
+                "{season_type:?}"
+            );
+            assert_eq!(show.season_types[0].kind, OFFICIAL);
+            assert_eq!(show.season_types[0].episode_count, 3);
+        }
+        // The other orders are still offered, and answered, as themselves.
+        let show = from_item(&it, &asked(&own, &orders, "absolute"));
+        assert_eq!(show.episodes.as_deref().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn the_source_that_numbers_the_series_is_said() {
+        let it = series();
+        let own = own(&it);
+        let tvdb = vec![aired_order("tvdb")];
+        let tmdb = vec![aired_order("tmdb")];
+        assert_eq!(
+            from_item(&it, &asked(&own, &tvdb, OFFICIAL)).metadata_source,
+            "tvdb"
+        );
+        // TMDB numbers it while TheTVDB does not answer for it.
+        assert_eq!(
+            from_item(&it, &asked(&own, &tmdb, OFFICIAL)).metadata_source,
+            "tmdb"
+        );
     }
 
     #[test]

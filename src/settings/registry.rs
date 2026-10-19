@@ -513,12 +513,58 @@ pub const REGISTRY: &[Definition] = &[
         kind: Kind::Text,
         scopes: SERVER_ONLY,
     },
+    // ── Numbering ────────────────────────────────────────────────────────────
+    Definition {
+        // How many refreshes in a row, most of a day apart, TheTVDB may leave a
+        // series unanswered before TMDB numbers it in its place; `0`, never.
+        // Read at every refresh of a series (`service::gather`).
+        key: "numbering.fallbackAfter",
+        kind: Kind::Int { min: 0, max: 30 },
+        scopes: SERVER_ONLY,
+    },
     // Webhooks were two settings here, an address and its events, until
     // they became destinations of their own: see `service::webhook`.
     // ── Updates ──────────────────────────────────────────────────────────────
     Definition {
         // GitHub asked daily for the latest release; off until turned on.
         key: "updates.check",
+        kind: Kind::Bool,
+        scopes: SERVER_ONLY,
+    },
+    // ── Backups ──────────────────────────────────────────────────────────────
+    Definition {
+        // How often the server makes an archive of itself, counted from the
+        // newest one: see `jobs::backup`.
+        key: "backup.schedule",
+        kind: Kind::Choice {
+            options: &["off", "daily", "weekly", "monthly"],
+        },
+        scopes: SERVER_ONLY,
+    },
+    Definition {
+        // How many of the schedule's own archives are kept: one at the
+        // least, a year of daily ones at the most.
+        key: "backup.keep",
+        kind: Kind::Int { min: 1, max: 365 },
+        scopes: SERVER_ONLY,
+    },
+    Definition {
+        // Whether the schedule's archives carry the media kept on disk.
+        key: "backup.includeMedia",
+        kind: Kind::Bool,
+        scopes: SERVER_ONLY,
+    },
+    Definition {
+        // How many archives made before upgrades are kept, apart from the
+        // schedule's: see `backup::Backups::before_upgrade`.
+        key: "backup.keepUpgrades",
+        kind: Kind::Int { min: 1, max: 20 },
+        scopes: SERVER_ONLY,
+    },
+    Definition {
+        // Whether a PostgreSQL is archived before a start applies
+        // migrations; an SQLite file always is.
+        key: "backup.beforeUpgrade",
         kind: Kind::Bool,
         scopes: SERVER_ONLY,
     },
@@ -662,6 +708,32 @@ mod tests {
         assert_eq!(def("updates.check").scopes, SERVER_ONLY);
         assert!(validate(def("updates.check"), "false").is_ok());
         assert!(validate(def("updates.check"), "daily").is_err());
+    }
+
+    #[test]
+    fn the_backups_are_the_server_s_and_kept_within_reason() {
+        for key in [
+            "backup.schedule",
+            "backup.keep",
+            "backup.includeMedia",
+            "backup.keepUpgrades",
+            "backup.beforeUpgrade",
+        ] {
+            assert_eq!(def(key).scopes, SERVER_ONLY, "{key}");
+        }
+        for schedule in ["off", "daily", "weekly", "monthly"] {
+            assert!(
+                validate(def("backup.schedule"), schedule).is_ok(),
+                "{schedule}"
+            );
+        }
+        assert!(validate(def("backup.schedule"), "hourly").is_err());
+        assert!(validate(def("backup.keep"), "0").is_err());
+        assert!(validate(def("backup.keep"), "4").is_ok());
+        assert!(validate(def("backup.includeMedia"), "false").is_ok());
+        assert!(validate(def("backup.keepUpgrades"), "0").is_err());
+        assert!(validate(def("backup.keepUpgrades"), "2").is_ok());
+        assert!(validate(def("backup.beforeUpgrade"), "true").is_ok());
     }
 
     #[test]

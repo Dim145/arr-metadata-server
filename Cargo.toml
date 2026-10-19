@@ -22,7 +22,7 @@ tower-http = { version = "0.7.1", features = [
     "trace", "cors", "compression-gzip", "compression-br", "normalize-path",
     "set-header", "timeout", "request-id", "catch-panic", "limit",
 ] }
-tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "signal", "time", "fs", "sync"] }
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "signal", "time", "fs", "sync", "io-util"] }
 hyper = "1.8"
 http-body-util = "0.1.5"
 bytes = "1.12.1"
@@ -122,6 +122,27 @@ mimalloc = "0.1.52"
 arc-swap = "1.9.2"
 # The machine's name, to tell one instance from another among several.
 whoami = { version = "2.1.3", default-features = false, features = ["std"] }
+
+# ── Backups and the command line ─────────────────────────────────────────────
+# The command line, its subcommands derived from types: `serve` when none is
+# named, so the image's entrypoint keeps starting the server.
+clap = { version = "4.6.7", features = ["derive"] }
+# A password asked for at a terminal, never echoed, never an argument that a
+# process list or a shell's history would keep.
+rpassword = "7.5.4"
+# An archive is a tar of its files, compressed with zstd. Neither the
+# extended attributes nor the old zstd formats are anything a backup of this
+# server writes or reads.
+tar = { version = "0.4.46", default-features = false }
+zstd = { version = "0.14.3", default-features = false }
+# And, given a passphrase, encrypted as age writes it (scrypt), so that a
+# copy kept elsewhere opens with this binary or with `age -d` alike: it holds
+# the accounts' password hashes, the webhooks' secrets and, among several
+# instances, the authority's private key.
+age = { version = "0.12.1", default-features = false }
+# A blocking reader and writer over a bucket's streams: the archive is
+# written and read by the synchronous tar, zstd and age, off the runtime.
+tokio-util = { version = "0.7.19", features = ["io", "io-util"] }
 
 [dev-dependencies]
 tokio = { version = "1.53.1", features = ["full", "test-util"] }

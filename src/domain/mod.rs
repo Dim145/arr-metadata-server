@@ -6,6 +6,7 @@
 
 pub mod fields;
 pub mod ids;
+pub mod orders;
 
 use std::{fmt, str::FromStr};
 
@@ -13,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 pub use ids::{ExternalIds, ExternalSource};
+pub use orders::{EpisodeOrder, OrderKind, OrderRecord, PlacedEpisode};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
@@ -817,27 +819,6 @@ pub struct Relation {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub work_id: Option<String>,
     pub sort_order: i32,
-}
-
-/// One of the other orders a series' episodes come in — `dvd`, `absolute`,
-/// `alternate`, `regional` — as TheTVDB keeps it: the work's episodes, by
-/// their TVDB id, in seasons and numbers of that order's own.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct EpisodeOrder {
-    pub kind: String,
-    pub episodes: Vec<PlacedEpisode>,
-}
-
-/// Where one episode stands in an order.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct PlacedEpisode {
-    pub tvdb_id: i64,
-    pub season_number: i32,
-    pub episode_number: i32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub absolute_number: Option<i32>,
 }
 
 /// An earlier work named beside one, as a line on a chart says it: its title,

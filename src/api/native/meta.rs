@@ -203,12 +203,23 @@ pub struct ListImport {
     pub rows: i64,
 }
 
+/// How MyAnimeList is asked first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum MalVia {
+    /// Its own API, `AMS_MAL_CLIENT_ID` being set.
+    Official,
+    /// Without a client id: Tenrai, then Jikan while `mal.fallback` is on.
+    /// The name is from when Jikan was the only way in without one.
+    Jikan,
+}
+
 /// What the further sources are working from.
 #[derive(Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct FurtherSources {
     /// `official` when `AMS_MAL_CLIENT_ID` is set, `jikan` otherwise.
-    pub mal_via: &'static str,
+    pub mal_via: MalVia,
     /// The anime identifier list; absent until it has been downloaded once.
     #[schema(required)]
     pub anime_list: Option<ListImport>,
@@ -232,11 +243,11 @@ pub struct Settings {
     pub refresh_enabled: bool,
     pub auth_disabled: bool,
     pub public_browse: bool,
-    pub native_policy: &'static str,
-    pub tmdb_policy: &'static str,
-    pub tvdb_policy: &'static str,
-    pub anilist_policy: &'static str,
-    pub arr_policy: &'static str,
+    pub native_policy: Policy,
+    pub tmdb_policy: Policy,
+    pub tvdb_policy: Policy,
+    pub anilist_policy: Policy,
+    pub arr_policy: Policy,
     pub further_sources: FurtherSources,
 }
 
@@ -269,9 +280,9 @@ async fn settings(
 
     let further_sources = FurtherSources {
         mal_via: if state.mal.uses_official_api() {
-            "official"
+            MalVia::Official
         } else {
-            "jikan"
+            MalVia::Jikan
         },
         anime_list: imported(repo::import::get(&state.db, crate::jobs::datasets::ANIME).await?),
         imdb_ratings: imported(repo::import::get(&state.db, crate::jobs::datasets::IMDB).await?),
@@ -291,13 +302,13 @@ async fn settings(
         refresh_enabled: state.flag("refresh.enabled", true),
         auth_disabled: state.config.security.auth_disabled,
         public_browse: state.public_site(),
-        native_policy: policy_name(state.config.policy_for(Surface::Native)),
+        native_policy: state.config.policy_for(Surface::Native).into(),
         // As the guard applies them: a relay asked with each client's own
         // key is guarded by the address list.
-        tmdb_policy: policy_name(crate::api::relay::policy(&state, Surface::Tmdb)),
-        tvdb_policy: policy_name(crate::api::relay::policy(&state, Surface::Tvdb)),
-        anilist_policy: policy_name(state.config.policy_for(Surface::Anilist)),
-        arr_policy: policy_name(state.config.policy_for(Surface::Arr)),
+        tmdb_policy: crate::api::relay::policy(&state, Surface::Tmdb).into(),
+        tvdb_policy: crate::api::relay::policy(&state, Surface::Tvdb).into(),
+        anilist_policy: state.config.policy_for(Surface::Anilist).into(),
+        arr_policy: state.config.policy_for(Surface::Arr).into(),
         further_sources,
     }))
 }
@@ -509,11 +520,29 @@ async fn import_dataset(
     }
 }
 
-pub(crate) fn policy_name(policy: SurfacePolicy) -> &'static str {
-    match policy {
-        SurfacePolicy::ApiKey => "apikey",
-        SurfacePolicy::Allowlist => "allowlist",
-        SurfacePolicy::Open => "open",
+/// What an API asks of a caller, as the configuration, the access page and
+/// the dashboard name it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+// Named explicitly, as the configuration's own type is: utoipa keys schemas
+// on the leaf name alone, and a `Policy` could be anything's.
+#[schema(as = SurfacePolicy)]
+pub enum Policy {
+    /// A key: in a header, or as `apikey` in the address.
+    ApiKey,
+    /// An address the allowlist lets through.
+    Allowlist,
+    /// Anybody.
+    Open,
+}
+
+impl From<SurfacePolicy> for Policy {
+    fn from(policy: SurfacePolicy) -> Self {
+        match policy {
+            SurfacePolicy::ApiKey => Self::ApiKey,
+            SurfacePolicy::Allowlist => Self::Allowlist,
+            SurfacePolicy::Open => Self::Open,
+        }
     }
 }
 
@@ -521,6 +550,26 @@ pub(crate) fn policy_name(policy: SurfacePolicy) -> &'static str {
 mod tests {
     use super::*;
     use crate::domain::MediaItem;
+
+    #[test]
+    fn a_policy_is_sent_as_the_configuration_spells_it() {
+        let sent = [
+            SurfacePolicy::ApiKey,
+            SurfacePolicy::Allowlist,
+            SurfacePolicy::Open,
+        ]
+        .map(Policy::from);
+        assert_eq!(
+            serde_json::to_value(sent).unwrap(),
+            serde_json::json!(["apikey", "allowlist", "open"])
+        );
+        for (policy, spelled) in sent.iter().zip(["apikey", "allowlist", "open"]) {
+            assert_eq!(
+                spelled.parse::<SurfacePolicy>().map(Policy::from).ok(),
+                Some(*policy)
+            );
+        }
+    }
 
     #[tokio::test]
     async fn a_reader_is_counted_what_a_reader_is_shown() {

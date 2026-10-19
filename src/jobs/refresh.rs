@@ -136,10 +136,7 @@ impl Recorder {
         let touched = job::Touched {
             id,
             title: work.map(|w| w.title.as_str()),
-            kind: work.map(|w| match w.kind {
-                MediaKind::Series => "series",
-                MediaKind::Movie => "movie",
-            }),
+            kind: work.map(|w| w.kind),
         };
         if let Err(e) = job::add_entry(db, run, position, touched, outcome, Some(note)).await {
             tracing::debug!(%id, error = %e, "could not write down what the run did to a work");
@@ -1077,7 +1074,7 @@ mod tests {
         assert_eq!(now.refresh_error, None);
         let entries = job::entries(&state.db, &run, 10).await.expect("entries");
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].outcome, "ok");
+        assert_eq!(entries[0].outcome, job::Outcome::Ok);
         assert_eq!(entries[0].note.as_deref(), Some(notes::LIGHT));
 
         // And not again for another six months.
@@ -1119,7 +1116,7 @@ mod tests {
             .expect("scheduled");
         assert!(due > started && due <= started + TimeDelta::hours(6) + TimeDelta::minutes(1));
         let entries = job::entries(&state.db, &run, 10).await.expect("entries");
-        assert_eq!(entries[0].outcome, "failed");
+        assert_eq!(entries[0].outcome, job::Outcome::Failed);
         assert_eq!(entries[0].note.as_deref(), Some(notes::TMDB_SILENT));
 
         // Nor is it among the aged works any more.

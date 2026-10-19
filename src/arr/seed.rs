@@ -319,7 +319,7 @@ async fn note(
     let touched = job::Touched {
         id,
         title: title.as_deref(),
-        kind: Some(kind.as_str()),
+        kind: Some(kind),
     };
     let position = i64::try_from(position).unwrap_or(i64::MAX);
     if let Err(e) = job::add_entry(&state.db, record, position, touched, outcome, Some(note)).await
@@ -440,9 +440,9 @@ mod tests {
             let entries = job::entries(&state.db, &record, 10).await.unwrap();
             assert_eq!(entries.len(), 2);
             assert_eq!(entries[0].media_id.as_deref(), Some(series.id.as_str()));
-            assert_eq!(entries[0].outcome, "skipped");
+            assert_eq!(entries[0].outcome, job::Outcome::Skipped);
             assert_eq!(entries[1].media_id, None);
-            assert_eq!(entries[1].outcome, "failed");
+            assert_eq!(entries[1].outcome, job::Outcome::Failed);
             assert_eq!(entries[1].note.as_deref(), Some(notes::NO_ID));
         }
         assert!(

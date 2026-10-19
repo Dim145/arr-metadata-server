@@ -72,9 +72,8 @@ digitally or on disc. `entries` holds both, earliest first, each tagged with its
   `digital`, `physical`, cinemas first). The kinds that fall on one day are one release.
 
 `works` carries every work the entries belong to, and `truncated` says that the window held more
-than one answer carries and the latest are missing: ask for a shorter one. `episodes` repeats the
-episodes `entries` lists beside the films; it is **deprecated**, the site no longer reads it, and
-a later version will drop it.
+than one answer carries and the latest are missing: ask for a shorter one. The episodes alone,
+which 0.8 also listed apart as `episodes`, are the entries whose `kind` is `episode`.
 
 A film comes out on the day it comes out **in the reader's country**, where that is known, and on
 its own dates otherwise; a date fixed by hand stays where it was put. This holds in `/calendar`

@@ -41,13 +41,17 @@ the server is the usual case. A name is at most 100 characters; a token is at mo
 Each destination ticks its own events:
 
 - **Every event** (`*`), those added in later versions included.
-- **What happens on its own**, three facts nobody did: `refresh.failed`, once, when a
+- **What happens on its own**, facts nobody did: `refresh.failed`, once, when a
   work starts failing — not at each try while it goes on, and not for a supplement
   that did not answer (TVmaze, Fanart.tv, AniList, MyAnimeList): the work is
   refreshed all the same ([grouped](#failed-refreshes-grouped) for the kinds people
   read); `media.failed`, a picture or
   a theme whose every fetch failed; `update.available`, once per version, while the
-  check for a newer version (`updates.check`) is on.
+  check for a newer version (`updates.check`) is on; `numbering.fallback`, once, when
+  TMDB starts numbering a series TheTVDB stopped answering for
+  ([who numbers a series](sonarr-radarr.md#who-numbers-a-series));
+  `backup.completed` and `backup.failed`, each time the scheduled task, or a
+  backup asked for on the Backups page, ends ([backups](install.md#backups)).
 - **Any action of the audit trail**: `item.imported`, `item.created`, `item.deleted`,
   `item.refreshed`, `item.renumbered`, `override.set`, `list.updated`,
   `setting.changed`, `notification.created`… The names are on the destination's form

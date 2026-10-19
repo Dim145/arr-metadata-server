@@ -57,6 +57,24 @@ pub fn from_fankai(id: i64) -> Option<i64> {
     (id >= FANKAI_OFFSET).then(|| id - FANKAI_OFFSET)
 }
 
+/// The id an episode is served under when an order carries it as a record
+/// of its own and TheTVDB gave it none: one a person wrote, one of a TMDB
+/// group the work holds no episode for. Sonarr keeps an episode's id in a
+/// 32-bit column and matches episodes by their numbers, not by it; the id
+/// is negative, so it is never one of TheTVDB's, and made of what names the
+/// record — its TMDB id, or its place's own — so it is the same from one
+/// answer to the next. Never zero, which Sonarr reads as none.
+pub fn own_episode(names: &str) -> i64 {
+    // FNV-1a: stable across builds and platforms, where `DefaultHasher`
+    // promises neither.
+    let mut hash: u32 = 0x811c_9dc5;
+    for byte in names.bytes() {
+        hash ^= u32::from(byte);
+        hash = hash.wrapping_mul(0x0100_0193);
+    }
+    -(i64::from(hash % (i32::MAX as u32)) + 1)
+}
+
 /// A search term of the form `prefix:value`, which Sonarr and Radarr both use
 /// to look a title up by a specific provider's id.
 #[derive(Debug, PartialEq, Eq)]
@@ -143,6 +161,15 @@ mod tests {
         assert_eq!(to_synthetic(2_147_483_647), None);
         assert_eq!(to_synthetic(0), None);
         assert_eq!(to_synthetic(-5), None);
+    }
+
+    #[test]
+    fn an_episode_of_an_order_s_own_is_given_a_negative_id_that_stays() {
+        let first = own_episode("tmdb:170135");
+        assert!(first < 0 && first >= -i64::from(i32::MAX), "{first}");
+        assert_eq!(own_episode("tmdb:170135"), first);
+        assert_ne!(own_episode("tmdb:170132"), first);
+        assert!(own_episode("") < 0);
     }
 
     #[test]

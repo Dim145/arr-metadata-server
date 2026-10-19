@@ -48,7 +48,7 @@ use crate::{
     config::{Api, Surface, SurfacePolicy},
     domain::{CoverType, CreditType, Episode, ExternalSource, MediaItem, Season},
     error::{AppError, AppResult},
-    service::{self, language},
+    service::{self, language, orders},
     state::AppState,
 };
 
@@ -88,6 +88,20 @@ const VALIDATORS: &[&str] = &["if-none-match", "if-modified-since"];
 /// The order TheTVDB names the aired one by: the one this catalogue numbers
 /// its seasons and episodes by.
 const AIRED_ORDER: &str = "official";
+
+/// Every season type TheTVDB numbers a series by, `default` — the series'
+/// own — among them. Any other in the path is an order this server keeps
+/// and TheTVDB does not: a TMDB group's, `tmdb-…`, or one made here, `ams-…`.
+const TVDB_TYPES: &[&str] = &[
+    "official",
+    "default",
+    "dvd",
+    "absolute",
+    "alternate",
+    "regional",
+    "altdvd",
+    "alttwo",
+];
 
 pub fn router() -> OpenApiRouter<AppState> {
     // The sign-in is a route of its own, so it is documented as what it is;
@@ -362,6 +376,28 @@ pub async fn relay(
 
     let target = patch_target(&path);
 
+    // A page of episodes in an order this server keeps and TheTVDB does
+    // not, or in the aired order while an order is frozen as it: answered
+    // here, TheTVDB not asked.
+    if let Some(Target::Episodes {
+        series,
+        order,
+        language,
+        ..
+    }) = &target
+        && let Some(page) = answered_here(
+            &state,
+            *series,
+            order,
+            language.as_deref(),
+            &parts.uri,
+            false,
+        )
+        .await?
+    {
+        return Ok(Json(page).into_response());
+    }
+
     // What TheTVDB answered last time, while it is still good: a document
     // asked with the operator's token is the same for every caller, and is
     // kept under the path and query asked; one asked with a client's own is
@@ -421,17 +457,103 @@ pub async fn relay(
         }
     };
 
+    // An order TheTVDB answers no episode for, where the series has seasons
+    // of it — `altdvd` and `alttwo` (thetvdb/v4-api#340) — and this server
+    // read it season by season: its page, from what was read.
+    if let Some(Target::Episodes {
+        series,
+        order,
+        language,
+        ..
+    }) = &target
+        && answer.status == StatusCode::OK
+        && relay::is_json(&answer.headers)
+        && serde_json::from_slice::<Value>(&answer.body).is_ok_and(|document| {
+            document
+                .pointer("/data/episodes")
+                .and_then(Value::as_array)
+                .is_some_and(Vec::is_empty)
+        })
+        && let Some(page) = answered_here(
+            &state,
+            *series,
+            order,
+            language.as_deref(),
+            &parts.uri,
+            true,
+        )
+        .await?
+    {
+        return Ok(Json(page).into_response());
+    }
+
     if let Some(target) = target
         && relay::is_json(&answer.headers)
         && let Ok(mut document) = serde_json::from_slice::<Value>(&answer.body)
-        && patch(&state, &mut document, target).await?
     {
-        let mut headers = answer.headers;
-        relay::without_validators(&mut headers);
-        return Ok((answer.status, headers, Json(document)).into_response());
+        let renumbered = match target {
+            Target::Series(series) if answer.status == StatusCode::OK => {
+                renumber_frozen(&state, series, &mut document).await?
+            }
+            _ => false,
+        };
+        if patch(&state, &mut document, target).await? || renumbered {
+            let mut headers = answer.headers;
+            relay::without_validators(&mut headers);
+            return Ok((answer.status, headers, Json(document)).into_response());
+        }
     }
 
     Ok((answer.status, answer.headers, Body::from(answer.body)).into_response())
+}
+
+/// A series' record that carries its episodes (`?meta=episodes`), while an
+/// order is frozen as its aired numbering: those episodes as that order
+/// numbers them, written as a page of its episodes in the aired order is
+/// ([`answered_here`]) — the record's are in the series' default order,
+/// which is the aired one. `false` where the record carries no episodes, the
+/// catalogue does not hold the series, or no order of it is frozen.
+async fn renumber_frozen(state: &AppState, series: i64, document: &mut Value) -> AppResult<bool> {
+    if !document
+        .pointer("/data/episodes")
+        .is_some_and(Value::is_array)
+    {
+        return Ok(false);
+    }
+    let Some(found) = crate::db::repo::item::find_id_by_external(
+        &state.db,
+        ExternalSource::TvdbSeries,
+        &series.to_string(),
+    )
+    .await?
+    else {
+        return Ok(false);
+    };
+    if crate::db::repo::order::frozen(&state.db, &found)
+        .await?
+        .is_none()
+    {
+        return Ok(false);
+    }
+    let Some(mut item) = service::load(state, &found).await? else {
+        return Ok(false);
+    };
+    state.media.for_clients(&mut item);
+    let all = crate::db::repo::order::list(&state.db, &item.id).await?;
+    let Some(placed) = orders::as_official(&item, &all) else {
+        return Ok(false);
+    };
+    let episodes: Vec<Value> = placed
+        .iter()
+        .map(|placed| episode_record(&item, series, placed))
+        .collect();
+    match document.pointer_mut("/data/episodes") {
+        Some(slot) => {
+            *slot = Value::Array(episodes);
+            Ok(true)
+        }
+        None => Ok(false),
+    }
 }
 
 /// What a relayed document is filed under: the path and the query asked,
@@ -634,6 +756,8 @@ enum Target {
     /// through, a series' own default — number the same episodes otherwise.
     Episodes {
         series: i64,
+        /// The season type, as the path names it.
+        order: String,
         aired: bool,
         language: Option<String>,
     },
@@ -662,11 +786,13 @@ fn patch_target(path: &str) -> Option<Target> {
         }
         ["series", series, "episodes", order] => Some(Target::Episodes {
             series: id(series)?,
+            order: order.to_string(),
             aired: *order == AIRED_ORDER,
             language: None,
         }),
         ["series", series, "episodes", order, lang] => Some(Target::Episodes {
             series: id(series)?,
+            order: order.to_string(),
             aired: *order == AIRED_ORDER,
             language: Some(lang.to_string()),
         }),
@@ -753,6 +879,7 @@ async fn patch(state: &AppState, document: &mut Value, target: Target) -> AppRes
             series,
             aired,
             language,
+            ..
         } => {
             match relay::locked_work(state, ExternalSource::TvdbSeries, &series.to_string()).await?
             {
@@ -806,6 +933,141 @@ async fn patch(state: &AppState, document: &mut Value, target: Target) -> AppRes
             }
             None => false,
         },
+    })
+}
+
+/// A page of a series' episodes in one of its orders, made here, in the
+/// shape TheTVDB answers one: for an order TheTVDB does not keep — a TMDB
+/// group's, one made here — when the series has it; for the aired order
+/// while an order is frozen as it; and, `filling`, for one of TheTVDB's own
+/// it answered with no episode, when this server read it season by season.
+/// Every episode on the first page, none on the next; each in the language
+/// the path names as far as the catalogue holds it, with what was locked for
+/// that language. `None` where TheTVDB answers.
+async fn answered_here(
+    state: &AppState,
+    series: i64,
+    order: &str,
+    language: Option<&str>,
+    uri: &Uri,
+    filling: bool,
+) -> AppResult<Option<Value>> {
+    let aired = order == AIRED_ORDER || order == "default";
+    let theirs = TVDB_TYPES.contains(&order);
+    if theirs && !aired && !filling {
+        return Ok(None);
+    }
+    if filling && (aired || !theirs) {
+        return Ok(None);
+    }
+    let Some(found) = crate::db::repo::item::find_id_by_external(
+        &state.db,
+        ExternalSource::TvdbSeries,
+        &series.to_string(),
+    )
+    .await?
+    else {
+        return Ok(None);
+    };
+    let Some(mut item) = service::load(state, &found).await? else {
+        return Ok(None);
+    };
+    if let Some(language) = language {
+        relay::lay_locks(state, &mut item, language);
+    }
+    state.media.for_clients(&mut item);
+    let all = orders::for_clients(state, &item, (!aired).then_some(order)).await?;
+    let placed = if aired {
+        match orders::as_official(&item, &all) {
+            Some(placed) => placed,
+            None => return Ok(None),
+        }
+    } else {
+        match orders::in_use(&item, &all, order) {
+            Some(kept) => orders::served(&item, kept),
+            None => return Ok(None),
+        }
+    };
+
+    let first_page = uri
+        .query()
+        .into_iter()
+        .flat_map(|query| query.split('&'))
+        .filter_map(|pair| pair.split_once('='))
+        .find(|(name, _)| *name == "page")
+        .is_none_or(|(_, page)| page.trim() == "0");
+    let episodes: Vec<Value> = if first_page {
+        placed
+            .iter()
+            .map(|placed| episode_record(&item, series, placed))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let total = episodes.len();
+    Ok(Some(json!({
+        "status": "success",
+        "data": {
+            "series": series_record(&item, series),
+            "episodes": episodes,
+        },
+        "links": {
+            "prev": null,
+            "self": format!("{PREFIX}{}", uri.path()),
+            "next": null,
+            "total_items": total,
+            "page_size": total,
+        },
+    })))
+}
+
+/// The base record a page of episodes names its series by, as TheTVDB
+/// writes one, made of the work.
+fn series_record(item: &MediaItem, series: i64) -> Value {
+    json!({
+        "id": series,
+        "name": item.title,
+        "slug": item.slug,
+        "image": relay::chosen_image(item, CoverType::Poster),
+        "firstAired": item.first_aired,
+        "lastAired": item.last_aired,
+        "year": item.year.map(|year| year.to_string()),
+        "overview": item.overview,
+        "originalLanguage": item.original_language,
+        "originalCountry": item.original_country,
+        "averageRuntime": item.runtime,
+        "lastUpdated": item.updated_at,
+    })
+}
+
+/// One episode of a page, as TheTVDB writes one, where the order puts it.
+/// One the order carries as a record of its own and TheTVDB gave no id is
+/// told by one made of what names it, as Sonarr is
+/// ([`orders::own_episode_id`]).
+fn episode_record(item: &MediaItem, series: i64, placed: &orders::Placed<'_>) -> Value {
+    let episode = placed.episode.as_ref();
+    let id = episode
+        .tvdb_id
+        .unwrap_or_else(|| orders::own_episode_id(episode));
+    json!({
+        "id": id,
+        "seriesId": series,
+        "name": episode.title,
+        "aired": episode.air_date,
+        "runtime": episode.runtime,
+        "nameTranslations": [],
+        "overview": episode.overview,
+        "overviewTranslations": [],
+        "image": episode.image,
+        "imageType": episode.image.as_ref().map(|_| 11),
+        "isMovie": 0,
+        "seasons": null,
+        "number": placed.episode_number,
+        "absoluteNumber": placed.absolute_number.unwrap_or(0),
+        "seasonNumber": placed.season_number,
+        "lastUpdated": item.updated_at,
+        "finaleType": episode.finale_type,
+        "year": episode.air_date.as_deref().and_then(|day| day.get(..4)),
     })
 }
 
@@ -1517,6 +1779,7 @@ mod tests {
             patch_target("/v4/series/81189/episodes/official/eng"),
             Some(Target::Episodes {
                 series: 81189,
+                order: "official".into(),
                 aired: true,
                 language: Some("eng".into())
             })
@@ -1525,6 +1788,7 @@ mod tests {
             patch_target("/v4/series/81189/episodes/official"),
             Some(Target::Episodes {
                 series: 81189,
+                order: "official".into(),
                 aired: true,
                 language: None
             })
@@ -1564,16 +1828,31 @@ mod tests {
         // The DVD order numbers episodes another way than this catalogue —
         // and a series' default order may be it: their episodes are told by
         // their ids alone.
-        for (path, language) in [
-            ("/v4/series/81189/episodes/dvd/eng", Some("eng")),
-            ("/v4/series/81189/episodes/default", None),
-            ("/v4/series/81189/episodes/default/fra", Some("fra")),
-            ("/v4/series/81189/episodes/absolute/eng", Some("eng")),
+        for (path, order, language) in [
+            ("/v4/series/81189/episodes/dvd/eng", "dvd", Some("eng")),
+            ("/v4/series/81189/episodes/default", "default", None),
+            (
+                "/v4/series/81189/episodes/default/fra",
+                "default",
+                Some("fra"),
+            ),
+            (
+                "/v4/series/81189/episodes/absolute/eng",
+                "absolute",
+                Some("eng"),
+            ),
+            // An order this server keeps and TheTVDB does not.
+            (
+                "/v4/series/81189/episodes/ams-mine/eng",
+                "ams-mine",
+                Some("eng"),
+            ),
         ] {
             assert_eq!(
                 patch_target(path),
                 Some(Target::Episodes {
                     series: 81189,
+                    order: order.into(),
                     aired: false,
                     language: language.map(str::to_string)
                 }),
@@ -2241,6 +2520,224 @@ mod relayed {
         .await
         .expect("an answer");
         answer(response).await
+    }
+
+    /// TheTVDB as the stand-in answers for the orders of a series: its aired
+    /// list, on its own and in its record, and the Blu-ray order it answers
+    /// empty for (thetvdb/v4-api#340).
+    fn tvdb_with_orders(asked: &Asked) -> (StatusCode, Value) {
+        match asked.path.as_str() {
+            "/v4/series/81189/extended" => (
+                StatusCode::OK,
+                json!({ "status": "success", "data": {
+                    "id": 81189, "name": "Breaking Bad",
+                    "episodes": [
+                        { "id": 11, "seasonNumber": 1, "number": 1, "name": "Pilot" },
+                        { "id": 12, "seasonNumber": 1, "number": 2, "name": "Cat's in the Bag..." }
+                    ]
+                } }),
+            ),
+            "/v4/series/81189/episodes/official/eng" => (
+                StatusCode::OK,
+                json!({ "status": "success", "data": {
+                    "series": { "id": 81189, "name": "Breaking Bad" },
+                    "episodes": [
+                        { "id": 11, "seasonNumber": 1, "number": 1, "name": "Pilot" },
+                        { "id": 12, "seasonNumber": 1, "number": 2, "name": "Cat's in the Bag..." }
+                    ]
+                }, "links": { "next": null } }),
+            ),
+            "/v4/series/81189/episodes/altdvd/eng" => (
+                StatusCode::OK,
+                json!({ "status": "success", "data": {
+                    "series": { "id": 81189, "name": "Breaking Bad" }, "episodes": []
+                }, "links": { "next": null } }),
+            ),
+            _ => tvdb(asked),
+        }
+    }
+
+    /// An order TheTVDB does not keep, the aired order while one is frozen
+    /// as it, and one TheTVDB answers empty for are answered here, as
+    /// TheTVDB writes a page; TheTVDB is asked for none of the first two.
+    #[tokio::test]
+    async fn the_orders_kept_here_are_answered_as_thetvdb_writes_a_page() {
+        use crate::{
+            db::repo::{self, child::blank_episode},
+            domain::{EpisodeOrder, OrderKind, OrderRecord, PlacedEpisode},
+        };
+
+        let stand_in = StandIn::start(tvdb_with_orders).await;
+        let state = testing::server(&stand_in).await;
+        let key = issued(&state).await;
+        let mut item = MediaItem::empty(MediaKind::Series);
+        item.title = "Breaking Bad".into();
+        item.slug = "breaking-bad".into();
+        item.external_ids.tvdb = Some(81189);
+        for (number, id, title) in [(1, 11, "Pilot"), (2, 12, "Cat's in the Bag...")] {
+            let mut episode = blank_episode(1, number);
+            episode.is_manual = false;
+            episode.tvdb_id = Some(id);
+            episode.title = title.into();
+            item.episodes.push(episode);
+        }
+        testing::store(&state, &item, &[]).await;
+        let order = |key: &str, source: &str, kind: OrderKind, episodes| EpisodeOrder {
+            key: key.into(),
+            kind,
+            source: source.into(),
+            source_ref: None,
+            label: key.into(),
+            is_default: false,
+            is_frozen: false,
+            announced: None,
+            updated_at: crate::db::now(),
+            episodes,
+        };
+        let mut extended = PlacedEpisode::of_tvdb(9001, 1, 1);
+        extended.record = Some(OrderRecord {
+            title: "Pilot (Extended)".into(),
+            overview: None,
+            aired: Some("2008-01-20".into()),
+            runtime: Some(58),
+            image: None,
+            finale_type: None,
+        });
+        repo::order::replace_source(
+            &state.db,
+            &item.id,
+            "tvdb",
+            &[order(
+                "altdvd",
+                "tvdb",
+                OrderKind::TvdbAlt,
+                vec![extended, PlacedEpisode::of_tvdb(12, 1, 2)],
+            )],
+        )
+        .await
+        .expect("TheTVDB's order");
+        repo::order::create(
+            &state.db,
+            &item.id,
+            &order(
+                "ams-mine",
+                "local",
+                OrderKind::Custom,
+                vec![
+                    PlacedEpisode::of_tvdb(12, 1, 1),
+                    PlacedEpisode::of_tvdb(11, 1, 2),
+                ],
+            ),
+        )
+        .await
+        .expect("one made here");
+
+        let (status, page) = get(
+            &state,
+            "/v4/series/81189/episodes/ams-mine/eng?page=0",
+            &key,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let episodes = page["data"]["episodes"].as_array().expect("its episodes");
+        assert_eq!(
+            episodes
+                .iter()
+                .map(|e| (
+                    e["id"].clone(),
+                    e["seasonNumber"].clone(),
+                    e["number"].clone()
+                ))
+                .collect::<Vec<_>>(),
+            [
+                (json!(12), json!(1), json!(1)),
+                (json!(11), json!(1), json!(2))
+            ]
+        );
+        assert_eq!(page["data"]["series"]["id"], json!(81189));
+        assert_eq!(page["links"]["next"], Value::Null);
+        assert!(
+            stand_in
+                .asked_at("/v4/series/81189/episodes/ams-mine/eng")
+                .is_empty()
+        );
+        // The next page is empty: everything is on the first.
+        let (_, next) = get(
+            &state,
+            "/v4/series/81189/episodes/ams-mine/eng?page=1",
+            &key,
+        )
+        .await;
+        assert_eq!(next["data"]["episodes"], json!([]));
+
+        // TheTVDB's Blu-ray order, empty there: filled with what was read.
+        let (status, page) = get(&state, "/v4/series/81189/episodes/altdvd/eng", &key).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            page["data"]["episodes"][0]["name"],
+            json!("Pilot (Extended)")
+        );
+        assert_eq!(page["data"]["episodes"][0]["id"], json!(9001));
+        assert_eq!(page["data"]["episodes"][1]["id"], json!(12));
+
+        // The aired order is TheTVDB's own until an order is frozen as it,
+        // on its pages and in the series' record with its episodes.
+        let numbered = |document: &Value| {
+            document["data"]["episodes"]
+                .as_array()
+                .expect("its episodes")
+                .iter()
+                .map(|e| {
+                    (
+                        e["id"].clone(),
+                        e["seasonNumber"].clone(),
+                        e["number"].clone(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let (_, aired) = get(&state, "/v4/series/81189/episodes/official/eng", &key).await;
+        assert_eq!(aired["data"]["episodes"][0]["id"], json!(11));
+        assert_eq!(
+            stand_in
+                .asked_at("/v4/series/81189/episodes/official/eng")
+                .len(),
+            1
+        );
+        let (status, record) = get(&state, "/v4/series/81189/extended?meta=episodes", &key).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            numbered(&record),
+            [
+                (json!(11), json!(1), json!(1)),
+                (json!(12), json!(1), json!(2))
+            ]
+        );
+        assert!(
+            repo::order::freeze(&state.db, &item.id, Some("ams-mine"))
+                .await
+                .expect("frozen")
+        );
+        state.caches.touched(&item.id).await;
+        let (_, frozen) = get(&state, "/v4/series/81189/episodes/official/eng", &key).await;
+        assert_eq!(frozen["data"]["episodes"][0]["id"], json!(12));
+        assert_eq!(
+            stand_in
+                .asked_at("/v4/series/81189/episodes/official/eng")
+                .len(),
+            1,
+            "TheTVDB not asked again"
+        );
+        let (status, record) = get(&state, "/v4/series/81189/extended?meta=episodes", &key).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(record["data"]["name"], json!("Breaking Bad"));
+        assert_eq!(
+            numbered(&record),
+            [
+                (json!(12), json!(1), json!(1)),
+                (json!(11), json!(1), json!(2))
+            ]
+        );
     }
 
     #[tokio::test]
