@@ -189,7 +189,7 @@ interface Errand {
 }
 
 /** The errands that are true, in the order they are worth doing. */
-function errandLines(todo: Errands, k: Dict['admin']['overview']): Errand[] {
+function errandLines(todo: Errands, k: Dict['admin']['overview'], locale: string): Errand[] {
   const all: Errand[] = [
     {
       key: 'failing',
@@ -243,6 +243,15 @@ function errandLines(todo: Errands, k: Dict['admin']['overview']): Errand[] {
       count: todo.failedMedia,
       text: (shown) => k.todoMedia(shown, todo.failedMedia),
     },
+    {
+      // One thing to settle, or none: an archive made now settles it.
+      key: 'backup',
+      to: '/admin/backups',
+      glyph: 'shield',
+      urgent: true,
+      count: todo.backupOverdue ? 1 : 0,
+      text: () => k.todoBackup(fmt.relative(todo.lastBackupAt, locale)),
+    },
   ]
   return all.filter((errand) => errand.count > 0)
 }
@@ -268,7 +277,7 @@ function ToDo() {
     refetchInterval: 60_000,
   })
 
-  const lines = todo.data ? errandLines(todo.data, k) : []
+  const lines = todo.data ? errandLines(todo.data, k, locale) : []
 
   return (
     <Panel label={k.todoTitle} className="rise mb-6">

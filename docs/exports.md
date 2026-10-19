@@ -268,6 +268,20 @@ Plex or Kodi library that holds those works alone.
   `<thumb aspect="poster" type="season" season="N">`.
 - The usual `<thumb>`, `<fanart>` and `<actor>`. U+FFFE and U+FFFF are left out of every
   document, since one made the whole document unreadable to a strict XML reader.
+- For a series with an order frozen as its aired numbering (see
+  [Orders](sonarr-radarr.md#orders)), its episodes' documents — and the files they are
+  written to — are numbered by that order, as Sonarr then names the files, and the
+  series' document names the order to Jellyfin in a `<displayorder>`: TheTVDB's type
+  for one of TheTVDB's (`dvd`, `alternate`, `altdvd`…), which its TheTVDB plugin
+  reads; for a TMDB episode group, the order its TMDb provider maps to the group's type
+  (`originalAirDate`, `absolute`, `dvd`, `digital`, `storyArc`, `production`, `tv`),
+  with the group itself beside it as `<uniqueid type="TmdbEpisodeGroupId">`. An order
+  made here is no order Jellyfin knows: nothing names it, and the numbers carry it.
+- For a special, `<displayseason>` and `<displayepisode>`: where Kodi shows it among
+  the regular seasons — the season, and the episode it comes before. TheTVDB's own
+  word on where it aired first; else where the first other order that places it among
+  the seasons puts it, the DVDs' first, the episode it comes before there named by its
+  numbers here; at the end of a season, the season alone.
 
 ### Pictures
 

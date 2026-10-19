@@ -218,6 +218,10 @@ pub struct Health {
     /// A newer release, when the check is on and found one; `null` else.
     #[schema(required)]
     pub update_available: Option<UpdateAvailable>,
+    /// When the newest archive of the database was made; `null` when none
+    /// was.
+    #[schema(required)]
+    pub last_backup_at: Option<String>,
 }
 
 /// A release newer than the version running.
@@ -335,6 +339,7 @@ async fn health(
             url: release.url,
             published_at: release.published_at,
         }),
+        last_backup_at: state.backups.newest_at().await?,
     }))
 }
 
@@ -535,6 +540,15 @@ async fn metrics(
     if crate::jobs::update_check::on(&state) {
         gauges.push(crate::metrics::update_available(
             crate::jobs::update_check::newer(&state).is_some(),
+        ));
+    }
+    // Only while the schedule is on and an archive exists: off, 0 would say
+    // one was just made, and `absent()` is how an alert says none ever was.
+    if crate::jobs::backup::interval(&state).is_some()
+        && let Ok(Some(last)) = crate::jobs::backup::last_at(&state).await
+    {
+        gauges.push(crate::metrics::backup_age(
+            (chrono::Utc::now() - last).as_seconds_f64(),
         ));
     }
 

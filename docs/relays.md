@@ -133,6 +133,15 @@ whatever language that is in, and the translations it carries take each what was
 locked for their language. `seasons/{id}/translations/{lang}` is not written: it
 does not say whose season it is.
 
+A series' episodes in an order the catalogue keeps and TheTVDB does not — a TMDB
+group's, `tmdb-…`, one made here, `ams-…` — are answered here, as TheTVDB writes a
+page of them, every episode on the first; so are the aired order's (`official`,
+`default`) and the episodes a series' record carries with `meta=episodes`, while
+an order is frozen as the aired numbering; and an order of TheTVDB's own it
+answers with no episode — `altdvd`, `alttwo` (thetvdb/v4-api#340) — is filled with
+what was read of it season by season. See
+[Orders](sonarr-radarr.md#orders).
+
 **AniList** (`graphql.anilist.co`): the title, description, genres and pictures of
 each entry the answer carries. AniList has no key to choose.
 

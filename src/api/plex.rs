@@ -40,7 +40,7 @@ use crate::{
     db::repo,
     domain::{EpisodeOrder, ExternalSource, MediaItem, MediaKind},
     error::{AppError, AppResult},
-    service::{self, ids, language, movie, series},
+    service::{self, ids, language, movie, orders, series},
     state::AppState,
     wire::plex::{
         self, Drawn, Hint, Key, Laid, Layout, PlexImagesResponse, PlexMatchRequest, PlexMetadata,
@@ -285,7 +285,7 @@ async fn metadata(
 ) -> AppResult<Json<PlexMetadataResponse>> {
     let key = Key::parse(&rating_key).ok_or(AppError::NotFound)?;
     let asking = Asking::of(&state, &identity, &headers, &query, peer);
-    let (item, orders) = served(&state, &key, &asking).await?;
+    let (item, orders) = served(&state, &key, &asking, asked_order(&key, &query)).await?;
     let drawn = asking.drawn();
     let with_children = query.include_children();
 
@@ -349,7 +349,7 @@ async fn children(
 ) -> AppResult<Json<PlexMetadataResponse>> {
     let key = Key::parse(&rating_key).ok_or(AppError::NotFound)?;
     let asking = Asking::of(&state, &identity, &headers, &query, peer);
-    let (item, orders) = served(&state, &key, &asking).await?;
+    let (item, orders) = served(&state, &key, &asking, asked_order(&key, &query)).await?;
     let drawn = asking.drawn();
     let page = Page::of(&headers, &query);
 
@@ -407,7 +407,7 @@ async fn grandchildren(
 ) -> AppResult<Json<PlexMetadataResponse>> {
     let key = Key::parse(&rating_key).ok_or(AppError::NotFound)?;
     let asking = Asking::of(&state, &identity, &headers, &query, peer);
-    let (item, orders) = served(&state, &key, &asking).await?;
+    let (item, orders) = served(&state, &key, &asking, asked_order(&key, &query)).await?;
     let drawn = asking.drawn();
     let page = Page::of(&headers, &query);
 
@@ -463,7 +463,7 @@ async fn images(
             plex::images_of(&item.images, &item.primary_images, &item.title, &drawn)
         }
         Key::Season { number, order, .. } => {
-            let orders = repo::order::list(&state.db, &item.id).await?;
+            let orders = orders::for_clients(&state, &item, order.as_deref()).await?;
             let layout = Layout::asked(&item, &orders, order.as_deref());
             let laid = layout.season(*number).ok_or(AppError::NotFound)?;
             laid.season
@@ -478,7 +478,7 @@ async fn images(
             order,
             ..
         } => {
-            let orders = repo::order::list(&state.db, &item.id).await?;
+            let orders = orders::for_clients(&state, &item, order.as_deref()).await?;
             let layout = Layout::asked(&item, &orders, order.as_deref());
             let episode = layout
                 .season(*season)
@@ -628,17 +628,28 @@ async fn work(state: &AppState, key: &Key) -> AppResult<Option<MediaItem>> {
     Ok(item.filter(|item| item.kind == kind))
 }
 
+/// The order an item is asked in: the one its key names, for a season or an
+/// episode; the one Plex names, for a series.
+fn asked_order<'k>(key: &'k Key, query: &'k PlexQuery) -> Option<&'k str> {
+    match key {
+        Key::Season { order, .. } | Key::Episode { order, .. } => order.as_deref(),
+        _ => query.episode_order.as_deref(),
+    }
+}
+
 /// The work, in the language asked — its title and overview, a series'
-/// episodes too — with the other orders the catalogue keeps for a series.
+/// episodes too — with the orders the catalogue keeps for a series, the one
+/// asked for read from its source first when it is still to be.
 async fn served(
     state: &AppState,
     key: &Key,
     asking: &Asking,
+    asked_order: Option<&str>,
 ) -> AppResult<(MediaItem, Vec<EpisodeOrder>)> {
     let mut item = work(state, key).await?.ok_or(AppError::NotFound)?;
     language::apply_with_fallback(state, &mut item, &asking.language, &asking.own).await?;
     let orders = match item.kind {
-        MediaKind::Series => repo::order::list(&state.db, &item.id).await?,
+        MediaKind::Series => orders::for_clients(state, &item, asked_order).await?,
         MediaKind::Movie => Vec::new(),
     };
     Ok((item, orders))
@@ -832,7 +843,8 @@ impl Matcher<'_> {
             &self.asking.language,
             &self.asking.own,
         );
-        let orders = repo::order::list(&self.state.db, &whole.id).await?;
+        let orders =
+            orders::for_clients(self.state, &whole, self.asked.episode_order.as_deref()).await?;
         let layout = Layout::asked(&whole, &orders, self.asked.episode_order.as_deref());
         Ok(Series::new(&whole, work, &layout, &drawn).show(&orders, true))
     }
@@ -869,7 +881,7 @@ impl Matcher<'_> {
             &self.asking.own,
         )
         .await?;
-        let orders = repo::order::list(&self.state.db, &item.id).await?;
+        let orders = orders::for_clients(self.state, &item, self.order_of(own)).await?;
         let layout = Layout::asked(&item, &orders, self.order_of(own));
         let drawn = self.asking.drawn();
         let series = Series::new(&item, &work, &layout, &drawn);
@@ -910,7 +922,7 @@ impl Matcher<'_> {
             &self.asking.own,
         )
         .await?;
-        let orders = repo::order::list(&self.state.db, &item.id).await?;
+        let orders = orders::for_clients(self.state, &item, self.order_of(own)).await?;
         let layout = Layout::asked(&item, &orders, self.order_of(own));
         let place = match own {
             Some(Key::Episode { season, number, .. }) => Some((*season, *number)),
@@ -1131,13 +1143,13 @@ fn own_place(hints: &[Hint]) -> Option<&Key> {
 fn aired_on<'l, 'a>(
     layout: &'l Layout<'a>,
     date: &str,
-) -> Option<(&'l Laid<'a>, i32, &'a crate::domain::Episode)> {
+) -> Option<(&'l Laid<'a>, i32, &'l crate::domain::Episode)> {
     let day = crate::wire::sonarr::sonarr_day(Some(date))?;
     layout.seasons.iter().find_map(|laid| {
         laid.episodes.iter().find_map(|(number, episode)| {
             (crate::wire::sonarr::sonarr_day(episode.air_date.as_deref()).as_deref()
                 == Some(day.as_str()))
-            .then_some((laid, *number, *episode))
+            .then_some((laid, *number, episode.as_ref()))
         })
     })
 }
@@ -1197,7 +1209,7 @@ mod tests {
             child::{blank_episode, blank_season},
             item::ItemWrite,
         },
-        domain::{CoverType, ExternalIds, Image, PlacedEpisode, Translation},
+        domain::{CoverType, ExternalIds, Image, OrderKind, PlacedEpisode, Translation},
     };
 
     /// The whole server on a database of its own, stored in English, with no
@@ -1382,17 +1394,21 @@ mod tests {
             work.episodes.push(episode);
         }
         store(state, &work).await;
-        let place = |tvdb_id, season_number, episode_number| PlacedEpisode {
-            tvdb_id,
-            season_number,
-            episode_number,
-            absolute_number: None,
-        };
-        repo::order::replace(
+        let place = PlacedEpisode::of_tvdb;
+        repo::order::replace_source(
             &state.db,
             &work.id,
+            "tvdb",
             &[EpisodeOrder {
-                kind: "dvd".into(),
+                key: "dvd".into(),
+                kind: OrderKind::Dvd,
+                source: "tvdb".into(),
+                source_ref: None,
+                label: "DVD Order".into(),
+                is_default: false,
+                is_frozen: false,
+                announced: None,
+                updated_at: crate::db::now(),
                 episodes: vec![place(1002, 1, 1), place(1001, 1, 2), place(2001, 2, 1)],
             }],
         )
@@ -2024,6 +2040,113 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    /// An order made here, a record of its own among its places, is offered
+    /// under its key and asked for by it — its hyphens written as
+    /// underscores in the keys of its seasons and episodes; frozen, it is
+    /// what the series answers when no order is named.
+    #[tokio::test]
+    async fn an_order_made_here_is_offered_asked_for_and_frozen_as_the_aired_one() {
+        let state = server().await;
+        let work = kenshin(&state).await;
+        let mut own = PlacedEpisode::of_tvdb(0, 1, 3);
+        own.tvdb_id = None;
+        own.record = Some(crate::domain::OrderRecord {
+            title: "A night at the cinema".into(),
+            overview: None,
+            aired: Some("2023-08-01".into()),
+            runtime: Some(24),
+            image: None,
+            finale_type: None,
+        });
+        repo::order::create(
+            &state.db,
+            &work.id,
+            &EpisodeOrder {
+                key: "ams-my-order".into(),
+                kind: OrderKind::Custom,
+                source: "local".into(),
+                source_ref: None,
+                label: "My order".into(),
+                is_default: false,
+                is_frozen: false,
+                announced: None,
+                updated_at: crate::db::now(),
+                episodes: vec![
+                    PlacedEpisode::of_tvdb(1002, 1, 1),
+                    PlacedEpisode::of_tvdb(1001, 1, 2),
+                    own,
+                ],
+            },
+        )
+        .await
+        .expect("made");
+
+        let (_, show) = ask(&state, "/plex/library/metadata/show-tvdb-416802", &[]).await;
+        let offered: Vec<(&str, &str)> = show["MediaContainer"]["Metadata"][0]["SeasonType"]
+            .as_array()
+            .expect("the orders offered")
+            .iter()
+            .map(|t| (t["id"].as_str().unwrap(), t["title"].as_str().unwrap()))
+            .collect();
+        assert!(
+            offered.contains(&("ams-my-order", "My order")),
+            "{offered:?}"
+        );
+        assert!(offered.contains(&("dvd", "DVD Order")), "{offered:?}");
+
+        let (_, seasons) = ask(
+            &state,
+            "/plex/library/metadata/show-tvdb-416802/children?episodeOrder=ams-my-order",
+            &[],
+        )
+        .await;
+        assert_eq!(
+            seasons["MediaContainer"]["Metadata"][0]["ratingKey"],
+            "season-tvdb-416802-s1-ams_my_order"
+        );
+        let (status, season) = ask(
+            &state,
+            "/plex/library/metadata/season-tvdb-416802-s1-ams_my_order?includeChildren=1",
+            &[],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let titles: Vec<&str> = season["MediaContainer"]["Metadata"][0]["Children"]["Metadata"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["title"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            titles,
+            ["Episode 1002", "Episode 1001", "A night at the cinema"]
+        );
+
+        // Frozen: the series' own seasons are the order's.
+        assert!(
+            repo::order::freeze(&state.db, &work.id, Some("ams-my-order"))
+                .await
+                .expect("frozen")
+        );
+        state.caches.touched(&work.id).await;
+        let (_, season) = ask(
+            &state,
+            "/plex/library/metadata/season-tvdb-416802-s1?includeChildren=1",
+            &[],
+        )
+        .await;
+        let titles: Vec<&str> = season["MediaContainer"]["Metadata"][0]["Children"]["Metadata"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["title"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            titles,
+            ["Episode 1002", "Episode 1001", "A night at the cinema"]
+        );
     }
 
     #[tokio::test]

@@ -8,11 +8,18 @@
 //! editing this file. Values are decoded by trying the types the schema uses —
 //! there are only three — rather than consulting the engine's own type system,
 //! which `Any` does not expose.
+//!
+//! It is also how a backup is made of a PostgreSQL — copied into an SQLite
+//! file, the archive's one engine-neutral payload — and how any archive is
+//! restored: copied out of that file into the database it is restored to,
+//! whose rows are emptied first in the same transaction (see
+//! [`Options::replace`]).
 
 use anyhow::{Context, Result, bail};
+use futures::TryStreamExt as _;
 use sqlx::{Column, Row, ValueRef};
 
-use crate::db::Db;
+use crate::db::{Db, Dialect};
 
 /// Every table, parents before children.
 ///
@@ -37,7 +44,10 @@ const TABLES: &[&str] = &[
     "media_image",
     "media_credit",
     "media_relation",
-    "media_episode_order",
+    // An order before its places; who numbers a series beside them.
+    "media_order",
+    "media_order_episode",
+    "media_numbering",
     "media_alternative_title",
     "media_rating",
     "media_translation",
@@ -75,7 +85,15 @@ const TABLES: &[&str] = &[
     "data_import",
     "curated_list",
     "curated_list_item",
+    // The archives made of the database: carried to another engine like the
+    // rest, and kept as they are by a restore (see `backup::restore`).
+    "backup",
 ];
+
+/// The tables a copy carries, parents before children.
+pub fn tables() -> &'static [&'static str] {
+    TABLES
+}
 
 /// Rows carried per statement. Large enough to be quick, small enough to stay
 /// inside every engine's bind-parameter ceiling for a wide table.
@@ -92,6 +110,33 @@ impl Report {
     }
 }
 
+/// What is told of each table as its copy starts: its name, how many come
+/// before it, and how many there are.
+pub type Progress<'a> = &'a (dyn Fn(&str, usize, usize) + Send + Sync);
+
+/// How a copy goes, besides from where to where.
+#[derive(Default)]
+pub struct Options<'a> {
+    /// Add to a target that already holds rows, rather than refusing it.
+    pub force: bool,
+    /// Empty the target's tables first, in the transaction the copy is made
+    /// in: what a restore does, once it has made its safety copy. A copy that
+    /// fails part of the way leaves the target as it was, emptied rows and
+    /// all.
+    pub replace: bool,
+    /// Tables neither emptied nor copied: what the target keeps of its own.
+    pub keep: &'a [&'a str],
+    /// Told of each table as its copy starts.
+    pub progress: Option<Progress<'a>>,
+    /// Copy the tables the source holds — and the target too — at whatever
+    /// version of the schema the two stand, rather than this binary's: an
+    /// archive made before an upgrade's migrations holds the tables they
+    /// will reshape or drop. Into SQLite, whose foreign keys are then
+    /// checked once the copy is whole: where an older table goes among the
+    /// others is not known here.
+    pub as_found: bool,
+}
+
 /// Copy everything from `source` into `target`.
 ///
 /// The target must already be migrated and must be empty, unless `force` is set.
@@ -104,9 +149,33 @@ pub async fn run(source: &Db, target: &Db, force: bool) -> Result<Report> {
              copy is usually what you want"
         );
     }
+    run_with(
+        source,
+        target,
+        Options {
+            force,
+            ..Options::default()
+        },
+    )
+    .await
+}
 
-    if !force {
-        for table in TABLES {
+/// Copy everything from `source` into `target`, as `options` say: the
+/// backups' own way in, which copies SQLite into SQLite on purpose.
+pub async fn run_with(source: &Db, target: &Db, options: Options<'_>) -> Result<Report> {
+    let listed: Vec<String> = if options.as_found {
+        tables_as_found(source, target).await?
+    } else {
+        TABLES.iter().map(|table| (*table).to_string()).collect()
+    };
+    let carried: Vec<&str> = listed
+        .iter()
+        .map(String::as_str)
+        .filter(|table| !options.keep.contains(table))
+        .collect();
+
+    if !options.force && !options.replace {
+        for table in &carried {
             let existing = count(target, table).await?;
             if existing > 0 {
                 bail!(
@@ -119,6 +188,23 @@ pub async fn run(source: &Db, target: &Db, force: bool) -> Result<Report> {
 
     let mut report = Report { copied: Vec::new() };
 
+    // The source read as of one moment, every table of it: read table by
+    // table through the pool, a server writing meanwhile — the one a backup
+    // is made of while it runs — could hand over an episode whose season was
+    // read before it existed, and the target refuses the orphan. A read
+    // transaction on SQLite holds its snapshot from its first read; on
+    // PostgreSQL it has to be asked for.
+    let mut snapshot = match source.dialect() {
+        Dialect::Sqlite => source.pool().begin().await,
+        Dialect::Postgres => {
+            source
+                .pool()
+                .begin_with("BEGIN ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+                .await
+        }
+    }
+    .context("failed to open a read of the source")?;
+
     // One transaction for the whole copy. Chunk by chunk and table by table, a
     // failure part of the way through left the target holding everything before
     // it — which the emptiness check above then refuses to let you retry, while
@@ -129,8 +215,21 @@ pub async fn run(source: &Db, target: &Db, force: bool) -> Result<Report> {
         .await
         .context("failed to open the transfer transaction")?;
 
-    for table in TABLES {
-        let rows = copy_table(source, target, &mut tx, table)
+    if options.replace {
+        empty(target, &mut tx, &carried).await?;
+    }
+    if options.as_found && target.dialect() == Dialect::Sqlite {
+        sqlx::query(target.sql("PRAGMA defer_foreign_keys = ON"))
+            .execute(&mut *tx)
+            .await
+            .context("failed to defer the target's foreign keys")?;
+    }
+
+    for (index, table) in carried.iter().enumerate() {
+        if let Some(progress) = options.progress {
+            progress(table, index, carried.len());
+        }
+        let rows = copy_table(source, &mut snapshot, target, &mut tx, table)
             .await
             .with_context(|| format!("while copying {table}"))?;
 
@@ -139,8 +238,105 @@ pub async fn run(source: &Db, target: &Db, force: bool) -> Result<Report> {
     }
 
     tx.commit().await.context("failed to commit the transfer")?;
+    // Nothing was written through it; ended rather than dropped, so the
+    // connection goes back to the pool at once.
+    snapshot
+        .commit()
+        .await
+        .context("failed to end the read of the source")?;
 
     Ok(report)
+}
+
+/// Empty the tables a restore replaces, children before their parents, in
+/// the copy's own transaction. Another instance on the same PostgreSQL may
+/// go on reading the rows as they were until the copy commits, and waits to
+/// write: nothing it writes meanwhile can land between the emptying and the
+/// copy. SQLite's write transaction keeps every other writer out already.
+async fn empty(
+    target: &Db,
+    tx: &mut sqlx::Transaction<'_, sqlx::Any>,
+    tables: &[&str],
+) -> Result<()> {
+    if target.dialect() == Dialect::Postgres {
+        let list = tables.join(", ");
+        sqlx::query(target.sql(&format!("LOCK TABLE {list} IN EXCLUSIVE MODE")))
+            .execute(&mut **tx)
+            .await
+            .context("failed to hold the tables for the restore")?;
+    }
+    for table in tables.iter().rev() {
+        sqlx::query(target.sql(&format!("DELETE FROM {table}")))
+            .execute(&mut **tx)
+            .await
+            .with_context(|| format!("while emptying {table}"))?;
+    }
+    Ok(())
+}
+
+/// The tables `source` holds that `target` holds too: this binary's first,
+/// in their order, then the others by name. Neither engine's own tables, the
+/// migrations' record, nor SQLite's search index and the tables behind it,
+/// which its triggers fill as the rows arrive.
+async fn tables_as_found(source: &Db, target: &Db) -> Result<Vec<String>> {
+    let in_source = tables_of(source).await?;
+    let in_target = tables_of(target).await?;
+    let mut both: Vec<String> = in_source
+        .into_iter()
+        .filter(|table| in_target.contains(table))
+        .collect();
+    both.sort_by_key(|table| {
+        (
+            TABLES
+                .iter()
+                .position(|known| known == table)
+                .unwrap_or(usize::MAX),
+            table.clone(),
+        )
+    });
+    Ok(both)
+}
+
+/// The tables of a database, as its engine lists them.
+async fn tables_of(db: &Db) -> Result<Vec<String>> {
+    let rows = match db.dialect() {
+        Dialect::Postgres => {
+            sqlx::query(db.sql(
+                "SELECT CAST(table_name AS TEXT) AS name FROM information_schema.tables \
+                 WHERE table_schema = current_schema() AND table_type = 'BASE TABLE'",
+            ))
+            .fetch_all(db.pool())
+            .await?
+        }
+        Dialect::Sqlite => {
+            sqlx::query(db.sql(
+                "SELECT name, CASE WHEN sql LIKE 'CREATE VIRTUAL TABLE%' THEN 1 ELSE 0 END \
+                 AS virtual FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+            ))
+            .fetch_all(db.pool())
+            .await?
+        }
+    };
+    let mut names = Vec::new();
+    let mut virtual_tables = Vec::new();
+    for row in &rows {
+        let name: String = row.try_get("name")?;
+        let is_virtual = db.dialect() == Dialect::Sqlite && row.try_get::<i64, _>("virtual")? != 0;
+        if is_virtual {
+            virtual_tables.push(name);
+        } else {
+            names.push(name);
+        }
+    }
+    Ok(names
+        .into_iter()
+        .filter(|name| name != "_sqlx_migrations")
+        .filter(|name| {
+            !virtual_tables
+                .iter()
+                .any(|table| name.starts_with(&format!("{table}_")))
+        })
+        .collect())
 }
 
 async fn count(db: &Db, table: &str) -> Result<i64> {
@@ -183,76 +379,90 @@ fn read(row: &sqlx::any::AnyRow, index: usize) -> Result<Value> {
     bail!("column {column} holds a type this transfer does not handle")
 }
 
+/// Copy one table, a chunk at a time as its rows are read: a table of a
+/// hundred thousand episodes is never held whole.
 async fn copy_table(
     source: &Db,
+    snapshot: &mut sqlx::Transaction<'_, sqlx::Any>,
     target: &Db,
     tx: &mut sqlx::Transaction<'_, sqlx::Any>,
     table: &str,
 ) -> Result<u64> {
-    let rows = sqlx::query(source.sql(&format!("SELECT * FROM {table}")))
-        .fetch_all(source.pool())
-        .await?;
+    let mut rows =
+        sqlx::query(source.sql(&format!("SELECT * FROM {table}"))).fetch(&mut **snapshot);
 
-    if rows.is_empty() {
-        return Ok(0);
-    }
-
-    let columns: Vec<String> = rows[0]
-        .columns()
-        .iter()
-        .map(|c| c.name().to_string())
-        .collect();
-
-    let column_list = columns.join(", ");
+    let mut columns: Vec<String> = Vec::new();
+    let mut chunk: Vec<Vec<Value>> = Vec::with_capacity(CHUNK);
     let mut written = 0u64;
 
-    for chunk in rows.chunks(CHUNK) {
-        // Read the chunk first: the SQL depends on which values are null.
-        let decoded: Vec<Vec<Value>> = chunk
-            .iter()
-            .map(|row| (0..columns.len()).map(|i| read(row, i)).collect())
-            .collect::<Result<_>>()?;
-
-        // A NULL goes in as a literal rather than a bound parameter. Binding
-        // `None::<String>` sends a typed null, and PostgreSQL rejects a text
-        // null for an integer column — "column is of type integer but
-        // expression is of type text". A bare NULL takes the column's own type.
-        let values = decoded
-            .iter()
-            .map(|row| {
-                let cells: Vec<&str> = row
-                    .iter()
-                    .map(|v| {
-                        if matches!(v, Value::Null) {
-                            "NULL"
-                        } else {
-                            "?"
-                        }
-                    })
-                    .collect();
-                format!("({})", cells.join(", "))
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        let sql = format!("INSERT INTO {table} ({column_list}) VALUES {values}");
-        let mut query = sqlx::query(target.sql(&sql));
-
-        for row in &decoded {
-            for value in row {
-                query = match value {
-                    Value::Null => continue,
-                    Value::Int(v) => query.bind(*v),
-                    Value::Real(v) => query.bind(*v),
-                    Value::Text(v) => query.bind(v.clone()),
-                };
-            }
+    while let Some(row) = rows.try_next().await? {
+        if columns.is_empty() {
+            columns = row.columns().iter().map(|c| c.name().to_string()).collect();
         }
-
-        written += query.execute(&mut **tx).await?.rows_affected();
+        chunk.push(
+            (0..columns.len())
+                .map(|i| read(&row, i))
+                .collect::<Result<_>>()?,
+        );
+        if chunk.len() == CHUNK {
+            written += insert(target, tx, table, &columns, &chunk).await?;
+            chunk.clear();
+        }
+    }
+    if !chunk.is_empty() {
+        written += insert(target, tx, table, &columns, &chunk).await?;
     }
 
     Ok(written)
+}
+
+/// Write one chunk of a table's rows, as they were read.
+async fn insert(
+    target: &Db,
+    tx: &mut sqlx::Transaction<'_, sqlx::Any>,
+    table: &str,
+    columns: &[String],
+    decoded: &[Vec<Value>],
+) -> Result<u64> {
+    let column_list = columns.join(", ");
+
+    // A NULL goes in as a literal rather than a bound parameter. Binding
+    // `None::<String>` sends a typed null, and PostgreSQL rejects a text
+    // null for an integer column — "column is of type integer but
+    // expression is of type text". A bare NULL takes the column's own type.
+    let values = decoded
+        .iter()
+        .map(|row| {
+            let cells: Vec<&str> = row
+                .iter()
+                .map(|v| {
+                    if matches!(v, Value::Null) {
+                        "NULL"
+                    } else {
+                        "?"
+                    }
+                })
+                .collect();
+            format!("({})", cells.join(", "))
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let sql = format!("INSERT INTO {table} ({column_list}) VALUES {values}");
+    let mut query = sqlx::query(target.sql(&sql));
+
+    for row in decoded {
+        for value in row {
+            query = match value {
+                Value::Null => continue,
+                Value::Int(v) => query.bind(*v),
+                Value::Real(v) => query.bind(*v),
+                Value::Text(v) => query.bind(v.clone()),
+            };
+        }
+    }
+
+    Ok(query.execute(&mut **tx).await?.rows_affected())
 }
 
 #[cfg(test)]

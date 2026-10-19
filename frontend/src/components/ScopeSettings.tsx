@@ -70,6 +70,9 @@ export const GROUPS = [
   // Kept on the Cache page, one switch per space.
   { id: 'cache', prefixes: ['cache'] },
   { id: 'adult', prefixes: ['adult'] },
+  // The schedule, what is kept, and the archives made before an upgrade;
+  // the archives themselves are on the Backups page.
+  { id: 'backup', prefixes: ['backup'] },
   // Kept in a panel of their own on the Settings page: the events are
   // ticked rather than typed, and the address can be tested.
   { id: 'webhooks', prefixes: ['webhooks'] },
@@ -215,7 +218,7 @@ export function ServerSettings({
   }
 
   const here = registry.data.filter((def) => def.scopes.includes('server'))
-  const groups: GroupId[] = ['answering', 'providers', 'sources', 'refresh', 'adult', 'other']
+  const groups: GroupId[] = ['answering', 'providers', 'sources', 'refresh', 'adult', 'backup', 'other']
 
   return (
     <div className="space-y-6">

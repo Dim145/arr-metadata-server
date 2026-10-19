@@ -55,6 +55,7 @@ const NAV: Entry[] = [
   { to: '/admin/arr', glyph: 'link', label: (t) => t.admin.arrNav, group: 'system', admin: true },
   { to: '/admin/media', glyph: 'image', label: (t) => t.admin.mediaNav, group: 'system', admin: true },
   { to: '/admin/cache', glyph: 'database', label: (t) => t.admin.cacheNav, group: 'system', admin: true },
+  { to: '/admin/backups', glyph: 'shield', label: (t) => t.admin.backupsNav, group: 'system', admin: true },
   { to: '/admin/audit', glyph: 'journal', label: (t) => t.admin.audit, group: 'system', admin: true },
   { to: '/admin/notifications', glyph: 'bell', label: (t) => t.admin.notificationsNav, group: 'system', admin: true },
   { to: '/admin/users', glyph: 'user', label: (t) => t.admin.users, group: 'access', admin: true },

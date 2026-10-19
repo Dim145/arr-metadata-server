@@ -13,7 +13,12 @@
 
 use std::fmt::Write as _;
 
-use crate::domain::{CoverType, Credit, CreditType, Episode, MediaItem, MediaKind};
+use crate::{
+    domain::{
+        CoverType, Credit, CreditType, Episode, EpisodeOrder, MediaItem, MediaKind, OrderKind,
+    },
+    service::orders,
+};
 
 /// Escape text for an XML text node or a double-quoted attribute.
 ///
@@ -72,14 +77,29 @@ pub struct Collection<'a> {
 /// [`for_item_in`].
 #[cfg(test)]
 pub fn for_item(item: &MediaItem) -> String {
-    for_item_in(item, None)
+    for_item_in(item, None, &[])
 }
 
 /// The document for a work: `<tvshow>` or `<movie>` — a film's with the
 /// collection it belongs to, when its name is known: TMDB gives the catalogue
 /// the collection's number, and the name is a second question to ask it, so the
 /// caller that has it hands it in.
-pub fn for_item_in(item: &MediaItem, collection: Option<&Collection<'_>>) -> String {
+///
+/// A series' with the orders the catalogue keeps for it
+/// (`repo::order::list`): one frozen as the aired numbering is named to
+/// Jellyfin, which numbers the series by the order its `<displayorder>`
+/// names — TheTVDB's type, through its TheTVDB plugin; TMDB's, through its
+/// TMDb provider, with the group's id beside it. An order made here is no
+/// order Jellyfin knows, and is not named; its episodes' documents carry the
+/// numbers it gives them all the same.
+pub fn for_item_in(
+    item: &MediaItem,
+    collection: Option<&Collection<'_>>,
+    orders: &[EpisodeOrder],
+) -> String {
+    let frozen = orders
+        .iter()
+        .find(|order| order.is_frozen && !order.is_default);
     let root = match item.kind {
         MediaKind::Series => "tvshow",
         MediaKind::Movie => "movie",
@@ -106,6 +126,11 @@ pub fn for_item_in(item: &MediaItem, collection: Option<&Collection<'_>>) -> Str
             tag(&mut out, "status", item.status.as_deref());
             // Kodi expects the broadcaster here, which our `network` is.
             tag(&mut out, "studio", item.network.as_deref());
+            tag(
+                &mut out,
+                "displayorder",
+                frozen.and_then(display_order).as_deref(),
+            );
         }
         MediaKind::Movie => {
             tag(&mut out, "premiered", item.in_cinemas.as_deref());
@@ -157,6 +182,18 @@ pub fn for_item_in(item: &MediaItem, collection: Option<&Collection<'_>>) -> Str
     }
 
     unique_ids(&mut out, item);
+    // The group a frozen TMDB order is: what Jellyfin's TMDb provider
+    // numbers the series by, whatever its display order says.
+    if let Some(group) = frozen
+        .filter(|order| order.source == crate::providers::names::TMDB)
+        .and_then(|order| order.source_ref.as_deref())
+    {
+        let _ = writeln!(
+            out,
+            "  <uniqueid type=\"TmdbEpisodeGroupId\">{}</uniqueid>",
+            escape(group)
+        );
+    }
     ratings(&mut out, item);
     artwork(&mut out, item);
 
@@ -179,26 +216,32 @@ pub fn for_item_in(item: &MediaItem, collection: Option<&Collection<'_>>) -> Str
     out
 }
 
-/// The document for one episode: `<episodedetails>`.
-pub fn for_episode(item: &MediaItem, episode: &Episode) -> String {
+/// The document for one episode: `<episodedetails>`. With the orders the
+/// catalogue keeps for the series, a special one of them places among the
+/// regular seasons is displayed there by Kodi — `displayseason`, and
+/// `displayepisode`, the episode it comes before — where TheTVDB's own hint
+/// of where it aired says nothing.
+pub fn for_episode(item: &MediaItem, episode: &Episode, orders: &[EpisodeOrder]) -> String {
     let mut out = String::with_capacity(1024);
     out.push_str(HEADER);
     out.push_str("<episodedetails>\n");
+
+    let (display_season, display_episode) = match (
+        episode.aired_before_season_number,
+        episode.aired_before_episode_number,
+    ) {
+        (None, None) if episode.season_number == 0 => {
+            special_place(item, episode, orders).unwrap_or_default()
+        }
+        given => given,
+    };
 
     tag(&mut out, "title", Some(&episode.title));
     tag(&mut out, "showtitle", Some(&item.title));
     tag_num(&mut out, "season", Some(episode.season_number));
     tag_num(&mut out, "episode", Some(episode.episode_number));
-    tag_num(
-        &mut out,
-        "displayseason",
-        episode.aired_before_season_number,
-    );
-    tag_num(
-        &mut out,
-        "displayepisode",
-        episode.aired_before_episode_number,
-    );
+    tag_num(&mut out, "displayseason", display_season);
+    tag_num(&mut out, "displayepisode", display_episode);
     tag(&mut out, "plot", episode.overview.as_deref());
     tag(&mut out, "aired", episode.air_date.as_deref());
     tag_num(&mut out, "runtime", episode.runtime);
@@ -229,6 +272,69 @@ pub fn for_episode(item: &MediaItem, episode: &Episode) -> String {
 
     out.push_str("</episodedetails>\n");
     out
+}
+
+/// What Jellyfin calls an order in a `<displayorder>`: TheTVDB's own type
+/// for one of its orders, as its TheTVDB plugin compares it; for a TMDB
+/// group, the order its TMDb provider maps to the group's type. None for an
+/// order made here, which Jellyfin cannot ask anybody for.
+fn display_order(order: &EpisodeOrder) -> Option<String> {
+    match order.source.as_str() {
+        crate::providers::names::TVDB => Some(order.key.clone()),
+        crate::providers::names::TMDB => Some(
+            match order.kind {
+                OrderKind::Aired => "originalAirDate",
+                OrderKind::Absolute => "absolute",
+                OrderKind::Dvd => "dvd",
+                OrderKind::Digital => "digital",
+                OrderKind::StoryArc => "storyArc",
+                OrderKind::Production => "production",
+                OrderKind::Tv => "tv",
+                OrderKind::TvdbAlt | OrderKind::Custom => return None,
+            }
+            .to_string(),
+        ),
+        _ => None,
+    }
+}
+
+/// Where the first order that places a special among the regular seasons —
+/// in the order they are offered, the DVDs' first; the one the episodes are
+/// numbered by aside — puts it, in the numbers the library goes by: the
+/// season and number of the episode the order has after it, or, at the end
+/// of a season, that season alone.
+fn special_place(
+    item: &MediaItem,
+    episode: &Episode,
+    kept: &[EpisodeOrder],
+) -> Option<(Option<i32>, Option<i32>)> {
+    kept.iter()
+        .filter(|order| !order.is_default && !order.is_frozen)
+        .find_map(|order| {
+            let mut placed = orders::placements(item, order);
+            placed.sort_by_key(|p| (p.season_number, p.episode_number));
+            let at = placed
+                .iter()
+                .position(|p| !p.own && p.episode.id == episode.id)?;
+            let season = placed[at].season_number;
+            if season == 0 {
+                return None;
+            }
+            let regular = |p: &&orders::Placed<'_>| {
+                p.season_number == season && !p.own && p.episode.season_number > 0
+            };
+            if let Some(next) = placed[at + 1..].iter().find(regular) {
+                return Some((
+                    Some(next.episode.season_number),
+                    Some(next.episode.episode_number),
+                ));
+            }
+            placed[..at]
+                .iter()
+                .rev()
+                .find(regular)
+                .map(|before| (Some(before.episode.season_number), None))
+        })
 }
 
 fn unique_ids(out: &mut String, item: &MediaItem) {
@@ -683,7 +789,7 @@ mod tests {
             votes: 260,
         });
 
-        let nfo = for_episode(&item, &episode);
+        let nfo = for_episode(&item, &episode, &[]);
 
         assert!(nfo.contains("<episodedetails>"));
         assert!(nfo.contains("<title>Pilot</title>"));
@@ -692,6 +798,114 @@ mod tests {
         assert!(nfo.contains("<episode>1</episode>"));
         assert!(nfo.contains("<aired>2008-01-20</aired>"));
         assert!(nfo.contains("<value>8.3</value>"));
+    }
+
+    fn order(key: &str, source: &str, kind: OrderKind, frozen: bool) -> EpisodeOrder {
+        EpisodeOrder {
+            key: key.into(),
+            kind,
+            source: source.into(),
+            source_ref: (source == "tmdb").then(|| "5acf93e60e0a26346d0000ce".to_string()),
+            label: key.into(),
+            is_default: false,
+            is_frozen: frozen,
+            announced: None,
+            updated_at: "2026-10-19T00:00:00.000Z".into(),
+            episodes: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_frozen_order_is_named_to_jellyfin_as_it_knows_it() {
+        let item = series();
+        let nfo = for_item_in(&item, None, &[order("dvd", "tvdb", OrderKind::Dvd, true)]);
+        assert!(nfo.contains("<displayorder>dvd</displayorder>"), "{nfo}");
+        assert!(!nfo.contains("TmdbEpisodeGroupId"), "{nfo}");
+
+        // A TMDB group: the order Jellyfin's TMDb provider maps to its type,
+        // and the group itself.
+        let nfo = for_item_in(
+            &item,
+            None,
+            &[order(
+                "tmdb-5acf93e60e0a26346d0000ce",
+                "tmdb",
+                OrderKind::StoryArc,
+                true,
+            )],
+        );
+        assert!(
+            nfo.contains("<displayorder>storyArc</displayorder>"),
+            "{nfo}"
+        );
+        assert!(
+            nfo.contains(
+                "<uniqueid type=\"TmdbEpisodeGroupId\">5acf93e60e0a26346d0000ce</uniqueid>"
+            ),
+            "{nfo}"
+        );
+        // Read to the end by a parser: one default id still, the group's
+        // beside it.
+        let elements = xml::read(&nfo);
+        let defaults = xml::at(&elements, "tvshow/uniqueid")
+            .into_iter()
+            .filter(|id| id.attribute("default") == Some("true"))
+            .count();
+        assert_eq!(defaults, 1, "{nfo}");
+
+        // One made here is no order Jellyfin knows; one not frozen, none to
+        // name.
+        for orders in [
+            vec![order("ams-mine", "local", OrderKind::Custom, true)],
+            vec![order("dvd", "tvdb", OrderKind::Dvd, false)],
+        ] {
+            let nfo = for_item_in(&item, None, &orders);
+            assert!(!nfo.contains("displayorder"), "{nfo}");
+        }
+    }
+
+    #[test]
+    fn a_special_an_order_places_among_the_seasons_is_displayed_there() {
+        let mut item = series();
+        let mut special = crate::db::repo::child::blank_episode(0, 1);
+        special.id = "special".into();
+        special.title = "Minisode".into();
+        special.tvdb_id = Some(900);
+        item.episodes = vec![special.clone()];
+        for (number, tvdb_id) in [(1, 101), (2, 102), (3, 103)] {
+            let mut episode = crate::db::repo::child::blank_episode(1, number);
+            episode.id = format!("e{number}");
+            episode.tvdb_id = Some(tvdb_id);
+            item.episodes.push(episode);
+        }
+        // The DVDs put the special between the first two episodes.
+        let mut dvd = order("dvd", "tvdb", OrderKind::Dvd, false);
+        dvd.episodes = [(101, 1), (900, 2), (102, 3), (103, 4)]
+            .into_iter()
+            .map(|(id, number)| crate::domain::PlacedEpisode::of_tvdb(id, 1, number))
+            .collect();
+
+        let nfo = for_episode(&item, &special, std::slice::from_ref(&dvd));
+        assert!(nfo.contains("<displayseason>1</displayseason>"), "{nfo}");
+        assert!(nfo.contains("<displayepisode>2</displayepisode>"), "{nfo}");
+
+        // Last of its season in the order: that season, and no episode.
+        dvd.episodes = [(101, 1), (102, 2), (103, 3), (900, 4)]
+            .into_iter()
+            .map(|(id, number)| crate::domain::PlacedEpisode::of_tvdb(id, 1, number))
+            .collect();
+        let nfo = for_episode(&item, &special, std::slice::from_ref(&dvd));
+        assert!(nfo.contains("<displayseason>1</displayseason>"), "{nfo}");
+        assert!(!nfo.contains("displayepisode"), "{nfo}");
+
+        // TheTVDB's own word on where it aired comes first; and no order,
+        // nothing said.
+        let mut hinted = special.clone();
+        hinted.aired_before_season_number = Some(2);
+        let nfo = for_episode(&item, &hinted, std::slice::from_ref(&dvd));
+        assert!(nfo.contains("<displayseason>2</displayseason>"), "{nfo}");
+        let nfo = for_episode(&item, &special, &[]);
+        assert!(!nfo.contains("displayseason"), "{nfo}");
     }
 
     #[test]
@@ -795,7 +1009,7 @@ mod tests {
             let mut episode = crate::db::repo::child::blank_episode(1, 1);
             episode.tvdb_id = tvdb;
             episode.tmdb_id = tmdb;
-            identifiers(&for_episode(&item, &episode), "episodedetails")
+            identifiers(&for_episode(&item, &episode, &[]), "episodedetails")
         };
 
         assert_eq!(
@@ -817,7 +1031,7 @@ mod tests {
             overview: Some("Xenomorphs,\nmostly."),
         };
 
-        let nfo = for_item_in(&film, Some(&collection));
+        let nfo = for_item_in(&film, Some(&collection), &[]);
         let elements = xml::read(&nfo);
         assert_eq!(
             xml::texts(&elements, "movie/set/name"),
@@ -835,6 +1049,7 @@ mod tests {
                 name: "  ",
                 overview: Some("x"),
             }),
+            &[],
         );
         assert!(!nameless.contains("<set>"));
         let bare = for_item_in(
@@ -843,13 +1058,14 @@ mod tests {
                 name: "Heat",
                 overview: None,
             }),
+            &[],
         );
         assert!(bare.contains("<set>\n    <name>Heat</name>\n  </set>"));
         assert!(!bare.contains("<overview>"));
         assert!(!for_item(&film).contains("<set>"));
 
         // A series belongs to no collection, whatever it is handed.
-        let show = for_item_in(&series(), Some(&collection));
+        let show = for_item_in(&series(), Some(&collection), &[]);
         assert!(!show.contains("<set>"));
     }
 
@@ -1000,7 +1216,7 @@ mod tests {
 
         let mut episode = crate::db::repo::child::blank_episode(1, 2);
         episode.title = "<Pilot> & \"more\"".into();
-        let elements = xml::read(&for_episode(&item, &episode));
+        let elements = xml::read(&for_episode(&item, &episode, &[]));
         assert_eq!(
             xml::texts(&elements, "episodedetails/title"),
             ["<Pilot> & \"more\""]

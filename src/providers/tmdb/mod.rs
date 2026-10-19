@@ -190,7 +190,7 @@ impl TmdbClient {
             ("language", language.to_string()),
             (
                 "append_to_response",
-                "external_ids,credits,content_ratings,alternative_titles,keywords,videos,images,translations"
+                "external_ids,credits,content_ratings,alternative_titles,keywords,videos,images,translations,episode_groups"
                     .to_string(),
             ),
             // Posters and logos in the configured language plus language-neutral art.
@@ -201,6 +201,22 @@ impl TmdbClient {
         ];
 
         self.fetch(&url, &params).await
+    }
+
+    /// One episode group with its episodes, by the id TMDB lists it under
+    /// with its series. `None` when TMDB holds no such group any more.
+    pub async fn episode_group(&self, id: &str) -> Result<Option<models::EpisodeGroup>> {
+        // One segment of the path, whatever the id holds: it was read from
+        // an answer, and is no address of anybody's choosing.
+        let url = format!(
+            "{}/tv/episode_group/{}",
+            self.base,
+            crate::providers::segment(id)
+        );
+        match self.fetch(&url, &[("language", self.language())]).await? {
+            Some(value) => Self::typed(&value, "episode group").map(Some),
+            None => Ok(None),
+        }
     }
 
     /// Every season's episode list, fetched concurrently, and the numbers of

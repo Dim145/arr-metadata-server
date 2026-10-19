@@ -42,6 +42,9 @@ import type { Episode, FieldRegistry, Image, MediaItem, Override, ProvenanceRepo
 
 import { FieldRow, hasValue } from './FieldRow'
 import { ImagePicker, type Candidate } from './ImagePicker'
+import { NumberingBanner } from './NumberingBanner'
+import { orderName } from './orders'
+import { OrdersPanel } from './OrdersPanel'
 import { seasonPictures } from './pictures'
 import { AddForm, Count, Empty, Facts, LockBadge, Yours, hostOf, useRemove } from './shared'
 
@@ -230,13 +233,23 @@ export function SeasonsTab({
 
   return (
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-[16rem_minmax(0,1fr)] lg:items-start">
+      {/* While TMDB numbers the series in TheTVDB's place: said above
+          everything the numbering moves, with the way back. */}
+      {orders.data ? (
+        <NumberingBanner workId={work.id} orders={orders.data} canWrite onChanged={onChanged} className="lg:col-span-2" />
+      ) : null}
+
       {/* ── The seasons ────────────────────────────────────────────── */}
       <nav aria-label={c.seasons} id="seasons" className="scroll-mt-28 lg:sticky lg:top-16 lg:scroll-mt-16">
         {numbers.length ? (
         <ol
           className={cn(
             '-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 [scrollbar-width:none] sm:-mx-6 sm:px-6',
-            'lg:mx-0 lg:block lg:space-y-0.5 lg:overflow-visible lg:rounded-panel lg:border lg:border-rule lg:p-2 lg:px-4 lg:film-strip-y',
+            // Sticky beside the fields, the rail scrolls within itself past
+            // the viewport's height: a series of forty seasons kept its last
+            // ones under the fold, where a sticky box reaches only at the
+            // page's end.
+            'lg:mx-0 lg:block lg:max-h-[calc(100dvh-5rem)] lg:space-y-0.5 lg:overflow-y-auto lg:rounded-panel lg:border lg:border-rule lg:p-2 lg:px-4 lg:film-strip-y',
           )}
         >
           {numbers.map((n) => {
@@ -475,10 +488,10 @@ export function SeasonsTab({
               {otherOrders.length ? (
                 <>
                   {' '}
-                  {s.otherOrders(fmt.list(otherOrders.map((order) => t.season.order[order.kind] ?? order.kind), locale))}{' '}
-                  <Link to={`/work/${work.id}/season/${season}?order=${encodeURIComponent(otherOrders[0]!.kind)}`} className="text-vermillion underline-offset-4 hover:underline">
+                  {s.otherOrders(fmt.list(otherOrders.map((order) => orderName(order, t.season.order)), locale))}{' '}
+                  <a href="#order-editor" className="text-vermillion underline-offset-4 hover:underline">
                     {s.seeOrders}
-                  </Link>
+                  </a>
                 </>
               ) : null}{' '}
               {c.onlyManual}
@@ -488,6 +501,9 @@ export function SeasonsTab({
           </>
         )}
       </div>
+
+      {/* ── The orders: the whole width, beneath the seasons ───────── */}
+      <OrdersPanel work={work} onChanged={onChanged} />
 
       {dialog}
 

@@ -130,12 +130,12 @@ pub struct Started {
 #[utoipa::path(
     post, path = "/tasks/{id}/run", tag = TAG,
     operation_id = "tasks_run",
-    params(("id" = String, Path, description = "`refresh.sweep`, `refresh.all`, `import.anime`, `import.imdb`, `export.nfo`, `media.store`, `media.sweep`, `tls.renew`, `update.check` or `arr.seed`")),
+    params(("id" = tasks::TaskId, Path, description = "The task to run")),
     responses(
         (status = 202, body = Started),
         (status = 403, description = "The caller is not an administrator"),
         (status = 404, description = "No such task"),
-        (status = 409, description = "It is running already"),
+        (status = 409, description = "It is running already, or a backup is being restored"),
         (status = 503, description = "Its source or its switch is off: no media store, no export path, no certificate of the server's own, the check for a newer version off, neither Sonarr nor Radarr connected"),
     ),
 )]
@@ -169,6 +169,7 @@ async fn run(
         tasks::TLS_RENEW => crate::tls::renew_now(&state, &by).await?,
         tasks::UPDATE_CHECK => jobs::update_check::check_now(&state, &by).await?,
         tasks::ARR_SEED => crate::arr::seed::start(&state, &by).await?,
+        tasks::BACKUP_RUN => jobs::backup::back_up_now(&state, &by, None).await?,
         _ => return Err(AppError::NotFound),
     };
 
@@ -212,7 +213,7 @@ async fn cancel(
         .ok_or(AppError::NotFound)?;
     if !jobs::cancel::cancel(&run.id) {
         // Not running here: perhaps on another instance, which is told.
-        let elsewhere = run.status == "running"
+        let elsewhere = run.status == repo::job::Status::Running
             && jobs::tasks::stops_partway(&run.kind)
             && run.instance.as_deref().is_some_and(|name| {
                 name != state.coord.instance.name && state.coord.is_alive(name)

@@ -15,6 +15,7 @@
 //! Written only: Plex is a client of this server, never one of its sources.
 
 use std::{
+    borrow::Cow,
     collections::{BTreeMap, HashMap, HashSet},
     fmt,
     ops::Range,
@@ -26,12 +27,12 @@ use utoipa::ToSchema;
 
 use crate::{
     domain::{
-        CoverType, CreditType, Episode, EpisodeOrder, Image, MediaItem, MediaKind, PrimaryImages,
-        Season, genre_parts, ids::normalize_imdb_id, lead_images,
+        CoverType, CreditType, Episode, EpisodeOrder, Image, MediaItem, MediaKind, OrderKind,
+        PrimaryImages, Season, genre_parts, ids::normalize_imdb_id, lead_images, orders::is_key,
     },
     service::{
         language,
-        orders::{self, AIRED},
+        orders::{self, AIRED, Placed},
     },
 };
 
@@ -686,10 +687,13 @@ impl Key {
 
 impl fmt::Display for Key {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // An order's key may hold hyphens — `tmdb-…`, `ams-…` — which part a
+        // key's pieces: written with underscores in their place, read back
+        // with hyphens.
         let order = |order: &Option<String>| {
             order
                 .as_deref()
-                .map(|kind| format!("-{kind}"))
+                .map(|kind| format!("-{}", kind.replace('-', "_")))
                 .unwrap_or_default()
         };
         match self {
@@ -726,19 +730,21 @@ fn placed(rest: &str) -> Option<(Work, &str, Option<String>)> {
         if !is_mark(mark) || !is_order(last) {
             return None;
         }
-        (work, mark, Some(last.to_string()))
+        (work, mark, Some(last.replace('_', "-")))
     };
     let order = order.filter(|kind| kind != AIRED);
     Some((Work::parse(work)?, mark, order))
 }
 
-/// Whether a kind of order can be written into a key: lower-case letters and
-/// digits, as TheTVDB names its orders — `dvd`, `altdvd`, `alttwo`.
+/// Whether an order is written in a key as this: lower-case letters and
+/// digits, as TheTVDB names its orders — `dvd`, `altdvd`, `alttwo` — and
+/// underscores, where the key of a TMDB group or an order made here has its
+/// hyphens (`tmdb_5acf…`, `ams_my_order`).
 pub fn is_order(kind: &str) -> bool {
-    (1..=32).contains(&kind.len())
+    (1..=orders::KEY_MOST).contains(&kind.len())
         && kind
             .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
 }
 
 fn positive(text: &str) -> Option<i64> {
@@ -882,26 +888,33 @@ pub struct Laid<'a> {
     /// The aired season of this number: the season itself in the aired
     /// order; in another, the one that lends it its pictures.
     pub season: Option<&'a Season>,
-    /// Its episodes, by their number in the order.
-    pub episodes: Vec<(i32, &'a Episode)>,
+    /// Its episodes, by their number in the order: the work's own, or the
+    /// records an order carries of episodes the work does not hold.
+    pub episodes: Vec<(i32, Cow<'a, Episode>)>,
 }
 
 impl<'a> Layout<'a> {
-    /// The work laid out in the order a client named by kind: its own for
-    /// the aired order, or when none is named; the one of that kind the
-    /// catalogue keeps for it otherwise — and not a season at all where it
-    /// keeps none, or one in name only (see [`orders::in_use`]): Plex asks
-    /// that no season be given for an order a series has not
-    /// (developer.plex.tv/pms, Metadata Providers › `episodeOrder`).
-    pub fn asked(item: &'a MediaItem, orders: &'a [EpisodeOrder], kind: Option<&str>) -> Self {
-        let kind = kind
+    /// The work laid out in the order a client named by its key: the aired
+    /// one when none is named — numbered by the order frozen as it, when one
+    /// is; the one of that key the catalogue keeps for it otherwise — and not
+    /// a season at all where it keeps none, or one in name only (see
+    /// [`orders::in_use`]): Plex asks that no season be given for an order a
+    /// series has not (developer.plex.tv/pms, Metadata Providers ›
+    /// `episodeOrder`).
+    pub fn asked(item: &'a MediaItem, orders: &'a [EpisodeOrder], key: Option<&str>) -> Self {
+        let key = key
             .map(|k| k.trim().to_ascii_lowercase())
             .filter(|k| !k.is_empty() && k != AIRED);
-        let Some(kind) = kind else {
-            return Self::aired(item);
+        let Some(key) = key else {
+            return match orders::as_official(item, orders) {
+                Some(frozen) => Self::placed(item, frozen, None),
+                None => Self::aired(item),
+            };
         };
-        match orders::in_use(item, orders, &kind) {
-            Some(order) if is_order(&kind) => Self::placed(item, order, Some(kind)),
+        match orders::in_use(item, orders, &key) {
+            Some(order) if is_key(&key) => {
+                Self::placed(item, orders::served(item, order), Some(key))
+            }
             _ => Self {
                 order: None,
                 placed: true,
@@ -931,32 +944,33 @@ impl<'a> Layout<'a> {
                     episodes: Vec::new(),
                 })
                 .episodes
-                .push((episode.episode_number, episode));
+                .push((episode.episode_number, Cow::Borrowed(episode)));
         }
         Self::sorted(None, false, seasons)
     }
 
-    /// The same episodes as another order places them: by TVDB id, under
-    /// that order's seasons and numbers — where they are is worked out once,
-    /// for every client, in [`orders::placements`].
-    fn placed(item: &'a MediaItem, order: &'a EpisodeOrder, kind: Option<String>) -> Self {
+    /// The episodes as an order places them, under its seasons and numbers —
+    /// where they are is worked out once, for every client, in
+    /// [`orders::placements`] — with the records it carries of episodes the
+    /// work does not hold.
+    fn placed(item: &'a MediaItem, placements: Vec<Placed<'a>>, key: Option<String>) -> Self {
         let mut aired: HashMap<i32, &'a Season> = HashMap::new();
         for season in &item.seasons {
             aired.entry(season.season_number).or_insert(season);
         }
         let mut seasons: BTreeMap<i32, Laid<'a>> = BTreeMap::new();
-        for (place, episode) in orders::placements(item, order) {
+        for placed in placements {
             seasons
-                .entry(place.season_number)
+                .entry(placed.season_number)
                 .or_insert_with(|| Laid {
-                    number: place.season_number,
-                    season: aired.get(&place.season_number).copied(),
+                    number: placed.season_number,
+                    season: aired.get(&placed.season_number).copied(),
                     episodes: Vec::new(),
                 })
                 .episodes
-                .push((place.episode_number, episode));
+                .push((placed.episode_number, placed.episode));
         }
-        Self::sorted(kind, true, seasons)
+        Self::sorted(key, true, seasons)
     }
 
     fn sorted(order: Option<String>, placed: bool, seasons: BTreeMap<i32, Laid<'a>>) -> Self {
@@ -981,7 +995,7 @@ impl Laid<'_> {
         self.episodes
             .iter()
             .find(|(n, _)| *n == number)
-            .map(|(_, episode)| *episode)
+            .map(|(_, episode)| episode.as_ref())
     }
 }
 
@@ -1532,47 +1546,65 @@ fn ratings(item: &MediaItem) -> Vec<PlexRating> {
 }
 
 /// The orders a series may be asked in, the aired one first, then each
-/// other order the catalogue keeps that places an episode the work still
-/// has — the same list Sonarr v5 is offered.
+/// other order the catalogue offers for it (`orders::offered`) — the same
+/// list Sonarr v5 is offered — each by its key and under its own name, told
+/// apart from another of the same name by its source
+/// (`orders::client_names`).
 fn season_types(item: &MediaItem, orders: &[EpisodeOrder]) -> Vec<PlexSeasonType> {
     let ids = &item.external_ids;
-    let source = if ids.tvdb.is_some() {
-        "tvdb"
-    } else if ids.tmdb.is_some() {
-        "tmdb"
-    } else if ids.fankai.is_some() {
-        "fankai"
-    } else {
-        "manual"
+    let source = match orders::aired(orders) {
+        Some(aired) => aired.source.clone(),
+        None if ids.tvdb.is_some() => "tvdb".to_string(),
+        None if ids.tmdb.is_some() => "tmdb".to_string(),
+        None if ids.fankai.is_some() => "fankai".to_string(),
+        None => "manual".to_string(),
     };
+    const AIRED_TITLE: &str = "Aired order";
     let mut types = vec![PlexSeasonType {
         id: AIRED.to_string(),
-        source: source.to_string(),
+        source,
         tag: "Aired".to_string(),
-        title: "Aired order".to_string(),
+        title: AIRED_TITLE.to_string(),
     }];
-    for order in orders {
-        let id = order.kind.to_ascii_lowercase();
-        if !is_order(&id) || id == AIRED || orders::placements(item, order).is_empty() {
-            continue;
-        }
-        let tag = match id.as_str() {
-            "dvd" => "DVD".to_string(),
-            "absolute" => "Absolute".to_string(),
-            "alternate" => "Alternate".to_string(),
-            "regional" => "Regional".to_string(),
-            "altdvd" => "Alternate DVD".to_string(),
-            "alttwo" => "Alternate 2".to_string(),
-            other => super::sonarr::capitalize(other),
-        };
+    let offered: Vec<&EpisodeOrder> = orders::offered(item, orders)
+        .into_iter()
+        .filter(|order| is_key(&order.key))
+        .collect();
+    let titles = orders::client_names(item, orders, &offered, AIRED_TITLE);
+    for (order, title) in offered.into_iter().zip(titles) {
         types.push(PlexSeasonType {
-            title: format!("TheTVDB ({tag} order)"),
-            id,
-            source: "tvdb".to_string(),
-            tag,
+            id: order.key.clone(),
+            source: order.source.clone(),
+            tag: tag(order),
+            title,
         });
     }
     types
+}
+
+/// A word or two for what an order is: its type, for one of TheTVDB's and a
+/// TMDB group; what it is for one made here.
+fn tag(order: &EpisodeOrder) -> String {
+    match (order.source.as_str(), order.key.as_str()) {
+        ("tvdb", "dvd") => "DVD",
+        ("tvdb", "absolute") => "Absolute",
+        ("tvdb", "alternate") => "Alternate",
+        ("tvdb", "regional") => "Regional",
+        ("tvdb", "altdvd") => "Alternate DVD",
+        ("tvdb", "alttwo") => "Alternate 2",
+        _ => match order.kind {
+            OrderKind::Aired => "Original air date",
+            OrderKind::Dvd => "DVD",
+            OrderKind::Absolute => "Absolute",
+            OrderKind::Digital => "Digital",
+            OrderKind::Production => "Production",
+            OrderKind::StoryArc => "Story arc",
+            OrderKind::Tv => "TV",
+            OrderKind::TvdbAlt => "Alternate",
+            OrderKind::Custom => "Custom",
+        },
+    }
+    .to_string()
 }
 
 /// The rating a work carries in the country asked, as Plex writes a
@@ -1766,14 +1798,17 @@ mod tests {
     }
 
     fn dvd() -> Vec<EpisodeOrder> {
-        let place = |tvdb_id, season_number, episode_number| PlacedEpisode {
-            tvdb_id,
-            season_number,
-            episode_number,
-            absolute_number: None,
-        };
+        let place = PlacedEpisode::of_tvdb;
         vec![EpisodeOrder {
-            kind: "dvd".into(),
+            key: "dvd".into(),
+            kind: OrderKind::Dvd,
+            source: "tvdb".into(),
+            source_ref: None,
+            label: "DVD Order".into(),
+            is_default: false,
+            is_frozen: false,
+            announced: None,
+            updated_at: "2026-10-19T00:00:00.000Z".into(),
             episodes: vec![place(1002, 1, 1), place(1001, 1, 2), place(2001, 2, 1)],
         }]
     }
@@ -1791,6 +1826,10 @@ mod tests {
             format!("season-id-{id}-s2-dvd"),
             "episode-tmdb-1396-s1e3".to_string(),
             format!("episode-id-{id}-s10e120-absolute"),
+            // A TMDB group's key and one made here, their hyphens written
+            // as underscores.
+            "season-tvdb-73244-s3-tmdb_5acf93e60e0a26346d0000ce".to_string(),
+            "episode-tvdb-73244-s0e2-ams_my_dvd_order".to_string(),
         ] {
             let key = Key::parse(&raw).unwrap_or_else(|| panic!("{raw} is a key"));
             assert_eq!(key.to_string(), raw);

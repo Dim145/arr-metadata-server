@@ -360,7 +360,8 @@ pub fn episode_locked(item: &MediaItem, episode: &Episode, field: &str) -> bool 
 /// Whose credential a relay asks its service with: an administrator's
 /// choice on the access page, `tmdb.relayCredential` for TMDB's relay and
 /// `tvdb.relayCredential` for TheTVDB's. AniList has no key to choose.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "lowercase")]
 pub enum RelayCredential {
     /// This server's own key, in place of whatever the client sent: the
     /// operator's key serves every client, and the operator answers for that
@@ -380,13 +381,6 @@ impl RelayCredential {
             Surface::Tmdb => Some("tmdb.relayCredential"),
             Surface::Tvdb => Some("tvdb.relayCredential"),
             _ => None,
-        }
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Server => "server",
-            Self::Client => "client",
         }
     }
 }

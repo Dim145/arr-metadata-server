@@ -227,6 +227,17 @@ pub fn update_available(found: bool) -> Metric {
     }
 }
 
+/// How old the newest archive is, in seconds: what an alert on backups
+/// that stopped reads. Offered only while one exists — `absent()` is how
+/// an alert says none was ever made.
+pub fn backup_age(seconds: f64) -> Metric {
+    Metric {
+        name: "ams_backup_age_seconds",
+        help: "Seconds since the newest archive of the database was made.",
+        samples: vec![(String::new(), seconds.max(0.0))],
+    }
+}
+
 /// A label value, escaped as the text format asks.
 pub fn label(value: &str) -> String {
     value
@@ -448,5 +459,16 @@ mod tests {
         assert!(text.contains("# TYPE ams_update_available gauge\nams_update_available 1\n"));
         let text = render(&[update_available(false)]);
         assert!(text.contains("ams_update_available 0\n"));
+    }
+
+    #[test]
+    fn the_newest_archive_s_age_is_a_gauge_never_below_nought() {
+        let text = render(&[backup_age(3600.0)]);
+        assert!(
+            text.contains("# TYPE ams_backup_age_seconds gauge\nams_backup_age_seconds 3600\n")
+        );
+        // A clock set back since the archive was made does not make it young.
+        let text = render(&[backup_age(-5.0)]);
+        assert!(text.contains("ams_backup_age_seconds 0\n"));
     }
 }

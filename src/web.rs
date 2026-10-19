@@ -57,6 +57,8 @@ pub async fn serve(state: AppState) -> Result<()> {
     keep.run("listing", Ends::Never, jobs::listing::run);
     // Whether it asks is a setting too, off until somebody turns it on.
     keep.run("update check", Ends::Never, jobs::update_check::run);
+    // The archives of the database, as often as the setting says.
+    keep.run("backups", Ends::Never, jobs::backup::run);
     // The works changed here, told to the operator's Sonarr and Radarr when
     // that is asked for: idle until a change is offered.
     keep.run("sonarr and radarr", Ends::Never, crate::arr::push::run);
@@ -242,6 +244,13 @@ impl Keep<'_> {
 /// id, and the count.
 fn protect(state: &AppState, router: Router) -> Router {
     let router = router
+        // Nearest the handlers: while an archive is restored nothing reaches
+        // one but the liveness probe, and the 503 goes out through every
+        // layer below like any answer.
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::backup::maintenance::guard,
+        ))
         // Before any guard: a request for a name this server does not answer
         // to should not reach one, let alone a handler.
         .layer(axum::middleware::from_fn_with_state(
@@ -251,12 +260,14 @@ fn protect(state: &AppState, router: Router) -> Router {
         .layer(cors(state))
         .layer(axum::extract::DefaultBodyLimit::max(MAX_BODY_BYTES))
         // Not the sounds: a song is already as small as it gets, and a range
-        // of one must arrive as the bytes asked for.
+        // of one must arrive as the bytes asked for. Nor an archive, which
+        // is compressed already, and encrypted when it is not plain zstd.
         .layer(CompressionLayer::new().compress_when({
-            use tower_http::compression::Predicate as _;
-            tower_http::compression::DefaultPredicate::new().and(
-                tower_http::compression::predicate::NotForContentType::new("audio/"),
-            )
+            use tower_http::compression::{Predicate as _, predicate::NotForContentType};
+            tower_http::compression::DefaultPredicate::new()
+                .and(NotForContentType::new("audio/"))
+                .and(NotForContentType::new("application/zstd"))
+                .and(NotForContentType::new("application/octet-stream"))
         }))
         .layer(TimeoutLayer::with_status_code(
             StatusCode::GATEWAY_TIMEOUT,
@@ -419,7 +430,13 @@ fn build_clients_router(state: AppState) -> Router {
                 async move { relays.answer(request).await }
             }
         })
-        .with_state(state)
+        .with_state(state.clone())
+        // The clients are shut out while an archive is restored, as the
+        // interface is.
+        .layer(axum::middleware::from_fn_with_state(
+            state,
+            crate::backup::maintenance::guard,
+        ))
         .layer(axum::middleware::from_fn(
             move |request: Request, next: axum::middleware::Next| {
                 let names = names.clone();

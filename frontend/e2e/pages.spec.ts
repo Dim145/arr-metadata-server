@@ -563,11 +563,14 @@ test.describe('the other orders', () => {
     request,
   }) => {
     const { items } = await (await request.get('/api/v1/items?kind=series&limit=30')).json()
-    let found: { id: string; orders: { kind: string; episodes: { seasonNumber: number }[] }[] } | undefined
+    type Order = { key: string; source: string; episodes: { seasonNumber: number }[] }
+    let found: { id: string; orders: Order[] } | undefined
     for (const { id } of items as { id: string }[]) {
       const response = await request.get(`/api/v1/items/${id}/orders`)
       expect(response.status()).toBe(200)
-      const { orders } = await response.json()
+      // TheTVDB's own, which the note below names: a TMDB group, or an order
+      // made here, says where it comes from in words of its own.
+      const orders = ((await response.json()).orders as Order[]).filter((o) => o.source === 'tvdb' && o.episodes.length)
       if (orders.length) {
         found = { id, orders }
         break
@@ -577,7 +580,7 @@ test.describe('the other orders', () => {
 
     const order = found!.orders[0]!
     const season = order.episodes[0]?.seasonNumber
-    await page.goto(`/work/${found!.id}/season/${season}?order=${order.kind}`)
+    await page.goto(`/work/${found!.id}/season/${season}?order=${order.key}`)
     const tabs = page.getByRole('group', { name: /numbering|numérotation/i })
     await expect(tabs).toBeVisible()
     await expect(tabs.locator('a[aria-current="page"]')).toHaveCount(1)
@@ -661,8 +664,10 @@ test.describe('the schedule', () => {
     const now = new Date()
     const from = new Date(now.getFullYear(), now.getMonth(), 1).toISOString()
     const to = new Date(now.getFullYear(), now.getMonth() + 1, 1).toISOString()
-    const month = await (await request.get(`/api/v1/calendar?from=${from}&to=${to}`)).json()
-    if (!isMobile && month.episodes.length) {
+    const month = (await (await request.get(`/api/v1/calendar?from=${from}&to=${to}`)).json()) as {
+      entries: { kind: string }[]
+    }
+    if (!isMobile && month.entries.some((entry) => entry.kind === 'episode')) {
       expect(await grid.locator('a[href*="/episode/"]').count()).toBeGreaterThan(0)
     }
 

@@ -8,13 +8,20 @@ use anyhow::Result;
 use serde::Serialize;
 use utoipa::ToSchema;
 
-use crate::db::{Db, RowExt, new_id, now, text_list};
+use crate::{
+    arr::client::App,
+    db::{Db, RowExt, new_id, now, text_list},
+};
 
 /// How many rows are kept.
 pub const KEPT: i64 = 300;
 
 /// How telling one work went.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+// Named explicitly: a run's entry and a test of a destination each end in an
+// `Outcome` too, and utoipa keys schemas on the leaf name alone.
+#[schema(as = ArrPushOutcome)]
 pub enum Outcome {
     /// Found there, and asked to read it again.
     Sent,
@@ -33,6 +40,17 @@ impl Outcome {
             Self::Failed => "failed",
         }
     }
+
+    /// An outcome as the history keeps it. One this version does not know —
+    /// a later version's — reads as a failure: whatever came of it, the
+    /// detail says.
+    fn parse(text: &str) -> Self {
+        match text {
+            "sent" => Self::Sent,
+            "absent" => Self::Absent,
+            _ => Self::Failed,
+        }
+    }
 }
 
 /// One work told of, as the page lists it.
@@ -43,8 +61,7 @@ impl Outcome {
 pub struct Push {
     pub id: String,
     pub at: String,
-    /// `sonarr` or `radarr`.
-    pub app: String,
+    pub app: App,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub media_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -55,8 +72,7 @@ pub struct Push {
     /// Its own id there, when it holds the work.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub arr_id: Option<i64>,
-    /// `sent`, `absent` or `failed`.
-    pub outcome: String,
+    pub outcome: Outcome,
     /// Why it was told: `lock`, `edit`, `sync`, `refresh`.
     pub reasons: Vec<String>,
     /// The command it went in, or what went wrong.
@@ -66,7 +82,7 @@ pub struct Push {
 
 /// One row to write.
 pub struct Told<'a> {
-    pub app: &'a str,
+    pub app: App,
     pub media_id: &'a str,
     pub title: &'a str,
     pub client_id: Option<i64>,
@@ -85,7 +101,7 @@ pub async fn add(db: &Db, told: &[Told<'_>]) -> Result<()> {
         ))
         .bind(new_id())
         .bind(now())
-        .bind(row.app)
+        .bind(row.app.as_str())
         .bind(row.media_id)
         .bind(row.title)
         .bind(row.client_id)
@@ -123,22 +139,28 @@ pub async fn latest(db: &Db, limit: i64) -> Result<Vec<Push>> {
     .fetch_all(db.pool())
     .await?;
 
-    rows.iter()
-        .map(|row| {
-            Ok(Push {
-                id: row.text("id")?,
-                at: row.text("at")?,
-                app: row.text("app")?,
-                media_id: row.opt_text("media_id")?,
-                title: row.opt_text("title")?,
-                client_id: row.opt_big("client_id")?,
-                arr_id: row.opt_big("arr_id")?,
-                outcome: row.text("outcome")?,
-                reasons: row.text_list("reasons")?,
-                detail: row.opt_text("detail")?,
-            })
-        })
-        .collect()
+    let mut pushes = Vec::with_capacity(rows.len());
+    for row in &rows {
+        // Only ever written for Sonarr or Radarr: a row naming another app
+        // is a later version's, which this one has no place for on the page.
+        let app = row.text("app")?;
+        let Some(app) = App::ALL.into_iter().find(|known| known.as_str() == app) else {
+            continue;
+        };
+        pushes.push(Push {
+            id: row.text("id")?,
+            at: row.text("at")?,
+            app,
+            media_id: row.opt_text("media_id")?,
+            title: row.opt_text("title")?,
+            client_id: row.opt_big("client_id")?,
+            arr_id: row.opt_big("arr_id")?,
+            outcome: Outcome::parse(&row.text("outcome")?),
+            reasons: row.text_list("reasons")?,
+            detail: row.opt_text("detail")?,
+        });
+    }
+    Ok(pushes)
 }
 
 #[cfg(test)]
@@ -155,7 +177,7 @@ mod tests {
             add(
                 &db,
                 &[Told {
-                    app: "sonarr",
+                    app: App::Sonarr,
                     media_id: "work",
                     title: &title,
                     client_id: Some(81189),
@@ -180,6 +202,37 @@ mod tests {
         assert!(
             kept.iter()
                 .all(|push| push.title.as_deref() != Some("Work 0"))
+        );
+        // Sent as it is kept.
+        let sent = serde_json::to_value(&kept[0]).unwrap();
+        assert_eq!(sent["app"], "sonarr");
+        assert_eq!(sent["outcome"], "sent");
+    }
+
+    #[tokio::test]
+    async fn a_row_in_words_this_version_does_not_know_still_reads() {
+        let db = db().await;
+        for (id, app, outcome) in [("a", "radarr", "queued"), ("b", "lidarr", "sent")] {
+            sqlx::query(db.sql(
+                "INSERT INTO arr_push (id, at, app, media_id, title, outcome, reasons)
+                 VALUES (?, ?, ?, 'work', 'A work', ?, '[]')",
+            ))
+            .bind(id)
+            .bind(now())
+            .bind(app)
+            .bind(outcome)
+            .execute(db.pool())
+            .await
+            .unwrap();
+        }
+
+        // An outcome it does not know is a failure, whose detail says the
+        // rest; an app it does not know has no place on the page.
+        let kept = latest(&db, 10).await.unwrap();
+        assert_eq!(kept.len(), 1);
+        assert_eq!(
+            (kept[0].app, kept[0].outcome),
+            (App::Radarr, Outcome::Failed)
         );
     }
 }

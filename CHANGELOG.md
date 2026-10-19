@@ -40,11 +40,10 @@ may change what the API or the configuration means, and says so here.
   Skyhook's second edition is set beside this server's for four real series
   by `scripts/e2e-skyhook-v2.sh`, and any difference that is not an addition
   fails the run. The Office (US) joins the script's default series for its
-  two alternate orders; an order made entirely of episode records the aired
-  list does not hold — TheTVDB files The Office's "Superfan" cuts as
-  episodes of their own — is printed as a known limit rather than a
-  failure, until the orders keep such records. It needs the same repository
-  secrets as the end-to-end job, and stands aside, saying so, without them.
+  two alternate orders: a season type the real Skyhook offers and this
+  server does not is a failure, The Office's "Superfan Order" included. It
+  needs the same repository secrets as the end-to-end job, and stands aside,
+  saying so, without them.
 - `docs/sonarr-radarr.md` says what happens when Sonarr is upgraded to v5 —
   every series refreshed once, the requests coalesced, the limit per address
   and how to raise it for the day — and tells "not found" from "not
@@ -63,6 +62,111 @@ may change what the API or the configuration means, and says so here.
 - CI measures how much of the crate the tests reach (`cargo llvm-cov`),
   informatively: the summary is in the job's log and `lcov.info` is kept a
   week as an artifact. It never fails the run.
+- **Backups.** The server makes archives of itself — the whole database as
+  one SQLite file, which restores on SQLite and on PostgreSQL alike, and,
+  when asked, the media kept on disk — named for when and why they were
+  made, `ams-20261019-020000-scheduled.tar.zst`, with a manifest that says
+  the version and the last migration that made them, the engine read and
+  each file's SHA-256. Weekly by default, the schedule's four newest kept
+  (`backup.schedule`, `backup.keep`, `backup.includeMedia`; migration 0036),
+  in `AMS_BACKUP_DIR` — `backups` beside the SQLite database, `/data/backups`
+  in the image — or, among several instances whose media are in a bucket, in
+  that bucket under `backups/`. With `AMS_BACKUP_PASSPHRASE` set, each
+  archive is encrypted as age writes it (`….tar.zst.age`): an archive holds
+  every account's password hash, every key's and the webhooks' secrets.
+  **Administration › Backups** lists them, makes one now, downloads, deletes
+  and restores them; the task `backup.run` is on the Jobs page, the
+  dashboard says when the newest archive is older than twice the schedule,
+  `/api/v1/admin/health` carries `lastBackupAt`, a scrape
+  `ams_backup_age_seconds`, and the webhooks are told `backup.completed` and
+  `backup.failed`.
+- Restoring an archive from the Backups page makes an archive of the
+  database first, then answers every request, on every door, with 503 —
+  `/health` aside — until the rows are copied, in one transaction: a restore
+  that fails leaves the database as it was. An archive of a later version or
+  migration is refused before anything is touched; an older one is brought
+  up to this version's migrations first. The audit trail records
+  `backup.restored` and `backup.deleted`.
+- Before a start applies a new version's migrations, the database is
+  archived as the version before left it (`ams-…-upgrade-m0037.tar.zst`,
+  without the media), the two newest kept apart from the schedule's
+  (`backup.keepUpgrades`): always on SQLite, on PostgreSQL unless
+  `backup.beforeUpgrade` is turned off. An archive that cannot be made stops
+  the start; `AMS_BACKUP_BEFORE_UPGRADE=false` starts without it.
+  `migrate run` does the same.
+- A command line beside the server: `backup`, `restore` — refused while a
+  server holds the database, which it does from its start, by a lock beside
+  an SQLite file or an advisory lock on PostgreSQL —, `user
+  list|create|reset-password|set-admin`, `keys create`, `locks
+  export|import`, `config check`, `migrate status|run` and `version`, beside
+  `healthcheck` and `transfer`; with no command the binary serves, as
+  before. What changes accounts, keys or locks goes through the server's own
+  API in the process, as `client:command line`, with the interface's checks
+  and its audit trail; a password is read from standard input or asked for,
+  never taken as an argument. `docs/cli.md` gives the `docker exec` and
+  `docker compose run` forms the distroless image needs.
+- **A series' orders are orders of their own** (migration 0037): each has
+  the key a client asks for it by, its kind, where it was read and the name
+  it goes by, and each of its places names an episode the work holds or
+  carries the record its source gave of one it does not. An order TheTVDB
+  files apart from the aired episodes is served whole — The Office's
+  "Superfan Order", 194 extended cuts that are episodes of their own on
+  TheTVDB, or a DVD's hour-long cut of two aired parts — where its places
+  named aired episodes or nothing. TheTVDB's orders go by the series' own
+  name for them ("Superfan Order", "Netflix Order"). The orders 0013 kept
+  are carried over, and each series that had one is refreshed at the next
+  sweep, which reads its orders as they are now. Two orders of one name are
+  told apart in Sonarr's and Plex's lists by the source of the one not
+  numbering the series — *Superfan Order (TMDB)*.
+- TMDB's episode groups are orders beside TheTVDB's: listed with the series,
+  read by the refresh that lists them, four at a time — the editor and a
+  season's page ask TMDB nothing — offered to Sonarr v5 and Plex under
+  `tmdb-` and the group's id. A group that is the same order as one
+  of the source numbering the series, and holds no more episodes, is not
+  offered: that one stands for it. `docs/sources.md` says which.
+- Orders made here, in the editor's Seasons tab: made empty or from
+  another — the aired one, TheTVDB's, a TMDB group — named, their places
+  moved up and down and renumbered, and given episodes of their own the work
+  does not hold, served under TheTVDB's id when they carry one and a stable
+  negative one otherwise. Sonarr v5 and Plex are offered them under `ams-`
+  and their name. Through the API: `POST /items/{id}/orders`, `PUT` and
+  `DELETE /items/{id}/orders/{key}`; the audit trail says `order.created`,
+  `order.updated`, `order.deleted`.
+- An order can be frozen as the aired numbering, and thawed
+  (`POST`/`DELETE /items/{id}/orders/{key}/freeze`; `order.frozen`,
+  `order.thawed`): Sonarr v4 and v5 asking for the aired order, Plex with no
+  order chosen, Jellyfin through the TheTVDB relay — its pages of episodes
+  and a series' record with `meta=episodes` — and the `.nfo` export are
+  served it, an episode that airs later keeping its aired numbers where the
+  order leaves them free, and an episode of the order's own given one id by
+  Sonarr v4 and v5 alike. It is how a series that has files in Sonarr v5 is
+  given another order, which Sonarr will not change on it (Sonarr#9055);
+  the dialog says what it does to XEM's mappings and to the files Sonarr
+  matched. A frozen series' `tvshow.nfo` carries `<displayorder>`, and the
+  group's id for a TMDB group; a special an order places among the seasons
+  is written with Kodi's `displayseason` and `displayepisode`.
+- TMDB numbers a series TheTVDB has stopped answering for, after
+  `numbering.fallbackAfter` refreshes in a row — three unless set, twenty
+  hours apart at the least, `0` never — each episode keeping the TheTVDB id
+  it had, until TheTVDB answers again. The audit trail says
+  `item.numbering_fallback` and `item.numbering_restored`, a notification
+  destination that wants `numbering.fallback` is told, Sonarr v5 is sent
+  `metadataSource: tmdb`, and the work's page and its editor carry a banner
+  with **Back to TheTVDB** (`POST /items/{id}/numbering/restore`). A
+  numbering frozen meanwhile stays TMDB's until it is given back by hand.
+- A season's page offers every order of the series, TMDB's groups and those
+  made here among them, names apart two that share a name by their source,
+  and marks an episode the order carries as its own.
+- `docs/api.md` says what 1.0 promises, and how something goes: under
+  `/api/v1` a documented field keeps its meaning and its type, whatever is
+  added can be ignored, and whatever goes is announced a minor ahead —
+  under *Deprecated* here, `deprecated` in the OpenAPI document, a
+  `Deprecation` header on the answers that still carry it; Sonarr's,
+  Radarr's and Plex's surfaces are served for as long as they read them,
+  and change only as they do; setting keys and `AMS_*` variables keep their
+  names, a renamed one read a minor longer with a warning; migrations only
+  go forward. `CONTRIBUTING.md` says what to write where when something is
+  deprecated, and when it goes.
 
 ### Changed
 
@@ -95,6 +199,35 @@ may change what the API or the configuration means, and says so here.
   follows `DROP TABLE`, `CREATE TEMP TABLE` and the name a renamed table
   takes; the provider fan-out a refresh awaits is boxed, so a debug build's
   futures stay small; `CONTRIBUTING.md` says how a release is cut.
+- The OpenAPI document gives the values of the fields the native API fills
+  from a fixed set, where it said "string": a site's access, what an API
+  asks of a caller, which relay and whose key it asks with, how MyAnimeList
+  is reached, the media store's backend and what is kept of each of a work's
+  media, the clients' door's certificate, a cache's space, a destination's
+  kind and why a test of it was not sent, a run's status and its entries'
+  outcome, a task's id, a push's outcome, a setting's source. Nothing the
+  server sends or accepts has changed; a client generated from the document
+  gets the values, and the interface's types take them from it instead of
+  repeating them by hand.
+- `transfer` reads its source as of one moment — one read transaction,
+  `REPEATABLE READ` on PostgreSQL — and a table a chunk at a time rather
+  than whole: a database a server is writing to copies without an episode
+  whose season was read before it existed, and a large table no longer
+  passes through memory in one piece.
+- The command line is parsed by clap: `--help` lists every command, and an
+  unknown command exits with 2. An archive is put together beside the
+  archives, in `AMS_BACKUP_DIR`, rather than in the system's temporary
+  directory; `compose.multi.yaml` mounts a volume at `/data` for it. The
+  backup settings have a panel of their own on the Settings page.
+- `media_episode_order` is gone (migration 0037): a transfer between
+  databases, and a backup, carry `media_order`, `media_order_episode` and
+  `media_numbering` in its place.
+
+### Removed
+
+- `episodes` in `GET /api/v1/calendar`, deprecated since 0.8.0: the
+  episodes are the entries of `entries` whose `kind` is `episode`, beside
+  the films' releases.
 
 ### Fixed
 
@@ -112,6 +245,9 @@ may change what the API or the configuration means, and says so here.
 - The page says which language it is read in from its first paint: the
   stored choice sets `<html lang>` before the interface loads, where it was
   `en` until it had.
+- The editor's rail of seasons scrolls within itself on a wide screen: stuck
+  beside the fields, a rail of forty seasons kept its last ones under the
+  fold, reachable only at the page's end.
 
 ### Security
 

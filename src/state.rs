@@ -174,6 +174,12 @@ pub struct Inner {
     /// What the webhooks keep between two events: their client, their
     /// worker's bell, and which events the destinations want.
     pub webhooks: crate::service::webhook::Hooks,
+    /// The archives of the database: where they are kept, and what makes
+    /// and restores them.
+    pub backups: crate::backup::Backups,
+    /// Whether the doors are shut while an archive is restored, and how far
+    /// it got: read by every request before anything else.
+    pub maintenance: crate::backup::Maintenance,
 }
 
 impl std::ops::Deref for AppState {
@@ -187,7 +193,25 @@ impl std::ops::Deref for AppState {
 impl AppState {
     pub async fn bootstrap(config: Config) -> Result<Self> {
         let db = Db::connect(&config.database).await?;
-        db.migrate().await?;
+        let backups = crate::backup::Backups::new(&config, db.clone(), None)?;
+        // An archive of the database before the migrations a new version
+        // brings, as the version before left it: the way back. Instances
+        // starting together find the same migrations pending: one at a time,
+        // so that one archive is made, and one start migrates.
+        let held = db
+            .hold_start(config.mode == crate::config::Mode::Multi)
+            .await?;
+        let upgraded = async {
+            let before = backups.before_upgrade().await?;
+            db.migrate().await?;
+            if let Some(before) = before {
+                backups.after_upgrade(before).await;
+            }
+            anyhow::Ok(())
+        }
+        .await;
+        held.release().await;
+        upgraded?;
 
         let upstreams = std::sync::Arc::new(configured_hosts(&config));
         let http = outbound_client(&upstreams, Redirects::Anywhere)?;
@@ -282,6 +306,8 @@ impl AppState {
             }
         }
 
+        let backups = backups.with_media(media.store().cloned());
+
         let state = Self(Arc::new(Inner {
             allowlist: Arc::new(RwLock::new(Vec::new())),
             resolver: Resolver::new(),
@@ -309,6 +335,8 @@ impl AppState {
             coord,
             media,
             webhooks: crate::service::webhook::Hooks::new()?,
+            backups,
+            maintenance: crate::backup::Maintenance::default(),
         }));
 
         // One instance at a time: each finds what the one before it made.
@@ -464,6 +492,16 @@ impl AppState {
                 // Off: telling the operator's own Sonarr and Radarr of a
                 // change is theirs to ask for, once they are connected.
                 ("arr.pushRefresh", "false".to_string()),
+                // On, weekly, four kept: what was never backed up is, from
+                // the version that can.
+                ("backup.schedule", "weekly".to_string()),
+                ("backup.keep", crate::jobs::backup::DEFAULT_KEEP.to_string()),
+                ("backup.includeMedia", "false".to_string()),
+                (
+                    crate::backup::KEEP_UPGRADES_SETTING,
+                    crate::backup::DEFAULT_KEEP_UPGRADES.to_string(),
+                ),
+                (crate::backup::BEFORE_UPGRADE_SETTING, "true".to_string()),
             ])
             .await?;
 

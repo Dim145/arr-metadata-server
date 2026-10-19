@@ -60,6 +60,13 @@ pub struct Todo {
     pub key_horizon_days: i64,
     /// Pictures and themes every try at fetching failed for.
     pub failed_media: i64,
+    /// Whether the newest archive of the database is older than twice the
+    /// schedule's interval, or none was ever made — while the schedule is
+    /// on.
+    pub backup_overdue: bool,
+    /// When the newest archive was made; `null` when none was.
+    #[schema(required)]
+    pub last_backup_at: Option<String>,
 }
 
 /// How many works the catalogue lists under one gap: the filter's own count,
@@ -144,6 +151,8 @@ async fn counted(state: &AppState, include_adult: bool) -> anyhow::Result<Todo> 
         expiring_keys: expiring_keys(db, KEY_HORIZON_DAYS).await?,
         key_horizon_days: KEY_HORIZON_DAYS,
         failed_media: repo::asset::counts(db).await?.failed,
+        backup_overdue: crate::jobs::backup::overdue(state).await?,
+        last_backup_at: state.backups.newest_at().await?,
     })
 }
 
@@ -218,6 +227,10 @@ mod tests {
                 expiring_keys: 0,
                 key_horizon_days: KEY_HORIZON_DAYS,
                 failed_media: 0,
+                // Never backed up, the schedule on: one thing the catalogue
+                // does not settle.
+                backup_overdue: true,
+                last_backup_at: None,
             }
         );
     }

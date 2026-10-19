@@ -25,7 +25,7 @@ pub struct Effective {
     pub value: String,
     /// The scope the value was found at — `server` unless something narrower
     /// overrode it.
-    pub source: String,
+    pub source: Scope,
     /// Whether this scope sets it itself, as opposed to inheriting.
     pub overridden: bool,
     /// What the server scope held before anybody changed it: the value the
@@ -191,7 +191,7 @@ impl Store {
                 } else {
                     value
                 },
-                source: scope.as_str().to_string(),
+                source: scope,
                 overridden: true,
                 default: self.default_of(def, scope),
             });
@@ -211,7 +211,7 @@ impl Store {
             } else {
                 value
             },
-            source: Scope::Server.as_str().to_string(),
+            source: Scope::Server,
             overridden: false,
             default: None,
         })

@@ -90,7 +90,7 @@ test.describe('the films in the schedule', () => {
     const schedule = async () =>
       (await (
         await request.get(`/api/v1/calendar?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`)
-      ).json()) as { entries: Entry[]; episodes: { workId: string }[]; works: { id: string }[] }
+      ).json()) as { entries: Entry[]; works: { id: string }[] }
 
     try {
       for (const [field, value] of [
@@ -101,13 +101,12 @@ test.describe('the films in the schedule', () => {
         expect(set.ok(), field).toBe(true)
       }
 
-      // One release today with both its kinds, among the episodes and not
-      // in their list; the disc, months away, nowhere.
+      // One release today with both its kinds, among the episodes and none
+      // of them; the disc, months away, nowhere.
       const listing = await schedule()
       expect(listing.entries.filter((e) => e.workId === id)).toEqual([
         { kind: 'release', workId: id, date: today, releaseTypes: ['cinema', 'digital'] },
       ])
-      expect(listing.episodes.some((e) => e.workId === id)).toBe(false)
       expect(listing.works.some((w) => w.id === id)).toBe(true)
       const before = listing.entries.filter((e) => e.kind === 'episode' && episodeDay(e.episode) === today).length
 

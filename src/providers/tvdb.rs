@@ -24,7 +24,7 @@ use crate::{
     db::{new_id, now},
     domain::{
         CountryRelease, CoverType, Episode, EpisodeOrder, ExternalIds, Image, MediaItem, MediaKind,
-        PlacedEpisode, Season, Translation, make_slug,
+        OrderKind, OrderRecord, PlacedEpisode, Season, Translation, make_slug,
     },
 };
 
@@ -340,9 +340,9 @@ impl TvdbClient {
     }
 
     /// The other orders TVDB keeps this series' episodes in — the DVDs',
-    /// straight through, an alternate or a regional one — each the same
-    /// episodes, by id, placed in seasons and numbers of its own. The aired
-    /// order is not among them: it is the work's own.
+    /// straight through, an alternate or a regional one — each a sequence of
+    /// episode records, by id, placed in seasons and numbers of its own. The
+    /// aired order is not among them: it is the work's own.
     ///
     /// Each is read from the episodes endpoint of its type. One that answers
     /// empty for a type the series has seasons of is read season by season
@@ -350,6 +350,13 @@ impl TvdbClient {
     /// call per season of the type), which is how TheTVDB's own site lists
     /// it: the endpoint answers an empty list for `altdvd` and `alttwo`
     /// (thetvdb/v4-api#340), and the real Skyhook serves both whole.
+    ///
+    /// Each place keeps the record TheTVDB gave of its episode — its name,
+    /// date, runtime, still — since an order's episode may be one of its own:
+    /// a DVD's hour-long cut of two aired parts, an extended cut. Each order
+    /// is named by the series' own name for it where TheTVDB keeps one
+    /// (`alternateName`: "Superfan Order", "BluRay Order"), and by TheTVDB's
+    /// for its type otherwise ("DVD Order").
     pub async fn orders(&self, tvdb_id: i64) -> Result<Vec<EpisodeOrder>> {
         if !self.is_enabled() {
             return Ok(Vec::new());
@@ -384,9 +391,10 @@ impl TvdbClient {
 
         // No falling back to the untranslated episodes here, as the aired
         // fetch does: a language TVDB does not hold blanks the names, and a
-        // place is made of ids and numbers alone.
+        // place is told by its id and its numbers first.
         let mut orders = Vec::with_capacity(seasons_of.len());
         for (kind, mut seasons) in seasons_of {
+            let label = order_label(&kind, &seasons);
             let mut episodes: Vec<PlacedEpisode> = self
                 .episodes_of(tvdb_id, &kind, &self.language)
                 .await?
@@ -398,7 +406,18 @@ impl TvdbClient {
                 episodes = self.placed_by_season(&seasons).await?;
             }
             if !episodes.is_empty() {
-                orders.push(EpisodeOrder { kind, episodes });
+                orders.push(EpisodeOrder {
+                    kind: OrderKind::of_tvdb(&kind),
+                    key: kind,
+                    source: crate::providers::names::TVDB.to_string(),
+                    source_ref: None,
+                    label,
+                    is_default: false,
+                    is_frozen: false,
+                    announced: None,
+                    updated_at: now(),
+                    episodes,
+                });
             }
         }
 
@@ -779,9 +798,17 @@ struct SeasonRecord {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct SeasonType {
     #[serde(default, rename = "type")]
     kind: String,
+    /// TheTVDB's name for the type: "DVD Order", "Alternate Order 2".
+    #[serde(default)]
+    name: Option<String>,
+    /// The series' own name for its order of this type: "Superfan Order",
+    /// "BluRay Order". The slots `alternate` to `alttwo` mean what this says.
+    #[serde(default)]
+    alternate_name: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -832,15 +859,54 @@ const OTHER_ORDERS: &[&str] = &[
     "alttwo",
 ];
 
-/// Where one episode record stands in the order it was read from.
+/// Where one episode record stands in the order it was read from, with the
+/// record itself: what is served for the place when the work holds no
+/// episode of that id.
 fn placed(raw: &Value) -> Option<PlacedEpisode> {
     let record: EpisodeRecord = serde_json::from_value(raw.clone()).ok()?;
-    Some(PlacedEpisode {
-        tvdb_id: record.id?,
-        season_number: record.season_number?,
-        episode_number: record.number?,
-        absolute_number: record.absolute_number,
-    })
+    let mut place = PlacedEpisode::of_tvdb(record.id?, record.season_number?, record.number?);
+    place.absolute_number = record.absolute_number.filter(|n| *n > 0);
+    place.record = Some(OrderRecord {
+        title: record
+            .name
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_string(),
+        overview: non_empty(record.overview.as_deref()),
+        aired: non_empty(record.aired.as_deref()),
+        runtime: record.runtime.filter(|r| *r > 0),
+        image: non_empty(record.image.as_deref()).map(|i| absolute(&i)),
+        finale_type: non_empty(record.finale_type.as_deref()),
+    });
+    Some(place)
+}
+
+/// What an order is called: the series' own name for it where TheTVDB keeps
+/// one, else TheTVDB's name for its type, else one made of the type.
+fn order_label(kind: &str, seasons: &[SeasonRecord]) -> String {
+    let named = |pick: fn(&SeasonType) -> Option<&str>| {
+        seasons
+            .iter()
+            .filter_map(|season| season.season_type.as_ref())
+            .find_map(|t| pick(t).map(str::trim).filter(|n| !n.is_empty()))
+            .map(str::to_string)
+    };
+    named(|t| t.alternate_name.as_deref())
+        .or_else(|| named(|t| t.name.as_deref()))
+        .unwrap_or_else(|| match kind {
+            "dvd" => "DVD Order".to_string(),
+            "absolute" => "Absolute Order".to_string(),
+            "alternate" => "Alternate Order".to_string(),
+            "regional" => "Regional Order".to_string(),
+            "altdvd" => "Alternate DVD Order".to_string(),
+            "alttwo" => "Alternate Order 2".to_string(),
+            other => {
+                let mut letters = other.chars();
+                let first = letters.next().map(|c| c.to_uppercase().collect::<String>());
+                format!("{}{} Order", first.unwrap_or_default(), letters.as_str())
+            }
+        })
 }
 
 /// TVDB's numeric artwork types, from `/artwork/types`.
@@ -1238,9 +1304,14 @@ mod tests {
         let placed = placed(&raw).expect("placed");
         assert_eq!(
             (placed.tvdb_id, placed.season_number, placed.episode_number),
-            (297989, 1, 2)
+            (Some(297989), 1, 2)
         );
         assert_eq!(placed.absolute_number, Some(2));
+        // With the record, served where the work holds no such episode.
+        assert_eq!(
+            placed.record.as_ref().map(|r| r.title.as_str()),
+            Some("The Train Job")
+        );
         // Without an id, or a place, there is nothing to keep.
         assert!(placed_is_none(
             &serde_json::json!({ "seasonNumber": 1, "number": 2 })
@@ -1646,7 +1717,7 @@ mod tests {
 
     /// An episode's id and where it stands: its season, its number, its
     /// absolute number.
-    type Placement = (i64, i32, i32, Option<i32>);
+    type Placement = (Option<i64>, i32, i32, Option<i32>);
 
     /// The Office (US), as TheTVDB answers for it: a DVD order the episodes
     /// endpoint lists, and a second alternate order it answers empty for
@@ -1661,10 +1732,10 @@ mod tests {
                 "/series/73244/extended",
                 json_reply(
                     r#"{"data":{"id":73244,"seasons":[
-                        {"id":10,"number":1,"type":{"type":"official"}},
-                        {"id":20,"number":1,"type":{"type":"dvd"}},
-                        {"id":31,"number":2,"type":{"type":"alttwo"}},
-                        {"id":30,"number":1,"type":{"type":"alttwo"}}
+                        {"id":10,"number":1,"type":{"type":"official","name":"Aired Order"}},
+                        {"id":20,"number":1,"type":{"type":"dvd","name":"DVD Order"}},
+                        {"id":31,"number":2,"type":{"type":"alttwo","name":"Alternate Order 2","alternateName":"Superfan Order"}},
+                        {"id":30,"number":1,"type":{"type":"alttwo","name":"Alternate Order 2","alternateName":"Superfan Order"}}
                     ]}}"#,
                 ),
             ),
@@ -1682,8 +1753,8 @@ mod tests {
                 "/seasons/30/extended",
                 json_reply(
                     r#"{"data":{"id":30,"number":1,"type":{"type":"alttwo"},"episodes":[
-                        {"id":10718410,"seasonNumber":99,"number":2,"absoluteNumber":2},
-                        {"id":10718411,"seasonNumber":99,"number":1}
+                        {"id":10718410,"seasonNumber":99,"number":2,"absoluteNumber":2,"name":"Diversity Day (Extended Cut)","aired":"2005-03-29","runtime":31},
+                        {"id":10718411,"seasonNumber":99,"number":1,"name":"Pilot (Extended Cut)","absoluteNumber":0}
                     ]}}"#,
                 ),
             ),
@@ -1702,7 +1773,7 @@ mod tests {
             .iter()
             .map(|order| {
                 (
-                    order.kind.as_str(),
+                    order.key.as_str(),
                     order
                         .episodes
                         .iter()
@@ -1724,14 +1795,31 @@ mod tests {
                 (
                     "alttwo",
                     vec![
-                        (10718411, 1, 1, None),
-                        (10718410, 1, 2, Some(2)),
-                        (10718412, 2, 1, None)
+                        (Some(10718411), 1, 1, None),
+                        (Some(10718410), 1, 2, Some(2)),
+                        (Some(10718412), 2, 1, None)
                     ]
                 ),
-                ("dvd", vec![(110413, 1, 1, None)]),
+                ("dvd", vec![(Some(110413), 1, 1, None)]),
             ]
         );
+        // Named by the series' own name for the order, where TheTVDB keeps
+        // one; each place with the record TheTVDB gave of its episode.
+        assert_eq!(
+            orders
+                .iter()
+                .map(|o| (o.label.as_str(), o.kind, o.source.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("Superfan Order", OrderKind::TvdbAlt, "tvdb"),
+                ("DVD Order", OrderKind::Dvd, "tvdb")
+            ]
+        );
+        let extended = &orders[0].episodes[1];
+        let record = extended.record.as_ref().expect("its record");
+        assert_eq!(record.title, "Diversity Day (Extended Cut)");
+        assert_eq!(record.aired.as_deref(), Some("2005-03-29"));
+        assert_eq!(record.runtime, Some(31));
 
         // One call per season of the order answered empty, and none for the
         // order the endpoint listed.

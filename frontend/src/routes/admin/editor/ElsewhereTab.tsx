@@ -22,6 +22,7 @@ import { useI18n } from '../../../lib/i18n'
 import { providerName } from '../../../lib/labels'
 import { identifierLink, relationLink } from '../../../lib/links'
 import { ratingsOf, seasonNumbers } from '../../../lib/media'
+import { orderName } from './orders'
 import type { ExternalIds, MediaItem, Override, Suggestion, Suggestions as SuggestionsResponse } from '../../../lib/types'
 
 import { Count, Empty } from './shared'
@@ -327,10 +328,15 @@ function Related({ work }: { work: MediaItem }) {
   )
 }
 
-/** The other orders TheTVDB numbers the episodes in, each a way to the season sheet in it. */
+/**
+ * The other orders the episodes are numbered in — TheTVDB's, TMDB's episode
+ * groups, those made here — each a way to the season sheet in it, and the
+ * way to the seasons tab, where they are made, written and frozen.
+ */
 function Orders({ work }: { work: MediaItem }) {
   const { t } = useI18n()
   const x = t.admin.editor.elsewhereTab
+  const o = t.admin.editor.orders
   const orders = useOrders(work.id)
   const list = orders.data?.orders ?? []
   const first = seasonNumbers(work).find((n) => n > 0) ?? seasonNumbers(work)[0]
@@ -348,16 +354,28 @@ function Orders({ work }: { work: MediaItem }) {
             const seasons = new Set(order.episodes.map((episode) => episode.seasonNumber))
             const target = seasons.has(first ?? -1) ? first : [...seasons].sort((a, b) => a - b)[0]
             return (
-              <li key={order.kind} className="flex items-center gap-3 px-5 py-2.5">
+              <li key={order.key} className="flex items-center gap-3 px-5 py-2.5">
                 <span className="min-w-0 flex-1">
-                  <span className="block text-sm font-medium text-bone">{t.season.order[order.kind] ?? order.kind}</span>
+                  <span className="block text-sm font-medium text-bone">
+                    {orderName(order, t.season.order)}
+                    {order.isFrozen ? <Glyph name="lock" className="ml-1.5 inline size-3 text-brass" aria-label={o.frozen} /> : null}
+                  </span>
                   <span className="block font-mono text-[0.6875rem] text-bone-faint tabular-nums">
-                    {t.admin.editor.contentValue(seasons.size, order.episodes.length)}
+                    {[
+                      o.source[order.source] ?? order.source,
+                      order.episodes.length
+                        ? t.admin.editor.contentValue(seasons.size, order.episodes.length)
+                        : order.announced
+                          ? o.unread(order.announced)
+                          : undefined,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')}
                   </span>
                 </span>
                 {target !== undefined ? (
                   <Link
-                    to={`/work/${work.id}/season/${target}?order=${encodeURIComponent(order.kind)}`}
+                    to={`/work/${work.id}/season/${target}?order=${encodeURIComponent(order.key)}`}
                     className="hit inline-flex min-h-8 shrink-0 items-center gap-1 rounded-full px-2 text-xs text-vermillion hover:bg-vermillion/10"
                   >
                     {x.seeOrder}
@@ -371,7 +389,12 @@ function Orders({ work }: { work: MediaItem }) {
       ) : (
         <Empty>{x.noOrders}</Empty>
       )}
-      <p className="border-t border-rule px-5 py-3 text-xs leading-relaxed text-bone-faint">{x.ordersHint}</p>
+      <p className="border-t border-rule px-5 py-3 text-xs leading-relaxed text-bone-faint">
+        {x.ordersHint}{' '}
+        <Link to={{ search: '?tab=seasons', hash: '#order-editor' }} className="text-vermillion underline-offset-4 hover:underline">
+          {x.editOrders}
+        </Link>
+      </p>
     </Panel>
   )
 }

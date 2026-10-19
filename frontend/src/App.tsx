@@ -50,6 +50,7 @@ const Jobs = named(() => import('./routes/admin/Jobs'), 'Jobs')
 const Sources = named(() => import('./routes/admin/Sources'), 'Sources')
 const Media = named(() => import('./routes/admin/Media'), 'Media')
 const Cache = named(() => import('./routes/admin/Cache'), 'Cache')
+const Backups = named(() => import('./routes/admin/Backups'), 'Backups')
 const Audit = named(() => import('./routes/admin/Audit'), 'Audit')
 const Notifications = named(() => import('./routes/admin/Notifications'), 'Notifications')
 const Settings = named(() => import('./routes/admin/Settings'), 'Settings')
@@ -150,6 +151,7 @@ function Router() {
           <Route path="sources" element={<Sources />} />
           <Route path="media" element={<Media />} />
           <Route path="cache" element={<Cache />} />
+          <Route path="backups" element={<Backups />} />
           <Route path="audit" element={<Audit />} />
           <Route path="notifications" element={<Notifications />} />
           <Route path="settings" element={<Settings />} />

@@ -45,6 +45,16 @@ pub struct Web {
     pub tls: bool,
 }
 
+/// Whose certificate the clients' door shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum DoorMode {
+    /// One this server issues itself, from an authority of its own.
+    Authority,
+    /// The operator's files.
+    Own,
+}
+
 /// The clients' door.
 #[derive(Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
@@ -52,7 +62,7 @@ pub struct Door {
     pub bind: String,
     /// `authority`: a certificate this server issues itself; `own`: the
     /// operator's files.
-    pub mode: &'static str,
+    pub mode: DoorMode,
     /// Every name it answers to.
     pub names: Vec<String>,
     /// Names asked for that the authority may not certify: its constraints
@@ -104,9 +114,9 @@ async fn status(
         Door {
             bind: clients.bind.to_string(),
             mode: if clients.authority.is_some() {
-                "authority"
+                DoorMode::Authority
             } else {
-                "own"
+                DoorMode::Own
             },
             names: clients.names.iter().map(ToString::to_string).collect(),
             refused: clients.refused().iter().map(ToString::to_string).collect(),

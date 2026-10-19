@@ -258,6 +258,110 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/backups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every archive, newest first, and how the server makes them. */
+        get: operations["backup_list"];
+        put?: never;
+        /**
+         * Make an archive now, in the background: its run's id at once, the
+         *     archive in the list once it is whole.
+         */
+        post: operations["backup_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/backups/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Where the last restore stands: the one this instance ran, else the last
+         *     the history holds. While one runs the server answers 503 to everything,
+         *     this included, with the step it is at.
+         */
+        get: operations["backup_restore_state"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/backups/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Take an archive away, and forget it. */
+        delete: operations["backup_remove"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/backups/{name}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * An archive's bytes, as kept: streamed, never held whole, and checked by
+         *     its SHA-256 — the `ETag` — when the server made it.
+         */
+        get: operations["backup_download"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/backups/{name}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Restore an archive over the database, in the background. An archive of
+         *     the database is made first — what undoes it — and every door of this
+         *     instance answers 503 until it is done: the interface, the API, Sonarr's
+         *     and Radarr's surfaces, the relays. Everybody is signed out but those
+         *     whose session the archive holds. An archive this server cannot read
+         *     whole, or a passphrase that does not open it, is refused before anything
+         *     starts.
+         */
+        post: operations["backup_restore"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/cache": {
         parameters: {
             query?: never;
@@ -1589,6 +1693,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/items/{id}/numbering/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Give the numbering back to TheTVDB: the series is refreshed at once, and
+         *     numbered by TheTVDB again when it answers — even with an order frozen,
+         *     which a return of TheTVDB's own accord leaves with TMDB. When it still
+         *     does not answer, TMDB keeps the numbering, as before.
+         */
+        post: operations["orders_restore"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/items/{id}/orders": {
         parameters: {
             query?: never;
@@ -1597,14 +1723,79 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * How else a series' episodes are numbered, as TheTVDB keeps them. The aired
-         *     order is the work's own and the one every client is served; these are for
-         *     a reader who knows the series by its DVDs, or straight through.
+         * How else a series' episodes are numbered: by TheTVDB, by TMDB's episode
+         *     groups, by orders made here. The aired order is the work's own and the
+         *     one every client is served unless it asks for another, or one is frozen
+         *     as it. As kept: a TMDB group not read yet — its places are read when the
+         *     series is refreshed, or when a client asks in it — says only how many
+         *     episodes TMDB lists it with (`announced`).
          */
         get: operations["orders_orders"];
         put?: never;
-        post?: never;
+        /**
+         * Make an order: empty, or a copy of another — the aired order as the
+         *     work numbers its episodes now, one of TheTVDB's, a TMDB group, another
+         *     made here — to change as one likes. It is offered to Sonarr v5 and Plex
+         *     at once, under `ams-` and its name.
+         */
+        post: operations["orders_create"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/items/{id}/orders/{key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Write an order made here, whole: its name and its places, each an
+         *     episode the work holds or a record of its own, a season and a number once
+         *     each. An order read from TheTVDB or TMDB is read again at every refresh
+         *     and is not written here: make an order from it to change it.
+         */
+        put: operations["orders_save"];
+        post?: never;
+        /**
+         * Forget an order made here. Frozen as the aired numbering, the aired order
+         *     answers as the work numbers its episodes again.
+         */
+        delete: operations["orders_remove"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/items/{id}/orders/{key}/freeze": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Freeze an order as the aired numbering: what Sonarr asking for the aired
+         *     order (`official`) is given from now on, and Sonarr v4, Plex with no
+         *     order named, the TheTVDB relay and the `.nfo` documents with it. Sonarr
+         *     renumbers its episodes at its next refresh, and files it matched by the
+         *     old numbers stand for other episodes; XEM's mappings, made for TheTVDB's
+         *     aired numbers, no longer fit. One order at the most is frozen: freezing
+         *     one thaws any other. Undone by thawing it.
+         */
+        post: operations["orders_freeze"];
+        /**
+         * Thaw the order frozen as the aired numbering: the aired order answers as
+         *     the work numbers its episodes again, and Sonarr renumbers at its next
+         *     refresh.
+         */
+        delete: operations["orders_thaw"];
         options?: never;
         head?: never;
         patch?: never;
@@ -3100,8 +3291,7 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         Access: {
-            /** @description `public` or `private`. */
-            site: string;
+            site: components["schemas"]["SiteAccess"];
             /** @description AMS_PUBLIC_BROWSE=false keeps the site private whatever is chosen here. */
             siteLocked: boolean;
             /**
@@ -3242,12 +3432,11 @@ export interface components {
             /** @description Whether an administrator left it on. */
             enabled: boolean;
             /**
-             * @description What it asks of a caller: `apikey`, `allowlist` or `open`. Set by the
-             *     deployment's environment, not here — except that a relay asked with
-             *     each client's own key asks for a listed address where the
-             *     environment says a key.
+             * @description What it asks of a caller. Set by the deployment's environment, not
+             *     here — except that a relay asked with each client's own key asks for
+             *     a listed address where the environment says a key.
              */
-            policy: string;
+            policy: components["schemas"]["SurfacePolicy"];
             /**
              * Format: int64
              * @description Calls answered and refused since the server started.
@@ -3285,8 +3474,7 @@ export interface components {
         ArrPush: {
             id: string;
             at: string;
-            /** @description `sonarr` or `radarr`. */
-            app: string;
+            app: components["schemas"]["App"];
             mediaId?: string | null;
             title?: string | null;
             /**
@@ -3299,13 +3487,17 @@ export interface components {
              * @description Its own id there, when it holds the work.
              */
             arrId?: number | null;
-            /** @description `sent`, `absent` or `failed`. */
-            outcome: string;
+            outcome: components["schemas"]["ArrPushOutcome"];
             /** @description Why it was told: `lock`, `edit`, `sync`, `refresh`. */
             reasons: string[];
             /** @description The command it went in, or what went wrong. */
             detail?: string | null;
         };
+        /**
+         * @description How telling one work went.
+         * @enum {string}
+         */
+        ArrPushOutcome: "sent" | "absent" | "failed";
         /** @description What a status says of the one that answered. */
         ArrStatus: {
             /** @description `Sonarr` or `Radarr`. */
@@ -3422,7 +3614,7 @@ export interface components {
              * @description `public`: anyone browses the catalogue. `private`: every page asks to
              *     sign in first.
              */
-            site: string;
+            site: components["schemas"]["SiteAccess"];
             registration: components["schemas"]["Registration"];
             /** @description Whether the password form is offered to everyone. */
             passwordLogin: boolean;
@@ -3432,6 +3624,242 @@ export interface components {
             subject: string;
             fingerprint: string;
             notAfter: string;
+        };
+        /** @description An archive, as the Backups page lists it. */
+        Backup: {
+            name: string;
+            createdAt: string;
+            reason: components["schemas"]["BackupReason"];
+            /**
+             * Format: int64
+             * @description Its size where it is kept, in bytes.
+             */
+            sizeBytes: number;
+            encrypted: boolean;
+            /**
+             * @description The engine its database was read from — `sqlite` or `postgres` —
+             *     when this database describes it.
+             */
+            engine: string | null;
+            /** @description The version of the server that made it, the same way. */
+            serverVersion: string | null;
+            /**
+             * Format: int64
+             * @description The last migration its database had, the same way.
+             */
+            migration: number | null;
+            includesMedia: boolean;
+            /** Format: int64 */
+            mediaFiles: number;
+            /**
+             * @description Who asked for it, as the journal names them; `null` for the schedule
+             *     and for one this database does not describe.
+             */
+            createdBy: string | null;
+            /**
+             * @description The SHA-256 of the archive as kept, when this database describes it:
+             *     what a copy taken elsewhere is checked against.
+             */
+            sha256: string | null;
+            /**
+             * @description Whether it is where the archives are kept. One removed by hand is
+             *     still listed while this database describes it, and can only be
+             *     forgotten.
+             */
+            present: boolean;
+            /**
+             * @description Whether this database describes it. One put where the archives are
+             *     kept by hand — or made before a restore brought back an older list —
+             *     is listed from its name alone; its manifest says the rest.
+             */
+            described: boolean;
+            /**
+             * Format: int64
+             * @description For an archive made before an upgrade, the migration the start went
+             *     on to apply: the database in it is at `migration`, the one before.
+             */
+            upgradeTo: number | null;
+        };
+        /** @description A file of the archive. */
+        BackupFile: {
+            path: string;
+            /** Format: int64 */
+            size: number;
+            sha256: string;
+        };
+        /** @description The archives, where they are kept, and how the server makes them. */
+        BackupList: {
+            /** @description Newest first. */
+            archives: components["schemas"]["Backup"][];
+            /**
+             * @description `directory`, or `bucket` among several instances whose media are in
+             *     one.
+             */
+            place: string;
+            /** @description Where: the directory's path, or the bucket and its folder. */
+            location: string;
+            /**
+             * @description Whether the archives the server makes are encrypted:
+             *     `AMS_BACKUP_PASSPHRASE` is set.
+             */
+            encrypted: boolean;
+            /** @description Whether an archive can carry the media: they are kept on disk. */
+            mediaOnDisk: boolean;
+            /** @description Where the media are kept: `off`, `filesystem` or `s3`. */
+            mediaStore: string;
+            /** @description `off`, `daily`, `weekly` or `monthly`. */
+            schedule: string;
+            /**
+             * Format: int64
+             * @description How many of the schedule's archives are kept.
+             */
+            keep: number;
+            /** @description Whether the schedule's archives carry the media kept on disk. */
+            includeMedia: boolean;
+            /** @description When the newest archive was made. */
+            lastAt: string | null;
+            /** @description When the schedule makes the next; `null` while it is off. */
+            nextAt: string | null;
+            /**
+             * @description Whether the newest archive is older than twice the schedule's
+             *     interval, or there is none, while the schedule is on.
+             */
+            overdue: boolean;
+            running: components["schemas"]["Job"] | null;
+            /** @description Where the last restore stands. */
+            restore: components["schemas"]["BackupRestore"];
+        };
+        BackupManifest: {
+            /**
+             * Format: int32
+             * @description The archive's layout: [`FORMAT`] when this server wrote it.
+             */
+            format: number;
+            /** @description The version of the server that made it. */
+            server: string;
+            /**
+             * Format: int64
+             * @description The last migration its database had.
+             */
+            migration: number;
+            createdAt: string;
+            /**
+             * @description The engine the database was read from: `sqlite` or `postgres`.
+             *     Restored onto either.
+             */
+            engine: string;
+            /**
+             * @description Why it was made: `scheduled`, `manual`, `safety`, `command`, or
+             *     `upgrade` — by a start, before the migrations it went on to apply.
+             */
+            reason: string;
+            /**
+             * Format: int64
+             * @description For an archive made before an upgrade, the last migration the start
+             *     went on to apply.
+             */
+            upgradeTo?: number | null;
+            /** @description Each file but the media, with its size and SHA-256. */
+            files: components["schemas"]["BackupFile"][];
+            media: components["schemas"]["BackupMedia"];
+        };
+        /** @description What the archive holds of the media. */
+        BackupMedia: {
+            /** @description Whether the media kept on disk are in it, under `media/`. */
+            included: boolean;
+            /**
+             * @description Where the server it was made of kept them: `off`, `filesystem` or
+             *     `s3`.
+             */
+            store: string;
+            /** Format: int64 */
+            files: number;
+            /** Format: int64 */
+            bytes: number;
+            /**
+             * @description What a restore has to know: where the media are when they are not
+             *     here.
+             */
+            note?: string | null;
+        };
+        /** @description The media the database names, against the media the store holds. */
+        BackupMediaCheck: {
+            /**
+             * Format: int64
+             * @description Named by a row, not in the store: served from its provider's
+             *     address until it is fetched again.
+             */
+            missing: number;
+            /**
+             * Format: int64
+             * @description In the store, named by no row: the sweep takes these away.
+             */
+            unreferenced: number;
+        };
+        /**
+         * @description Why an archive was made: said in its name, and in its row.
+         * @enum {string}
+         */
+        BackupReason: "scheduled" | "manual" | "safety" | "command" | "upgrade";
+        /** @description What an archive made now is to hold. */
+        BackupRequest: {
+            /**
+             * @description The media kept on disk with the database. Left out, as the
+             *     schedule's archives have them.
+             */
+            includeMedia?: boolean | null;
+        };
+        /** @description Where the last restore this instance ran stands. */
+        BackupRestore: {
+            state: components["schemas"]["BackupRestoreStatus"];
+            archive: string | null;
+            startedAt: string | null;
+            finishedAt: string | null;
+            /** @description What went wrong; the database is as it was before. */
+            error: string | null;
+            restored: components["schemas"]["BackupRestored"] | null;
+        };
+        /** @description What opens the archive to restore. */
+        BackupRestoreRequest: {
+            /**
+             * @description Its passphrase, when it is encrypted with another than the server's
+             *     own. Never kept, never logged.
+             */
+            passphrase?: string | null;
+        };
+        /**
+         * @description How a restore stands.
+         * @enum {string}
+         */
+        BackupRestoreStatus: "idle" | "running" | "succeeded" | "failed";
+        /** @description What a restore did. */
+        BackupRestored: {
+            /** @description The archive restored, by its name or its path. */
+            archive: string;
+            /** @description What it said of itself. */
+            manifest: components["schemas"]["BackupManifest"];
+            /**
+             * @description The archive made of the database before it was replaced: what
+             *     undoes this restore. `null` when the database was empty.
+             */
+            safety: string | null;
+            /**
+             * Format: int64
+             * @description The rows copied into the database.
+             */
+            rows: number;
+            /**
+             * Format: int64
+             * @description The media the archive held that were put back into the store.
+             */
+            mediaRestored: number;
+            /**
+             * Format: int64
+             * @description Those it held that were not: the store already had them, or there
+             *     is no store to put them in.
+             */
+            mediaSkipped: number;
+            media: components["schemas"]["BackupMediaCheck"] | null;
         };
         /**
          * @description One of the ways into MyAnimeList.
@@ -3460,6 +3888,11 @@ export interface components {
             /** Format: int64 */
             bytes: number;
         };
+        /**
+         * @description One of the caches, by the name it is filed under.
+         * @enum {string}
+         */
+        CacheSpace: "items" | "searches" | "lists" | "relay" | "sessions";
         Calendar: {
             /**
              * @description The episodes and the films' releases together, earliest first: an
@@ -3862,7 +4295,7 @@ export interface components {
              * @description `authority`: a certificate this server issues itself; `own`: the
              *     operator's files.
              */
-            mode: string;
+            mode: components["schemas"]["DoorMode"];
             /** @description Every name it answers to. */
             names: string[];
             /**
@@ -3880,6 +4313,11 @@ export interface components {
             renewBeforeDays: number;
         };
         /**
+         * @description Whose certificate the clients' door shows.
+         * @enum {string}
+         */
+        DoorMode: "authority" | "own";
+        /**
          * @description One setting as the interface shows it: what it is, and where the answer
          *     currently comes from.
          */
@@ -3890,7 +4328,7 @@ export interface components {
              * @description The scope the value was found at — `server` unless something narrower
              *     overrode it.
              */
-            source: string;
+            source: components["schemas"]["Scope"];
             /** @description Whether this scope sets it itself, as opposed to inheriting. */
             overridden: boolean;
             /**
@@ -3937,12 +4375,59 @@ export interface components {
             isManual: boolean;
         };
         /**
-         * @description One of the other orders a series' episodes come in — `dvd`, `absolute`,
-         *     `alternate`, `regional` — as TheTVDB keeps it: the work's episodes, by
-         *     their TVDB id, in seasons and numbers of that order's own.
+         * @description One of the orders a series' episodes come in: one of TheTVDB's besides
+         *     the aired one, a TMDB episode group, one made here — or the aired order
+         *     itself, whose places are the work's own episodes and are not listed.
          */
         EpisodeOrder: {
-            kind: string;
+            /**
+             * @description What a client asks for it by — Sonarr v5's season type, Plex's
+             *     episode order, the TheTVDB relay's season type: `official` for the
+             *     aired order, TheTVDB's own type for its others (`dvd`, `absolute`,
+             *     `alternate`, `regional`, `altdvd`, `alttwo`), `tmdb-` and the id of a
+             *     TMDB episode group, `ams-` and a name for one made here.
+             */
+            key: string;
+            kind: components["schemas"]["OrderKind"];
+            /**
+             * @description Where it was read: `tvdb`, `tmdb`, or `local` for one made here. The
+             *     aired order's is whoever numbers the work's episodes — `tmdb` while
+             *     TMDB numbers a series TheTVDB stopped answering for.
+             */
+            source: string;
+            /** @description The order's id at its source: a TMDB episode group's. */
+            sourceRef?: string | null;
+            /**
+             * @description Its name: the series' own for one of TheTVDB's ("Superfan Order",
+             *     "BluRay Order") or TheTVDB's for the type ("DVD Order"), the group's
+             *     on TMDB, the one it was given here.
+             */
+            label: string;
+            /** @description Whether it is the aired order. */
+            isDefault: boolean;
+            /**
+             * @description Whether it is what the aired order answers with: Sonarr asking for
+             *     `official`, Sonarr v4, Plex with no order named and the TheTVDB relay
+             *     are given its numbering, frozen until it is thawed. One order of a
+             *     work at the most.
+             */
+            isFrozen: boolean;
+            /**
+             * Format: int32
+             * @description How many episodes its source says it holds, where they are yet to be
+             *     read: a TMDB group's are read the first time it is served or shown.
+             */
+            announced?: number | null;
+            /**
+             * @description When it was last written: read from its source, saved, frozen. An
+             *     episode that airs after it is served in a frozen or a home-made order
+             *     under its aired numbers, where the order leaves them free.
+             */
+            updatedAt: string;
+            /**
+             * @description Its places, in its own sequence. None for the aired order: its
+             *     places are the work's episodes.
+             */
             episodes: components["schemas"]["PlacedEpisode"][];
         };
         EpisodeResource: {
@@ -4119,7 +4604,7 @@ export interface components {
         };
         Flushed: {
             /** @description Which spaces were forgotten. */
-            spaces: string[];
+            spaces: components["schemas"]["CacheSpace"][];
             /**
              * Format: int64
              * @description Keys the server let go of, all spaces together.
@@ -4157,7 +4642,7 @@ export interface components {
         /** @description What the further sources are working from. */
         FurtherSources: {
             /** @description `official` when `AMS_MAL_CLIENT_ID` is set, `jikan` otherwise. */
-            malVia: string;
+            malVia: components["schemas"]["MalVia"];
             animeList: components["schemas"]["ListImport"] | null;
             imdbRatings: components["schemas"]["ListImport"] | null;
         };
@@ -4200,6 +4685,11 @@ export interface components {
             /** @description The latest runs of the jobs, newest first. */
             jobs: components["schemas"]["Job"][];
             updateAvailable: components["schemas"]["UpdateAvailable"] | null;
+            /**
+             * @description When the newest archive of the database was made; `null` when none
+             *     was.
+             */
+            lastBackupAt: string | null;
         };
         /**
          * @description What the sources gave a work and a person hid. Served to nobody: kept
@@ -4370,7 +4860,7 @@ export interface components {
             kind: string;
             /** @description What it acted on: an item id, or nothing for a sweep. */
             target: string | null;
-            status: string;
+            status: components["schemas"]["JobStatus"];
             startedAt: string | null;
             finishedAt: string | null;
             error: string | null;
@@ -4403,12 +4893,14 @@ export interface components {
             mediaId?: string | null;
             /** @description Its title and kind when the run took it. */
             title?: string | null;
-            kind?: string | null;
+            kind?: components["schemas"]["MediaKind"] | null;
             /**
              * @description `ok`, `failed`, `skipped` — or `imported`, the seed's: a work of
-             *     Sonarr's or Radarr's library fetched and stored for the first time.
+             *     Sonarr's or Radarr's library fetched and stored for the first time;
+             *     `written` and `removed`, a backup's: the archive it made, and those
+             *     past the ones its schedule keeps.
              */
-            outcome: string;
+            outcome: components["schemas"]["JobOutcome"];
             /**
              * @description What happened: one of the fixed notes the interface knows, or the
              *     error as the provider said it.
@@ -4416,6 +4908,16 @@ export interface components {
             note?: string | null;
             createdAt: string;
         };
+        /**
+         * @description How a run's work on one entry ended.
+         * @enum {string}
+         */
+        JobOutcome: "ok" | "failed" | "skipped" | "imported" | "written" | "removed";
+        /**
+         * @description Where a run stands.
+         * @enum {string}
+         */
+        JobStatus: "running" | "succeeded" | "failed" | "stopped";
         JobsResponse: {
             jobs: components["schemas"]["Job"][];
             /** Format: int64 */
@@ -4626,6 +5128,11 @@ export interface components {
              */
             canWrite: boolean;
         };
+        /**
+         * @description How MyAnimeList is asked first.
+         * @enum {string}
+         */
+        MalVia: "official" | "jikan";
         MeResponse: {
             identity: string;
             canWrite: boolean;
@@ -4654,6 +5161,11 @@ export interface components {
             locale?: string | null;
             hasPassword: boolean;
         };
+        /**
+         * @description Where the media are kept, as `AMS_MEDIA_STORAGE` says.
+         * @enum {string}
+         */
+        MediaBackend: "off" | "filesystem" | "s3";
         /** @description A work, with whatever children the caller asked to load. */
         MediaItem: {
             id: string;
@@ -4782,8 +5294,7 @@ export interface components {
         MediaKind: "series" | "movie";
         /** @description How the store stands. */
         MediaStatus: {
-            /** @description `off`, `filesystem` or `s3`. */
-            backend: string;
+            backend: components["schemas"]["MediaBackend"];
             /** @description Whether the media are fetched as works are stored. */
             storing: boolean;
             /** @description `proxy` or `redirect`: through this server, or sent to the bucket. */
@@ -4797,6 +5308,12 @@ export interface components {
             fetching: boolean;
             sweeping: boolean;
         };
+        /**
+         * @description What is kept of one address a work points at: where its asset stands,
+         *     or that it has none.
+         * @enum {string}
+         */
+        MediumStatus: "pending" | "stored" | "failed" | "absent";
         /** @description The first tier: this process's memory. */
         Memory: components["schemas"]["Tally"] & {
             /** Format: int64 */
@@ -4910,6 +5427,19 @@ export interface components {
             /** @description Within what your role grants; `read` when left out. */
             scopes?: string[];
         };
+        /** @description A new order, made here. */
+        NewOrder: {
+            /**
+             * @description What it is called: what Sonarr's list of orders, Plex's and the
+             *     editor show. Its key is made of it — `ams-` and its words.
+             */
+            label: string;
+            /**
+             * @description The key of the order its places are copied from: `official` for the
+             *     aired order, as the work numbers its episodes now. Empty without.
+             */
+            from?: string | null;
+        };
         NewRule: {
             /** @description An address (`172.31.0.7`) or a block (`172.31.0.0/24`). */
             cidr: string;
@@ -4980,13 +5510,90 @@ export interface components {
             editorValues?: string | null;
             passwordLogin?: boolean | null;
         };
-        Orders: {
+        /**
+         * @description What an order is, whatever its source calls it. TheTVDB's further orders
+         *     are slots — `alternate`, `regional`, `altdvd`, `alttwo` — whose meaning
+         *     is the series' own name for each, so they are one kind here; TMDB types
+         *     its episode groups one to seven.
+         * @enum {string}
+         */
+        OrderKind: "aired" | "dvd" | "absolute" | "digital" | "production" | "story_arc" | "tv" | "tvdb_alt" | "custom";
+        /** @description Who numbers a series, and what its clients are offered. */
+        OrderNumbering: {
             /**
-             * @description Each order TheTVDB keeps besides the aired one — `dvd`, `absolute`,
-             *     `alternate`, `regional` — with the work's episodes placed in it by
-             *     their TVDB id. Empty for a film, or a series numbered one way only.
+             * @description Whether TMDB numbers a series TheTVDB lists: while TheTVDB does not
+             *     answer for it, or until somebody gives the numbering back.
+             */
+            heldByTmdb: boolean;
+            /**
+             * @description Since when TMDB numbers it in TheTVDB's place, after TheTVDB left it
+             *     unanswered refresh after refresh.
+             */
+            fallbackSince?: string | null;
+            /**
+             * Format: int32
+             * @description How many refreshes in a row, the most part of a day apart, TheTVDB
+             *     has not answered for it.
+             */
+            silent: number;
+            /**
+             * Format: int64
+             * @description After how many TMDB numbers a series in TheTVDB's place: the
+             *     `numbering.fallbackAfter` setting, `0` when it never does.
+             */
+            fallbackAfter: number;
+            /**
+             * @description The key of the order frozen as its aired numbering: what Sonarr
+             *     asking for the aired order, Sonarr v4, Plex with no order named and
+             *     the TheTVDB relay are given.
+             */
+            frozen?: string | null;
+            /**
+             * @description The keys of the orders Sonarr v5 and Plex are offered, the aired one
+             *     aside: the same order kept by TheTVDB and by TMDB is offered once.
+             */
+            offered: string[];
+        };
+        /**
+         * @description An episode as an order's source describes it, kept with its place: the
+         *     record served where no episode the work holds stands for the place.
+         */
+        OrderRecord: {
+            title: string;
+            overview?: string | null;
+            /** @description The day it aired, `YYYY-MM-DD`. */
+            aired?: string | null;
+            /**
+             * Format: int32
+             * @description In minutes.
+             */
+            runtime?: number | null;
+            /** @description Its still, an address. */
+            image?: string | null;
+            /** @description `season`, `midseason` or `series`, as TheTVDB marks a finale. */
+            finaleType?: string | null;
+        };
+        /** @description An order made here, written whole. */
+        OrderWrite: {
+            label: string;
+            /**
+             * @description Its places, in its own sequence: each an episode the work holds, or
+             *     a record of the order's own. A season and a number once each.
+             */
+            places: components["schemas"]["PlaceWrite"][];
+        };
+        Orders: {
+            aired?: components["schemas"]["EpisodeOrder"] | null;
+            /**
+             * @description Every other order — TheTVDB's first, the DVDs' at their head, then
+             *     TMDB's episode groups, then those made here — each with its places:
+             *     an episode the work holds by its id as the work gives it now, or the
+             *     record the order carries of one it does not. Empty for a film, or a
+             *     series numbered one way only.
              */
             orders: components["schemas"]["EpisodeOrder"][];
+            /** @description Who numbers the series, and what its clients are offered. */
+            numbering: components["schemas"]["OrderNumbering"];
         };
         /** @description One stored manual edit. */
         Override: {
@@ -5044,16 +5651,68 @@ export interface components {
             /** @description The character, or the job title for crew. */
             character?: string | null;
         };
-        /** @description Where one episode stands in an order. */
-        PlacedEpisode: {
-            /** Format: int64 */
-            tvdbId: number;
+        /** @description One place of an order made here. */
+        PlaceWrite: {
+            /**
+             * @description The place's id, as the order gave it: what keeps the id a record of
+             *     the order's own is served under the same from one save to the next.
+             */
+            id?: string | null;
             /** Format: int32 */
             seasonNumber: number;
             /** Format: int32 */
             episodeNumber: number;
             /** Format: int32 */
             absoluteNumber?: number | null;
+            /** @description An episode the work holds, by its id as the work gives it. */
+            episodeId?: string | null;
+            /**
+             * Format: int64
+             * @description Its TheTVDB id, as the order gave it: names the episode when the id
+             *     above is one a refresh has written again since.
+             */
+            tvdbId?: number | null;
+            /**
+             * Format: int64
+             * @description Its TMDB id, likewise.
+             */
+            tmdbId?: number | null;
+            record?: components["schemas"]["OrderRecord"] | null;
+        };
+        /**
+         * @description Where one episode stands in an order: a season and a number, and either
+         *     an episode the work holds or the record the order carries of one it does
+         *     not.
+         */
+        PlacedEpisode: {
+            /**
+             * @description The place's own id: what a record a person wrote is known by from one
+             *     save to the next.
+             */
+            id: string;
+            /** Format: int32 */
+            seasonNumber: number;
+            /** Format: int32 */
+            episodeNumber: number;
+            /** Format: int32 */
+            absoluteNumber?: number | null;
+            /**
+             * @description The held episode the place names, by the row it is kept in. A
+             *     refresh writes a source's episodes again under new rows, so the ids
+             *     below are what name one of those; the row names one made by hand.
+             */
+            episodeId?: string | null;
+            /**
+             * Format: int64
+             * @description The episode's id on TheTVDB.
+             */
+            tvdbId?: number | null;
+            /**
+             * Format: int64
+             * @description The episode's id on TMDB.
+             */
+            tmdbId?: number | null;
+            record?: components["schemas"]["OrderRecord"] | null;
         };
         PlexChildren: {
             size: number;
@@ -5507,17 +6166,29 @@ export interface components {
             sortOrder: number;
         };
         /**
+         * @description A relay whose service takes a key of its own: TMDB's and TheTVDB's.
+         *     AniList's takes none, and has no credential to choose.
+         * @enum {string}
+         */
+        RelayApi: "tmdb" | "tvdb";
+        /**
+         * @description Whose credential a relay asks its service with: an administrator's
+         *     choice on the access page, `tmdb.relayCredential` for TMDB's relay and
+         *     `tvdb.relayCredential` for TheTVDB's. AniList has no key to choose.
+         * @enum {string}
+         */
+        RelayCredential: "server" | "client";
+        /**
          * @description Whose key a relay asks its service with (`tmdb.relayCredential`,
          *     `tvdb.relayCredential`), and what stands around that choice.
          */
         RelayCredentialState: {
-            /** @description `tmdb` or `tvdb`. */
-            api: components["schemas"]["Api"];
+            api: components["schemas"]["RelayApi"];
             /**
              * @description `server`: this server's key in place of the client's. `client`: the
              *     client's own, as it came.
              */
-            credential: string;
+            credential: components["schemas"]["RelayCredential"];
             /**
              * @description Whether this server holds a key of the service's own to stand in
              *     with: without one, `server` answers 503.
@@ -5528,7 +6199,7 @@ export interface components {
              *     `AMS_TVDB_AUTH`), before the choice above reads a key policy as the
              *     address list.
              */
-            configuredPolicy: string;
+            configuredPolicy: components["schemas"]["SurfacePolicy"];
         };
         /**
          * @description A film coming out on one day of the window, and which of the listed works
@@ -5673,18 +6344,25 @@ export interface components {
         };
         /** @description One order the series' episodes come in, as Sonarr offers it. */
         SeasonTypeResource: {
-            /** @description `Aired Order`, `DVD Order`…: what Sonarr shows. */
+            /** @description `Aired Order`, `DVD Order`, `Superfan Order`…: what Sonarr shows. */
             name: string;
             /**
-             * @description `official`, `dvd`, `absolute`, `alternate`, `regional`, `altdvd`,
-             *     `alttwo`: what Sonarr asks the series in.
+             * @description What Sonarr asks the series in, and writes into the address it asks
+             *     for it at: `official`; TheTVDB's `dvd`, `absolute`, `alternate`,
+             *     `regional`, `altdvd`, `alttwo`; `tmdb-` and a TMDB episode group's
+             *     id; `ams-` and a name for an order made here.
              */
             type: string;
+            /**
+             * @description Empty for a TMDB group not read yet, which is read when the series is
+             *     first asked for in it.
+             */
             seasonNumbers: number[];
             /**
              * Format: int32
              * @description The episodes of the regular seasons; the specials are not counted,
-             *     as the real service does not count them.
+             *     as the real service does not count them. For a TMDB group not read
+             *     yet, the count TMDB lists it with.
              */
             episodeCount: number;
         };
@@ -5795,11 +6473,11 @@ export interface components {
             refreshEnabled: boolean;
             authDisabled: boolean;
             publicBrowse: boolean;
-            nativePolicy: string;
-            tmdbPolicy: string;
-            tvdbPolicy: string;
-            anilistPolicy: string;
-            arrPolicy: string;
+            nativePolicy: components["schemas"]["SurfacePolicy"];
+            tmdbPolicy: components["schemas"]["SurfacePolicy"];
+            tvdbPolicy: components["schemas"]["SurfacePolicy"];
+            anilistPolicy: components["schemas"]["SurfacePolicy"];
+            arrPolicy: components["schemas"]["SurfacePolicy"];
             furtherSources: components["schemas"]["FurtherSources"];
         };
         /** @description The second tier: the server, shared. */
@@ -5920,7 +6598,7 @@ export interface components {
             translations: components["schemas"]["SkyhookTranslationResource"][];
             /**
              * @description The aired order first, then each other order the catalogue keeps for
-             *     the series.
+             *     the series: TheTVDB's, TMDB's episode groups, those made here.
              */
             seasonTypes: components["schemas"]["SeasonTypeResource"][];
             actors: components["schemas"]["ActorResource"][];
@@ -5929,8 +6607,10 @@ export interface components {
             /** @description Left out of a search result, as the real service leaves it. */
             episodes?: components["schemas"]["EpisodeResourceV2"][] | null;
             /**
-             * @description `tvdb`; `tmdb` or `fankai` for an id this server made for a work
-             *     TheTVDB does not list (see [`ids`]).
+             * @description Who numbers the episodes: `tvdb`; `tmdb` for a series TMDB numbers —
+             *     one TheTVDB does not list, under an id this server made for it (see
+             *     [`ids`]), or one TheTVDB stopped answering for; `fankai` for a
+             *     Fan-Kai.
              */
             metadataSource: string;
         };
@@ -5938,6 +6618,12 @@ export interface components {
             /** @description The works, drawn as a list is: artwork and scores, no episodes. */
             items: components["schemas"]["MediaItem"][];
         };
+        /**
+         * @description Who may browse the catalogue: `site.access`, unless
+         *     `AMS_PUBLIC_BROWSE=false` keeps the site private whatever it says.
+         * @enum {string}
+         */
+        SiteAccess: "public" | "private";
         SkyhookAlternativeTitleResource: {
             title: string;
         };
@@ -6001,7 +6687,7 @@ export interface components {
             sources: string[];
         };
         SpaceReport: {
-            id: string;
+            id: components["schemas"]["CacheSpace"];
             enabled: boolean;
             /** Format: int64 */
             ttlSeconds: number;
@@ -6054,6 +6740,12 @@ export interface components {
         Suggestions: {
             suggestions: components["schemas"]["Suggestion"][];
         };
+        /**
+         * @description What an API asks of a caller, as the configuration, the access page and
+         *     the dashboard name it.
+         * @enum {string}
+         */
+        SurfacePolicy: "apikey" | "allowlist" | "open";
         SyncOutcome: {
             /** @description The work as it now stands. */
             item: components["schemas"]["MediaItem"];
@@ -6083,10 +6775,20 @@ export interface components {
             /** Format: int64 */
             misses: number;
         };
+        /**
+         * @description Why a task cannot be run now.
+         * @enum {string}
+         */
+        TaskBlocked: "source_off" | "not_configured" | "running" | "busy" | "media_off" | "no_authority" | "updates_off" | "arr_off";
+        /**
+         * @description A task, sent under the name the history files its runs by.
+         * @enum {string}
+         */
+        TaskId: "refresh.sweep" | "refresh.all" | "import.anime" | "import.imdb" | "export.nfo" | "media.store" | "media.sweep" | "tls.renew" | "update.check" | "arr.seed" | "backup.run";
         /** @enum {string} */
         TaskMode: "scheduled" | "manual" | "off";
         TaskState: {
-            id: string;
+            id: components["schemas"]["TaskId"];
             mode: components["schemas"]["TaskMode"];
             /**
              * Format: int64
@@ -6101,8 +6803,7 @@ export interface components {
             running?: components["schemas"]["Job"] | null;
             /** @description Whether a run in progress can be stopped. */
             cancelable: boolean;
-            /** @description Why it cannot be run now, when it cannot. */
-            blocked?: string | null;
+            blocked?: components["schemas"]["TaskBlocked"] | null;
         };
         TestOutcome: {
             ok: boolean;
@@ -6166,6 +6867,14 @@ export interface components {
              * @description Pictures and themes every try at fetching failed for.
              */
             failedMedia: number;
+            /**
+             * @description Whether the newest archive of the database is older than twice the
+             *     schedule's interval, or none was ever made — while the schedule is
+             *     on.
+             */
+            backupOverdue: boolean;
+            /** @description When the newest archive was made; `null` when none was. */
+            lastBackupAt: string | null;
         };
         Translation: {
             language: string;
@@ -6342,8 +7051,11 @@ export interface components {
         WebhookDestination: {
             id: string;
             name: string;
-            /** @description `standard`, `json`, `discord`, `slack`, `ntfy`, `gotify` or `apprise`. */
-            kind: string;
+            /**
+             * @description A kind this server does not know — a destination a later version
+             *     made — is sent as it was stored, and nothing is posted to it.
+             */
+            kind: components["schemas"]["WebhookKind"];
             /**
              * @description Its address: the scheme, host and port shown, the rest masked — for
              *     most services the token is in the path.
@@ -6385,8 +7097,7 @@ export interface components {
          */
         WebhookDestinationInput: {
             name?: string | null;
-            /** @description `standard`, `json`, `discord`, `slack`, `ntfy`, `gotify` or `apprise`. */
-            kind?: string | null;
+            kind?: components["schemas"]["WebhookKind"] | null;
             /**
              * @description Where it is posted: a webhook's address, an ntfy topic's, a Gotify
              *     server's, an Apprise API's `/notify/{key}`. Left out or empty on a
@@ -6429,8 +7140,13 @@ export interface components {
             /** @description What a new destination is told of, until other events are ticked. */
             defaults: string[];
             /** @description The kinds of destination, in the order they are offered. */
-            kinds: string[];
+            kinds: components["schemas"]["WebhookKind"][];
         };
+        /**
+         * @description The kinds of destination.
+         * @enum {string}
+         */
+        WebhookKind: "standard" | "json" | "discord" | "slack" | "ntfy" | "gotify" | "apprise";
         /**
          * @description One thing told, as a delivery keeps it: the event, who did it, to what,
          *     what is worth saying of it, and when.
@@ -6449,6 +7165,11 @@ export interface components {
              */
             count?: number | null;
         };
+        /**
+         * @description Why a test was not sent.
+         * @enum {string}
+         */
+        WebhookRefusal: "not_web" | "internal" | "unsent";
         /** @description What a test of a destination came to. */
         WebhookTest: {
             /** @description Whether the address took it: it answered, with a success. */
@@ -6463,13 +7184,7 @@ export interface components {
              *     that name no address.
              */
             error?: string | null;
-            /**
-             * @description Why nothing was sent: `not_web`, not an http(s) address or one that
-             *     names this machine; `internal`, a name that resolves to an address
-             *     only reachable from here; `unsent`, the post could not be made — a
-             *     standard destination without its secret — as `error` says.
-             */
-            refused?: string | null;
+            refused?: components["schemas"]["WebhookRefusal"] | null;
             /**
              * Format: int64
              * @description How long it took, in milliseconds.
@@ -6516,7 +7231,7 @@ export interface components {
              * @description `stored`, `pending`, `failed` — or `absent`, when nothing has been
              *     asked of it: the store is off, or the address is not one it fetches.
              */
-            status: string;
+            status: components["schemas"]["MediumStatus"];
             assetId?: string | null;
             /** Format: int64 */
             bytes?: number | null;
@@ -7102,6 +7817,220 @@ export interface operations {
             };
         };
     };
+    backup_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupList"];
+                };
+            };
+            /** @description The caller is not an administrator */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    backup_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BackupRequest"];
+            };
+        };
+        responses: {
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Started"];
+                };
+            };
+            /** @description The caller is not an administrator */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description An archive is being made, or one restored */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    backup_restore_state: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupRestore"];
+                };
+            };
+            /** @description The caller is not an administrator */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    backup_remove: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The archive's name, as listed */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Taken away */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The caller is not an administrator */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such archive */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    backup_download: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The archive's name, as listed */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The archive */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description The caller is not an administrator */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such archive is kept */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    backup_restore: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The archive's name, as listed */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BackupRestoreRequest"];
+            };
+        };
+        responses: {
+            /** @description Started: follow it at /admin/backups/restore */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The archive cannot be read: encrypted with another passphrase, or damaged */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The caller is not an administrator */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such archive is kept */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description An archive is being made or restored, or this one was made by a later version */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     cache_report: {
         parameters: {
             query?: never;
@@ -7159,8 +8088,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description `items`, `searches`, `lists`, `relay` or `sessions` */
-                space: string;
+                /** @description The space to forget */
+                space: components["schemas"]["CacheSpace"];
             };
             cookie?: never;
         };
@@ -10015,6 +10944,57 @@ export interface operations {
             };
         };
     };
+    orders_restore: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The work's identifier */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Refreshed: the orders as they stand, and who numbers the series */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Orders"];
+                };
+            };
+            /** @description The caller may not write */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such work */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A series TMDB does not number, or one with no TheTVDB id */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The refresh failed altogether */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     orders_orders: {
         parameters: {
             query?: never;
@@ -10036,6 +11016,254 @@ export interface operations {
                 };
             };
             /** @description No such work */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    orders_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The work's identifier */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewOrder"];
+            };
+        };
+        responses: {
+            /** @description Made */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EpisodeOrder"];
+                };
+            };
+            /** @description No name, or an order to copy the work does not have */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The caller may not write */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such work */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A film, or a series with as many orders made here as it may keep */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    orders_save: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The work's identifier */
+                id: string;
+                /** @description The order's key, `ams-…` */
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrderWrite"];
+            };
+        };
+        responses: {
+            /** @description Written */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EpisodeOrder"];
+                };
+            };
+            /** @description A place that names no episode the work holds and carries no record, one given twice, a number out of range */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The caller may not write */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such work, or no such order */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description An order read from a source, which is not written here */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    orders_remove: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The work's identifier */
+                id: string;
+                /** @description The order's key, `ams-…` */
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Forgotten */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The caller may not write */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such work, or no such order */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description An order read from a source, which comes back at the next refresh */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    orders_freeze: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The work's identifier */
+                id: string;
+                /** @description The order's key */
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Frozen: the orders as they stand */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Orders"];
+                };
+            };
+            /** @description The aired order itself, which a frozen order stands in for */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The caller may not write */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such work, or no such order */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description An order that places no episode */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    orders_thaw: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The work's identifier */
+                id: string;
+                /** @description The key of the order frozen */
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Thawed: the orders as they stand */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Orders"];
+                };
+            };
+            /** @description The caller may not write */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such work, or that order is not the one frozen */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -11773,8 +13001,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description `refresh.sweep`, `refresh.all`, `import.anime`, `import.imdb`, `export.nfo`, `media.store`, `media.sweep`, `tls.renew`, `update.check` or `arr.seed` */
-                id: string;
+                /** @description The task to run */
+                id: components["schemas"]["TaskId"];
             };
             cookie?: never;
         };
@@ -11802,7 +13030,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description It is running already */
+            /** @description It is running already, or a backup is being restored */
             409: {
                 headers: {
                     [name: string]: unknown;

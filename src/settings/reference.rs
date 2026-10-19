@@ -233,6 +233,24 @@ const GROUPS: &[Group] = &[
         )],
     },
     Group {
+        title: "Numbering",
+        lead: "On **Settings › Everything else**. See \
+               [Who numbers a series](sonarr-radarr.md#who-numbers-a-series).",
+        entries: &[set(
+            "numbering.fallbackAfter",
+            "How many refreshes in a row TheTVDB may leave a series unanswered — counted twenty \
+             hours apart at the least, so that an outage of an afternoon counts once — before \
+             TMDB numbers the series in its place: TMDB's seasons and episodes, or its group of \
+             the original air date where that one numbers the same episodes and puts more of \
+             them where TheTVDB had them, each keeping the TheTVDB id it had. The audit trail \
+             says so (`item.numbering_fallback`), the notifications that want it are told \
+             (`numbering.fallback`), and the work's page and its editor carry a banner with the \
+             way back. TheTVDB takes its numbering back of itself when it answers again, unless \
+             an order of the series was frozen as its aired numbering meanwhile. `0`: never. \
+             Unset, it is `3`.",
+        )],
+    },
+    Group {
         title: "Automatic refresh",
         lead: "On **Settings › Automatic refresh**: stored works are fetched again as what is \
                known about them ages.",
@@ -539,6 +557,52 @@ const GROUPS: &[Group] = &[
              off.",
         )],
     },
+    Group {
+        title: "Backups",
+        lead: "On **Administration › Backups**, which lists the archives and makes, downloads, \
+               deletes and restores them, and under **Settings › Backups**. See \
+               [Backups](install.md#backups).",
+        entries: &[
+            set(
+                "backup.schedule",
+                "How often the server makes an archive of its database: `off`, `daily`, `weekly` \
+                 or `monthly`, counted from the newest archive, whoever made it — one made by \
+                 hand puts the next off by as long. Off, archives are still made by hand, by the \
+                 command line and before every restore, and the dashboard stops asking for one.",
+            ),
+            set(
+                "backup.keep",
+                "How many of the schedule's own archives are kept, the newest: after each run, \
+                 those past them are taken away. Those made by hand, by the command line or \
+                 before a restore stay until somebody deletes them.",
+            ),
+            set(
+                "backup.includeMedia",
+                "Put the media kept on disk in the schedule's archives beside the database, \
+                 each picture and theme once. Off, an archive holds the database alone: what the \
+                 providers gave is fetched again as it is asked for, but a picture uploaded by \
+                 hand is nowhere else, so back the media directory up some other way. Media kept \
+                 in a bucket are never in an archive: the bucket is backed up as a bucket is.",
+            ),
+            set(
+                "backup.keepUpgrades",
+                "How many of the archives made before upgrades are kept, the newest: when a new \
+                 version starts on a database its migrations have not reached, the database is \
+                 archived as the version before left it — `ams-…-upgrade-m0037.tar.zst`, the way \
+                 back — and those past these are taken away. They are counted apart: they never \
+                 take the place of the schedule's.",
+            ),
+            set(
+                "backup.beforeUpgrade",
+                "Whether that archive is made of a PostgreSQL too. An SQLite file is copied as a \
+                 file, in seconds; a PostgreSQL is copied row by row through SQLite, which takes \
+                 a while on a large catalogue, and an administrator who keeps `pg_dump`s of their \
+                 own may prefer to turn it off. `AMS_BACKUP_BEFORE_UPGRADE=false` starts without \
+                 the archive on either engine — what to do when one cannot be made, which stops \
+                 the start rather than migrate without the way back.",
+            ),
+        ],
+    },
 ];
 
 /// What comes before the groups.
@@ -736,12 +800,13 @@ fn render(defaults: &HashMap<String, String>) -> String {
     page
 }
 
-/// What reads the environment: the configuration, and the two modules that
-/// read a variable of their own.
-const READERS: [&str; 3] = [
+/// What reads the environment: the configuration, and the three modules
+/// that read a variable of their own.
+const READERS: [&str; 4] = [
     include_str!("../config.rs"),
     include_str!("../telemetry.rs"),
     include_str!("../outbound.rs"),
+    include_str!("../backup/mod.rs"),
 ];
 
 /// Whether `variable` is read by the server: named in one of [`READERS`], as

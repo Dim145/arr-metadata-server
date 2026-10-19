@@ -199,3 +199,11 @@ See [Caching](caching.md).
 | `AMS_MEDIA_PRIVATE_NETWORKS` | `true` | `false` keeps the media store and the `.nfo` export out of private networks too. |
 | `AMS_NFO_EXPORT_PATH` | unset | Where `POST /api/v1/export/nfo` writes; unset, that export is off. See [Exports](exports.md). |
 | `AMS_NFO_EXPORT_ARTWORK` | `true` | Downloads the artwork beside the documents. |
+
+### Backups
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `AMS_BACKUP_DIR` | `backups` beside the SQLite database (`/data/backups` in the image), `data/backups` with PostgreSQL | Where the archives are kept; among several instances whose media are in a bucket, they go to the bucket and this is where one is put together. Either way it needs room for a copy of the database. See [Backups](install.md#backups). |
+| `AMS_BACKUP_PASSPHRASE` | unset | Encrypts every archive the server makes, as age does with a passphrase, and opens them again; unset, they are not encrypted. |
+| `AMS_BACKUP_BEFORE_UPGRADE` | `true` | `false` lets a start apply a new version's migrations without first making an archive of the database: what to set, once, when that archive cannot be made and the start stops for it. |

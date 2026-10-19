@@ -49,6 +49,11 @@ FILMS = {603: ("The Matrix", "matrix"), 157336: ("Interstellar", "interstellar")
 DVD_SERIES = 81189  # added in its DVD order on Sonarr 5
 FRENCH_SERIES = 71663  # added with French as its metadata language on Sonarr 5
 SEASON_TITLES = 305288  # TheTVDB names its seasons
+ORDERED_SERIES = 412806  # added on Sonarr 5 in an order made here, `ams-…`
+FROZEN_SERIES = 305288  # an order made here frozen as its aired numbering, then thawed
+ORDER_LABEL = "E2E order"  # the order made here, on ORDERED_SERIES
+FROZEN_LABEL = "E2E frozen"  # the one frozen, on FROZEN_SERIES
+OWN_TITLE = "E2E record of the order's own"  # an episode the order carries, the work does not hold
 LOCKED = 81189  # the series, and film 603, a title is locked on
 FRENCH = {"id": 2, "name": "French"}  # Sonarr's Language.French
 ENGLISH = {"id": 1, "name": "English"}
@@ -259,6 +264,42 @@ class Native:
     def lock_title(self, item_id, title):
         self.call("PUT", f"/items/{item_id}/overrides", {"field": "title", "value": title})
 
+    def orders(self, item_id):
+        return self.call("GET", f"/items/{item_id}/orders")
+
+    def order_made(self, item_id, label, change):
+        """An order made here from the aired one, its places written as
+        `change` makes them of the aired ones; one of that name a run before
+        made is forgotten first, so the order is the aired one as it is now."""
+        for order in self.orders(item_id)["orders"]:
+            if order["source"] == "local" and order["label"] == label:
+                self.call("DELETE", f"/items/{item_id}/orders/{urllib.parse.quote(order['key'])}")
+        made = self.call("POST", f"/items/{item_id}/orders", {"label": label, "from": "official"})
+        places = [
+            {
+                "id": place["id"],
+                "seasonNumber": place["seasonNumber"],
+                "episodeNumber": place["episodeNumber"],
+                "absoluteNumber": place.get("absoluteNumber"),
+                "episodeId": place.get("episodeId"),
+                "tvdbId": place.get("tvdbId"),
+                "tmdbId": place.get("tmdbId"),
+                "record": place.get("record"),
+            }
+            for place in made["episodes"]
+        ]
+        written = self.call(
+            "PUT",
+            f"/items/{item_id}/orders/{urllib.parse.quote(made['key'])}",
+            {"label": label, "places": change(places)},
+        )
+        return written["key"]
+
+    def order_forgotten(self, item_id, label):
+        for order in self.orders(item_id)["orders"]:
+            if order["source"] == "local" and order["label"] == label:
+                self.call("DELETE", f"/items/{item_id}/orders/{urllib.parse.quote(order['key'])}")
+
 
 class Door:
     """The server's clients' door, by the names the clients call it by."""
@@ -378,6 +419,28 @@ def served_show(stack, arr, tvdb, language="eng", season_type="official"):
 
 def key_of(episode):
     return (episode["seasonNumber"], episode["episodeNumber"])
+
+
+def swapped_first_two(places):
+    """The first two places of the first regular season, what they hold
+    swapped and their numbers where they were: the aired order, but for two
+    episodes — enough for a numbering to be told from the aired one."""
+    regular = sorted((p for p in places if p["seasonNumber"] > 0), key=lambda p: (p["seasonNumber"], p["episodeNumber"]))
+    if len(regular) < 2 or regular[0]["seasonNumber"] != regular[1]["seasonNumber"]:
+        raise Failure(f"no first season of two episodes to swap: {[(p['seasonNumber'], p['episodeNumber']) for p in regular[:4]]}")
+    first, second = regular[0], regular[1]
+    for field in ("id", "episodeId", "tvdbId", "tmdbId", "record"):
+        first[field], second[field] = second.get(field), first.get(field)
+    return places
+
+
+def with_own_record(places):
+    """The places swapped as above, and a special of the order's own the work
+    does not hold, at S00E99."""
+    places = swapped_first_two(places)
+    places = [p for p in places if (p["seasonNumber"], p["episodeNumber"]) != (0, 99)]
+    places.append({"seasonNumber": 0, "episodeNumber": 99, "record": {"title": OWN_TITLE, "aired": "2023-01-01", "runtime": 24}})
+    return places
 
 
 # What Sonarr deserializes a series into: the resources under
@@ -567,6 +630,26 @@ def phase_sonarr(R, stack, arr):
     if v5:
         options[FRENCH_SERIES] = dict(language=FRENCH)
         options[DVD_SERIES] = dict(season_type="dvd")
+        if ORDERED_SERIES in stack.series:
+            # An order made here, offered under a key TheTVDB never gave:
+            # whether Sonarr v5 takes a season type it was not built with.
+            with R.check(f"{label}: an order made here on tvdb:{ORDERED_SERIES} is offered among its season types"):
+                item = native.item("series", "tvdb", ORDERED_SERIES)
+                expect(item is not None, f"tvdb:{ORDERED_SERIES} is not in the catalogue")
+                key = native.order_made(item["id"], ORDER_LABEL, with_own_record)
+                served = served_show(stack, arr, ORDERED_SERIES)
+                offered = [t.get("type") for t in served.get("seasonTypes") or []]
+                expect(key in offered, f"this server offers {offered}, not {key!r}")
+                found = arr.get(f"{arr.api}/series/lookup?term=tvdb:{ORDERED_SERIES}")
+                held = [s for s in found if s.get("tvdbId") == ORDERED_SERIES]
+                types = [t.get("type") for s in held for t in s.get("seasonTypes") or []]
+                expect(
+                    key in types,
+                    f"Sonarr's lookup offers {types} for tvdb:{ORDERED_SERIES}; it answered "
+                    f"{json.dumps(held[:1])[:800]}",
+                )
+                options[ORDERED_SERIES] = dict(season_type=key)
+                R.note(f"{label}: offered {key!r} among {types}")
     ids = {}
     for tvdb, (title, _) in stack.series.items():
         with R.check(f"{label}: {title} (tvdb:{tvdb}) is added" + (f" {options[tvdb]}" if tvdb in options else "")):
@@ -700,6 +783,84 @@ def phase_sonarr5_reads(R, stack, arr, ids):
             expect(len(titles_served) >= 3, f"the server names only {len(titles_served)} seasons")
             titles_here = {s["seasonNumber"]: s.get("title") for s in held["seasons"] if s.get("title")}
             expect(titles_here == titles_served, f"Sonarr's season titles {titles_here}, served {titles_served}")
+    if ORDERED_SERIES in ids:
+        tvdb = ORDERED_SERIES
+        with R.check(f"{label}: added in the order made here, tvdb:{tvdb} is numbered by it, its own record among its episodes"):
+            held = arr.get(f"{arr.api}/series/{ids[tvdb]}")
+            key = held.get("seasonType")
+            expect(
+                isinstance(key, str) and key.startswith("ams-"),
+                f"the series' season type is {key!r}; Sonarr holds {json.dumps(held)[:800]}",
+            )
+            served = served_show(stack, arr, tvdb, "eng", key)
+            aired = served_show(stack, arr, tvdb, "eng", "official")
+            episodes = arr.get(f"{arr.api}/episode?seriesId={ids[tvdb]}")
+            here = {key_of(e): e.get("title") for e in episodes}
+            there = {key_of(e): e.get("title") for e in served["episodes"]}
+            expect(
+                set(here) == set(there),
+                f"Sonarr's numbering is not the order's: Sonarr lacks {sorted(set(there) - set(here))[:6]}, "
+                f"has extra {sorted(set(here) - set(there))[:6]}",
+            )
+            expect(here.get((0, 99)) == OWN_TITLE, f"S00E99 in Sonarr is {here.get((0, 99))!r}, not {OWN_TITLE!r}")
+            aired_titles = {key_of(e): e.get("title") for e in aired["episodes"]}
+            first = min(k for k in aired_titles if k[0] > 0)
+            second = min(k for k in aired_titles if k[0] == first[0] and k > first)
+            expect(
+                (here.get(first), here.get(second)) == (aired_titles[second], aired_titles[first]),
+                f"{first} and {second} are {here.get(first)!r} and {here.get(second)!r} in Sonarr; aired, "
+                f"{aired_titles[first]!r} and {aired_titles[second]!r}",
+            )
+            R.note(f"{label}: {len(episodes)} episodes in {key!r}, {len(aired['episodes'])} aired")
+    if FROZEN_SERIES in ids:
+        phase_frozen(R, stack, arr, ids)
+
+
+def phase_frozen(R, stack, arr, ids):
+    """An order made here, frozen as the aired numbering: what Sonarr asking
+    for the aired order is served from then on, which it follows at its next
+    refresh; thawed, it goes back. Thawed whatever came of it, so that the
+    series is left as the stack found it."""
+    label, tvdb, native = arr.label, FROZEN_SERIES, stack.native
+    item = native.item("series", "tvdb", tvdb)
+    if item is None:
+        with R.check(f"{label}: an order frozen on tvdb:{tvdb} numbers it in Sonarr"):
+            raise Failure(f"tvdb:{tvdb} is not in the catalogue")
+        return
+    aired = served_show(stack, arr, tvdb)
+    aired_titles = {key_of(e): e.get("title") for e in aired["episodes"]}
+    regular = sorted(k for k in aired_titles if k[0] > 0)
+    first, second = regular[0], regular[1]
+    try:
+        with R.check(f"{label}: an order frozen as the aired numbering of tvdb:{tvdb} numbers it in Sonarr after a refresh"):
+            key = native.order_made(item["id"], FROZEN_LABEL, swapped_first_two)
+            native.call("POST", f"/items/{item['id']}/orders/{urllib.parse.quote(key)}/freeze")
+            frozen = served_show(stack, arr, tvdb)
+            served = {key_of(e): e.get("title") for e in frozen["episodes"]}
+            expect(
+                (served.get(first), served.get(second)) == (aired_titles[second], aired_titles[first]),
+                f"the aired order is served as {served.get(first)!r}, {served.get(second)!r} at {first}, {second}: "
+                f"not the frozen numbering",
+            )
+            refresh_series(arr, ids[tvdb])
+            episodes = {key_of(e): e.get("title") for e in arr.get(f"{arr.api}/episode?seriesId={ids[tvdb]}")}
+            expect(
+                (episodes.get(first), episodes.get(second)) == (aired_titles[second], aired_titles[first]),
+                f"after its refresh Sonarr holds {episodes.get(first)!r}, {episodes.get(second)!r} at {first}, "
+                f"{second}; the frozen numbering is {served.get(first)!r}, {served.get(second)!r}",
+            )
+    finally:
+        with R.check(f"{label}: thawed, tvdb:{tvdb} is numbered as it aired again in Sonarr"):
+            native.order_forgotten(item["id"], FROZEN_LABEL)
+            back = served_show(stack, arr, tvdb)
+            served = {key_of(e): e.get("title") for e in back["episodes"]}
+            expect(served.get(first) == aired_titles[first], f"the aired order is served as {served.get(first)!r} at {first}")
+            refresh_series(arr, ids[tvdb])
+            episodes = {key_of(e): e.get("title") for e in arr.get(f"{arr.api}/episode?seriesId={ids[tvdb]}")}
+            expect(
+                episodes.get(first) == aired_titles[first],
+                f"after its refresh Sonarr holds {episodes.get(first)!r} at {first}, aired {aired_titles[first]!r}",
+            )
 
 
 def phase_scene(R, stack, arr, ids):
@@ -1118,7 +1279,11 @@ def phase_plex(R, stack):
     with R.check("plex: the film is matched, and has the title, summary, year, genres, classification and poster of the catalogue"):
         videos = eventually(
             lambda: plex_get(base, f"/library/sections/{films_key}/all").findall("Video"),
-            lambda found: len(found) == 1 and all(found[0].get(a) for a in ("summary", "thumb", "contentRating")),
+            # Plex fills the record in steps: the genres land after the text and
+            # the poster, so a look taken too early finds none.
+            lambda found: len(found) == 1
+            and all(found[0].get(a) for a in ("summary", "thumb", "contentRating"))
+            and found[0].findall("Genre"),
         )
         expect(len(videos) == 1, f"the films library holds {len(videos)} films")
         ours = provider_json("/library/metadata/movie-tmdb-603")

@@ -91,10 +91,52 @@ pub struct Server {
     pub info: Option<cache::redis::Info>,
 }
 
+/// One of the caches, by the name it is filed under.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+// Named explicitly: utoipa keys schemas on the leaf name alone, and a
+// `SpaceId` could be anything's.
+#[schema(as = CacheSpace)]
+pub enum SpaceId {
+    /// The works, merged.
+    Items,
+    /// Searches and the catalogue's pages.
+    Searches,
+    /// Whole lists relayed from a metadata service: IMDb's Top 250 and the
+    /// like.
+    Lists,
+    /// What the relays' services answered.
+    Relay,
+    /// Whose each session is: memory alone.
+    Sessions,
+}
+
+impl SpaceId {
+    /// Every space, in the order the page lists them.
+    pub const ALL: [SpaceId; 5] = [
+        Self::Items,
+        Self::Searches,
+        Self::Lists,
+        Self::Relay,
+        Self::Sessions,
+    ];
+
+    /// The name the cache files it under.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Items => "items",
+            Self::Searches => "searches",
+            Self::Lists => "lists",
+            Self::Relay => "relay",
+            Self::Sessions => "sessions",
+        }
+    }
+}
+
 #[derive(Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SpaceReport {
-    pub id: &'static str,
+    pub id: SpaceId,
     pub enabled: bool,
     pub ttl_seconds: u64,
     pub memory: Memory,
@@ -192,11 +234,11 @@ async fn report(
     };
 
     macro_rules! space {
-        ($space:expr) => {{
+        ($id:expr, $space:expr) => {{
             let space = &$space;
             space.settle().await;
             SpaceReport {
-                id: space.id,
+                id: $id,
                 enabled: space.enabled(),
                 ttl_seconds: space.ttl().as_secs(),
                 memory: Memory {
@@ -216,12 +258,12 @@ async fn report(
         }};
     }
     let spaces = vec![
-        space!(c.items),
-        space!(c.searches),
-        space!(c.lists),
-        space!(c.relay),
+        space!(SpaceId::Items, c.items),
+        space!(SpaceId::Searches, c.searches),
+        space!(SpaceId::Lists, c.lists),
+        space!(SpaceId::Relay, c.relay),
         SpaceReport {
-            id: "sessions",
+            id: SpaceId::Sessions,
             enabled: c.sessions_enabled(),
             ttl_seconds: c.session_ttl.as_secs(),
             memory: Memory {
@@ -253,7 +295,7 @@ async fn report(
 #[serde(rename_all = "camelCase")]
 pub struct Flushed {
     /// Which spaces were forgotten.
-    pub spaces: Vec<&'static str>,
+    pub spaces: Vec<SpaceId>,
     /// Keys the server let go of, all spaces together.
     pub keys: u64,
 }
@@ -275,8 +317,8 @@ async fn flush_all(
 ) -> AppResult<Json<Flushed>> {
     identity.require_admin()?;
     let mut keys = 0;
-    for space in cache::SPACES {
-        keys += state.caches.flush(space).await.unwrap_or(0);
+    for space in SpaceId::ALL {
+        keys += state.caches.flush(space.as_str()).await.unwrap_or(0);
     }
     audit::record(
         &state,
@@ -290,7 +332,7 @@ async fn flush_all(
     )
     .await;
     Ok(Json(Flushed {
-        spaces: cache::SPACES.to_vec(),
+        spaces: SpaceId::ALL.to_vec(),
         keys,
     }))
 }
@@ -299,7 +341,7 @@ async fn flush_all(
 #[utoipa::path(
     post, path = "/admin/cache/{space}/flush", tag = TAG,
     operation_id = "cache_flush_space",
-    params(("space" = String, Path, description = "`items`, `searches`, `lists`, `relay` or `sessions`")),
+    params(("space" = SpaceId, Path, description = "The space to forget")),
     responses(
         (status = 200, body = Flushed),
         (status = 403, description = "The caller is not an administrator"),
@@ -313,17 +355,19 @@ async fn flush_space(
     Path(space): Path<String>,
 ) -> AppResult<(StatusCode, Json<Flushed>)> {
     identity.require_admin()?;
-    let Some(id) = cache::SPACES.iter().find(|s| **s == space) else {
+    // Read here rather than by the extractor: another name is no such space,
+    // a 404, as it always was.
+    let Some(id) = SpaceId::ALL.into_iter().find(|s| s.as_str() == space) else {
         return Err(AppError::NotFound);
     };
-    let keys = state.caches.flush(id).await.unwrap_or(0);
+    let keys = state.caches.flush(id.as_str()).await.unwrap_or(0);
     audit::record(
         &state,
         Event {
             identity: Some(&identity),
             ip: &ip,
             action: Action::CacheFlushed,
-            target: Some(id),
+            target: Some(id.as_str()),
             detail: Some(&format!("{keys} keys on the server")),
         },
     )
@@ -335,4 +379,19 @@ async fn flush_space(
             keys,
         }),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_space_is_sent_under_the_name_the_cache_files_it_under() {
+        let names: Vec<&str> = SpaceId::ALL.iter().map(|space| space.as_str()).collect();
+        assert_eq!(names, cache::SPACES);
+        assert_eq!(
+            serde_json::to_value(SpaceId::ALL).unwrap(),
+            serde_json::json!(cache::SPACES)
+        );
+    }
 }

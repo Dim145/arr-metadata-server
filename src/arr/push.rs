@@ -473,7 +473,7 @@ async fn tell(state: &AppState, connection: &Connection, targets: Vec<Target>) {
     let told: Vec<Told<'_>> = rows
         .iter()
         .map(|(target, arr_id, outcome, detail)| Told {
-            app: app.as_str(),
+            app,
             media_id: &target.id,
             title: &target.title,
             client_id: target.client_id,
@@ -763,13 +763,13 @@ mod tests {
         assert_eq!(commands[0].key.as_deref(), Some("sonarr-key-0001"));
 
         let pushes = history::latest(&state.db, 10).await.unwrap();
-        let sonarr = pushes.iter().find(|p| p.app == "sonarr").unwrap();
-        assert_eq!(sonarr.outcome, "sent");
+        let sonarr = pushes.iter().find(|p| p.app == App::Sonarr).unwrap();
+        assert_eq!(sonarr.outcome, Outcome::Sent);
         assert_eq!(sonarr.arr_id, Some(12));
         assert_eq!(sonarr.detail.as_deref(), Some("command 77"));
         assert_eq!(sonarr.reasons, ["lock", "sync"]);
-        let radarr = pushes.iter().find(|p| p.app == "radarr").unwrap();
-        assert_eq!(radarr.outcome, "absent");
+        let radarr = pushes.iter().find(|p| p.app == App::Radarr).unwrap();
+        assert_eq!(radarr.outcome, Outcome::Absent);
         assert_eq!(radarr.client_id, Some(603));
 
         // Switched off: nobody is asked anything.
@@ -899,7 +899,7 @@ mod tests {
         // never looked for, and are not.
         let pushes = history::latest(&state.db, 10).await.unwrap();
         assert_eq!(pushes.len(), 1, "{pushes:?}");
-        assert_eq!(pushes[0].outcome, "failed");
+        assert_eq!(pushes[0].outcome, Outcome::Failed);
         assert_eq!(pushes[0].media_id.as_deref(), Some(SERIES));
         assert!(
             pushes[0]
@@ -944,7 +944,7 @@ mod tests {
         assert_eq!(asked.lock().len(), 2);
         let pushes = history::latest(&state.db, 10).await.unwrap();
         assert_eq!(pushes.len(), 2);
-        assert!(pushes.iter().all(|push| push.outcome == "failed"));
+        assert!(pushes.iter().all(|push| push.outcome == Outcome::Failed));
         assert_eq!(waits_for(SERIES), None);
         assert_eq!(waits_for(SECOND), None);
         assert_eq!(warnings.so_far(), 2);

@@ -126,9 +126,13 @@ catalogue's own id when it has none of those, as an entry made by hand may.
 movie-tmdb-603                  show-tvdb-81189
 season-tvdb-81189-s1            episode-tvdb-81189-s1e3
 season-tvdb-81189-s1-dvd        movie-id-…   (an entry made by hand)
+season-tvdb-73244-s3-tmdb_5acf93e60e0a26346d0000ce
+episode-tvdb-73244-s0e2-ams_my_dvd_order
 ```
 
-A season or an episode of another order ends with the order's name (`-dvd`).
+A season or an episode of another order ends with the order's key (`-dvd`), its
+hyphens written as underscores: a TMDB group's (`tmdb-5acf…`) and an order made
+here (`ams-my-dvd-order`) have some, and a key is read from its right.
 The GUID Plex keeps is `tv.plex.agents.custom.arrmetadataserver://{type}/{ratingKey}`.
 
 ### Paging
@@ -177,10 +181,21 @@ its season and number, or by the day it aired.
   disc, in that country. A date fixed by hand is the film's in every country. See
   [Data](data.md#release-dates-and-certifications-by-country).
 - **Episode orders.** A series offers the orders the catalogue keeps for it
-  (`SeasonType`): the aired one (`official`), then each order TheTVDB keeps for
-  it — `dvd`, `absolute`, `alternate`, `regional`. It is laid out in the one Plex
-  asks for with `episodeOrder`; an order the series does not have gives no season
-  at all.
+  (`SeasonType`), as Sonarr v5 is offered them: the aired one (`official`), then
+  each order TheTVDB keeps for it — `dvd`, `absolute`, `alternate`, `regional`,
+  `altdvd`, `alttwo` — each TMDB episode group (`tmdb-` and the group's id) and
+  each order made here (`ams-` and its name). Each comes with its `source`
+  (`tvdb`, `tmdb`, `local`), a short `tag` and its name as `title`: the series'
+  own for one of TheTVDB's ("Superfan Order"), the group's on TMDB. It is laid
+  out in the one Plex asks for with `episodeOrder`, the episodes an order carries
+  as its own — an extended cut, a DVD's hour-long cut of two aired parts — among
+  them; an order the series does not have gives no season at all. Two orders of
+  one name are told apart by the source of the one not numbering the series,
+  "Superfan Order (TMDB)". A TMDB group is read from TMDB by the refresh that
+  lists it, or the first time it is asked for when that refresh could not read it.
+  With no order named, the
+  series is laid out as it aired, or in the order frozen as its aired numbering
+  when one is. See [Orders](sonarr-radarr.md#orders).
 - **Pictures** are given as absolute addresses, since Plex fetches every picture
   itself: a picture this server keeps is under `AMS_PUBLIC_URL`, or under the host
   Plex called when that is unset.

@@ -237,14 +237,84 @@ impl Db {
 
     /// Apply the migration set belonging to this dialect.
     pub async fn migrate(&self) -> Result<()> {
-        match self.dialect {
-            Dialect::Sqlite => sqlx::migrate!("migrations/sqlite").run(&self.pool).await,
-            Dialect::Postgres => sqlx::migrate!("migrations/postgres").run(&self.pool).await,
-        }
-        .context("database migration failed")?;
+        migrations(self.dialect)
+            .run(&self.pool)
+            .await
+            .context("database migration failed")?;
 
         tracing::info!(dialect = ?self.dialect, "database schema up to date");
         Ok(())
+    }
+
+    /// Apply this dialect's migrations up to `version`, and none after it:
+    /// a copy made at the schema another database stands at.
+    pub async fn migrate_to(&self, version: i64) -> Result<()> {
+        migrations(self.dialect)
+            .run_to(version, &self.pool)
+            .await
+            .with_context(|| format!("database migration to {version:04} failed"))
+    }
+
+    /// This binary's migrations a database has not had: those its start
+    /// applies. Nothing for a database never migrated, which is new.
+    pub async fn pending_migrations(&self) -> Result<Vec<i64>> {
+        let applied = self.applied_migrations().await?;
+        if applied.is_empty() {
+            return Ok(Vec::new());
+        }
+        Ok(migrations(self.dialect)
+            .iter()
+            .filter(|m| !m.migration_type.is_down_migration())
+            .map(|m| m.version)
+            .filter(|version| !applied.iter().any(|a| a.version == *version))
+            .collect())
+    }
+
+    /// The migrations this database has had, by version, with whether each
+    /// went through: none for a database never migrated.
+    pub async fn applied_migrations(&self) -> Result<Vec<Applied>> {
+        let exists = match self.dialect {
+            Dialect::Sqlite => {
+                "SELECT COUNT(*) AS n FROM sqlite_master \
+                 WHERE type = 'table' AND name = '_sqlx_migrations'"
+            }
+            Dialect::Postgres => {
+                "SELECT COUNT(*) AS n FROM information_schema.tables \
+                 WHERE table_name = '_sqlx_migrations' AND table_schema = current_schema()"
+            }
+        };
+        if sqlx::query(exists).fetch_one(&self.pool).await?.big("n")? == 0 {
+            return Ok(Vec::new());
+        }
+        // `success` as a number: a boolean on PostgreSQL, which `Any`
+        // decodes, an integer on SQLite, which it does not decode as one.
+        let rows = sqlx::query(
+            "SELECT version, description, CASE WHEN success THEN 1 ELSE 0 END AS ok \
+             FROM _sqlx_migrations ORDER BY version",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|row| {
+                Ok(Applied {
+                    version: row.big("version")?,
+                    description: row.text("description")?,
+                    success: row.big("ok")? != 0,
+                })
+            })
+            .collect()
+    }
+
+    /// The last migration this database has had and that went through.
+    pub async fn last_migration(&self) -> Result<i64> {
+        Ok(self
+            .applied_migrations()
+            .await?
+            .iter()
+            .filter(|m| m.success)
+            .map(|m| m.version)
+            .max()
+            .unwrap_or(0))
     }
 
     /// Open a transaction that is going to write.
@@ -333,6 +403,38 @@ impl Db {
     }
 }
 
+/// The two migration sets, read into the binary when it is built.
+static SQLITE_MIGRATIONS: sqlx::migrate::Migrator = sqlx::migrate!("migrations/sqlite");
+static POSTGRES_MIGRATIONS: sqlx::migrate::Migrator = sqlx::migrate!("migrations/postgres");
+
+/// The migration set of an engine.
+pub fn migrations(dialect: Dialect) -> &'static sqlx::migrate::Migrator {
+    match dialect {
+        Dialect::Sqlite => &SQLITE_MIGRATIONS,
+        Dialect::Postgres => &POSTGRES_MIGRATIONS,
+    }
+}
+
+/// The last migration this binary knows: the same number on both engines,
+/// which the parity test keeps so.
+pub fn latest_migration() -> i64 {
+    SQLITE_MIGRATIONS
+        .iter()
+        .map(|m| m.version)
+        .max()
+        .unwrap_or(0)
+}
+
+/// A migration as a database recorded it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Applied {
+    pub version: i64,
+    pub description: String,
+    /// Whether it went through. One that did not is what a migration that
+    /// failed halfway leaves, on an engine where it could.
+    pub success: bool,
+}
+
 /// The advisory lock the start is held under: any fixed number, the same
 /// for every instance.
 const START_LOCK: i64 = 7_462_391;
@@ -359,18 +461,11 @@ impl StartHeld {
 
 /// `sqlite://data/ams.db?mode=rwc` only creates the file, never the directory.
 fn ensure_sqlite_parent_dir(url: &str) -> Result<()> {
-    let path = url
-        .trim_start_matches("sqlite://")
-        .trim_start_matches("sqlite:")
-        .split('?')
-        .next()
-        .unwrap_or_default();
-
-    if path.is_empty() || path == ":memory:" {
+    let Some(path) = sqlite_path(url) else {
         return Ok(());
-    }
+    };
 
-    if let Some(parent) = Path::new(path).parent()
+    if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
         && !parent.exists()
     {
@@ -379,6 +474,45 @@ fn ensure_sqlite_parent_dir(url: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// The file an SQLite address names, as sqlx reads it — decoded, so that a
+/// name with a space in it is that name — or none for one in memory and for
+/// another engine's.
+pub fn sqlite_path(url: &str) -> Option<std::path::PathBuf> {
+    if !url.starts_with("sqlite:") {
+        return None;
+    }
+    let path = url
+        .trim_start_matches("sqlite://")
+        .trim_start_matches("sqlite:")
+        .split('?')
+        .next()
+        .unwrap_or_default();
+
+    if path.is_empty() || path == ":memory:" {
+        return None;
+    }
+    let decoded = urlencoding::decode(path)
+        .map(|p| p.into_owned())
+        .unwrap_or_else(|_| path.to_string());
+    Some(std::path::PathBuf::from(decoded))
+}
+
+/// The address of an SQLite file, for [`Db::connect`]: made when `create`
+/// says so, and its path encoded so that a space, a `?` or a `#` in a name
+/// stays part of it.
+pub fn sqlite_url(path: &Path, create: bool) -> String {
+    let mut encoded = String::new();
+    for byte in path.to_string_lossy().bytes() {
+        if byte.is_ascii_alphanumeric() || b"/-._~".contains(&byte) {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    let mode = if create { "rwc" } else { "rw" };
+    format!("sqlite://{encoded}?mode={mode}")
 }
 
 /// Strip the password out of a connection URL before it reaches a log line.
@@ -651,6 +785,27 @@ mod tests {
             Dialect::Postgres
         );
         assert!(Dialect::from_url("mysql://x").is_err());
+    }
+
+    #[test]
+    fn an_sqlite_file_is_named_by_an_address_that_reads_back_as_it() {
+        let odd = Path::new("/srv/ams data/a?b#c%.db");
+        let url = sqlite_url(odd, true);
+        assert_eq!(url, "sqlite:///srv/ams%20data/a%3Fb%23c%25.db?mode=rwc");
+        assert_eq!(sqlite_path(&url).as_deref(), Some(odd));
+        assert_eq!(
+            sqlite_path("sqlite://data/ams.db?mode=rwc").as_deref(),
+            Some(Path::new("data/ams.db"))
+        );
+        assert_eq!(sqlite_path("sqlite::memory:"), None);
+        assert_eq!(sqlite_path("postgres://ams@db/ams"), None);
+    }
+
+    #[test]
+    fn the_last_migration_is_the_same_on_both_engines() {
+        let last = |dialect| migrations(dialect).iter().map(|m| m.version).max();
+        assert_eq!(last(Dialect::Sqlite), last(Dialect::Postgres));
+        assert_eq!(Some(latest_migration()), last(Dialect::Sqlite));
     }
 
     #[test]

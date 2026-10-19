@@ -35,7 +35,7 @@ use crate::{
     api::{
         audit::{self, Event},
         extract::ClientIp,
-        native::{auth, users},
+        native::{access::SiteAccess, auth, users},
     },
     auth::{ip::bucket, secrets},
     db::repo::{
@@ -250,7 +250,7 @@ pub fn router() -> OpenApiRouter<AppState> {
 pub struct AuthOptions {
     /// `public`: anyone browses the catalogue. `private`: every page asks to
     /// sign in first.
-    pub site: &'static str,
+    pub site: SiteAccess,
     pub registration: Registration,
     /// Whether the password form is offered to everyone.
     pub password_login: bool,
@@ -276,11 +276,7 @@ pub struct OidcButton {
 )]
 async fn options(State(state): State<AppState>) -> Json<AuthOptions> {
     Json(AuthOptions {
-        site: if state.public_site() {
-            "public"
-        } else {
-            "private"
-        },
+        site: SiteAccess::of(&state),
         // Sign-ups open accounts with a password: none while passwords are
         // off.
         registration: if state.password_login() {

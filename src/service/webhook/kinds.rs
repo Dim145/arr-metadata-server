@@ -40,7 +40,11 @@ const SECRET_BYTES: usize = 32;
 const DISCORD_CHARS: usize = 1990;
 
 /// The kinds of destination.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+// Named explicitly: an asset and a setting each have a `Kind` too, and utoipa
+// keys schemas on the leaf name alone.
+#[schema(as = WebhookKind)]
 pub enum Kind {
     Standard,
     Json,
@@ -768,6 +772,8 @@ mod tests {
     fn every_kind_reads_back_as_itself() {
         for kind in Kind::ALL {
             assert_eq!(Kind::parse(kind.as_str()), Some(*kind));
+            // And is sent as it is stored.
+            assert_eq!(serde_json::to_value(kind).unwrap(), kind.as_str());
         }
         assert_eq!(Kind::parse("smtp"), None);
         assert_eq!(Kind::Standard.secret(), Secret::Signing);

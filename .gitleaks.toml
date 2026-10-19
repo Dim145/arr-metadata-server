@@ -1,15 +1,24 @@
-# Secret scanning, with the one thing that is not a secret written down.
+# Secret scanning, with the two things that are not secrets written down.
 #
 #   gitleaks detect --source . --redact
 #
-# Nothing here loosens a rule globally. The single allowance is a line in the
-# smoke script that reads an API key *out of a response* the script itself just
+# Nothing here loosens a rule globally. One allowance is a line in the smoke
+# script that reads an API key *out of a response* the script itself just
 # asked the server to create — a `curl … | sed -n 's/.*"key"…'`, which the
-# `curl-auth-header` rule reads as a credential being written down. There is no
-# value in the file to leak.
+# `curl-auth-header` rule reads as a credential being written down. The other
+# is a TMDB episode group's id — twenty-four hexadecimal digits behind `tmdb-`,
+# the key a client asks an order by (`tmdb-5acf93e60e0a26346d0000ce` is
+# Firefly's DVD order, on TMDB's public pages), which the generic-key rule
+# takes for a key wherever a test or a page writes `key: "tmdb-…"`. Neither
+# is a value that could open anything.
 
 [extend]
 useDefault = true
+
+[allowlist]
+description = "TMDB episode group ids are public identifiers, not keys"
+regexTarget = "line"
+regexes = ['''tmdb[-_][0-9a-f]{24}''']
 
 [[rules]]
 id = "curl-auth-header"

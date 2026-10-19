@@ -52,7 +52,7 @@ pub struct WebhookEvents {
     /// What a new destination is told of, until other events are ticked.
     pub defaults: Vec<&'static str>,
     /// The kinds of destination, in the order they are offered.
-    pub kinds: Vec<&'static str>,
+    pub kinds: Vec<Kind>,
 }
 
 /// The events a destination can be told of, for the Notifications page to
@@ -71,7 +71,7 @@ async fn events(Extension(identity): Extension<Identity>) -> AppResult<Json<Webh
         facts: Fact::ALL.iter().map(|f| f.as_str()).collect(),
         actions: Action::ALL.iter().map(|a| a.as_str()).collect(),
         defaults: webhook::DEFAULT_EVENTS.split(',').collect(),
-        kinds: Kind::ALL.iter().map(|k| k.as_str()).collect(),
+        kinds: Kind::ALL.to_vec(),
     }))
 }
 
@@ -85,7 +85,11 @@ async fn events(Extension(identity): Extension<Identity>) -> AppResult<Json<Webh
 pub struct DestinationView {
     pub id: String,
     pub name: String,
-    /// `standard`, `json`, `discord`, `slack`, `ntfy`, `gotify` or `apprise`.
+    /// A kind this server does not know — a destination a later version
+    /// made — is sent as it was stored, and nothing is posted to it.
+    // Kept as the text stored rather than read into a `Kind`, which could
+    // not hold one it does not know: the page names that one as it is.
+    #[schema(value_type = Kind)]
     pub kind: String,
     /// Its address: the scheme, host and port shown, the rest masked — for
     /// most services the token is in the path.
@@ -169,7 +173,11 @@ async fn list(
 #[schema(as = WebhookDestinationInput)]
 pub struct DestinationInput {
     pub name: Option<String>,
-    /// `standard`, `json`, `discord`, `slack`, `ntfy`, `gotify` or `apprise`.
+    /// Needed for a new one; left out on a change, the kind stays. Another
+    /// word is refused with a 400 that names the kinds there are.
+    // Read as text and checked by `kind_of`: read into a `Kind`, another
+    // word would be axum's 422, in plain text.
+    #[schema(value_type = Option<Kind>)]
     pub kind: Option<String>,
     /// Where it is posted: a webhook's address, an ntfy topic's, a Gotify
     /// server's, an Apprise API's `/notify/{key}`. Left out or empty on a
@@ -518,6 +526,31 @@ async fn rotate(
 
 // ─── a test ──────────────────────────────────────────────────────────────────
 
+/// Why a test was not sent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+// Named explicitly: utoipa keys schemas on the leaf name alone, and a
+// `Refused` could be anything's.
+#[schema(as = WebhookRefusal)]
+pub enum Refused {
+    /// Not an http(s) address, or one that names this machine.
+    NotWeb,
+    /// A name that resolves to an address only reachable from here.
+    Internal,
+    /// The post could not be made: a standard destination without its
+    /// secret.
+    Unsent,
+}
+
+impl From<webhook::Refusal> for Refused {
+    fn from(refusal: webhook::Refusal) -> Self {
+        match refusal {
+            webhook::Refusal::NotWeb => Self::NotWeb,
+            webhook::Refusal::Internal => Self::Internal,
+        }
+    }
+}
+
 /// What a test of a destination came to.
 #[derive(Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
@@ -536,7 +569,7 @@ pub struct WebhookTest {
     /// only reachable from here; `unsent`, the post could not be made — a
     /// standard destination without its secret — as `error` says.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub refused: Option<&'static str>,
+    pub refused: Option<Refused>,
     /// How long it took, in milliseconds.
     pub millis: u64,
 }
@@ -586,14 +619,14 @@ async fn test(
             delivered: false,
             status: None,
             error: None,
-            refused: Some(why.code()),
+            refused: Some(why.into()),
             millis: 0,
         },
         Outcome::Unsent { why } => WebhookTest {
             delivered: false,
             status: None,
             error: Some(why),
-            refused: Some("unsent"),
+            refused: Some(Refused::Unsent),
             millis: 0,
         },
     };
@@ -814,7 +847,14 @@ mod tests {
         let Json(offered) = events(admin()).await.expect("offered");
         assert_eq!(
             offered.facts,
-            ["refresh.failed", "media.failed", "update.available"]
+            [
+                "refresh.failed",
+                "media.failed",
+                "update.available",
+                "numbering.fallback",
+                "backup.completed",
+                "backup.failed"
+            ]
         );
         assert_eq!(offered.actions.len(), Action::ALL.len());
         assert_eq!(
@@ -826,7 +866,12 @@ mod tests {
                 "dataset.imported"
             ]
         );
-        assert_eq!(offered.kinds.len(), Kind::ALL.len());
+        assert_eq!(
+            serde_json::to_value(&offered.kinds).unwrap(),
+            serde_json::json!([
+                "standard", "discord", "slack", "ntfy", "gotify", "apprise", "json"
+            ])
+        );
         assert!(matches!(
             events(Extension(Identity::Visitor)).await,
             Err(AppError::Forbidden)
@@ -1133,7 +1178,8 @@ mod tests {
             .await
             .expect("tried");
         assert!(!tried.delivered);
-        assert_eq!(tried.refused, Some("not_web"));
+        assert_eq!(tried.refused, Some(Refused::NotWeb));
+        assert_eq!(serde_json::to_value(&tried).unwrap()["refused"], "not_web");
         assert_eq!(tried.status, None);
         // Nothing of it in the log.
         assert_eq!(

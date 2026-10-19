@@ -104,14 +104,6 @@ pub enum Status {
 }
 
 impl Status {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Pending => "pending",
-            Self::Stored => "stored",
-            Self::Failed => "failed",
-        }
-    }
-
     pub fn parse(s: &str) -> Self {
         match s {
             "stored" => Self::Stored,
