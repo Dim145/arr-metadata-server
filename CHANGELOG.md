@@ -167,6 +167,124 @@ may change what the API or the configuration means, and says so here.
   names, a renamed one read a minor longer with a warning; migrations only
   go forward. `CONTRIBUTING.md` says what to write where when something is
   deprecated, and when it goes.
+- **Each work keeps a journal** of what changed in it, value by value: every
+  field a refresh, a sync or a person changed — of the work, of a season, of
+  an episode, of a credit, a picture or a title a lock names — with what it
+  held, what it took, when, why (`refresh`, `sync`, `fallback`, `lock`,
+  `unlock`, `revert`, `edit`, `import`) and who: a person, a key, a source,
+  or both when a person asked the sources again (migration 0038). A refresh
+  writes what it changed at once and nothing when it changed nothing; of a
+  series' episodes the journal follows the title, the overview, the air
+  date, the runtime and the still, and an episode that moved is one change
+  of its numbers. It is the editor's new **Journal** tab, filtered by field,
+  by who and by a period, and `GET /api/v1/items/{id}/changes`; kept a year
+  unless `history.keepDays` says otherwise, `0` for ever.
+- *Revert to this value*, beside a change in the journal, locks the field to
+  the value it held before it — through the locks' own route,
+  `"cause": "revert"`, which the audit trail and the journal say; what a
+  source gave is never written back over its copy.
+- Under a field locked in every language, the editor says what the sources
+  give now when it is something else — *TMDB now says: …*, and *changed
+  since the lock* when a source moved it after the lock was set — with
+  *Take this value*, which lifts the lock. The dashboard counts the works
+  with a lock their source moved under, the catalogue filters them
+  (`?missing=divergingLock`), and `GET /api/v1/items/{id}/provenance`
+  carries them under `diverging`.
+- The editor's refresh shows first what it would change: the sources are
+  asked and merged as a refresh asks and merges them, nothing is written,
+  and every value it would write over is listed with what it holds and
+  would hold — the locked ones are not, since no refresh reaches them. A
+  field ticked is locked as it stands before the refresh runs.
+  `POST /api/v1/items/{id}/refresh?dryRun=1`, and the sync's, answer the
+  same and write nothing.
+- After **Change a field…** over a selection, *Undo* is offered for eight
+  seconds, longer while the pointer or the focus rests on it: each work is
+  put back as its journal says it was, the lock it held or none
+  (`POST /api/v1/items/{id}/changes/undo`), and one changed since by
+  something else is left as it is.
+- The audit trail and a work's journal are downloaded whole, under the
+  filters of their page, as a CSV a spreadsheet opens or as JSON
+  (`?format=csv`, `?format=json`): buttons on **Audit** and in the
+  **Journal** tab. A cell a spreadsheet would take for a formula — a refused
+  sign-in's typed name included — is written so it is not.
+- A work's page on a phone keeps a bar along the foot of the screen — where
+  to watch it, its trailer, its address — in place of the site's own, and a
+  row of its sections under the bar at the top that follows the reader down
+  the page. The rest of a long cast, the other names, the keywords and the
+  identifiers past the first few are folded, and the browser's find in page
+  unfolds them on a match (a `<details>` where the browser cannot).
+- The schedule's month is a table a screen reader walks by weekday and
+  week, its days named in full, each episode's hour a `<time>`, small
+  posters in the days wide enough to hold them; a list of the month's days
+  is a press away; and an episode opens a look at itself beside the day —
+  what it is, when, where, the way to its page — rather than leaving the
+  month.
+- Keys: `/` to search, `g` then `b`, `c` or `s` for the catalogue, the
+  schedule or the season chart, `r` for a work at random, `t` for today in
+  the schedule, and `?` for the list of them. None fires while something is
+  being typed. The arrow keys move between the cards of a grid or a shelf
+  of posters, by where the cards are drawn; Tab still stops at each card.
+- Read the catalogue's texts in another language than the interface's:
+  "Read texts in…" in the language menu passes the chosen language on every
+  read of the catalogue — titles and synopses where a translation is held —
+  and leaves the administration alone.
+- Posters of works for adults — marked so, or rated 18 and over — are
+  blurred until pressed, or until "Show adult posters" is turned on in the
+  language menu; the front page never features one for a reader who has
+  not.
+- A work's page carries schema.org's description of a `Movie` or a
+  `TVSeries` — name, poster, synopsis, release, genres, director, rating —
+  for search engines, only while the site is public.
+- The front page says what is new rather than what the catalogue holds:
+  what airs this week, the series back this week, the selections, the
+  season's new works and the newest arrivals with a trailer — and its
+  featured picture steps back and darkens as the page is scrolled past it,
+  where the browser drives animations by scrolling and the reader allows
+  motion.
+- A reader whose system asks for more contrast gets it: the quietest text
+  rises to the tier above it, the hairlines become edges a field can be
+  found by — 3:1 against every surface — and the grain and the washes go.
+  Under forced colours (Windows' contrast themes) buttons, choices, chips,
+  lamps and switches keep an edge in the system's button colour, a chosen
+  option and a switch that is on wear its selection colours, and the
+  score's arc and a missing poster's stand-in keep their drawing.
+- A button that shows only a glyph says its name beside it, to a pointer
+  that rests on it and to the keyboard that reaches it, where the browser's
+  own tooltip came late and never to a keyboard.
+- The installed app's icon carries the number of episodes airing today
+  while the app is behind another, and drops it when the app comes back: no
+  notification, no permission, nothing sent.
+- `frontend/e2e/vitals.spec.ts` measures the Core Web Vitals of the front
+  page, the catalogue, a work and the season chart, and holds them to
+  Google's "good": LCP within 2.5 s, CLS under 0.1.
+- **A search that ranks, and forgives.** A term is found in every name a
+  work goes by — its title, original title, sort title, each translation's
+  and each alternative title, and the titles locked by hand — whatever its
+  accents, its case and its punctuation, in the people the credits name and
+  in the episodes' titles, from one index both engines read (`search_doc`,
+  migration 0039; SQLite's FTS5 trigram table, PostgreSQL's `pg_trgm`).
+  What it finds comes in order: the name that is the term, then one that
+  starts with it, then one with a word that does, then one that holds it,
+  the better known first among those alike; a year at the end of a term
+  puts that year's work first. When the letters find nothing a term was
+  typed to find, the names sharing most of its trigrams are offered:
+  `breking bad` finds Breaking Bad.
+- `GET /api/v1/search`, the search box's: works, people and episodes, each
+  kind ranked on its own, a work with the other title it was found by. The
+  command palette lists the three kinds under their headings — an episode
+  as `S05E14 — Ozymandias`, opening its page; somebody credited, opening
+  theirs — and `@` looks for people alone.
+- The catalogue's further filters, in a "More filters" sheet: a person
+  credited (a TMDB id, or a name whatever its case and accents), a keyword,
+  a running time, the country a work was made in, the rating the reader's
+  country gives it, the collection a film belongs to; and the orders by
+  running time, by when a series last aired and by how many episodes it
+  has. The API takes them as `person`, `keyword`, `runtimeMin`/`runtimeMax`,
+  `country`, `certification` (with `region`), `collection` and
+  `sort=runtime|lastAired|episodes`; `GET /api/v1/facets` adds the
+  countries and the ratings to choose from.
+- The task `search.rebuild` writes the search index again from the whole
+  catalogue, the search answering throughout.
 
 ### Changed
 
@@ -222,8 +340,69 @@ may change what the API or the configuration means, and says so here.
 - `media_episode_order` is gone (migration 0037): a transfer between
   databases, and a backup, carry `media_order`, `media_order_episode` and
   `media_numbering` in its place.
+- `POST /api/v1/items/{id}/refresh` and `POST /api/v1/items/{id}/sync` are
+  documented as answering `RefreshAnswer` and `SyncAnswer`: the work, or
+  the sync's outcome, as before — or, with `dryRun`, what they would write
+  over.
+- The bar at the top is calmer: the palette's ⌘K is said in the search
+  field beside its `/`, and the languages are one small menu; between a
+  laptop's narrowest width and 1280 px the search is the button that opens
+  it under the bar, which no longer runs past the edge of the screen.
+- Signing in and signing up say what is missing or wrong under each field
+  once it has been left, or when the form is sent, in the interface's
+  language, and put the cursor in the first field to fix; the password
+  fields are named for password managers (`current-password`,
+  `new-password`).
+- Alternative titles lead to a search of the catalogue, and the directors
+  and writers named under a synopsis to everything the catalogue holds with
+  them.
+- Nothing that says something is smaller than twelve pixels: a field's
+  name, a chip, a rating on a card were eleven, a vote count eight.
+- Counts follow each language's grammar (`Intl.PluralRules`): French says
+  « 0 œuvre », and a new language can give its own forms.
+- Going back slides the page the other way it came, and the scroll position
+  is put back once the page it belongs to is drawn; dialogs, sheets and
+  menus rise in and fall away. None of it moves for a reader who asked for
+  less motion.
+- Lists open in the interface's colours where the browser lets a select be
+  drawn, and in the system's elsewhere.
+- Text no longer jumps when the typefaces arrive: the system fonts drawn
+  meanwhile are reshaped to Libre Bodoni's and Public Sans's measurements.
+- Headings break into even lines and paragraphs no longer end on a lone
+  word, where the browser can; the page keeps room for its scrollbar, so a
+  short page and a long one line up.
+- A long grid of posters lays out only the rows near the screen, and a
+  poster's frame is tinted by the work's genre while the picture loads. The
+  front page's rows keep their place while their reading is out, and the
+  catalogue's count of results its line before the count is known: each row
+  arrived above those already drawn and pushed the page down, a shift the
+  Core Web Vitals spec now holds the pages to.
+- An empty screen says why — nothing yet, nothing under these filters, a
+  failure — and a failure with no network says so.
+- `GET /api/v1/items?term=` is in the order of how well each work answers
+  the term unless `sort` is given (`sort=relevance` says it); a term of
+  punctuation alone finds nothing where it found every work, and a term
+  shorter than three letters is looked for at the start of a name. Sonarr's,
+  Radarr's and Plex's searches list the work held here by that very name
+  before a better known one that only starts with it, and before TMDB's
+  answers.
+- The catalogue lists its filters' chips at the head of the filters, with
+  "Clear all"; shows six columns from 1440 pixels; and asks for the next
+  page as the end of the list comes near, the button staying for whoever
+  reaches it first.
+- The first start after the upgrade writes the search index in the
+  background, a few hundred works a pass: a catalogue of fifty thousand
+  works is searchable whole after about four minutes, and finds what is
+  already written meanwhile.
+- The bundled SQLite is compiled without its memory statistics
+  (`SQLITE_DEFAULT_MEMSTATUS=0`), whose global mutex was the ceiling under
+  many searches at once; `docs/perf/README.md` has the measurements.
 
 ### Removed
+
+- The title index of 0022 (SQLite's `media_search` and its triggers,
+  PostgreSQL's five trigram indexes on the works' titles), which the search
+  no longer reads.
 
 - `episodes` in `GET /api/v1/calendar`, deprecated since 0.8.0: the
   episodes are the entries of `entries` whose `kind` is `episode`, beside
@@ -248,6 +427,12 @@ may change what the API or the configuration means, and says so here.
 - The editor's rail of seasons scrolls within itself on a wide screen: stuck
   beside the fields, a rail of forty seasons kept its last ones under the
   fold, reachable only at the page's end.
+- French said "1 en échec" for none and "0 jours", "0 images"; counts of
+  nought are now singular. The light theme's washes were the dark theme's
+  colours.
+- A shared address no longer carries the section the reader was at: pressing
+  *Watch* or a section chip left `#watch` or `#details` in it, and the
+  recipient landed mid-page.
 
 ### Security
 

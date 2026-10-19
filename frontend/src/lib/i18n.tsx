@@ -45,6 +45,35 @@ export type Lang = keyof typeof LANGUAGES
 
 export const LANGS = Object.keys(LANGUAGES) as Lang[]
 
+/**
+ * A word's forms by count: `other` always, which every language has and which
+ * stands in for any form a dictionary does not give, and whichever of `zero`,
+ * `one`, `two`, `few` and `many` the language's grammar sorts counts into —
+ * `one` for English and French, `few` and `many` for Polish or Russian, `two`
+ * for Welsh or Arabic.
+ */
+export type Plural<T = string> = { other: T } & { [form in Exclude<Intl.LDMLPluralRule, 'other'>]?: T }
+
+/**
+ * The form a count takes, chosen by one language's rules.
+ *
+ * Each dictionary makes its own and calls it `plural` — `const plural =
+ * plurals('fr')` — then writes `plural(n, { one: …, other: … })` wherever a
+ * word follows a count. The rules are `Intl.PluralRules`', not a ternary on
+ * 1, which was right in English and wrong in French, where 0 takes the
+ * singular, and had no way to say the third and fourth forms other
+ * languages have.
+ *
+ * Bound to the language the words are in rather than the one on screen: a
+ * partial translation is completed with English, and the English it borrows
+ * must keep English grammar — read by Japanese rules, which put 1 under
+ * `other`, it would have said "1 works".
+ */
+export function plurals(lang: Lang): <T>(count: number, forms: Plural<T>) => T {
+  const rules = new Intl.PluralRules(LANGUAGES[lang].locale)
+  return (count, forms) => forms[rules.select(count)] ?? forms.other
+}
+
 const STORAGE_KEY = 'ams.lang'
 
 /**

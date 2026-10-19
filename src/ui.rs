@@ -8,7 +8,10 @@
 //! The page is the same for every route but one thing: a link to a work or
 //! to a list carries, in its head, what a link preview shows of it — a title,
 //! a line, a poster — for the readers that never run the app, and only while
-//! a reader with no credential would be let in at all.
+//! a reader with no credential would be let in at all. A work's page carries
+//! what a search engine reads of it too, as schema.org describes a film or a
+//! series — only where the site is public, the one case a search engine is
+//! meant to read it.
 
 use axum::{
     Router,
@@ -23,7 +26,7 @@ use rust_embed::RustEmbed;
 use crate::{
     config::SurfacePolicy,
     db::repo::{self, list::CuratedList},
-    domain::{CoverType, MediaKind},
+    domain::{CoverType, CreditType, MediaKind},
     service,
     state::AppState,
 };
@@ -146,6 +149,9 @@ struct Preview {
     image: Option<String>,
     /// Open Graph's word for it: `video.tv_show`, `video.movie`, `website`.
     kind: &'static str,
+    /// What a search engine reads of the page, as JSON-LD ready to sit in a
+    /// script element (see [`structured`]): a work's, on a public site.
+    structured: Option<String>,
 }
 
 impl Preview {
@@ -186,6 +192,13 @@ impl Preview {
         head.push_str(&format!(
             "    <meta property=\"og:image\" content=\"{image}\" />\n    <meta name=\"twitter:card\" content=\"summary\" />\n    "
         ));
+        // A data block, not a script: the page's policy, which runs only this
+        // origin's scripts, has nothing to say to it, and nothing runs it.
+        if let Some(data) = &self.structured {
+            head.push_str(&format!(
+                "<script type=\"application/ld+json\">{data}</script>\n    "
+            ));
+        }
 
         let replaced = match (html.find(PREVIEW_START), html.find(PREVIEW_END)) {
             (Some(start), Some(end)) if start < end => {
@@ -280,15 +293,141 @@ async fn work_preview(state: &AppState, id: &str) -> Option<Preview> {
         }
     })
     .filter(|url| url.starts_with("https://") || url.starts_with("http://"));
+    let description = item.overview.as_deref().and_then(line);
+    // For a search engine, and only where the site is public: one let in by
+    // the surface's own policy is a home network's, not the web's.
+    let structured = state.public_site().then(|| {
+        let published = match item.kind {
+            MediaKind::Series => item.first_aired.as_deref(),
+            MediaKind::Movie => item
+                .in_cinemas
+                .as_deref()
+                .or(item.digital_release.as_deref())
+                .or(item.physical_release.as_deref()),
+        };
+        let mut directors: Vec<&str> = Vec::new();
+        for credit in &item.credits {
+            if credit.credit_type == CreditType::Director
+                && !directors.contains(&credit.person_name.as_str())
+            {
+                directors.push(&credit.person_name);
+            }
+        }
+        structured(&Described {
+            kind: item.kind,
+            name: &item.title,
+            url: state
+                .config
+                .server
+                .public_url
+                .as_deref()
+                .map(|public| format!("{}/work/{}", public.trim_end_matches('/'), item.id)),
+            image: image.as_deref(),
+            description: description.as_deref(),
+            published: published.and_then(day),
+            genres: &item.genres,
+            directors,
+            rating: item
+                .headline_rating()
+                .and_then(|r| Some((r.value?, r.votes.filter(|&votes| votes > 0)?))),
+        })
+    });
     Some(Preview {
         title,
-        description: item.overview.as_deref().and_then(line),
+        description,
         image,
         kind: match item.kind {
             MediaKind::Series => "video.tv_show",
             MediaKind::Movie => "video.movie",
         },
+        structured,
     })
+}
+
+/// A work, as much of it as a search engine is told.
+struct Described<'a> {
+    kind: MediaKind,
+    name: &'a str,
+    url: Option<String>,
+    image: Option<&'a str>,
+    description: Option<&'a str>,
+    /// The day it came out: `YYYY-MM-DD`.
+    published: Option<&'a str>,
+    genres: &'a [String],
+    directors: Vec<&'a str>,
+    /// The mark the plate leads with, out of ten, and how many votes made
+    /// it: a mark nobody voted for is no rating to a search engine.
+    rating: Option<(f64, i64)>,
+}
+
+/// A work as schema.org describes one: a `Movie` — the type Google documents
+/// for its film results — or a `TVSeries`, with what the page itself shows
+/// of it, and nothing it lacks. Written for a script element: no `<`, `>` or
+/// `&` is left in it as itself, so no synopsis can close the element early.
+fn structured(work: &Described) -> String {
+    let mut data = serde_json::Map::new();
+    data.insert("@context".into(), "https://schema.org".into());
+    data.insert(
+        "@type".into(),
+        match work.kind {
+            MediaKind::Movie => "Movie",
+            MediaKind::Series => "TVSeries",
+        }
+        .into(),
+    );
+    data.insert("name".into(), work.name.into());
+    if let Some(url) = &work.url {
+        data.insert("url".into(), url.as_str().into());
+    }
+    if let Some(image) = work.image {
+        data.insert("image".into(), image.into());
+    }
+    if let Some(description) = work.description {
+        data.insert("description".into(), description.into());
+    }
+    if let Some(published) = work.published {
+        data.insert("datePublished".into(), published.into());
+    }
+    if !work.genres.is_empty() {
+        data.insert("genre".into(), work.genres.into());
+    }
+    if !work.directors.is_empty() {
+        data.insert(
+            "director".into(),
+            work.directors
+                .iter()
+                .map(|name| serde_json::json!({ "@type": "Person", "name": name }))
+                .collect(),
+        );
+    }
+    if let Some((value, votes)) = work.rating {
+        data.insert(
+            "aggregateRating".into(),
+            serde_json::json!({
+                "@type": "AggregateRating",
+                "ratingValue": (value * 10.0).round() / 10.0,
+                "bestRating": 10,
+                // One unless a source gave less, which TMDB's scale allows.
+                "worstRating": if value < 1.0 { 0 } else { 1 },
+                "ratingCount": votes,
+            }),
+        );
+    }
+    serde_json::Value::Object(data)
+        .to_string()
+        .replace('<', "\\u003c")
+        .replace('>', "\\u003e")
+        .replace('&', "\\u0026")
+}
+
+/// The day a date begins with, `YYYY-MM-DD`, where it has the shape of one.
+fn day(value: &str) -> Option<&str> {
+    let day = value.get(..10)?;
+    let shaped = day.bytes().enumerate().all(|(at, b)| match at {
+        4 | 7 => b == b'-',
+        _ => b.is_ascii_digit(),
+    });
+    shaped.then_some(day)
 }
 
 async fn list_preview(state: &AppState, key: &str) -> Option<Preview> {
@@ -311,6 +450,7 @@ async fn list_preview(state: &AppState, key: &str) -> Option<Preview> {
         description: list.description.as_deref().and_then(line),
         image,
         kind: "website",
+        structured: None,
     })
 }
 
@@ -423,6 +563,7 @@ mod tests {
             description: Some("A cat, a mouse.".into()),
             image: Some("https://image.example/p.jpg".into()),
             kind: "video.movie",
+            structured: None,
         };
         let page = preview.apply(PAGE, Some("https://films.example"), "/work/abc");
         assert!(page.contains(
@@ -456,6 +597,7 @@ mod tests {
             description: None,
             image: None,
             kind: "website",
+            structured: None,
         };
         let page = bare.apply(PAGE, Some("https://films.example"), "/lists/untitled");
         assert!(page.contains("content=\"https://films.example/icon-512.png\""));
@@ -472,6 +614,109 @@ mod tests {
         );
         assert!(plain.contains("<title>Untitled · Cinémathèque</title>"));
         assert!(plain.contains("content=\"x\""));
+    }
+
+    #[test]
+    fn a_film_is_described_as_schema_org_has_one_for_a_search_engine() {
+        let genres = vec!["Drama".to_string(), "Crime".to_string()];
+        let data = structured(&Described {
+            kind: MediaKind::Movie,
+            name: "Heat",
+            url: Some("https://films.example/work/abc".into()),
+            image: Some("https://image.example/heat.jpg"),
+            description: Some("A thief, a detective."),
+            published: Some("1995-12-15"),
+            genres: &genres,
+            directors: vec!["Michael Mann"],
+            rating: Some((8.27, 700_000)),
+        });
+        let value: serde_json::Value = serde_json::from_str(&data).unwrap();
+        assert_eq!(value["@context"], "https://schema.org");
+        assert_eq!(value["@type"], "Movie");
+        assert_eq!(value["name"], "Heat");
+        assert_eq!(value["url"], "https://films.example/work/abc");
+        assert_eq!(value["image"], "https://image.example/heat.jpg");
+        assert_eq!(value["description"], "A thief, a detective.");
+        assert_eq!(value["datePublished"], "1995-12-15");
+        assert_eq!(value["genre"], serde_json::json!(["Drama", "Crime"]));
+        assert_eq!(
+            value["director"],
+            serde_json::json!([{ "@type": "Person", "name": "Michael Mann" }])
+        );
+        assert_eq!(value["aggregateRating"]["@type"], "AggregateRating");
+        assert_eq!(value["aggregateRating"]["ratingValue"], 8.3);
+        assert_eq!(value["aggregateRating"]["bestRating"], 10);
+        assert_eq!(value["aggregateRating"]["ratingCount"], 700_000);
+    }
+
+    #[test]
+    fn a_series_says_only_what_it_has_and_never_closes_its_element() {
+        let data = structured(&Described {
+            kind: MediaKind::Series,
+            name: "Tom & Jerry",
+            url: None,
+            image: None,
+            description: Some("</script><script>alert(1)</script>"),
+            published: None,
+            genres: &[],
+            directors: Vec::new(),
+            rating: None,
+        });
+        // Nothing in it is markup: `<`, `>` and `&` are escapes, which a
+        // JSON reader turns back into what they were.
+        assert!(!data.contains('<') && !data.contains('>') && !data.contains('&'));
+        let value: serde_json::Value = serde_json::from_str(&data).unwrap();
+        assert_eq!(value["@type"], "TVSeries");
+        assert_eq!(value["name"], "Tom & Jerry");
+        assert_eq!(value["description"], "</script><script>alert(1)</script>");
+        // What it lacks, it does not claim.
+        for absent in [
+            "url",
+            "image",
+            "datePublished",
+            "genre",
+            "director",
+            "aggregateRating",
+        ] {
+            assert!(value.get(absent).is_none(), "{absent}");
+        }
+    }
+
+    #[test]
+    fn the_description_sits_in_the_head_with_the_preview_once_there_is_one() {
+        let described = Preview {
+            title: "Heat (1995)".into(),
+            description: None,
+            image: None,
+            kind: "video.movie",
+            structured: Some("{\"@type\":\"Movie\"}".into()),
+        };
+        let page = described.apply(PAGE, None, "/work/abc");
+        assert!(
+            page.contains("<script type=\"application/ld+json\">{\"@type\":\"Movie\"}</script>")
+        );
+        assert_eq!(page.matches("application/ld+json").count(), 1);
+        // Before the page's own scripts, inside the head.
+        assert!(page.find("application/ld+json") < page.find("/assets/index-abc.js"));
+
+        let plain = Preview {
+            structured: None,
+            ..described
+        };
+        assert!(
+            !plain
+                .apply(PAGE, None, "/work/abc")
+                .contains("application/ld+json")
+        );
+    }
+
+    #[test]
+    fn a_day_is_the_date_a_value_begins_with() {
+        assert_eq!(day("1995-12-15"), Some("1995-12-15"));
+        assert_eq!(day("2016-07-15T00:00:00Z"), Some("2016-07-15"));
+        assert_eq!(day("1995"), None);
+        assert_eq!(day("15/12/1995"), None);
+        assert_eq!(day("1995-12-1é"), None);
     }
 
     #[test]

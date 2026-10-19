@@ -16,6 +16,7 @@ mod merge;
 mod metrics;
 mod outbound;
 mod providers;
+mod search;
 mod service;
 mod settings;
 mod state;

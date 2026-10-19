@@ -909,25 +909,30 @@ mod tests {
                 .await
                 .unwrap_or_else(|e| panic!("migration {}: {e}", migration.version));
         }
-        let work = firefly(&db).await;
-        // Two series beside it: one with no order kept, one with an order
-        // and its refresh due already.
+        // Three series, written as that version's schema holds them: the
+        // write path of today writes into tables later migrations made.
         let another = |title: &str, slug: &str| {
             let mut series = MediaItem::empty(MediaKind::Series);
             series.title = title.into();
             series.slug = slug.into();
             series
         };
+        let work = another("Firefly", "firefly-2002");
+        // Two series beside it: one with no order kept, one with an order
+        // and its refresh due already.
         let unordered = another("Dollhouse", "dollhouse-2009");
         let due = another("Angel", "angel-1999");
-        for series in [&unordered, &due] {
-            item::upsert(
-                &db,
-                ItemWrite {
-                    item: series,
-                    replace_children: false,
-                },
-            )
+        for series in [&work, &unordered, &due] {
+            sqlx::query(db.sql(
+                "INSERT INTO media_item (id, kind, slug, title, created_at, updated_at)
+                 VALUES (?, 'series', ?, ?, ?, ?)",
+            ))
+            .bind(&series.id)
+            .bind(&series.slug)
+            .bind(&series.title)
+            .bind(&series.created_at)
+            .bind(&series.updated_at)
+            .execute(db.pool())
             .await
             .expect("stored");
         }

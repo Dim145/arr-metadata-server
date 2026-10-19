@@ -30,7 +30,11 @@ use chrono::{DateTime, TimeDelta, Utc};
 use serde_json::Value;
 
 use crate::{
-    db::{repo, to_rfc3339},
+    db::{
+        repo,
+        repo::change::{Cause, NewChange},
+        to_rfc3339,
+    },
     domain::{ExternalSource, MediaItem, MediaKind, Rating, fields},
     state::AppState,
 };
@@ -486,17 +490,41 @@ pub const REFRESH_ERROR_CHARS: usize = 500;
 /// is tried again ([`retry_after_failure`]) rather than a full interval away.
 pub async fn persist(
     state: &AppState,
-    mut item: MediaItem,
+    item: MediaItem,
     snapshots: &[(String, Value)],
     provenance: crate::merge::provenance::Provenance,
     failure: Option<&str>,
 ) -> Result<MediaItem> {
+    persist_as(state, item, snapshots, provenance, failure, false).await
+}
+
+/// [`persist`], told whether this refresh handed the series' numbering from
+/// one source to the other: what its journal then says of the seasons and
+/// the episodes it moved (`fallback`).
+///
+/// What it changes in a work held here is written to the work's journal
+/// once the work is, at once, and nothing when it changes nothing:
+/// see [`changes_of`]. While it is only previewed ([`previewing`]), nothing
+/// is written — what it would write over is gathered instead.
+pub(crate) async fn persist_as(
+    state: &AppState,
+    mut item: MediaItem,
+    snapshots: &[(String, Value)],
+    provenance: crate::merge::provenance::Provenance,
+    failure: Option<&str>,
+    renumbered: bool,
+) -> Result<MediaItem> {
+    use crate::merge::provenance::Watched;
+
     // As the merge came back, before what it lacked is put back.
     let returned = crate::merge::provenance::Returned::of(&item);
     // Whether a work held here was refreshing without fault before this.
     let mut was_well = false;
     // The episodes TheTVDB moved since the copy held: said once written.
     let mut moved = Vec::new();
+    // What the journal follows of the work as held, and its locks.
+    let mut held: Option<(Watched, Vec<fields::Override>)> = None;
+    let previewing = is_previewing();
 
     if let Some(existing_id) = find_existing(state, &item).await?
         && let Some(mut existing) = repo::item::get(&state.db, &existing_id).await?
@@ -510,12 +538,14 @@ pub async fn persist(
         repo::item::load_children(&state.db, &mut existing).await?;
         keep_title_qualifier(&mut item, &existing, snapshots);
         moved = crate::arr::renumber::moves(&existing.episodes, &item.episodes);
+        let watched = Watched::of(&existing);
         keep_what_nobody_answered(&mut item, existing);
 
         // What is locked of its identity is written as locked, not as a
         // provider said it: the row is what the lists and the lookups read.
         let locked = repo::override_field::list(&state.db, &item.id).await?;
         crate::domain::fields::pin_identity(&mut item, &locked);
+        held = Some((watched, locked));
     }
 
     crate::merge::drop_own_title(&mut item);
@@ -532,20 +562,50 @@ pub async fn persist(
         }
     }
 
-    let _writing = WRITING.lock(&item.id).await;
+    // A preview writes nothing, and waits on no writer.
+    let _writing = match previewing {
+        false => Some(WRITING.lock(&item.id).await),
+        true => None,
+    };
 
     // What the write keeps when every provider came back without it is still
     // whoever gave it before. Read under the lock every writer of the record
     // takes, and written in the same transaction as the work.
     let mut provenance = provenance;
+    let mut was = None;
     match repo::item::provenance(&state.db, &item.id).await {
         Ok(Some(before)) => {
             crate::merge::provenance::carry_over(&mut provenance, &before, &returned);
+            was = Some(before);
         }
         Ok(None) => {}
         Err(e) => {
             tracing::warn!(id = %item.id, error = %e, "could not read where the work's values came from")
         }
+    }
+
+    let changed = held
+        .as_ref()
+        .map(|(watched, locks)| {
+            let found = crate::merge::provenance::changes(
+                watched,
+                &Watched::of(&item),
+                was.as_ref(),
+                &provenance,
+            );
+            let cause = |change: &crate::merge::provenance::FieldChange| match renumbered
+                && change.scope != "item"
+            {
+                true => Cause::Fallback,
+                false => asked_cause().unwrap_or(Cause::Refresh),
+            };
+            changes_of(found, locks, cause)
+        })
+        .unwrap_or_default();
+
+    if previewing {
+        preview_found(&changed);
+        return Ok(item);
     }
 
     repo::item::upsert_traced(
@@ -558,6 +618,7 @@ pub async fn persist(
     )
     .await?;
 
+    journal(state, &item.id, &changed).await;
     crate::arr::renumber::tell(state, &item, &moved).await;
 
     // Refreshed in part, where its refreshes had been going well: told once.
@@ -587,13 +648,22 @@ pub enum SyncWrite {
 /// refresh — and only if nothing else has written the work since `stored` was
 /// read, checked in the write's own transaction. The provenance is written in
 /// it too, so it always describes the write beside it.
+///
+/// What it changes is written to the work's journal once it is written —
+/// as a sync, or as what [`asked`] says it is — and while it is only
+/// previewed, nothing is: what it would write over is gathered instead.
+/// `was` is who gave what before, which a value that went is said to be
+/// the provider's of.
 pub async fn persist_sync(
     state: &AppState,
     mut item: MediaItem,
     snapshots: &[(String, Value)],
     stored: &MediaItem,
+    was: &crate::merge::provenance::Provenance,
     provenance: &crate::merge::provenance::Provenance,
 ) -> Result<SyncWrite> {
+    use crate::merge::provenance::Watched;
+
     item.id.clone_from(&stored.id);
     item.slug.clone_from(&stored.slug);
     item.created_at.clone_from(&stored.created_at);
@@ -610,6 +680,24 @@ pub async fn persist_sync(
     item.refresh_after.clone_from(&stored.refresh_after);
     item.refresh_error.clone_from(&stored.refresh_error);
 
+    let found = crate::merge::provenance::changes(
+        &Watched::of(stored),
+        &Watched::of(&item),
+        Some(was),
+        provenance,
+    );
+    // The locks are read only when there is something they could hold.
+    let locks = match found.is_empty() {
+        true => Vec::new(),
+        false => repo::override_field::list(&state.db, &item.id).await?,
+    };
+    let changed = changes_of(found, &locks, |_| asked_cause().unwrap_or(Cause::Sync));
+
+    if is_previewing() {
+        preview_found(&changed);
+        return Ok(SyncWrite::Written(Box::new(item)));
+    }
+
     let _writing = WRITING.lock(&item.id).await;
 
     let written = repo::item::upsert_unchanged(
@@ -625,6 +713,7 @@ pub async fn persist_sync(
 
     match written {
         repo::item::Conditional::Written => {
+            journal(state, &item.id, &changed).await;
             crate::arr::renumber::tell(state, &item, &moved).await;
             after_write(state, &item.id, snapshots)
                 .await
@@ -632,6 +721,134 @@ pub async fn persist_sync(
         }
         repo::item::Conditional::Changed => Ok(SyncWrite::Changed),
         repo::item::Conditional::Gone => Ok(SyncWrite::Gone),
+    }
+}
+
+// ─── what a write changed ────────────────────────────────────────────────────
+
+tokio::task_local! {
+    /// Set over a refresh or a sync somebody asked for, or one that is only
+    /// previewed: see [`asked`] and [`previewing`].
+    static ASKED: Asked;
+}
+
+/// What the sources of a work were asked again for: by whom — nobody, for
+/// the schedule — and why, which the work's journal says; and, while the
+/// asking is only previewed, where what it would write over is gathered
+/// instead of written.
+struct Asked {
+    by: Option<String>,
+    cause: Option<Cause>,
+    preview: Option<std::cell::RefCell<Vec<NewChange>>>,
+}
+
+/// Run `work` — a refresh, a sync — as `by` asked it, for `cause` when that
+/// is not what the write says of itself: a refresh writes `refresh`, a sync
+/// `sync`. Outside it, nobody asked.
+pub async fn asked<F: std::future::Future>(
+    by: Option<String>,
+    cause: Option<Cause>,
+    work: F,
+) -> F::Output {
+    // On the heap, as `providers::noting` puts what it runs: the whole
+    // fan-out of a refresh.
+    ASKED
+        .scope(
+            Asked {
+                by,
+                cause,
+                preview: None,
+            },
+            Box::pin(work),
+        )
+        .await
+}
+
+/// Run `work` — a refresh, a sync — without writing anything of the work:
+/// what it would write over is handed back with what it came to, the values
+/// a lock holds left out, since nothing a refresh writes reaches them. The
+/// sources are asked as they always are; nothing else is told — not the
+/// work's journal, not its orders or who numbers it, not Sonarr or Radarr.
+pub async fn previewing<F: std::future::Future>(work: F) -> (F::Output, Vec<NewChange>) {
+    let work = Box::pin(work);
+    ASKED
+        .scope(
+            Asked {
+                by: None,
+                cause: None,
+                preview: Some(std::cell::RefCell::new(Vec::new())),
+            },
+            async {
+                let out = work.await;
+                let found = ASKED.with(|asked| {
+                    asked
+                        .preview
+                        .as_ref()
+                        .map(std::cell::RefCell::take)
+                        .unwrap_or_default()
+                });
+                (out, found)
+            },
+        )
+        .await
+}
+
+/// Whether what runs now is only a preview, and nothing of the work is to be
+/// written: see [`previewing`].
+pub fn is_previewing() -> bool {
+    ASKED
+        .try_with(|asked| asked.preview.is_some())
+        .unwrap_or(false)
+}
+
+/// Who asked for what runs now, if anybody did.
+fn asked_by() -> Option<String> {
+    ASKED.try_with(|asked| asked.by.clone()).ok().flatten()
+}
+
+/// Why the sources were asked, when the asking says.
+fn asked_cause() -> Option<Cause> {
+    ASKED.try_with(|asked| asked.cause).ok().flatten()
+}
+
+/// Hand a preview what a write would have changed, but what a lock holds:
+/// that, the write would not have reached.
+fn preview_found(changed: &[NewChange]) {
+    let _ = ASKED.try_with(|asked| {
+        if let Some(preview) = &asked.preview {
+            preview
+                .borrow_mut()
+                .extend(changed.iter().filter(|change| !change.was_locked).cloned());
+        }
+    });
+}
+
+/// What a write found changed, as its journal writes it: each change for the
+/// cause `cause` says, and whether a lock in every language held its field —
+/// in which case what is served did not change with it.
+fn changes_of(
+    found: Vec<crate::merge::provenance::FieldChange>,
+    locks: &[fields::Override],
+    cause: impl Fn(&crate::merge::provenance::FieldChange) -> Cause,
+) -> Vec<NewChange> {
+    found
+        .into_iter()
+        .map(|change| {
+            let locked = locks.iter().any(|lock| {
+                lock.scope == change.scope && lock.field == change.field && !lock.in_one_language()
+            });
+            let cause = cause(&change);
+            NewChange::found(change, cause, locked)
+        })
+        .collect()
+}
+
+/// Write what a write changed to the work's journal, as whoever asked for it
+/// did it. Best effort, as the audit trail is: the work is written already,
+/// and refusing it now would leave it written and said to have failed.
+async fn journal(state: &AppState, id: &str, changed: &[NewChange]) {
+    if let Err(e) = repo::change::record(&state.db, id, asked_by().as_deref(), changed).await {
+        tracing::warn!(%id, error = format_args!("{e:#}"), "could not write what changed to the work's journal");
     }
 }
 

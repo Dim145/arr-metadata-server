@@ -7,6 +7,11 @@
  * placeholders, so the count or the name is typed too.
  */
 
+import { plurals } from '../i18n'
+
+/** The form a count's words take, by English rules: "1 work", "0 works". */
+const plural = plurals('en')
+
 export const en = {
   brand: {
     name: 'Cinémathèque',
@@ -40,7 +45,7 @@ export const en = {
     lead: 'What it holds, when it was made, what it is about, where it came from and how it is rated — counted as you are shown it.',
     works: 'Works',
     episodes: 'Episodes',
-    addedRecently: (n: number) => (n === 1 ? '1 work added in the last thirty days.' : `${n} works added in the last thirty days.`),
+    addedRecently: (n: number) => plural(n, { one: '1 work added in the last thirty days.', other: `${n} works added in the last thirty days.` }),
     decades: 'By decade',
     genres: 'By genre',
     networks: 'By network or studio',
@@ -54,13 +59,18 @@ export const en = {
   },
   palette: {
     open: 'Command palette',
-    placeholder: 'A title, or a place to go…',
+    placeholder: 'A title, a name, an episode, or a place to go…',
     goTo: 'Go to',
     works: 'Works',
+    people: 'People',
+    episodes: 'Episodes',
     recent: 'Recent',
     random: 'A work at random',
     none: 'Nothing matches.',
-    hint: '↑ ↓ to move, Enter to open, Esc to close — ⌘K or Ctrl K from anywhere.',
+    namePrompt: 'A name after the @: somebody credited on a work here.',
+    credited: (n: number) => plural(n, { one: '1 work', other: `${n} works` }),
+    matched: (name: string) => `found under “${name}”`,
+    hint: '↑ ↓ to move, Enter to open, Esc to close, @ for people alone — ⌘K or Ctrl K from anywhere.',
   },
   collections: {
     label: 'Collections',
@@ -68,7 +78,7 @@ export const en = {
     lead: 'The film collections the catalogue holds part or all of, as TMDB groups them.',
     one: 'Collection',
     unnamed: (id: number) => `Collection ${id}`,
-    held: (n: number, of: number) => (of ? `${n} of ${of} films in the catalogue` : n === 1 ? '1 film in the catalogue' : `${n} films in the catalogue`),
+    held: (n: number, of: number) => (of ? `${n} of ${of} films in the catalogue` : plural(n, { one: '1 film in the catalogue', other: `${n} films in the catalogue` })),
     parts: 'Every film of it',
     missing: 'Not in the catalogue',
     inCatalogue: 'In the catalogue',
@@ -83,7 +93,7 @@ export const en = {
     one: 'Selection',
     empty: 'No selection yet.',
     emptyHint: 'Whoever maintains the catalogue composes them under Lists.',
-    count: (n: number) => (n === 1 ? '1 work' : `${n} works`),
+    count: (n: number) => plural(n, { one: '1 work', other: `${n} works` }),
     kind: { series: 'Series', movie: 'Films', mixed: 'Series and films' },
     byFilter: 'Kept current by a filter',
     byHand: 'Composed by hand',
@@ -117,8 +127,8 @@ export const en = {
     searchPlaceholder: 'Search for a work…',
     searchShortcut: 'Press / to search',
     results: 'Results',
-    allResults: (n: number) => (n === 1 ? 'See the 1 result' : `See all ${n} results`),
-    resultsFound: (n: number) => (n === 1 ? '1 result' : `${n} results`),
+    allResults: (n: number) => plural(n, { one: 'See the 1 result', other: `See all ${n} results` }),
+    resultsFound: (n: number) => plural(n, { one: '1 result', other: `${n} results` }),
     noResults: (term: string) => `Nothing for “${term}”`,
     searching: 'Searching…',
     admin: 'Admin',
@@ -145,6 +155,34 @@ export const en = {
     more: 'More',
     mainNavigation: 'Main navigation',
     appearance: 'Appearance',
+  },
+  // The menu beside the search: the two languages, and how posters are shown.
+  reader: {
+    title: 'Language and reading',
+    menu: (code: string) => `Language and reading (${code})`,
+    interface: 'Interface',
+    texts: 'Read texts in…',
+    textsHint: 'Titles and synopses, wherever a translation is held. The interface keeps its own language.',
+    asInterface: 'The interface’s language',
+    adult: 'Show adult posters',
+    adultHint: 'Off, the posters of works for adults stay blurred until pressed.',
+    forAdults: 'For adults',
+    show: 'Show the poster',
+    showPicture: 'Show the picture',
+  },
+  // The list `?` opens.
+  keys: {
+    title: 'Keyboard shortcuts',
+    search: 'Search the catalogue',
+    palette: 'Open the command palette',
+    browse: 'Go to the catalogue',
+    calendar: 'Go to the schedule',
+    seasons: 'Go to the season chart',
+    random: 'Open a work at random',
+    today: 'Today, in the schedule',
+    help: 'This list',
+    then: 'then',
+    hint: 'None of them does anything while you type in a field.',
   },
   home: {
     loadFailed: 'The catalogue could not be loaded just now. Try again in a moment.',
@@ -182,11 +220,15 @@ export const en = {
     recent: 'Recently viewed',
     recentClear: 'Clear the recent',
     recentHint: 'The entries opened lately — kept in this browser alone, sent nowhere.',
+    backThisWeek: 'Back this week',
+    newWithTrailer: 'New, with a trailer',
+    wholeSelection: 'The whole selection',
+    allSelections: 'Every selection',
   },
   browse: {
     title: 'Browse',
     genresSearch: 'Find a genre',
-    genresOthers: (n: number) => (n === 1 ? 'The other one' : `The ${n} others, A to Z`),
+    genresOthers: (n: number) => plural(n, { one: 'The other one', other: `The ${n} others, A to Z` }),
     genresNone: 'No genre by that name.',
     genreMode: 'Works carrying',
     genreAll: 'All of them',
@@ -204,13 +246,15 @@ export const en = {
     sortAdded: 'Recently added',
     manualOnly: 'Edited by hand',
     clear: 'Clear filters',
-    results: (n: number) => (n === 1 ? '1 work' : `${n} works`),
+    results: (n: number) => plural(n, { one: '1 work', other: `${n} works` }),
     noResults: 'No work matches these filters.',
     noResultsHint: 'Widen the year, or clear the filters.',
     noResultsTermHint:
       'Check the spelling, or try the original title. The catalogue only holds works a client has already asked for.',
     loadMore: 'Load more',
+    loadingMore: 'Loading more…',
     orders: {
+      relevant: 'Best match',
       popular: 'Most popular',
       rated: 'Highest rated',
       newest: 'Newest',
@@ -218,14 +262,43 @@ export const en = {
       title: 'Title, A to Z',
       titleDesc: 'Title, Z to A',
       added: 'Recently added',
+      longest: 'Longest',
+      shortest: 'Shortest',
+      lastAired: 'Aired most recently',
+      episodes: 'Most episodes',
     },
+    applied: 'Filters on',
+    clearAll: 'Clear all',
+    moreFilters: 'More filters',
+    clearMore: 'Clear these',
+    creditsAndWords: 'Credits and keywords',
+    person: 'Person',
+    personHint: 'A name as the credits give it, or a TMDB id.',
+    keyword: 'Keyword',
+    keywordHint: 'As TMDB files it: time travel, heist.',
+    runtime: 'Running time',
+    runtimeMin: 'At least',
+    runtimeMax: 'At most',
+    minutes: 'min',
+    origin: 'Country and rating',
+    country: 'Made in',
+    anyCountry: 'Any country',
+    certification: (country?: string) => (country ? `Rating in ${country}` : 'Rating'),
+    anyCertification: 'Any rating',
+    collection: 'Collection',
+    anyCollection: 'Any collection',
+    withPerson: (name: string) => `With ${name}`,
+    runtimeChip: (min?: number, max?: number) =>
+      min !== undefined && max !== undefined ? `${min}–${max} min` : min !== undefined ? `${min} min or longer` : `${max} min or shorter`,
+    madeIn: (country: string) => `Made in ${country}`,
+    rated: (rating: string) => `Rated ${rating}`,
     quoted: (term: string) => `“${term}”`,
     remove: (label: string) => `Remove the filter: ${label}`,
     noResultsFilterHint: 'These filters leave nothing. Take one off:',
     loadFailed: 'The list could not be loaded just now. Try again in a moment.',
     capped: (shown: string, total: string) => `The first ${shown} of ${total}. Narrow the list to see the rest.`,
     without: (label: string) => `Without ${label}`,
-    show: (n: number) => (n === 1 ? 'Show 1 work' : `Show ${n} works`),
+    show: (n: number) => plural(n, { one: 'Show 1 work', other: `Show ${n} works` }),
     since: (year: string) => `Since ${year}`,
     until: (year: string) => `Until ${year}`,
     atLeast: (score: string) => `${score} or more`,
@@ -252,7 +325,7 @@ export const en = {
     seasons: 'Seasons',
     episodes: 'Episodes',
     season: (n: number) => (n === 0 ? 'Specials' : `Season ${n}`),
-    episodeCount: (n: number) => (n === 1 ? '1 episode' : `${n} episodes`),
+    episodeCount: (n: number) => plural(n, { one: '1 episode', other: `${n} episodes` }),
     artwork: 'Artwork',
     details: 'Details',
     watch: 'Where to watch',
@@ -321,7 +394,7 @@ export const en = {
     homepage: 'Homepage',
     trailer: 'Trailer',
     noOverview: 'No overview for this work yet.',
-    votes: (shown: string, n: number) => (n === 1 ? '1 vote' : `${shown} votes`),
+    votes: (shown: string, n: number) => plural(n, { one: '1 vote', other: `${shown} votes` }),
     ratings: 'Ratings',
     outOfTen: 'out of 10',
     back: 'Back to the catalogue',
@@ -365,7 +438,7 @@ export const en = {
     } as Record<string, string>,
     noneIn: (country: string) => `${country}: no date known.`,
     unratedIn: (country: string) => `${country}: no rating known.`,
-    otherCountries: (n: number) => (n === 1 ? 'One other country' : `${n} other countries`),
+    otherCountries: (n: number) => plural(n, { one: 'One other country', other: `${n} other countries` }),
     fewerCountries: 'Fewer countries',
     titleTypes: {
       romaji: 'Romaji',
@@ -387,6 +460,14 @@ export const en = {
       backDone: 'TheTVDB numbers the series again.',
       backFailed: 'TheTVDB still does not answer: TMDB keeps the numbering.',
     },
+    // The page on a phone: its row of sections, and the bar along its foot.
+    onThisPage: 'On this page',
+    actions: 'This work',
+    watchNow: 'Watch',
+    allKeywords: (n: number) => `All ${n} keywords`,
+    allIdentifiers: (n: number) => `All ${n} identifiers`,
+    searchTitle: (title: string) => `Search the catalogue for “${title}”`,
+    withPerson: (name: string) => `Everything here with ${name}`,
   },
   elsewhere: {
     newTab: '(opens in a new tab)',
@@ -474,9 +555,9 @@ export const en = {
   },
   person: {
     label: 'Filmography',
-    works: (n: number) => (n === 1 ? '1 work here' : `${n} works here`),
-    parts: (n: number) => (n === 1 ? '1 role' : `${n} roles`),
-    jobs: (n: number) => (n === 1 ? '1 job behind the camera' : `${n} jobs behind the camera`),
+    works: (n: number) => plural(n, { one: '1 work here', other: `${n} works here` }),
+    parts: (n: number) => plural(n, { one: '1 role', other: `${n} roles` }),
+    jobs: (n: number) => plural(n, { one: '1 job behind the camera', other: `${n} jobs behind the camera` }),
     partial: 'Only the works this catalogue holds.',
     onTmdb: 'The whole career on TMDB',
     as: (character: string) => `as ${character}`,
@@ -524,8 +605,8 @@ export const en = {
     // The films only once there are some: "15 episodes · 2 releases".
     count: (episodes: number, releases = 0) =>
       [
-        episodes || !releases ? (episodes === 1 ? '1 episode' : `${episodes} episodes`) : '',
-        releases ? (releases === 1 ? '1 release' : `${releases} releases`) : '',
+        episodes || !releases ? (plural(episodes, { one: '1 episode', other: `${episodes} episodes` })) : '',
+        releases ? (plural(releases, { one: '1 release', other: `${releases} releases` })) : '',
       ]
         .filter(Boolean)
         .join(' · '),
@@ -559,16 +640,22 @@ export const en = {
     previousMonth: 'Previous month',
     thisMonth: 'This month',
     nextMonth: 'Next month',
-    more: (n: number) => (n === 1 ? '+ 1 more' : `+ ${n} more`),
+    more: (n: number) => plural(n, { one: '+ 1 more', other: `+ ${n} more` }),
     monthEmpty: 'Nothing in the schedule this month.',
     monthEmptyOther: 'Nothing in the schedule that month.',
     openWeek: (day: string) => `See the week of ${day}`,
+    layouts: 'Show the month as',
+    grid: 'Grid',
+    list: 'List',
+    listView: 'The month, day by day',
+    openEpisode: 'Open the episode',
+    openSeries: 'The series',
   },
   seasons: {
     label: 'Season chart',
     names: { winter: 'Winter', spring: 'Spring', summer: 'Summer', autumn: 'Autumn' },
     title: (name: string, year: number) => `${name} ${year}`,
-    count: (n: number) => (n === 1 ? '1 work' : `${n} works`),
+    count: (n: number) => plural(n, { one: '1 work', other: `${n} works` }),
     previous: 'Previous season:',
     next: 'Next season:',
     current: 'This season',
@@ -578,7 +665,7 @@ export const en = {
     nextYear: (season: string) => `Year after: ${season}`,
     strip: 'The season, week by week',
     frame: (week: string, n: number) =>
-      n === 1 ? `Week of ${week}: 1 premiere` : `Week of ${week}: ${n} premieres`,
+      plural(n, { one: `Week of ${week}: 1 premiere`, other: `Week of ${week}: ${n} premieres` }),
     today: 'Today',
     kind: 'Kind',
     kinds: {
@@ -609,7 +696,7 @@ export const en = {
     releases: (when: string) => `Releases ${when}`,
     released: (when: string) => `Released ${when}`,
     began: (when: string) => `Began ${when}`,
-    episodes: (n: number) => (n === 1 ? '1 episode' : `${n} episodes`),
+    episodes: (n: number) => plural(n, { one: '1 episode', other: `${n} episodes` }),
     aired: (aired: number, of: number) => `${aired} of ${of} aired`,
     nextEpisode: (n: number, when: string) => `Episode ${n} ${when}`,
     sequelOf: (title: string) => `Sequel of ${title}`,
@@ -733,13 +820,13 @@ export const en = {
       accounts: 'Accounts',
       viaOidc: (n: number) => `${n} through OIDC`,
       pending: 'Waiting for approval',
-      pendingHint: (n: number) => (n === 1 ? 'one sign-up to review' : `${n} sign-ups to review`),
+      pendingHint: (n: number) => plural(n, { one: 'one sign-up to review', other: `${n} sign-ups to review` }),
       admins: 'Administrators',
       search: 'Search a name, a username, an address',
       allRoles: 'Every role',
       allStatuses: 'Every status',
       create: 'Open an account',
-      selected: (n: number) => (n === 1 ? '1 selected' : `${n} selected`),
+      selected: (n: number) => plural(n, { one: '1 selected', other: `${n} selected` }),
       clear: 'Clear',
       setRole: 'Set the role',
       apply: 'Apply',
@@ -766,10 +853,10 @@ export const en = {
       passwordGenerate: 'Optional: left empty, one is generated and shown once.',
       opened: (name: string) => `${name}’s account is open`,
       generated: 'Their password, shown once:',
-      deleteTitle: (n: number) => (n === 1 ? 'Delete this account?' : `Delete ${n} accounts?`),
+      deleteTitle: (n: number) => plural(n, { one: 'Delete this account?', other: `Delete ${n} accounts?` }),
       deleteBody: 'Their sessions and keys go with them. What they did stays in the journal, under their name.',
       deleteConfirm: 'Delete',
-      refused: (n: number) => (n === 1 ? 'One was left as it was:' : `${n} were left as they were:`),
+      refused: (n: number) => plural(n, { one: 'One was left as it was:', other: `${n} were left as they were:` }),
       back: 'All members',
       access: 'Role and status',
       resetPassword: 'Give a new password',
@@ -832,21 +919,21 @@ export const en = {
       test: 'Test the discovery',
       testing: 'Reading…',
       found: (keys: number, algorithms: string) =>
-        `Found: authorization, token${keys ? `, ${keys === 1 ? 'one key' : `${keys} keys`}` : ''}${algorithms ? ` · ${algorithms}` : ''}.`,
+        `Found: authorization, token${keys ? `, ${plural(keys, { one: 'one key', other: `${keys} keys` })}` : ''}${algorithms ? ` · ${algorithms}` : ''}.`,
       testFailed: 'Discovery failed:',
     },
     invitations: {
       title: 'Invitations',
       lead: 'A code opens one account, or several, with the role it gives. Its link carries it: send the link. The code is shown once, when it is made.',
       usable: (n: number, places: number) =>
-        n === 0 ? 'none usable' : `${n} usable · ${places === 1 ? 'one account' : `${places} accounts`} left to open`,
+        n === 0 ? 'none usable' : `${n} usable · ${plural(places, { one: 'one account', other: `${places} accounts` })} left to open`,
       code: 'Code',
       role: 'Role given',
       uses: 'Used',
       expires: 'Expires',
       maxUses: 'Accounts it opens',
       validity: 'Valid for',
-      days: (n: number) => (n === 1 ? '1 day' : `${n} days`),
+      days: (n: number) => plural(n, { one: '1 day', other: `${n} days` }),
       note: 'Note',
       noteHint: 'For your own memory; they never see it.',
       notePlaceholder: 'For the family',
@@ -878,9 +965,9 @@ export const en = {
         approval: 'sign-ups wait for approval',
         open: 'anyone signs up',
         apisAll: 'every API answers',
-        apisSome: (on: string[]) => (on.length ? `only ${on.join(', ')} answer${on.length === 1 ? 's' : ''}` : 'no API answers'),
+        apisSome: (on: string[]) => (on.length ? `only ${on.join(', ')} ${plural(on.length, { one: 'answers', other: 'answer' })}` : 'no API answers'),
         keys: (n: number) =>
-          n === 0 ? 'only administrators make keys' : n === 1 ? 'each member may make a key' : `each member may make ${n} keys`,
+          n === 0 ? 'only administrators make keys' : plural(n, { one: 'each member may make a key', other: `each member may make ${n} keys` }),
       },
       q1: 'Who comes into the site?',
       q2: 'Who may sign up?',
@@ -899,9 +986,9 @@ export const en = {
         approval: 'Anyone signs up, and the account waits until an administrator activates it. An invitation skips the wait.',
         open: 'Anyone signs up and comes in at once, with the role below — five accounts an hour from one address at most.',
       },
-      pending: (n: number) => (n === 1 ? 'One account is waiting for approval.' : `${n} accounts are waiting for approval.`),
+      pending: (n: number) => plural(n, { one: 'One account is waiting for approval.', other: `${n} accounts are waiting for approval.` }),
       review: 'Review them',
-      invitations: (n: number) => (n === 0 ? 'No usable invitation.' : n === 1 ? 'One usable invitation.' : `${n} usable invitations.`),
+      invitations: (n: number) => (n === 0 ? 'No usable invitation.' : plural(n, { one: 'One usable invitation.', other: `${n} usable invitations.` })),
       manage: 'Invitations',
       newRole: 'Role once approved',
       newRoleHint: 'For an account that waited for approval. An open door always opens a member’s account, or anybody on the internet could edit.',
@@ -972,7 +1059,7 @@ export const en = {
       policyNote: 'What each API asks for is set by the deployment — AMS_ARR_AUTH, AMS_PLEX_AUTH, AMS_TMDB_AUTH, AMS_TVDB_AUTH, AMS_ANILIST_AUTH, AMS_NATIVE_AUTH — and the addresses on the Keys & network page.',
       uptime: (since: string) => `Counted since the server started, ${since}.`,
       countedShared: (since: string) => `Counted over every instance since the tally began, ${since}.`,
-      rules: (n: number) => (n === 1 ? 'one listed address' : `${n} listed addresses`),
+      rules: (n: number) => plural(n, { one: 'one listed address', other: `${n} listed addresses` }),
       authDisabled: 'AMS_AUTH_DISABLED is set: nothing asks for a credential. The site is open to anyone, and so is every API left on here.',
       listeners: {
         title: 'The clients’ door',
@@ -1005,7 +1092,7 @@ export const en = {
       keysTitle: 'Keys per member',
       keysHint: 'At 1, each member has their key, which they regenerate; above, they keep a list. At 0, only administrators make keys. Administrators, and the server’s own keys, are not counted.',
       keysNow: (server: number, personal: number) =>
-        `${server === 1 ? 'one server key' : `${server} server keys`} · ${personal === 1 ? 'one held by a person' : `${personal} held by people`}`,
+        `${plural(server, { one: 'one server key', other: `${server} server keys` })} · ${plural(personal, { one: 'one held by a person', other: `${personal} held by people` })}`,
       fewer: 'One fewer',
       more: 'One more',
       saved: 'Saved',
@@ -1064,7 +1151,7 @@ export const en = {
       orderDesc: 'Highest or newest first',
       orderAsc: 'Lowest or oldest first',
       limit: 'At most',
-      preview: (n: number) => (n === 1 ? 'Resolves to 1 work' : `Resolves to ${n} works`),
+      preview: (n: number) => plural(n, { one: 'Resolves to 1 work', other: `Resolves to ${n} works` }),
       colName: 'Name',
       colKind: 'Holds',
       colMode: 'Composed',
@@ -1096,7 +1183,7 @@ export const en = {
       kometaFile: (kind: string) => `Download the metadata file for the ${kind}`,
       kometaDone: (kind: 'movie' | 'series', n: number) =>
         kind === 'movie'
-          ? `${n === 1 ? '1 film' : `${n} films`} with corrections written.`
+          ? `${plural(n, { one: '1 film', other: `${n} films` })} with corrections written.`
           : `${n} series with corrections written.`,
       kometaEmpty: (kind: 'movie' | 'series'): string =>
         kind === 'movie' ? 'No film has anything locked yet: nothing to write.' : 'No series has anything locked yet: nothing to write.',
@@ -1185,12 +1272,12 @@ export const en = {
       memoryOf: (used: string, max: string) => `${used} used of ${max} (maxmemory)`,
       memoryUnbounded: (used: string) => `${used} used, no ceiling set (maxmemory)`,
       eviction: 'Eviction',
-      evicted: (n: number) => (n === 1 ? '1 key evicted since its start' : `${n} keys evicted since its start`),
+      evicted: (n: number) => plural(n, { one: '1 key evicted since its start', other: `${n} keys evicted since its start` }),
       clients: 'Clients',
       started: 'Started',
       latency: 'Round trip',
       lastError: 'Last error',
-      errors: (n: number) => (n === 1 ? '1 command unanswered' : `${n} commands unanswered`),
+      errors: (n: number) => plural(n, { one: '1 command unanswered', other: `${n} commands unanswered` }),
       none: 'none',
       evictionWarning: 'The eviction policy is noeviction: at full memory the server refuses to write and the cache stops filling. Set maxmemory-policy allkeys-lru.',
       unknownPolicy: 'unknown',
@@ -1204,7 +1291,7 @@ export const en = {
       stamp: (generation: number, epoch: number) => `generation ${generation} · epoch ${epoch}`,
       instances: 'Instances',
       instancesOne: 'One instance',
-      instancesMany: (n: number) => (n === 1 ? '1 instance, alone for now' : `${n} instances`),
+      instancesMany: (n: number) => plural(n, { one: '1 instance, alone for now', other: `${n} instances` }),
       instancesSingleHint:
         'This server runs alone: it schedules its own jobs, and the cache server, when there is one, is a second tier and nothing more. Set AMS_MODE=multi to run several instances over one PostgreSQL, one bucket and one cache server.',
       instancesMultiHint: (leader: string | null) =>
@@ -1254,7 +1341,7 @@ export const en = {
       pushHint:
         'A lock put on a work, one of its seasons or episodes, changed or taken off; an edit of its seasons or episodes; a sync; a refresh that changed what it is served as: Sonarr (for a series) or Radarr (for a film) is asked to read the work again, ten seconds after the last change — one command for a burst of them. Off, they find out at their own next refresh.',
       pushNeeds: 'Connect Sonarr or Radarr first: there is nobody to tell yet.',
-      waiting: (n: number) => (n === 1 ? 'One work waits to be told of.' : `${n} works wait to be told of.`),
+      waiting: (n: number) => plural(n, { one: 'One work waits to be told of.', other: `${n} works wait to be told of.` }),
       seed: 'Fill the catalogue from their library',
       seedLead:
         'Every series Sonarr holds and every film Radarr holds, imported here when it is not yet — the way the import page does it, one work after another, gently. Run it before pointing them at this server, so that their first refresh finds the catalogue ready; run it again at any time, and it only fetches what came since.',
@@ -1337,7 +1424,7 @@ export const en = {
       engines: { sqlite: 'SQLite', postgres: 'PostgreSQL' } as Record<string, string>,
       database: (engine: string) => `The ${engine} database`,
       unknownDatabase: 'A database',
-      withMediaCount: (shown: string, n: number) => (n === 1 ? `and ${shown} medium` : `and ${shown} media`),
+      withMediaCount: (shown: string, n: number) => plural(n, { one: `and ${shown} medium`, other: `and ${shown} media` }),
       encryptedChip: 'Encrypted',
       missing: 'Missing',
       missingHint: 'Listed, but no longer where the archives are kept.',
@@ -1430,7 +1517,7 @@ export const en = {
       colError: 'Last error',
       retry: 'Try again',
       retryAll: 'Try everything again',
-      retried: (n: number) => (n === 1 ? '1 medium put back in line.' : `${n} media put back in line.`),
+      retried: (n: number) => plural(n, { one: '1 medium put back in line.', other: `${n} media put back in line.` }),
       kinds: { image: 'Picture', audio: 'Sound' } as Record<string, string>,
       loadFailed: 'The media store could not be read.',
       reset: 'Forget every copy',
@@ -1439,7 +1526,7 @@ export const en = {
       resetTitle: 'Forget every copy kept?',
       resetBody:
         'Every work points at its providers again, and nothing is deleted: for a store moved elsewhere, or one whose files are gone. “Store everything” fetches them again; the next sweep removes the files no row names any more.',
-      resetDone: (n: number) => (n === 1 ? '1 copy forgotten.' : `${n} copies forgotten.`),
+      resetDone: (n: number) => plural(n, { one: '1 copy forgotten.', other: `${n} copies forgotten.` }),
     },
     sourcesPage: {
       lead:
@@ -1659,7 +1746,7 @@ export const en = {
       signed: 'Signed',
       tokenSet: 'Token kept',
       everyEvent: 'Every event',
-      eventCount: (n: number) => (n === 1 ? '1 event' : `${n} events`),
+      eventCount: (n: number) => plural(n, { one: '1 event', other: `${n} events` }),
       counts: (pending: number, failed: number, delivered: number) =>
         [
           pending ? `${pending} waiting` : '',
@@ -1767,30 +1854,32 @@ export const en = {
       locksImport: 'Import a locks file',
       locksImporting: 'Importing…',
       locksImported: (applied: number, works: number) =>
-        applied === 1 ? `1 lock set on ${works} work.` : `${applied} locks set on ${works} ${works === 1 ? 'work' : 'works'}.`,
-      locksUnchanged: (n: number) => (n === 1 ? '1 lock was already so.' : `${n} locks were already so.`),
+        plural(applied, { one: `1 lock set on ${works} work.`, other: `${applied} locks set on ${works} ${plural(works, { one: 'work', other: 'works' })}.` }),
+      locksUnchanged: (n: number) => plural(n, { one: '1 lock was already so.', other: `${n} locks were already so.` }),
       locksExportFailed: 'The locks could not be read just now.',
       locksTooBig: 'That part of the file was refused as too large.',
       locksUnmatched: (titles: string[]) => `Not held here: ${titles.join(', ')}.`,
-      locksRefused: (n: number) => (n === 1 ? '1 lock refused.' : `${n} locks refused.`),
+      locksRefused: (n: number) => plural(n, { one: '1 lock refused.', other: `${n} locks refused.` }),
       locksFailed: 'The file could not be read as a locks document.',
       failing: (shown: string, n: number) =>
-        n === 1 ? '1 work failed its last refresh' : `${shown} works failed their last refresh`,
+        plural(n, { one: '1 work failed its last refresh', other: `${shown} works failed their last refresh` }),
       todoTitle: 'To do',
       todoNothing: 'Nothing to do. The catalogue is in order.',
       todoLoadFailed: 'The list of what is to do could not be loaded.',
-      todoNoPoster: (shown: string, n: number) => (n === 1 ? `${shown} work has no poster` : `${shown} works have no poster`),
-      todoNoOverview: (shown: string, n: number) => (n === 1 ? `${shown} work has no synopsis` : `${shown} works have no synopsis`),
+      todoNoPoster: (shown: string, n: number) => plural(n, { one: `${shown} work has no poster`, other: `${shown} works have no poster` }),
+      todoNoOverview: (shown: string, n: number) => plural(n, { one: `${shown} work has no synopsis`, other: `${shown} works have no synopsis` }),
       todoNoImdb: (shown: string, n: number) =>
-        n === 1 ? `${shown} work has no IMDb identifier` : `${shown} works have no IMDb identifier`,
+        plural(n, { one: `${shown} work has no IMDb identifier`, other: `${shown} works have no IMDb identifier` }),
       todoNeverRefreshed: (shown: string, n: number) =>
-        n === 1 ? `${shown} work was never refreshed` : `${shown} works were never refreshed`,
+        plural(n, { one: `${shown} work was never refreshed`, other: `${shown} works were never refreshed` }),
       todoKeys: (shown: string, n: number, days: number) =>
-        n === 1 ? `${shown} API key expires within ${days} days` : `${shown} API keys expire within ${days} days`,
+        plural(n, { one: `${shown} API key expires within ${days} days`, other: `${shown} API keys expire within ${days} days` }),
       todoMedia: (shown: string, n: number) =>
-        n === 1 ? `${shown} picture or theme could not be fetched` : `${shown} pictures or themes could not be fetched`,
+        plural(n, { one: `${shown} picture or theme could not be fetched`, other: `${shown} pictures or themes could not be fetched` }),
       todoBackup: (when: string | undefined) =>
         when ? `The last archive of the database was made ${when}` : 'No archive of the database was ever made',
+      todoDiverging: (shown: string, n: number) =>
+        plural(n, { one: `${shown} work has a lock whose source has changed`, other: `${shown} works have a lock whose source has changed` }),
       lead: 'What this server holds, and what it has been doing.',
       recentRuns: 'Recent runs',
       allRuns: 'All of them',
@@ -1812,7 +1901,7 @@ export const en = {
 
     works: {
       bulk: {
-        selected: (n: number) => (n === 1 ? '1 selected' : `${n} selected`),
+        selected: (n: number) => plural(n, { one: '1 selected', other: `${n} selected` }),
         selectAll: 'Select every work shown',
         select: (title: string) => `Select ${title}`,
         clear: 'Clear the selection',
@@ -1821,7 +1910,7 @@ export const en = {
         disable: 'Disable',
         delete: 'Delete',
         addTo: 'Add to a list…',
-        deleteTitle: (n: number) => (n === 1 ? 'Delete this work?' : `Delete these ${n} works?`),
+        deleteTitle: (n: number) => plural(n, { one: 'Delete this work?', other: `Delete these ${n} works?` }),
         deleteBody: 'They will be gone from the catalogue and from every client that reads it. This cannot be undone.',
         summary: (done: number, unchanged: number, skipped: number, failed: number) =>
           [
@@ -1832,14 +1921,20 @@ export const en = {
           ]
             .filter(Boolean)
             .join(', ') + '.',
-        failures: (n: number) => (n === 1 ? 'What failed, and why' : `The ${n} that failed, and why`),
+        failures: (n: number) => plural(n, { one: 'What failed, and why', other: `The ${n} that failed, and why` }),
         added: (n: number, list: string) => `${n} added to “${list}”.`,
         working: 'Working…',
         progress: 'Done so far',
         editField: 'Change a field…',
         reask: 'Ask the sources again…',
+        undo: 'Undo',
+        undoOffer: (n: number) => plural(n, { one: 'The field was changed on 1 work.', other: `The field was changed on ${n} works.` }),
+        undone: (done: number, failed: number) =>
+          failed
+            ? `Undone on ${done}; ${plural(failed, { one: '1 was changed since, and is left as it is', other: `${failed} were changed since, and are left as they are` })}.`
+            : plural(done, { one: 'Undone on 1 work.', other: `Undone on ${done} works.` }),
         field: {
-          title: (n: number) => (n === 1 ? 'Change a field of 1 work' : `Change a field of ${n} works`),
+          title: (n: number) => plural(n, { one: 'Change a field of 1 work', other: `Change a field of ${n} works` }),
           field: 'Field',
           action: 'What to do',
           set: 'Set to',
@@ -1852,14 +1947,14 @@ export const en = {
           no: 'No',
           languageHint: 'A language code, as the sources give them: ja, en, fra.',
           sets: (field: string, value: string, n: number) =>
-            `“${field}” becomes “${value}” on ${n === 1 ? '1 work' : `${n} works`}, each its own change in the journal, and is locked there: no refresh moves it until the lock is lifted.`,
+            `“${field}” becomes “${value}” on ${plural(n, { one: '1 work', other: `${n} works` })}, each its own change in the journal, and is locked there: no refresh moves it until the lock is lifted.`,
           adds: (genre: string, n: number) =>
-            `“${genre}” is added to the genres of each of the ${n === 1 ? 'work' : `${n} works`} that lacks it, and their genres are locked. One that has it already is left alone.`,
+            `“${genre}” is added to the genres of each of the ${plural(n, { one: 'work', other: `${n} works` })} that lacks it, and their genres are locked. One that has it already is left alone.`,
           removes: (genre: string, n: number) =>
-            `“${genre}” is taken off the genres of each of the ${n === 1 ? 'work' : `${n} works`} that has it, and their genres are locked. One that lacks it is left alone.`,
+            `“${genre}” is taken off the genres of each of the ${plural(n, { one: 'work', other: `${n} works` })} that has it, and their genres are locked. One that lacks it is left alone.`,
           unlocks: (field: string, n: number) =>
-            `“${field}” is handed back to the sources on ${n === 1 ? '1 work' : `${n} works`}: the next refresh gives it their value. One where it is not locked is left alone.`,
-          apply: (n: number) => (n === 1 ? 'Apply to 1 work' : `Apply to ${n} works`),
+            `“${field}” is handed back to the sources on ${plural(n, { one: '1 work', other: `${n} works` })}: the next refresh gives it their value. One where it is not locked is left alone.`,
+          apply: (n: number) => plural(n, { one: 'Apply to 1 work', other: `Apply to ${n} works` }),
           adultHint: 'While adult titles are hidden from everyone, a work marked adult leaves this list as well.',
           invalid: {
             empty: 'Give a value.',
@@ -1868,7 +1963,7 @@ export const en = {
           },
         },
         reaskDialog: {
-          title: (n: number) => (n === 1 ? 'Ask the sources again about 1 work' : `Ask the sources again about ${n} works`),
+          title: (n: number) => plural(n, { one: 'Ask the sources again about 1 work', other: `Ask the sources again about ${n} works` }),
           explain:
             'Each work asks those of the sources ticked that describe it; the others keep their last answer. Locked fields do not move, and the full refresh keeps its schedule. A work entered by hand, or not yet refreshed in full since the server began recording where its values come from, is passed over.',
           choose: 'The sources to ask again',
@@ -1876,7 +1971,7 @@ export const en = {
           apply: (sources: number, works: number) =>
             sources === 0
               ? 'Tick a source'
-              : `Ask ${sources === 1 ? '1 source' : `${sources} sources`} about ${works === 1 ? '1 work' : `${works} works`}`,
+              : `Ask ${plural(sources, { one: '1 source', other: `${sources} sources` })} about ${plural(works, { one: '1 work', other: `${works} works` })}`,
         },
       },
       missing: {
@@ -1885,6 +1980,7 @@ export const en = {
         overview: 'No overview',
         imdb: 'No IMDb id',
         refresh: 'Never refreshed',
+        divergingLock: 'Lock to look at again',
         none: 'Nothing lacks it',
         noneHint: 'Every work kept here has what these filters look for.',
       },
@@ -1929,7 +2025,7 @@ export const en = {
       served: 'Served from its sources',
       enable: 'Enable',
       disable: 'Disable',
-      locks: (n: number) => (n === 1 ? '1 lock' : `${n} locks`),
+      locks: (n: number) => plural(n, { one: '1 lock', other: `${n} locks` }),
       empty: 'Nothing here yet',
       emptyHint: 'Entries appear as clients ask for them, or you create one by hand.',
       emptyFiltered: 'No stored entry matches',
@@ -1986,7 +2082,7 @@ export const en = {
       sourceHint: 'The usual order stops at the first source that finds something; one chosen here is asked on its own.',
       fankaiPage:
         'Fankai’s website numbers its productions otherwise than its metadata service, the one this server reads, so its addresses lead nowhere here: search the production by its title.',
-      resultsAt: (n: number, source: string) => `${n === 1 ? '1 result' : `${n} results`} at ${source}`,
+      resultsAt: (n: number, source: string) => `${plural(n, { one: '1 result', other: `${n} results` })} at ${source}`,
       kind: 'Kind',
       bothKinds: 'Both',
       year: 'Year',
@@ -1995,7 +2091,7 @@ export const en = {
       searching: 'Asking the providers…',
       found: 'What the providers have',
       slow: 'This calls TMDB and TheTVDB — and Fankai, when it is on — over the network, so it is not instant. A few seconds is normal.',
-      results: (n: number) => (n === 1 ? '1 result' : `${n} results`),
+      results: (n: number) => plural(n, { one: '1 result', other: `${n} results` }),
       import: 'Import',
       importing: 'Fetching…',
       stored: 'Already held',
@@ -2044,7 +2140,7 @@ export const en = {
       everyLanguage: 'Every language',
       reachAlone: 'A reader of this language is given it, over a lock in every language and over the translation; any other language is not.',
       reachEvery: 'Every language is given it, over its translation — except one with a lock of its own.',
-      lockCount: (n: number) => (n === 1 ? '1 locked field' : `${n} locked fields`),
+      lockCount: (n: number) => plural(n, { one: '1 locked field', other: `${n} locked fields` }),
       saveAndLock: 'Save and lock',
       unlock: 'Unlock',
       unlockAll: 'Unlock everything',
@@ -2052,13 +2148,9 @@ export const en = {
       unlockAllBody:
         'Each locked field goes back to whatever the providers say at the next refresh, and what you typed is discarded.',
       unlockAllDeeper: (n: number) =>
-        n === 1
-          ? 'That includes 1 lock on a season or an episode.'
-          : `That includes ${n} locks on seasons and episodes.`,
+        plural(n, { one: 'That includes 1 lock on a season or an episode.', other: `That includes ${n} locks on seasons and episodes.` }),
       unlockAllGiven: (n: number) =>
-        n === 1
-          ? 'And 1 credit, picture or title hidden or corrected goes back to what its source gives.'
-          : `And ${n} credits, pictures or titles hidden or corrected go back to what their sources give.`,
+        plural(n, { one: 'And 1 credit, picture or title hidden or corrected goes back to what its source gives.', other: `And ${n} credits, pictures or titles hidden or corrected go back to what their sources give.` }),
       refresh: 'Refresh from providers',
       refreshing: 'Refreshing…',
       refreshFailed: 'The last refresh failed',
@@ -2077,7 +2169,7 @@ export const en = {
       nextRefresh: 'Next refresh',
       content: 'Content',
       contentValue: (seasons: number, episodes: number) =>
-        `${seasons === 1 ? '1 season' : `${seasons} seasons`} · ${episodes === 1 ? '1 episode' : `${episodes} episodes`}`,
+        `${plural(seasons, { one: '1 season', other: `${seasons} seasons` })} · ${plural(episodes, { one: '1 episode', other: `${episodes} episodes` })}`,
       noSources: 'No provider has answered for this entry yet.',
       handEntered: 'Entered by hand. No provider stands behind this entry.',
       origin: {
@@ -2096,21 +2188,21 @@ export const en = {
           'Where the values come from is recorded at each full refresh, and this work has not had one since. Refresh it once to see it, and to sync it source by source.',
         same: (list: string) => `The same value from ${list}.`,
         passed: (list: string, n: number, from: string) =>
-          `${list} ${n === 1 ? 'gives' : 'give'} none: ${from} fills it in.`,
+          `${list} ${plural(n, { one: 'gives', other: 'give' })} none: ${from} fills it in.`,
         differed: (list: string, n: number, from: string) =>
-          `${list} ${n === 1 ? 'gives' : 'give'} another; ${from} comes first.`,
+          `${list} ${plural(n, { one: 'gives', other: 'give' })} another; ${from} comes first.`,
         authority: 'The authority on studios: it replaces what the others say.',
         wholeList: 'Taken whole, from the first source that has a list.',
         underLock: (from: string) => `Without the lock, the value would come from ${from}.`,
         images: 'Images',
-        imageCount: (n: number) => (n === 1 ? '1 image' : `${n} images`),
+        imageCount: (n: number) => plural(n, { one: '1 image', other: `${n} images` }),
         imagesFrom: (list: string) => `Gathered: ${list}.`,
         episodes: 'Episodes',
         episodesFrom: (from: string) => `The list and its numbering, Sonarr’s, come from ${from}.`,
         episodesTimes: 'Broadcast instants from TVmaze wherever its dates agree.',
         episodesFill: (list: string) => `Overviews and stills from ${list} where the list has none.`,
         credits: 'Credits',
-        creditCount: (n: number) => (n === 1 ? '1 person' : `${n} people`),
+        creditCount: (n: number) => plural(n, { one: '1 person', other: `${n} people` }),
         creditsFrom: 'One source’s cast, whole: nothing tells the same actor apart from one provider to the next.',
         view: 'View',
       },
@@ -2121,13 +2213,13 @@ export const en = {
         never: 'never answered for this work',
         off: 'switched off',
         noId: 'no identifier to ask it by',
-        fields: (n: number) => (n === 1 ? '1 field' : `${n} fields`),
-        images: (n: number) => (n === 1 ? '1 image' : `${n} images`),
+        fields: (n: number) => plural(n, { one: '1 field', other: `${n} fields` }),
+        images: (n: number) => plural(n, { one: '1 image', other: `${n} images` }),
         theEpisodes: 'the episodes',
         theCredits: 'the cast',
         theRelations: 'the related works',
-        translations: (n: number) => (n === 1 ? '1 translation' : `${n} translations`),
-        ratings: (n: number) => (n === 1 ? '1 rating' : `${n} ratings`),
+        translations: (n: number) => plural(n, { one: '1 translation', other: `${n} translations` }),
+        ratings: (n: number) => plural(n, { one: '1 rating', other: `${n} ratings` }),
         loadFailed: 'Where the values come from could not be loaded.',
         retry: 'Try again',
         noneAnswered: 'None of the sources asked answered: nothing was changed.',
@@ -2136,10 +2228,10 @@ export const en = {
         changed: 'The work was written by something else while its sources were asked — a refresh, perhaps. Nothing was changed: sync again.',
         bringsList: (numbering: string, by: string) =>
           `${numbering} is asked with ${by}: the episode list is its own, and ${by} only fills it in.`,
-        confirms: (n: number) => (n === 1 ? 'confirms 1 field' : `confirms ${n} fields`),
+        confirms: (n: number) => plural(n, { one: 'confirms 1 field', other: `confirms ${n} fields` }),
         nothing: 'nothing kept',
         ask: (name: string) => `Ask ${name} again`,
-        button: (n: number) => (n === 1 ? 'Sync from 1 source' : `Sync from ${n} sources`),
+        button: (n: number) => plural(n, { one: 'Sync from 1 source', other: `Sync from ${n} sources` }),
         choose: 'Tick the sources to ask again',
         syncing: 'Syncing…',
         explain:
@@ -2147,7 +2239,7 @@ export const en = {
         brings: (by: string) => `TVmaze is asked with ${by}: it gives each episode’s broadcast instant.`,
         done: (list: string) => `Synced from ${list}.`,
         silent: (list: string, n: number) =>
-          `${list} did not answer: ${n === 1 ? 'its' : 'their'} last answer stands.`,
+          `${list} did not answer: ${plural(n, { one: 'its', other: 'their' })} last answer stands.`,
         refreshOnce: 'Refresh in full',
         rules: 'What each source keeps',
         rulesBody: 'The order and the rules, source by source, are on the page',
@@ -2162,6 +2254,81 @@ export const en = {
         artwork: 'Artwork',
         people: 'People & titles',
         elsewhere: 'Elsewhere',
+        journal: 'Journal',
+      },
+      /** What changed in the work, value by value, and the ways back: the journal tab. */
+      journal: {
+        title: 'Journal',
+        lead: 'What changed in this work, value by value, newest first: what each held and took, who made the change and why. A value a source changed under a lock reached the record, not what is served. Kept as long as history.keepDays says.',
+        field: 'Field',
+        allFields: 'Every field',
+        who: 'Who',
+        everybody: 'Everybody',
+        from: 'From',
+        to: 'To',
+        clear: 'Clear the filters',
+        empty: 'Nothing has changed yet',
+        emptyHint: 'From the next refresh, sync or lock, each value that changes is written here: what it held, what it took, and who changed it.',
+        emptyFiltered: 'No change matches these filters.',
+        loadFailed: 'The journal could not be loaded.',
+        more: 'Older changes',
+        csv: 'CSV',
+        json: 'JSON',
+        downloadHint: 'Every change the filters match, not only those shown. A CSV opens in a spreadsheet.',
+        nothing: 'nothing',
+        schedule: 'by the schedule',
+        by: (who: string) => `by ${who}`,
+        season: (n: number) => `Season ${n}`,
+        moved: 'moved',
+        came: { season: 'added', episode: 'added', image: 'added', credit: 'added', alternativeTitle: 'added' },
+        went: { season: 'removed', episode: 'removed', image: 'removed', credit: 'removed', alternativeTitle: 'removed' },
+        held: 'Under a lock: what is served did not change',
+        revert: 'Revert to this value',
+        revertHint: 'Locks the field to the value it held before this change. The journal and the audit trail call it a revert.',
+        fields: {
+          number: 'Numbers',
+          season: 'Season',
+          episode: 'Episode',
+          image: 'Picture',
+          credit: 'Credit',
+          alternativeTitle: 'Alternative title',
+        },
+        causes: {
+          refresh: 'Refresh',
+          sync: 'Sync',
+          fallback: 'Numbering handed over',
+          lock: 'Lock',
+          unlock: 'Lock lifted',
+          revert: 'Revert',
+          edit: 'Edit',
+          merge: 'Merge',
+          import: 'Import',
+        },
+      },
+      /** What a refresh would change, shown before it is run. */
+      review: {
+        title: 'What a refresh would change',
+        asking: 'Asking the sources, without writing anything…',
+        failed: 'The sources could not be asked.',
+        nothing: 'The sources say what the record says: a refresh would change nothing. It can still be run, to note that they were asked.',
+        lead: (n: number) =>
+          plural(n, {
+            one: 'The sources were asked, and nothing was written. A refresh would write over this value — the locked ones are not listed, since no refresh reaches them. Tick it to lock it as it stands first, and the refresh leaves it alone.',
+            other: `The sources were asked, and nothing was written. A refresh would write over these ${n} values — the locked ones are not listed, since no refresh reaches them. Tick one to lock it as it stands first, and the refresh leaves it alone.`,
+          }),
+        lockFirst: 'Lock before refreshing',
+        lockAll: 'Lock them all first',
+        lockNone: 'Lock none of them',
+        run: 'Refresh',
+        lockAndRun: (n: number) => plural(n, { one: 'Lock 1 value and refresh', other: `Lock ${n} values and refresh` }),
+      },
+      /** Under a lock, what its sources give now when it is something else. */
+      diverging: {
+        sourceSays: (source: string) => `${source} now says:`,
+        sourcesSay: 'The sources now say:',
+        sinceLock: 'changed since the lock',
+        nothing: 'nothing',
+        take: 'Take this value',
       },
       groups: {
         identity: 'Identity',
@@ -2175,7 +2342,7 @@ export const en = {
           'The other kind of work’s fields — a film’s release dates on a series, a series’ broadcast on a film. Kept in case a source gave one, or a lock holds one.',
         also: 'Also in this record',
       },
-      fieldCount: (n: number) => (n === 1 ? '1 field' : `${n} fields`),
+      fieldCount: (n: number) => plural(n, { one: '1 field', other: `${n} fields` }),
       filter: {
         label: 'Show',
         all: 'All',
@@ -2222,7 +2389,7 @@ export const en = {
         pictures: {
           title: 'Pictures',
           none: 'No picture attached to this season.',
-          hiddenCount: (n: number) => (n === 1 ? '1 hidden' : `${n} hidden`),
+          hiddenCount: (n: number) => plural(n, { one: '1 hidden', other: `${n} hidden` }),
           chosen: 'The chosen poster is shown whatever is hidden.',
         },
         shift: {
@@ -2238,9 +2405,9 @@ export const en = {
           after: 'After',
           none: 'No episode of this season has a date to move.',
           invalid: 'A whole number of days, from −3650 to 3650, other than 0.',
-          apply: (n: number) => (n === 1 ? 'Shift 1 episode' : `Shift ${n} episodes`),
+          apply: (n: number) => plural(n, { one: 'Shift 1 episode', other: `Shift ${n} episodes` }),
           applying: (at: number, total: number) => `${at} of ${total} episodes…`,
-          done: (n: number) => (n === 1 ? '1 episode moved.' : `${n} episodes moved.`),
+          done: (n: number) => plural(n, { one: '1 episode moved.', other: `${n} episodes moved.` }),
           failed: (ok: number, failed: number) => `${ok} moved, ${failed} refused:`,
           close: 'Close',
         },
@@ -2278,7 +2445,7 @@ export const en = {
         sending: 'Sending…',
         chosenPoster: 'Chosen poster',
         seasonImages: (n: number) =>
-          n === 1 ? '1 picture attached to a season, managed from the Seasons tab.' : `${n} pictures attached to seasons, managed from the Seasons tab.`,
+          plural(n, { one: '1 picture attached to a season, managed from the Seasons tab.', other: `${n} pictures attached to seasons, managed from the Seasons tab.` }),
         openSeasons: 'Open the seasons',
       },
       artworkTab: {
@@ -2297,7 +2464,7 @@ export const en = {
         titleLanguage: 'Language or country',
         titleLanguageHint: 'A code: fr, eng, usa…',
         translations: 'Translations',
-        translationCount: (n: number) => (n === 1 ? '1 language' : `${n} languages`),
+        translationCount: (n: number) => plural(n, { one: '1 language', other: `${n} languages` }),
         translationsHint:
           '“Show in”, on the Record tab, reads the work in one of them. They come from the sources, whole, and are not edited here.',
         noTranslations: 'No translation held.',
@@ -2323,7 +2490,7 @@ export const en = {
         airedBy: (source: string) => `The work’s own episodes, as ${source} numbers them`,
         source: { tvdb: 'TheTVDB', tmdb: 'TMDB', local: 'Made here' } as Record<string, string>,
         unread: (n: number) =>
-          n === 1 ? '1 episode, as TMDB lists it; read at the next refresh' : `${n} episodes, as TMDB lists it; read at the next refresh`,
+          plural(n, { one: '1 episode, as TMDB lists it; read at the next refresh', other: `${n} episodes, as TMDB lists it; read at the next refresh` }),
         reading: 'Reading the orders…',
         frozen: 'Frozen as the aired numbering',
         notOffered: 'Not offered: the same order from the source numbering the series stands for it',
@@ -2491,8 +2658,8 @@ export const en = {
       colSeen: 'Last seen',
       allowed: 'Allowed',
       refused: 'Refused',
-      refusedCount: (n: number) => (n === 1 ? '1 refusal' : `${n} refusals`),
-      callCount: (n: number) => (n === 1 ? '1 call' : `${n} calls`),
+      refusedCount: (n: number) => plural(n, { one: '1 refusal', other: `${n} refusals` }),
+      callCount: (n: number) => plural(n, { one: '1 call', other: `${n} calls` }),
       unnamed: 'No name',
       unnamedHint: 'Nothing in the hosts file or the resolver answers for this address',
       alreadyAllowed: 'Already allowed',
@@ -2585,6 +2752,7 @@ export const en = {
         'update.check': 'Check for a newer version',
         'arr.seed': 'Seed from Sonarr and Radarr',
         'backup.run': 'Back up the database',
+        'search.rebuild': 'Rebuild the search index',
         'backup.restore': 'Restore an archive',
         'refresh.item': 'One work refreshed',
       } as Record<string, string>,
@@ -2600,6 +2768,7 @@ export const en = {
         'update.check': 'GitHub asked for this project’s latest release, a minute after the start and then daily — one anonymous request, and only with the check turned on in the settings. A newer one is said on the dashboard, and told to the webhook once.',
         'arr.seed': 'Every series your Sonarr holds and every film your Radarr holds, imported here when it is not yet, one after the other — before pointing them at this server, or again later for what came since. It can be stopped.',
         'backup.run': 'An archive of the database, kept where the server keeps them — on the schedule Backups sets, the schedule’s oldest past those it keeps taken away. Run now, it is one made by hand, which stays until deleted.',
+        'search.rebuild': 'Every name a work, a person or an episode is found by, written again from the catalogue: each title in each language, everybody credited, every episode. The index keeps itself current as works are written; this is for when it seems not to. The search answers throughout.',
       } as Record<string, string>,
       every: (seconds: number) =>
         seconds >= 604_800 && seconds % 604_800 === 0
@@ -2635,7 +2804,7 @@ export const en = {
       history: 'History',
       failuresOnly: 'Failures only',
       loadMore: 'Load more',
-      dayFailed: (n: number) => (n === 1 ? '1 failed' : `${n} failed`),
+      dayFailed: (n: number) => plural(n, { one: '1 failed', other: `${n} failed` }),
       noFailures: 'No run has failed.',
       noFailuresHint: 'Everything that ran, ran. Take the filter off to see them all.',
       noMatch: 'No run matches these filters.',
@@ -2654,7 +2823,7 @@ export const en = {
       again: 'Run again',
       showDetail: (name: string) => `Show what ${name} did`,
       hideDetail: (name: string) => `Hide what ${name} did`,
-      entries: (n: number) => (n === 1 ? 'One work taken' : `${n.toLocaleString('en')} works taken`),
+      entries: (n: number) => plural(n, { one: 'One work taken', other: `${n.toLocaleString('en')} works taken` }),
       moreEntries: (n: number) => `and ${n.toLocaleString('en')} more, not listed here`,
       noEntries: 'Nothing is written down for this run: it predates the detail, or its task keeps none — only a refresh does.',
       noneDue: 'No work was due, so none was taken.',
@@ -2682,7 +2851,7 @@ export const en = {
         storedStopped: (done: number, failed: number, of: number) =>
           `Stopped: ${done} stored, ${failed} failed, of ${of}`,
         swept: (rows: number, files: number) =>
-          `${rows === 1 ? '1 medium' : `${rows} media`} forgotten, ${files === 1 ? '1 file' : `${files} files`} removed`,
+          `${plural(rows, { one: '1 medium', other: `${rows} media` })} forgotten, ${plural(files, { one: '1 file', other: `${files} files` })} removed`,
         renewed: (until: string) => `Renewed; valid until ${until}`,
         certValid: (until: string) => `Valid until ${until}; nothing to do`,
         synced: (list: string) => `Synced from ${list}`,
@@ -2691,7 +2860,7 @@ export const en = {
         seeded: (here: number, imported: number, missing: number, failed: number, of: number) =>
           `Of ${of}: ${here} already here, ${imported} imported, ${missing} not found, ${failed} failed`,
         backedUp: (name: string, size: string, removed: number) =>
-          `${name}, ${size}${removed ? `; ${removed === 1 ? '1 archive' : `${removed} archives`} past those kept taken away` : ''}`,
+          `${name}, ${size}${removed ? `; ${plural(removed, { one: '1 archive', other: `${removed} archives` })} past those kept taken away` : ''}`,
         restored: (rows: number, media: number, safety?: string) =>
           `${rows} rows put back${media ? `, ${media} media` : ''}${safety ? `; restoring ${safety} undoes it` : ''}`,
       },
@@ -2727,6 +2896,7 @@ export const en = {
         'held there under no id to look it up by': 'Held there under no id to look it up by',
         'archive written': 'Archive written',
         'past those the schedule keeps': 'Past those the schedule keeps',
+        'search index built again': 'Search index built again',
       } as Record<string, string>,
     },
 
@@ -2748,6 +2918,8 @@ export const en = {
       emptyHint: 'Entries appear as soon as anything is created, edited or revoked.',
       emptyFilteredHint: 'No entry matches that filter.',
       loadFailed: 'The audit trail could not be loaded.',
+      download: { csv: 'CSV', json: 'JSON' },
+      downloadHint: 'Every entry the filters match, not only this page. A CSV opens in a spreadsheet.',
       /** What each action is, in words, beside the name the logs keep. */
       says: {
         'item.created': 'Work added by hand',
@@ -2867,7 +3039,7 @@ export const en = {
       exportRun: 'Export',
       exportRunning: 'Exporting…',
       exportDone: (works: number, episodes: number) =>
-        `${works === 1 ? '1 work' : `${works} works`}, ${episodes === 1 ? '1 episode' : `${episodes} episodes`}`,
+        `${plural(works, { one: '1 work', other: `${works} works` })}, ${plural(episodes, { one: '1 episode', other: `${episodes} episodes` })}`,
       exportFailed: (n: number) => `${n} failed`,
       exportNoPath: 'AMS_NFO_EXPORT_PATH is not set.',
       exportBackground: 'Written in the background — this page can be left, and the run is recorded.',
@@ -2961,6 +3133,7 @@ export const en = {
       'refresh.ttlContinuing': 'A work still changing, kept for',
       'refresh.ttlEnded': 'A work done changing, kept for',
       'numbering.fallbackAfter': 'TMDB numbers a series after',
+      'history.keepDays': 'A work’s journal keeps a change for',
       'sources.priority': 'Order of the sources',
       'updates.check': 'Check for a newer version',
       'backup.schedule': 'Back up the database',
@@ -3000,6 +3173,8 @@ export const en = {
       'refresh.ttlEnded': 'In seconds: the same for an ended series or a released film — 604800 is a week. A minute at the least, ten years at the most. Past 15552000 — 180 days — TMDB is asked again every six months all the same, as its terms allow no longer.',
       'numbering.fallbackAfter':
         'Refreshes in a row TheTVDB leaves a series unanswered — twenty hours apart at the least — before TMDB numbers it in its place, until TheTVDB answers again. 0: never. Three when unset.',
+      'history.keepDays':
+        'In days: how long a value a source or a person changed stays in the work’s journal, where it can be gone back to — and where a lock its source moved under is told. 0 keeps every change. A year when unset.',
       'sources.priority': 'The providers, most trusted first, separated by commas. Put in order on the Sources page; a work takes a new order at its next refresh.',
       'updates.check': 'Once a day, and a minute after the start, this server asks GitHub for its latest release, and the dashboard says when a newer one is out. What is sent is one anonymous GET to api.github.com, with the name and version every request of this server carries — nothing about this instance or what it holds. Off until turned on.',
       'backup.schedule': 'Counted from the newest archive, whoever made it; off, archives are still made by hand and before every restore. The archives are on Administration › Backups.',
@@ -3079,6 +3254,8 @@ export const en = {
       password_login_off: 'Passwords are switched off here: use the identity provider. Only the administrator the environment names keeps one.',
       sign_in_first: 'Sign in first, then tie your account from its page.',
     },
+    usernameMissing: 'Enter your username.',
+    passwordMissing: 'Enter your password.',
   },
   register: {
     title: 'Join the catalogue',
@@ -3119,6 +3296,8 @@ export const en = {
       conflict: 'That username is taken.',
       rate_limited: 'Too many accounts from this address for now: try again in an hour.',
     },
+    codeMissing: 'Enter the code from your invitation.',
+    emailWrong: 'That does not read as an e-mail address.',
   },
   share: {
     button: 'Share',
@@ -3130,6 +3309,8 @@ export const en = {
     loading: 'Loading…',
     error: 'Something went wrong.',
     errorHint: 'This page could not be shown. It is usually a moment — try again.',
+    offline: 'No connection',
+    offlineHint: 'This device is offline, and the page needs the server. It comes back by itself once the connection does.',
     retry: 'Try again',
     cancel: 'Cancel',
     actionFailed: 'That did not work.',
@@ -3255,6 +3436,8 @@ export const en = {
     openWork: (title: string) => `Open ${title}`,
     shelfBack: 'Scroll back',
     shelfOn: 'Scroll forward',
+    toResults: 'Skip to the results',
+    toFilters: 'Back to the filters',
   },
 }
 

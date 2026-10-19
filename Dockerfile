@@ -33,6 +33,11 @@ RUN cargo install --locked --version 0.7.7 cargo-auditable
 
 # Compile the dependency tree against a stub so it caches independently of the
 # application sources, which change far more often.
+#
+# The bundled SQLite is compiled without its memory statistics, whose global
+# mutex was the ceiling under many searches at once — the same flag
+# `.cargo/config.toml` sets for a local build, which this stage does not copy.
+ENV LIBSQLITE3_FLAGS="-DSQLITE_DEFAULT_MEMSTATUS=0"
 COPY Cargo.toml Cargo.lock build.rs ./
 RUN mkdir -p src \
  && echo 'fn main() {}' > src/main.rs \

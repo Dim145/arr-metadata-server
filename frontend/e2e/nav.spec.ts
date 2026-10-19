@@ -80,7 +80,11 @@ test.describe('the browse tab and its panel', () => {
     await page.getByRole('button', { name: /browse: the menu|parcourir : le menu/i }).click()
     const panel = page.getByRole('group', { name: /^(browse|parcourir)$/i })
     await expect(panel.locator('a[href^="/browse?kind=movie&genre="]').first()).toBeVisible()
-    await page.waitForFunction(() => document.getAnimations().every((a) => a.playState !== 'running'))
+    // The front page's plate is driven by the scroll, and runs for as long as
+    // the page is there: only what time drives is waited for.
+    await page.waitForFunction(() =>
+      document.getAnimations().every((a) => a.playState !== 'running' || a.timeline !== document.timeline),
+    )
     const results = await new AxeBuilder({ page })
       .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'])
       .analyze()

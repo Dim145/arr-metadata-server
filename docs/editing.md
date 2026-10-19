@@ -3,10 +3,11 @@
 A field changed by hand is **locked**: it is served whatever the sources say, and no
 refresh or sync moves it until the lock is lifted. The catalogue's filters, orders and
 counts follow the edit too. This page covers what can be locked and how — a text for
-one language alone, a credit, a picture or a title that a source gave — and the
-administration's tools for keeping a catalogue in order: the register of every work,
-actions on many works at once, the order of the sources, how long a work keeps before it
-is refreshed, and the dashboard's list of what there is to do.
+one language alone, a credit, a picture or a title that a source gave — each work's
+journal of what changed and the ways back, and the administration's tools for keeping a
+catalogue in order: the register of every work, actions on many works at once, the order
+of the sources, how long a work keeps before it is refreshed, and the dashboard's list of
+what there is to do.
 
 Locks are made in the work's editor (`/admin/catalogue`, then a work), or through the
 native API, which asks for the right to write: an editor's or an administrator's session,
@@ -124,6 +125,103 @@ locks at most, and the dashboard sends a longer file in parts. The document is *
 when it holds a lock in one language or a lock on a credit, a picture or a title that a
 source gave, and version 1 otherwise; this server reads both.
 
+## The journal
+
+Every work keeps a **journal** of what changed in it, value by value: a field of the work,
+of a season or of an episode, or a child a lock names. Each change says what the value held
+and what it took, when, why, and who — a person, a key, or a source, or both when a person
+asked the sources again:
+
+| Why | Made by | What it is |
+|---|---|---|
+| `refresh` | a source | a refresh, asked for or the schedule's, the six-monthly one of TMDB alone included |
+| `sync` | a source | some sources asked again, from the editor's *Sources* panel or *Ask the sources again…* |
+| `fallback` | a source | the seasons and episodes moved when TMDB numbers a series in TheTVDB's place, or TheTVDB takes it back |
+| `lock`, `unlock` | a person | a lock set, changed or lifted — in the editor, by *Change a field…*, through the API; a credit, a picture or a title a source gave hidden or shown again; the still or the theme an upload fills |
+| `edit` | a person | a field of what was entered by hand, which has no source to be locked against; a season, an episode, a picture, a credit or an alternative title added or removed by hand, and a credit added by hand corrected |
+| `revert` | a person | a value gone back to from the journal, or a change undone |
+| `import` | a person | a lock brought in from a file (`POST /api/v1/admin/locks`) |
+
+A refresh writes everything it changed at once, in one transaction, and nothing when it
+changed nothing — what most refreshes find. Of a season the journal follows the title, the
+overview and the air date, and of an episode the title, the overview, the air date, the
+runtime and the still: a series of a thousand episodes would otherwise write a thousand rows
+of everything else. An episode is followed by what it is known by — TheTVDB's id, then
+TMDB's, then its numbers — so one that moved is one change, *Numbers* `S01E05 → S02E01`, and
+one that came or went is another. What a person added by hand is not a source's to change,
+and is not followed by a refresh: its coming and going are the person's, journaled as they
+add or remove it — a change of the row's own scope (`season:7`, `episode:7x1`, `image:…`,
+`credit:…`, `alternativeTitle:…`) with a few words of it. A source's change made under a lock says so, *Under a lock*: it reached
+the record, and not what is served.
+
+The journal is the editor's **Journal** tab: newest first, the changes one write made in the
+order the record lists them, filtered by field, by who — a person, a key or a source — and by
+a period from one day to another, a page at a time. *CSV* and *JSON* hand over every change
+the filters match, not only those shown; a CSV opens in a spreadsheet. A change is kept as
+long as `history.keepDays` says — a year unless it is set, `0` for ever — and pruned by the
+pass that prunes the audit trail; a work deleted takes its journal with it. The audit trail
+says *that* a lock was set; the journal says what it held.
+
+### Going back to a value
+
+*Revert to this value*, beside a change of a field a lock can hold, locks the field to the
+value it held before the change, through the locks' own route: what a source gave is never
+written back over its copy. The lock, the audit trail's line (`override.set`, `revert`) and
+the journal's own say so. Lifting the lock instead hands the field back to whatever the
+sources say now.
+
+### What the sources say under a lock
+
+Under a field locked in every language, when the sources give it another value now, a line
+in slate says what they give — *TMDB now says: …* — and, when a source changed it after the
+lock was set, *changed since the lock*. *Take this value* lifts the lock, and the journal
+says what it held and what is served without it. A lock in one language alone, the work's
+identity — adult, its slug, its identifiers — and the pictures chosen to lead with have no
+such line: what the sources give is in the stored language, and the identity is written to
+the work as it is locked.
+
+The dashboard counts the works with a lock a source moved under since it was set, and which
+says something else than the lock now: *N works have a lock whose source has changed*. A lock
+set again — kept as it was — is no longer counted, nor one whose source came round to it.
+
+### What a refresh would change
+
+The editor's refresh asks first. The sources are asked as a refresh asks them, merged as a
+refresh merges them, and nothing is written — not the work, not its journal, not its orders,
+not who numbers it; Sonarr and Radarr are not told. What a refresh would write over is listed,
+each value with what it holds and would hold, and the locked ones are not, since no refresh
+reaches them. *Lock before refreshing*, beside each field a lock can hold, locks it as it
+stands first, and the refresh — run from the same dialog — leaves it alone.
+
+### Undoing a change over many works
+
+Once **Change a field…** is done over a selection, *Undo* is offered for eight seconds — for as
+long as the pointer or the focus rests on it, besides. Each work the change was done for is
+put back as its journal says it was: the lock it held, with its value, or no lock at all; the
+journal and the audit trail call it a revert. A work whose field something else changed since
+— a refresh, somebody else — is left as it is, and said so in the summary.
+
+### Through the API
+
+For whoever may edit the catalogue:
+
+- `GET /api/v1/items/{id}/changes` reads the journal, newest first: `field`, `actor` (a person,
+  a key or a source), `since` and `before` (an instant, or a day from its midnight UTC), fifty
+  a page unless `limit` says otherwise, and `cursor` — the `next` the page before was answered
+  with. `format=csv` or `format=json` hands over every change the filters match, as a file.
+- `POST /api/v1/items/{id}/changes/undo`, with `{"scope": "item", "field": "genres"}`, undoes
+  the caller's last change of that value: `409` when something else changed it since, and
+  for a row added or removed by hand, which is removed or added again instead.
+- `PUT /api/v1/items/{id}/overrides` with `"cause": "revert"`, and
+  `DELETE /api/v1/items/{id}/overrides/{scope}/{field}?cause=revert`, are a lock set or lifted to
+  go back to a value, which the journal and the audit trail say.
+- `POST /api/v1/items/{id}/refresh?dryRun=1`, and `POST /api/v1/items/{id}/sync?dryRun=1` with
+  the sources to ask, answer what would be written over — `changes`, each with its `scope`,
+  `field`, `before`, `after` and the `provider` whose value it would be — and write nothing.
+- `GET /api/v1/items/{id}/provenance` carries, under `diverging`, each lock whose sources say
+  something else now: its `scope` and `field`, what they say (`value`), whose it is
+  (`provider`), and whether a source changed it since the lock was set (`moved`).
+
 ## The catalogue
 
 The administration's catalogue (`/admin/catalogue`) is a register of every work the server
@@ -183,7 +281,9 @@ Tick the rows — or the box in the header, for every row shown — and the bar 
 
 Each work is its own request, four at a time, and its own line in the audit trail, so one
 that fails takes nothing else with it. A bar shows how far the run has gone, and it ends with
-a count — done, already so, passed over, failed — and the reason for each failure.
+a count — done, already so, passed over, failed — and the reason for each failure. A field
+changed so can be undone a moment after: see
+[Undoing a change over many works](#undoing-a-change-over-many-works).
 
 ### Shifting a season's air dates
 
@@ -312,6 +412,7 @@ it counts, and a figure of nought is no line; with nothing left, the card says s
 | Works with no synopsis | `missing=overview` | `/admin/catalogue?missing=overview` |
 | Works with no IMDb identifier | `missing=imdb` | `/admin/catalogue?missing=imdb` |
 | Works never refreshed | `missing=refresh` | `/admin/catalogue?missing=refresh` |
+| Works with a lock whose source has changed | a lock a source moved under since it was set, and which says something else now | `/admin/catalogue?missing=divergingLock` |
 | API keys about to lapse | enabled, not yet expired, expiring within 14 days | `/admin/clients` |
 | Pictures and themes given up on | media whose every fetch failed | `/admin/media` |
 
@@ -319,7 +420,7 @@ The four gaps are counted through the catalogue filter's own definition, over th
 its list shows — those switched off among them, and adult titles as the server's policy has
 them — so that a figure and the list it leads to agree. The answer is camel-cased:
 `refreshFailed`, `noPoster`, `noOverview`, `noImdb`, `neverRefreshed`, `expiringKeys`,
-`keyHorizonDays` and `failedMedia`.
+`keyHorizonDays`, `failedMedia` and `divergingLocks`.
 
 The banner of failed refreshes is the first line of the list. The count of locked fields is the
 last, quiet figure among the others, and the explanation of how locking works folds to its

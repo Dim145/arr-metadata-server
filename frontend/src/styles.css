@@ -131,6 +131,104 @@
   unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
 }
 
+/* ── While the faces load ─────────────────────────────────────────────────
+   With `swap`, text is drawn at once in a font the system has and redrawn
+   when the face arrives — and if the two differ in width and height, every
+   line wraps anew and the page jumps. So the stand-in is a system font
+   reshaped to the face it stands for: Georgia for Libre Bodoni; Arial, and
+   its metric twins Liberation Sans and Arimo where Linux has them instead,
+   for Public Sans. `system-ui` itself cannot be named by `local()` — it is
+   a different font on every system — so it stays behind these, unadjusted,
+   for a system that has neither.
+
+   The numbers are the usual ones (capsize's, next/font's), measured with
+   fontTools from the woff2 files here and the system fonts: `size-adjust`
+   is the face's average advance over the stand-in's, each over its em —
+   the lowercase alphabet and the space, weighted by how often each comes in
+   English; the overrides are the face's hhea ascent, descent and line gap
+   over its em times that adjustment. Libre Bodoni and Public Sans both set
+   their typographic metrics to the hhea ones, so the result holds on every
+   system. One face per weight the interface uses, against Georgia's or
+   Arial's own bold where there is one: the body refuses synthesised bold,
+   so a stand-in of one weight would draw a heading thin, and narrower than
+   it will be. */
+@font-face {
+  font-family: 'Libre Bodoni Fallback';
+  font-style: normal;
+  font-weight: 100 450;
+  src: local('Georgia');
+  size-adjust: 100.83%;
+  ascent-override: 91.64%;
+  descent-override: 32.33%;
+  line-gap-override: 0%;
+}
+
+@font-face {
+  font-family: 'Libre Bodoni Fallback';
+  font-style: normal;
+  font-weight: 451 599;
+  src: local('Georgia');
+  size-adjust: 102.26%;
+  ascent-override: 90.36%;
+  descent-override: 31.88%;
+  line-gap-override: 0%;
+}
+
+@font-face {
+  font-family: 'Libre Bodoni Fallback';
+  font-style: normal;
+  font-weight: 600 900;
+  src: local('Georgia Bold'), local('Georgia-Bold');
+  size-adjust: 88.92%;
+  ascent-override: 103.91%;
+  descent-override: 36.66%;
+  line-gap-override: 0%;
+}
+
+@font-face {
+  font-family: 'Libre Bodoni Fallback';
+  font-style: italic;
+  font-weight: 100 900;
+  src: local('Georgia Italic'), local('Georgia-Italic');
+  size-adjust: 95.48%;
+  ascent-override: 96.77%;
+  descent-override: 34.14%;
+  line-gap-override: 0%;
+}
+
+@font-face {
+  font-family: 'Public Sans Fallback';
+  font-style: normal;
+  font-weight: 100 450;
+  src: local('Arial'), local('ArialMT'), local('Liberation Sans'), local('LiberationSans-Regular'), local('Arimo');
+  size-adjust: 105.23%;
+  ascent-override: 90.28%;
+  descent-override: 21.38%;
+  line-gap-override: 0%;
+}
+
+@font-face {
+  font-family: 'Public Sans Fallback';
+  font-style: normal;
+  font-weight: 451 599;
+  src: local('Arial'), local('ArialMT'), local('Liberation Sans'), local('LiberationSans-Regular'), local('Arimo');
+  size-adjust: 105.83%;
+  ascent-override: 89.77%;
+  descent-override: 21.26%;
+  line-gap-override: 0%;
+}
+
+@font-face {
+  font-family: 'Public Sans Fallback';
+  font-style: normal;
+  font-weight: 600 900;
+  src: local('Arial Bold'), local('Arial-BoldMT'), local('Liberation Sans Bold'), local('LiberationSans-Bold'), local('Arimo Bold');
+  size-adjust: 99.43%;
+  ascent-override: 95.55%;
+  descent-override: 22.63%;
+  line-gap-override: 0%;
+}
+
 /* ───────────────────────────────────────────────────────────────────────────
    LA CINÉMATHÈQUE
 
@@ -185,9 +283,44 @@
 
   --color-moss: #6b9a5b;
 
-  --font-display: "Libre Bodoni", "Didot", Georgia, serif;
-  --font-sans: "Public Sans Variable", "Public Sans", ui-sans-serif, system-ui, sans-serif;
+  /* What a colour says, named apart from the colour: a page asks for an
+     error's colour, not vermillion's, so the day the two must part — an
+     error that is not the way through the building — is a line here, not a
+     search across every screen. Each follows its colour into the light theme.
+     A state is never said by its colour alone (see `Lamp`). */
+  --color-status-ok: var(--color-moss);
+  --color-status-warn: var(--color-brass);
+  --color-status-error: var(--color-vermillion);
+  /* Text a reader has selected, which wears the accent like the place they are. */
+  --color-selection: var(--color-vermillion);
+  /* What opens over the page — a dialog, a popover, a sheet — stands on the
+     raised ink, one step out of the page. */
+  --surface-overlay: var(--color-ink-raised);
+
+  --font-display: "Libre Bodoni", "Libre Bodoni Fallback", "Didot", Georgia, serif;
+  --font-sans: "Public Sans Variable", "Public Sans", "Public Sans Fallback", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, monospace;
+
+  /* The small steps of type, named, so a page asks for a step rather than a
+     number in brackets. Twelve pixels is the floor for anything a reader has
+     to read: a caption, a count, a field's name (`.label`). `label` is the one
+     step under it, for a mono tag that only decorates — its words said in
+     full by a visually hidden text beside it. Each is a size alone: the line
+     height stays the one the text around it has. Registered with
+     tailwind-merge in lib/cn.ts, which would otherwise read `text-caption`
+     as a colour and drop it for the next `text-bone`. */
+  --text-label: 0.6875rem;
+  --text-caption: 0.75rem;
+  --text-body-sm: 0.8125rem;
+  --text-body: 0.875rem;
+  --text-lead: 0.9375rem;
+
+  /* A work's title on its plate, scaled with the column it sits in rather
+     than in three jumps at three breakpoints: `cqi` is that column's width,
+     once the column is a container (`@container`), and the screen's until it
+     is. From 28 to 48 pixels: a range under two and a half times its floor,
+     past which a reader's zoom could no longer double the text. */
+  --text-plate: clamp(1.75rem, 4cqi + 1rem, 3rem);
 
   --radius-card: 10px;
   --radius-panel: 14px;
@@ -198,7 +331,25 @@
   --shadow-plate: 0 18px 40px -20px rgb(0 0 0 / 0.9), 0 2px 8px -4px rgb(224 68 52 / 0.18);
   --shadow-lift: 0 10px 28px -16px rgb(0 0 0 / 0.85);
 
-  /* One rhythm for every transition in the interface. */
+  /* ── Motion ─────────────────────────────────────────────────────────────
+     One rhythm for every movement in the interface, and the rules it keeps:
+
+     - Transform and opacity only. Nothing that moves asks for a new layout
+       or a repaint of a large area; a hover is a change of colour, not of
+       size, and a knob slides by `transform`, never by `left`.
+     - The durations: 150ms for a state a control changes into — a hover, a
+       switch, a pill; 200ms for a field's edge and a button's colour; for
+       what opens over the page, 150ms a popover, 180ms a dialog, 220ms a
+       sheet, and 150ms for any of them leaving; 220ms for a page crossing
+       to the next, 340ms for a poster travelling onto its plate; 300 to
+       550ms for an entrance — a fade, a rise, a title's strike — staggered
+       35ms a card and never past 350ms.
+     - Two curves: this one out, for whatever arrives or settles, and this
+       one in, for whatever leaves.
+     - None of it for a reader who asked for less motion. The rule at the end
+       of this file stills every animation and transition; anything new is
+       written under `prefers-reduced-motion: no-preference` besides, so it
+       is not merely cut short but never asked for. */
   --ease-out-soft: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-in-soft: cubic-bezier(0.7, 0, 0.84, 0);
 }
@@ -269,6 +420,31 @@
   --color-stock-8: #7f3d5e;
 }
 
+/* ── More contrast, when it is asked for ────────────────────────────────────
+   The same tokens again, for a reader whose system asks for more contrast.
+   The quietest text rises to the tier above it, and the hairlines become
+   lines a field's edge can be found by: 3:1 against every surface they cross,
+   which is what WCAG asks of a control's boundary, where the everyday rules
+   stay near 1.3:1 because they separate rather than enclose. The grain and
+   the washes go too (below, beside their classes). The tones stay: this is
+   still the same room, with the lights up. */
+@media (prefers-contrast: more) {
+  :root,
+  :root[data-theme="light"] {
+    --color-bone-faint: var(--color-bone-dim);
+  }
+
+  :root {
+    --color-rule: #64646c;
+    --color-rule-bright: #7e7e86;
+  }
+
+  :root[data-theme="light"] {
+    --color-rule: #857e73;
+    --color-rule-bright: #6f695f;
+  }
+}
+
 /* A strip of film stood on end: perforations down both edges. The rail of
    seasons beside the episodes, where it has the height to read as one. A
    utility rather than a component class so it can wait for a breakpoint. */
@@ -286,6 +462,26 @@
   html {
     color-scheme: dark;
     -webkit-text-size-adjust: 100%;
+    /* Both shells scroll the document, and a page short enough to need no
+       scrollbar was drawn a scrollbar's width wider than the next: going
+       from an empty search to its results, or opening a dialog, moved every
+       centred thing sideways. The gutter is kept whether the bar shows or
+       not. Overlay scrollbars take no room, so there it changes nothing. */
+    scrollbar-gutter: stable;
+  }
+
+  /* A heading breaks where its lines come out even, not wherever the last
+     word happened to fall: a title of two lines reads as two halves, not a
+     line and a stray word. The browser balances up to six lines and wraps
+     anything longer as usual, which is why it is only asked of headings. A
+     paragraph is spared its last word alone on a line. The longhand, so a
+     heading inside something that must not wrap still does not. */
+  :where(h1, h2, h3, h4, h5, h6) {
+    text-wrap-style: balance;
+  }
+
+  :where(p) {
+    text-wrap-style: pretty;
   }
 
   html[data-theme="light"] {
@@ -317,7 +513,7 @@
   }
 
   ::selection {
-    background: var(--color-vermillion);
+    background: var(--color-selection);
     color: var(--color-ink);
   }
 
@@ -383,19 +579,90 @@
     z-index: 0;
     pointer-events: none;
     background-image:
-      radial-gradient(60rem 36rem at 4% -8rem, rgb(224 68 52 / 0.12), transparent 64%),
-      radial-gradient(50rem 32rem at 98% 4%, rgb(201 162 39 / 0.07), transparent 62%);
+      radial-gradient(60rem 36rem at 4% -8rem, color-mix(in srgb, var(--color-vermillion) 12%, transparent), transparent 64%),
+      radial-gradient(50rem 32rem at 98% 4%, color-mix(in srgb, var(--color-brass) 7%, transparent), transparent 62%);
   }
 
   /* ── Micro-label ──────────────────────────────────────────────────────────
-     The caption under an index-card field. Mono, small, wide, quiet. */
+     The caption under an index-card field. Mono, small, wide, quiet — and at
+     the twelve-pixel floor, since it names what is under it: at eleven, set
+     in capitals and spaced, it was the hardest text in the interface to read,
+     and the most frequent. */
   .label {
     font-family: var(--font-mono);
-    font-size: 0.6875rem;
+    font-size: var(--text-caption);
     font-weight: 500;
     letter-spacing: 0.14em;
     text-transform: uppercase;
     color: var(--color-bone-faint);
+  }
+
+  /* ── A long grid of posters ───────────────────────────────────────────────
+     A catalogue shown in full is a few hundred cards, each a picture, a
+     title and a line, laid out and painted whether anyone scrolls to them or
+     not. Past the eighteenth — three rows of the widest grid, nine of a
+     phone's, well below the first screen of either — a card is laid out
+     when it comes near the screen, and holds a card's height until then:
+     about 20rem, a poster and its two lines at the widths the grids draw.
+     Once drawn, the browser keeps the height it really had. A card stays in
+     the tab order and in what a screen reader reads, skipped or not. */
+  .poster-grid > :nth-child(n + 19) {
+    content-visibility: auto;
+    contain-intrinsic-block-size: auto 20rem;
+  }
+
+  /* ── A choice from a list ─────────────────────────────────────────────────
+     The one control that wore the system's colours: its list opened in the
+     system's font, white on a dark page. Where the engine lets a select be
+     drawn (`appearance: base-select`), the list is a panel of the room's own
+     — the raised ink, the bright rule, the card's corner, options a finger's
+     height with the vermillion mark on the chosen one — and the field keeps
+     its chevron, drawn in its background like everywhere else. Elsewhere the
+     system's list opens, as it always has; the field is the same either way,
+     and so are its name, its label and what it sends. */
+  .select-base {
+    appearance: none;
+  }
+
+  @supports (appearance: base-select) {
+    .select-base,
+    .select-base::picker(select) {
+      appearance: base-select;
+    }
+
+    .select-base::picker-icon {
+      display: none;
+    }
+
+    .select-base::picker(select) {
+      margin-block: 0.25rem;
+      border: 1px solid var(--color-rule-bright);
+      border-radius: var(--radius-card);
+      padding: 0.25rem;
+      background-color: var(--color-ink-raised);
+      color: var(--color-bone);
+      box-shadow: var(--shadow-lift);
+    }
+
+    .select-base option {
+      min-block-size: 2.75rem;
+      border-radius: 6px;
+      padding-inline: 0.75rem;
+      color: var(--color-bone-dim);
+    }
+
+    .select-base option:is(:hover, :focus-visible) {
+      background-color: var(--color-ink-high);
+      color: var(--color-bone);
+    }
+
+    .select-base option:checked {
+      color: var(--color-bone);
+    }
+
+    .select-base option::checkmark {
+      color: var(--color-vermillion);
+    }
   }
 
   /* ── Hairline ─────────────────────────────────────────────────────────────
@@ -424,7 +691,9 @@
 
      It sits under the content because a hero image would otherwise cover it,
      and its whole job is the rest of the page: an interface this dark reads as
-     a void without something behind it. */
+     a void without something behind it. Mixed from the tokens rather than
+     written out, so the daylight theme's deeper accent, brass and teal wash
+     its paper as the dark ones wash the ink. */
   .ambience::after {
     content: "";
     position: fixed;
@@ -432,9 +701,20 @@
     z-index: 0;
     pointer-events: none;
     background-image:
-      radial-gradient(70rem 42rem at 6% -6rem, rgb(224 68 52 / 0.3), transparent 66%),
-      radial-gradient(58rem 36rem at 96% 8%, rgb(201 162 39 / 0.17), transparent 64%),
-      radial-gradient(64rem 42rem at 48% 112%, rgb(72 169 166 / 0.14), transparent 68%);
+      radial-gradient(70rem 42rem at 6% -6rem, color-mix(in srgb, var(--color-vermillion) 30%, transparent), transparent 66%),
+      radial-gradient(58rem 36rem at 96% 8%, color-mix(in srgb, var(--color-brass) 17%, transparent), transparent 64%),
+      radial-gradient(64rem 42rem at 48% 112%, color-mix(in srgb, var(--color-stock-5) 14%, transparent), transparent 68%);
+  }
+
+  /* Texture laid over the text and light washed behind it are the first
+     things a reader asking for more contrast does not want: both lower the
+     contrast of everything they touch, a little, everywhere. */
+  @media (prefers-contrast: more) {
+    .grain::before,
+    .ambience::after,
+    .ambience-quiet::after {
+      content: none;
+    }
   }
 }
 
@@ -484,25 +764,99 @@
     }
   }
 
-  /* A sheet coming up from the foot of the screen: the same rise as any
-     entrance, a little longer, so it reads as arriving from below. */
-  @keyframes sheet {
-    from {
-      opacity: 0;
-      transform: translate3d(0, 1.5rem, 0);
-    }
-    to {
-      opacity: 1;
-      transform: none;
-    }
-  }
-
   .rise {
     animation: rise 0.42s var(--ease-out-soft) both;
   }
 
-  .sheet-in {
-    animation: sheet 0.26s var(--ease-out-soft) both;
+  /* ── What opens over the page ─────────────────────────────────────────────
+     A dialog, a sheet and a popover come in by a transition from a starting
+     style rather than by an animation: the browser runs it the moment one is
+     drawn, again at every opening, and an engine without `@starting-style`
+     simply shows it. The dialog rises a little out of its backdrop, the
+     sheet comes up from the foot of the screen, a popover drops a hair from
+     its button. The way out runs where the engine can keep a closing one in
+     the top layer until it has gone (`overlay`, and `display` let to change
+     last: `allow-discrete`); elsewhere it goes at once. Nothing moves for a
+     reader who asked for less motion. */
+  @media (prefers-reduced-motion: no-preference) {
+    .dialog-in,
+    .sheet-in,
+    .popover-in {
+      transition-property: opacity, transform, display, overlay;
+      transition-duration: 180ms;
+      transition-timing-function: var(--ease-out-soft);
+      transition-behavior: allow-discrete;
+    }
+
+    .sheet-in {
+      transition-duration: 220ms;
+    }
+
+    .popover-in {
+      transition-duration: 150ms;
+    }
+
+    @starting-style {
+      .dialog-in {
+        opacity: 0;
+        transform: translate3d(0, 0.5rem, 0) scale(0.98);
+      }
+
+      .sheet-in {
+        opacity: 0;
+        transform: translate3d(0, 1.5rem, 0);
+      }
+
+      .popover-in {
+        opacity: 0;
+        transform: translate3d(0, -0.25rem, 0);
+      }
+    }
+
+    /* Leaving, quicker than arriving, and falling away rather than settling
+       — and let through: a press on the page behind a dialog that is going
+       reaches the page, not what is left of the dialog. In one forgiving
+       list, so that an engine without popovers still keeps the dialogs'. */
+    :is(dialog.dialog-in:not([open]), dialog.sheet-in:not([open]), .popover-in[popover]:not(:popover-open)) {
+      pointer-events: none;
+    }
+
+    dialog.dialog-in:not([open]) {
+      opacity: 0;
+      transform: translate3d(0, 0.5rem, 0) scale(0.98);
+      transition-duration: 150ms;
+      transition-timing-function: var(--ease-in-soft);
+    }
+
+    dialog.sheet-in:not([open]) {
+      opacity: 0;
+      transform: translate3d(0, 1.5rem, 0);
+      transition-duration: 150ms;
+      transition-timing-function: var(--ease-in-soft);
+    }
+
+    .popover-in[popover]:not(:popover-open) {
+      opacity: 0;
+      transform: translate3d(0, -0.25rem, 0);
+      transition-timing-function: var(--ease-in-soft);
+    }
+
+    dialog:is(.dialog-in, .sheet-in)::backdrop {
+      transition-property: opacity, display, overlay;
+      transition-duration: 180ms;
+      transition-timing-function: var(--ease-out-soft);
+      transition-behavior: allow-discrete;
+    }
+
+    dialog:is(.dialog-in, .sheet-in):not([open])::backdrop {
+      opacity: 0;
+    }
+
+    @starting-style {
+      dialog:is(.dialog-in, .sheet-in)[open]::backdrop {
+        opacity: 0;
+      }
+    }
   }
 
   /* A long list of rows costs layout for every one of them, on screen or not.
@@ -541,6 +895,14 @@
   /* Past ten, everything arrives together: a grid of forty posters should not
      take two seconds to finish assembling. */
   .stagger > *:nth-child(n + 11) { animation-delay: 350ms; }
+
+  /* A stand-in that waits a beat before it shows (see `Skeleton`): an answer
+     back within 150ms never flashes one. In a staggered grid too, where the
+     cascade's own delays would otherwise show the first at once. */
+  .wait-in,
+  .stagger > .wait-in {
+    animation: fade 0.2s var(--ease-out-soft) 150ms both;
+  }
 
   /* The shimmer on a loading placeholder. */
   .shimmer {
@@ -591,9 +953,55 @@
     animation-duration: 340ms;
   }
 
-  /* ── Motion, refused ──────────────────────────────────────────────────────
-     Someone who has asked their system for less movement has asked this
-     interface too. Everything still arrives; it simply arrives already there. */
+  /* Which way the reader went (`forward` or `back`, from lib/transitions.ts):
+     going on, the page leaves towards the start of the line and the next
+     comes in from its end; going back, the other way round, so that what
+     returns comes from where it went. A short way — what is said is the
+     direction, not a ride across the screen — and in the same 220ms. An
+     engine that cannot tell the stylesheet the way keeps the cross-fade. */
+  @media (prefers-reduced-motion: no-preference) {
+    @keyframes leave-forward {
+      to {
+        opacity: 0;
+        transform: translate3d(-1.5rem, 0, 0);
+      }
+    }
+
+    @keyframes arrive-forward {
+      from {
+        opacity: 0;
+        transform: translate3d(1.5rem, 0, 0);
+      }
+    }
+
+    @keyframes leave-back {
+      to {
+        opacity: 0;
+        transform: translate3d(1.5rem, 0, 0);
+      }
+    }
+
+    @keyframes arrive-back {
+      from {
+        opacity: 0;
+        transform: translate3d(-1.5rem, 0, 0);
+      }
+    }
+
+    html:active-view-transition-type(forward)::view-transition-old(root) {
+      animation-name: leave-forward;
+    }
+    html:active-view-transition-type(forward)::view-transition-new(root) {
+      animation-name: arrive-forward;
+    }
+    html:active-view-transition-type(back)::view-transition-old(root) {
+      animation-name: leave-back;
+    }
+    html:active-view-transition-type(back)::view-transition-new(root) {
+      animation-name: arrive-back;
+    }
+  }
+
   /* A control scrolled into view — by the keyboard, by an anchor, by whoever
    drives the page — stops short of what sticks to the top: the site's bar,
    the administration's on a small screen, a page's own row of sections. Else
@@ -605,6 +1013,9 @@
   scroll-margin-block-end: 5rem;
 }
 
+/* ── Motion, refused ──────────────────────────────────────────────────────
+   Someone who has asked their system for less movement has asked this
+   interface too. Everything still arrives; it simply arrives already there. */
 @media (prefers-reduced-motion: reduce) {
     *,
     *::before,

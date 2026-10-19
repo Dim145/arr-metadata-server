@@ -38,6 +38,46 @@ transfer, and a poll of a calendar feed costs a header exchange. Answers are
 marked `private, no-cache` unless a handler says how long they may be kept, so
 a browser keeps them and asks.
 
+## A work's journal, dry runs and files
+
+Each work keeps a journal of every value a refresh, a sync or a person changed in it — what it
+held, what it took, who and why — read a page at a time from `GET /api/v1/items/{id}/changes`,
+each page giving the `cursor` of the next. `POST /api/v1/items/{id}/refresh?dryRun=1`, and the
+sync with the same, answer what they would write over and write nothing. The audit trail and a
+work's journal are handed over whole as a file, under the same filters as their pages, with
+`?format=csv` — a spreadsheet opens it — or `?format=json`. See
+[The journal](editing.md#the-journal).
+
+## Searching the catalogue
+
+`GET /api/v1/search?term=…` is the search box's: the works, the people credited on them and the
+episodes a term finds, each kind ranked on its own — `kinds=work,person,episode` to ask for fewer,
+`limit` (six by default, twenty at most) for more of each, `language` for the titles. A work comes
+under the title it is shown by, with `matched` naming the other title it was found by when that is
+not the one; a person with the TMDB id their page is filed under, when the credits give one, and
+how many works credit them; an episode with its series, its season and its number.
+
+`GET /api/v1/items?term=…` searches the same index for a page of works, in the order of how well
+each answers — the term itself, then a name that starts with it, then a word that does, then one
+that holds it, the better known first among those alike — unless `sort` asks for another. Both
+fold the term as the index folds every name: accents, case and punctuation aside. A term whose
+letters find nothing it was typed to find is taken for a misspelling, and the names sharing most
+of its trigrams are what it finds; Sonarr's and Radarr's lookups and Plex's match read the letters
+alone, which TMDB's own search follows with its own forgiveness.
+
+The list also takes `person` (a TMDB id, or a name whole, whatever its case and accents),
+`runtimeMin` and `runtimeMax` (minutes), `country` (where a work was made, `FR`),
+`certification` (a rating as the reader's country writes it, read in `region` — by default the
+country the caller is answered for) and `collection`, and sorts by `runtime`, `lastAired` and
+`episodes` besides. `GET /api/v1/facets` takes the same filters and adds the countries and the
+ratings they leave to choose from.
+
+The index is kept by the server: a work is written into it as it is stored, and anything else
+that changes what it is found by — a title locked, an alternative title added by hand — has it
+written again within seconds. The task `search.rebuild` writes all of it again. On PostgreSQL it
+reads `pg_trgm`, which the migration installs where it may; without it a search reads every row
+and forgives no misspelling, and the server says so when it starts.
+
 ## What stays, and how something goes
 
 What follows is what 1.0 promises. Until then, a minor may still change what the API or the

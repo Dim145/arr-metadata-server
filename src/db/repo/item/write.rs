@@ -103,9 +103,14 @@ pub async fn insert_manual(
         claimed.push((source, value));
     }
 
+    // Found by the search the moment it exists, as a refreshed work is.
+    let people =
+        crate::db::repo::search::index_works(db, &mut tx, std::slice::from_ref(&item.id)).await?;
+
     tx.commit()
         .await
         .context("failed to commit the work entered by hand")?;
+    index_people(db, &people).await;
     Ok(Ok(()))
 }
 
@@ -139,6 +144,14 @@ async fn write_item(
     upsert_row(db, &mut tx, write.item).await?;
     let displaced = upsert_external_ids(db, &mut tx, write.item).await?;
 
+    // Who the credits name before they are replaced: somebody a refresh takes
+    // off the work has their row written again too, for one work fewer.
+    let ids = std::slice::from_ref(&write.item.id);
+    let mut people = if write.replace_children {
+        crate::db::repo::search::people_of(db, &mut tx, ids).await?
+    } else {
+        Default::default()
+    };
     if write.replace_children {
         replace_children(db, &mut tx, write.item).await?;
     }
@@ -152,6 +165,11 @@ async fn write_item(
             .context("failed to record where the work's values came from")?;
     }
 
+    // The work's rows of the search index, from what was just written, in
+    // the same transaction: a reader never finds the work by a name it no
+    // longer has, nor misses it by the one it was given.
+    people.extend(crate::db::repo::search::index_works(db, &mut tx, ids).await?);
+
     tx.commit().await.context("failed to commit item write")?;
 
     // After the commit, one row at a time, so no two works' locks are held
@@ -159,8 +177,27 @@ async fn write_item(
     for other in displaced {
         mark_changed(db, &other).await?;
     }
+    index_people(db, &people).await;
 
     Ok(Conditional::Written)
+}
+
+/// Write again the search index's rows of the people a write touched, once it
+/// is committed: in their own transaction, since a person is credited on many
+/// works and two writes holding one person's row each would wait on each
+/// other. One that fails is said and left for the index's next rebuild — the
+/// work itself is written, and a person's row a little behind costs a
+/// search nothing worse than a count of works off by one.
+async fn index_people(db: &Db, people: &std::collections::BTreeSet<String>) {
+    if people.is_empty() {
+        return;
+    }
+    if let Err(e) = crate::db::repo::search::index_people(db, people).await {
+        tracing::warn!(
+            error = format_args!("{e:#}"),
+            "could not write the people of a work into the search index"
+        );
+    }
 }
 
 /// A slug no other work of this kind is already using.
@@ -687,12 +724,21 @@ async fn replace_children(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaIt
 }
 
 pub async fn delete(db: &Db, id: &str) -> Result<bool> {
+    let mut tx = db.begin_write().await?;
+    // Who its credits name, for their rows of the search index to count one
+    // work fewer; its own rows and its episodes' go with it, by their key.
+    let people =
+        crate::db::repo::search::people_of(db, &mut tx, std::slice::from_ref(&id.to_string()))
+            .await?;
+
     // Every child table cascades from media_item.
     let result = sqlx::query(db.sql("DELETE FROM media_item WHERE id = ?"))
         .bind(id)
-        .execute(db.pool())
+        .execute(&mut *tx)
         .await?;
+    tx.commit().await.context("failed to commit the deletion")?;
 
+    index_people(db, &people).await;
     Ok(result.rows_affected() > 0)
 }
 

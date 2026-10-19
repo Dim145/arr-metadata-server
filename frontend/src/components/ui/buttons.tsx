@@ -6,6 +6,7 @@
 import { cn } from '../../lib/cn'
 
 import { Glyph, type GlyphName } from './glyphs'
+import { useTooltip } from './overlay'
 
 type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
   /** The element itself, for whoever has to give it focus back. */
@@ -14,10 +15,16 @@ type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
   size?: 'sm' | 'md'
 }
 
+// Under forced colours a button keeps an edge of the system's button colour:
+// the palette that drew the primary one is a gradient, which forced colours
+// take away, and the quiet one never had an edge — either would be a word
+// floating on the page. A disabled one says so in the system's grey.
 const BUTTON_BASE =
   'inline-flex items-center justify-center gap-2 rounded-full font-sans font-medium ' +
   'transition-colors duration-200 cursor-pointer select-none ' +
-  'disabled:cursor-not-allowed disabled:opacity-45'
+  'disabled:cursor-not-allowed disabled:opacity-45 ' +
+  'forced-colors:border forced-colors:border-[color:ButtonText] ' +
+  'forced-colors:disabled:border-[color:GrayText] forced-colors:disabled:text-[color:GrayText]'
 
 const BUTTON_VARIANT: Record<NonNullable<ButtonProps['variant']>, string> = {
   primary:
@@ -31,7 +38,7 @@ const BUTTON_VARIANT: Record<NonNullable<ButtonProps['variant']>, string> = {
 // 44px is the smallest target a finger finds reliably; `sm` keeps that height
 // and only loses horizontal padding, so a dense toolbar is still tappable.
 const BUTTON_SIZE: Record<NonNullable<ButtonProps['size']>, string> = {
-  sm: 'min-h-11 px-3 text-[0.8125rem]',
+  sm: 'min-h-11 px-3 text-body-sm',
   md: 'min-h-11 px-5 text-sm',
 }
 
@@ -85,8 +92,8 @@ export function ButtonLink({
  * Exists because a register's action column has no room for four verbs, and a
  * `Button` with only an icon in it loses the thing that makes it usable — its
  * name. Here the name is compulsory: it reaches the screen reader through
- * `aria-label` and the mouse through the tooltip, and the target stays 44px
- * whatever the glyph measures.
+ * `aria-label`, and the mouse and the keyboard through the tooltip (see
+ * `useTooltip`), and the target stays 44px whatever the glyph measures.
  */
 export function IconButton({
   glyph,
@@ -108,6 +115,8 @@ export function IconButton({
   pressed?: boolean
   className?: string
 }) {
+  const { trigger, tip } = useTooltip(label)
+
   return (
     <button
       type="button"
@@ -115,17 +124,22 @@ export function IconButton({
       disabled={busy || disabled}
       aria-label={label}
       aria-pressed={pressed}
-      title={label}
+      {...trigger}
       className={cn(
         'grid size-11 shrink-0 cursor-pointer place-items-center rounded-card text-bone-faint',
         pressed && 'bg-brass/[0.08] text-brass',
         'transition-colors duration-150 hover:bg-ink-high',
         'disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent',
         tone === 'danger' ? 'hover:text-vermillion' : 'hover:text-bone',
+        // Forced colours take the brass tint away, and with it the only sign
+        // a toggle is on: the system's own selection colours say it there.
+        'forced-colors:border forced-colors:border-[color:ButtonText]',
+        pressed && 'forced-colors:bg-[color:Highlight] forced-colors:text-[color:HighlightText]',
         className,
       )}
     >
       {busy ? <Spinner className="size-4" /> : <Glyph name={glyph} className="size-4" />}
+      {tip}
     </button>
   )
 }

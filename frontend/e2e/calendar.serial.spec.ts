@@ -125,14 +125,15 @@ test.describe('the films in the schedule', () => {
       // The month: in today's cell after its episodes — three at most before
       // the rest is a step into the week.
       await page.goto('/calendar?view=month')
-      const cell = page.getByRole('list', { name: /days of the month|jours du mois/i }).locator(`li[data-day="${today}"]`)
+      const cell = page.getByRole('table').locator(`td[data-day="${today}"]`)
       if (before < 3) await expect(cell.locator(`a[href="/work/${id}"]`)).toBeVisible()
       else await expect(cell.getByRole('link', { name: /^\+ \d+ (more|autres?)$/ })).toBeVisible()
       await scan(page, 'the month, with a film in it')
 
-      // On a phone, the day's mark counts it.
+      // On a phone, the day's mark counts it: the day's own link, the first
+      // in its cell, before what the day lists wider.
       await page.setViewportSize({ width: 375, height: 812 })
-      const mark = page.getByRole('list', { name: /days of the month|jours du mois/i }).locator(`li[data-day="${today}"] a`)
+      const mark = page.getByRole('table').locator(`td[data-day="${today}"] a`).first()
       await expect(mark).toHaveAttribute('aria-label', /\d+ (releases?|sorties?)$/)
       await page.setViewportSize({ width: 1440, height: 900 })
 

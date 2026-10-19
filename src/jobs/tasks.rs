@@ -29,6 +29,7 @@ pub const TLS_RENEW: &str = repo::job::kinds::TLS_RENEW;
 pub const UPDATE_CHECK: &str = repo::job::kinds::UPDATE_CHECK;
 pub const ARR_SEED: &str = crate::arr::seed::KIND;
 pub const BACKUP_RUN: &str = crate::jobs::backup::KIND;
+pub const SEARCH_REBUILD: &str = crate::jobs::search::KIND;
 
 /// A task, sent under the name the history files its runs by.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
@@ -55,11 +56,13 @@ pub enum TaskId {
     ArrSeed,
     #[serde(rename = "backup.run")]
     BackupRun,
+    #[serde(rename = "search.rebuild")]
+    SearchRebuild,
 }
 
 impl TaskId {
     /// Every task, in the order the page shows them.
-    pub const ALL: [TaskId; 11] = [
+    pub const ALL: [TaskId; 12] = [
         Self::RefreshSweep,
         Self::RefreshAll,
         Self::ImportAnime,
@@ -71,6 +74,7 @@ impl TaskId {
         Self::UpdateCheck,
         Self::ArrSeed,
         Self::BackupRun,
+        Self::SearchRebuild,
     ];
 
     /// Its name, as the history files its runs.
@@ -87,6 +91,7 @@ impl TaskId {
             Self::UpdateCheck => UPDATE_CHECK,
             Self::ArrSeed => ARR_SEED,
             Self::BackupRun => BACKUP_RUN,
+            Self::SearchRebuild => SEARCH_REBUILD,
         }
     }
 }
@@ -180,6 +185,7 @@ fn lock_busy(id: &str) -> bool {
         UPDATE_CHECK => crate::jobs::update_check::is_checking(),
         ARR_SEED => crate::arr::seed::is_busy(),
         BACKUP_RUN => crate::jobs::backup::is_busy(),
+        SEARCH_REBUILD => crate::jobs::search::is_busy(),
         _ => false,
     }
 }
@@ -195,6 +201,7 @@ pub fn hold_of(id: &str) -> Option<&'static str> {
         TLS_RENEW => Some(repo::job::kinds::TLS_RENEW),
         ARR_SEED => Some(crate::arr::seed::HOLD),
         BACKUP_RUN => Some(crate::jobs::backup::HOLD),
+        SEARCH_REBUILD => Some(crate::jobs::search::HOLD),
         _ => None,
     }
 }
@@ -316,6 +323,9 @@ async fn state_of(state: &AppState, task: TaskId) -> anyhow::Result<TaskState> {
             Some(every) => (Mode::Scheduled, Some(every.as_secs() as i64), None),
             None => (Mode::Manual, None, None),
         },
+        // By hand: the index keeps itself current, and is written again
+        // whole only for somebody who doubts it.
+        SEARCH_REBUILD => (Mode::Manual, None, None),
         _ => (Mode::Off, None, None),
     };
 

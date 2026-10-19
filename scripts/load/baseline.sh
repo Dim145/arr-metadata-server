@@ -61,5 +61,5 @@ for entry in "${scenarios[@]}"; do
     continue
   fi
   # The name reaches Python as an environment variable, never as source.
-  NAME="$name" printf '%s' "$out" | py "import os; d = json.load(sys.stdin); s = d['summary']; lp = d['latencyPercentiles']; codes = d.get('statusCodeDistribution', {}); bad = sum(v for k, v in codes.items() if not k.startswith('2')); ms = lambda x: f'{x*1000:.1f} ms'; print(f\"| {os.environ['NAME']} | {s['requestsPerSec']:.0f} | {ms(lp['p50'])} | {ms(lp['p95'])} | {ms(lp['p99'])} | {bad} |\")"
+  printf '%s' "$out" | NAME="$name" py "import os; d = json.load(sys.stdin); s = d['summary']; lp = d['latencyPercentiles']; codes = d.get('statusCodeDistribution', {}); bad = sum(v for k, v in codes.items() if not k.startswith('2')); ms = lambda x: f'{x*1000:.1f} ms'; print(f\"| {os.environ['NAME']} | {s['requestsPerSec']:.0f} | {ms(lp['p50'])} | {ms(lp['p95'])} | {ms(lp['p99'])} | {bad} |\")"
 done

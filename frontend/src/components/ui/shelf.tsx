@@ -10,7 +10,7 @@
  * along it, not the only one.
  */
 
-import { useCallback, useEffect, useId, useRef, useState, type ReactNode, type Ref } from 'react'
+import { useCallback, useEffect, useId, useRef, useState, type KeyboardEventHandler, type ReactNode, type Ref } from 'react'
 
 import { cn } from '../../lib/cn'
 import { useI18n } from '../../lib/i18n'
@@ -24,6 +24,7 @@ export function Shelf({
   listClassName,
   tabIndex,
   ref,
+  onKeyDown,
 }: {
   /** What the row holds, for a screen reader: the list's name. */
   label?: string
@@ -37,6 +38,8 @@ export function Shelf({
   tabIndex?: number
   /** The list itself, for whoever has to scroll it somewhere. */
   ref?: Ref<HTMLUListElement>
+  /** What its items' keys do beyond Tab: the arrows between cards, for a row of them. */
+  onKeyDown?: KeyboardEventHandler<HTMLUListElement>
 }) {
   const { t } = useI18n()
   const id = useId()
@@ -96,11 +99,13 @@ export function Shelf({
 
   return (
     <div className={cn('group/shelf relative', className)}>
+      {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- its items take the focus; the list hears their keys */}
       <ul
         ref={attach}
         id={id}
         aria-label={label || undefined}
         tabIndex={tabIndex}
+        onKeyDown={onKeyDown}
         className={cn('flex snap-x snap-proximity scroll-pl-2 overflow-x-auto', listClassName)}
       >
         {children}
@@ -163,6 +168,7 @@ function Arrow({
       className={cn(
         'absolute top-1/2 grid size-11 -translate-y-1/2 place-items-center rounded-full',
         'border border-rule-bright bg-ink/90 text-bone shadow-[var(--shadow-lift)]',
+        'forced-colors:border-[color:ButtonText]',
         'transition-opacity duration-150',
         direction === 'before' ? 'left-1' : 'right-1',
         // Out of the way of a pointer until it rests on the row, and of a

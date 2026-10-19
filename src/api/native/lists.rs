@@ -945,6 +945,9 @@ fn filter_query(filter: &ListFilter, adult: bool, kind: ListKind) -> AppResult<r
         descending: filter.descending,
         limit: filter.limit.unwrap_or(100),
         offset: 0,
+        // What a list's filter cannot say yet: a person, a runtime, a
+        // country, a rating.
+        ..Default::default()
     })
 }
 

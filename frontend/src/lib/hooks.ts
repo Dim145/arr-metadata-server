@@ -12,7 +12,7 @@ import { NavigationType, useLocation, useNavigationType } from 'react-router'
 
 import { api, query, segment } from './api'
 import { useI18n } from './i18n'
-import type { AuthOptions, CuratedLists, MediaItem, Me, Orders } from './types'
+import type { AuthOptions, Collections, CuratedLists, MediaItem, Me, Orders, SearchHits } from './types'
 
 /**
  * The selections a reader may see: what the lists page shows, and what
@@ -123,5 +123,46 @@ export function useAuthOptions() {
     queryFn: () => api.get<AuthOptions>('/auth/options'),
     retry: false,
     staleTime: 5 * 60_000,
+  })
+}
+
+/** The kinds of hit a search across the catalogue answers with. */
+export type SearchKind = 'work' | 'person' | 'episode'
+
+/**
+ * What a term finds across the catalogue — its works, the people credited on
+ * them, its episodes — each kind ranked by the server, misspellings forgiven
+ * where the letters find little: for a field that lists what it finds as it
+ * is typed. Nothing is asked for a term under two characters, nor while
+ * `enabled` is false; the last answer stays up while the next is asked,
+ * rather than the list emptying at every keystroke.
+ */
+export function useSearch(
+  term: string,
+  { kinds, limit, enabled = true }: { kinds?: SearchKind[]; limit?: number; enabled?: boolean } = {},
+) {
+  const { lang } = useI18n()
+  const asked = term.trim()
+  const wanted = kinds?.join(',') ?? ''
+  return useQuery({
+    queryKey: ['search', asked, wanted, limit ?? 0, lang],
+    enabled: enabled && asked.length >= 2,
+    queryFn: () => api.get<SearchHits>(`/search${query({ term: asked, kinds: wanted, limit, language: lang })}`),
+    placeholderData: (previous) => previous,
+    staleTime: 30_000,
+  })
+}
+
+/**
+ * The film collections the catalogue holds part of, most films first: what
+ * the catalogue's filter offers, under the key the collections' own page
+ * reads them by.
+ */
+export function useCollections() {
+  return useQuery({
+    queryKey: ['collections'],
+    queryFn: () => api.get<Collections>('/collections'),
+    staleTime: 10 * 60_000,
+    retry: false,
   })
 }

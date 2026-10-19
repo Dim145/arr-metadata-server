@@ -12,7 +12,7 @@ export function Label({ children, className }: { children: ReactNode; className?
 
 export function Mono({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <span className={cn('font-mono text-[0.8125rem] tabular-nums', className)}>{children}</span>
+    <span className={cn('font-mono text-body-sm tabular-nums', className)}>{children}</span>
   )
 }
 
@@ -34,9 +34,11 @@ export function SectionTitle({
         </h2>
         {action}
       </div>
+      {/* A gradient, which forced colours remove: there the rule is drawn
+          plain, in the text's colour, so the heading still heads something. */}
       <div
         aria-hidden
-        className="h-px bg-[linear-gradient(to_right,var(--color-vermillion),color-mix(in_srgb,var(--color-vermillion)_35%,var(--color-rule))_18%,var(--color-rule)_55%,transparent)]"
+        className="h-px bg-[linear-gradient(to_right,var(--color-vermillion),color-mix(in_srgb,var(--color-vermillion)_35%,var(--color-rule))_18%,var(--color-rule)_55%,transparent)] forced-colors:bg-[color:CanvasText]"
       />
     </div>
   )

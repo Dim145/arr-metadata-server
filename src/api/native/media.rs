@@ -25,7 +25,10 @@ use crate::{
         asset::{Asset, Kind},
         audit::Action,
     },
-    domain::{CoverType, MediaItem, fields::Scope},
+    domain::{
+        CoverType, MediaItem,
+        fields::{Child, Scope},
+    },
     error::{AppError, AppResult},
     media::file,
     service,
@@ -644,36 +647,49 @@ async fn upload(
         .media
         .remember(&origin, &kept.key, kept.thumb, inspected.content_type);
 
+    // Each told to the work's journal: a picture added by hand, or the lock
+    // a still or a theme fills its field with, over what was served before.
     let detail = match place {
         Place::Picture { cover_type, season } => {
             let mut image = repo::child::blank_image(cover_type, origin.clone());
             image.season_number = season;
             repo::child::add_image(&state.db, &id, &image).await?;
+            super::history::write(
+                &state,
+                &id,
+                &by,
+                &[super::history::came(
+                    Child::of_image(&image).to_string(),
+                    super::history::IMAGE,
+                    super::history::summary::image(&image),
+                )],
+            )
+            .await;
             match season {
                 Some(n) => format!("{} for season {n}", cover_type.as_str()),
                 None => cover_type.as_str().to_string(),
             }
         }
         Place::Still { season, episode } => {
-            repo::override_field::set(
-                &state.db,
-                &id,
+            super::overrides::lock_served(
+                &state,
+                &item,
                 Scope::Episode { season, episode },
                 "image",
-                Some(&serde_json::Value::String(origin.clone())),
-                Some(&by),
+                &serde_json::Value::String(origin.clone()),
+                &by,
             )
             .await?;
             format!("still for {season}x{episode}")
         }
         Place::Theme => {
-            repo::override_field::set(
-                &state.db,
-                &id,
+            super::overrides::lock_served(
+                &state,
+                &item,
                 Scope::Item,
                 "themeMusic",
-                Some(&serde_json::Value::String(origin.clone())),
-                Some(&by),
+                &serde_json::Value::String(origin.clone()),
+                &by,
             )
             .await?;
             "theme".to_string()
@@ -768,14 +784,33 @@ async fn forget(
     }
 
     let removed = if uploaded {
+        let by = identity.label();
+        // The pictures that were the upload, as the work held them: removed,
+        // each told to its journal as a picture taken off by hand.
+        let pictures: Vec<_> = item
+            .images
+            .iter()
+            .chain(item.seasons.iter().flat_map(|s| &s.images))
+            .filter(|image| image.is_manual && image.url == asset.origin)
+            .map(|image| {
+                super::history::went(
+                    Child::of_image(image).to_string(),
+                    super::history::IMAGE,
+                    super::history::summary::image(image),
+                )
+            })
+            .collect();
         repo::child::remove_images_by_url(&state.db, &id, &asset.origin).await?;
+        super::history::write(&state, &id, &by, &pictures).await;
         // A field that held the upload — a still, a theme, the poster the
-        // work or a season was to lead with — holds nothing now.
-        for locked in locks.iter().filter(names_it) {
-            if let Ok(scope) = locked.scope.parse::<Scope>() {
-                repo::override_field::unset(&state.db, &id, scope, &locked.field).await?;
-            }
-        }
+        // work or a season was to lead with — holds nothing now, and its
+        // journal says what it holds again.
+        let filled: Vec<(Scope, &str)> = locks
+            .iter()
+            .filter(names_it)
+            .filter_map(|locked| Some((locked.scope.parse::<Scope>().ok()?, locked.field.as_str())))
+            .collect();
+        super::overrides::lift_all(&state, &id, &filled, &by).await?;
         remove_asset(&state, &asset, Removal::UnlessNamed).await?
     } else {
         remove_asset(&state, &asset, Removal::Always).await?
@@ -835,4 +870,190 @@ pub async fn remove_asset(state: &AppState, asset: &Asset, removal: Removal) -> 
         crate::media::worker::delete_files(state, store, key, asset.thumb).await;
     }
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::{body::Body, extract::FromRequest, http::Request};
+    use serde_json::{Value, json};
+
+    use super::*;
+    use crate::{
+        config,
+        db::repo::change::{Cause, Filter},
+        domain::MediaKind,
+    };
+
+    /// A change, as these tests read it: why, where, what, what it held and
+    /// what it took.
+    type Line = (Cause, String, String, Option<Value>, Option<Value>);
+
+    /// The whole server, on a database of its own, keeping its media in
+    /// `dir`: what an upload needs somewhere to go.
+    async fn server(dir: &std::path::Path) -> AppState {
+        let mut config = config::Config::from_env().expect("a configuration");
+        config.mode = config::Mode::Single;
+        config.database = crate::db::testing::database().await;
+        config.security.bootstrap_admin = None;
+        config.cache.redis_url = None;
+        config.media.storage = config::MediaStorage::Filesystem;
+        config.media.dir = dir.to_path_buf();
+        config.clients = None;
+        config.tmdb.api_key = None;
+        config.tvdb.api_key = None;
+        config.tvdb.enabled = false;
+
+        AppState::bootstrap(config).await.expect("a server")
+    }
+
+    /// A picture of a few pixels, of one colour.
+    fn png(red: u8) -> Vec<u8> {
+        let mut out = Vec::new();
+        image::RgbImage::from_pixel(4, 6, image::Rgb([red, 30, 30]))
+            .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+            .expect("a picture");
+        out
+    }
+
+    /// The form an upload is sent as: these words, and the file.
+    async fn uploaded(
+        state: &AppState,
+        id: &str,
+        words: &[(&str, &str)],
+        file: &[u8],
+    ) -> AppResult<(StatusCode, Json<Uploaded>)> {
+        let mut body = Vec::new();
+        for (name, value) in words {
+            body.extend_from_slice(
+                format!(
+                    "--edge\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n"
+                )
+                .as_bytes(),
+            );
+        }
+        body.extend_from_slice(
+            b"--edge\r\nContent-Disposition: form-data; name=\"file\"; filename=\"upload\"\r\n\
+              Content-Type: application/octet-stream\r\n\r\n",
+        );
+        body.extend_from_slice(file);
+        body.extend_from_slice(b"\r\n--edge--\r\n");
+        let request = Request::builder()
+            .method("POST")
+            .uri("/")
+            .header("content-type", "multipart/form-data; boundary=edge")
+            .body(Body::from(body))
+            .expect("a request");
+        let form = Multipart::from_request(request, state)
+            .await
+            .expect("a form");
+        upload(
+            State(state.clone()),
+            Extension(Identity::Anonymous),
+            ClientIp::NONE,
+            Path(id.to_string()),
+            form,
+        )
+        .await
+    }
+
+    /// An upload that fills a field locks it, over what was served; one that
+    /// is a picture is a picture added by hand: each in the work's journal,
+    /// and so is taking it away again.
+    #[tokio::test]
+    async fn an_upload_and_its_removal_are_journaled_as_the_lock_or_the_picture_they_are() {
+        let dir = std::env::temp_dir().join(format!("ams-media-{}", crate::db::new_id()));
+        let state = server(&dir).await;
+
+        let mut series = MediaItem::empty(MediaKind::Series);
+        series.title = "The Wire".into();
+        series.slug = "the-wire".into();
+        series.external_ids.tmdb = Some(1438);
+        let mut season = repo::child::blank_season(1);
+        season.is_manual = false;
+        let mut episode = repo::child::blank_episode(1, 1);
+        episode.is_manual = false;
+        episode.title = "The Target".into();
+        episode.image = Some("https://images.example/still.jpg".into());
+        series.seasons = vec![season];
+        series.episodes = vec![episode];
+        repo::item::upsert(
+            &state.db,
+            repo::item::ItemWrite {
+                item: &series,
+                replace_children: true,
+            },
+        )
+        .await
+        .expect("stored");
+
+        let (_, Json(still)) = uploaded(&state, &series.id, &[("episode", "1x1")], &png(200))
+            .await
+            .expect("a still");
+        let (_, Json(poster)) = uploaded(&state, &series.id, &[("coverType", "poster")], &png(120))
+            .await
+            .expect("a poster");
+        for asset in [&still.asset_id, &poster.asset_id] {
+            forget(
+                State(state.clone()),
+                Extension(Identity::Anonymous),
+                ClientIp::NONE,
+                Path((series.id.clone(), asset.clone())),
+            )
+            .await
+            .expect("taken away");
+        }
+
+        let mut written = repo::change::list(&state.db, &series.id, &Filter::default(), None, 50)
+            .await
+            .expect("the journal")
+            .entries;
+        written.sort_by(|a, b| (a.at.as_str(), a.id.as_str()).cmp(&(b.at.as_str(), b.id.as_str())));
+        assert!(
+            written
+                .iter()
+                .all(|c| c.actor.as_deref() == Some("anonymous"))
+        );
+        let read: Vec<Line> = written
+            .into_iter()
+            .map(|c| (c.cause, c.scope, c.field, c.before, c.after))
+            .collect();
+        let provider_still = Some(json!("https://images.example/still.jpg"));
+        let picture = format!("image:{}", poster.origin);
+        assert_eq!(
+            read,
+            [
+                // The still locked over the source's, and handed back to it.
+                (
+                    Cause::Lock,
+                    "episode:1x1".to_string(),
+                    "image".to_string(),
+                    provider_still.clone(),
+                    Some(json!(still.origin))
+                ),
+                (
+                    Cause::Edit,
+                    picture.clone(),
+                    "image".to_string(),
+                    None,
+                    Some(json!({ "coverType": "poster" }))
+                ),
+                (
+                    Cause::Unlock,
+                    "episode:1x1".to_string(),
+                    "image".to_string(),
+                    Some(json!(still.origin)),
+                    provider_still
+                ),
+                (
+                    Cause::Edit,
+                    picture,
+                    "image".to_string(),
+                    Some(json!({ "coverType": "poster" })),
+                    None
+                ),
+            ]
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

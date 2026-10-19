@@ -15,7 +15,7 @@ import { Link, useParams, useSearchParams } from 'react-router'
 
 import { Elsewhere, Trail } from '../components/elsewhere'
 import { Placement, finaleLabel } from '../components/episodes'
-import { Artwork } from '../components/media'
+import { Artwork, VEILED, Veil, useVeiled } from '../components/media'
 import { Chip, EmptyState, Glyph, Skeleton } from '../components/ui'
 import { ApiError } from '../lib/api'
 import { cn } from '../lib/cn'
@@ -120,6 +120,8 @@ function SeasonSheet({
 }) {
   const { t, locale } = useI18n()
   const me = useMe()
+  // A work for adults keeps its pictures veiled until the reader asks.
+  const veiled = useVeiled(item)
 
   // A season's own name and note belong to the aired order; another order's
   // seasons are only numbers.
@@ -168,20 +170,23 @@ function SeasonSheet({
       />
 
       <header className="rise mt-4 flex flex-col gap-6 sm:flex-row sm:items-end">
-        <div className="w-28 shrink-0 sm:w-36">
+        {/* A veiled poster is clipped to its frame, whose blur would
+            otherwise spill past the edge. */}
+        <div className={cn('relative w-28 shrink-0 sm:w-36', veiled && sheet && 'overflow-hidden rounded-plate')}>
           {sheet ? (
             <Artwork
               url={sheet}
               role="poster"
               eager
               alt={t.a11y.poster(`${item.title} — ${name}`)}
-              className="w-full rounded-plate border border-rule-bright shadow-[var(--shadow-plate)]"
+              className={cn('w-full rounded-plate border border-rule-bright shadow-[var(--shadow-plate)]', veiled && VEILED)}
             />
           ) : (
             <div className="grid aspect-2/3 w-full place-items-center rounded-plate border border-rule bg-ink-high">
               <Glyph name="tv" className="size-7 text-bone-faint" />
             </div>
           )}
+          {veiled && sheet ? <Veil id={item.id} button /> : null}
         </div>
 
         <div className="min-w-0 flex-1">
@@ -203,7 +208,7 @@ function SeasonSheet({
               .join(' · ')}
           </p>
           {meta?.overview ? (
-            <p className="mt-4 max-w-[68ch] text-[0.9375rem] leading-relaxed text-bone-dim">{meta.overview}</p>
+            <p className="mt-4 max-w-[68ch] text-lead leading-relaxed text-bone-dim">{meta.overview}</p>
           ) : null}
 
           <div className="mt-5 flex flex-wrap items-center gap-3">
@@ -211,7 +216,7 @@ function SeasonSheet({
             {me.data?.canWrite ? (
               <Link
                 to={`/admin/catalogue/${item.id}?season=${number}`}
-                className="inline-flex min-h-11 items-center gap-1.5 rounded-full border border-brass-deep px-3.5 text-[0.8125rem] font-medium text-brass transition-colors duration-150 hover:bg-brass/10"
+                className="inline-flex min-h-11 items-center gap-1.5 rounded-full border border-brass-deep px-3.5 text-body-sm font-medium text-brass transition-colors duration-150 hover:bg-brass/10"
               >
                 <Glyph name="pencil" className="size-3.5" />
                 {t.season.edit}
@@ -384,6 +389,7 @@ function EpisodeEntry({
   own?: boolean
 }) {
   const { t, locale } = useI18n()
+  const veiled = useVeiled(item)
 
   // The way to the episode's page is its aired place; what is printed on the
   // still is its place in the order shown.
@@ -412,15 +418,16 @@ function EpisodeEntry({
             url={episode.image}
             role="still"
             alt=""
-            className="size-full object-cover"
+            className={cn('size-full object-cover', veiled && VEILED)}
           />
         ) : (
           <div className="grid size-full place-items-center">
             <Glyph name="film" className="size-5 text-bone-faint" />
           </div>
         )}
+        {veiled && episode.image ? <Veil id={item.id} shows={false} /> : null}
         {/* Edge print: the code as a film strip carries its frame numbers. */}
-        <span className="absolute bottom-1.5 left-1.5 rounded-card bg-ink/85 px-1.5 py-0.5 font-mono text-[0.6875rem] font-medium tracking-wider text-bone tabular-nums">
+        <span className="absolute bottom-1.5 left-1.5 rounded-card bg-ink/85 px-1.5 py-0.5 font-mono text-caption font-medium tracking-wider text-bone tabular-nums">
           {episodeCode(shown)}
         </span>
       </div>
@@ -452,7 +459,7 @@ function EpisodeEntry({
           {episode.title || t.episode.untitled(shown.episodeNumber)}
         </h2>
 
-        <p className="mt-1 font-mono text-[0.6875rem] text-bone-faint tabular-nums">
+        <p className="mt-1 font-mono text-caption text-bone-faint tabular-nums">
           {[
             released && day ? t.episode.availableOn(day) : day,
             time,

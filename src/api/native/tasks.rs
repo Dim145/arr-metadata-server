@@ -170,6 +170,7 @@ async fn run(
         tasks::UPDATE_CHECK => jobs::update_check::check_now(&state, &by).await?,
         tasks::ARR_SEED => crate::arr::seed::start(&state, &by).await?,
         tasks::BACKUP_RUN => jobs::backup::back_up_now(&state, &by, None).await?,
+        tasks::SEARCH_REBUILD => jobs::search::rebuild_now(&state, &by).await?,
         _ => return Err(AppError::NotFound),
     };
 

@@ -54,6 +54,11 @@ const TABLES: &[&str] = &[
     "media_release",
     "media_episode_translation",
     "media_language_fetch",
+    // What changed in each work, after the works.
+    "media_change",
+    // The search index, after the works it names: carried rather than built
+    // again, its rows numbered by what they are and not by a counter.
+    "search_doc",
     // People before their keys: a key names its owner.
     "admin_user",
     "admin_session",

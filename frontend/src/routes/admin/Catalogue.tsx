@@ -40,7 +40,7 @@ import {
   Th,
   Tr,
 } from '../../components/ui'
-import { ApiError, api, query } from '../../lib/api'
+import { ApiError, api, query, segment } from '../../lib/api'
 import { cn } from '../../lib/cn'
 import * as fmt from '../../lib/format'
 import { useSettled } from '../../lib/debounce'
@@ -62,7 +62,7 @@ import type {
 type Asking = { item: MediaItem; what: 'delete' | 'disable' }
 
 /** What a record can lack, as the server's `missing` filter names it, in the order the filters are drawn. */
-const GAPS = ['poster', 'overview', 'imdb', 'refresh'] as const
+const GAPS = ['poster', 'overview', 'imdb', 'refresh', 'divergingLock'] as const
 type Gap = (typeof GAPS)[number]
 
 const GAP_GLYPH: Record<Gap, GlyphName> = {
@@ -70,6 +70,7 @@ const GAP_GLYPH: Record<Gap, GlyphName> = {
   overview: 'journal',
   imdb: 'link',
   refresh: 'refresh',
+  divergingLock: 'lock',
 }
 
 /** How one work came out of an action done to the whole selection. */
@@ -226,24 +227,33 @@ export function Catalogue() {
     if (allBox.current) allBox.current.indeterminate = selected.size > 0 && !allShown
   }, [selected, allShown])
 
+  // A field changed over the selection, which can be undone a moment; see
+  // `undo` below.
+  const [undoable, setUndoable] = useState<{ field: FieldName; works: MediaItem[] } | null>(null)
+  const [heeded, setHeeded] = useState(false)
+
   /**
    * One action over the selection: each work its own request, four at a time,
    * so one that fails does not take the rest with it — and each its own line in
    * the audit trail. Counted as it goes, and summed up at the end, with what
-   * failed and why.
+   * failed and why. The works it was done for are handed back, for an undo.
    */
-  const runBulk = async (act: (item: MediaItem) => Promise<Outcome | void>) => {
+  const runBulk = async (act: (item: MediaItem) => Promise<Outcome | void>): Promise<MediaItem[]> => {
     const works = (shown ?? []).filter((item) => selected.has(item.id))
-    if (!works.length) return
+    if (!works.length) return []
     setReport(null)
+    setUndoable(null)
     setProgress({ at: 0, total: works.length })
     const tally: Record<Outcome, number> = { done: 0, unchanged: 0, skipped: 0 }
     const failures: Report['failures'] = []
+    const done: MediaItem[] = []
     const queue = [...works]
     const worker = async () => {
       for (let item = queue.shift(); item !== undefined; item = queue.shift()) {
         try {
-          tally[(await act(item)) ?? 'done'] += 1
+          const outcome = (await act(item)) ?? 'done'
+          tally[outcome] += 1
+          if (outcome === 'done') done.push(item)
         } catch (error) {
           failures.push({ title: item.title, why: error instanceof Error ? error.message : t.common.actionFailed })
         }
@@ -254,6 +264,46 @@ export function Catalogue() {
     setProgress(null)
     setReport({ text: b.summary(tally.done, tally.unchanged, tally.skipped, failures.length), failures })
     setSelected(new Set())
+    invalidate()
+    return done
+  }
+
+  /**
+   * A field changed over the selection can be undone for eight seconds — for
+   * as long as the pointer or the focus is on the offer, besides: each work
+   * it changed is put back as its journal says it was, the lock it held or
+   * none, four at a time. A work changed since by something else is left as
+   * it is, and said so.
+   */
+  useEffect(() => {
+    if (!undoable || heeded) return
+    const timer = window.setTimeout(() => setUndoable(null), 8_000)
+    return () => window.clearTimeout(timer)
+  }, [undoable, heeded])
+  const undo = async () => {
+    if (!undoable) return
+    const { field, works } = undoable
+    setUndoable(null)
+    setHeeded(false)
+    setReport(null)
+    setProgress({ at: 0, total: works.length })
+    let undone = 0
+    const failures: Report['failures'] = []
+    const queue = [...works]
+    const worker = async () => {
+      for (let item = queue.shift(); item !== undefined; item = queue.shift()) {
+        try {
+          await api.post(`/items/${segment(item.id)}/changes/undo`, { scope: 'item', field })
+          undone += 1
+        } catch (error) {
+          failures.push({ title: item.title, why: error instanceof Error ? error.message : t.common.actionFailed })
+        }
+        setProgress((now) => (now ? { ...now, at: now.at + 1 } : now))
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(4, works.length) }, worker))
+    setProgress(null)
+    setReport({ text: b.undone(undone, failures.length), failures })
     invalidate()
   }
 
@@ -638,9 +688,27 @@ export function Catalogue() {
         onClose={() => setBulkAsk(null)}
         onApply={(change) => {
           setBulkAsk(null)
-          void runBulk((item) => changeField(item, change))
+          void runBulk((item) => changeField(item, change)).then((done) => {
+            if (done.length) setUndoable({ field: change.field, works: done })
+          })
         }}
       />
+
+      {undoable ? (
+        <div
+          role="status"
+          onMouseEnter={() => setHeeded(true)}
+          onMouseLeave={() => setHeeded(false)}
+          onFocus={() => setHeeded(true)}
+          onBlur={() => setHeeded(false)}
+          className="fade-in fixed inset-x-4 bottom-4 z-40 mx-auto flex max-w-md items-center justify-between gap-3 rounded-panel border border-rule-bright bg-ink-top py-2 pr-2 pl-4 text-sm text-bone shadow-[var(--shadow-plate)] sm:right-6 sm:left-auto"
+        >
+          <span>{b.undoOffer(undoable.works.length)}</span>
+          <Button size="sm" onClick={() => void undo()}>
+            {b.undo}
+          </Button>
+        </div>
+      ) : null}
 
       <Reask
         key={`reask-${openings}`}

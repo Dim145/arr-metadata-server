@@ -6,6 +6,8 @@
  * the shell can redirect to sign-in rather than each caller handling it.
  */
 
+import { textLanguage } from './prefs'
+
 export class ApiError extends Error {
   constructor(
     readonly status: number,
@@ -23,8 +25,35 @@ export class ApiError extends Error {
 
 const BASE = '/api/v1'
 
+/**
+ * A read in the language the reader chose for the catalogue's texts, where
+ * they chose one apart from the interface's: whatever asks for a work, a
+ * season, a person, the schedule or a list in the interface's language is
+ * answered in that one instead, and the pages need not know. Here rather
+ * than in every page, which each ask in their own words.
+ *
+ * Only the reader's side of the site: the administration asks in the
+ * language it is editing, which is not the reader's to change. And only a
+ * read that asks for a language at all: one that did not wants none.
+ */
+export function inTextLanguage(path: string, chosen = textLanguage(), where = currentPath()): string {
+  if (!chosen || where.startsWith('/admin')) return path
+  const at = path.indexOf('?')
+  if (at < 0) return path
+  const params = new URLSearchParams(path.slice(at + 1))
+  if (!params.has('language')) return path
+  params.set('language', chosen)
+  return `${path.slice(0, at)}?${params.toString()}`
+}
+
+/** Where the page is, which decides whose language a read is asked in. */
+function currentPath(): string {
+  return typeof window === 'undefined' ? '/' : window.location.pathname
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${BASE}${path}`, {
+  const reading = !init?.method || init.method === 'GET'
+  const response = await fetch(`${BASE}${reading ? inTextLanguage(path) : path}`, {
     credentials: 'same-origin',
     headers: init?.body ? { 'content-type': 'application/json' } : undefined,
     ...init,

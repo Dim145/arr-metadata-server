@@ -35,6 +35,26 @@ pub struct Query {
     /// A network or a studio, by name.
     pub network: Option<String>,
     pub collection: Option<i64>,
+    /// Works crediting somebody: by their TMDB id, given as digits, or else
+    /// by their name, whatever its case and accents.
+    pub person: Option<String>,
+    /// Works that run at least, or at most, this many minutes: a film's
+    /// length, a series' episodes'.
+    pub runtime_min: Option<i32>,
+    pub runtime_max: Option<i32>,
+    /// Works made in this country, ISO 3166-1 alpha-2: `FR`.
+    pub country: Option<String>,
+    /// Works rated so in [`Self::region`], as that country writes its
+    /// ratings: `12`, `PG-13`. Without a region, the rating a work carries
+    /// as its own.
+    pub certification: Option<String>,
+    /// The country a rating is read in: the reader's.
+    pub region: Option<String>,
+    /// The works a misspelt term was taken for, beside those its letters
+    /// find: `None` until [`tolerate`] has looked, so that a list and its
+    /// count, or its facets, answer for the same works. A caller that wants
+    /// the term's letters alone settles it as none, an empty list.
+    pub tolerance: Option<Vec<String>>,
     /// Works whose score — the one their card leads with — is at least this.
     pub min_rating: Option<f64>,
     /// Works whose last refresh failed.
@@ -61,11 +81,20 @@ pub struct Query {
 pub enum Sort {
     #[default]
     Popularity,
+    /// How well each work answers the term, best first: see `crate::search`.
+    /// Without a term, the same as popularity.
+    Relevance,
     Rating,
     Release,
     Title,
     Added,
     Refreshed,
+    /// A film's length, a series' episodes'.
+    Runtime,
+    /// When a series last aired; a film has no such date and comes last.
+    LastAired,
+    /// How many episodes a series holds, specials aside.
+    Episodes,
 }
 
 impl std::str::FromStr for Sort {
@@ -74,13 +103,18 @@ impl std::str::FromStr for Sort {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "popularity" => Ok(Self::Popularity),
+            "relevance" => Ok(Self::Relevance),
             "rating" => Ok(Self::Rating),
             "release" => Ok(Self::Release),
             "title" => Ok(Self::Title),
             "added" => Ok(Self::Added),
             "refreshed" => Ok(Self::Refreshed),
+            "runtime" => Ok(Self::Runtime),
+            "lastAired" => Ok(Self::LastAired),
+            "episodes" => Ok(Self::Episodes),
             other => Err(format!(
-                "unknown sort {other:?}: expected popularity, rating, release, title, added or refreshed"
+                "unknown sort {other:?}: expected popularity, relevance, rating, release, title, \
+                 added, refreshed, runtime, lastAired or episodes"
             )),
         }
     }
@@ -100,10 +134,19 @@ pub enum Missing {
     /// Never refreshed, although it has an identifier to be refreshed by. A
     /// work entered by hand is never refreshed, and is not one of these.
     Refresh,
+    /// A lock a source moved under since it was set, and which says
+    /// something else than the lock now: see `repo::change::DIVERGING_LOCK`.
+    DivergingLock,
 }
 
 impl Missing {
-    pub const ALL: [Missing; 4] = [Self::Poster, Self::Overview, Self::Imdb, Self::Refresh];
+    pub const ALL: [Missing; 5] = [
+        Self::Poster,
+        Self::Overview,
+        Self::Imdb,
+        Self::Refresh,
+        Self::DivergingLock,
+    ];
 
     pub fn as_str(self) -> &'static str {
         match self {
@@ -111,6 +154,7 @@ impl Missing {
             Self::Overview => "overview",
             Self::Imdb => "imdb",
             Self::Refresh => "refresh",
+            Self::DivergingLock => "divergingLock",
         }
     }
 
@@ -167,6 +211,8 @@ impl Missing {
                    AND EXISTS (SELECT 1 FROM media_external_id e
                                WHERE e.media_id = media_item.id))"
             }
+            // The dashboard's count is the same words, so the two agree.
+            Self::DivergingLock => crate::db::repo::change::DIVERGING_LOCK,
         };
         (words, 0)
     }
@@ -179,7 +225,11 @@ impl std::str::FromStr for Missing {
         Self::ALL
             .into_iter()
             .find(|gap| gap.as_str() == s)
-            .ok_or_else(|| format!("unknown gap {s:?}: expected poster, overview, imdb or refresh"))
+            .ok_or_else(|| {
+                format!(
+                    "unknown gap {s:?}: expected poster, overview, imdb, refresh or divergingLock"
+                )
+            })
     }
 }
 
@@ -191,12 +241,241 @@ impl std::str::FromStr for Missing {
 /// reported a complete run over a fifth of the library.
 pub const MAX_PAGE: i64 = 500;
 
-/// Shallow search over the canonical store.
+/// The works a query lists, a page of them.
 ///
-/// Matching is a case-insensitive substring over the title, the sort title and
-/// every alternative title, which is what clients searching by a localised name
-/// need. Anything more (ranking, typo tolerance) belongs in a later FTS index.
+/// With a term, and in no other order than how well each answers it
+/// ([`Sort::Relevance`]), the works are found and ranked by `crate::search`:
+/// a few hundred names found by the term in the search index, put in order,
+/// the works they name read under the query's other filters. Any further
+/// down the list come in popularity order, so that every work the term
+/// matches is still reachable a page at a time. Otherwise the term narrows
+/// the list like any filter, and the list is in the order asked for.
 pub async fn search(db: &Db, q: &Query) -> Result<Vec<MediaItem>> {
+    match relevance_term(q) {
+        Some(term) => {
+            let finds = find_works(db, q, &term).await?;
+            ranked(db, q, &term, &finds).await
+        }
+        None => listed(db, q).await,
+    }
+}
+
+/// A page of the works a query lists, and how many it lists in all: one look
+/// in the search index for both, so that the count is of the works the page
+/// was drawn from.
+pub async fn search_counted(db: &Db, q: &Query) -> Result<(Vec<MediaItem>, i64)> {
+    let Some(term) = term_of(q) else {
+        return Ok((listed(db, q).await?, count_matching(db, q).await?));
+    };
+    let mut q = q.clone();
+    let items = if q.sort == Sort::Relevance {
+        let finds = find_works(db, &q, &term).await?;
+        if q.tolerance.is_none() {
+            q.tolerance = Some(works_of(&finds.resembling));
+        }
+        ranked(db, &q, &term, &finds).await?
+    } else {
+        tolerate(db, &mut q).await?;
+        listed(db, &q).await?
+    };
+    let total = count_matching(db, &q).await?;
+    Ok((items, total))
+}
+
+/// Settle which works a misspelt term is taken for, once, before a list, its
+/// count or its facets are read with the query: none for a query without a
+/// term, or one already settled. The search index is glanced at, not read
+/// through: a term its letters find in many works forgives nothing, and is
+/// known to at the cost of a few rows.
+pub async fn tolerate(db: &Db, q: &mut Query) -> Result<()> {
+    if q.tolerance.is_some() {
+        return Ok(());
+    }
+    if let Some(term) = term_of(q) {
+        let rows = crate::search::forgiven(db, &term, &works_scope(q)).await?;
+        q.tolerance = Some(works_of(&rows));
+    }
+    Ok(())
+}
+
+/// The term a query searches by, folded, where it has one.
+fn term_of(q: &Query) -> Option<crate::search::Term> {
+    q.term
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .map(crate::search::Term::parse)
+}
+
+/// The term, where the list is to be in the order of how well each work
+/// answers it.
+fn relevance_term(q: &Query) -> Option<crate::search::Term> {
+    (q.sort == Sort::Relevance).then(|| term_of(q)).flatten()
+}
+
+/// The most names each look in the search index brings back: enough that
+/// the work a reader means is among them, few enough to rank at once.
+const POOL: i64 = 200;
+
+/// Where the search index is looked in for a query's term: works, of the
+/// query's kind, as far as it may show them.
+fn works_scope(q: &Query) -> crate::search::Scope {
+    crate::search::Scope {
+        kind: crate::search::Kind::Work,
+        media_kind: q.kind,
+        include_disabled: q.include_disabled,
+        include_adult: q.include_adult,
+        limit: POOL,
+        // Settled already — as none, by a caller that wants the letters
+        // alone — it is not looked for again.
+        forgive: q.tolerance.is_none(),
+    }
+}
+
+/// What the search index finds of works for a query's term.
+async fn find_works(
+    db: &Db,
+    q: &Query,
+    term: &crate::search::Term,
+) -> Result<crate::search::Finds> {
+    crate::search::find(db, term, &works_scope(q)).await
+}
+
+/// The works some rows name, each once, in the rows' order.
+fn works_of(rows: &[crate::search::Found]) -> Vec<String> {
+    let mut ids: Vec<String> = Vec::new();
+    for row in rows {
+        let id = crate::search::subject(row);
+        if !ids.iter().any(|seen| seen == id) {
+            ids.push(id.to_string());
+        }
+    }
+    ids
+}
+
+/// A page of the works found for a term, in the order of how well each
+/// answers it: the works the search index brought, read under the query's
+/// other filters and ranked, then — past them — the rest of what the term
+/// matches, most popular first.
+async fn ranked(
+    db: &Db,
+    q: &Query,
+    term: &crate::search::Term,
+    finds: &crate::search::Finds,
+) -> Result<Vec<MediaItem>> {
+    let mut pool: Vec<String> = Vec::new();
+    for row in finds.all() {
+        let id = crate::search::subject(row);
+        if !pool.iter().any(|seen| seen == id) {
+            pool.push(id.to_string());
+        }
+    }
+
+    // The works found, as the rest of the query narrows them.
+    let mut found: Vec<MediaItem> = Vec::new();
+    if !pool.is_empty() {
+        let others = Query {
+            term: None,
+            tolerance: None,
+            ..q.clone()
+        };
+        let mut sql = format!(
+            "SELECT {ITEM_COLUMNS} FROM media_item WHERE id IN ({})",
+            vec!["?"; pool.len()].join(", ")
+        );
+        let mut args = AnyArguments::default();
+        for id in &pool {
+            args.add(id.clone()).map_err(|e| anyhow::anyhow!("{e}"))?;
+        }
+        narrowed(db.dialect(), &others, true, &mut sql, &mut args)?;
+        let rows = sqlx::query_with(db.sql(&sql), args)
+            .fetch_all(db.pool())
+            .await?;
+        for row in &rows {
+            found.push(map_item(row)?);
+        }
+    }
+
+    // Each work by the best of its names. The title a work is shown under
+    // counts for a little more than its other names, and what it is known by
+    // is its row's, not the copy the index holds.
+    let by_id: HashMap<String, (Option<i32>, Option<f64>, String)> = found
+        .iter()
+        .map(|item| {
+            (
+                item.id.clone(),
+                (item.year, item.popularity, crate::search::norm(&item.title)),
+            )
+        })
+        .collect();
+    let order = crate::search::best_first(
+        term,
+        finds
+            .all()
+            .filter(|row| by_id.contains_key(crate::search::subject(row))),
+        |row| {
+            let (year, popularity, title) = &by_id[crate::search::subject(row)];
+            (*year, *popularity, &row.norm == title)
+        },
+    );
+    let rank: HashMap<&str, usize> = order
+        .iter()
+        .enumerate()
+        .map(|(at, (id, _))| (id.as_str(), at))
+        .collect();
+    found.retain(|item| rank.contains_key(item.id.as_str()));
+    found.sort_by_key(|item| rank[item.id.as_str()]);
+
+    let limit = q.limit.clamp(1, MAX_PAGE) as usize;
+    let offset = q.offset.max(0) as usize;
+    let ranked_count = found.len();
+    let mut page: Vec<MediaItem> = found.into_iter().skip(offset).take(limit).collect();
+
+    // Past the works ranked: the rest of what the term matches, which the
+    // index was not asked for, most popular first — when there is a rest:
+    // reads that stopped short of their limit brought every name it matches.
+    if page.len() < limit && !finds.complete {
+        let mut sql = format!("SELECT {ITEM_COLUMNS} FROM media_item WHERE 1 = 1");
+        let mut args = AnyArguments::default();
+        let settled = Query {
+            tolerance: Some(
+                q.tolerance
+                    .clone()
+                    .unwrap_or_else(|| works_of(&finds.resembling)),
+            ),
+            ..q.clone()
+        };
+        narrow(db.dialect(), &settled, &mut sql, &mut args)?;
+        let ranked_ids: Vec<&str> = rank.keys().copied().collect();
+        if !ranked_ids.is_empty() {
+            sql.push_str(&format!(
+                " AND id NOT IN ({})",
+                vec!["?"; ranked_ids.len()].join(", ")
+            ));
+            for id in &ranked_ids {
+                args.add(id.to_string())
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+            }
+        }
+        sql.push_str(" ORDER BY (popularity + 0) DESC NULLS LAST, title ASC LIMIT ? OFFSET ?");
+        args.add((limit - page.len()) as i64)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        args.add(offset.saturating_sub(ranked_count) as i64)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let rows = sqlx::query_with(db.sql(&sql), args)
+            .fetch_all(db.pool())
+            .await?;
+        for row in &rows {
+            page.push(map_item(row)?);
+        }
+    }
+
+    attach_external_ids(db, &mut page).await?;
+    Ok(page)
+}
+
+/// A page of the works a query lists, in the order it asks for.
+async fn listed(db: &Db, q: &Query) -> Result<Vec<MediaItem>> {
     let mut sql = format!(
         "SELECT {ITEM_COLUMNS} FROM {} WHERE 1 = 1",
         from_clause(db, q)
@@ -278,30 +557,20 @@ pub(super) async fn attach_external_ids(db: &Db, items: &mut [MediaItem]) -> Res
     Ok(())
 }
 
-/// Whether a query searches text, which no index can help with.
+/// Whether a query searches text.
 fn searches_text(q: &Query) -> bool {
     q.term.as_deref().is_some_and(|t| !t.trim().is_empty())
 }
 
-/// The table to read, and — for a text search on SQLite — the instruction to
-/// read it straight through.
+/// The table to read.
 ///
-/// `LIKE '%term%'` has to look at every row, so a text search is a full read
-/// whatever happens. But `ix_media_item_browse` carries `is_enabled` and
-/// `is_adult`, and SQLite's planner prefers filtering through an index that
-/// holds the filter columns to reading the table: it walks the index, then
-/// fetches nearly every row from the table one at a time, because nearly every
-/// row passes. Measured at fifty thousand works, a search for a term that
-/// matched nothing went from 22 ms to 97 ms that way — and a search for
-/// something not yet stored is exactly what every Sonarr and Radarr search does
-/// first. `NOT INDEXED` is SQLite's own spelling of "don't"; PostgreSQL's cost
-/// model gets there by itself once [`order_clause`] stops it walking an index
-/// for the order.
-pub(super) fn from_clause(db: &Db, q: &Query) -> &'static str {
-    match (db.dialect(), searches_text(q)) {
-        (crate::db::Dialect::Sqlite, true) => "media_item NOT INDEXED",
-        _ => "media_item",
-    }
+/// A text search was once a `LIKE '%term%'` over every row, and read the
+/// table straight through (`NOT INDEXED`) rather than let SQLite walk an
+/// index of the filter columns for it. The term is now a set of works the
+/// search index names — `id IN (…)` — which is best read by the key, as
+/// either engine does unprompted.
+pub(super) fn from_clause(_db: &Db, _q: &Query) -> &'static str {
+    "media_item"
 }
 
 /// The order every list is in.
@@ -311,21 +580,31 @@ pub(super) fn from_clause(db: &Db, q: &Query) -> &'static str {
 /// `ix_media_item_popular` in order, betting that enough rows match early to
 /// stop after thirty-six — a bet that loses badly for a term matching nothing,
 /// 38 ms becoming 59 at fifty thousand works. With nothing to walk it reads
-/// the table and sorts what matched, which is what a text search costs anyway.
+/// what the term matched and sorts it, which is what a text search costs anyway.
 ///
 /// Anything but popularity is sorted rather than walked: nothing is indexed
 /// by score or date, and for a catalogue's worth of rows that costs little.
 /// Missing values go last whichever way the list runs, so a work with no date
-/// is not presented as the oldest.
+/// is not presented as the oldest, nor a film among the series that ran
+/// longest.
 fn order_clause(q: &Query) -> String {
     let (expression, descending) = match q.sort {
-        Sort::Popularity if searches_text(q) => ("(popularity + 0)", true),
-        Sort::Popularity => ("popularity", true),
+        Sort::Popularity | Sort::Relevance if searches_text(q) => ("(popularity + 0)", true),
+        Sort::Popularity | Sort::Relevance => ("popularity", true),
         Sort::Rating => ("listed_score", true),
         Sort::Release => ("listed_release", true),
         Sort::Title => ("listed_title", false),
         Sort::Added => ("created_at", true),
         Sort::Refreshed => ("refreshed_at", true),
+        Sort::Runtime => ("runtime", true),
+        Sort::LastAired => ("last_aired", true),
+        // Counted off `ix_episode_media`, one work at a time: the specials
+        // are not what "how many episodes" asks about.
+        Sort::Episodes => (
+            "(SELECT COUNT(*) FROM media_episode e
+               WHERE e.media_id = media_item.id AND e.season_number > 0)",
+            true,
+        ),
     };
 
     let direction = if q.descending.unwrap_or(descending) {
@@ -465,6 +744,126 @@ pub async fn load_artwork(db: &Db, items: &mut [MediaItem]) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// The countries the works a query lists were made in, with how many works
+/// each — counted as if the query named no country, as the other facets
+/// count a choice that replaces the one made — most common first.
+pub async fn country_facets(db: &Db, q: &Query) -> Result<Vec<super::Facet>> {
+    let others = Query {
+        country: None,
+        ..q.clone()
+    };
+    let mut sql = format!(
+        "SELECT production_countries, original_country FROM {} WHERE 1 = 1",
+        from_clause(db, &others)
+    );
+    let mut args = AnyArguments::default();
+    narrow(db.dialect(), &others, &mut sql, &mut args)?;
+    let rows = sqlx::query_with(db.sql(&sql), args)
+        .fetch_all(db.pool())
+        .await?;
+
+    let mut counts: HashMap<String, i64> = HashMap::new();
+    for row in &rows {
+        let mut made: Vec<String> = row.text_list("production_countries")?;
+        made.extend(row.opt_text("original_country")?);
+        let mut seen = std::collections::HashSet::new();
+        for country in made {
+            let country = country.trim().to_ascii_uppercase();
+            if country.len() == 2 && seen.insert(country.clone()) {
+                *counts.entry(country).or_default() += 1;
+            }
+        }
+    }
+    let mut facets: Vec<super::Facet> = counts
+        .into_iter()
+        .map(|(value, count)| super::Facet { value, count })
+        .collect();
+    facets.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.value.cmp(&b.value)));
+    Ok(facets)
+}
+
+/// The ratings the works a query lists carry in its region — or as their own,
+/// without one — with how many works each, counted as if the query named no
+/// rating. In the order the region's ratings run where they are ages, `12`
+/// before `16`; most common first otherwise.
+pub async fn certification_facets(db: &Db, q: &Query) -> Result<Vec<super::Facet>> {
+    let others = Query {
+        certification: None,
+        ..q.clone()
+    };
+    // The works the list holds without its rating, read once: a common
+    // table, kept for the statement, where a region names it twice — a
+    // term's match in the search index is not run once for each.
+    let mut listed = format!("SELECT id FROM {} WHERE 1 = 1", from_clause(db, &others));
+    let mut args = AnyArguments::default();
+    narrow(db.dialect(), &others, &mut listed, &mut args)?;
+
+    let region = q.region.as_deref().map(str::trim).filter(|r| !r.is_empty());
+    let sql = match region {
+        Some(region) => {
+            for _ in 0..2 {
+                args.add(region.to_string())
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+            }
+            format!(
+                "WITH listed AS MATERIALIZED ({listed})
+                 SELECT media_id AS id, certification AS rating FROM media_release
+                  WHERE country = ? AND certification IS NOT NULL AND certification <> ''
+                    AND media_id IN (SELECT id FROM listed)
+                 UNION
+                 SELECT id, content_rating AS rating FROM media_item
+                  WHERE content_rating_country = ? AND content_rating IS NOT NULL
+                    AND content_rating <> '' AND id IN (SELECT id FROM listed)"
+            )
+        }
+        None => format!(
+            "SELECT id, content_rating AS rating FROM media_item
+              WHERE content_rating IS NOT NULL AND content_rating <> '' AND id IN ({listed})"
+        ),
+    };
+    let rows = sqlx::query_with(db.sql(&sql), args)
+        .fetch_all(db.pool())
+        .await?;
+
+    let mut counts: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
+    for row in &rows {
+        let rating = row.text("rating")?.trim().to_string();
+        if !rating.is_empty() {
+            counts.entry(rating).or_default().insert(row.text("id")?);
+        }
+    }
+    let mut facets: Vec<super::Facet> = counts
+        .into_iter()
+        .map(|(value, works)| super::Facet {
+            value,
+            count: works.len() as i64,
+        })
+        .collect();
+    let ages = facets.iter().all(|f| age(&f.value).is_some());
+    facets.sort_by(|a, b| {
+        if ages {
+            age(&a.value)
+                .cmp(&age(&b.value))
+                .then_with(|| a.value.cmp(&b.value))
+        } else {
+            b.count.cmp(&a.count).then_with(|| a.value.cmp(&b.value))
+        }
+    });
+    Ok(facets)
+}
+
+/// The age a rating names, where it is one: `12`, `16+`, `-12`, `FSK 16`.
+fn age(rating: &str) -> Option<u32> {
+    let digits: String = rating.chars().filter(char::is_ascii_digit).collect();
+    let rest = rating
+        .chars()
+        .filter(|c| !c.is_ascii_digit() && !matches!(c, '+' | '-' | ' '))
+        .count();
+    (rest <= 3 && !digits.is_empty())
+        .then(|| digits.parse().ok())
+        .flatten()
 }
 
 /// The most collections one listing carries.
@@ -653,12 +1052,39 @@ pub(super) fn narrow(
     sql: &mut String,
     args: &mut AnyArguments,
 ) -> Result<()> {
+    let named = term_of(q).is_some();
+    narrowed(dialect, q, named, sql, args)
+}
+
+/// [`narrow`], told whether the statement's works are named already — by a
+/// term's match in the search index, or a list of ids the statement holds.
+///
+/// Named, SQLite is kept from reading them through an index of their kind or
+/// of what is shown, by a unary `+` before those columns. With no figures on
+/// what the columns hold, its planner takes `kind = 'series'` for a handful
+/// of rows, and read the twenty thousand series of a fifty-thousand-work
+/// catalogue to keep the few a term named: 40 ms for a count the works' own
+/// keys answer in one, every page and every facet of a search of series.
+/// PostgreSQL keeps figures, and has no `+` for text.
+fn narrowed(
+    dialect: crate::db::Dialect,
+    q: &Query,
+    named: bool,
+    sql: &mut String,
+    args: &mut AnyArguments,
+) -> Result<()> {
+    let plain = if named && dialect == crate::db::Dialect::Sqlite {
+        "+"
+    } else {
+        ""
+    };
+
     if !q.include_disabled {
-        sql.push_str(" AND is_enabled = 1");
+        sql.push_str(&format!(" AND {plain}is_enabled = 1"));
     }
 
     if let Some(kind) = q.kind {
-        sql.push_str(" AND kind = ?");
+        sql.push_str(&format!(" AND {plain}kind = ?"));
         args.add(kind.as_str().to_string())
             .map_err(|e| anyhow::anyhow!("{e}"))?;
     }
@@ -786,6 +1212,93 @@ pub(super) fn narrow(
         args.add(collection).map_err(|e| anyhow::anyhow!("{e}"))?;
     }
 
+    // Somebody by their TMDB id, or by their name as the search index folds
+    // it — so `wim wenders` and `Wim Wenders` are one person, and so is
+    // `Pedro Almodovar` without his accent — on either engine alike. The
+    // index's people's rows say which ids and which names that is.
+    if let Some(person) = q.person.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+        if let Ok(tmdb_id) = person.parse::<i64>() {
+            sql.push_str(" AND id IN (SELECT media_id FROM media_credit WHERE tmdb_person_id = ?)");
+            args.add(tmdb_id).map_err(|e| anyhow::anyhow!("{e}"))?;
+        } else {
+            sql.push_str(
+                " AND id IN (SELECT c.media_id FROM media_credit c
+                             WHERE c.tmdb_person_id IN (
+                                       SELECT CAST(substr(d.ref_id, 6) AS BIGINT) FROM search_doc d
+                                        WHERE d.kind = 'person' AND d.norm = ?
+                                          AND substr(d.ref_id, 1, 5) = 'tmdb:')
+                                OR (c.tmdb_person_id IS NULL AND c.person_name IN (
+                                       SELECT substr(d.ref_id, 6) FROM search_doc d
+                                        WHERE d.kind = 'person' AND d.norm = ?
+                                          AND substr(d.ref_id, 1, 5) = 'name:')))",
+            );
+            let folded = crate::search::norm(person);
+            for _ in 0..2 {
+                args.add(folded.clone())
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+            }
+        }
+    }
+
+    if let Some(least) = q.runtime_min {
+        sql.push_str(" AND runtime >= ?");
+        args.add(i64::from(least))
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+    }
+    if let Some(most) = q.runtime_max {
+        sql.push_str(" AND runtime <= ?");
+        args.add(i64::from(most))
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+    }
+
+    // Among the countries it was made in, as the genres are matched: whole,
+    // inside the JSON list. A series filed under its country of origin alone
+    // is found by that.
+    if let Some(country) = q
+        .country
+        .as_deref()
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
+    {
+        let country = country.to_ascii_uppercase();
+        sql.push_str(
+            " AND (REPLACE(production_countries, ?, '') <> production_countries
+                   OR original_country = ?)",
+        );
+        args.add(json_element(&country))
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        args.add(country).map_err(|e| anyhow::anyhow!("{e}"))?;
+    }
+
+    // The rating a country gives the work: one of its releases there, or the
+    // rating the work carries as its own when that is the country's. Without
+    // a country, the work's own.
+    if let Some(rating) = q
+        .certification
+        .as_deref()
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
+    {
+        match q.region.as_deref().map(str::trim).filter(|r| !r.is_empty()) {
+            Some(region) => {
+                sql.push_str(
+                    " AND (id IN (SELECT media_id FROM media_release
+                                  WHERE country = ? AND certification = ?)
+                           OR (content_rating = ? AND content_rating_country = ?))",
+                );
+                for value in [region, rating, rating, region] {
+                    args.add(value.to_string())
+                        .map_err(|e| anyhow::anyhow!("{e}"))?;
+                }
+            }
+            None => {
+                sql.push_str(" AND content_rating = ?");
+                args.add(rating.to_string())
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+            }
+        }
+    }
+
     if let Some(min) = q.min_rating.filter(|m| *m > 0.0) {
         sql.push_str(" AND listed_score >= ?");
         args.add(min).map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -796,8 +1309,7 @@ pub(super) fn narrow(
     }
 
     // Each gap narrows further: asked for a poster and an overview, the list
-    // is of the works lacking both. Before the text search, which ends the
-    // statement early on SQLite.
+    // is of the works lacking both.
     for gap in &q.missing {
         let (condition, binds) = gap.condition();
         sql.push_str(" AND ");
@@ -811,76 +1323,29 @@ pub(super) fn narrow(
     }
 
     if !q.include_adult {
-        sql.push_str(" AND is_adult = 0");
+        sql.push_str(&format!(" AND {plain}is_adult = 0"));
     }
 
+    // The works the search index finds by the term's letters — or, read as a
+    // title and a year, by the title's — and those a misspelt term was taken
+    // for, once that is settled (see `tolerate`).
     if let Some(term) = q.term.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
-        // SQLite: the trigram index over every title the work goes by, folded
-        // of case and accents — a substring match like `LIKE`'s, read off an
-        // index. A trigram needs three characters; shorter, `LIKE` it is.
-        // PostgreSQL runs the `LIKE`s below, which pg_trgm indexes as they
-        // are written.
-        if dialect == crate::db::Dialect::Sqlite && term.chars().count() >= 3 {
-            sql.push_str(
-                " AND id IN (SELECT media_id FROM media_search WHERE media_search MATCH ?)",
-            );
-            args.add(fts_phrase(term))
-                .map_err(|e| anyhow::anyhow!("{e}"))?;
-            return Ok(());
-        }
-        // Matched as typed: `%` and `_` are characters a title can hold, not
-        // wildcards. `_` found every work, and `a_c` found `abc`.
-        let pattern = format!("%{}%", like_escaped(&term.to_lowercase()));
-
-        // The stored title is the provider's. Someone who renamed a work will
-        // look for it by the name they gave it, so overrides are searched too:
-        // the value is JSON, but a substring match over the encoded string finds
-        // it either way.
-        // The slug as well, and it is the one that does the real work for
-        // anything not written in ASCII. `LOWER` is the engines' own, and they
-        // disagree: PostgreSQL folds `Été` to `été`, SQLite folds only ASCII and
-        // leaves it as `Été` — so a search for `été` found the work on one
-        // engine and not the other. The slug was transliterated when the work
-        // was stored, so `ete` matches `Été` on both. A term with no letter or
-        // digit in it has no slug, and is not looked for in one: the slug of
-        // nothing was `untitled`, and found every work named so.
-        let slugged = slug::slugify(term);
-        sql.push_str(
-            r" AND (LOWER(title) LIKE ? ESCAPE '\'
-                   OR LOWER(COALESCE(sort_title, '')) LIKE ? ESCAPE '\'
-                   OR id IN (SELECT media_id FROM media_alternative_title
-                             WHERE LOWER(title) LIKE ? ESCAPE '\')
-                   OR id IN (SELECT media_id FROM media_override
-                             WHERE field IN ('title', 'sortTitle', 'originalTitle')
-                               AND LOWER(COALESCE(value, '')) LIKE ? ESCAPE '\')",
-        );
-        for _ in 0..4 {
-            args.add(pattern.clone())
-                .map_err(|e| anyhow::anyhow!("{e}"))?;
-        }
-        if !slugged.is_empty() {
-            sql.push_str(r" OR slug LIKE ? ESCAPE '\'");
-            args.add(format!("%{}%", like_escaped(&slugged)))
-                .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let term = crate::search::Term::parse(term);
+        sql.push_str(" AND (");
+        crate::search::candidates::push_works(dialect, &term.forms(), sql, args)?;
+        if let Some(taken) = q.tolerance.as_ref().filter(|ids| !ids.is_empty()) {
+            sql.push_str(&format!(
+                " OR id IN ({})",
+                vec!["?"; taken.len()].join(", ")
+            ));
+            for id in taken {
+                args.add(id.clone()).map_err(|e| anyhow::anyhow!("{e}"))?;
+            }
         }
         sql.push(')');
     }
 
     Ok(())
-}
-
-/// Text as a `LIKE` pattern matches it, whatever it holds: the wildcards
-/// `%` and `_`, and `\` that escapes them (`ESCAPE '\'`), each escaped.
-fn like_escaped(text: &str) -> String {
-    text.replace('\\', r"\\")
-        .replace('%', r"\%")
-        .replace('_', r"\_")
-}
-
-/// A term as one FTS5 phrase: quoted, so nothing in it is read as syntax,
-/// and matched whole — every trigram of it, in order.
-fn fts_phrase(term: &str) -> String {
-    format!("\"{}\"", term.replace('"', "\"\""))
 }
 
 pub async fn count(db: &Db, kind: Option<MediaKind>) -> Result<i64> {
@@ -937,12 +1402,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_list_is_read_in_index_order_and_a_text_search_is_not() {
+    async fn a_list_is_read_in_index_order_and_a_text_search_from_the_search_index() {
         // The whole point of migration 0007, pinned: a page of one kind comes
         // straight off `ix_media_item_browse` with no sort, a page of every kind
-        // off `ix_media_item_popular` — and a text search reads the table,
-        // because walking either index for it measured four times slower on a
-        // term that matched nothing.
+        // off `ix_media_item_popular` — and a text search reads neither, since
+        // walking either for it measured four times slower on a term that
+        // matched nothing: it reads the works the search index names, by
+        // their key.
         //
         // SQLite's, whatever engine the other tests run on: the plan is read
         // with its own `EXPLAIN QUERY PLAN`, and means nothing to PostgreSQL's.
@@ -984,8 +1450,34 @@ mod tests {
         )
         .await;
         assert!(
-            !text.contains("USING INDEX"),
-            "a text search walked an index: {text}"
+            text.contains("VIRTUAL TABLE") && text.contains("(id=?)"),
+            "a text search did not start from the search index: {text}"
+        );
+        assert!(
+            !text.contains("ix_media_item_browse") && !text.contains("ix_media_item_popular"),
+            "a text search walked an index of the list: {text}"
+        );
+
+        // Of one kind too. Told nothing of what `kind` holds, SQLite took
+        // `kind = 'series'` for a handful of rows, and read every series
+        // through an index of their kind to keep the few the term named.
+        let text_of_a_kind = plan(
+            &db,
+            &Query {
+                term: Some("breaking".into()),
+                kind: Some(MediaKind::Series),
+                limit: 36,
+                ..Default::default()
+            },
+        )
+        .await;
+        assert!(
+            text_of_a_kind.contains("VIRTUAL TABLE") && text_of_a_kind.contains("(id=?)"),
+            "a text search of series did not start from the search index: {text_of_a_kind}"
+        );
+        assert!(
+            !text_of_a_kind.contains("(kind=?"),
+            "a text search of series read the series by their kind: {text_of_a_kind}"
         );
     }
 
@@ -1054,6 +1546,9 @@ mod tests {
         )
         .await
         .unwrap();
+        // The lock marks the work, and the server writes its rows of the
+        // index again within seconds; here, at once.
+        crate::db::repo::search::catch_up(&db, 10).await.unwrap();
 
         let found = |term: &str| {
             let db = &db;
@@ -1562,13 +2057,51 @@ mod tests {
         assert_eq!(episode_count(&db, true, true).await.unwrap(), episodes);
     }
 
-    #[test]
-    fn a_term_is_escaped_into_a_pattern_that_matches_it_as_typed() {
-        assert_eq!(like_escaped("100%"), r"100\%");
-        assert_eq!(like_escaped("a_c"), r"a\_c");
-        assert_eq!(like_escaped(r"back\slash"), r"back\\slash");
-        assert_eq!(like_escaped(r"\%_"), r"\\\%\_");
-        assert_eq!(like_escaped("plain"), "plain");
+    #[tokio::test]
+    async fn a_lock_its_sources_moved_under_is_a_gap_the_register_lists() {
+        let db = db().await;
+        let locked = stored(&db, |i| i.title = "Locked".into()).await;
+        stored(&db, |i| i.title = "Untouched".into()).await;
+        crate::db::repo::override_field::set(
+            &db,
+            &locked.id,
+            crate::domain::fields::Scope::Item,
+            "overview",
+            Some(&serde_json::json!("Written by hand.")),
+            None,
+        )
+        .await
+        .expect("locked");
+        // A refresh since the lock, whose source says something else now.
+        sqlx::query(db.sql(
+            "INSERT INTO media_change
+                 (id, media_id, at, cause, scope, field, language, value_before, value_after,
+                  was_locked)
+             VALUES (?, ?, '2999-01-01T00:00:00.000Z', 'refresh', 'item', 'overview', '',
+                     ?, ?, 1)",
+        ))
+        .bind(crate::db::new_id())
+        .bind(&locked.id)
+        .bind(r#""As it was.""#)
+        .bind(r#""As the source has it now.""#)
+        .execute(db.pool())
+        .await
+        .expect("journaled");
+
+        let query = Query {
+            missing: vec!["divergingLock".parse().expect("a gap")],
+            include_disabled: true,
+            include_adult: true,
+            ..Default::default()
+        };
+        assert_eq!(titles(&db, query.clone()).await, ["Locked"]);
+        assert_eq!(
+            count_matching(&db, &query).await.expect("counted"),
+            crate::db::repo::change::count_diverging(&db, true)
+                .await
+                .expect("counted"),
+            "the register and the dashboard count the same works"
+        );
     }
 
     #[tokio::test]
@@ -1589,15 +2122,19 @@ mod tests {
             )
         };
 
-        // Terms shorter than a trigram take the `LIKE` path on SQLite, as
-        // every term does on PostgreSQL. `%` and `_` found every work.
-        assert_eq!(found("%").await, ["50% Off"]);
-        assert_eq!(found("_").await, ["snake_case"]);
+        // A term is folded before it is looked for, its punctuation a space:
+        // `%` and `_` are no wildcards, and a term of punctuation alone is
+        // nothing to look for — it finds nothing, where it once found every
+        // work.
+        assert_eq!(found("%").await, Vec::<String>::new());
+        assert_eq!(found("_").await, Vec::<String>::new());
         assert_eq!(found("%%").await, Vec::<String>::new());
         assert_eq!(found(r"\").await, Vec::<String>::new());
-        // A term with nothing to make a slug of is not looked for in the
-        // slugs: the slug of nothing was `untitled`.
         assert_eq!(found("!").await, Vec::<String>::new());
+        assert_eq!(found("a_c").await, Vec::<String>::new());
+        // Written as it is stored, a title is found.
+        assert_eq!(found("50%").await, ["50% Off"]);
+        assert_eq!(found("snake_case").await, ["snake_case"]);
         // An ordinary short term still matches as it did.
         assert_eq!(found("ab").await, ["Abc"]);
     }

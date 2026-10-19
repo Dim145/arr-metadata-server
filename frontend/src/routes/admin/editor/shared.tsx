@@ -16,10 +16,10 @@ import { cn } from '../../../lib/cn'
 import { useI18n } from '../../../lib/i18n'
 import type { MediaItem } from '../../../lib/types'
 
-/** The sections of the editor, in the order the tabs show them. */
-export type Tab = 'record' | 'seasons' | 'artwork' | 'people' | 'elsewhere'
+/** The sections of the editor, in the order the tabs show them: the journal of what changed last. */
+export type Tab = 'record' | 'seasons' | 'artwork' | 'people' | 'elsewhere' | 'journal'
 
-export const TABS: Tab[] = ['record', 'seasons', 'artwork', 'people', 'elsewhere']
+export const TABS: Tab[] = ['record', 'seasons', 'artwork', 'people', 'elsewhere', 'journal']
 
 export function isTab(value: string | null): value is Tab {
   return TABS.includes(value as Tab)
@@ -51,6 +51,9 @@ export function tabOfAnchor(hash: string): Tab | undefined {
     case 'related':
     case 'orders':
       return 'elsewhere'
+    case 'journal':
+    case 'changes':
+      return 'journal'
     default:
       return undefined
   }

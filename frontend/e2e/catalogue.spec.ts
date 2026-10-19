@@ -63,9 +63,14 @@ test.describe('the catalogue', () => {
     expect((await title.textContent())?.trim()).not.toBe('')
     await expect(page.getByRole('link', { name: /details|fiche/i }).first()).toBeVisible()
 
-    // Both kinds are offered, and each row says how many it is a window onto.
-    await expect(page.getByRole('heading', { name: /^(Series|Séries)$/ })).toBeVisible()
-    await expect(page.getByRole('heading', { name: /^(Films)$/ })).toBeVisible()
+    // The arrivals are offered — those with a trailer where there are enough
+    // of them — and the row says how many it is a window onto.
+    await expect(
+      page.getByRole('heading', {
+        name: /^(Recently added|Ajoutés récemment|New, with a trailer|Nouveautés avec bande-annonce)$/,
+      }),
+    ).toBeVisible()
+    await expect(page.locator('a[href="/browse?order=added"]')).toContainText(/\d/)
   })
 
   test('every poster carries a described image or a placeholder, never a bare box', async ({
@@ -170,6 +175,9 @@ test.describe('the catalogue', () => {
     test.skip(!work, 'the catalogue holds no series')
 
     await page.goto('/')
+    // Drawn once its language is in: below a laptop's width the search is a
+    // button that opens the field, and the button is there only then.
+    await expect(page.locator('a[href^="/work/"]').first()).toBeVisible()
     const reveal = page.getByRole('button', { name: /^(search|rechercher)/i })
     if (await reveal.isVisible()) await reveal.click()
 
@@ -426,12 +434,15 @@ test.describe('a work', () => {
  * the foot of the screen opens — together with the logo, search and a menu
  * button at the top they were wider than the screen, and at 320px the menu
  * button itself was pushed off the edge. Opening the sheet first, when there
- * is one, is what a person on a phone does.
+ * is one, is what a person on a phone does. Wider, the language is in the
+ * small menu beside the search, which is opened in its place.
  */
 async function openMenuIfNarrow(page: Page) {
   const more = page.getByRole('button', { name: /^(more|plus)$/i })
   if (await more.isVisible()) {
     await more.click()
+  } else {
+    await page.getByRole('button', { name: /^(language and reading|langue et lecture)/i }).click()
   }
 }
 

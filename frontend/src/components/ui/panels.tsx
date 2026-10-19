@@ -111,8 +111,12 @@ export function OnThisPage({
               href={`#${entry.id}`}
               aria-current={current === entry.id ? 'location' : undefined}
               className={cn(
-                'hit inline-flex min-h-9 items-center rounded-full px-3 text-[0.8125rem] transition-colors duration-150',
-                current === entry.id ? 'bg-ink-top text-bone' : 'text-bone-dim hover:text-bone',
+                'hit inline-flex min-h-9 items-center rounded-full px-3 text-body-sm transition-colors duration-150',
+                // The section in view is marked by a lighter surface, which
+                // forced colours flatten: there it wears the selection colours.
+                current === entry.id
+                  ? 'bg-ink-top text-bone forced-colors:bg-[color:Highlight] forced-colors:text-[color:HighlightText]'
+                  : 'text-bone-dim hover:text-bone',
               )}
             >
               {entry.label}

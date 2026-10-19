@@ -4,8 +4,10 @@
  * The record is a card in five sections, each a tab: the fields and the
  * sources behind them, the seasons and their episodes, the artwork, the
  * people and the other titles, and the work as the rest of the world files
- * it. The address carries which is open, so a season's own page, the back
- * button and a bookmark all land where they meant to.
+ * it — and a sixth, its journal of what changed. The address carries which
+ * is open, so a season's own page, the back button and a bookmark all land
+ * where they meant to. A refresh shows what it would change before it is
+ * run.
  *
  * The lock is the product, so it is the loudest thing on every row: a brass
  * edge, a padlock beside the field's name and the word itself in a chip.
@@ -32,9 +34,11 @@ import type { FieldRegistry, MediaItem, Override, ProvenanceReport, Uploaded } f
 import { ArtworkTab } from './editor/ArtworkTab'
 import { ElsewhereTab } from './editor/ElsewhereTab'
 import { ImagePicker, type Candidate } from './editor/ImagePicker'
+import { JournalTab } from './editor/JournalTab'
 import { EditorLocksContext, type EditorLocks } from './editor/locks'
 import { PeopleTab } from './editor/PeopleTab'
 import { RecordTab } from './editor/RecordTab'
+import { RefreshReview } from './editor/RefreshReview'
 import { SeasonsTab } from './editor/SeasonsTab'
 import { Count, Facts, LockBadge, TABS, isTab, tabOfAnchor, type Tab } from './editor/shared'
 
@@ -119,6 +123,8 @@ export function WorkEditor() {
     mutationFn: () => api.post<MediaItem>(`/items/${segment(id)}/refresh`),
     onSuccess: invalidate,
   })
+  // What a refresh would change is shown first, and it is run from there.
+  const [reviewing, setReviewing] = useState(false)
 
   // The poster and the background the work leads with, chosen from the
   // masthead: the same lock the artwork tab's star sets, reached from where
@@ -237,6 +243,7 @@ export function WorkEditor() {
       </>
     ),
     elsewhere: identifiers ? <Count>{identifiers}</Count> : null,
+    journal: null,
   }
 
   return (
@@ -380,7 +387,7 @@ export function WorkEditor() {
           {/* Two to a row on a phone, a row of their own at the widest. */}
           <div className="grid grid-cols-2 gap-2 sm:col-span-2 sm:flex sm:flex-wrap xl:col-span-1 xl:justify-end xl:self-end xl:pb-1">
             {work.isManual ? null : (
-              <Button onClick={() => refresh.mutate()} disabled={refresh.isPending}>
+              <Button onClick={() => setReviewing(true)} disabled={refresh.isPending}>
                 {refresh.isPending ? <Spinner className="size-4" /> : <Glyph name="refresh" className="size-4" />}
                 {/* The whole phrase where there is room; the verb alone on a
                     phone, where three lines of button were half the masthead. */}
@@ -403,6 +410,10 @@ export function WorkEditor() {
           </div>
         </div>
       </header>
+
+      {reviewing ? (
+        <RefreshReview work={work} registry={registry.data} onClose={() => setReviewing(false)} onRefresh={() => refresh.mutate()} />
+      ) : null}
 
       {choosing ? (
         <ImagePicker
@@ -471,7 +482,7 @@ export function WorkEditor() {
               language={language}
               onLanguage={setLanguage}
               refreshing={refresh.isPending}
-              onRefresh={() => refresh.mutate()}
+              onRefresh={() => setReviewing(true)}
               onChanged={invalidate}
             />
           ) : shown === 'seasons' ? (
@@ -480,6 +491,8 @@ export function WorkEditor() {
             <ArtworkTab work={work} onChanged={invalidate} />
           ) : shown === 'people' ? (
             <PeopleTab work={work} report={report.data} onChanged={invalidate} />
+          ) : shown === 'journal' ? (
+            <JournalTab work={work} registry={registry.data} onChanged={invalidate} />
           ) : (
             <ElsewhereTab work={work} overrides={locks} onChanged={invalidate} />
           )}

@@ -1082,6 +1082,10 @@ impl Matcher<'_> {
             term: Some(title.to_string()),
             kind: Some(kind),
             include_adult: self.adult,
+            // The best named first, by their letters alone: a work that only
+            // resembles a file's name is no match for it.
+            sort: repo::item::Sort::Relevance,
+            tolerance: Some(Vec::new()),
             limit: HELD_CANDIDATES,
             ..Default::default()
         };

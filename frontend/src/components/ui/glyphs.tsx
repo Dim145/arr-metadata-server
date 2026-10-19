@@ -31,6 +31,8 @@ const PATHS = {
     </>
   ),
   cloud: <path d="M4.5 12.5a3 3 0 0 1 .3-6 4 4 0 0 1 7.6 1.2 2.4 2.4 0 0 1-.4 4.8Z" />,
+  // The same cloud, struck through: no network between the page and its server.
+  offline: <path d="M4.5 12.5a3 3 0 0 1 .3-6 4 4 0 0 1 7.6 1.2 2.4 2.4 0 0 1-.4 4.8ZM2.5 2.5l11 11" />,
   alert: <path d="M8 5v4M8 11.5v.01M8 2 1.5 13.5h13Z" />,
   reel: (
     <>

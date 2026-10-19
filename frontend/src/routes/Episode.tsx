@@ -12,7 +12,7 @@ import { Link, useParams } from 'react-router'
 
 import { Elsewhere, ExternalLink, Trail } from '../components/elsewhere'
 import { Placement, finaleLabel } from '../components/episodes'
-import { Artwork, Score } from '../components/media'
+import { Artwork, Score, VEILED, Veil, useVeiled } from '../components/media'
 import { Chip, Field, Glyph, Panel, PanelHead, SectionTitle, Skeleton } from '../components/ui'
 import { ApiError } from '../lib/api'
 import { cn } from '../lib/cn'
@@ -52,6 +52,9 @@ export function Episode() {
 function Card({ item, episode }: { item: MediaItem; episode: EpisodeData }) {
   const { t, locale } = useI18n()
   const me = useMe()
+  // Its pictures are the work's, and veiled as the work's are (see
+  // `useVeiled`): uncovered here, they are uncovered on its page too.
+  const veiled = useVeiled(item)
 
   const seasonMeta = item.seasons?.find((s) => s.seasonNumber === episode.seasonNumber)
   const season = seasonName(seasonMeta?.title, episode.seasonNumber, t.work.season)
@@ -96,7 +99,7 @@ function Card({ item, episode }: { item: MediaItem; episode: EpisodeData }) {
               eager
               fetchPriority="high"
               alt={t.a11y.still(title)}
-              className="fade-in size-full object-cover"
+              className={cn('fade-in size-full object-cover', veiled && VEILED)}
             />
           ) : (
             <div className="grid size-full place-items-center">
@@ -106,6 +109,7 @@ function Card({ item, episode }: { item: MediaItem; episode: EpisodeData }) {
           <span className="absolute bottom-3 left-3 rounded-card bg-ink/85 px-2 py-1 font-mono text-xs font-medium tracking-wider text-bone tabular-nums">
             {code}
           </span>
+          {veiled && episode.image ? <Veil id={item.id} button shows="picture" /> : null}
         </div>
 
         <div className="rise min-w-0" style={{ animationDelay: '70ms' }}>
@@ -156,7 +160,7 @@ function Card({ item, episode }: { item: MediaItem; episode: EpisodeData }) {
               <div className="flex items-center gap-3">
                 <Score value={episode.rating.value} votes={episode.rating.votes} size="sm" />
                 {episode.rating.votes ? (
-                  <span className="font-mono text-[0.6875rem] text-bone-faint tabular-nums">
+                  <span className="font-mono text-caption text-bone-faint tabular-nums">
                     {t.work.votes(fmt.count(episode.rating.votes, locale), episode.rating.votes)}
                   </span>
                 ) : null}
@@ -179,7 +183,7 @@ function Card({ item, episode }: { item: MediaItem; episode: EpisodeData }) {
             {me.data?.canWrite ? (
               <Link
                 to={`/admin/catalogue/${item.id}?season=${episode.seasonNumber}&episode=${episode.episodeNumber}`}
-                className="inline-flex min-h-11 items-center gap-1.5 rounded-full border border-brass-deep px-3.5 text-[0.8125rem] font-medium text-brass transition-colors duration-150 hover:bg-brass/10"
+                className="inline-flex min-h-11 items-center gap-1.5 rounded-full border border-brass-deep px-3.5 text-body-sm font-medium text-brass transition-colors duration-150 hover:bg-brass/10"
               >
                 <Glyph name="pencil" className="size-3.5" />
                 {t.episode.edit}
@@ -193,7 +197,7 @@ function Card({ item, episode }: { item: MediaItem; episode: EpisodeData }) {
         <section className="min-w-0">
           <SectionTitle>{t.work.overview}</SectionTitle>
           {episode.overview ? (
-            <p className="max-w-[68ch] text-[0.9375rem] leading-relaxed text-bone-dim">{episode.overview}</p>
+            <p className="max-w-[68ch] text-lead leading-relaxed text-bone-dim">{episode.overview}</p>
           ) : (
             <p className="text-sm text-bone-faint italic">{t.episode.noOverview}</p>
           )}
@@ -218,7 +222,7 @@ function Card({ item, episode }: { item: MediaItem; episode: EpisodeData }) {
               {episode.runtime ? <Field label={t.work.runtime}>{fmt.runtime(episode.runtime, locale)}</Field> : null}
               {links.map((link) => (
                 <Field key={link.source} label={providerName(link.source)}>
-                  <ExternalLink href={link.href} className="font-mono text-[0.8125rem] tabular-nums">
+                  <ExternalLink href={link.href} className="font-mono text-body-sm tabular-nums">
                     {link.source === 'tvdb' ? episode.tvdbId : episode.tmdbId}
                   </ExternalLink>
                 </Field>
@@ -246,6 +250,7 @@ function Neighbour({
   direction: 'before' | 'after'
 }) {
   const { t } = useI18n()
+  const veiled = useVeiled(item)
 
   if (!episode) return <span />
 
@@ -261,12 +266,15 @@ function Neighbour({
     >
       <div className="relative aspect-video w-28 shrink-0 overflow-hidden rounded-card bg-ink-high">
         {episode.image ? (
-          <Artwork url={episode.image} role="still" alt="" className="size-full object-cover" />
+          <Artwork url={episode.image} role="still" alt="" className={cn('size-full object-cover', veiled && VEILED)} />
         ) : (
           <div className="grid size-full place-items-center">
             <Glyph name="film" className="size-4 text-bone-faint" />
           </div>
         )}
+        {/* Words only: the card is a link, and the episode it leads to is
+            where the still is uncovered. */}
+        {veiled && episode.image ? <Veil id={item.id} shows={false} /> : null}
       </div>
       <div className="min-w-0">
         <p className={cn('label flex items-center gap-1.5', direction === 'after' && 'sm:justify-end')}>
@@ -274,7 +282,7 @@ function Neighbour({
           {direction === 'before' ? t.episode.previous : t.episode.next}
           {direction === 'after' ? <Glyph name="chevronRight" className="size-3" /> : null}
         </p>
-        <p className="mt-1 font-mono text-[0.6875rem] text-bone-faint tabular-nums">{episodeCode(episode)}</p>
+        <p className="mt-1 font-mono text-caption text-bone-faint tabular-nums">{episodeCode(episode)}</p>
         <p className="truncate text-sm font-medium text-bone transition-colors duration-150 group-hover:text-vermillion">
           {episode.title || t.episode.untitled(episode.episodeNumber)}
         </p>

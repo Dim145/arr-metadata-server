@@ -83,6 +83,25 @@ pub struct ListQuery {
     /// The TMDB collection a film belongs to.
     #[serde(default, deserialize_with = "crate::api::extract::empty_as_none")]
     pub collection: Option<i64>,
+    /// Somebody the works credit: their TMDB id, or their name — whatever
+    /// its case and accents, but whole: `Wim Wenders`, not `Wenders`.
+    pub person: Option<String>,
+    /// The shortest a work may run, in minutes: a film's length, a series'
+    /// episodes'.
+    #[serde(default, deserialize_with = "crate::api::extract::empty_as_none")]
+    pub runtime_min: Option<i32>,
+    /// The longest a work may run, in minutes.
+    #[serde(default, deserialize_with = "crate::api::extract::empty_as_none")]
+    pub runtime_max: Option<i32>,
+    /// A country the works were made in, ISO 3166-1 alpha-2: `FR`.
+    pub country: Option<String>,
+    /// The rating the works carry in the reader's country, as that country
+    /// writes it: `12`, `PG-13`.
+    pub certification: Option<String>,
+    /// The reader's country, ISO 3166-1 alpha-2, which `certification` is
+    /// read in. Absent, the country this caller is answered for:
+    /// `tmdb.watchRegion` as set for it, else its language's.
+    pub region: Option<String>,
     /// The lowest score, out of ten, a work may have to be listed.
     #[serde(default, deserialize_with = "crate::api::extract::empty_as_none")]
     pub min_rating: Option<f64>,
@@ -95,11 +114,15 @@ pub struct ListQuery {
     /// their own, nor one chosen by hand — `overview` — no overview in the
     /// language they are stored in — `imdb` — no IMDb identifier — and
     /// `refresh` — never refreshed, though they have an identifier to be
-    /// refreshed by. Several narrow together: `poster,overview` lists the works
-    /// lacking both. For those who may edit the catalogue, as `refreshFailed`.
+    /// refreshed by — and `divergingLock` — a lock a source moved under since
+    /// it was set, and which says something else now. Several narrow
+    /// together: `poster,overview` lists the works lacking both. For those who
+    /// may edit the catalogue, as `refreshFailed`.
     pub missing: Option<String>,
-    /// `popularity` (the default), `rating`, `release`, `title`, `added` or
-    /// `refreshed`.
+    /// `relevance` — how well each work answers `term`, the default when
+    /// there is one — `popularity` (the default otherwise), `rating`,
+    /// `release`, `title`, `added`, `refreshed`, `runtime`, `lastAired` or
+    /// `episodes`.
     pub sort: Option<String>,
     /// `asc` or `desc`; each sort has its own default.
     pub order: Option<String>,
@@ -138,6 +161,9 @@ pub(super) fn to_query(
         .transpose()
         .map_err(|e| AppError::BadRequest(e.to_string()))?;
 
+    // A search is in the order of how well each work answers it, unless
+    // another order is asked for.
+    let searched = query.term.as_deref().is_some_and(|t| !t.trim().is_empty());
     let sort = query
         .sort
         .as_deref()
@@ -146,7 +172,11 @@ pub(super) fn to_query(
         .map(str::parse::<repo::item::Sort>)
         .transpose()
         .map_err(AppError::BadRequest)?
-        .unwrap_or_default();
+        .unwrap_or(if searched {
+            repo::item::Sort::Relevance
+        } else {
+            repo::item::Sort::Popularity
+        });
 
     let descending = match query.order.as_deref().map(str::trim) {
         None | Some("") => None,
@@ -164,6 +194,20 @@ pub(super) fn to_query(
             "minRating is a score out of ten".into(),
         ));
     }
+    if [query.runtime_min, query.runtime_max]
+        .into_iter()
+        .flatten()
+        .any(|minutes| !(0..=10_000).contains(&minutes))
+    {
+        return Err(AppError::BadRequest(
+            "runtimeMin and runtimeMax are minutes, from 0 to 10000".into(),
+        ));
+    }
+    let country = country_code(query.country.as_deref(), "country")?;
+    let region = match country_code(query.region.as_deref(), "region")? {
+        Some(region) => Some(region),
+        None => state.watch_region(identity.client_id(), identity.peer_id()),
+    };
 
     // Short, every one of them, and few: a term the size of a book is not a
     // search, and each genre or language is one more value bound into the
@@ -174,6 +218,8 @@ pub(super) fn to_query(
         ("status", &query.status),
         ("network", &query.network),
         ("missing", &query.missing),
+        ("person", &query.person),
+        ("certification", &query.certification),
     ] {
         if text
             .as_deref()
@@ -253,6 +299,14 @@ pub(super) fn to_query(
         original_language: query.original_language,
         network: query.network,
         collection: query.collection,
+        person: query.person,
+        runtime_min: query.runtime_min,
+        runtime_max: query.runtime_max,
+        country,
+        certification: query.certification,
+        region,
+        // Settled by the list, its count and the facets, each in turn.
+        tolerance: None,
         min_rating: query.min_rating,
         refresh_failed: query.refresh_failed && maintains,
         missing: if maintains { missing } else { Vec::new() },
@@ -266,10 +320,32 @@ pub(super) fn to_query(
     })
 }
 
+/// A country code as it is filed: two letters, upper case. Nothing for
+/// nothing; a refusal for anything else.
+fn country_code(raw: Option<&str>, what: &str) -> AppResult<Option<String>> {
+    let Some(raw) = raw.map(str::trim).filter(|r| !r.is_empty()) else {
+        return Ok(None);
+    };
+    let code = raw.to_ascii_uppercase();
+    if code.len() == 2 && code.bytes().all(|b| b.is_ascii_uppercase()) {
+        Ok(Some(code))
+    } else {
+        Err(AppError::BadRequest(format!(
+            "{what} is a country code such as FR or US"
+        )))
+    }
+}
+
 /// List and search stored works.
 ///
 /// Searches this server's own store only — it does not reach out to a provider.
 /// Manual overrides are applied, so what you see here is what clients are served.
+///
+/// With a `term`, the works are ranked by how well each answers it — a title
+/// that is the term before one that starts with it, before one with a word
+/// that does, before one that holds it — the better known first among those
+/// that answer alike; a term misspelt finds what it resembles when its
+/// letters find little. `sort` still orders a search when it is given.
 #[utoipa::path(
     get, path = "/items", tag = TAG,
     operation_id = "items_list",
@@ -314,7 +390,9 @@ async fn list(
             .into_response());
     }
 
-    let mut items = repo::item::search(&state.db, &query_for_count).await?;
+    // The page and the count from one look in the search index: a misspelt
+    // term is taken for the same works by both.
+    let (mut items, total) = repo::item::search_counted(&state.db, &query_for_count).await?;
 
     // Without this the list would show provider values while the detail view
     // showed edited ones, and a lock would look like it had not taken.
@@ -337,7 +415,6 @@ async fn list(
         }
     }
 
-    let total = repo::item::count_matching(&state.db, &query_for_count).await?;
     for item in &mut items {
         state.media.localize(item);
         service::as_card(item);
@@ -631,19 +708,45 @@ async fn remove(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[derive(Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+#[serde(rename_all = "camelCase")]
+pub struct RefreshQuery {
+    /// `1` to be told what the refresh would write over — the values the
+    /// sources give otherwise now, none of them locked — with nothing written,
+    /// no run recorded and nobody told.
+    #[serde(default, deserialize_with = "super::history::flag")]
+    pub dry_run: bool,
+}
+
+/// What a refresh is answered with: the work as it now stands, or — for a
+/// dry run — what the refresh would write over.
+#[derive(Serialize, ToSchema)]
+#[serde(untagged)]
+// Named explicitly: one of two answers.
+#[schema(as = RefreshAnswer)]
+pub enum RefreshAnswer {
+    Refreshed(Box<MediaItem>),
+    Previewed(super::history::Preview),
+}
+
 /// Refetch from providers now, ignoring the refresh schedule.
 ///
 /// Provider data and provider-sourced children are replaced. Manual overrides
-/// are not touched — that is the point of them.
+/// are not touched — that is the point of them. What the refresh changed is
+/// written to the work's journal, as the caller asked it. With `dryRun`,
+/// nothing is: the sources are asked and merged as a refresh asks and merges
+/// them, and the answer is what would be written over.
 #[utoipa::path(
     post, path = "/items/{id}/refresh", tag = TAG,
     operation_id = "items_refresh",
-    params(("id" = String, Path, description = "The work's identifier")),
+    params(("id" = String, Path, description = "The work's identifier"), RefreshQuery),
     responses(
-        (status = 200, description = "The work as it now stands", body = MediaItem),
+        (status = 200, description = "The work as it now stands; for a dry run, what the refresh would write over", body = RefreshAnswer),
         (status = 403, description = "The caller may not write"),
         (status = 404, description = "No such work"),
-        (status = 502, description = "The provider could not be reached"),
+        (status = 409, description = "A manual entry, which has no source to refresh from"),
+        (status = 502, description = "The provider could not be reached; for a dry run, no provider could resolve the work"),
     ),
 )]
 async fn refresh(
@@ -651,12 +754,34 @@ async fn refresh(
     Extension(identity): Extension<Identity>,
     ip: ClientIp,
     Path(id): Path<String>,
-) -> AppResult<Json<MediaItem>> {
+    Query(asked): Query<RefreshQuery>,
+) -> AppResult<Json<RefreshAnswer>> {
     identity.require_write()?;
 
     let item = service::load(&state, &id)
         .await?
         .ok_or(AppError::NotFound)?;
+
+    const MANUAL: &str = "a manual entry has no source to refresh from";
+
+    // Only told what it would change: no run opened, nothing written.
+    if asked.dry_run {
+        if item.is_manual {
+            return Err(AppError::Conflict(MANUAL.into()));
+        }
+        // Nobody to ask is said so, not passed off as nothing to change.
+        let found = crate::jobs::refresh::preview(&state, &item)
+            .await
+            .map_err(AppError::UpstreamUnavailable)?
+            .ok_or_else(|| {
+                AppError::UpstreamUnavailable(anyhow::anyhow!(
+                    "no provider could resolve this entry; a refresh would leave it as it is"
+                ))
+            })?;
+        return Ok(Json(RefreshAnswer::Previewed(super::history::Preview::of(
+            found,
+        ))));
+    }
 
     // Someone is waiting on this one, so it earns a row of its own rather than
     // being folded into a sweep summary.
@@ -675,7 +800,6 @@ async fn refresh(
     // the refusal it is — not left open, as it was, for the schedule to find
     // among the runs a crash abandoned.
     if item.is_manual {
-        const WHY: &str = "a manual entry has no source to refresh from";
         if let Some(record) = &record {
             crate::jobs::refresh::Recorder::for_run(Some(record))
                 .note(
@@ -683,17 +807,23 @@ async fn refresh(
                     &id,
                     Some(&item),
                     repo::job::Outcome::Skipped,
-                    WHY,
+                    MANUAL,
                 )
                 .await;
-            if let Err(e) = repo::job::finish(&state.db, record, None, Some(WHY)).await {
+            if let Err(e) = repo::job::finish(&state.db, record, None, Some(MANUAL)).await {
                 tracing::warn!(error = %e, "could not close the job run");
             }
         }
-        return Err(AppError::Conflict(WHY.into()));
+        return Err(AppError::Conflict(MANUAL.into()));
     }
 
-    let outcome = crate::jobs::refresh::refresh_one(&state, &item).await;
+    // What it changes is the caller's doing, in the work's journal.
+    let outcome = service::asked(
+        Some(by.clone()),
+        None,
+        crate::jobs::refresh::refresh_one(&state, &item),
+    )
+    .await;
 
     if let Some(record) = record {
         use crate::jobs::refresh::{Recorder, notes};
@@ -766,7 +896,9 @@ async fn refresh(
     )
     .await;
 
-    Ok(Json(refreshed.unwrap_or(item)))
+    Ok(Json(RefreshAnswer::Refreshed(Box::new(
+        refreshed.unwrap_or(item),
+    ))))
 }
 
 #[derive(Serialize, ToSchema)]
@@ -826,6 +958,9 @@ pub struct ProvenanceReport {
     /// Every provider that could describe the work, in the order a refresh
     /// asks them.
     pub sources: Vec<SyncSource>,
+    /// The locks whose sources say something else now, beside what they say.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub diverging: Vec<super::history::Divergence>,
 }
 
 /// Who gave the work its values, and whom it can be synced from.
@@ -873,9 +1008,11 @@ async fn provenance(
         })
         .collect();
 
+    let diverging = super::history::diverging(&state, &id, provenance.as_ref()).await?;
     Ok(Json(ProvenanceReport {
         provenance,
         sources,
+        diverging,
     }))
 }
 
@@ -897,19 +1034,42 @@ pub struct SyncOutcome {
     pub silent: Vec<String>,
 }
 
+#[derive(Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncQuery {
+    /// `1` to be told what asking these sources again would write over, with
+    /// nothing written and nobody told.
+    #[serde(default, deserialize_with = "super::history::flag")]
+    pub dry_run: bool,
+}
+
+/// What a sync is answered with: what it did, or — for a dry run — what it
+/// would write over.
+#[derive(Serialize, ToSchema)]
+#[serde(untagged)]
+// Named explicitly: one of two answers.
+#[schema(as = SyncAnswer)]
+pub enum SyncAnswer {
+    Synced(Box<SyncOutcome>),
+    Previewed(super::history::Preview),
+}
+
 /// Ask some of a work's sources again, and only them.
 ///
 /// What they say is weighed against what every other source said last time,
 /// by the usual priority: the result is what a full refresh would make had
 /// nobody else changed their mind. Fields locked by hand are not touched, and
-/// the work's refresh schedule stands — this is not a refresh.
+/// the work's refresh schedule stands — this is not a refresh. What it
+/// changed is written to the work's journal; with `dryRun`, nothing is, and
+/// the answer is what would be written over.
 #[utoipa::path(
     post, path = "/items/{id}/sync", tag = TAG,
     operation_id = "items_sync",
-    params(("id" = String, Path, description = "The work's identifier")),
+    params(("id" = String, Path, description = "The work's identifier"), SyncQuery),
     request_body = SyncRequest,
     responses(
-        (status = 200, body = SyncOutcome),
+        (status = 200, description = "What the sync did; for a dry run, what it would write over", body = SyncAnswer),
         (status = 400, description = "No sources, or one this work cannot be asked about"),
         (status = 403, description = "The caller may not write"),
         (status = 404, description = "No such work"),
@@ -922,8 +1082,9 @@ async fn sync(
     Extension(identity): Extension<Identity>,
     ip: ClientIp,
     Path(id): Path<String>,
+    Query(asked): Query<SyncQuery>,
     Json(request): Json<SyncRequest>,
-) -> AppResult<Json<SyncOutcome>> {
+) -> AppResult<Json<SyncAnswer>> {
     identity.require_write()?;
     if service::load(&state, &id)
         .await?
@@ -979,6 +1140,35 @@ async fn sync(
 
     repo::item::load_children(&state.db, &mut stored).await?;
 
+    use service::gather::ResyncOutcome;
+
+    // Only told what it would change: no run opened, nothing written.
+    if asked.dry_run {
+        let (outcome, found) = service::previewing(service::gather::resync(
+            &state,
+            &stored,
+            &provenance,
+            &asking,
+        ))
+        .await;
+        return match outcome.map_err(AppError::UpstreamUnavailable)? {
+            ResyncOutcome::Synced(done) => {
+                Ok(Json(SyncAnswer::Previewed(super::history::Preview {
+                    answered: done.answered.iter().map(|p| p.to_string()).collect(),
+                    silent: done.silent.iter().map(|p| p.to_string()).collect(),
+                    ..super::history::Preview::of(found)
+                })))
+            }
+            ResyncOutcome::NoneAnswered => Err(AppError::UpstreamUnavailable(anyhow::anyhow!(
+                "none of the sources asked answered; nothing would change"
+            ))),
+            ResyncOutcome::Gone => Err(AppError::NotFound),
+            ResyncOutcome::Changed => Err(AppError::Conflict(
+                "the work was written by something else while its sources were asked".into(),
+            )),
+        };
+    }
+
     let by = identity.label();
     let record = repo::job::start_by(
         &state.db,
@@ -990,9 +1180,13 @@ async fn sync(
     .inspect_err(|e| tracing::warn!(error = %e, "could not open a job run"))
     .ok();
 
-    use service::gather::ResyncOutcome;
-
-    let outcome = service::gather::resync(&state, &stored, &provenance, &asking).await;
+    // What it changes is the caller's doing, in the work's journal.
+    let outcome = service::asked(
+        Some(by.clone()),
+        None,
+        service::gather::resync(&state, &stored, &provenance, &asking),
+    )
+    .await;
     let said = match &outcome {
         Ok(ResyncOutcome::Synced(done)) => format!("synced from {}", done.answered.join(", ")),
         Ok(ResyncOutcome::NoneAnswered) => format!("none of {} answered", asking.join(", ")),
@@ -1044,11 +1238,11 @@ async fn sync(
     )
     .await;
 
-    Ok(Json(SyncOutcome {
+    Ok(Json(SyncAnswer::Synced(Box::new(SyncOutcome {
         item: done.item,
         answered: done.answered.iter().map(|p| p.to_string()).collect(),
         silent: done.silent.iter().map(|p| p.to_string()).collect(),
-    }))
+    }))))
 }
 
 /// The raw provider documents behind an entry.
@@ -1561,6 +1755,87 @@ mod tests {
         ] {
             assert!(
                 matches!(asked(refused.clone()), Err(AppError::BadRequest(_))),
+                "{refused} was let through"
+            );
+        }
+    }
+
+    /// The titles a list answers with, in its own order.
+    async fn in_order(state: &AppState, asked: &str) -> AppResult<(Vec<String>, i64)> {
+        let uri: Uri = format!("/items?limit=100&{asked}")
+            .parse()
+            .expect("an address");
+        let Query(query) = Query::<ListQuery>::try_from_uri(&uri).expect("a query");
+        let response = list(State(state.clone()), admin(), Query(query)).await?;
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("a body");
+        let page: Value = serde_json::from_slice(&body).expect("JSON");
+        let titles = page["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .map(|item| item["title"].as_str().expect("a title").to_string())
+            .collect();
+        Ok((titles, page["total"].as_i64().expect("a total")))
+    }
+
+    #[tokio::test]
+    async fn a_search_is_ranked_unless_another_order_is_asked_for() {
+        let state = crate::api::native::testing::server().await;
+        stored(&state, 1, "Breaking Bad", |w| w.popularity = Some(50.0)).await;
+        stored(&state, 2, "The Breaking Point", |w| {
+            w.popularity = Some(900.0)
+        })
+        .await;
+        stored(&state, 3, "Breaking", |w| w.popularity = Some(1.0)).await;
+
+        // The term itself, then a title that starts with it, then one with a
+        // word that does: better known or not.
+        let (ranked, total) = in_order(&state, "term=breaking").await.expect("listed");
+        assert_eq!(ranked, ["Breaking", "Breaking Bad", "The Breaking Point"]);
+        assert_eq!(total, 3);
+        // Asked for another order, the same works in it.
+        let (by_title, _) = in_order(&state, "term=breaking&sort=title")
+            .await
+            .expect("listed");
+        assert_eq!(by_title, ["Breaking", "Breaking Bad", "The Breaking Point"]);
+        let (popular, _) = in_order(&state, "term=breaking&sort=popularity")
+            .await
+            .expect("listed");
+        assert_eq!(popular, ["The Breaking Point", "Breaking Bad", "Breaking"]);
+        // Misspelt, counted as it is listed.
+        let (found, total) = in_order(&state, "term=breking%20bad")
+            .await
+            .expect("listed");
+        assert_eq!(found.first().map(String::as_str), Some("Breaking Bad"));
+        assert_eq!(total, found.len() as i64);
+    }
+
+    #[tokio::test]
+    async fn the_further_filters_are_checked_before_they_narrow() {
+        let state = crate::api::native::testing::server().await;
+        stored(&state, 1, "Long", |w| {
+            w.runtime = Some(150);
+            w.production_countries = vec!["FR".into()];
+        })
+        .await;
+        stored(&state, 2, "Short", |w| w.runtime = Some(80)).await;
+
+        let (long, _) = in_order(&state, "runtimeMin=120&country=fr")
+            .await
+            .expect("listed");
+        assert_eq!(long, ["Long"]);
+        let (short, _) = in_order(&state, "runtimeMax=90&sort=runtime")
+            .await
+            .expect("listed");
+        assert_eq!(short, ["Short"]);
+        for refused in ["country=France", "region=1", "runtimeMin=-5", "sort=length"] {
+            assert!(
+                matches!(
+                    in_order(&state, refused).await,
+                    Err(AppError::BadRequest(_))
+                ),
                 "{refused} was let through"
             );
         }

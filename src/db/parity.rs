@@ -43,68 +43,45 @@ struct Intended {
     why: &'static str,
 }
 
-const FTS5: &str = "SQLite's search of titles is an FTS5 table, and FTS5 keeps five tables of \
-                    its own behind it; PostgreSQL has none of them, and indexes the titles \
-                    themselves (the trigram indexes below)";
-const FTS5_TRIGGERS: &str = "what keeps the FTS5 table current — a work, an alternative title \
-                             or an override written is that work's text built again; \
-                             PostgreSQL reads the tables themselves, so there is nothing to keep";
-const TRIGRAM: &str = "migration 0022: a trigram index (pg_trgm) of an expression the title \
-                       search runs, where the extension can be created; SQLite's counterpart \
-                       is the FTS5 table";
+const FTS5: &str = "the search index's trigrams on SQLite are an FTS5 table over `search_doc` \
+                    (migration 0039), and FTS5 keeps four tables of its own behind it; \
+                    PostgreSQL has none of them, and indexes `search_doc` itself (the trigram \
+                    indexes below)";
+const FTS5_TRIGGERS: &str = "what keeps the FTS5 table in step with `search_doc`, which its \
+                             external content is — the three triggers the FTS5 documentation \
+                             has; PostgreSQL's indexes are kept by the engine";
+const TRIGRAM: &str = "migration 0039: a trigram index (pg_trgm) of `search_doc` for each kind of \
+                       row, where the extension can be created; SQLite's counterpart is the FTS5 \
+                       table";
 
 const INTENDED: &[Intended] = &[
     Intended {
         only_on: Dialect::Sqlite,
-        starting: "media_search",
+        starting: "search_fts",
         needs: None,
         why: FTS5,
     },
     Intended {
         only_on: Dialect::Sqlite,
-        starting: "media_item: trigger media_search_",
-        needs: None,
-        why: FTS5_TRIGGERS,
-    },
-    Intended {
-        only_on: Dialect::Sqlite,
-        starting: "media_alternative_title: trigger media_search_",
-        needs: None,
-        why: FTS5_TRIGGERS,
-    },
-    Intended {
-        only_on: Dialect::Sqlite,
-        starting: "media_override: trigger media_search_",
+        starting: "search_doc: trigger search_doc_",
         needs: None,
         why: FTS5_TRIGGERS,
     },
     Intended {
         only_on: Dialect::Postgres,
-        starting: "media_item: index idx_media_item_title_trgm ",
+        starting: "search_doc: index ix_search_doc_work_trgm ",
         needs: Some("pg_trgm"),
         why: TRIGRAM,
     },
     Intended {
         only_on: Dialect::Postgres,
-        starting: "media_item: index idx_media_item_sort_title_trgm ",
+        starting: "search_doc: index ix_search_doc_person_trgm ",
         needs: Some("pg_trgm"),
         why: TRIGRAM,
     },
     Intended {
         only_on: Dialect::Postgres,
-        starting: "media_item: index idx_media_item_slug_trgm ",
-        needs: Some("pg_trgm"),
-        why: TRIGRAM,
-    },
-    Intended {
-        only_on: Dialect::Postgres,
-        starting: "media_alternative_title: index idx_media_alternative_title_trgm ",
-        needs: Some("pg_trgm"),
-        why: TRIGRAM,
-    },
-    Intended {
-        only_on: Dialect::Postgres,
-        starting: "media_override: index idx_media_override_value_trgm ",
+        starting: "search_doc: index ix_search_doc_episode_trgm ",
         needs: Some("pg_trgm"),
         why: TRIGRAM,
     },
@@ -192,7 +169,9 @@ async fn what_sqlite_built_is_read_back_whole() {
         "media_item: index ix_media_item_browse (kind, is_enabled, popularity desc, title, is_adult)",
         "media_external_id: primary key (source, value)",
         "media_external_id: foreign key (media_id) references media_item (id) on delete cascade",
-        "media_search: table",
+        "search_doc: table",
+        "search_doc: index ix_search_doc_prefix (kind, norm)",
+        "media_item: index ix_media_item_search_stale (id) partial",
     ] {
         assert!(
             facts.contains(expected),

@@ -637,10 +637,17 @@ fn add_unseen(results: &mut Vec<MediaItem>, candidate: MediaItem) {
 }
 
 async fn local_search(state: &AppState, term: &str, year: Option<i32>) -> Result<Vec<MediaItem>> {
+    // Ranked by how well each answers the term, so that the film held here by
+    // that very name comes first in Radarr's list, before TMDB's.
     let query = repo::item::Query {
         term: Some(term.to_string()),
         kind: Some(MediaKind::Movie),
         year,
+        sort: repo::item::Sort::Relevance,
+        // By its letters alone: TMDB's search, which follows, forgives a
+        // misspelling, and a film held here that only resembles the title
+        // would come first in the list Radarr picks from.
+        tolerance: Some(Vec::new()),
         limit: state.search_limit() as i64,
         ..Default::default()
     };
