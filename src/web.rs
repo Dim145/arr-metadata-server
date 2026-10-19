@@ -59,6 +59,9 @@ pub async fn serve(state: AppState) -> Result<()> {
     keep.run("update check", Ends::Never, jobs::update_check::run);
     // The archives of the database, as often as the setting says.
     keep.run("backups", Ends::Never, jobs::backup::run);
+    // The search index, caught up on the works whose names changed outside
+    // a write — and, after the upgrade that brought it, built.
+    keep.run("search index", Ends::Never, jobs::search::run);
     // The works changed here, told to the operator's Sonarr and Radarr when
     // that is asked for: idle until a change is offered.
     keep.run("sonarr and radarr", Ends::Never, crate::arr::push::run);

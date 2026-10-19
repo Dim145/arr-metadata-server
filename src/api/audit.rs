@@ -3,6 +3,7 @@
 use axum::{
     Extension, Json,
     extract::{Query as AxumQuery, State},
+    response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
@@ -149,6 +150,13 @@ pub struct ListQuery {
     pub limit: Option<i64>,
     #[serde(default, deserialize_with = "crate::api::extract::empty_as_none")]
     pub offset: Option<i64>,
+    /// `csv` or `json`: every entry the filters match, newest first, as a
+    /// file to download — the page asked for, `limit` and `offset`, set
+    /// aside.
+    // Inlined: a format is no schema of its own, and a reference to one
+    // only a parameter names would lead nowhere.
+    #[param(inline)]
+    pub format: Option<Format>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -167,13 +175,19 @@ pub struct ListResponse {
 /// Read the audit trail, newest first.
 ///
 /// Administrative: it names who did what, so it requires an administrator or a
-/// key carrying the `admin` scope.
+/// key carrying the `admin` scope. With `format`, every entry the filters
+/// match is handed over as a file: a CSV for a spreadsheet — a column for
+/// the instant, who, the action, the target, the work it names, the note and
+/// the address — or a JSON array of the entries.
 #[utoipa::path(
     get, path = "/audit", tag = TAG,
     operation_id = "audit_list",
     params(ListQuery),
     responses(
-        (status = 200, body = ListResponse),
+        (status = 200, description = "A page of the trail; with `format`, the whole of what the filters match, as a file", content(
+            (ListResponse = "application/json"),
+            (String = "text/csv"),
+        )),
         (status = 403, description = "The caller is not an administrator"),
     ),
 )]
@@ -181,7 +195,7 @@ async fn list(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
     AxumQuery(query): AxumQuery<ListQuery>,
-) -> AppResult<Json<ListResponse>> {
+) -> AppResult<Response> {
     if !identity.is_admin() {
         return Err(AppError::Forbidden);
     }
@@ -194,9 +208,25 @@ async fn list(
         limit: query.limit.unwrap_or(100),
         offset: query.offset.unwrap_or(0),
     };
-    let mut entries = repo::audit::list(&state.db, &filter).await?;
 
-    // A work is named by its id, and read by its title.
+    if let Some(format) = query.format {
+        return Ok(export(state, filter, format));
+    }
+
+    let mut entries = repo::audit::list(&state.db, &filter).await?;
+    name_works(&state, &mut entries).await?;
+
+    Ok(Json(ListResponse {
+        entries,
+        // As many as the filters match, so the pages end where the entries do.
+        total: repo::audit::count_matching(&state.db, &filter).await?,
+        actions: Action::ALL.iter().map(|a| a.as_str()).collect(),
+    })
+    .into_response())
+}
+
+/// A work is named by its id, and read by its title.
+async fn name_works(state: &AppState, entries: &mut [Entry]) -> anyhow::Result<()> {
     let ids: Vec<String> = entries
         .iter()
         .filter_map(named_work)
@@ -205,16 +235,68 @@ async fn list(
         .into_iter()
         .collect();
     let works = repo::item::titles(&state.db, &ids).await?;
-    for entry in &mut entries {
+    for entry in entries {
         entry.work = named_work(entry).and_then(|id| works.get(id)).cloned();
     }
+    Ok(())
+}
 
-    Ok(Json(ListResponse {
-        entries,
-        // As many as the filters match, so the pages end where the entries do.
-        total: repo::audit::count_matching(&state.db, &filter).await?,
-        actions: Action::ALL.iter().map(|a| a.as_str()).collect(),
-    }))
+/// How many entries of the trail an export reads at a time.
+const EXPORTED_PAGE: i64 = 500;
+
+/// Every entry `filter` matches, newest first, as a file: read a page at a
+/// time after the last one read, so that what is written meanwhile neither
+/// repeats an entry nor skips one.
+fn export(state: AppState, filter: repo::audit::Query, format: Format) -> Response {
+    let pages = futures::stream::try_unfold(
+        Some(None::<(String, String)>),
+        move |after: Option<Option<(String, String)>>| {
+            let state = state.clone();
+            let filter = filter.clone();
+            async move {
+                let Some(after) = after else {
+                    return Ok(None);
+                };
+                let mut page = repo::audit::page_after(
+                    &state.db,
+                    &filter,
+                    after.as_ref().map(|(at, id)| (at.as_str(), id.as_str())),
+                    EXPORTED_PAGE,
+                )
+                .await?;
+                let Some(last) = page.last() else {
+                    return Ok(None);
+                };
+                // A short page is the last: no need to ask for another.
+                let next = (page.len() as i64 == EXPORTED_PAGE)
+                    .then(|| (last.at.clone(), last.id.clone()));
+                name_works(&state, &mut page).await?;
+                Ok(Some((page, next.map(Some))))
+            }
+        },
+    );
+
+    Download {
+        format,
+        name: format!("audit-{}", chrono::Utc::now().format("%Y-%m-%d")),
+        columns: &["at", "actor", "action", "target", "work", "detail", "ip"],
+        cells: |entry: &Entry| {
+            vec![
+                entry.at.clone(),
+                entry.actor.clone().unwrap_or_default(),
+                entry.action.clone(),
+                entry.target.clone().unwrap_or_default(),
+                entry
+                    .work
+                    .as_ref()
+                    .map(|work| work.title.clone())
+                    .unwrap_or_default(),
+                entry.detail.clone().unwrap_or_default(),
+                entry.ip.clone().unwrap_or_default(),
+            ]
+        },
+    }
+    .respond(pages)
 }
 
 /// The work an entry acted on, where its action acts on one: a work's own
@@ -246,6 +328,150 @@ fn work_id(target: &str) -> Option<&str> {
     });
     let whole = matches!(target.as_bytes().get(36), None | Some(b'#'));
     (shaped && whole).then_some(id)
+}
+
+// ─── downloads ───────────────────────────────────────────────────────────────
+
+/// The forms a list is downloaded in: `csv` for a spreadsheet, `json` for a
+/// program.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+// Named explicitly: a format is many things in this document.
+#[schema(as = DownloadFormat)]
+pub enum Format {
+    Csv,
+    Json,
+}
+
+/// A list handed over as a file — the audit trail, a work's journal — written
+/// out a page at a time as it is read from the database, however long it has
+/// grown, and never held whole.
+pub(crate) struct Download<T> {
+    pub format: Format,
+    /// The file's name, without its extension.
+    pub name: String,
+    /// A CSV's columns, and how one entry fills them.
+    pub columns: &'static [&'static str],
+    pub cells: fn(&T) -> Vec<String>,
+}
+
+impl<T: Serialize + Send + 'static> Download<T> {
+    /// The file, from `pages`: what the list holds, a page at a time. A page
+    /// that cannot be read ends the file there, cut short, and is logged —
+    /// the answer was begun, and cannot be refused any more.
+    pub(crate) fn respond<S>(self, pages: S) -> axum::response::Response
+    where
+        S: futures::Stream<Item = anyhow::Result<Vec<T>>> + Send + 'static,
+    {
+        use axum::{
+            body::{Body, Bytes},
+            http::{HeaderValue, header},
+            response::IntoResponse,
+        };
+        use futures::StreamExt as _;
+
+        let Download {
+            format,
+            name,
+            columns,
+            cells,
+        } = self;
+        // A spreadsheet takes a file for UTF-8 by the mark it opens with, and
+        // a title in Japanese for mojibake without it.
+        let head = match format {
+            Format::Csv => format!("\u{feff}{}", csv_row(columns.iter().map(|c| c.to_string()))),
+            Format::Json => "[".to_string(),
+        };
+        let tail = match format {
+            Format::Csv => String::new(),
+            Format::Json => "\n]\n".to_string(),
+        };
+
+        let mut first = true;
+        let body = pages.map(move |page| -> Result<Bytes, std::io::Error> {
+            let page = page.map_err(|e| {
+                tracing::warn!(error = format_args!("{e:#}"), "a download was cut short");
+                std::io::Error::other(e.to_string())
+            })?;
+            let mut chunk = String::new();
+            for entry in &page {
+                match format {
+                    Format::Csv => chunk.push_str(&csv_row(cells(entry))),
+                    Format::Json => {
+                        if !first {
+                            chunk.push(',');
+                        }
+                        first = false;
+                        chunk.push('\n');
+                        chunk.push_str(
+                            &serde_json::to_string(entry).map_err(std::io::Error::other)?,
+                        );
+                    }
+                }
+            }
+            Ok(Bytes::from(chunk))
+        });
+        let whole = futures::stream::once(async move { Ok(Bytes::from(head)) })
+            .chain(body)
+            .chain(futures::stream::once(async move { Ok(Bytes::from(tail)) }));
+
+        let (kind, extension) = match format {
+            Format::Csv => ("text/csv; charset=utf-8", "csv"),
+            Format::Json => ("application/json", "json"),
+        };
+        let mut response = Body::from_stream(whole).into_response();
+        let headers = response.headers_mut();
+        headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(kind));
+        // The name is made here, of letters, digits, dashes and dots.
+        if let Ok(disposition) =
+            HeaderValue::from_str(&format!("attachment; filename=\"{name}.{extension}\""))
+        {
+            headers.insert(header::CONTENT_DISPOSITION, disposition);
+        }
+        // Who did what is not for a cache to keep.
+        headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+        response
+    }
+}
+
+/// A row of a CSV file, as RFC 4180 has it: its cells between commas, ended
+/// by a carriage return and a line feed.
+pub(crate) fn csv_row(cells: impl IntoIterator<Item = String>) -> String {
+    let mut row = cells
+        .into_iter()
+        .map(|cell| csv_cell(&cell))
+        .collect::<Vec<_>>()
+        .join(",");
+    row.push_str("\r\n");
+    row
+}
+
+/// One cell of a CSV file: quoted when it holds what would end it — a comma,
+/// a quote, a line break — and kept from being taken for a formula by a
+/// spreadsheet, which reads one in a cell that opens with `=`, `+`, `-`, `@`
+/// or a tab: a sign-in refused under a name typed as `=HYPERLINK(…)` would
+/// otherwise be a link in it.
+fn csv_cell(text: &str) -> String {
+    let guarded = if text.starts_with(['=', '+', '-', '@', '\t', '\r']) {
+        format!("'{text}")
+    } else {
+        text.to_string()
+    };
+    if guarded.contains([',', '"', '\n', '\r']) {
+        format!("\"{}\"", guarded.replace('"', "\"\""))
+    } else {
+        guarded
+    }
+}
+
+/// A value of a list as a cell says it: a text as it reads, nothing as
+/// nothing, anything else — a number, a list — as its JSON.
+pub(crate) fn cell_of(value: Option<&serde_json::Value>) -> String {
+    match value {
+        None | Some(serde_json::Value::Null) => String::new(),
+        Some(serde_json::Value::String(text)) => text.clone(),
+        Some(other) => other.to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -311,6 +537,102 @@ mod tests {
         );
         // Typed into the sign-in form, shaped like an id or not.
         assert_eq!(named_work(&entry(Action::SignInFailed, id, None)), None);
+    }
+
+    #[test]
+    fn a_cell_is_quoted_where_it_must_be_and_never_taken_for_a_formula() {
+        let row = csv_row(
+            [
+                "plain",
+                "a, b",
+                "say \"hi\"",
+                "=HYPERLINK(\"x\")",
+                "-3",
+                "@home",
+                "two\nlines",
+                "",
+            ]
+            .map(String::from),
+        );
+        assert_eq!(
+            row,
+            "plain,\"a, b\",\"say \"\"hi\"\"\",\"'=HYPERLINK(\"\"x\"\")\",'-3,'@home,\"two\nlines\",\r\n"
+        );
+        assert_eq!(cell_of(None), "");
+        assert_eq!(cell_of(Some(&serde_json::json!("text"))), "text");
+        assert_eq!(
+            cell_of(Some(&serde_json::json!(["a", "b"]))),
+            "[\"a\",\"b\"]"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_trail_is_handed_over_whole_with_the_same_filters_to_an_administrator_alone() {
+        use axum::body::to_bytes;
+
+        let state = crate::api::native::testing::server().await;
+        for (actor, action) in [
+            ("admin:alice", Action::OverrideSet),
+            ("admin:alice", Action::OverrideRemoved),
+            ("editor:bob", Action::OverrideSet),
+            ("admin:alice", Action::SignedIn),
+        ] {
+            repo::audit::record(
+                &state.db,
+                repo::audit::Record {
+                    actor: Some(actor),
+                    action,
+                    target: Some("=cmd|' /C calc'!A0"),
+                    detail: Some("set"),
+                    ip: Some("203.0.113.7"),
+                },
+            )
+            .await
+            .unwrap();
+        }
+        let file = |identity: Identity, query: &'static str| {
+            let state = state.clone();
+            async move {
+                list(
+                    State(state),
+                    Extension(identity),
+                    AxumQuery(serde_urlencoded::from_str(query).unwrap()),
+                )
+                .await
+            }
+        };
+
+        let csv = file(
+            Identity::Anonymous,
+            "format=csv&actor=admin%3Aalice&limit=1",
+        )
+        .await
+        .expect("exported");
+        assert_eq!(csv.headers()["content-type"], "text/csv; charset=utf-8");
+        let body = to_bytes(csv.into_body(), usize::MAX).await.unwrap();
+        let text = String::from_utf8(body.to_vec()).unwrap();
+        let lines: Vec<&str> = text.trim_start_matches('\u{feff}').split("\r\n").collect();
+        assert_eq!(lines[0], "at,actor,action,target,work,detail,ip");
+        // Every entry of the actor's, whatever page was asked for, and the
+        // target kept from being taken for a formula.
+        assert_eq!(lines.len(), 5, "{text}");
+        assert!(
+            lines[1].contains(",admin:alice,auth.signed_in,'=cmd|' /C calc'!A0,,set,203.0.113.7"),
+            "{text}"
+        );
+
+        let json = file(Identity::Anonymous, "format=json&action=override.set")
+            .await
+            .expect("exported");
+        let body = to_bytes(json.into_body(), usize::MAX).await.unwrap();
+        let read: Vec<serde_json::Value> = serde_json::from_slice(&body).expect("an array");
+        assert_eq!(read.len(), 2);
+        assert!(read.iter().all(|entry| entry["action"] == "override.set"));
+
+        assert!(matches!(
+            file(Identity::Visitor, "format=csv").await,
+            Err(AppError::Forbidden)
+        ));
     }
 
     #[test]

@@ -6,7 +6,9 @@
 //! `?refreshFailed=true` — counted through that filter's own definition and
 //! over the same works, those switched off among them, so that following a
 //! line of the list lands on exactly that many, and a figure of nought is one
-//! the dashboard says nothing about.
+//! the dashboard says nothing about. The locks a source moved under are
+//! counted by the condition `?missing=divergingLock` is to list them by
+//! (`repo::change::DIVERGING_LOCK`).
 
 use axum::{Extension, Json, extract::State};
 use serde::Serialize;
@@ -67,6 +69,10 @@ pub struct Todo {
     /// When the newest archive was made; `null` when none was.
     #[schema(required)]
     pub last_backup_at: Option<String>,
+    /// Works with a lock a source moved under since it was set, and which
+    /// says something else than the lock now: worth a look, to keep the
+    /// lock or to take what the source says.
+    pub diverging_locks: i64,
 }
 
 /// How many works the catalogue lists under one gap: the filter's own count,
@@ -153,6 +159,7 @@ async fn counted(state: &AppState, include_adult: bool) -> anyhow::Result<Todo> 
         failed_media: repo::asset::counts(db).await?.failed,
         backup_overdue: crate::jobs::backup::overdue(state).await?,
         last_backup_at: state.backups.newest_at().await?,
+        diverging_locks: repo::change::count_diverging(db, include_adult).await?,
     })
 }
 
@@ -231,6 +238,7 @@ mod tests {
                 // does not settle.
                 backup_overdue: true,
                 last_backup_at: None,
+                diverging_locks: 0,
             }
         );
     }
@@ -504,6 +512,54 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(asked(&state, false).await.no_overview, 1);
+    }
+
+    #[tokio::test]
+    async fn a_lock_its_source_moved_under_is_counted_once_a_work_as_the_reader_sees_them() {
+        use crate::db::repo::change::{Cause, NewChange};
+
+        let state = super::super::testing::server().await;
+        let moved_under = |title: &'static str, adult: bool| {
+            let state = state.clone();
+            async move {
+                let id = store(&state, title, |w| w.is_adult = adult).await;
+                for field in ["overview", "status"] {
+                    repo::override_field::set(
+                        &state.db,
+                        &id,
+                        Scope::Item,
+                        field,
+                        Some(&json!("Mine.")),
+                        None,
+                    )
+                    .await
+                    .unwrap();
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(3)).await;
+                let changes: Vec<NewChange> = ["overview", "status"]
+                    .into_iter()
+                    .map(|field| NewChange {
+                        cause: Cause::Refresh,
+                        scope: "item".into(),
+                        field: field.into(),
+                        language: String::new(),
+                        before: Some(json!("Old.")),
+                        after: Some(json!("New.")),
+                        provider: Some("tmdb".into()),
+                        was_locked: true,
+                    })
+                    .collect();
+                repo::change::record(&state.db, &id, None, &changes)
+                    .await
+                    .unwrap();
+            }
+        };
+
+        // Two locks of one work: one work to look at.
+        moved_under("Moved under", false).await;
+        moved_under("For adults", true).await;
+        assert_eq!(asked(&state, false).await.diverging_locks, 1);
+        assert_eq!(asked(&state, true).await.diverging_locks, 2);
     }
 
     #[tokio::test]

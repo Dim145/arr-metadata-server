@@ -7,7 +7,7 @@
  */
 
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 
 import { Button, ButtonLink, FormField, Glyph, Input } from '../components/ui'
@@ -15,6 +15,9 @@ import { ApiError, api } from '../lib/api'
 import { useAuthOptions } from '../lib/hooks'
 import { useI18n } from '../lib/i18n'
 import { sitePath } from '../lib/links'
+import { WRONG, firstWrong, useDone, useValidity } from './fields'
+
+const FIELDS = ['username', 'password'] as const
 
 export function Login() {
   const { t } = useI18n()
@@ -40,6 +43,14 @@ export function Login() {
 
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
+  const done = useDone(FIELDS)
+  const fields = useRef<HTMLFormElement>(null)
+  // What is wrong with each field, said once the reader is done with it.
+  const usernameWrong = username.trim() ? undefined : t.auth.usernameMissing
+  const passwordWrong = password ? undefined : t.auth.passwordMissing
+  useValidity(fields, { username: usernameWrong, password: passwordWrong })
+  const sayUsername = done.done('username') ? usernameWrong : undefined
+  const sayPassword = done.done('password') ? passwordWrong : undefined
 
   const signIn = useMutation({
     mutationFn: () => api.post<{ canWrite: boolean }>('/auth/login', { username, password }),
@@ -66,48 +77,86 @@ export function Login() {
   const wrongCredentials =
     signIn.error instanceof ApiError && (signIn.error.isUnauthorized || signIn.error.status === 403)
 
+  // The browser's own checks are not asked for: their bubble speaks the
+  // browser's language and goes as soon as it came. The form says what is
+  // wrong under each field, in the page's, and the first wrong field takes
+  // the focus — as the browser's would have.
   const form = (
     <form
+      ref={fields}
       className="space-y-5"
+      noValidate
       onSubmit={(event) => {
         event.preventDefault()
+        done.sent()
+        const wrong = firstWrong(event.currentTarget)
+        if (wrong) {
+          wrong.focus()
+          return
+        }
         signIn.mutate()
       }}
     >
-      <FormField label={t.auth.username} htmlFor="username">
+      <FormField
+        label={t.auth.username}
+        htmlFor="username"
+        error={sayUsername ? <span id="username-error">{sayUsername}</span> : undefined}
+      >
         <Input
           id="username"
           name="username"
           autoComplete="username"
+          autoCapitalize="none"
+          autoCorrect="off"
+          spellCheck={false}
+          enterKeyHint="next"
           required
           autoFocus={passwords && !provider}
+          aria-invalid={sayUsername ? true : undefined}
+          aria-describedby={sayUsername ? 'username-error' : undefined}
           value={username}
-          onChange={(event) => setUsername(event.target.value)}
+          onChange={(event) => {
+            setUsername(event.target.value)
+            done.typed('username')
+          }}
+          onBlur={() => done.left('username')}
+          className={WRONG}
         />
       </FormField>
 
+      {/* `current-password`, the field's id as its autocomplete: the name a
+          password manager looks for to fill the one it keeps for the site. */}
       <FormField
         label={t.auth.password}
-        htmlFor="password"
-        error={failed ? (refusal ?? (wrongCredentials ? t.auth.failed : t.common.error)) : undefined}
+        htmlFor="current-password"
+        error={
+          sayPassword ? (
+            <span id="password-error">{sayPassword}</span>
+          ) : failed ? (
+            (refusal ?? (wrongCredentials ? t.auth.failed : t.common.error))
+          ) : undefined
+        }
       >
         <Input
-          id="password"
+          id="current-password"
           name="password"
           type="password"
           autoComplete="current-password"
+          enterKeyHint="go"
           required
+          aria-invalid={sayPassword ? true : undefined}
+          aria-describedby={sayPassword ? 'password-error' : undefined}
           value={password}
-          onChange={(event) => setPassword(event.target.value)}
+          onChange={(event) => {
+            setPassword(event.target.value)
+            done.typed('password')
+          }}
+          onBlur={() => done.left('password')}
+          className={WRONG}
         />
       </FormField>
 
-      <Button
-        type="submit"
-        variant="primary"
-        className="w-full"
-        disabled={signIn.isPending || !username || !password}
-      >
+      <Button type="submit" variant="primary" className="w-full" disabled={signIn.isPending}>
         {signIn.isPending ? t.auth.signingIn : t.auth.submit}
       </Button>
     </form>
@@ -147,7 +196,7 @@ export function Login() {
         ) : null}
 
         {provider && passwords ? (
-          <div className="my-6 flex items-center gap-3 font-mono text-[0.6875rem] tracking-[0.16em] text-bone-faint uppercase">
+          <div className="my-6 flex items-center gap-3 font-mono text-caption tracking-[0.16em] text-bone-faint uppercase">
             <span aria-hidden className="h-px flex-1 bg-rule" />
             {t.auth.or}
             <span aria-hidden className="h-px flex-1 bg-rule" />

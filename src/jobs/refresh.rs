@@ -46,12 +46,28 @@ pub async fn refresh_one(state: &AppState, item: &MediaItem) -> Result<Option<Me
     };
 
     // Served differently since: told to the operator's Sonarr or Radarr,
-    // when that is asked for.
-    if let Some(fresh) = &refreshed {
+    // when that is asked for — and when it was written, not previewed.
+    if let Some(fresh) = &refreshed
+        && !crate::service::is_previewing()
+    {
         crate::arr::push::refreshed(state, item, fresh);
     }
 
     Ok(refreshed)
+}
+
+/// What a refresh of `item` would write over, without writing anything: its
+/// sources are asked as a refresh asks them, and what they say is merged and
+/// set beside the work as stored. The values a lock holds are left out — no
+/// refresh reaches them — and nothing is told: not the work's journal, not
+/// its orders, not Sonarr or Radarr. `None` when there is nothing to refresh
+/// it from.
+pub async fn preview(
+    state: &AppState,
+    item: &MediaItem,
+) -> Result<Option<Vec<crate::db::repo::change::NewChange>>> {
+    let (refreshed, found) = crate::service::previewing(refresh_one(state, item)).await;
+    Ok(refreshed?.map(|_| found))
 }
 
 async fn refresh_series(state: &AppState, item: &MediaItem) -> Result<Option<MediaItem>> {
@@ -386,6 +402,7 @@ pub async fn run(state: AppState) {
         }
 
         prune_audit(&state).await;
+        prune_changes(&state).await;
         prune_jobs(&state).await;
         prune_callers(&state).await;
     }
@@ -598,11 +615,11 @@ async fn light_refresh(state: &AppState, id: &str, recorder: &Recorder) -> Light
 
     use crate::service::gather::{ResyncOutcome, resync};
     let asking = [crate::providers::names::TMDB];
-    let outcome = without_panicking(crate::providers::unhurried(resync(
-        state,
-        &stored,
-        &provenance,
-        &asking,
+    // A refresh, in its journal, though TMDB is asked as a sync asks it.
+    let outcome = without_panicking(crate::providers::unhurried(crate::service::asked(
+        None,
+        Some(crate::db::repo::change::Cause::Refresh),
+        resync(state, &stored, &provenance, &asking),
     )))
     .await;
 
@@ -793,6 +810,34 @@ async fn prune_audit(state: &AppState) {
     }
 }
 
+/// How many days a work's journal keeps a change, when `history.keepDays`
+/// says nothing: a year.
+pub const HISTORY_KEEP_DAYS: i64 = 365;
+
+/// Drop the changes of the works' journals past their retention,
+/// `history.keepDays`: a year unless it is set, and `0` keeps them all.
+/// Read at each pass, as the other settings the scheduler reads are.
+async fn prune_changes(state: &AppState) {
+    let days = state
+        .settings
+        .int_at("history.keepDays", None, None)
+        .unwrap_or(HISTORY_KEEP_DAYS);
+    if days <= 0 {
+        return;
+    }
+
+    let Some(cutoff) = days_ago(days) else {
+        tracing::warn!(days, "the journal's retention is too long to be a date");
+        return;
+    };
+
+    match repo::change::prune(&state.db, &cutoff).await {
+        Ok(0) => {}
+        Ok(removed) => tracing::info!(removed, retention_days = days, "pruned the works' journals"),
+        Err(e) => tracing::warn!(error = %e, "could not prune the works' journals"),
+    }
+}
+
 /// A timestamp that many days ago, or `None` if there is no such date.
 ///
 /// `AMS_AUDIT_RETENTION_DAYS` is an operator-supplied `u32` and chrono panics
@@ -838,7 +883,10 @@ mod tests {
     use super::*;
     use crate::{
         config,
-        db::repo::child::{blank_episode, blank_season},
+        db::repo::{
+            change::Cause,
+            child::{blank_episode, blank_season},
+        },
         domain::ExternalIds,
         merge::provenance::{Provenance, Source},
     };
@@ -1015,6 +1063,40 @@ mod tests {
         .expect("the sweep's task")
     }
 
+    /// A work's journal, newest first, whole.
+    async fn journal(state: &AppState, id: &str) -> Vec<repo::change::Entry> {
+        repo::change::list(&state.db, id, &repo::change::Filter::default(), None, 500)
+            .await
+            .expect("the journal")
+            .entries
+    }
+
+    /// One refresh of `item`, as `by` asks it, on a task of its own: the
+    /// room a refresh has in a running server.
+    async fn refreshed_by(state: &AppState, item: &MediaItem, by: Option<&str>) {
+        let state = state.clone();
+        let item = item.clone();
+        let by = by.map(str::to_string);
+        tokio::spawn(
+            async move { crate::service::asked(by, None, refresh_one(&state, &item)).await },
+        )
+        .await
+        .expect("the refresh's task")
+        .expect("refreshed")
+        .expect("something to refresh it from");
+    }
+
+    /// What a refresh of `item` would change, on a task of its own.
+    async fn previewed(state: &AppState, item: &MediaItem) -> Vec<repo::change::NewChange> {
+        let state = state.clone();
+        let item = item.clone();
+        tokio::spawn(async move { preview(&state, &item).await })
+            .await
+            .expect("the preview's task")
+            .expect("previewed")
+            .expect("something to refresh it from")
+    }
+
     async fn held(state: &AppState, id: &str) -> MediaItem {
         let mut item = repo::item::get(&state.db, id)
             .await
@@ -1077,9 +1159,280 @@ mod tests {
         assert_eq!(entries[0].outcome, job::Outcome::Ok);
         assert_eq!(entries[0].note.as_deref(), Some(notes::LIGHT));
 
+        // The work's journal says what TMDB changed, as a refresh the
+        // schedule made: nobody asked for it.
+        let written = journal(&state, &series.id).await;
+        let overview = written
+            .iter()
+            .find(|change| change.field == "overview")
+            .expect("journaled");
+        assert_eq!(overview.cause, Cause::Refresh);
+        assert_eq!(overview.actor, None);
+        assert_eq!(overview.provider.as_deref(), Some("tmdb"));
+        assert_eq!(overview.before, Some(serde_json::json!("Old overview.")));
+
         // And not again for another six months.
         assert_eq!(swept(&state, 25, Some(&run)).await, "nothing was due");
         assert!(providers.asked().is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_refresh_journals_what_it_changed_and_a_preview_of_it_writes_nothing() {
+        let providers = providers().await;
+        let state = server(&providers.at).await;
+        let series = aged_series(&state, "Breaking Bad", 81189, 1396).await;
+
+        let found = previewed(&state, &series).await;
+        let overview = found
+            .iter()
+            .find(|change| change.field == "overview")
+            .expect("the overview would change");
+        assert_eq!(overview.scope, "item");
+        assert_eq!(overview.before, Some(serde_json::json!("Old overview.")));
+        assert_eq!(
+            overview.after,
+            Some(serde_json::json!("New overview from TMDB."))
+        );
+        assert_eq!(overview.provider.as_deref(), Some("tmdb"));
+
+        // Nothing written: the work as it was, its schedule, no journal, no
+        // copy of what TMDB answered.
+        let now = held(&state, &series.id).await;
+        assert_eq!(now.overview.as_deref(), Some("Old overview."));
+        assert_eq!(now.refreshed_at, series.refreshed_at);
+        assert_eq!(now.refresh_after, series.refresh_after);
+        assert!(journal(&state, &series.id).await.is_empty());
+        assert!(
+            repo::snapshot::fetched(&state.db, &series.id)
+                .await
+                .expect("read")
+                .is_empty()
+        );
+
+        // In earnest, as somebody asked it: what the preview said, written
+        // as theirs, each value TMDB's or TheTVDB's as the merge says.
+        refreshed_by(&state, &series, Some("admin:alice")).await;
+        let written = journal(&state, &series.id).await;
+        assert_eq!(written.len(), found.len(), "{written:#?}");
+        let overview = written
+            .iter()
+            .find(|change| change.field == "overview")
+            .expect("journaled");
+        assert_eq!(overview.cause, Cause::Refresh);
+        assert_eq!(overview.actor.as_deref(), Some("admin:alice"));
+        assert_eq!(overview.provider.as_deref(), Some("tmdb"));
+        assert!(!overview.was_locked);
+        assert_eq!(
+            held(&state, &series.id).await.overview.as_deref(),
+            Some("New overview from TMDB.")
+        );
+
+        // Refreshed again, the sources say the same: nothing is written.
+        refreshed_by(&state, &series, None).await;
+        assert_eq!(journal(&state, &series.id).await.len(), written.len());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_change_under_a_lock_is_journaled_as_held_and_left_out_of_a_preview() {
+        let providers = providers().await;
+        let state = server(&providers.at).await;
+        let series = aged_series(&state, "Breaking Bad", 81189, 1396).await;
+        repo::override_field::set(
+            &state.db,
+            &series.id,
+            crate::domain::fields::Scope::Item,
+            "overview",
+            Some(&serde_json::json!("Mine.")),
+            Some("admin:alice"),
+        )
+        .await
+        .expect("locked");
+        tokio::time::sleep(Duration::from_millis(3)).await;
+
+        // No refresh reaches it, so none would change it.
+        assert!(
+            previewed(&state, &series)
+                .await
+                .iter()
+                .all(|change| change.field != "overview")
+        );
+
+        // The source's value changes beneath the lock: written, as held by
+        // it, and the lock is now one its source moved under.
+        refreshed_by(&state, &series, None).await;
+        let written = journal(&state, &series.id).await;
+        let overview = written
+            .iter()
+            .find(|change| change.field == "overview")
+            .expect("journaled");
+        assert!(overview.was_locked);
+        assert_eq!(
+            overview.after,
+            Some(serde_json::json!("New overview from TMDB."))
+        );
+        assert_eq!(
+            repo::change::count_diverging(&state.db, true)
+                .await
+                .expect("counted"),
+            1
+        );
+        // What is served is the lock's still.
+        let served = crate::service::load(&state, &series.id)
+            .await
+            .expect("read")
+            .expect("held");
+        assert_eq!(served.overview.as_deref(), Some("Mine."));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_sync_journals_what_it_changed_as_a_sync_and_its_preview_writes_nothing() {
+        use crate::service::gather::{ResyncOutcome, resync};
+
+        let providers = providers().await;
+        let state = server(&providers.at).await;
+        let series = aged_series(&state, "Breaking Bad", 81189, 1396).await;
+        let stored = held(&state, &series.id).await;
+        let provenance = repo::item::provenance(&state.db, &series.id)
+            .await
+            .expect("read")
+            .expect("recorded");
+
+        let (state_, stored_, provenance_) = (state.clone(), stored.clone(), provenance.clone());
+        let (outcome, found) = tokio::spawn(async move {
+            crate::service::previewing(resync(
+                &state_,
+                &stored_,
+                &provenance_,
+                &[crate::providers::names::TMDB],
+            ))
+            .await
+        })
+        .await
+        .expect("the preview's task");
+        assert!(matches!(outcome, Ok(ResyncOutcome::Synced(_))));
+        assert!(found.iter().any(|change| change.field == "overview"));
+        assert!(journal(&state, &series.id).await.is_empty());
+        assert_eq!(
+            held(&state, &series.id).await.overview.as_deref(),
+            Some("Old overview.")
+        );
+
+        let (state_, stored_, provenance_) = (state.clone(), stored.clone(), provenance.clone());
+        let outcome = tokio::spawn(async move {
+            crate::service::asked(
+                Some("editor:bob".into()),
+                None,
+                resync(
+                    &state_,
+                    &stored_,
+                    &provenance_,
+                    &[crate::providers::names::TMDB],
+                ),
+            )
+            .await
+        })
+        .await
+        .expect("the sync's task");
+        assert!(matches!(outcome, Ok(ResyncOutcome::Synced(_))));
+        let written = journal(&state, &series.id).await;
+        assert_eq!(written.len(), found.len());
+        let overview = written
+            .iter()
+            .find(|change| change.field == "overview")
+            .expect("journaled");
+        assert_eq!(overview.cause, Cause::Sync);
+        assert_eq!(overview.actor.as_deref(), Some("editor:bob"));
+        assert_eq!(overview.provider.as_deref(), Some("tmdb"));
+    }
+
+    #[tokio::test]
+    async fn the_journal_is_pruned_past_its_retention_and_kept_whole_at_nought() {
+        let state = server("http://127.0.0.1:9").await;
+        let series = aged_series(&state, "Pruned", 81191, 1398).await;
+        let write = |days_ago: i64| {
+            let state = state.clone();
+            let id = series.id.clone();
+            async move {
+                repo::change::record(
+                    &state.db,
+                    &id,
+                    None,
+                    &[repo::change::NewChange {
+                        cause: Cause::Refresh,
+                        scope: "item".into(),
+                        field: "overview".into(),
+                        language: String::new(),
+                        before: None,
+                        after: Some(serde_json::json!(days_ago)),
+                        provider: Some("tmdb".into()),
+                        was_locked: false,
+                    }],
+                )
+                .await
+                .expect("written");
+                sqlx::query(
+                    state
+                        .db
+                        .sql("UPDATE media_change SET at = ? WHERE value_after = ?"),
+                )
+                .bind(to_rfc3339(Utc::now() - TimeDelta::days(days_ago)))
+                .bind(days_ago.to_string())
+                .execute(state.db.pool())
+                .await
+                .expect("aged");
+            }
+        };
+        let kept = || {
+            let state = state.clone();
+            let id = series.id.clone();
+            async move {
+                let mut ages: Vec<String> = journal(&state, &id)
+                    .await
+                    .into_iter()
+                    .filter_map(|change| change.after.map(|age| age.to_string()))
+                    .collect();
+                ages.sort();
+                ages
+            }
+        };
+
+        write(400).await;
+        write(40).await;
+        write(1).await;
+
+        // A year unless it is set.
+        prune_changes(&state).await;
+        assert_eq!(kept().await, ["1", "40"]);
+
+        // Nought keeps everything.
+        state
+            .settings
+            .set(
+                crate::settings::registry::Scope::Server,
+                "",
+                "history.keepDays",
+                "0",
+                None,
+            )
+            .await
+            .expect("set");
+        write(4000).await;
+        prune_changes(&state).await;
+        assert_eq!(kept().await, ["1", "40", "4000"]);
+
+        state
+            .settings
+            .set(
+                crate::settings::registry::Scope::Server,
+                "",
+                "history.keepDays",
+                "30",
+                None,
+            )
+            .await
+            .expect("set");
+        prune_changes(&state).await;
+        assert_eq!(kept().await, ["1"]);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

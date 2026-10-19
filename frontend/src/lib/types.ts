@@ -245,6 +245,23 @@ export type ProvenanceReport = Schema<'ProvenanceReport'>
 
 export type SyncOutcome = Schema<'SyncOutcome'>
 
+/** A lock whose sources say something else now, beside what they say. */
+export type LockDivergence = Schema<'LockDivergence'>
+
+/** What a refresh or a sync would write over, from a dry run of it. */
+export type RefreshPreview = Schema<'RefreshPreview'>
+
+/** One value a write changed, or would. */
+export type FieldChange = Schema<'FieldChange'>
+
+/** One change in a work's journal: what the value held and took, who and why. */
+export type ChangeEntry = Schema<'ChangeEntry'>
+
+/** A page of a work's journal, and what its filters can offer. */
+export type ChangeList = Schema<'ChangeList'>
+
+export type ChangeCause = Schema<'ChangeCause'>
+
 /** What each source gives a work, and which wins. */
 export type SourceRules = Schema<'SourceRules'>
 
@@ -341,6 +358,18 @@ export type CuratedListRequest = Schema<'CuratedListRequest'>
 export type Facet = Schema<'Facet'>
 
 export type Facets = Schema<'Facets'>
+
+/** The list's facets, and the countries and ratings its further filters choose among. */
+export type CatalogueFacets = Schema<'CatalogueFacets'>
+
+/** What a search across the catalogue found: its works, people and episodes, each ranked. */
+export type SearchHits = Schema<'SearchHits'>
+
+export type WorkHit = Schema<'WorkHit'>
+
+export type PersonHit = Schema<'PersonHit'>
+
+export type EpisodeHit = Schema<'EpisodeHit'>
 
 export type Airing = Schema<'Airing'>
 

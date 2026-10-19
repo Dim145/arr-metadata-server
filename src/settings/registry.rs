@@ -522,6 +522,15 @@ pub const REGISTRY: &[Definition] = &[
         kind: Kind::Int { min: 0, max: 30 },
         scopes: SERVER_ONLY,
     },
+    // ── Journal ──────────────────────────────────────────────────────────────
+    Definition {
+        // How many days each work's journal keeps a change, `0` for ever: a
+        // year unless set (`jobs::refresh::HISTORY_KEEP_DAYS`), ten at the
+        // most. Read by the pass that prunes the audit trail.
+        key: "history.keepDays",
+        kind: Kind::Int { min: 0, max: 3650 },
+        scopes: SERVER_ONLY,
+    },
     // Webhooks were two settings here, an address and its events, until
     // they became destinations of their own: see `service::webhook`.
     // ── Updates ──────────────────────────────────────────────────────────────
@@ -734,6 +743,15 @@ mod tests {
         assert!(validate(def("backup.keepUpgrades"), "0").is_err());
         assert!(validate(def("backup.keepUpgrades"), "2").is_ok());
         assert!(validate(def("backup.beforeUpgrade"), "true").is_ok());
+    }
+
+    #[test]
+    fn the_journal_is_the_server_s_and_kept_from_never_to_ten_years() {
+        assert_eq!(def("history.keepDays").scopes, SERVER_ONLY);
+        assert!(validate(def("history.keepDays"), "0").is_ok(), "for ever");
+        assert!(validate(def("history.keepDays"), "365").is_ok());
+        assert!(validate(def("history.keepDays"), "3651").is_err());
+        assert!(validate(def("history.keepDays"), "-1").is_err());
     }
 
     #[test]

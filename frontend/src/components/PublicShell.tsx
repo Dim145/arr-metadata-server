@@ -9,11 +9,13 @@
  * The one thing that does float is the bar along the foot of a phone — fixed,
  * since a thumb reaches the bottom of a screen and not its top — and the page
  * keeps room under its own end for it: nothing, the footer included, is left
- * beneath it.
+ * beneath it. A page whose own actions are what the thumb is there for — a
+ * work's: where to watch it, its trailer, its address — stands its own bar
+ * there instead (`useFootBar`), and the page keeps no room for the site's.
  */
 
-import { keepPreviousData, useQuery } from '@tanstack/react-query'
-import { Fragment, useEffect, useState } from 'react'
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
+import { createContext, Fragment, use, useEffect, useId, useLayoutEffect, useState } from 'react'
 import { Link, Outlet, useLocation, useNavigate, useSearchParams } from 'react-router'
 
 import { api, query } from '../lib/api'
@@ -27,12 +29,37 @@ import { LanguageToggle } from './LanguageToggle'
 import { AdminLink, BrowseTab, Tab, TabBar } from './nav'
 import { lookup, providerName } from '../lib/labels'
 import { poster } from '../lib/media'
+import {
+  TEXT_LANGUAGES,
+  setTextLanguage,
+  showAdultPosters,
+  useAdultPostersShown,
+  useTextLanguage,
+} from '../lib/prefs'
 import type { ItemPage, Me, Sources } from '../lib/types'
-import { CommandPalette, openPalette, paletteShortcut } from './CommandPalette'
-import { Artwork } from './media'
+import { CommandPalette, paletteShortcut } from './CommandPalette'
+import { KeysHelp, useShortcuts } from './KeysHelp'
+import { Artwork, VEILED, useVeiled } from './media'
 import { PageBoundary } from './PageBoundary'
 import { SignOut } from './SignOut'
-import { Glyph, Input } from './ui'
+import { Glyph, Input, Menu, Select, Toggle } from './ui'
+
+/** Told by a page that it stands its own bar along the foot of a phone. */
+const FootBar = createContext<((footed: boolean) => void) | null>(null)
+
+/**
+ * For a page that stands a bar of its own along the foot of a phone, in place
+ * of the site's: said before the first paint, so the two are never drawn at
+ * once, and unsaid as the page goes.
+ */
+export function useFootBar() {
+  const say = use(FootBar)
+  useLayoutEffect(() => {
+    if (!say) return
+    say(true)
+    return () => say(false)
+  }, [say])
+}
 
 export function PublicShell({ me }: { me?: Me }) {
   const { t } = useI18n()
@@ -41,6 +68,9 @@ export function PublicShell({ me }: { me?: Me }) {
   // Signed in, whatever the account may do: a member has a way out too.
   const signedIn = Boolean(me?.canWrite || me?.user)
   const [searching, setSearching] = useState(false)
+  const [keys, setKeys] = useState(false)
+  // Whether the page has a bar of its own along the foot of a phone.
+  const [footed, setFooted] = useState(false)
   const location = useLocation()
   useNavigationReset('main')
 
@@ -49,25 +79,23 @@ export function PublicShell({ me }: { me?: Me }) {
     setSearching(false)
   }, [location.pathname, location.search])
 
-  // `/` puts the cursor in the search, as it does on every site with one,
-  // unless it is being typed into a field.
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key !== '/' || event.metaKey || event.ctrlKey || event.altKey) return
-      const target = event.target as HTMLElement | null
-      if (target?.closest('input, textarea, select, [contenteditable="true"]')) return
-      event.preventDefault()
+  // `/` puts the cursor in the search, as it does on every site with one —
+  // the field in the bar where the width has it, the one under the bar where
+  // it has not — and the other keys go where they say; see `KeysHelp`.
+  useShortcuts({
+    search: () => {
       const box = document.getElementById('catalogue-search') as HTMLInputElement | null
-      if (box && box.offsetParent !== null) {
-        box.focus()
-        box.select()
+      const under = document.getElementById('catalogue-search-bar') as HTMLInputElement | null
+      const field = box && box.offsetParent !== null ? box : under
+      if (field) {
+        field.focus()
+        field.select()
       } else {
         setSearching(true)
       }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [])
+    },
+    help: () => setKeys(true),
+  })
 
   return (
     // `clip` rather than `hidden`: the season scrollers deliberately bleed past
@@ -77,8 +105,14 @@ export function PublicShell({ me }: { me?: Me }) {
     // container and the sticky header stops sticking.
     //
     // Under a phone, room for the bar along its foot: a cell is 3.5rem and a
-    // hairline, and a phone with a home indicator adds its own inset.
-    <div className="grain ambience min-h-dvh overflow-x-clip pb-[calc(3.625rem+env(safe-area-inset-bottom))] md:pb-0">
+    // hairline, and a phone with a home indicator adds its own inset. None for
+    // a page that stands its own bar there, in the flow of the page.
+    <div
+      className={cn(
+        'grain ambience min-h-dvh overflow-x-clip',
+        !footed && 'pb-[calc(3.625rem+env(safe-area-inset-bottom))] md:pb-0',
+      )}
+    >
       <a
         href="#main"
         className="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-50 focus:rounded-card focus:bg-vermillion focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-ink"
@@ -113,16 +147,12 @@ export function PublicShell({ me }: { me?: Me }) {
           </nav>
 
           <div className="ml-auto flex items-center gap-2">
-            <SearchBox className="hidden w-64 lg:block" />
-            <button
-              type="button"
-              onClick={openPalette}
-              aria-label={t.palette.open}
-              title={t.palette.open}
-              className="hidden min-h-11 items-center rounded-full border border-rule px-2.5 font-mono text-[0.6875rem] text-bone-faint transition-colors duration-150 hover:border-rule-bright hover:text-bone lg:inline-flex"
-            >
-              {paletteShortcut()}
-            </button>
+            {/* The palette's ⌘K is said in the field, beside its `/`: a
+                button of its own beside the search was a second way into the
+                same thing, and one more control in a full bar. The field
+                waits for `xl`: between a laptop's narrowest and `xl`, beside
+                five tabs, it pushed the way in past the edge of the screen. */}
+            <SearchBox className="hidden w-64 xl:block" />
 
             {/* Below the width where the field fits, search is still one tap
                 away, in the bar at the top with the title: it is the thing
@@ -132,10 +162,20 @@ export function PublicShell({ me }: { me?: Me }) {
               onClick={() => setSearching((was) => !was)}
               aria-expanded={searching}
               aria-label={t.nav.search}
-              className="grid size-11 place-items-center rounded-card text-bone-dim transition-colors duration-200 hover:bg-ink-high hover:text-bone lg:hidden"
+              aria-keyshortcuts="/"
+              className="grid size-11 place-items-center rounded-card text-bone-dim transition-colors duration-200 hover:bg-ink-high hover:text-bone xl:hidden"
             >
               <Glyph name={searching ? 'close' : 'search'} className="size-5" />
             </button>
+
+            {/* On a tablet the bar is full: the lamp waits for `lg`. */}
+            <ThemeToggle className="hidden lg:flex" />
+
+            {/* The languages, and how the catalogue is shown, at every width:
+                a phone's sheet has the interface's language, but not the
+                texts' or the posters'. A menu rather than a pair of buttons:
+                one control, where there were two halves of one. */}
+            <ReaderMenu />
 
             {/* In the bar from `md` up; below it they are in the sheet the
                 bar along the foot of the screen opens. On a phone the logo,
@@ -143,10 +183,7 @@ export function PublicShell({ me }: { me?: Me }) {
                 the screen together — at 320px the menu button sat past the
                 edge, clipped away, and the navigation behind it could not be
                 opened at all. The top bar keeps the title and the search. */}
-            <div className="hidden items-center gap-2 md:flex">
-              {/* On a tablet the bar is full: the lamp waits for `lg`. */}
-              <ThemeToggle className="hidden lg:flex" />
-              <LanguageToggle />
+            <div className="hidden md:contents">
               <AdminLink me={me} />
               {signedIn ? (
                 <SignOut
@@ -159,7 +196,7 @@ export function PublicShell({ me }: { me?: Me }) {
         </div>
 
         {searching ? (
-          <div className="border-t border-rule bg-ink-raised px-4 py-3 lg:hidden">
+          <div className="border-t border-rule bg-ink-raised px-4 py-3 xl:hidden">
             <SearchBox id="catalogue-search-bar" autoFocus />
           </div>
         ) : null}
@@ -168,14 +205,17 @@ export function PublicShell({ me }: { me?: Me }) {
       <main id="main" tabIndex={-1} className="relative z-10 mx-auto max-w-7xl px-4 pb-24 outline-none sm:px-6">
         {/* A page that throws is said so here, with the bar still where it was. */}
         <PageBoundary>
-          <Outlet />
+          <FootBar value={setFooted}>
+            <Outlet />
+          </FootBar>
         </PageBoundary>
         <CommandPalette canWrite={Boolean(me?.canWrite)} isAdmin={Boolean(me?.isAdmin)} />
+        <KeysHelp open={keys} onClose={() => setKeys(false)} />
       </main>
 
-      <Footer />
+      <Footer onKeys={() => setKeys(true)} />
 
-      <TabBar me={me} />
+      {footed ? null : <TabBar me={me} />}
     </div>
   )
 }
@@ -195,6 +235,108 @@ function Wordmark() {
       />
       <span className="label hidden lg:block">arr</span>
     </Link>
+  )
+}
+
+/**
+ * How the catalogue is read here: the interface's language, the language of
+ * its texts, and whether the posters of works for adults are shown.
+ *
+ * Two languages, because they are two questions. The interface speaks the
+ * few languages it is written in; the texts — titles, synopses, taglines —
+ * are the providers', in any language they translate into. A reader of the
+ * interface in English may want the films' own synopses in German.
+ *
+ * The site's own menu (`Menu`): a popover tied to its button, Escape and a
+ * press elsewhere closing it — and, holding controls rather than actions, a
+ * small dialog of them, each named.
+ */
+function ReaderMenu() {
+  const { t, lang, locale } = useI18n()
+  const queryClient = useQueryClient()
+  const texts = useTextLanguage()
+  const adult = useAdultPostersShown()
+  const id = useId()
+
+  // Each language named in the interface's, and sorted as their names are,
+  // not as their codes.
+  const names = (() => {
+    try {
+      return new Intl.DisplayNames([locale], { type: 'language' })
+    } catch {
+      return undefined
+    }
+  })()
+  const named = (tag: string) => {
+    try {
+      return names?.of(tag) ?? tag
+    } catch {
+      return tag
+    }
+  }
+  const collator = new Intl.Collator(locale)
+  const languages = TEXT_LANGUAGES.map((tag) => ({ tag, name: named(tag) })).sort((a, b) => collator.compare(a.name, b.name))
+
+  return (
+    <Menu
+      // Named with the code it shows, so a voice that says "EN" finds it;
+      // the language in full is the toggle's, inside.
+      label={t.reader.menu(lang.toUpperCase())}
+      title={t.reader.title}
+      button={
+        <>
+          <Glyph name="globe" className="size-4" />
+          <span className="font-mono text-caption font-medium tracking-wider uppercase">{lang}</span>
+          <Glyph name="chevronDown" className="size-3 transition-transform duration-150" />
+        </>
+      }
+      buttonClassName={(open) =>
+        cn(
+          'flex min-h-11 shrink-0 cursor-pointer items-center gap-1.5 rounded-card border border-rule px-2.5 text-bone-dim',
+          'transition-colors duration-150 hover:border-rule-bright hover:text-bone',
+          // The chevron turns while the panel is out.
+          open && 'border-rule-bright text-bone [&>svg:last-of-type]:rotate-180',
+        )
+      }
+      className="w-[min(20rem,calc(100vw-2rem))] p-4"
+    >
+      <p className="label">{t.reader.interface}</p>
+      <div className="mt-2">
+        <LanguageToggle />
+      </div>
+
+      <label htmlFor={`${id}-texts`} className="label mt-5 block">
+        {t.reader.texts}
+      </label>
+      <Select
+        id={`${id}-texts`}
+        value={texts ?? ''}
+        aria-describedby={`${id}-texts-hint`}
+        onChange={(event) => {
+          setTextLanguage(event.target.value || undefined)
+          // Everything read so far was read in the other language: read
+          // again, the page stays as it is until the new words arrive.
+          void queryClient.invalidateQueries()
+        }}
+        className="mt-2"
+      >
+        <option value="">{t.reader.asInterface}</option>
+        {languages.map(({ tag, name }) => (
+          <option key={tag} value={tag}>
+            {name}
+          </option>
+        ))}
+      </Select>
+      <p id={`${id}-texts-hint`} className="mt-1.5 text-caption leading-relaxed text-bone-faint">
+        {t.reader.textsHint}
+      </p>
+
+      <div className="mt-5 flex items-center justify-between gap-3">
+        <span className="text-sm text-bone">{t.reader.adult}</span>
+        <Toggle checked={adult} label={t.reader.adult} onChange={showAdultPosters} />
+      </div>
+      <p className="mt-1 text-caption leading-relaxed text-bone-faint">{t.reader.adultHint}</p>
+    </Menu>
   )
 }
 
@@ -284,6 +426,7 @@ function SearchBox({
         aria-controls={listing}
         aria-autocomplete="list"
         aria-activedescendant={listed && active >= 0 ? optionId(active) : undefined}
+        aria-keyshortcuts="/"
         autoComplete="off"
         enterKeyHint="search"
         value={term}
@@ -310,7 +453,8 @@ function SearchBox({
           }
         }}
         placeholder={t.nav.searchPlaceholder}
-        className="pr-9 pl-9"
+        // Room on the right for the keys said there, from where they are.
+        className="pr-9 pl-9 lg:pr-15"
       />
       {term ? (
         <button
@@ -326,13 +470,23 @@ function SearchBox({
           <Glyph name="close" className="size-3.5" />
         </button>
       ) : (
-        <kbd
+        // The keys that lead here, said where the eye already is: `/` for
+        // this field, the palette's for everything else. Said to a screen
+        // reader by the field's own `aria-keyshortcuts` and the list `?`
+        // opens; drawn only where a keyboard is likely, from `lg` up.
+        <span
           aria-hidden
-          title={t.nav.searchShortcut}
-          className="pointer-events-none absolute top-1/2 right-3 hidden -translate-y-1/2 rounded-[4px] border border-rule px-1.5 font-mono text-[0.625rem] text-bone-faint lg:block"
+          className="pointer-events-none absolute top-1/2 right-2.5 hidden -translate-y-1/2 items-center gap-1 lg:flex"
         >
-          /
-        </kbd>
+          {['/', paletteShortcut()].map((key) => (
+            <kbd
+              key={key}
+              className="rounded-[4px] border border-rule px-1 font-mono text-caption leading-[1.125rem] text-bone-faint"
+            >
+              {key}
+            </kbd>
+          ))}
+        </span>
       )}
 
       {listed ? (
@@ -359,13 +513,11 @@ function SearchBox({
               )}
             >
               <span className="aspect-2/3 w-8 shrink-0 overflow-hidden rounded-[4px] bg-ink-high">
-                {poster(item) ? (
-                  <Artwork url={poster(item)!} role="thumb" sizes="32px" alt="" className="size-full object-cover" />
-                ) : null}
+                {poster(item) ? <ResultThumb item={item} /> : null}
               </span>
               <span className="min-w-0">
                 <span className="block truncate text-sm font-medium text-bone">{item.title}</span>
-                <span className="block font-mono text-[0.6875rem] text-bone-faint tabular-nums">
+                <span className="block font-mono text-caption text-bone-faint tabular-nums">
                   {[item.year, item.kind === 'series' ? t.home.kindSeries : t.home.kindFilm].filter(Boolean).join(' · ')}
                 </span>
               </span>
@@ -401,7 +553,26 @@ function SearchBox({
   )
 }
 
-function Footer() {
+/**
+ * A found work's poster, the size of a thumbnail: veiled, as every poster of a
+ * work for adults is, for a reader who has not asked to see them — too small
+ * here to be uncovered, which its page is the place for.
+ */
+function ResultThumb({ item }: { item: ItemPage['items'][number] }) {
+  const veiled = useVeiled(item)
+
+  return (
+    <Artwork
+      url={poster(item)!}
+      role="thumb"
+      sizes="32px"
+      alt=""
+      className={cn('size-full object-cover', veiled && VEILED)}
+    />
+  )
+}
+
+function Footer({ onKeys }: { onKeys: () => void }) {
   const { t, lang } = useI18n()
   const hasLists = useHasLists()
   const me = useMe()
@@ -437,6 +608,16 @@ function Footer() {
           >
             {t.nav.figures}
           </Link>
+          {/* The list of the keys, for whoever reads with a keyboard and has
+              not met `?` yet: not drawn under a finger, which has none. */}
+          <button
+            type="button"
+            onClick={onKeys}
+            aria-keyshortcuts="?"
+            className="hidden min-h-11 cursor-pointer items-center self-start text-xs text-bone-dim transition-colors duration-150 hover:text-bone pointer-fine:inline-flex"
+          >
+            {t.keys.title}
+          </button>
         </div>
         {/* What a reader can follow from elsewhere: the schedule in a
             calendar app, the arrivals and the week in a feed reader. Only

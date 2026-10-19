@@ -72,3 +72,105 @@ What moved, and why:
   instance would otherwise compute again.
 - The percentiles are of a laptop serving itself over loopback; compare
   rows between runs, not with a production host.
+
+## The ranked search, over fifty thousand works (migration 0039)
+
+The development catalogue is too small for a search to cost anything, so
+the search index was measured over a made-up one: 50 000 works (30 000
+films, 20 000 series with 345 214 episodes), 133 294 alternative titles,
+74 856 translations and 300 000 credits among 39 976 people, the words of
+every title drawn from the system word list by Zipf's law — a word's chance
+falls as one over its rank — and three in ten from a short list of common
+ones, `the`, `love`, `night`… Both builds are release builds with thin LTO
+and 16 codegen units (fat LTO takes minutes to link, and the comparison is
+what counts): *before* is fae9bf4, *after* the tree with the search index.
+The two servers ran side by side over copies of the catalogue, the after
+one's index written first, each scenario 10 s at 32 connections against one
+and then the other. A scenario of random terms (`oha --rand-regex-url`)
+meets most of its terms cold; a kept one is asked once before it is timed.
+
+| Scenario | before req/s | p50 | p99 | after req/s | p50 | p99 |
+|---|---:|---:|---:|---:|---:|---:|
+| catalogue list (24 series), kept | 54 488 | 0.5 ms | 2.6 ms | 60 334 | 0.4 ms | 2.1 ms |
+| search "love", kept | 56 011 | 0.5 ms | 2.5 ms | 60 367 | 0.4 ms | 2.3 ms |
+| search, a common word + 0–2 letters | 44 | 587.3 ms | 3 638.0 ms | 19 | 1 259.6 ms | 6 299.1 ms |
+| search, five random letters | 41 | 805.5 ms | 1 069.2 ms | 235 | 103.3 ms | 359.8 ms |
+| series search, a common word + 0–2 letters | 54 | 505.6 ms | 2 988.9 ms | 40 | 665.8 ms | 4 377.2 ms |
+| facets, a common word + 0–2 letters | 53 | 633.0 ms | 1 816.4 ms | 11 | 4 234.1 ms | 9 053.6 ms |
+| Sonarr search "love", kept | 4 472 | 7.0 ms | 10.0 ms | 4 393 | 7.2 ms | 10.3 ms |
+
+The command palette's own search, `/api/v1/search` (works, people and
+episodes at once), which the before build does not have: 18 requests a
+second for a common word and a letter or two (p50 1 906.2 ms), 121 for five
+random letters (p50 141.5 ms).
+
+What moved, and why:
+
+- **A kept answer costs what it did**: the cache answers before anything is
+  searched. The gap between the two columns is the spread between runs of a
+  laptop serving itself.
+- **A term no name holds** — five random letters, which is what a
+  misspelling looks like to the index — is answered six times as often. The
+  before build matched it against every work's titles and found nothing in
+  800 ms at this load; the after build finds nothing in a few rows of its
+  two reads by the letters, then asks for the names sharing most of the
+  term's trigrams, each trigram's rows counted.
+- **A common word, cold, costs more.** To rank, the after build reads the
+  best-known 200 of the names that start with the term and of those that
+  hold it — for `love`, 2 254 and 5 879 names, each joined to its work and
+  sorted by popularity — where the before build read the titles once; a
+  common word with a letter or two after it mostly finds nothing by its
+  letters, and pays for the misspelling read as well.
+- **The facets** of a term read its works three times: for the genres and
+  the rest, then for the countries and the ratings, which are new. When
+  first measured they read more: the whole search first, only to learn
+  whether a misspelling was forgiven (they now glance at fifty rows of it),
+  and the ratings' subquery once for each branch of their `UNION` (now one
+  common table).
+- **A search of series** read every series through the index of their kind
+  in the first measurement — without statistics, SQLite takes
+  `kind = 'series'` for a handful of rows — and took 8 s at p50; when the
+  search index names the works, those columns are now written `+kind`,
+  SQLite's way of keeping a column out of its choice of index.
+- **At 32 connections the limit is SQLite's, not the search's**: one
+  connection answers a cold search of a common word in tens of
+  milliseconds, but thirty-two share the bundled SQLite's memory-statistics
+  mutex, which every allocation takes, and read a 596 MB file through page
+  caches of 2 MB each. Two settings lift both; they are measured below, and
+  are not part of this change.
+
+### The same, with two settings of SQLite's (proposed, not applied)
+
+Both builds again, each with `PRAGMA mmap_size = 1073741824` on every
+connection (`src/db/mod.rs`) and the bundled SQLite compiled with
+`SQLITE_DEFAULT_MEMSTATUS=0` (`LIBSQLITE3_FLAGS`), which SQLite's own list of
+recommended options carries:
+
+| Scenario | before req/s | p50 | p99 | after req/s | p50 | p99 |
+|---|---:|---:|---:|---:|---:|---:|
+| catalogue list (24 series), kept | 71 185 | 0.4 ms | 1.5 ms | 63 130 | 0.4 ms | 2.2 ms |
+| search "love", kept | 68 765 | 0.4 ms | 1.6 ms | 48 359 | 0.5 ms | 3.5 ms |
+| search, a common word + 0–2 letters | 861 | 1.5 ms | 334.3 ms | 2 219 | 0.4 ms | 89.2 ms |
+| search, five random letters | 332 | 94.3 ms | 144.1 ms | 2 511 | 9.4 ms | 40.9 ms |
+| series search, a common word + 0–2 letters | 1 029 | 1.4 ms | 247.0 ms | 1 438 | 0.6 ms | 126.2 ms |
+| facets, a common word + 0–2 letters | 376 | 85.9 ms | 167.2 ms | 362 | 37.7 ms | 319.4 ms |
+| Sonarr search "love", kept | 3 969 | 7.9 ms | 11.9 ms | 3 205 | 8.9 ms | 24.8 ms |
+
+The palette's search: 1 187 a second for a common word and a letter or two
+(p50 0.6 ms), 2 199 for five random letters (p50 12.1 ms). Apart, the map
+multiplies the after build's cold scenarios by two to eight and the
+statistics left out by one and a half to four; together, by ten (five
+random letters) to more than a hundred (a common word), and its facets by
+thirty. With both, it answers a cold search one and a half to seven times
+as often as the before build with the same settings, and the facets as
+often.
+
+### The first start after the upgrade
+
+On this catalogue the first start answers after 10 s — the archive the
+server makes of the database before it migrates, 9 s for 336 MB; the
+migrations themselves take 2 — then writes the search index in the
+background: whole after 255 s (258 080 names of works, 39 976 people,
+345 214 episodes), the search answering from what is written meanwhile. The
+file grows from 336 MB to 596 MB: the index's table, its FTS5 trigrams and
+its three indexes weigh 283 MB, less the 0022 index the migration drops.

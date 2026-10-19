@@ -153,8 +153,12 @@ test.describe('accounts', () => {
       expect(await them.page.evaluate(() => localStorage.getItem('ams.recent'))).not.toBeNull()
 
       // The way out is in the catalogue's own bar — in the sheet of the bar
-      // along the foot of the screen, on a phone.
-      if (isMobile) await them.page.getByRole('button', { name: /^(more|plus)$/i }).click()
+      // along the foot of the screen, on a phone, which a work's page gives
+      // over to its own actions: the way out is a page away there.
+      if (isMobile) {
+        await them.page.goto('/')
+        await them.page.getByRole('button', { name: /^(more|plus)$/i }).click()
+      }
       await them.page.getByRole('button', { name: /sign out|déconnecter/i }).click()
       await them.page.waitForURL('**/login')
       expect((await them.page.request.get('/api/v1/account')).status()).toBe(401)

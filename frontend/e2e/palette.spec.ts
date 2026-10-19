@@ -33,8 +33,9 @@ test.describe('the command palette', () => {
     await expect(box).toBeHidden()
     await expect(page).toHaveURL(/kind=movie/)
 
-    // The button in the bar opens it too.
-    await page.getByRole('button', { name: /command palette|palette de commandes/i }).click()
+    // The bar's ⌘K button is gone — the search field says the key instead —
+    // so the key is the way back in.
+    await page.keyboard.press('ControlOrMeta+k')
     await expect(box).toBeVisible()
   })
 

@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { image, work } from './fixtures'
+import { forAdults } from './prefs'
+import type { Recent } from './recent'
 
 /** A browser's storage, kept in a map. */
 function storage(initial: Record<string, string> = {}) {
@@ -51,6 +53,40 @@ describe('the works opened lately', () => {
     expect(latest?.id).toBe('b')
     expect(first).toMatchObject({ id: 'a', title: 'Heat', kind: 'movie', year: 1995, poster: 'https://example.org/heat.jpg' })
     expect(first?.rating).toMatchObject({ source: 'imdb', value: 8.3 })
+  })
+
+  it('keep what veils a work for adults, and nothing where there is nothing to veil', async () => {
+    const { remember } = await fresh()
+    remember(work({ id: 'marked', isAdult: true }))
+    remember(work({ id: 'rated', contentRating: 'R18+' }))
+    remember(work({ id: 'teen', contentRating: 'TV-14' }))
+    remember(work({ id: 'plain' }))
+
+    const kept = shelf(local.kept) as Recent[]
+    expect(kept.find((recent) => recent.id === 'marked')).toMatchObject({ isAdult: true })
+    expect(kept.find((recent) => recent.id === 'rated')).toMatchObject({ contentRating: 'R18+' })
+    const plain = kept.find((recent) => recent.id === 'plain')
+    expect(plain).not.toHaveProperty('isAdult')
+    expect(plain).not.toHaveProperty('contentRating')
+    // The rule every other row applies to a work reads the shelf's entries alike.
+    expect(kept.filter(forAdults).map((recent) => recent.id)).toEqual(['rated', 'marked'])
+  })
+
+  it('read an entry kept before the veil as a work for anyone, and pass over one whose veil is broken', async () => {
+    local.kept.set(
+      'ams.recent',
+      JSON.stringify([
+        { id: 'before', title: 'Before', kind: 'movie', at: 0 },
+        { id: 'figure', title: 'Figure', kind: 'movie', at: 0, contentRating: 18 },
+        { id: 'word', title: 'Word', kind: 'movie', at: 0, isAdult: 'yes' },
+      ]),
+    )
+    const { remember } = await fresh()
+    remember(work({ id: 'new' }))
+
+    const kept = shelf(local.kept) as Recent[]
+    expect(kept.map((recent) => recent.id)).toEqual(['new', 'before'])
+    expect(kept.filter(forAdults)).toEqual([])
   })
 
   it('hold each work once, moved to the front when it is opened again', async () => {

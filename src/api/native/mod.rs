@@ -17,6 +17,7 @@ pub mod discover;
 pub mod export;
 pub mod feeds;
 pub mod figures;
+pub mod history;
 pub mod invitations;
 pub mod items;
 pub mod lists;
@@ -29,6 +30,7 @@ pub mod orders;
 pub mod overrides;
 pub mod recommend;
 pub mod rules;
+pub mod search;
 pub mod seasons;
 pub mod settings;
 pub mod signup;
@@ -78,6 +80,7 @@ pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .merge(items::router())
         .merge(browse::router())
+        .merge(search::router())
         .merge(feeds::router())
         .merge(lists::router())
         .merge(watch::router())
@@ -91,6 +94,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(tls::router())
         .merge(cache::router())
         .merge(overrides::router())
+        .merge(history::router())
         .merge(clients::router())
         .merge(meta::router())
         .merge(network::router())

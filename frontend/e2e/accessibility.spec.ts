@@ -26,7 +26,11 @@ async function scan(page: Page, label: string) {
 
   // Mid-fade, text is measured at part of its opacity: a dialog scanned the
   // moment it opened failed on colours that pass once it has finished arriving.
-  await page.waitForFunction(() => document.getAnimations().every((a) => a.playState !== 'running'))
+  // An animation the page's scroll drives — the front page's plate — runs for
+  // as long as the page is there, and is never waited for.
+  await page.waitForFunction(() =>
+    document.getAnimations().every((a) => a.playState !== 'running' || a.timeline !== document.timeline),
+  )
 
   const results = await new AxeBuilder({ page }).withTags(WCAG).analyze()
 

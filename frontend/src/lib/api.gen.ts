@@ -741,7 +741,10 @@ export interface paths {
         /**
          * Read the audit trail, newest first.
          * @description Administrative: it names who did what, so it requires an administrator or a
-         *     key carrying the `admin` scope.
+         *     key carrying the `admin` scope. With `format`, every entry the filters
+         *     match is handed over as a file: a CSV for a spreadsheet — a column for
+         *     the instant, who, the action, the target, the work it names, the note and
+         *     the address — or a JSON array of the entries.
          */
         get: operations["audit_list"];
         put?: never;
@@ -1215,7 +1218,8 @@ export interface paths {
          * @description Takes the list's own filters and counts under them — see
          *     [`repo::item::facets`] for how each is counted — and over what this caller
          *     may see: an adult title's genre is not counted for somebody who would never
-         *     be shown it.
+         *     be shown it. A term counts the works the list finds for it, a misspelt one
+         *     included.
          */
         get: operations["browse_facets"];
         put?: never;
@@ -1351,6 +1355,12 @@ export interface paths {
          * List and search stored works.
          * @description Searches this server's own store only — it does not reach out to a provider.
          *     Manual overrides are applied, so what you see here is what clients are served.
+         *
+         *     With a `term`, the works are ranked by how well each answers it — a title
+         *     that is the term before one that starts with it, before one with a word
+         *     that does, before one that holds it — the better known first among those
+         *     that answer alike; a term misspelt finds what it resembles when its
+         *     letters find little. `sort` still orders a search when it is given.
          */
         get: operations["items_list"];
         put?: never;
@@ -1455,6 +1465,57 @@ export interface paths {
         get: operations["feeds_work_ics"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/items/{id}/changes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read a work's journal, newest first.
+         * @description Every value a refresh, a sync or a person changed — of the work, of its
+         *     seasons and episodes, of a child a lock names — with what it held, what it
+         *     took, who and why: `refresh`, `sync` and `fallback` are a source's, `lock`,
+         *     `unlock`, `revert` and `edit` a person's. Kept `history.keepDays` days.
+         *     For the people who keep the catalogue: it names who locked what. With
+         *     `format`, every change the filters match is handed over as a file: a CSV
+         *     for a spreadsheet, or a JSON array of the changes.
+         */
+        get: operations["history_changes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/items/{id}/changes/undo": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Undo the caller's last change of one value of a work.
+         * @description The lock it set, changed or lifted is put back as it was — the lock it
+         *     replaced, with the value that held, or no lock at all — and the journal
+         *     and the audit trail call that a `revert`. What the catalogue's "Undo"
+         *     does for each work an action over a selection changed. Refused when
+         *     something else changed the value since — a refresh, or somebody else —
+         *     and for a row added or removed by hand, which is removed or added again.
+         */
+        post: operations["history_undo"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1827,10 +1888,18 @@ export interface paths {
          *     A scope naming a child the sources gave hides it (`hidden`, `true`) or
          *     corrects a credit (`characterName`, `sortOrder`), whatever row a refresh
          *     writes it in next.
+         *
+         *     The work's journal is told what the value held and what it holds now: a
+         *     lock, an edit of what was entered by hand, or — with `cause: revert` — a
+         *     value put back from the journal.
          */
         put: operations["overrides_set"];
         post?: never;
-        /** Unlock every field of a work at once. */
+        /**
+         * Unlock every field of a work at once.
+         * @description The work's journal is told, lock by lock, what each held and what is
+         *     served without it.
+         */
         delete: operations["overrides_clear"];
         options?: never;
         head?: never;
@@ -1851,7 +1920,8 @@ export interface paths {
          * Unlock one field, handing it back to provider data on the next refresh.
          * @description The scope may name a child the sources gave, as the lock does
          *     (`credit:actor:tmdb:17419`), percent-encoded; an image's, whose address
-         *     holds slashes, is easier lifted from the image's own route.
+         *     holds slashes, is easier lifted from the image's own route. The work's
+         *     journal is told what the lock held and what is served without it.
          */
         delete: operations["overrides_unset"];
         options?: never;
@@ -1894,7 +1964,10 @@ export interface paths {
         /**
          * Refetch from providers now, ignoring the refresh schedule.
          * @description Provider data and provider-sourced children are replaced. Manual overrides
-         *     are not touched — that is the point of them.
+         *     are not touched — that is the point of them. What the refresh changed is
+         *     written to the work's journal, as the caller asked it. With `dryRun`,
+         *     nothing is: the sources are asked and merged as a refresh asks and merges
+         *     them, and the answer is what would be written over.
          */
         post: operations["items_refresh"];
         delete?: never;
@@ -2016,7 +2089,9 @@ export interface paths {
          * @description What they say is weighed against what every other source said last time,
          *     by the usual priority: the result is what a full refresh would make had
          *     nobody else changed their mind. Fields locked by hand are not touched, and
-         *     the work's refresh schedule stands — this is not a refresh.
+         *     the work's refresh schedule stands — this is not a refresh. What it
+         *     changed is written to the work's journal; with `dryRun`, nothing is, and
+         *     the answer is what would be written over.
          */
         post: operations["items_sync"];
         delete?: never;
@@ -2440,6 +2515,33 @@ export interface paths {
          *     credits carry none and are not found here.
          */
         get: operations["browse_person"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Search the works, the people and the episodes at once.
+         * @description Each kind ranked on its own — a name that is the term, then one that
+         *     starts with it, then one with a word that does, then one that holds it,
+         *     then, when those are few, one a misspelt term resembles; the better known
+         *     first among those that answer alike. A work is found by any of its titles
+         *     — original, alternative, translated, locked by hand — and named by the one
+         *     it is shown under, with the one it was found by beside it. Only what the
+         *     caller may see: works switched on, adult ones as their policy allows, and
+         *     people credited on such a work.
+         */
+        get: operations["search_find"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3970,6 +4072,30 @@ export interface components {
             CreditId: string;
             Images?: components["schemas"]["ImageResource"][];
         };
+        /**
+         * @description What the catalogue can be narrowed by next, with how many works each
+         *     choice would leave: the list's facets, and the countries and the ratings
+         *     its further filters choose among.
+         */
+        CatalogueFacets: components["schemas"]["Facets"] & {
+            /**
+             * @description The countries the works were made in, ISO 3166-1 alpha-2, most common
+             *     first — counted as if no country were chosen.
+             */
+            countries: components["schemas"]["Facet"][];
+            /**
+             * @description The ratings the works carry in the reader's country (`region`), as
+             *     that country writes them; mildest first where they are ages, most
+             *     common first otherwise. Counted as if no rating were chosen.
+             */
+            certifications: components["schemas"]["Facet"][];
+            /**
+             * @description The country those ratings are read in: the one asked for, else the
+             *     one this caller is answered for. Absent, the ratings are the ones the
+             *     works carry as their own.
+             */
+            region?: string | null;
+        };
         Certificate: {
             names: string[];
             notAfter: string;
@@ -3980,6 +4106,65 @@ export interface components {
         CertificationResource: {
             Country: string;
             Certification: string;
+        };
+        /**
+         * @description Why a value changed.
+         * @enum {string}
+         */
+        ChangeCause: "refresh" | "sync" | "fallback" | "lock" | "unlock" | "revert" | "edit" | "merge" | "import";
+        /** @description A change, as the journal reads it. */
+        ChangeEntry: {
+            id: string;
+            at: string;
+            cause: components["schemas"]["ChangeCause"];
+            /**
+             * @description Who, as the audit trail names them — a person, or a key; nothing for
+             *     the schedule's own doing.
+             */
+            actor: string | null;
+            /** @description The source whose answer the new value is, where one is known. */
+            provider: string | null;
+            /**
+             * @description `item`, `season:2`, `episode:2x5`, or a child a lock names, as a lock
+             *     names it: `credit:actor:tmdb:17419`.
+             */
+            scope: string;
+            /**
+             * @description The field, as the field registry names it; for an episode, `number`
+             *     when it moved, `episode` when it came or went — `season` for a season.
+             */
+            field: string;
+            /**
+             * @description The language a text was locked in alone (`fra`); absent for every
+             *     language, and for what is in none.
+             */
+            language?: string | null;
+            /** @description What it held; `null` for nothing. */
+            before: unknown;
+            /** @description What it took; `null` for nothing. */
+            after: unknown;
+            /**
+             * @description Whether a lock held the field as it changed: a source's change made
+             *     under one reached the record and not what is served.
+             */
+            wasLocked: boolean;
+        };
+        /** @description A page of a work's journal. */
+        ChangeList: {
+            /**
+             * @description Newest first; the changes one write made, in the order the work
+             *     lists them.
+             */
+            changes: components["schemas"]["ChangeEntry"][];
+            /**
+             * @description What to ask for the next page with, as `cursor`; absent after the
+             *     last.
+             */
+            next?: string | null;
+            /** @description Every field the work's journal names, for a filter to offer. */
+            fields: string[];
+            /** @description Everybody it names — people, keys, sources — for a filter to offer. */
+            who: string[];
         };
         ChangePasswordRequest: {
             currentPassword: string;
@@ -4374,6 +4559,19 @@ export interface components {
             rating?: components["schemas"]["RatingValue"] | null;
             isManual: boolean;
         };
+        /** @description An episode found by its title. */
+        EpisodeHit: {
+            workId: string;
+            /** @description The series' title, in the language asked for where one is held. */
+            workTitle: string;
+            /** Format: int32 */
+            seasonNumber: number;
+            /** Format: int32 */
+            episodeNumber: number;
+            title: string;
+            /** @description `YYYY-MM-DD`. */
+            airDate?: string | null;
+        };
         /**
          * @description One of the orders a series' episodes come in: one of TheTVDB's besides
          *     the aired one, a TMDB episode group, one made here — or the aired order
@@ -4550,6 +4748,29 @@ export interface components {
             yearMin: number | null;
             /** Format: int32 */
             yearMax: number | null;
+        };
+        /**
+         * @description One value of a work that changed — of the work itself, of a season or of
+         *     an episode — as its journal writes it.
+         */
+        FieldChange: {
+            /**
+             * @description Where the value is, as a lock names it: `item`, `season:2`,
+             *     `episode:2x5` — an episode by the numbers it has after the change.
+             */
+            scope: string;
+            /**
+             * @description The field, as the field registry names it; for an episode, `number`
+             *     when it moved, and `episode` when it came or went — `season` for a
+             *     season.
+             */
+            field: string;
+            /** @description What it held; `null` for nothing. */
+            before: unknown;
+            /** @description What it holds now, or would; `null` for nothing. */
+            after: unknown;
+            /** @description The source whose answer the new value is, where one is known. */
+            provider?: string | null;
         };
         FieldDef: {
             /** @description The entity's serde name; also the key stored in `media_override.field`. */
@@ -5059,6 +5280,32 @@ export interface components {
              *     behalf.
              */
             value: unknown;
+        };
+        /**
+         * @description What a lock is set or lifted for, besides an edit.
+         * @enum {string}
+         */
+        LockCause: "revert";
+        /** @description A lock whose sources say something else now. */
+        LockDivergence: {
+            /** @description Where the lock is, as it names it: `item`, `season:2`, `episode:2x5`. */
+            scope: string;
+            field: string;
+            /**
+             * @description What the sources give the work now, merged as a refresh merges them;
+             *     `null` for nothing.
+             */
+            value: unknown;
+            /**
+             * @description The source whose value that is, where one is known: of the work's own
+             *     fields.
+             */
+            provider?: string | null;
+            /**
+             * @description Whether a source changed the value since the lock was set: one the
+             *     dashboard counts among the locks to look at again.
+             */
+            moved: boolean;
         };
         /**
          * @description A text a person locked, in one language or in every one: what a work
@@ -5644,6 +5891,21 @@ export interface components {
             /** @description A few portraits, in TMDB's order. */
             photos?: string[];
         };
+        /** @description Somebody the catalogue's works credit. */
+        PersonHit: {
+            name: string;
+            /**
+             * Format: int64
+             * @description Their TMDB id, which their page is filed under; none for somebody
+             *     credited by name alone, whose works the list finds by that name.
+             */
+            tmdbId?: number | null;
+            /**
+             * Format: int64
+             * @description How many works of the catalogue credit them.
+             */
+            works: number;
+        };
         /** @description One part a person played, or one job they did, on one work. */
         PersonRole: {
             workId: string;
@@ -6046,6 +6308,8 @@ export interface components {
              *     asks them.
              */
             sources: components["schemas"]["SyncSource"][];
+            /** @description The locks whose sources say something else now, beside what they say. */
+            diverging?: components["schemas"]["LockDivergence"][];
         };
         /** @description One provider, where the merge ranks it, and whether it answers now. */
         RankedProvider: {
@@ -6101,6 +6365,27 @@ export interface components {
             /** Format: int64 */
             TmdbId: number;
             Title: string;
+        };
+        /**
+         * @description What a refresh is answered with: the work as it now stands, or — for a
+         *     dry run — what the refresh would write over.
+         */
+        RefreshAnswer: components["schemas"]["MediaItem"] | components["schemas"]["RefreshPreview"];
+        /**
+         * @description What a refresh or a sync would write over, had it been asked for in
+         *     earnest.
+         */
+        RefreshPreview: {
+            /**
+             * @description The values it would write over, none of them locked — the work's own
+             *     first, then its seasons and its episodes — each with what it holds
+             *     and what it would hold.
+             */
+            changes: components["schemas"]["FieldChange"][];
+            /** @description For a sync, the sources asked that answered. */
+            answered?: string[];
+            /** @description For a sync, the sources asked that did not. */
+            silent?: string[];
         };
         Refusal: {
             id: string;
@@ -6276,6 +6561,12 @@ export interface components {
         Rule: "first" | "whole" | "union" | "spine" | "either";
         /** @enum {string} */
         Scope: "server" | "client" | "peer";
+        /** @description What a search found, kind by kind, the best of each first. */
+        SearchHits: {
+            works: components["schemas"]["WorkHit"][];
+            people: components["schemas"]["PersonHit"][];
+            episodes: components["schemas"]["EpisodeHit"][];
+        };
         Season: {
             id: string;
             /** Format: int32 */
@@ -6431,6 +6722,7 @@ export interface components {
              *     the field. To hand it back to the provider, delete the override instead.
              */
             value?: unknown;
+            cause?: components["schemas"]["LockCause"] | null;
         };
         SetResponse: {
             lockedFields: string[];
@@ -6746,6 +7038,11 @@ export interface components {
          * @enum {string}
          */
         SurfacePolicy: "apikey" | "allowlist" | "open";
+        /**
+         * @description What a sync is answered with: what it did, or — for a dry run — what it
+         *     would write over.
+         */
+        SyncAnswer: components["schemas"]["SyncOutcome"] | components["schemas"]["RefreshPreview"];
         SyncOutcome: {
             /** @description The work as it now stands. */
             item: components["schemas"]["MediaItem"];
@@ -6784,7 +7081,7 @@ export interface components {
          * @description A task, sent under the name the history files its runs by.
          * @enum {string}
          */
-        TaskId: "refresh.sweep" | "refresh.all" | "import.anime" | "import.imdb" | "export.nfo" | "media.store" | "media.sweep" | "tls.renew" | "update.check" | "arr.seed" | "backup.run";
+        TaskId: "refresh.sweep" | "refresh.all" | "import.anime" | "import.imdb" | "export.nfo" | "media.store" | "media.sweep" | "tls.renew" | "update.check" | "arr.seed" | "backup.run" | "search.rebuild";
         /** @enum {string} */
         TaskMode: "scheduled" | "manual" | "off";
         TaskState: {
@@ -6875,6 +7172,13 @@ export interface components {
             backupOverdue: boolean;
             /** @description When the newest archive was made; `null` when none was. */
             lastBackupAt: string | null;
+            /**
+             * Format: int64
+             * @description Works with a lock a source moved under since it was set, and which
+             *     says something else than the lock now: worth a look, to keep the
+             *     lock or to take what the source says.
+             */
+            divergingLocks: number;
         };
         Translation: {
             language: string;
@@ -6905,6 +7209,19 @@ export interface components {
          * @enum {string}
          */
         Unavailable: "off" | "noId";
+        UndoChangeRequest: {
+            /**
+             * @description `item`, `season:3`, `episode:3x7`, or a child a lock names. Defaults
+             *     to the work itself.
+             */
+            scope?: string;
+            field: string;
+            /**
+             * @description The language the value was locked in alone: `fr`, `fra`. Absent for
+             *     every language.
+             */
+            language?: string | null;
+        };
         /** @description A release newer than the version running. */
         UpdateAvailable: {
             version: string;
@@ -7210,6 +7527,20 @@ export interface components {
             regions: string[];
             /** @description Who the data comes from; shown beside it, as TMDB's terms ask. */
             attribution: string;
+        };
+        /** @description A work found. */
+        WorkHit: {
+            id: string;
+            kind: components["schemas"]["MediaKind"];
+            /** @description Its title, in the language asked for where a translation is held. */
+            title: string;
+            /** Format: int32 */
+            year?: number | null;
+            /**
+             * @description The other name it was found by, where that is not its title: its
+             *     original title, one of its alternative ones.
+             */
+            matched?: string | null;
         };
         /** @description A work's media, and whether anything is kept at all. */
         WorkMedia: {
@@ -8778,6 +9109,12 @@ export interface operations {
                 since?: string;
                 limit?: number;
                 offset?: number;
+                /**
+                 * @description `csv` or `json`: every entry the filters match, newest first, as a
+                 *     file to download — the page asked for, `limit` and `offset`, set
+                 *     aside.
+                 */
+                format?: "csv" | "json";
             };
             header?: never;
             path?: never;
@@ -8785,12 +9122,14 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
+            /** @description A page of the trail; with `format`, the whole of what the filters match, as a file */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": components["schemas"]["AuditListResponse"];
+                    "text/csv": string;
                 };
             };
             /** @description The caller is not an administrator */
@@ -9711,6 +10050,31 @@ export interface operations {
                 network?: string;
                 /** @description The TMDB collection a film belongs to. */
                 collection?: number;
+                /**
+                 * @description Somebody the works credit: their TMDB id, or their name — whatever
+                 *     its case and accents, but whole: `Wim Wenders`, not `Wenders`.
+                 */
+                person?: string;
+                /**
+                 * @description The shortest a work may run, in minutes: a film's length, a series'
+                 *     episodes'.
+                 */
+                runtimeMin?: number;
+                /** @description The longest a work may run, in minutes. */
+                runtimeMax?: number;
+                /** @description A country the works were made in, ISO 3166-1 alpha-2: `FR`. */
+                country?: string;
+                /**
+                 * @description The rating the works carry in the reader's country, as that country
+                 *     writes it: `12`, `PG-13`.
+                 */
+                certification?: string;
+                /**
+                 * @description The reader's country, ISO 3166-1 alpha-2, which `certification` is
+                 *     read in. Absent, the country this caller is answered for:
+                 *     `tmdb.watchRegion` as set for it, else its language's.
+                 */
+                region?: string;
                 /** @description The lowest score, out of ten, a work may have to be listed. */
                 minRating?: number;
                 /**
@@ -9724,13 +10088,17 @@ export interface operations {
                  *     their own, nor one chosen by hand — `overview` — no overview in the
                  *     language they are stored in — `imdb` — no IMDb identifier — and
                  *     `refresh` — never refreshed, though they have an identifier to be
-                 *     refreshed by. Several narrow together: `poster,overview` lists the works
-                 *     lacking both. For those who may edit the catalogue, as `refreshFailed`.
+                 *     refreshed by — and `divergingLock` — a lock a source moved under since
+                 *     it was set, and which says something else now. Several narrow
+                 *     together: `poster,overview` lists the works lacking both. For those who
+                 *     may edit the catalogue, as `refreshFailed`.
                  */
                 missing?: string;
                 /**
-                 * @description `popularity` (the default), `rating`, `release`, `title`, `added` or
-                 *     `refreshed`.
+                 * @description `relevance` — how well each work answers `term`, the default when
+                 *     there is one — `popularity` (the default otherwise), `rating`,
+                 *     `release`, `title`, `added`, `refreshed`, `runtime`, `lastAired` or
+                 *     `episodes`.
                  */
                 sort?: string;
                 /** @description `asc` or `desc`; each sort has its own default. */
@@ -9749,7 +10117,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Facets"];
+                    "application/json": components["schemas"]["CatalogueFacets"];
                 };
             };
             /** @description A filter was not one the list understands */
@@ -9981,6 +10349,31 @@ export interface operations {
                 network?: string;
                 /** @description The TMDB collection a film belongs to. */
                 collection?: number;
+                /**
+                 * @description Somebody the works credit: their TMDB id, or their name — whatever
+                 *     its case and accents, but whole: `Wim Wenders`, not `Wenders`.
+                 */
+                person?: string;
+                /**
+                 * @description The shortest a work may run, in minutes: a film's length, a series'
+                 *     episodes'.
+                 */
+                runtimeMin?: number;
+                /** @description The longest a work may run, in minutes. */
+                runtimeMax?: number;
+                /** @description A country the works were made in, ISO 3166-1 alpha-2: `FR`. */
+                country?: string;
+                /**
+                 * @description The rating the works carry in the reader's country, as that country
+                 *     writes it: `12`, `PG-13`.
+                 */
+                certification?: string;
+                /**
+                 * @description The reader's country, ISO 3166-1 alpha-2, which `certification` is
+                 *     read in. Absent, the country this caller is answered for:
+                 *     `tmdb.watchRegion` as set for it, else its language's.
+                 */
+                region?: string;
                 /** @description The lowest score, out of ten, a work may have to be listed. */
                 minRating?: number;
                 /**
@@ -9994,13 +10387,17 @@ export interface operations {
                  *     their own, nor one chosen by hand — `overview` — no overview in the
                  *     language they are stored in — `imdb` — no IMDb identifier — and
                  *     `refresh` — never refreshed, though they have an identifier to be
-                 *     refreshed by. Several narrow together: `poster,overview` lists the works
-                 *     lacking both. For those who may edit the catalogue, as `refreshFailed`.
+                 *     refreshed by — and `divergingLock` — a lock a source moved under since
+                 *     it was set, and which says something else now. Several narrow
+                 *     together: `poster,overview` lists the works lacking both. For those who
+                 *     may edit the catalogue, as `refreshFailed`.
                  */
                 missing?: string;
                 /**
-                 * @description `popularity` (the default), `rating`, `release`, `title`, `added` or
-                 *     `refreshed`.
+                 * @description `relevance` — how well each work answers `term`, the default when
+                 *     there is one — `popularity` (the default otherwise), `rating`,
+                 *     `release`, `title`, `added`, `refreshed`, `runtime`, `lastAired` or
+                 *     `episodes`.
                  */
                 sort?: string;
                 /** @description `asc` or `desc`; each sort has its own default. */
@@ -10353,6 +10750,134 @@ export interface operations {
             };
             /** @description No such work, or none this caller may see */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    history_changes: {
+        parameters: {
+            query?: {
+                /**
+                 * @description One field, as the field registry names it — `overview`, `genres` —
+                 *     wherever it is; `number` for the episodes that moved.
+                 */
+                field?: string;
+                /**
+                 * @description A person, a key or a source: who made the change, or whose answer it
+                 *     was — `admin`, `tmdb`.
+                 */
+                actor?: string;
+                /**
+                 * @description Only the changes made at or after this instant (RFC 3339), or this
+                 *     day (`2026-10-01`, from its midnight UTC).
+                 */
+                since?: string;
+                /** @description Only the changes made before this instant, or this day. */
+                before?: string;
+                /** @description Where the page before ended: the `next` it was answered with. */
+                cursor?: string;
+                /**
+                 * @description How many changes a page holds: fifty unless asked, five hundred at the
+                 *     most.
+                 */
+                limit?: number;
+                /**
+                 * @description `csv` or `json`: every change the filters match, newest first, as a
+                 *     file to download — `cursor` and `limit` set aside.
+                 */
+                format?: "csv" | "json";
+            };
+            header?: never;
+            path: {
+                /** @description The work's identifier */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of the journal; with `format`, the whole of what the filters match, as a file */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangeList"];
+                    "text/csv": string;
+                };
+            };
+            /** @description A period that is neither an instant nor a day */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The caller may not write */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such work */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    history_undo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The work's identifier */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UndoChangeRequest"];
+            };
+        };
+        responses: {
+            /** @description Put back as it was */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unparsable scope, a value the field cannot hold, or no language */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The caller may not write */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No change of that value to undo */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Something else changed the value since, or the change added or removed a row by hand */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -11386,6 +11911,11 @@ export interface operations {
                  *     lock in every language is lifted.
                  */
                 language?: string;
+                /**
+                 * @description `revert` when the lock is lifted to put back what the work's journal
+                 *     says the value was; absent otherwise.
+                 */
+                cause?: components["schemas"]["LockCause"];
             };
             header?: never;
             path: {
@@ -11468,7 +11998,14 @@ export interface operations {
     };
     items_refresh: {
         parameters: {
-            query?: never;
+            query?: {
+                /**
+                 * @description `1` to be told what the refresh would write over — the values the
+                 *     sources give otherwise now, none of them locked — with nothing written,
+                 *     no run recorded and nobody told.
+                 */
+                dryRun?: boolean;
+            };
             header?: never;
             path: {
                 /** @description The work's identifier */
@@ -11478,13 +12015,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The work as it now stands */
+            /** @description The work as it now stands; for a dry run, what the refresh would write over */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["MediaItem"];
+                    "application/json": components["schemas"]["RefreshAnswer"];
                 };
             };
             /** @description The caller may not write */
@@ -11501,7 +12038,14 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The provider could not be reached */
+            /** @description A manual entry, which has no source to refresh from */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The provider could not be reached; for a dry run, no provider could resolve the work */
             502: {
                 headers: {
                     [name: string]: unknown;
@@ -11716,7 +12260,13 @@ export interface operations {
     };
     items_sync: {
         parameters: {
-            query?: never;
+            query?: {
+                /**
+                 * @description `1` to be told what asking these sources again would write over, with
+                 *     nothing written and nobody told.
+                 */
+                dryRun?: boolean;
+            };
             header?: never;
             path: {
                 /** @description The work's identifier */
@@ -11730,12 +12280,13 @@ export interface operations {
             };
         };
         responses: {
+            /** @description What the sync did; for a dry run, what it would write over */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SyncOutcome"];
+                    "application/json": components["schemas"]["SyncAnswer"];
                 };
             };
             /** @description No sources, or one this work cannot be asked about */
@@ -12641,6 +13192,58 @@ export interface operations {
             };
             /** @description Nobody by that id is credited on a work held here */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    search_find: {
+        parameters: {
+            query: {
+                /**
+                 * @description What to look for: a title, a name, an episode's title — as typed,
+                 *     accents, case and punctuation aside. A year at the end of a title,
+                 *     `dune 2021`, puts that year's work first.
+                 */
+                term: string;
+                /**
+                 * @description Which kinds of hit, comma-separated: `work`, `person`, `episode`.
+                 *     All three when left out.
+                 */
+                kinds?: string;
+                /** @description The most hits of each kind, from 1 to 20; 6 when left out. */
+                limit?: number;
+                /** @description Titles in this language, where a translation is held. */
+                language?: string;
+                /**
+                 * @description Ask for adult titles. Honoured only as far as the server and this
+                 *     caller's own policy allow, as the list does.
+                 */
+                includeAdult?: boolean;
+                /**
+                 * @description Works switched off too. For those who may edit the catalogue; anybody
+                 *     else is answered as if it had not been asked.
+                 */
+                includeDisabled?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SearchHits"];
+                };
+            };
+            /** @description The term is too long, a kind is not one of work, person and episode, or the language is not a language tag */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -5,6 +5,10 @@
 //! by what it is: a credit, an image, an alternative title, hidden or
 //! corrected (see [`fields::Child`]). The editor sets the latter through the
 //! child's own routes (`children.rs`), which name it by its row.
+//!
+//! Every lock set, changed or lifted here is written to the work's journal
+//! (`repo::change`) beside the audit trail's line: what the value held, what
+//! it holds now, and whether a lock held it before — what an undo puts back.
 
 use axum::{
     Extension, Json,
@@ -22,12 +26,17 @@ use crate::{
         extract::ClientIp,
     },
     auth::Identity,
-    db::repo::{self, audit::Action},
+    db::repo::{
+        self,
+        audit::Action,
+        change::{Cause, NewChange},
+    },
     domain::{
-        MediaKind,
+        MediaItem, MediaKind,
         fields::{self, Child, Override, Scope},
     },
     error::{AppError, AppResult},
+    merge::provenance,
     service,
     state::AppState,
 };
@@ -71,6 +80,18 @@ async fn list(
     Ok(Json(overrides))
 }
 
+/// What a lock is set or lifted for, besides an edit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+// Named explicitly: what a lock is set for is not what a change was made
+// for, which the journal names `ChangeCause`.
+#[schema(as = LockCause)]
+pub enum LockCause {
+    /// A value put back from the work's journal: the audit trail's line
+    /// says `revert`, and so does the journal's.
+    Revert,
+}
+
 #[derive(Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SetRequest {
@@ -87,6 +108,10 @@ pub struct SetRequest {
     /// Absent or `null` stores an explicit "cleared" value, which still locks
     /// the field. To hand it back to the provider, delete the override instead.
     pub value: Option<Value>,
+    /// `revert` when the value is put back from the work's journal; absent
+    /// for an edit.
+    #[serde(default)]
+    pub cause: Option<LockCause>,
 }
 
 fn default_scope() -> String {
@@ -111,6 +136,10 @@ pub struct SetResponse {
 /// A scope naming a child the sources gave hides it (`hidden`, `true`) or
 /// corrects a credit (`characterName`, `sortOrder`), whatever row a refresh
 /// writes it in next.
+///
+/// The work's journal is told what the value held and what it holds now: a
+/// lock, an edit of what was entered by hand, or — with `cause: revert` — a
+/// value put back from the journal.
 #[utoipa::path(
     put, path = "/items/{id}/overrides", tag = TAG,
     operation_id = "overrides_set",
@@ -128,9 +157,36 @@ async fn set(
     Extension(identity): Extension<Identity>,
     ip: ClientIp,
     Path(id): Path<String>,
-    Json(mut request): Json<SetRequest>,
+    Json(request): Json<SetRequest>,
 ) -> AppResult<Json<SetResponse>> {
     identity.require_write()?;
+
+    let placed = place(&state, &identity, &id, request).await?;
+    answer(&state, &identity, &ip, &id, &placed).await
+}
+
+/// Where a lock was put, as the audit trail names it, and what its line says
+/// of it.
+struct Placed {
+    target: String,
+    detail: &'static str,
+}
+
+/// Check and set the lock `request` asks for, and write what it replaced to
+/// the work's journal: what `set` does before it answers, and what an undo
+/// does to put a lock back.
+async fn place(
+    state: &AppState,
+    identity: &Identity,
+    id: &str,
+    mut request: SetRequest,
+) -> AppResult<Placed> {
+    let detail = match (request.cause, request.value.is_some()) {
+        (Some(LockCause::Revert), _) => "revert",
+        (None, true) => "set",
+        (None, false) => "cleared",
+    };
+    let by = identity.label();
 
     // A child the sources gave, by what it is.
     if let Ok(child) = request.scope.parse::<Child>() {
@@ -139,31 +195,29 @@ async fn set(
                 "a credit, an image or a title is locked in every language".into(),
             ));
         }
-        let child = own_address(&state, child);
+        let child = own_address(state, child);
         fields::validate_child(&child, &request.field, request.value.as_ref())
             .map_err(AppError::BadRequest)?;
-        let item = service::load(&state, &id)
-            .await?
-            .ok_or(AppError::NotFound)?;
-        lock_child(
-            &state,
+        let item = service::load(state, id).await?.ok_or(AppError::NotFound)?;
+        let named = child.to_string();
+        set_in(
+            state,
             &item.id,
-            &child,
-            &request.field,
-            request.value.as_ref(),
-            &identity.label(),
+            &Setting {
+                scope: &named,
+                field: &request.field,
+                language: "",
+                value: request.value.as_ref(),
+                by: &by,
+                cause: cause_of(request.cause, false),
+                served: None,
+            },
         )
         .await?;
-        let target = format!("{id}#{child}/{}", request.field);
-        return answer(
-            &state,
-            &identity,
-            &ip,
-            &id,
-            &target,
-            request.value.is_some(),
-        )
-        .await;
+        return Ok(Placed {
+            target: format!("{id}#{child}/{}", request.field),
+            detail,
+        });
     }
 
     let scope: Scope = request
@@ -191,9 +245,7 @@ async fn set(
 
     // Refuse to attach an override to something that is not there: it would
     // silently do nothing on read.
-    let item = service::load(&state, &id)
-        .await?
-        .ok_or(AppError::NotFound)?;
+    let item = service::load(state, id).await?.ok_or(AppError::NotFound)?;
 
     match scope {
         Scope::Season(n) if !item.seasons.iter().any(|s| s.season_number == n) => {
@@ -210,45 +262,55 @@ async fn set(
         _ => {}
     }
 
+    let named = scope.to_string();
+    let setting = Setting {
+        scope: &named,
+        field: &request.field,
+        language: language.as_deref().unwrap_or_default(),
+        value: request.value.as_ref(),
+        by: &by,
+        cause: cause_of(request.cause, by_hand(&item, scope)),
+        // What a value never locked held is what the work is served with.
+        served: Some(&item),
+    };
     match language.as_deref() {
-        Some(language) => {
-            lock_in_language(
-                &state,
-                &item.id,
-                scope,
-                &request.field,
-                language,
-                request.value.as_ref(),
-                &identity.label(),
-            )
-            .await?;
-        }
-        None => {
-            lock(
-                &state,
-                (&item.id, item.kind),
-                scope,
-                &request.field,
-                request.value.as_ref(),
-                &identity.label(),
-            )
-            .await?;
-        }
+        Some(_) => set_in(state, &item.id, &setting).await?,
+        None => set_on(state, (&item.id, item.kind), scope, &setting).await?,
     }
 
     let target = match language.as_deref() {
         Some(language) => format!("{id}#{scope}/{}@{language}", request.field),
         None => format!("{id}#{scope}/{}", request.field),
     };
-    answer(
-        &state,
-        &identity,
-        &ip,
-        &id,
-        &target,
-        request.value.is_some(),
-    )
-    .await
+    Ok(Placed { target, detail })
+}
+
+/// What the journal calls a lock set: a value put back from it, when that is
+/// what was asked; an edit, of what was entered by hand and has no source to
+/// be locked against; a lock otherwise.
+fn cause_of(asked: Option<LockCause>, by_hand: bool) -> Cause {
+    match asked {
+        Some(LockCause::Revert) => Cause::Revert,
+        None if by_hand => Cause::Edit,
+        None => Cause::Lock,
+    }
+}
+
+/// Whether what a lock is set on was entered by hand: the work, or the
+/// season or the episode the scope names.
+fn by_hand(item: &MediaItem, scope: Scope) -> bool {
+    item.is_manual
+        || match scope {
+            Scope::Item => false,
+            Scope::Season(number) => item
+                .seasons
+                .iter()
+                .any(|s| s.season_number == number && s.is_manual),
+            Scope::Episode { season, episode } => item
+                .episodes
+                .iter()
+                .any(|e| e.season_number == season && e.episode_number == episode && e.is_manual),
+        }
 }
 
 /// What a lock set is answered with, once it is listed again and recorded:
@@ -258,13 +320,23 @@ async fn answer(
     identity: &Identity,
     ip: &ClientIp,
     id: &str,
-    target: &str,
-    given: bool,
+    placed: &Placed,
 ) -> AppResult<Json<SetResponse>> {
+    told(state, identity, ip, id, placed).await;
+
+    let updated = service::load(state, id).await?.ok_or(AppError::NotFound)?;
+
+    Ok(Json(SetResponse {
+        locked_fields: updated.locked_fields,
+    }))
+}
+
+/// A lock set, listed again and recorded in the audit trail.
+async fn told(state: &AppState, identity: &Identity, ip: &ClientIp, id: &str, placed: &Placed) {
     service::listing::after_write(state, id).await;
 
     tracing::info!(
-        %id, %target, actor = %identity.label(),
+        %id, target = %placed.target, actor = %identity.label(),
         "locked a field with a manual edit"
     );
 
@@ -274,19 +346,13 @@ async fn answer(
             identity: Some(identity),
             ip,
             action: Action::OverrideSet,
-            target: Some(target),
+            target: Some(&placed.target),
             // The value itself is not recorded: an overview runs to paragraphs,
-            // and the current value is one read away.
-            detail: Some(if given { "set" } else { "cleared" }),
+            // and the current value is one read away — and in the journal.
+            detail: Some(placed.detail),
         },
     )
     .await;
-
-    let updated = service::load(state, id).await?.ok_or(AppError::NotFound)?;
-
-    Ok(Json(SetResponse {
-        locked_fields: updated.locked_fields,
-    }))
 }
 
 #[derive(Deserialize, IntoParams)]
@@ -295,13 +361,17 @@ pub struct UnsetQuery {
     /// The language a text was locked in alone: `fr`, `fra`. Left out, the
     /// lock in every language is lifted.
     pub language: Option<String>,
+    /// `revert` when the lock is lifted to put back what the work's journal
+    /// says the value was; absent otherwise.
+    pub cause: Option<LockCause>,
 }
 
 /// Unlock one field, handing it back to provider data on the next refresh.
 ///
 /// The scope may name a child the sources gave, as the lock does
 /// (`credit:actor:tmdb:17419`), percent-encoded; an image's, whose address
-/// holds slashes, is easier lifted from the image's own route.
+/// holds slashes, is easier lifted from the image's own route. The work's
+/// journal is told what the lock held and what is served without it.
 #[utoipa::path(
     delete, path = "/items/{id}/overrides/{scope}/{field}", tag = TAG,
     operation_id = "overrides_unset",
@@ -327,9 +397,27 @@ async fn unset(
 ) -> AppResult<StatusCode> {
     identity.require_write()?;
 
+    if !lift(&state, &identity, &ip, (&id, &scope, &field), &query).await? {
+        return Err(AppError::NotFound);
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Lift the lock a work holds on `field` at `scope` — as a request names
+/// them, in the language `query` names alone when it names one — and write to
+/// the work's journal what it held and what is served without it: what
+/// `unset` does, and what an undo does to take a lock away. `false`, and
+/// nothing done, when there was no such lock.
+async fn lift(
+    state: &AppState,
+    identity: &Identity,
+    ip: &ClientIp,
+    (id, scope, field): (&str, &str, &str),
+    query: &UnsetQuery,
+) -> AppResult<bool> {
     let language = lock_language(query.language.as_deref())?;
     let (scope, uploads) = match scope.parse::<Child>() {
-        Ok(child) => (own_address(&state, child).to_string(), Vec::new()),
+        Ok(child) => (own_address(state, child).to_string(), Vec::new()),
         Err(_) => {
             let scope: Scope = scope
                 .parse()
@@ -337,46 +425,109 @@ async fn unset(
             // An upload locked into the field goes with the lock.
             let uploads = match language {
                 Some(_) => Vec::new(),
-                None => uploads_locked(&state, &id, Some((scope, field.as_str()))).await?,
+                None => uploads_locked(state, id, Some((scope, field))).await?,
             };
             (scope.to_string(), uploads)
         }
     };
+    let shelf = language.as_deref().unwrap_or_default();
 
-    let removed = repo::override_field::unset_in(
-        &state.db,
-        &id,
-        &scope,
-        &field,
-        language.as_deref().unwrap_or_default(),
-    )
-    .await?;
+    let held = repo::change::lock_held(&state.db, id, &scope, field, shelf).await?;
+    let removed = repo::override_field::unset_in(&state.db, id, &scope, field, shelf).await?;
     if !removed {
-        return Err(AppError::NotFound);
+        return Ok(false);
     }
-    super::media::forget_uploads(&state, uploads.iter().map(String::as_str)).await;
+    super::media::forget_uploads(state, uploads.iter().map(String::as_str)).await;
 
-    state.caches.touched(&id).await;
-    service::listing::after_write(&state, &id).await;
+    state.caches.touched(id).await;
+    service::listing::after_write(state, id).await;
     tracing::info!(%id, %scope, %field, actor = %identity.label(), "unlocked a field");
+
+    // What is served now the lock is gone: the sources' value, read afresh.
+    let served = match scope.parse::<Scope>() {
+        Ok(_) => service::load(state, id).await?,
+        Err(_) => None,
+    };
+    let revert = query.cause == Some(LockCause::Revert);
+    super::history::write(
+        state,
+        id,
+        &identity.label(),
+        &[NewChange {
+            cause: if revert { Cause::Revert } else { Cause::Unlock },
+            scope: scope.clone(),
+            field: field.to_string(),
+            language: shelf.to_string(),
+            before: held.flatten(),
+            after: served
+                .as_ref()
+                .and_then(|item| provenance::value_at(item, &scope, field, shelf)),
+            provider: None,
+            was_locked: true,
+        }],
+    )
+    .await;
 
     let target = match language.as_deref() {
         Some(language) => format!("{id}#{scope}/{field}@{language}"),
         None => format!("{id}#{scope}/{field}"),
     };
     audit::record(
-        &state,
+        state,
         Event {
-            identity: Some(&identity),
-            ip: &ip,
+            identity: Some(identity),
+            ip,
             action: Action::OverrideRemoved,
             target: Some(&target),
-            detail: None,
+            detail: revert.then_some("revert"),
         },
     )
     .await;
 
-    Ok(StatusCode::NO_CONTENT)
+    Ok(true)
+}
+
+/// Put back what a value was before `change`, as it was: the lock it held,
+/// set again with the value it held, or no lock at all. What an undo does —
+/// as `who` asks it — and which the trail and the journal call a `revert`.
+pub(super) async fn put_back(
+    state: &AppState,
+    identity: &Identity,
+    ip: &ClientIp,
+    id: &str,
+    change: &repo::change::Entry,
+) -> AppResult<()> {
+    let language = change.language.clone();
+    if change.was_locked {
+        let placed = place(
+            state,
+            identity,
+            id,
+            SetRequest {
+                scope: change.scope.clone(),
+                field: change.field.clone(),
+                language,
+                value: change.before.clone(),
+                cause: Some(LockCause::Revert),
+            },
+        )
+        .await?;
+        told(state, identity, ip, id, &placed).await;
+    } else {
+        // No lock to lift is what was there before: nothing to put back.
+        lift(
+            state,
+            identity,
+            ip,
+            (id, &change.scope, &change.field),
+            &UnsetQuery {
+                language,
+                cause: Some(LockCause::Revert),
+            },
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 /// The key a text is locked in a language under, as translations are filed
@@ -405,6 +556,84 @@ fn own_address(state: &AppState, child: Child) -> Child {
     }
 }
 
+/// One lock to set, as a person sets it.
+struct Setting<'a> {
+    /// What it addresses, as a lock names it: `item`, `season:2`, a child's.
+    scope: &'a str,
+    field: &'a str,
+    /// The language a text is locked in alone (`fra`); empty for every one.
+    language: &'a str,
+    value: Option<&'a Value>,
+    by: &'a str,
+    /// What the journal calls it.
+    cause: Cause,
+    /// The work as served before it, when the caller read it: what a value
+    /// never locked held.
+    served: Option<&'a MediaItem>,
+}
+
+/// What a lock about to be set replaces: whether a lock held the value, and
+/// what that held — or, with none, what the work as served holds there, when
+/// the caller read it.
+async fn replaced(
+    state: &AppState,
+    id: &str,
+    setting: &Setting<'_>,
+) -> AppResult<(bool, Option<Value>)> {
+    let held = repo::change::lock_held(
+        &state.db,
+        id,
+        setting.scope,
+        setting.field,
+        setting.language,
+    )
+    .await?;
+    Ok(match held {
+        Some(value) => (true, value),
+        None => (
+            false,
+            setting.served.and_then(|item| {
+                provenance::value_at(item, setting.scope, setting.field, setting.language)
+            }),
+        ),
+    })
+}
+
+/// Write to the work's journal the lock `setting` set, over what it
+/// replaced — unless it was set again with the value it held, which changes
+/// nothing anybody reads.
+async fn remember(
+    state: &AppState,
+    id: &str,
+    setting: &Setting<'_>,
+    (was_locked, before): (bool, Option<Value>),
+) {
+    let after = setting.value.filter(|value| !value.is_null()).cloned();
+    if was_locked && provenance::same(before.as_ref(), after.as_ref()) {
+        return;
+    }
+    let change = NewChange {
+        cause: setting.cause,
+        scope: setting.scope.to_string(),
+        field: setting.field.to_string(),
+        language: setting.language.to_string(),
+        before,
+        after,
+        provider: None,
+        was_locked,
+    };
+    super::history::write(state, id, setting.by, &[change]).await;
+}
+
+/// Who sets or lifts a lock off the locks' own routes, and what the journal
+/// calls it: a lock imported from a file says so, and a child the sources
+/// gave, hidden or corrected, is locked.
+#[derive(Clone, Copy)]
+pub(super) struct Hand<'a> {
+    pub(super) by: &'a str,
+    pub(super) cause: Cause,
+}
+
 /// Lock a text of a work, a season or an episode in one language alone, by
 /// its key (`fra`): what an edit in that language and an imported lock come
 /// to. Nothing of the work's row moves with it — no text is its identity —
@@ -417,20 +646,22 @@ pub(super) async fn lock_in_language(
     field: &str,
     language: &str,
     value: Option<&Value>,
-    by: &str,
+    hand: Hand<'_>,
 ) -> AppResult<()> {
-    repo::override_field::set_in(
-        &state.db,
+    set_in(
+        state,
         id,
-        &scope.to_string(),
-        field,
-        language,
-        value,
-        Some(by),
+        &Setting {
+            scope: &scope.to_string(),
+            field,
+            language,
+            value,
+            by: hand.by,
+            cause: hand.cause,
+            served: None,
+        },
     )
-    .await?;
-    state.caches.touched(id).await;
-    Ok(())
+    .await
 }
 
 /// Lock something of a child the sources gave — hide it, correct it — in
@@ -442,19 +673,75 @@ pub(super) async fn lock_child(
     child: &Child,
     field: &str,
     value: Option<&Value>,
-    by: &str,
+    hand: Hand<'_>,
 ) -> AppResult<()> {
+    set_in(
+        state,
+        id,
+        &Setting {
+            scope: &child.to_string(),
+            field,
+            language: "",
+            value,
+            by: hand.by,
+            cause: hand.cause,
+            served: None,
+        },
+    )
+    .await
+}
+
+/// Lift a lock on a child the sources gave — show it again, take a
+/// correction off — and tell the journal what it held: a lock lifted. `false`,
+/// and nothing done, when the child held no such lock.
+pub(super) async fn lift_child(
+    state: &AppState,
+    id: &str,
+    child: &Child,
+    field: &str,
+    by: &str,
+) -> AppResult<bool> {
+    let scope = child.to_string();
+    let held = repo::change::lock_held(&state.db, id, &scope, field, "").await?;
+    if !repo::override_field::unset_in(&state.db, id, &scope, field, "").await? {
+        return Ok(false);
+    }
+    state.caches.touched(id).await;
+    super::history::write(
+        state,
+        id,
+        by,
+        &[NewChange {
+            cause: Cause::Unlock,
+            scope,
+            field: field.to_string(),
+            language: String::new(),
+            before: held.flatten(),
+            after: None,
+            provider: None,
+            was_locked: true,
+        }],
+    )
+    .await;
+    Ok(true)
+}
+
+/// Set a lock that writes nothing of the work's row — a text in one
+/// language, a child the sources gave — and tell the work's journal.
+async fn set_in(state: &AppState, id: &str, setting: &Setting<'_>) -> AppResult<()> {
+    let replaced = replaced(state, id, setting).await?;
     repo::override_field::set_in(
         &state.db,
         id,
-        &child.to_string(),
-        field,
-        "",
-        value,
-        Some(by),
+        setting.scope,
+        setting.field,
+        setting.language,
+        setting.value,
+        Some(setting.by),
     )
     .await?;
     state.caches.touched(id).await;
+    remember(state, id, setting, replaced).await;
     Ok(())
 }
 
@@ -465,6 +752,9 @@ pub struct ClearResponse {
 }
 
 /// Unlock every field of a work at once.
+///
+/// The work's journal is told, lock by lock, what each held and what is
+/// served without it.
 #[utoipa::path(
     delete, path = "/items/{id}/overrides", tag = TAG,
     operation_id = "overrides_clear",
@@ -483,12 +773,39 @@ async fn clear(
     identity.require_write()?;
 
     let uploads = uploads_locked(&state, &id, None).await?;
+    let held = repo::override_field::list(&state.db, &id).await?;
     let removed = repo::override_field::clear(&state.db, &id).await?;
     super::media::forget_uploads(&state, uploads.iter().map(String::as_str)).await;
 
     state.caches.touched(&id).await;
     service::listing::after_write(&state, &id).await;
     tracing::info!(%id, removed, actor = %identity.label(), "unlocked every field");
+
+    // What each value is served as now, read once for them all.
+    let served = match held.iter().any(|lock| lock.scope.parse::<Scope>().is_ok()) {
+        true => service::load(&state, &id).await?,
+        false => None,
+    };
+    let lifted: Vec<NewChange> = held
+        .into_iter()
+        .map(|lock| {
+            let language = lock.language.unwrap_or_default();
+            let after = served
+                .as_ref()
+                .and_then(|item| provenance::value_at(item, &lock.scope, &lock.field, &language));
+            NewChange {
+                cause: Cause::Unlock,
+                scope: lock.scope,
+                field: lock.field,
+                language,
+                before: lock.value.filter(|value| !value.is_null()),
+                after,
+                provider: None,
+                was_locked: true,
+            }
+        })
+        .collect();
+    super::history::write(&state, &id, &identity.label(), &lifted).await;
 
     audit::record(
         &state,
@@ -521,18 +838,139 @@ pub(super) async fn lock(
     scope: Scope,
     field: &str,
     value: Option<&Value>,
+    hand: Hand<'_>,
+) -> AppResult<()> {
+    set_on(
+        state,
+        (id, kind),
+        scope,
+        &Setting {
+            scope: &scope.to_string(),
+            field,
+            language: "",
+            value,
+            by: hand.by,
+            cause: hand.cause,
+            served: None,
+        },
+    )
+    .await
+}
+
+/// Lock a field of the work, a season or an episode as a person's doing off
+/// the locks' own routes — an upload made an episode's still, or the work's
+/// theme — the journal told what it replaced, as `served`, the work as it was
+/// served, held it: a lock, or an edit of what was entered by hand.
+pub(super) async fn lock_served(
+    state: &AppState,
+    served: &MediaItem,
+    scope: Scope,
+    field: &str,
+    value: &Value,
     by: &str,
 ) -> AppResult<()> {
-    match scope {
-        Scope::Item => {
-            repo::override_field::set_on_work(&state.db, id, kind, field, value, Some(by))
-                .await?
-                .map_err(|taken| AppError::Conflict(taken.0))?;
+    let named = scope.to_string();
+    set_on(
+        state,
+        (&served.id, served.kind),
+        scope,
+        &Setting {
+            scope: &named,
+            field,
+            language: "",
+            value: Some(value),
+            by,
+            cause: cause_of(None, by_hand(served, scope)),
+            served: Some(served),
+        },
+    )
+    .await
+}
+
+/// Lift locks in every language that something other than the locks' own
+/// routes took away — the fields an upload filled, once the upload goes —
+/// and tell the journal what each held and what is served without it. A
+/// field that held no lock is passed over.
+pub(super) async fn lift_all(
+    state: &AppState,
+    id: &str,
+    locks: &[(Scope, &str)],
+    by: &str,
+) -> AppResult<()> {
+    let mut lifted = Vec::new();
+    for (scope, field) in locks {
+        let named = scope.to_string();
+        let held = repo::change::lock_held(&state.db, id, &named, field, "").await?;
+        if repo::override_field::unset(&state.db, id, *scope, field).await? {
+            lifted.push((named, field.to_string(), held.flatten()));
         }
-        _ => repo::override_field::set(&state.db, id, scope, field, value, Some(by)).await?,
+    }
+    if lifted.is_empty() {
+        return Ok(());
     }
 
     state.caches.touched(id).await;
+    let served = service::load(state, id).await?;
+    let changes: Vec<NewChange> = lifted
+        .into_iter()
+        .map(|(scope, field, before)| {
+            let after = served
+                .as_ref()
+                .and_then(|item| provenance::value_at(item, &scope, &field, ""));
+            NewChange {
+                cause: Cause::Unlock,
+                scope,
+                field,
+                language: String::new(),
+                before,
+                after,
+                provider: None,
+                was_locked: true,
+            }
+        })
+        .collect();
+    super::history::write(state, id, by, &changes).await;
+    Ok(())
+}
+
+/// Set a lock in every language on a field of a work, a season or an
+/// episode — the identity written to the row with it — and tell the work's
+/// journal.
+async fn set_on(
+    state: &AppState,
+    (id, kind): (&str, MediaKind),
+    scope: Scope,
+    setting: &Setting<'_>,
+) -> AppResult<()> {
+    let replaced = replaced(state, id, setting).await?;
+    match scope {
+        Scope::Item => {
+            repo::override_field::set_on_work(
+                &state.db,
+                id,
+                kind,
+                setting.field,
+                setting.value,
+                Some(setting.by),
+            )
+            .await?
+            .map_err(|taken| AppError::Conflict(taken.0))?;
+        }
+        _ => {
+            repo::override_field::set(
+                &state.db,
+                id,
+                scope,
+                setting.field,
+                setting.value,
+                Some(setting.by),
+            )
+            .await?
+        }
+    }
+
+    state.caches.touched(id).await;
+    remember(state, id, setting, replaced).await;
     Ok(())
 }
 
@@ -558,6 +996,47 @@ async fn uploads_locked(
             _ => None,
         })
         .collect())
+}
+
+/// What the journal's tests lock and unlock with: the routes' own
+/// handlers, as a caller with every right.
+#[cfg(test)]
+pub(super) mod testing {
+    use super::*;
+
+    pub async fn set(
+        state: &AppState,
+        id: &str,
+        request: SetRequest,
+    ) -> AppResult<Json<SetResponse>> {
+        super::set(
+            State(state.clone()),
+            Extension(Identity::Anonymous),
+            ClientIp::NONE,
+            Path(id.to_string()),
+            Json(request),
+        )
+        .await
+    }
+
+    pub async fn unset(
+        state: &AppState,
+        id: &str,
+        scope: &str,
+        field: &str,
+    ) -> AppResult<StatusCode> {
+        super::unset(
+            State(state.clone()),
+            Extension(Identity::Anonymous),
+            ClientIp::NONE,
+            Path((id.to_string(), scope.to_string(), field.to_string())),
+            Query(UnsetQuery {
+                language: None,
+                cause: None,
+            }),
+        )
+        .await
+    }
 }
 
 #[cfg(test)]
@@ -640,6 +1119,7 @@ mod tests {
                 field: field.into(),
                 language: language.map(str::to_string),
                 value: Some(value),
+                cause: None,
             }),
         )
         .await
@@ -741,6 +1221,7 @@ mod tests {
             Path((film.id.clone(), "item".into(), "title".into())),
             Query(UnsetQuery {
                 language: Some("fra".into()),
+                cause: None,
             }),
         )
         .await
@@ -782,6 +1263,7 @@ mod tests {
                 field: "hidden".into(),
                 language: Some("fr".into()),
                 value: Some(json!(true)),
+                cause: None,
             }),
         )
         .await;

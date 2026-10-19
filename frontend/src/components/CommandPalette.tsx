@@ -1,30 +1,22 @@
 /**
- * The command palette: ⌘K or Ctrl+K anywhere, then a title or a place to go.
- * One field and one list — what was opened lately while the field is empty,
- * the places, then the works that match — moved through with the arrows and
- * opened with Enter, as a combobox is.
+ * The command palette: ⌘K or Ctrl+K anywhere, then a title, a name, an
+ * episode, or a place to go. One field and one list — what was opened lately
+ * while the field is empty, the places, then what the catalogue finds: its
+ * works, the people credited on them, its episodes, each group headed by its
+ * kind — moved through with the arrows and opened with Enter, as a combobox
+ * is. A term that starts with `@` looks for people alone.
  */
 
-import { useQuery } from '@tanstack/react-query'
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 
-import { api, query } from '../lib/api'
 import { cn } from '../lib/cn'
 import { useSettled } from '../lib/debounce'
 import { drawWork } from '../lib/draw'
-import { useHasLists } from '../lib/hooks'
+import { useHasLists, useSearch } from '../lib/hooks'
 import { useI18n } from '../lib/i18n'
 import { useRecent } from '../lib/recent'
-import type { ItemPage } from '../lib/types'
 import { Glyph } from './ui'
-
-/** Asked for from a button as well as the keyboard. */
-const OPEN_EVENT = 'ams:palette'
-
-export function openPalette() {
-  window.dispatchEvent(new CustomEvent(OPEN_EVENT))
-}
 
 /** What the shortcut is called on this machine. */
 export function paletteShortcut(): string {
@@ -48,10 +40,20 @@ interface Place {
 interface Option {
   id: string
   label: string
+  /** The other name a work was found by, beside the one it is shown under. */
+  aside?: string
   note?: string
   to: string
-  kind: 'recent' | 'place' | 'work'
+  kind: 'recent' | 'place' | 'work' | 'person' | 'episode'
   run?: () => void | Promise<void>
+}
+
+/** What marks a term as a look for people alone. */
+const PEOPLE = '@'
+
+/** An episode's place in its series, as release names and guides write it: S02E05. */
+function episodeCode(season: number, episode: number): string {
+  return `S${String(season).padStart(2, '0')}E${String(episode).padStart(2, '0')}`
 }
 
 /**
@@ -83,13 +85,8 @@ export function CommandPalette({ canWrite, isAdmin }: { canWrite: boolean; isAdm
       event.preventDefault()
       setOpen((was) => !was)
     }
-    const onAsk = () => setOpen(true)
     window.addEventListener('keydown', onKey)
-    window.addEventListener(OPEN_EVENT, onAsk)
-    return () => {
-      window.removeEventListener('keydown', onKey)
-      window.removeEventListener(OPEN_EVENT, onAsk)
-    }
+    return () => window.removeEventListener('keydown', onKey)
   }, [])
 
   // Focus goes into the field on opening and back where it came from on
@@ -156,23 +153,28 @@ export function CommandPalette({ canWrite, isAdmin }: { canWrite: boolean; isAdm
     [t, lang, canWrite, isAdmin, hasLists, navigate],
   )
 
-  const needle = term.trim().toLowerCase()
-  const matchingPlaces = needle ? places.filter((place) => place.label.toLowerCase().includes(needle)) : places
+  // `@` first: people alone, and no place is one of them.
+  const people = term.trimStart().startsWith(PEOPLE)
+  const needle = (people ? term.trimStart().slice(PEOPLE.length) : term).trim().toLowerCase()
+  const matchingPlaces = people ? [] : needle ? places.filter((place) => place.label.toLowerCase().includes(needle)) : places
 
-  const works = useQuery({
-    queryKey: ['palette', settled, lang],
-    enabled: open && settled.trim().length >= 2,
-    queryFn: () => api.get<ItemPage>(`/items${query({ term: settled, limit: 6, language: lang })}`),
-    placeholderData: (previous) => previous,
+  const asked = settled.trimStart().startsWith(PEOPLE) ? settled.trimStart().slice(PEOPLE.length) : settled
+  const search = useSearch(asked, {
+    kinds: people ? ['person'] : ['work', 'person', 'episode'],
+    limit: people ? 8 : 5,
+    enabled: open,
   })
-  const found = settled.trim().length >= 2 ? (works.data?.items ?? []) : []
+  // What the search holds is the last term's while the next is asked: shown
+  // only while the field still asks for a search.
+  const hits = asked.trim().length >= 2 && needle.length >= 2 ? search.data : undefined
 
   const kindOf = (kind: 'series' | 'movie') => (kind === 'series' ? t.nav.series : t.nav.films)
 
   const options: Option[] = [
     // What was opened lately, while nothing is typed: the likeliest thing to
-    // want back. A word typed is a search, and the list is the search's.
-    ...(needle
+    // want back. A word typed is a search, and the list is the search's; an
+    // `@` asks for people, which none of these is.
+    ...(needle || people
       ? []
       : recent.map((work) => ({
           id: `recent:${work.id}`,
@@ -189,12 +191,29 @@ export function CommandPalette({ canWrite, isAdmin }: { canWrite: boolean; isAdm
       kind: 'place' as const,
       run: place.run,
     })),
-    ...found.map((work) => ({
+    ...(hits?.works ?? []).map((work) => ({
       id: `work:${work.id}`,
       label: work.title,
+      aside: work.matched,
       note: [work.year, kindOf(work.kind)].filter(Boolean).join(' · '),
       to: `/work/${work.id}`,
       kind: 'work' as const,
+    })),
+    ...(hits?.people ?? []).map((person) => ({
+      id: `person:${person.tmdbId ?? person.name}`,
+      label: person.name,
+      note: t.palette.credited(person.works),
+      // Somebody known by no TMDB id has no page of their own: the works
+      // that credit them are the list's, filtered by their name.
+      to: person.tmdbId ? `/person/${person.tmdbId}` : `/browse?person=${encodeURIComponent(person.name)}`,
+      kind: 'person' as const,
+    })),
+    ...(hits?.episodes ?? []).map((episode) => ({
+      id: `episode:${episode.workId}:${episode.seasonNumber}:${episode.episodeNumber}`,
+      label: `${episodeCode(episode.seasonNumber, episode.episodeNumber)} — ${episode.title}`,
+      note: episode.workTitle,
+      to: `/work/${episode.workId}/season/${episode.seasonNumber}/episode/${episode.episodeNumber}`,
+      kind: 'episode' as const,
     })),
   ]
   const count = options.length
@@ -208,7 +227,13 @@ export function CommandPalette({ canWrite, isAdmin }: { canWrite: boolean; isAdm
     else navigate(option.to)
   }
 
-  const headings = { recent: t.palette.recent, place: t.palette.goTo, work: t.palette.works }
+  const headings = {
+    recent: t.palette.recent,
+    place: t.palette.goTo,
+    work: t.palette.works,
+    person: t.palette.people,
+    episode: t.palette.episodes,
+  }
 
   if (!open) return null
 
@@ -269,7 +294,14 @@ export function CommandPalette({ canWrite, isAdmin }: { canWrite: boolean; isAdm
         </div>
         <ul id={listId} role="listbox" aria-label={t.palette.open} className="max-h-[50vh] overflow-y-auto py-2">
           {options.length === 0 ? (
-            <li className="px-4 py-3 text-sm text-bone-faint">{works.isFetching ? t.common.loading : t.palette.none}</li>
+            <li className="px-4 py-3 text-sm text-bone-faint">
+              {/* While the term settles, what it finds is on its way: not "nothing" yet. */}
+              {search.isFetching || (settled !== term && needle.length >= 2)
+                ? t.common.loading
+                : people && needle.length < 2
+                  ? t.palette.namePrompt
+                  : t.palette.none}
+            </li>
           ) : (
             options.map((option, index) => {
               const heads = index === 0 || options[index - 1]?.kind !== option.kind
@@ -288,10 +320,15 @@ export function CommandPalette({ canWrite, isAdmin }: { canWrite: boolean; isAdm
                     index === active ? 'bg-ink-high text-bone' : 'text-bone-dim',
                   )}
                 >
-                  <span className="label w-16 shrink-0">{heads ? headings[option.kind] : ''}</span>
+                  <span className="label w-20 shrink-0">{heads ? headings[option.kind] : ''}</span>
                   {option.run ? <Glyph name="shuffle" className="size-4 shrink-0 text-bone-faint" /> : null}
-                  <span className="min-w-0 flex-1 truncate">{option.label}</span>
-                  {option.note ? <span className="shrink-0 font-mono text-xs text-bone-faint">{option.note}</span> : null}
+                  <span className="min-w-0 flex-1 truncate">
+                    {option.label}
+                    {/* The name it was found by, where the reader would not
+                        know it for the one it is shown under. */}
+                    {option.aside ? <span className="text-bone-faint"> · {t.palette.matched(option.aside)}</span> : null}
+                  </span>
+                  {option.note ? <span className="max-w-[40%] shrink-0 truncate font-mono text-xs text-bone-faint">{option.note}</span> : null}
                 </li>
               )
             })

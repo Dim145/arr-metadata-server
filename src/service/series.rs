@@ -436,9 +436,16 @@ pub async fn search(state: &AppState, term: &str) -> Result<Vec<MediaItem>> {
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
 async fn local_search(state: &AppState, term: &str) -> Result<Vec<MediaItem>> {
+    // Ranked by how well each answers the term, so that the series held here
+    // by that very name comes first in Sonarr's list, before TMDB's.
     let query = repo::item::Query {
         term: Some(term.to_string()),
         kind: Some(MediaKind::Series),
+        sort: repo::item::Sort::Relevance,
+        // By its letters alone: TMDB's search, which follows, forgives a
+        // misspelling, and a series held here that only resembles the title
+        // would come first in the list Sonarr picks from.
+        tolerance: Some(Vec::new()),
         limit: state.search_limit() as i64,
         ..Default::default()
     };
@@ -705,5 +712,38 @@ mod tests {
         let mut results = vec![series(None, None)];
         merge_results(&mut results, vec![series(None, None)]);
         assert_eq!(results.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_series_held_here_by_the_title_searched_for_comes_first() {
+        // What Sonarr's search is answered with first: the catalogue's, then
+        // TMDB's. The series named exactly so leads, ahead of a better-known
+        // one that only starts with the title; one that merely resembles it
+        // is left to TMDB, which forgives misspellings itself.
+        let (state, _) = crate::service::testing::server().await;
+        for (title, popularity, tvdb) in [
+            ("Breaking Bad: Original Minisodes", 900.0, 1),
+            ("Breaking Bad", 300.0, 2),
+            ("Braking Bad", 50.0, 3),
+        ] {
+            let mut item = series(None, Some(tvdb));
+            item.id = crate::db::new_id();
+            item.title = title.into();
+            item.slug = crate::domain::make_slug(title, None);
+            item.popularity = Some(popularity);
+            repo::item::upsert(
+                &state.db,
+                repo::item::ItemWrite {
+                    item: &item,
+                    replace_children: true,
+                },
+            )
+            .await
+            .expect("stored");
+        }
+
+        let found = search(&state, "breaking bad").await.expect("answered");
+        let titles: Vec<&str> = found.iter().map(|item| item.title.as_str()).collect();
+        assert_eq!(titles, ["Breaking Bad", "Breaking Bad: Original Minisodes"]);
     }
 }

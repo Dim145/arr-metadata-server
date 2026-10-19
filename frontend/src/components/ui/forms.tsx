@@ -7,6 +7,9 @@ import { cn } from '../../lib/cn'
 
 import { Glyph } from './glyphs'
 
+// A field in focus says so by its edge, which turns from rule to bone. Forced
+// colours paint every edge alike, so the ring the field hides is `hidden`
+// rather than `none`: invisible in the palette, drawn in the system's.
 export function Input({ className, ...props }: React.InputHTMLAttributes<HTMLInputElement>) {
   return (
     <input
@@ -14,7 +17,7 @@ export function Input({ className, ...props }: React.InputHTMLAttributes<HTMLInp
       className={cn(
         'min-h-11 w-full rounded-card border border-rule bg-ink px-3 text-sm text-bone',
         'transition-colors duration-200 placeholder:text-bone-faint',
-        'hover:border-rule-bright focus:border-bone-dim focus:outline-none',
+        'hover:border-rule-bright focus:border-bone-dim focus:outline-hidden',
         className,
       )}
     />
@@ -36,21 +39,28 @@ export function Textarea({
       className={cn(
         'w-full rounded-card border border-rule bg-ink px-3 py-2.5 text-sm leading-relaxed text-bone',
         'transition-colors duration-200 placeholder:text-bone-faint',
-        'hover:border-rule-bright focus:border-bone-dim focus:outline-none',
+        'hover:border-rule-bright focus:border-bone-dim focus:outline-hidden',
         className,
       )}
     />
   )
 }
 
+/**
+ * A choice from a list: the browser's own select, its list drawn in the
+ * room's colours where the engine allows it (`.select-base`, styles.css) and
+ * the system's elsewhere. Full width unless told otherwise — a drawn list
+ * does not size itself to its longest option, so a narrower field wants a
+ * width or a `min-w-` of its own.
+ */
 export function Select({ className, ...props }: React.SelectHTMLAttributes<HTMLSelectElement>) {
   return (
     <select
       {...props}
       className={cn(
-        'min-h-11 w-full cursor-pointer appearance-none rounded-card border border-rule bg-ink',
+        'select-base min-h-11 w-full cursor-pointer rounded-card border border-rule bg-ink',
         'px-3 pr-9 text-sm text-bone transition-colors duration-200',
-        'hover:border-rule-bright focus:border-bone-dim focus:outline-none',
+        'hover:border-rule-bright focus:border-bone-dim focus:outline-hidden',
         // The chevron, drawn rather than imported, so it inherits the palette.
         "bg-[url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5 6 6.5 11 1.5' stroke='%23a5a099' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E\")]",
         'bg-[length:12px_8px] bg-[position:right_0.75rem_center] bg-no-repeat',
@@ -99,11 +109,17 @@ export function Toggle({
         'disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent',
       )}
     >
+      {/* Under forced colours the track and the knob would both take the
+          page's colour and vanish, leaving the switch's state to nothing but
+          the knob's place: there the knob is drawn in the button colour, and
+          a switch that is on fills with the system's selection colour. */}
       <span
         aria-hidden
         className={cn(
           'relative block h-6 w-11 rounded-full border transition-colors duration-150',
-          checked ? 'border-moss bg-moss/25' : 'border-rule-bright bg-ink',
+          checked
+            ? 'border-moss bg-moss/25 forced-colors:border-[color:Highlight] forced-colors:bg-[color:Highlight]'
+            : 'border-rule-bright bg-ink forced-colors:border-[color:ButtonText]',
         )}
       >
         {/* The knob travels by transform rather than by `left`: the second
@@ -112,7 +128,9 @@ export function Toggle({
           className={cn(
             'absolute top-1/2 left-0.5 size-4 -translate-y-1/2 rounded-full',
             'transition-[transform,background-color] duration-150',
-            checked ? 'translate-x-5 bg-moss' : 'bg-bone-faint',
+            checked
+              ? 'translate-x-5 bg-moss forced-colors:bg-[color:HighlightText]'
+              : 'bg-bone-faint forced-colors:bg-[color:ButtonText]',
           )}
         />
       </span>
@@ -142,7 +160,7 @@ export function FormField({
       {children}
       {hint && !error ? <p className="text-xs text-bone-faint">{hint}</p> : null}
       {error ? (
-        <p role="alert" className="flex items-center gap-1.5 text-xs text-vermillion">
+        <p role="alert" className="flex items-center gap-1.5 text-xs text-status-error">
           <Glyph name="alert" className="size-3.5 shrink-0" />
           {error}
         </p>

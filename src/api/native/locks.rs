@@ -336,6 +336,13 @@ async fn apply(
 ) -> AppResult<()> {
     // Each work is found once and read once, however many locks it has.
     let mut found: HashMap<WorkKey, Option<Known>> = HashMap::new();
+    // Every lock set is the importer's, and the work's journal says it came
+    // from a file.
+    let by = identity.label();
+    let imported = super::overrides::Hand {
+        by: &by,
+        cause: crate::db::repo::change::Cause::Import,
+    };
 
     for lock in &document.locks {
         let key = WorkKey::of(&lock.work);
@@ -394,7 +401,7 @@ async fn apply(
                 &child,
                 &lock.field,
                 value.as_ref(),
-                &identity.label(),
+                imported,
             )
             .await?;
             known.current.insert(slot, value.clone());
@@ -467,7 +474,7 @@ async fn apply(
                     &lock.field,
                     language,
                     value.as_ref(),
-                    &identity.label(),
+                    imported,
                 )
                 .await
             }
@@ -478,7 +485,7 @@ async fn apply(
                     scope,
                     &lock.field,
                     value.as_ref(),
-                    &identity.label(),
+                    imported,
                 )
                 .await
             }
@@ -767,5 +774,83 @@ mod tests {
                 .is_adult
         );
         assert_eq!(listed(&state).await, ["Ronin"]);
+    }
+
+    /// Every lock a file brings is the importer's, and the work's journal
+    /// says it came from a file — a field's, a text's in one language, a
+    /// child's; brought again unchanged, it writes nothing more.
+    #[tokio::test]
+    async fn an_imported_lock_is_journaled_as_an_import() {
+        use crate::db::repo::change::{Cause, Filter};
+
+        let state = super::super::testing::server().await;
+        let heat = film(&state, "Heat", 949).await;
+        let document: Locks = serde_json::from_value(serde_json::json!({
+            "version": 2,
+            "locks": [
+                {
+                    "work": { "kind": "movie", "title": "Heat", "tmdb": 949 },
+                    "scope": "item", "field": "overview", "value": "From a file.",
+                },
+                {
+                    "work": { "kind": "movie", "title": "Heat", "tmdb": 949 },
+                    "scope": "item", "field": "title", "language": "fra", "value": "Heat (FR)",
+                },
+                {
+                    "work": { "kind": "movie", "title": "Heat", "tmdb": 949 },
+                    "scope": "credit:actor:tmdb:1158", "field": "hidden", "value": true,
+                },
+            ],
+        }))
+        .expect("a document");
+        let journal = || {
+            let state = state.clone();
+            let id = heat.id.clone();
+            async move {
+                repo::change::list(&state.db, &id, &Filter::default(), None, 50)
+                    .await
+                    .expect("the journal")
+                    .entries
+            }
+        };
+
+        let mut outcome = Outcome::default();
+        apply(&state, &Identity::Anonymous, &document, &mut outcome)
+            .await
+            .expect("imported");
+        assert_eq!(outcome.applied, 3, "{:?}", outcome.refused);
+        let written = journal().await;
+        let mut read: Vec<(Cause, &str, &str, Option<&str>)> = written
+            .iter()
+            .map(|c| {
+                (
+                    c.cause,
+                    c.scope.as_str(),
+                    c.field.as_str(),
+                    c.language.as_deref(),
+                )
+            })
+            .collect();
+        read.sort_by_key(|(_, scope, field, _)| (*scope, *field));
+        assert_eq!(
+            read,
+            [
+                (Cause::Import, "credit:actor:tmdb:1158", "hidden", None),
+                (Cause::Import, "item", "overview", None),
+                (Cause::Import, "item", "title", Some("fra")),
+            ]
+        );
+        assert!(
+            written
+                .iter()
+                .all(|c| c.actor.as_deref() == Some("anonymous"))
+        );
+
+        let mut again = Outcome::default();
+        apply(&state, &Identity::Anonymous, &document, &mut again)
+            .await
+            .expect("imported");
+        assert_eq!((again.applied, again.unchanged), (0, 3));
+        assert_eq!(journal().await.len(), 3);
     }
 }

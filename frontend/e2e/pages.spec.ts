@@ -650,10 +650,12 @@ test.describe('the schedule', () => {
     await expect(views.getByRole('link', { name: /^(month|mois)$/i })).toHaveAttribute('aria-current', 'true')
 
     // Whole weeks, Monday to Sunday, around the month — once the listing has
-    // arrived and the grid with it.
-    const grid = page.getByRole('list', { name: /days of the month|jours du mois/i })
-    await expect(grid.locator('li').first()).toBeVisible()
-    const days = await grid.locator('li').count()
+    // arrived and the table with it: a column a weekday, named in full.
+    const grid = page.getByRole('table')
+    await expect(grid.locator('td[data-day]').first()).toBeVisible()
+    await expect(grid.getByRole('columnheader')).toHaveCount(7)
+    await expect(grid.getByRole('columnheader').first()).toContainText(/^.+(monday|lundi)$/i)
+    const days = await grid.locator('td[data-day]').count()
     expect(days % 7).toBe(0)
     expect(days).toBeGreaterThanOrEqual(28)
     expect(days).toBeLessThanOrEqual(42)

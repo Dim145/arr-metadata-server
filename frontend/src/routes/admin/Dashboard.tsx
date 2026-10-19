@@ -229,6 +229,15 @@ function errandLines(todo: Errands, k: Dict['admin']['overview'], locale: string
       text: (shown) => k.todoNeverRefreshed(shown, todo.neverRefreshed),
     },
     {
+      // A lock its source moved under since it was set: kept, or the
+      // source's value taken, from the field's own row in the editor.
+      key: 'diverging',
+      to: '/admin/catalogue?missing=divergingLock',
+      glyph: 'lock',
+      count: todo.divergingLocks,
+      text: (shown) => k.todoDiverging(shown, todo.divergingLocks),
+    },
+    {
       key: 'keys',
       to: '/admin/clients',
       glyph: 'key',
@@ -260,9 +269,10 @@ function errandLines(todo: Errands, k: Dict['admin']['overview'], locale: string
  * What there is to do.
  *
  * A line for each thing that is true — works whose last refresh failed, works
- * with no poster, no synopsis, no IMDb identifier, works never refreshed, keys
- * about to lapse, media given up on — each the way into the catalogue filtered
- * to those works, or into the page that settles it. A figure of nought is not
+ * with no poster, no synopsis, no IMDb identifier, works never refreshed,
+ * works with a lock their source moved under, keys about to lapse, media given
+ * up on — each the way into the catalogue filtered to those works, or into the
+ * page that settles it. A figure of nought is not
  * a line: a list that is always there, reading zero, is one nobody reads on
  * the day it says something. With nothing left, it says so once, as a thing
  * that is true too.

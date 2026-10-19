@@ -33,7 +33,11 @@ export function Chip({
     <span
       className={cn(
         'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1',
-        'font-mono text-[0.6875rem] font-medium tracking-[0.12em] uppercase',
+        // At the twelve-pixel floor: a chip says a state or a source, which
+        // is read, not glanced at. Its edge, under forced colours, is the
+        // button colour, as a pill's edge is wherever the system draws one.
+        'font-mono text-caption font-medium tracking-[0.12em] uppercase',
+        'forced-colors:border-[color:ButtonText]',
         CHIP_TONE[tone],
         className,
       )}

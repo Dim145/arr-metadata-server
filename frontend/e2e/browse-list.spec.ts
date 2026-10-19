@@ -127,7 +127,8 @@ test.describe('the catalogue as a list', () => {
     await page.goto('/browse?view=list&kind=series')
     await expect(rows(page).first()).toBeVisible()
 
-    await page.getByRole('button', { name: /^(clear filters|effacer les filtres)$/i }).click()
+    // "Clear all", at the head of the filters (above the results on a phone).
+    await page.getByRole('button', { name: /^(clear all|tout effacer)$/i }).click()
     await expect(page).toHaveURL(/view=list/)
     await expect(page).not.toHaveURL(/kind=/)
 

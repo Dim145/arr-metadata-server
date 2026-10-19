@@ -41,18 +41,42 @@ pub fn router() -> OpenApiRouter<AppState> {
 // ─── facets ──────────────────────────────────────────────────────────────────
 
 /// What the catalogue can be narrowed by next, with how many works each
+/// choice would leave: the list's facets, and the countries and the ratings
+/// its further filters choose among.
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+#[schema(as = CatalogueFacets)]
+pub struct CatalogueFacets {
+    #[serde(flatten)]
+    pub facets: Facets,
+    /// The countries the works were made in, ISO 3166-1 alpha-2, most common
+    /// first — counted as if no country were chosen.
+    pub countries: Vec<repo::item::Facet>,
+    /// The ratings the works carry in the reader's country (`region`), as
+    /// that country writes them; mildest first where they are ages, most
+    /// common first otherwise. Counted as if no rating were chosen.
+    pub certifications: Vec<repo::item::Facet>,
+    /// The country those ratings are read in: the one asked for, else the
+    /// one this caller is answered for. Absent, the ratings are the ones the
+    /// works carry as their own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region: Option<String>,
+}
+
+/// What the catalogue can be narrowed by next, with how many works each
 /// choice would leave.
 ///
 /// Takes the list's own filters and counts under them — see
 /// [`repo::item::facets`] for how each is counted — and over what this caller
 /// may see: an adult title's genre is not counted for somebody who would never
-/// be shown it.
+/// be shown it. A term counts the works the list finds for it, a misspelt one
+/// included.
 #[utoipa::path(
     get, path = "/facets", tag = TAG,
     operation_id = "browse_facets",
     params(super::items::ListQuery),
     responses(
-        (status = 200, body = Facets),
+        (status = 200, body = CatalogueFacets),
         (status = 400, description = "A filter was not one the list understands"),
     ),
 )]
@@ -60,7 +84,7 @@ async fn facets(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
     Query(query): Query<super::items::ListQuery>,
-) -> AppResult<Json<Facets>> {
+) -> AppResult<Json<CatalogueFacets>> {
     let mut filters = super::items::to_query(&state, &identity, query)?;
     // The page and its order are the list's; the counts are the same for all.
     filters.sort = repo::item::Sort::default();
@@ -80,13 +104,21 @@ async fn facets(
     );
 
     if let Some(cached) = state.caches.searches.get(&key).await
-        && let Ok(facets) = serde_json::from_str::<Facets>(&cached)
+        && let Ok(facets) = serde_json::from_str::<CatalogueFacets>(&cached)
     {
         return Ok(Json(facets));
     }
 
-    let found = repo::item::facets(&state.db, &filters).await?;
-    if found.total > 0
+    // The works a misspelt term is taken for, as the list takes it: settled
+    // once the answer is known not to be kept already.
+    repo::item::tolerate(&state.db, &mut filters).await?;
+    let found = CatalogueFacets {
+        facets: repo::item::facets(&state.db, &filters).await?,
+        countries: repo::item::country_facets(&state.db, &filters).await?,
+        certifications: repo::item::certification_facets(&state.db, &filters).await?,
+        region: filters.region.clone(),
+    };
+    if found.facets.total > 0
         && let Ok(encoded) = serde_json::to_string(&found)
     {
         state.caches.searches.insert(key, encoded).await;

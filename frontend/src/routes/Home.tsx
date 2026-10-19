@@ -2,54 +2,73 @@
  * The way in.
  *
  * A catalogue's front page should show the catalogue, not explain it: one work
- * given the room a poster deserves, then rows of everything else. The featured
- * work is whichever the providers rank highest, which is as close to an opinion
- * as this server is willing to have.
+ * given the room a poster deserves, then rows that say something of their
+ * own — what is on this week, what is back, what the selections hold, what
+ * the season brings, what came in with a trailer to watch. Rows of "series"
+ * and "films" said nothing the catalogue's own page does not, twelve at a
+ * time. The featured work is whichever the providers rank highest, which is
+ * as close to an opinion as this server is willing to have; the selections
+ * are whoever maintains it having one.
  */
 
-import { useQuery } from '@tanstack/react-query'
+import { useQueries, useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router'
 
-import { Artwork, Placeholder, PosterCard, PosterShelf, Score } from '../components/media'
-import { EmptyState, Genre, Glyph, Label, SectionTitle, Skeleton } from '../components/ui'
-import { useMe } from '../lib/hooks'
-import { api, query } from '../lib/api'
+import { Artwork, Placeholder, PosterCard, PosterShelf, Score, VEILED, Veil, useVeiled } from '../components/media'
+import { EmptyState, Genre, Glyph, Label, SectionTitle, Shelf, Skeleton } from '../components/ui'
+import { useCuratedLists, useMe } from '../lib/hooks'
+import { api, query, segment } from '../lib/api'
+import { cn } from '../lib/cn'
 import * as fmt from '../lib/format'
 import { useI18n } from '../lib/i18n'
 import { airTime, backdrop, episodeCode, headlineRating, logo, poster } from '../lib/media'
+import { forAdults, useAdultPostersShown } from '../lib/prefs'
 import { forget, useRecent } from '../lib/recent'
 import { chartQuery, formatDay, seasonOf, seasonPath } from '../lib/seasons'
-import type { Airing, Calendar, CalendarEntry, ItemPage, MediaItem, Release } from '../lib/types'
+import type { Airing, Calendar, CalendarEntry, CuratedList, CuratedListPage, ItemPage, MediaItem, Release } from '../lib/types'
+
+/** How many of the most followed series and films the featured work is drawn from. */
+const CONTENDERS = 4
+
+/** How many arrivals are read: enough to find a row of them with a trailer. */
+const ARRIVALS = 36
+
+/** The fewest arrivals with a trailer that make a row of their own. */
+const WITH_TRAILER = 4
+
+/** How many selections have a row: the rest are a link away. */
+const SELECTIONS = 2
 
 export function Home() {
   const { t, lang } = useI18n()
+  const adult = useAdultPostersShown()
 
   const series = useQuery({
     queryKey: ['home', 'series', lang],
-    queryFn: () => api.get<ItemPage>(`/items${query({ kind: 'series', limit: 12, language: lang })}`),
+    queryFn: () => api.get<ItemPage>(`/items${query({ kind: 'series', limit: CONTENDERS, language: lang })}`),
   })
 
   const films = useQuery({
     queryKey: ['home', 'movie', lang],
-    queryFn: () => api.get<ItemPage>(`/items${query({ kind: 'movie', limit: 12, language: lang })}`),
+    queryFn: () => api.get<ItemPage>(`/items${query({ kind: 'movie', limit: CONTENDERS, language: lang })}`),
   })
 
   const added = useQuery({
     queryKey: ['home', 'added', lang],
-    queryFn: () => api.get<ItemPage>(`/items${query({ sort: 'added', limit: 12, language: lang })}`),
+    queryFn: () => api.get<ItemPage>(`/items${query({ sort: 'added', limit: ARRIVALS, language: lang })}`),
   })
 
   const loading = series.isPending || films.isPending
   const everything = [...(series.data?.items ?? []), ...(films.data?.items ?? [])]
   // The work at the top: one of the most followed series and films, a
   // different one each day rather than the same one for ever — the same one
-  // all day, so a page left open and reloaded does not shuffle.
-  const heroes = [...(series.data?.items ?? []).slice(0, 4), ...(films.data?.items ?? []).slice(0, 4)].filter(
-    (item) => backdrop(item),
-  )
+  // all day, so a page left open and reloaded does not shuffle. Never one
+  // for adults for a reader who has not asked to see their pictures: the
+  // plate is the whole width of the screen.
+  const heroes = everything.filter((item) => backdrop(item) && (adult || !forAdults(item)))
   const now = new Date()
   const dayOfYear = Math.floor((now.getTime() - new Date(now.getFullYear(), 0, 0).getTime()) / 86_400_000)
-  const featured = heroes.length ? heroes[dayOfYear % heroes.length] : everything[0]
+  const featured = heroes.length ? heroes[dayOfYear % heroes.length] : everything.find((item) => adult || !forAdults(item))
 
   if (loading) {
     return <HomeSkeleton />
@@ -58,7 +77,7 @@ export function Home() {
   if (series.isError || films.isError) {
     return (
       <div className="pt-16">
-        <EmptyState title={t.home.loadFailed} />
+        <EmptyState kind="error" title={t.home.loadFailed} />
       </div>
     )
   }
@@ -76,39 +95,41 @@ export function Home() {
 
         <RecentlyViewed />
 
+        <BackThisWeek />
+
+        <Selections />
+
         <ThisSeason />
 
-        {series.data?.items.length ? (
-          <Row
-            title={t.home.allSeries}
-            to="/browse?kind=series"
-            items={series.data.items}
-            total={series.data.total}
-          />
-        ) : null}
-
-        {films.data?.items.length ? (
-          <Row
-            title={t.home.allFilms}
-            to="/browse?kind=movie"
-            items={films.data.items}
-            total={films.data.total}
-          />
-        ) : null}
-
-        {added.data?.items.length ? (
-          <Row
-            title={t.home.recentlyAdded}
-            to="/browse?order=added"
-            items={added.data.items}
-            total={added.data.total}
-            mixed
-          />
-        ) : null}
+        {added.data?.items.length ? <Arrivals items={added.data.items} total={added.data.total} /> : null}
       </div>
     </div>
   )
 }
+
+/**
+ * The plate's picture stepping back as the page is scrolled past it: it
+ * fades into the ink and drops behind the scroll a little, while the title
+ * goes on as text does — the projector dimming as the reader walks in. The
+ * entrance's own keyframes, `strike`, played backwards over the plate's own
+ * height, which is the length of scroll it takes to leave the screen.
+ *
+ * Driven by the page's scroll alone, with no script: where the browser does
+ * not drive animations by scrolling, or the reader has asked for less
+ * movement, the picture simply stays as it is. The parts of `animation` are
+ * set one by one, so that no shorthand put after them resets the timeline.
+ */
+const STEPS_BACK = [
+  'motion-safe:supports-[(animation-timeline:scroll())_and_(animation-range:0%_100%)]:[animation-name:strike]',
+  'motion-safe:supports-[(animation-timeline:scroll())_and_(animation-range:0%_100%)]:[animation-duration:auto]',
+  'motion-safe:supports-[(animation-timeline:scroll())_and_(animation-range:0%_100%)]:[animation-timing-function:linear]',
+  'motion-safe:supports-[(animation-timeline:scroll())_and_(animation-range:0%_100%)]:[animation-fill-mode:both]',
+  'motion-safe:supports-[(animation-timeline:scroll())_and_(animation-range:0%_100%)]:[animation-direction:reverse]',
+  'motion-safe:supports-[(animation-timeline:scroll())_and_(animation-range:0%_100%)]:[animation-timeline:scroll()]',
+  'motion-safe:supports-[(animation-timeline:scroll())_and_(animation-range:0%_100%)]:[animation-range:0_19rem]',
+  'sm:motion-safe:supports-[(animation-timeline:scroll())_and_(animation-range:0%_100%)]:[animation-range:0_24rem]',
+  'lg:motion-safe:supports-[(animation-timeline:scroll())_and_(animation-range:0%_100%)]:[animation-range:0_28rem]',
+].join(' ')
 
 /**
  * The work at the top.
@@ -126,7 +147,7 @@ function Featured({ item }: { item: MediaItem }) {
 
   return (
     <section className="relative mx-[calc(50%-50vw)] w-screen">
-      <div className="relative h-[19rem] overflow-hidden sm:h-[24rem] lg:h-[28rem]">
+      <div className={cn('relative h-[19rem] overflow-hidden sm:h-[24rem] lg:h-[28rem]', STEPS_BACK)}>
         {art ? (
           <Artwork
             url={art}
@@ -234,6 +255,24 @@ function Featured({ item }: { item: MediaItem }) {
   )
 }
 
+/** The way from a row to the whole of what it is a window onto, and how many that is. */
+function SeeAll({ to, label, total }: { to: string; label: string; total?: number }) {
+  const { locale } = useI18n()
+
+  return (
+    <Link
+      to={to}
+      className="flex min-h-11 items-center gap-1.5 text-sm text-bone-dim transition-colors duration-200 hover:text-vermillion"
+    >
+      {label}
+      {total !== undefined ? (
+        <span className="font-mono text-xs text-bone-faint tabular-nums">{fmt.count(total, locale)}</span>
+      ) : null}
+      <Glyph name="chevronRight" className="size-3.5" />
+    </Link>
+  )
+}
+
 function Row({
   title,
   to,
@@ -248,26 +287,11 @@ function Row({
   /** Series and films together, so each card says which it is. */
   mixed?: boolean
 }) {
-  const { t, locale } = useI18n()
+  const { t } = useI18n()
 
   return (
     <section>
-      <SectionTitle
-        action={
-          <Link
-            to={to}
-            className="flex min-h-11 items-center gap-1.5 text-sm text-bone-dim transition-colors duration-200 hover:text-vermillion"
-          >
-            {t.home.seeAll}
-            <span className="font-mono text-xs text-bone-faint tabular-nums">
-              {fmt.count(total, locale)}
-            </span>
-            <Glyph name="chevronRight" className="size-3.5" />
-          </Link>
-        }
-      >
-        {title}
-      </SectionTitle>
+      <SectionTitle action={<SeeAll to={to} label={t.home.seeAll} total={total} />}>{title}</SectionTitle>
 
       <PosterShelf label={title}>
         {items.map((item) => (
@@ -279,16 +303,35 @@ function Row({
 }
 
 /**
- * The next seven days, as a strip of frames: what is on, when, in the
- * reader's own time — and the films coming out, on their day, after its
- * episodes. Left out when nothing is.
+ * What came in lately — the ones with a trailer first in line, where there
+ * are enough of them to fill a row: a new arrival is met by watching its
+ * trailer, and its page has the button. Otherwise every arrival, as they came.
  */
-function ThisWeek() {
-  const { t, lang, locale } = useI18n()
+function Arrivals({ items, total }: { items: MediaItem[]; total: number }) {
+  const { t } = useI18n()
+  const trailed = items.filter((item) => item.trailerYoutubeId)
+  const trailers = trailed.length >= WITH_TRAILER
 
-  // Today and the six days after it, as the reader's calendar has them — and
-  // the same dates at midnight UTC, where an episode with only a date is
-  // stored: from this hour on, tonight's episode was already "past".
+  return (
+    <Row
+      title={trailers ? t.home.newWithTrailer : t.home.recentlyAdded}
+      to="/browse?order=added"
+      items={(trailers ? trailed : items).slice(0, 12)}
+      total={total}
+      mixed
+    />
+  )
+}
+
+/**
+ * The next seven days, as the schedule has them: today and the six days after
+ * it, as the reader's calendar has them — and the same dates at midnight UTC,
+ * where an episode with only a date is stored: from this hour on, tonight's
+ * episode was already "past". One read for the strip and for the series back
+ * this week.
+ */
+function useWeek() {
+  const { lang } = useI18n()
   const today = new Date()
   today.setHours(0, 0, 0, 0)
   const end = new Date(today)
@@ -315,45 +358,119 @@ function ThisWeek() {
       return day !== undefined && day >= first && day <= last ? [{ entry, day }] : []
     })
     .sort((a, b) => a.day.localeCompare(b.day) || rank(a.entry) - rank(b.entry))
-    .slice(0, 16)
-    .map(({ entry }) => entry)
 
-  if (!entries.length) return null
+  return { works, entries, pending: week.isPending }
+}
+
+/**
+ * A row's place, kept while its reading is out. The rows arrive in the order
+ * their requests answer, not the order of the page, and each one drawn above
+ * those already there pushed the whole page down — a layout shift at every
+ * arrival. A row that turns out empty gives its place back, which is rare
+ * enough to be the one shift left.
+ */
+function RowPlaceholder() {
+  return (
+    <section aria-hidden className="space-y-4">
+      <Skeleton className="h-7 w-40" />
+      <PosterShelf>
+        {Array.from({ length: 6 }, (_, index) => (
+          <div key={index} className="space-y-2.5">
+            <Skeleton className="aspect-2/3 w-full" />
+            <Skeleton className="h-4 w-3/4" />
+          </div>
+        ))}
+      </PosterShelf>
+    </section>
+  )
+}
+
+/**
+ * The next seven days, as a row of frames: what is on, when, in the reader's
+ * own time — and the films coming out, on their day, after its episodes. A
+ * row that scrolls, its ends said, as every row of the page does, the frames
+ * narrow enough for five or six across a wide screen. Left out when nothing
+ * is.
+ */
+function ThisWeek() {
+  const { t, locale } = useI18n()
+  const { works, entries, pending } = useWeek()
+  const shown = entries.slice(0, 16).map(({ entry }) => entry)
+
+  if (pending) return <RowPlaceholder />
+  if (!shown.length) return null
+
+  return (
+    // A region named for the row, for whoever walks the page by landmarks:
+    // the week is the one row that is not a shelf of posters.
+    <section aria-label={t.home.thisWeek}>
+      <SectionTitle action={<SeeAll to="/calendar" label={t.home.fullSchedule} />}>{t.home.thisWeek}</SectionTitle>
+
+      <Shelf
+        label={t.home.thisWeek}
+        className="-mt-2 -mr-4 -ml-2 sm:-mr-6"
+        listClassName="gap-3 pt-2 pr-4 pb-2 pl-2 sm:pr-6"
+      >
+        {shown.map((entry) => (
+          <li key={entry.kind === 'release' ? `${entry.workId}-${entry.date}` : `${entry.workId}-${entry.episode.id}`} className="w-56 shrink-0 snap-start">
+            {entry.kind === 'release' ? (
+              <UpcomingRelease release={entry} work={works.get(entry.workId)} locale={locale} />
+            ) : (
+              <Upcoming airing={entry} work={works.get(entry.workId)} locale={locale} />
+            )}
+          </li>
+        ))}
+      </Shelf>
+    </section>
+  )
+}
+
+/**
+ * The series with an episode in the next seven days, as posters: which of
+ * the catalogue's series are on again this week, the strip above saying when.
+ * A season beginning comes first — that is a series coming back — then the
+ * rest by the day they air.
+ */
+function BackThisWeek() {
+  const { t, locale } = useI18n()
+  const { works, entries, pending } = useWeek()
+
+  // Each series once, at its first episode of the week.
+  const firsts = new Map<string, { airing: Airing; day: string }>()
+  for (const { entry, day } of entries) {
+    if (entry.kind === 'episode' && works.has(entry.workId) && !firsts.has(entry.workId)) {
+      firsts.set(entry.workId, { airing: entry, day })
+    }
+  }
+  const opens = ({ episode }: Airing) => episode.seasonNumber > 0 && episode.episodeNumber === 1
+  const back = [...firsts.values()].sort(
+    (a, b) => Number(opens(b.airing)) - Number(opens(a.airing)) || a.day.localeCompare(b.day),
+  )
+
+  if (pending) return <RowPlaceholder />
+  if (!back.length) return null
+
+  // What comes, in the season chart's words where a season begins.
+  const what = (airing: Airing) =>
+    opens(airing)
+      ? airing.episode.seasonNumber === 1
+        ? t.seasons.badges.newSeries
+        : t.seasons.badges.season(airing.episode.seasonNumber)
+      : episodeCode(airing.episode)
 
   return (
     <section>
-      <SectionTitle
-        action={
-          <Link
-            to="/calendar"
-            className="flex min-h-11 items-center gap-1.5 text-sm text-bone-dim transition-colors duration-200 hover:text-vermillion"
-          >
-            {t.home.fullSchedule}
-            <Glyph name="chevronRight" className="size-3.5" />
-          </Link>
-        }
-      >
-        {t.home.thisWeek}
-      </SectionTitle>
-
-      <div
-        role="region"
-        aria-label={t.home.thisWeek}
-        className="-mt-2 -mr-4 -ml-2 flex snap-x snap-mandatory scroll-pl-2 gap-3 overflow-x-auto pt-2 pr-4 pb-2 pl-2 sm:-mr-6 sm:pr-6"
-      >
-        {entries.map((entry) =>
-          entry.kind === 'release' ? (
-            <UpcomingRelease
-              key={`${entry.workId}-${entry.date}`}
-              release={entry}
-              work={works.get(entry.workId)}
-              locale={locale}
-            />
-          ) : (
-            <Upcoming key={`${entry.workId}-${entry.episode.id}`} airing={entry} work={works.get(entry.workId)} locale={locale} />
-          ),
-        )}
-      </div>
+      <SectionTitle>{t.home.backThisWeek}</SectionTitle>
+      <PosterShelf label={t.home.backThisWeek}>
+        {back.slice(0, 12).map(({ airing, day }) => (
+          <PosterCard
+            key={airing.workId}
+            item={works.get(airing.workId)!}
+            to={`/work/${airing.workId}`}
+            note={`${what(airing)} · ${frameDay(day, locale)}`}
+          />
+        ))}
+      </PosterShelf>
     </section>
   )
 }
@@ -394,7 +511,8 @@ function RecentlyViewed() {
             key={work.id}
             to={`/work/${work.id}`}
             kind
-            // As much of the work as the shelf kept: enough for a card.
+            // As much of the work as the shelf kept: enough for a card, and
+            // for the veil over an adult work's poster, as on every row.
             item={{
               id: work.id,
               title: work.title,
@@ -404,10 +522,75 @@ function RecentlyViewed() {
                 ? [{ id: `recent-${work.id}`, coverType: 'poster', url: work.poster, sortOrder: 0, isManual: false }]
                 : [],
               ratings: work.rating ? [work.rating] : [],
+              isAdult: work.isAdult,
+              contentRating: work.contentRating,
               isManual: false,
               externalIds: {},
             }}
           />
+        ))}
+      </PosterShelf>
+    </section>
+  )
+}
+
+/**
+ * The selections, while there are some: the first two, each a row of its
+ * works under its name and its few lines — the catalogue's own programmes,
+ * as a cinémathèque prints its seasons — and the rest a link away.
+ */
+function Selections() {
+  const { t, lang } = useI18n()
+  const lists = useCuratedLists()
+  const all = lists.data?.lists ?? []
+  const shown = all.slice(0, SELECTIONS)
+
+  // Each selection is read here, with the list page's own query so going
+  // there from here costs nothing — and so that the row leading to all of
+  // them is drawn only once a selection is: drawn first, its negative margin
+  // pulled the sections' place up, and the page dropped back as they came.
+  const pages = useQueries({
+    queries: shown.map((list) => ({
+      queryKey: ['list', list.slug, lang],
+      queryFn: () => api.get<CuratedListPage>(`/lists/${segment(list.slug)}${query({ language: lang })}`),
+    })),
+  })
+
+  if (lists.isPending || pages.some((page) => page.isPending)) return <RowPlaceholder />
+  if (!all.length) return null
+  const drawn = pages.some((page) => (page.data?.items.length ?? 0) > 0)
+
+  return (
+    <>
+      {shown.map((list, i) => (
+        <Selection key={list.id} list={list} page={pages[i]?.data} />
+      ))}
+      {drawn && all.length > SELECTIONS ? (
+        <div className="-mt-10 flex justify-end">
+          <SeeAll to="/lists" label={t.home.allSelections} total={all.length} />
+        </div>
+      ) : null}
+    </>
+  )
+}
+
+function Selection({ list, page }: { list: CuratedList; page: CuratedListPage | undefined }) {
+  const { t } = useI18n()
+  const items = page?.items ?? []
+
+  if (!items.length) return null
+
+  return (
+    <section>
+      <SectionTitle action={<SeeAll to={`/lists/${list.slug}`} label={t.home.wholeSelection} total={page?.total} />}>
+        {list.name}
+      </SectionTitle>
+      {list.description ? (
+        <p className="-mt-2 mb-6 line-clamp-2 max-w-prose text-sm leading-relaxed text-bone-dim">{list.description}</p>
+      ) : null}
+      <PosterShelf label={list.name}>
+        {items.slice(0, 12).map((item) => (
+          <PosterCard key={item.id} item={item} to={`/work/${item.id}`} kind />
         ))}
       </PosterShelf>
     </section>
@@ -432,6 +615,7 @@ function ThisSeason() {
     .filter((e) => e.kind !== 'continuing')
     .sort((a, b) => (works.get(b.workId)!.popularity ?? -1) - (works.get(a.workId)!.popularity ?? -1))
 
+  if (chart.isPending) return <RowPlaceholder />
   if (!fresh.length) return null
 
   const day = (value: string) => formatDay(value, locale, { day: 'numeric', month: 'short' })
@@ -440,17 +624,8 @@ function ThisSeason() {
     <section>
       <SectionTitle
         action={
-          <Link
-            to={seasonPath(at)}
-            className="flex min-h-11 items-center gap-1.5 text-sm text-bone-dim transition-colors duration-200 hover:text-vermillion"
-          >
-            {t.home.wholeSeason}
-            {/* The season's works, as its page counts them. */}
-            <span className="font-mono text-xs text-bone-faint tabular-nums">
-              {fmt.count(new Set(held.map((e) => e.workId)).size, locale)}
-            </span>
-            <Glyph name="chevronRight" className="size-3.5" />
-          </Link>
+          // The season's works, as its page counts them.
+          <SeeAll to={seasonPath(at)} label={t.home.wholeSeason} total={new Set(held.map((e) => e.workId)).size} />
         }
       >
         {t.home.thisSeason(at.season, at.year)}
@@ -493,30 +668,34 @@ function frameDay(day: string, locale: string): string {
     : new Intl.DateTimeFormat(locale, { weekday: 'short', timeZone: 'UTC' }).format(new Date(`${day}T00:00:00Z`))
 }
 
+/** The day, and the hour where one is known, a frame is stamped with. */
+const STAMP =
+  'absolute top-1.5 left-1.5 rounded-card bg-ink/85 px-1.5 py-0.5 font-mono text-caption font-medium text-bone tabular-nums first-letter:uppercase'
+
+const FRAME =
+  'group block overflow-hidden rounded-panel border border-rule bg-ink-raised transition-colors duration-150 hover:border-rule-bright'
+
 function Upcoming({ airing, work, locale }: { airing: Airing; work?: MediaItem; locale: string }) {
   const { t } = useI18n()
   const { episode } = airing
   const image = episode.image ?? (work ? backdrop(work) : undefined)
+  const veiled = useVeiled(work ?? { id: '' })
   const when = airTime(episode)
   const day = when ? frameDay(when.day, locale) : undefined
   const time = when?.moment ? fmt.clock(when.moment.toISOString(), locale) : undefined
 
   return (
-    <Link
-      to={`/work/${airing.workId}/season/${episode.seasonNumber}/episode/${episode.episodeNumber}`}
-      className="group w-64 shrink-0 snap-start overflow-hidden rounded-panel border border-rule bg-ink-raised transition-colors duration-150 hover:border-rule-bright"
-    >
-      <div className="relative aspect-video bg-ink-high">
+    <Link to={`/work/${airing.workId}/season/${episode.seasonNumber}/episode/${episode.episodeNumber}`} className={FRAME}>
+      <div className="relative aspect-video overflow-hidden bg-ink-high">
         {image ? (
-          <Artwork url={image} role="still" alt="" className="size-full object-cover" />
+          <Artwork url={image} role="still" alt="" className={cn('size-full object-cover', veiled && VEILED)} />
         ) : (
           <div className="grid size-full place-items-center">
             <Glyph name="tv" className="size-5 text-bone-faint" />
           </div>
         )}
-        <span className="absolute top-1.5 left-1.5 rounded-card bg-ink/85 px-1.5 py-0.5 font-mono text-[0.6875rem] font-medium text-bone tabular-nums first-letter:uppercase">
-          {[day, time].filter(Boolean).join(' · ')}
-        </span>
+        {veiled && image ? <Veil id={airing.workId} shows={false} /> : null}
+        <span className={STAMP}>{[day, time].filter(Boolean).join(' · ')}</span>
       </div>
       <div className="space-y-0.5 p-3">
         <p className="truncate text-sm font-medium text-bone transition-colors duration-150 group-hover:text-vermillion">
@@ -537,23 +716,20 @@ function Upcoming({ airing, work, locale }: { airing: Airing; work?: MediaItem; 
 function UpcomingRelease({ release, work, locale }: { release: Release; work?: MediaItem; locale: string }) {
   const { t } = useI18n()
   const image = work ? backdrop(work) : undefined
+  const veiled = useVeiled(work ?? { id: '' })
 
   return (
-    <Link
-      to={`/work/${release.workId}`}
-      className="group w-64 shrink-0 snap-start overflow-hidden rounded-panel border border-rule bg-ink-raised transition-colors duration-150 hover:border-rule-bright"
-    >
-      <div className="relative aspect-video bg-ink-high">
+    <Link to={`/work/${release.workId}`} className={FRAME}>
+      <div className="relative aspect-video overflow-hidden bg-ink-high">
         {image ? (
-          <Artwork url={image} role="still" alt="" className="size-full object-cover" />
+          <Artwork url={image} role="still" alt="" className={cn('size-full object-cover', veiled && VEILED)} />
         ) : (
           <div className="grid size-full place-items-center">
             <Glyph name="film" className="size-5 text-bone-faint" />
           </div>
         )}
-        <span className="absolute top-1.5 left-1.5 rounded-card bg-ink/85 px-1.5 py-0.5 font-mono text-[0.6875rem] font-medium text-bone tabular-nums first-letter:uppercase">
-          {frameDay(release.date, locale)}
-        </span>
+        {veiled && image ? <Veil id={release.workId} shows={false} /> : null}
+        <span className={STAMP}>{frameDay(release.date, locale)}</span>
       </div>
       <div className="space-y-0.5 p-3">
         <p className="truncate text-sm font-medium text-bone transition-colors duration-150 group-hover:text-vermillion">

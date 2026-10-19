@@ -10,7 +10,7 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router'
 
 import { Button, FormField, Glyph, Input, Spinner } from '../components/ui'
@@ -19,6 +19,17 @@ import { longDate } from '../lib/format'
 import { useAuthOptions } from '../lib/hooks'
 import { useI18n } from '../lib/i18n'
 import type { InvitationOffer } from '../lib/types'
+import { WRONG, firstWrong, useDone, useValidity } from './fields'
+
+const FIELDS = ['invite', 'username', 'email', 'password'] as const
+
+/**
+ * An address as the browser's own check reads one: a name, an `@`, and a
+ * domain of dot-separated labels — the pattern the HTML standard gives, so
+ * the words under the field and the browser agree.
+ */
+const EMAIL =
+  /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/
 
 /** The code a link brought, after the `#` where the browser keeps it to itself. */
 function codeFromAddress(): string {
@@ -59,7 +70,8 @@ export function Register() {
   const [displayName, setDisplayName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [touched, setTouched] = useState({ username: false, password: false })
+  const done = useDone(FIELDS)
+  const fields = useRef<HTMLFormElement>(null)
   const [pending, setPending] = useState<string | null>(null)
 
   const trimmed = code.trim()
@@ -91,6 +103,36 @@ export function Register() {
     },
   })
 
+  const mode = options.data?.registration ?? 'closed'
+  const required = mode === 'invite'
+  const codeState = !trimmed
+    ? undefined
+    : !whole(trimmed)
+      ? undefined
+      : offer.isPending
+        ? 'checking'
+        : offer.isSuccess
+          ? 'valid'
+          : 'invalid'
+
+  // What is wrong with each field, whether or not it is said yet: kept as the
+  // field's own validity, and said under it once the reader is done with it.
+  const wrong = {
+    invite: required && !trimmed ? t.register.codeMissing : codeState === 'invalid' ? t.register.invalid : undefined,
+    username: !username.trim()
+      ? t.auth.usernameMissing
+      : USERNAME.test(username.trim())
+        ? undefined
+        : t.register.usernameHint,
+    email: email.trim() && !EMAIL.test(email.trim()) ? t.register.emailWrong : undefined,
+    password: !password ? t.auth.passwordMissing : [...password].length < 12 ? t.register.passwordHint : undefined,
+  }
+  useValidity(fields, wrong)
+  // A code found unusable is said at once, whoever typed it: the link that
+  // brought it was the reader's doing too.
+  const said = (key: (typeof FIELDS)[number]) =>
+    done.done(key) || (key === 'invite' && codeState === 'invalid') ? wrong[key] : undefined
+
   if (options.isPending) {
     return (
       <Door>
@@ -98,8 +140,6 @@ export function Register() {
       </Door>
     )
   }
-
-  const mode = options.data?.registration ?? 'closed'
 
   if (pending !== null) {
     return (
@@ -121,46 +161,47 @@ export function Register() {
     )
   }
 
-  const required = mode === 'invite'
-  const usernameWrong = touched.username && username.trim() !== '' && !USERNAME.test(username.trim())
-  const passwordShort = touched.password && password !== '' && [...password].length < 12
-  const codeState = !trimmed
-    ? undefined
-    : !whole(trimmed)
-      ? undefined
-      : offer.isPending
-        ? 'checking'
-        : offer.isSuccess
-          ? 'valid'
-          : 'invalid'
-
   const refusal = register.error instanceof ApiError ? register.error : undefined
   const refusalText = refusal
     ? ((t.register.errors as Record<string, string | undefined>)[refusal.code] ??
       (refusal.status === 400 ? refusal.message : t.common.error))
     : undefined
 
-  const ready =
-    USERNAME.test(username.trim()) &&
-    [...password].length >= 12 &&
-    (!required || codeState === 'valid') &&
-    codeState !== 'invalid' &&
-    codeState !== 'checking'
+  /** What a field says it needs, and what it says is wrong once it may, each by an id the field points at. */
+  const words = (key: (typeof FIELDS)[number], hint: string | undefined) => {
+    const error = said(key)
+    return {
+      hint: hint ? <span id={`${key}-hint`}>{hint}</span> : undefined,
+      error: error ? <span id={`${key}-error`}>{error}</span> : undefined,
+      field: {
+        'aria-invalid': error ? true : undefined,
+        'aria-describedby': error ? `${key}-error` : hint ? `${key}-hint` : undefined,
+        onBlur: () => done.left(key),
+        className: WRONG,
+      },
+    }
+  }
+
+  const invite = words(
+    'invite',
+    codeState === 'checking'
+      ? t.register.checking
+      : codeState === 'valid' && offer.data
+        ? undefined
+        : required
+          ? t.register.codeHint
+          : t.register.codeOptionalHint,
+  )
+  const name = words('username', t.register.usernameHint)
+  const address = words('email', t.register.emailHint)
+  const secret = words('password', t.register.passwordHint)
 
   const codeField = (
     <FormField
       label={required ? t.register.code : t.register.codeOptional}
       htmlFor="invite"
-      hint={
-        codeState === 'checking'
-          ? t.register.checking
-          : codeState === 'valid' && offer.data
-            ? undefined
-            : required
-              ? t.register.codeHint
-              : t.register.codeOptionalHint
-      }
-      error={codeState === 'invalid' ? t.register.invalid : undefined}
+      hint={invite.hint}
+      error={invite.error}
     >
       <Input
         id="invite"
@@ -170,9 +211,13 @@ export function Register() {
         required={required}
         autoFocus={required && !trimmed}
         placeholder="K7QM-2XRP-9DHT-4WCN"
-        className="font-mono tracking-wider uppercase"
+        {...invite.field}
+        className={`${WRONG} font-mono tracking-wider uppercase`}
         value={code}
-        onChange={(event) => setCode(event.target.value)}
+        onChange={(event) => {
+          setCode(event.target.value)
+          done.typed('invite')
+        }}
       />
       {codeState === 'valid' && offer.data ? (
         <p className="flex items-center gap-1.5 text-xs text-moss" role="status">
@@ -188,34 +233,46 @@ export function Register() {
       <h1 className="font-display text-3xl font-medium text-bone">{t.register.title}</h1>
       <p className="mt-2 mb-8 text-sm leading-relaxed text-bone-dim">{t.register.lead[mode]}</p>
 
+      {/* The browser's own checks are not asked for: their bubble speaks the
+          browser's language and goes as soon as it came. Each field says what
+          is wrong under it, once the reader is done with it, and on sending
+          the first wrong one takes the focus — as the browser's would have. */}
       <form
+        ref={fields}
         className="space-y-5"
         noValidate
         onSubmit={(event) => {
           event.preventDefault()
-          setTouched({ username: true, password: true })
-          if (ready) register.mutate()
+          done.sent()
+          const first = firstWrong(event.currentTarget)
+          if (first) {
+            first.focus()
+            return
+          }
+          // A code still being checked is waited for: sent now, the answer
+          // would be whatever the server makes of it.
+          if (codeState !== 'checking') register.mutate()
         }}
       >
         {required ? codeField : null}
 
-        <FormField
-          label={t.register.username}
-          htmlFor="username"
-          hint={t.register.usernameHint}
-          error={usernameWrong ? t.register.usernameHint : undefined}
-        >
+        <FormField label={t.register.username} htmlFor="username" hint={name.hint} error={name.error}>
           <Input
             id="username"
             name="username"
             autoComplete="username"
             autoCapitalize="none"
+            autoCorrect="off"
             spellCheck={false}
+            enterKeyHint="next"
             required
             autoFocus={!required || Boolean(trimmed)}
+            {...name.field}
             value={username}
-            onChange={(event) => setUsername(event.target.value)}
-            onBlur={() => setTouched((was) => ({ ...was, username: true }))}
+            onChange={(event) => {
+              setUsername(event.target.value)
+              done.typed('username')
+            }}
           />
         </FormField>
 
@@ -224,39 +281,46 @@ export function Register() {
             id="display-name"
             name="name"
             autoComplete="nickname"
+            enterKeyHint="next"
             maxLength={80}
             value={displayName}
             onChange={(event) => setDisplayName(event.target.value)}
           />
         </FormField>
 
-        <FormField label={t.register.email} htmlFor="email" hint={t.register.emailHint}>
+        <FormField label={t.register.email} htmlFor="email" hint={address.hint} error={address.error}>
           <Input
             id="email"
             name="email"
             type="email"
             autoComplete="email"
+            enterKeyHint="next"
+            {...address.field}
             value={email}
-            onChange={(event) => setEmail(event.target.value)}
+            onChange={(event) => {
+              setEmail(event.target.value)
+              done.typed('email')
+            }}
           />
         </FormField>
 
-        <FormField
-          label={t.register.password}
-          htmlFor="password"
-          hint={t.register.passwordHint}
-          error={passwordShort ? t.register.passwordHint : undefined}
-        >
+        {/* `new-password`, the field's id as its autocomplete: a password
+            manager offers one it makes up, and never the one it keeps. */}
+        <FormField label={t.register.password} htmlFor="new-password" hint={secret.hint} error={secret.error}>
           <Input
-            id="password"
+            id="new-password"
             name="password"
             type="password"
             autoComplete="new-password"
+            enterKeyHint="done"
             required
             minLength={12}
+            {...secret.field}
             value={password}
-            onChange={(event) => setPassword(event.target.value)}
-            onBlur={() => setTouched((was) => ({ ...was, password: true }))}
+            onChange={(event) => {
+              setPassword(event.target.value)
+              done.typed('password')
+            }}
           />
         </FormField>
 

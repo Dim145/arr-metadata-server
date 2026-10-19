@@ -29,7 +29,7 @@ use crate::{
     domain::{Episode, ExternalIds, ExternalSource, MediaItem, MediaKind, OrderKind},
     merge::{self, Contribution, provenance::Provenance},
     providers::{names, tmdb::map as tmdb_map},
-    service::{anime, orders, persist},
+    service::{anime, orders},
     state::AppState,
     wire,
 };
@@ -200,8 +200,8 @@ pub async fn series(
 
     let stored = store(state, gathered).await?;
     // The other orders TheTVDB numbers it in, and TMDB's groups, kept beside
-    // the aired one.
-    if let Some(item) = &stored {
+    // the aired one — not by a refresh that is only previewed.
+    if let Some(item) = stored.as_ref().filter(|_| !super::is_previewing()) {
         orders::gather(
             state,
             item,
@@ -622,8 +622,21 @@ async fn store(state: &AppState, gathered: Gathered) -> Result<Option<MediaItem>
         );
     }
 
-    let stored = persist(state, merged, &snapshots, provenance, failure.as_deref()).await?;
-    keep_numbering(state, &stored, &numbering).await;
+    // The seasons and the episodes this refresh moved, it moved by handing
+    // the numbering over, when it did: the journal says so.
+    let renumbered = numbering.change.is_some();
+    let stored = super::persist_as(
+        state,
+        merged,
+        &snapshots,
+        provenance,
+        failure.as_deref(),
+        renumbered,
+    )
+    .await?;
+    if !super::is_previewing() {
+        keep_numbering(state, &stored, &numbering).await;
+    }
     Ok(Some(stored))
 }
 
@@ -1532,13 +1545,14 @@ pub async fn resync(
         &merge::provenance::Returned::of(&merged),
     );
 
-    let item = match super::persist_sync(state, merged, &snapshots, stored, &now).await? {
-        super::SyncWrite::Written(item) => *item,
-        super::SyncWrite::Changed => return Ok(ResyncOutcome::Changed),
-        super::SyncWrite::Gone => return Ok(ResyncOutcome::Gone),
-    };
+    let item =
+        match super::persist_sync(state, merged, &snapshots, stored, provenance, &now).await? {
+            super::SyncWrite::Written(item) => *item,
+            super::SyncWrite::Changed => return Ok(ResyncOutcome::Changed),
+            super::SyncWrite::Gone => return Ok(ResyncOutcome::Gone),
+        };
 
-    if item.kind == MediaKind::Series {
+    if item.kind == MediaKind::Series && !super::is_previewing() {
         orders::gather(
             state,
             &item,

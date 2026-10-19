@@ -21,9 +21,15 @@
  * and may be locked in that language alone: the row finds its lock in that
  * language first (`locks.tsx`), says which language a lock is in, and asks,
  * when it is edited, whether the edit is for this language or for every one.
+ *
+ * Under a lock in every language, when the sources give the field another
+ * value now, a slate line says what they give — and whether it changed since
+ * the lock was set — with the way to take it: the lock lifted, and the
+ * journal told. Read from the work's provenance, which the editor asks for
+ * once.
  */
 
-import { useMutation } from '@tanstack/react-query'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import { useState, type ReactNode } from 'react'
 
 import { ExternalLink } from '../../../components/elsewhere'
@@ -42,13 +48,13 @@ import {
   Textarea,
   Toggle,
 } from '../../../components/ui'
-import { api, query } from '../../../lib/api'
+import { api, query, segment } from '../../../lib/api'
 import { cn } from '../../../lib/cn'
 import * as fmt from '../../../lib/format'
 import { useI18n, type Dict } from '../../../lib/i18n'
-import { languageName, statusLabel, titleOrigin } from '../../../lib/labels'
+import { languageName, providerName, statusLabel, titleOrigin } from '../../../lib/labels'
 import { trailerPage } from '../../../lib/links'
-import type { FieldDef, Override, ValueSource } from '../../../lib/types'
+import type { FieldDef, Override, ProvenanceReport, ValueSource } from '../../../lib/types'
 
 import { codeOf, lockOf, shelfOf, useEditorLocks } from './locks'
 import { hostOf } from './shared'
@@ -120,6 +126,18 @@ export function FieldRow({
   })
 
   const locked = lock !== undefined
+  // What the sources give the field now, when they give another value than
+  // the lock in every language: the editor's own read of the provenance,
+  // shared rather than asked for again.
+  const report = useQuery({
+    queryKey: ['item', itemId, 'provenance'],
+    queryFn: () => api.get<ProvenanceReport>(`/items/${segment(itemId)}/provenance`),
+    enabled: locked && !lock.language,
+  })
+  const apart =
+    locked && !lock.language
+      ? report.data?.diverging?.find((one) => one.scope === scope && one.field === def.name)
+      : undefined
   const lockLabel = lock?.language
     ? t.admin.editor.lockedIn(spoken(lock.language, locale))
     : shelf && locked
@@ -199,6 +217,23 @@ export function FieldRow({
             </div>
           ) : null}
           {note && !editing ? <p className="mt-1.5 text-xs leading-relaxed text-bone-faint">{note}</p> : null}
+          {apart && !editing ? (
+            <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 border-l-2 border-slate-deep pl-3 text-xs leading-relaxed text-slate">
+              <p className="min-w-0 flex-1">
+                {apart.provider
+                  ? t.admin.editor.diverging.sourceSays(providerName(apart.provider))
+                  : t.admin.editor.diverging.sourcesSay}{' '}
+                <span className="break-words whitespace-pre-line text-bone-dim">
+                  {readable(apart.value, t) || t.admin.editor.diverging.nothing}
+                </span>
+                {apart.moved ? <span className="text-slate"> · {t.admin.editor.diverging.sinceLock}</span> : null}
+              </p>
+              <Button size="sm" variant="quiet" onClick={() => unlock.mutate()} disabled={unlock.isPending}>
+                {unlock.isPending ? <Spinner className="size-4" /> : <Glyph name="unlock" className="size-4" />}
+                {t.admin.editor.diverging.take}
+              </Button>
+            </div>
+          ) : null}
         </div>
 
         {editing ? null : (

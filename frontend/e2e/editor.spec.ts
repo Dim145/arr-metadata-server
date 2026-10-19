@@ -2,9 +2,9 @@ import { expect, test, type Page } from '@playwright/test'
 import { pattern } from './support/regex'
 
 /**
- * The work editor: a record in five tabs — the fields, the seasons and their
- * episodes, the artwork, the people and titles, the work elsewhere — with the
- * address saying which is open.
+ * The work editor: a record in six tabs — the fields, the seasons and their
+ * episodes, the artwork, the people and titles, the work elsewhere, and its
+ * journal — with the address saying which is open.
  *
  * What is added by hand is added to a work made here and removed at the end,
  * one per project: the two projects run at once against one server, and a
@@ -66,7 +66,7 @@ test.describe('the work editor', () => {
     await page.goto(`/admin/catalogue/${series!.id}`)
     await expect(page.getByRole('heading', { level: 1 })).toContainText(series!.title)
     const tabs = page.getByRole('tablist', { name: /sections/i })
-    await expect(tabs.getByRole('tab')).toHaveCount(5)
+    await expect(tabs.getByRole('tab')).toHaveCount(6)
     await expect(tabs.getByRole('tab', { name: /^(record|fiche)/i })).toHaveAttribute('aria-selected', 'true')
 
     // The record first: the fields in their groups, and the sources beside them.
@@ -524,9 +524,10 @@ test.describe('the work editor', () => {
 
     try {
       await page.goto(`/admin/catalogue/${id}`)
-      // A film's record: its release group, and no seasons tab.
+      // A film's record: its release group, and no seasons tab — the record,
+      // the artwork, the people, the journal and elsewhere.
       await expect(page.locator('#group-release')).toBeVisible()
-      await expect(page.getByRole('tablist', { name: /sections/i }).getByRole('tab')).toHaveCount(4)
+      await expect(page.getByRole('tablist', { name: /sections/i }).getByRole('tab')).toHaveCount(5)
 
       const served = page.getByRole('switch', { name: /^(enabled|activée)$/i })
       await expect(served).toHaveAttribute('aria-checked', 'true')

@@ -23,6 +23,15 @@ export interface Recent {
   year?: number
   poster?: string
   rating?: Rating
+  /**
+   * What veils the poster of a work for adults (see `forAdults`): the
+   * catalogue's mark and the work's age rating, so the shelf veils it as
+   * every other row does. Said only when there is something to say; an
+   * entry kept before they were is read as a work for anyone until the work
+   * is opened again.
+   */
+  isAdult?: boolean
+  contentRating?: string
   at: number
 }
 
@@ -33,7 +42,15 @@ const listeners = new Set<() => void>()
 function isRecent(value: unknown): value is Recent {
   if (!value || typeof value !== 'object') return false
   const entry = value as Record<string, unknown>
-  return typeof entry.id === 'string' && typeof entry.title === 'string' && (entry.kind === 'series' || entry.kind === 'movie')
+  return (
+    typeof entry.id === 'string' &&
+    typeof entry.title === 'string' &&
+    (entry.kind === 'series' || entry.kind === 'movie') &&
+    // Read as the work's own fields are: a rating that is not words would
+    // throw where the veil reads it, on the home page.
+    (entry.isAdult === undefined || typeof entry.isAdult === 'boolean') &&
+    (entry.contentRating === undefined || typeof entry.contentRating === 'string')
+  )
 }
 
 function read(): Recent[] {
@@ -84,6 +101,8 @@ export function remember(item: MediaItem) {
     year: item.year,
     poster: poster(item),
     rating: headlineRating(item.ratings),
+    isAdult: item.isAdult || undefined,
+    contentRating: item.contentRating ?? undefined,
     at: Date.now(),
   }
   write([entry, ...read().filter((recent) => recent.id !== item.id)].slice(0, KEPT))

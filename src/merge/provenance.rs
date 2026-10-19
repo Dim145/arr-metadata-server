@@ -725,6 +725,509 @@ pub fn leftover(stored: &MediaItem, answered: &[&str]) -> MediaItem {
     item
 }
 
+// ─── what changed ────────────────────────────────────────────────────────────
+
+/// The fields of a season the journal follows.
+pub const SEASON_WATCHED: &[&str] = &["title", "overview", "airDate"];
+
+/// The fields of an episode the journal follows: what a list of episodes is
+/// read by. A series of a thousand episodes would otherwise write a thousand
+/// rows of everything else at each refresh that touched them. Its numbers are
+/// followed apart, an episode that moved being one change of `number`.
+pub const EPISODE_WATCHED: &[&str] = &["title", "overview", "airDate", "runtime", "image"];
+
+/// What a work holds that its journal follows, read off the work: its own
+/// fields, as the field registry names them, and of its seasons and episodes
+/// those above. Taken of the work as stored before a write and of the work
+/// about to be written, and set side by side by [`changes`].
+///
+/// What a person added by hand — a season, an episode — is left out: a
+/// refresh does not write it, and would otherwise be read as taking it away.
+pub struct Watched {
+    fields: BTreeMap<&'static str, serde_json::Value>,
+    seasons: BTreeMap<i32, BTreeMap<&'static str, serde_json::Value>>,
+    episodes: Vec<WatchedEpisode>,
+}
+
+/// An episode as the journal follows it: what it is known by, where it is,
+/// and the values of [`EPISODE_WATCHED`] it has.
+struct WatchedEpisode {
+    tvdb_id: Option<i64>,
+    tmdb_id: Option<i64>,
+    season: i32,
+    number: i32,
+    absolute: Option<i32>,
+    values: BTreeMap<&'static str, serde_json::Value>,
+}
+
+impl WatchedEpisode {
+    fn of(episode: &Episode) -> Self {
+        let mut values = BTreeMap::new();
+        let texts = [
+            ("title", Some(episode.title.as_str())),
+            ("overview", episode.overview.as_deref()),
+            ("airDate", episode.air_date.as_deref()),
+            ("image", episode.image.as_deref()),
+        ];
+        for (name, text) in texts {
+            if let Some(text) = text.filter(|text| !text.trim().is_empty()) {
+                values.insert(name, serde_json::Value::String(text.to_string()));
+            }
+        }
+        if let Some(runtime) = episode.runtime {
+            values.insert("runtime", serde_json::Value::from(runtime));
+        }
+        Self {
+            tvdb_id: episode.tvdb_id,
+            tmdb_id: episode.tmdb_id,
+            season: episode.season_number,
+            number: episode.episode_number,
+            absolute: episode.absolute_episode_number,
+            values,
+        }
+    }
+
+    fn scope(&self) -> String {
+        format!("episode:{}x{}", self.season, self.number)
+    }
+
+    /// Where it is, as the journal writes a move: `{"season": 2, "episode":
+    /// 5}`, and its absolute number when it has one.
+    fn place(&self) -> serde_json::Value {
+        let mut place = serde_json::json!({ "season": self.season, "episode": self.number });
+        if let Some(absolute) = self.absolute {
+            place["absolute"] = absolute.into();
+        }
+        place
+    }
+
+    /// What is written of an episode that came or went: its title and its
+    /// day, as far as it has them — never nothing, which would read as no
+    /// change.
+    fn summary(&self) -> serde_json::Value {
+        let mut summary = serde_json::Map::new();
+        for name in ["title", "airDate"] {
+            if let Some(value) = self.values.get(name) {
+                summary.insert(name.to_string(), value.clone());
+            }
+        }
+        serde_json::Value::Object(summary)
+    }
+}
+
+/// The work's own fields its journal follows: every one a person may lock,
+/// but the slug — made here, not given — and the pictures chosen to lead
+/// with, which are a choice among its images rather than fields of its own.
+fn watched_fields() -> impl Iterator<Item = &'static str> {
+    ITEM_FIELDS
+        .iter()
+        .map(|def| def.name)
+        .filter(|name| *name != "slug" && !crate::domain::fields::CHOSEN_IMAGES.contains(name))
+}
+
+impl Watched {
+    pub fn of(item: &MediaItem) -> Self {
+        let json = tracked_json(item);
+        let mut fields = BTreeMap::new();
+        for name in watched_fields() {
+            let value = if name == "externalIds" {
+                serde_json::to_value(&item.external_ids).unwrap_or_default()
+            } else {
+                json.get(name).cloned().unwrap_or_default()
+            };
+            if !blank(&value) {
+                fields.insert(name, value);
+            }
+        }
+
+        let seasons = item
+            .seasons
+            .iter()
+            .filter(|season| !season.is_manual)
+            .map(|season| {
+                let texts = [
+                    ("title", season.title.as_deref()),
+                    ("overview", season.overview.as_deref()),
+                    ("airDate", season.air_date.as_deref()),
+                ];
+                let values = texts
+                    .into_iter()
+                    .filter_map(|(name, text)| {
+                        let text = text.filter(|text| !text.trim().is_empty())?;
+                        Some((name, serde_json::Value::String(text.to_string())))
+                    })
+                    .collect();
+                (season.season_number, values)
+            })
+            .collect();
+
+        let episodes = item
+            .episodes
+            .iter()
+            .filter(|episode| !episode.is_manual)
+            .map(WatchedEpisode::of)
+            .collect();
+
+        Self {
+            fields,
+            seasons,
+            episodes,
+        }
+    }
+}
+
+/// One value of a work that changed — of the work itself, of a season or of
+/// an episode — as its journal writes it.
+#[derive(Clone, Debug, PartialEq, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FieldChange {
+    /// Where the value is, as a lock names it: `item`, `season:2`,
+    /// `episode:2x5` — an episode by the numbers it has after the change.
+    pub scope: String,
+    /// The field, as the field registry names it; for an episode, `number`
+    /// when it moved, and `episode` when it came or went — `season` for a
+    /// season.
+    pub field: String,
+    /// What it held; `null` for nothing.
+    #[schema(required)]
+    pub before: Option<serde_json::Value>,
+    /// What it holds now, or would; `null` for nothing.
+    #[schema(required)]
+    pub after: Option<serde_json::Value>,
+    /// The source whose answer the new value is, where one is known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+}
+
+/// What changed between two takes of a work, field by field: the work's own
+/// fields first, in the registry's order, then its seasons, then its
+/// episodes. `was` and `now` say who gave what before and after: a value
+/// that came is the provider's that gave it, one that went the provider's
+/// that gave it before.
+///
+/// An episode is followed by what it is known by — TheTVDB's id, then
+/// TMDB's, then its numbers — so that one moved is one change of `number`,
+/// not a title and an overview changed at every place it passed through.
+/// Lists are compared as sets: a source that orders its genres otherwise has
+/// changed nothing anybody reads.
+pub fn changes(
+    before: &Watched,
+    after: &Watched,
+    was: Option<&Provenance>,
+    now: &Provenance,
+) -> Vec<FieldChange> {
+    let mut found = Vec::new();
+
+    for name in watched_fields() {
+        let (old, new) = (before.fields.get(name), after.fields.get(name));
+        if same(old, new) {
+            continue;
+        }
+        let provider = match new {
+            Some(_) => given_by(Some(now), name),
+            None => given_by(was, name),
+        };
+        found.push(FieldChange {
+            scope: "item".into(),
+            field: name.into(),
+            before: old.cloned(),
+            after: new.cloned(),
+            provider,
+        });
+    }
+
+    let numbering = |provenance: Option<&Provenance>| {
+        provenance
+            .and_then(|p| p.episodes.clone())
+            .filter(|p| is_a_provider(p))
+    };
+
+    let numbers: BTreeSet<i32> = before
+        .seasons
+        .keys()
+        .chain(after.seasons.keys())
+        .copied()
+        .collect();
+    for number in numbers {
+        let scope = format!("season:{number}");
+        match (before.seasons.get(&number), after.seasons.get(&number)) {
+            (Some(old), Some(new)) => {
+                for name in SEASON_WATCHED {
+                    if !same(old.get(name), new.get(name)) {
+                        found.push(FieldChange {
+                            scope: scope.clone(),
+                            field: (*name).into(),
+                            before: old.get(name).cloned(),
+                            after: new.get(name).cloned(),
+                            provider: None,
+                        });
+                    }
+                }
+            }
+            (old, new) => found.push(FieldChange {
+                scope,
+                field: "season".into(),
+                before: old.map(season_summary),
+                after: new.map(season_summary),
+                provider: numbering(if new.is_some() { Some(now) } else { was }),
+            }),
+        }
+    }
+
+    // Each episode held before, found by what it is known by; those found
+    // are taken, and those never taken went.
+    let mut by_tvdb = std::collections::HashMap::new();
+    let mut by_tmdb = std::collections::HashMap::new();
+    let mut by_place = std::collections::HashMap::new();
+    for (at, episode) in before.episodes.iter().enumerate() {
+        if let Some(id) = episode.tvdb_id {
+            by_tvdb.entry(id).or_insert(at);
+        }
+        if let Some(id) = episode.tmdb_id {
+            by_tmdb.entry(id).or_insert(at);
+        }
+        by_place
+            .entry((episode.season, episode.number))
+            .or_insert(at);
+    }
+    let mut taken = vec![false; before.episodes.len()];
+    // Two ids of one source that differ are two episodes, wherever they are.
+    let may_be = |old: &WatchedEpisode, new: &WatchedEpisode| {
+        let differ =
+            |a: Option<i64>, b: Option<i64>| matches!((a, b), (Some(a), Some(b)) if a != b);
+        !differ(old.tvdb_id, new.tvdb_id) && !differ(old.tmdb_id, new.tmdb_id)
+    };
+
+    for new in &after.episodes {
+        let free = |at: &usize| !taken[*at] && may_be(&before.episodes[*at], new);
+        let at = new
+            .tvdb_id
+            .and_then(|id| by_tvdb.get(&id))
+            .filter(|at| free(at))
+            .or_else(|| {
+                new.tmdb_id
+                    .and_then(|id| by_tmdb.get(&id))
+                    .filter(|at| free(at))
+            })
+            .or_else(|| {
+                by_place
+                    .get(&(new.season, new.number))
+                    .filter(|at| free(at))
+            })
+            .copied();
+        let scope = new.scope();
+        let Some(at) = at else {
+            found.push(FieldChange {
+                scope,
+                field: "episode".into(),
+                before: None,
+                after: Some(new.summary()),
+                provider: numbering(Some(now)),
+            });
+            continue;
+        };
+        taken[at] = true;
+        let old = &before.episodes[at];
+
+        // An absolute number gained or lost is no move: a source that gives
+        // none is not saying the episode has none.
+        let absolute_moved = matches!((old.absolute, new.absolute), (Some(a), Some(b)) if a != b);
+        if (old.season, old.number) != (new.season, new.number) || absolute_moved {
+            found.push(FieldChange {
+                scope: scope.clone(),
+                field: "number".into(),
+                before: Some(old.place()),
+                after: Some(new.place()),
+                provider: numbering(Some(now)),
+            });
+        }
+        for name in EPISODE_WATCHED {
+            if !same(old.values.get(name), new.values.get(name)) {
+                found.push(FieldChange {
+                    scope: scope.clone(),
+                    field: (*name).into(),
+                    before: old.values.get(name).cloned(),
+                    after: new.values.get(name).cloned(),
+                    provider: None,
+                });
+            }
+        }
+    }
+
+    for (old, _) in before
+        .episodes
+        .iter()
+        .zip(&taken)
+        .filter(|(_, taken)| !**taken)
+    {
+        found.push(FieldChange {
+            scope: old.scope(),
+            field: "episode".into(),
+            before: Some(old.summary()),
+            after: None,
+            provider: numbering(was),
+        });
+    }
+
+    found
+}
+
+/// What is written of a season that came or went: its title and its day, as
+/// far as it has them.
+fn season_summary(values: &BTreeMap<&'static str, serde_json::Value>) -> serde_json::Value {
+    let mut summary = serde_json::Map::new();
+    for name in ["title", "airDate"] {
+        if let Some(value) = values.get(name) {
+            summary.insert(name.to_string(), value.clone());
+        }
+    }
+    serde_json::Value::Object(summary)
+}
+
+/// The provider a record says gave `field`, if a provider did: the stored
+/// work beneath a sync, a picture added by hand, are nobody's answer.
+pub fn given_by(provenance: Option<&Provenance>, field: &str) -> Option<String> {
+    provenance?
+        .fields
+        .get(field)
+        .map(|source| source.from.clone())
+        .filter(|from| is_a_provider(from))
+}
+
+fn is_a_provider(name: &str) -> bool {
+    !matches!(name, STORED | "manual" | "unknown")
+}
+
+/// Whether a value says nothing: none, an empty text, an empty list or an
+/// empty set of identifiers. A flag that is false says something.
+fn blank(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Null => true,
+        serde_json::Value::String(text) => text.trim().is_empty(),
+        serde_json::Value::Array(items) => items.is_empty(),
+        serde_json::Value::Object(members) => members.is_empty(),
+        _ => false,
+    }
+}
+
+/// Whether two values are one, a list being compared as the set it lists, at
+/// every depth: MyAnimeList's ids in another order are the same ids.
+pub fn same(a: Option<&serde_json::Value>, b: Option<&serde_json::Value>) -> bool {
+    fn settled(value: &serde_json::Value) -> serde_json::Value {
+        match value {
+            serde_json::Value::Array(items) => {
+                let mut items: Vec<serde_json::Value> = items.iter().map(settled).collect();
+                items.sort_by_cached_key(serde_json::Value::to_string);
+                serde_json::Value::Array(items)
+            }
+            serde_json::Value::Object(members) => serde_json::Value::Object(
+                members
+                    .iter()
+                    .map(|(key, value)| (key.clone(), settled(value)))
+                    .collect(),
+            ),
+            other => other.clone(),
+        }
+    }
+
+    match (a, b) {
+        (Some(a), Some(b)) => a == b || settled(a) == settled(b),
+        (a, b) => a == b,
+    }
+}
+
+/// What a work holds at `scope` for `field` — as it is served, when it is
+/// the work as served: what a lock set there replaces, and what lifting one
+/// hands back. A text in `language` (`fra`) is the work's translation there,
+/// when it has one; nothing for a child a lock names, whose values the
+/// journal takes from its locks alone.
+pub fn value_at(
+    item: &MediaItem,
+    scope: &str,
+    field: &str,
+    language: &str,
+) -> Option<serde_json::Value> {
+    use crate::domain::{CoverType, fields::Scope};
+
+    /// The address of the picture a work or a season leads with: the one
+    /// chosen, else the first of its kind.
+    fn leading(
+        images: &[Image],
+        chosen: Option<&str>,
+        kind: CoverType,
+    ) -> Option<serde_json::Value> {
+        let own = |image: &&Image| image.cover_type == kind;
+        chosen
+            .and_then(|id| images.iter().filter(own).find(|image| image.id == id))
+            .or_else(|| images.iter().find(own))
+            .map(|image| serde_json::Value::String(image.url.clone()))
+    }
+
+    let value = match scope.parse::<Scope>().ok()? {
+        Scope::Item if !language.is_empty() => {
+            let translation = item.translations.iter().find(|t| t.language == language)?;
+            let text = match field {
+                "title" => translation.title.clone(),
+                "overview" => translation.overview.clone(),
+                "tagline" => translation.tagline.clone(),
+                _ => None,
+            };
+            serde_json::Value::from(text)
+        }
+        Scope::Item => match field {
+            "externalIds" => serde_json::to_value(&item.external_ids).ok()?,
+            "slug" => serde_json::Value::String(item.slug.clone()),
+            "primaryPoster" => {
+                let own: Vec<Image> = item
+                    .images
+                    .iter()
+                    .filter(|image| image.season_number.is_none())
+                    .cloned()
+                    .collect();
+                leading(
+                    &own,
+                    item.primary_images.poster.as_deref(),
+                    CoverType::Poster,
+                )?
+            }
+            "primaryFanart" => {
+                let own: Vec<Image> = item
+                    .images
+                    .iter()
+                    .filter(|image| image.season_number.is_none())
+                    .cloned()
+                    .collect();
+                leading(
+                    &own,
+                    item.primary_images.fanart.as_deref(),
+                    CoverType::Fanart,
+                )?
+            }
+            _ => tracked_json(item).get(field)?.clone(),
+        },
+        Scope::Season(number) => {
+            let season = item.seasons.iter().find(|s| s.season_number == number)?;
+            if field == "primaryPoster" {
+                leading(
+                    &season.images,
+                    season.primary_images.poster.as_deref(),
+                    CoverType::Poster,
+                )?
+            } else {
+                serde_json::to_value(season).ok()?.get(field)?.clone()
+            }
+        }
+        Scope::Episode { season, episode } => {
+            let found = item
+                .episodes
+                .iter()
+                .find(|e| e.season_number == season && e.episode_number == episode)?;
+            serde_json::to_value(found).ok()?.get(field)?.clone()
+        }
+    };
+    (!blank(&value)).then_some(value)
+}
+
 fn is_empty(value: &serde_json::Value) -> bool {
     match value {
         serde_json::Value::Null => true,
@@ -1382,5 +1885,322 @@ mod tests {
         let (stored, provenance) = merge(vec![("tmdb", tmdb)]);
         assert!(reconstruct(&stored, &provenance, "tvdb").is_none());
         assert!(reconstruct(&stored, &provenance, "tmdb").is_some());
+    }
+
+    /// An episode as its source gives it: known by TheTVDB's `id`, at
+    /// `season` and `number`, under `title`.
+    fn given(id: i64, season: i32, number: i32, title: &str) -> Episode {
+        let mut episode = crate::db::repo::child::blank_episode(season, number);
+        episode.is_manual = false;
+        episode.tvdb_id = Some(id);
+        episode.title = title.into();
+        episode
+    }
+
+    fn change(
+        scope: &str,
+        field: &str,
+        before: Option<serde_json::Value>,
+        after: Option<serde_json::Value>,
+        provider: Option<&str>,
+    ) -> FieldChange {
+        FieldChange {
+            scope: scope.into(),
+            field: field.into(),
+            before,
+            after,
+            provider: provider.map(String::from),
+        }
+    }
+
+    #[test]
+    fn a_change_is_found_field_by_field_and_given_to_whoever_gave_it() {
+        use serde_json::json;
+
+        let mut tmdb = item("Breaking Bad", Some("ended"), None);
+        tmdb.overview = Some("Old.".into());
+        tmdb.genres = vec!["Drama".into(), "Crime".into()];
+        let (before, was) = merge(vec![("tmdb", tmdb)]);
+
+        let mut tmdb = item("Breaking Bad", None, None);
+        tmdb.overview = Some("New.".into());
+        // The same genres, in another order: nothing anybody reads changed.
+        tmdb.genres = vec!["Crime".into(), "Drama".into()];
+        let tvdb = item("Breaking Bad", None, Some(47));
+        let (after, now) = merge(vec![("tmdb", tmdb), ("tvdb", tvdb)]);
+
+        let found = changes(
+            &Watched::of(&before),
+            &Watched::of(&after),
+            Some(&was),
+            &now,
+        );
+        assert_eq!(
+            found,
+            [
+                change(
+                    "item",
+                    "overview",
+                    Some(json!("Old.")),
+                    Some(json!("New.")),
+                    Some("tmdb")
+                ),
+                // Gone: the source that gave it before is the one that took it away.
+                change("item", "status", Some(json!("ended")), None, Some("tmdb")),
+                change("item", "runtime", None, Some(json!(47)), Some("tvdb")),
+            ]
+        );
+
+        // The same work twice is no change at all.
+        assert!(changes(&Watched::of(&after), &Watched::of(&after), Some(&now), &now).is_empty());
+    }
+
+    #[test]
+    fn an_episode_that_moved_is_one_change_and_one_that_came_or_went_is_another() {
+        use serde_json::json;
+
+        let mut before = item("A", None, None);
+        before.episodes = vec![
+            given(1001, 1, 1, "Pilot"),
+            given(1002, 1, 2, "Second"),
+            given(1003, 1, 3, "Third"),
+        ];
+        let mut after = item("A", None, None);
+        after.episodes = vec![
+            given(1001, 1, 1, "Pilot, part one"),
+            // Moved to the next season, its title as it was.
+            given(1002, 2, 1, "Second"),
+            // Another episode at the third's place: the third went, this came.
+            given(1004, 1, 3, "Third, recut"),
+        ];
+        after.episodes[2].air_date = Some("2008-02-10".into());
+        let numbered = Provenance {
+            episodes: Some("tvdb".into()),
+            ..Provenance::default()
+        };
+
+        let found = changes(
+            &Watched::of(&before),
+            &Watched::of(&after),
+            Some(&numbered),
+            &numbered,
+        );
+        assert_eq!(
+            found,
+            [
+                change(
+                    "episode:1x1",
+                    "title",
+                    Some(json!("Pilot")),
+                    Some(json!("Pilot, part one")),
+                    None
+                ),
+                change(
+                    "episode:2x1",
+                    "number",
+                    Some(json!({ "season": 1, "episode": 2 })),
+                    Some(json!({ "season": 2, "episode": 1 })),
+                    Some("tvdb")
+                ),
+                change(
+                    "episode:1x3",
+                    "episode",
+                    None,
+                    Some(json!({ "title": "Third, recut", "airDate": "2008-02-10" })),
+                    Some("tvdb")
+                ),
+                change(
+                    "episode:1x3",
+                    "episode",
+                    Some(json!({ "title": "Third" })),
+                    None,
+                    Some("tvdb")
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_renumbering_by_tmdb_is_followed_by_tmdbs_ids_and_moves_each_episode_once() {
+        use serde_json::json;
+
+        // Numbered by TheTVDB, then by TMDB, which gives no TheTVDB ids but
+        // its own, that the list held too.
+        let mut before = item("A", None, None);
+        before.episodes = (1..=3)
+            .map(|n| {
+                let mut e = given(2000 + i64::from(n), 1, n, &format!("E{n}"));
+                e.tmdb_id = Some(3000 + i64::from(n));
+                e.absolute_episode_number = Some(n);
+                e
+            })
+            .collect();
+        let mut after = item("A", None, None);
+        after.episodes = (1..=3)
+            .map(|n| {
+                let mut e = given(
+                    0,
+                    if n == 3 { 2 } else { 1 },
+                    if n == 3 { 1 } else { n },
+                    &format!("E{n}"),
+                );
+                e.tvdb_id = None;
+                e.tmdb_id = Some(3000 + i64::from(n));
+                e.absolute_episode_number = Some(n);
+                e
+            })
+            .collect();
+
+        let found = changes(
+            &Watched::of(&before),
+            &Watched::of(&after),
+            None,
+            &Provenance::default(),
+        );
+        assert_eq!(
+            found,
+            [change(
+                "episode:2x1",
+                "number",
+                Some(json!({ "season": 1, "episode": 3, "absolute": 3 })),
+                Some(json!({ "season": 2, "episode": 1, "absolute": 3 })),
+                None
+            )]
+        );
+    }
+
+    #[test]
+    fn what_a_person_added_by_hand_is_never_read_as_taken_away() {
+        let mut before = item("A", None, None);
+        let mut by_hand = given(0, 1, 9, "Mine");
+        by_hand.tvdb_id = None;
+        by_hand.is_manual = true;
+        let mut season = crate::db::repo::child::blank_season(7);
+        season.title = Some("Mine too".into());
+        before.episodes = vec![given(1, 1, 1, "Pilot"), by_hand];
+        before.seasons = vec![season];
+        let mut after = item("A", None, None);
+        after.episodes = vec![given(1, 1, 1, "Pilot")];
+
+        assert!(
+            changes(
+                &Watched::of(&before),
+                &Watched::of(&after),
+                None,
+                &Provenance::default()
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_season_that_came_is_one_change_and_a_seasons_title_another() {
+        use serde_json::json;
+
+        let mut before = item("A", None, None);
+        let mut one = crate::db::repo::child::blank_season(1);
+        one.is_manual = false;
+        one.title = Some("Season 1".into());
+        before.seasons = vec![one.clone()];
+        let mut after = item("A", None, None);
+        one.title = Some("The Beginning".into());
+        let mut two = crate::db::repo::child::blank_season(2);
+        two.is_manual = false;
+        two.air_date = Some("2009-03-08".into());
+        after.seasons = vec![one, two];
+
+        let found = changes(
+            &Watched::of(&before),
+            &Watched::of(&after),
+            None,
+            &Provenance::default(),
+        );
+        assert_eq!(
+            found,
+            [
+                change(
+                    "season:1",
+                    "title",
+                    Some(json!("Season 1")),
+                    Some(json!("The Beginning")),
+                    None
+                ),
+                change(
+                    "season:2",
+                    "season",
+                    None,
+                    Some(json!({ "airDate": "2009-03-08" })),
+                    None
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_value_is_read_where_a_lock_names_it() {
+        use serde_json::json;
+
+        let mut work = item("Heat", Some("released"), Some(170));
+        work.genres = vec!["Crime".into()];
+        work.external_ids.tmdb = Some(949);
+        work.translations = vec![crate::domain::Translation {
+            language: "fra".into(),
+            title: Some("Heat (FR)".into()),
+            overview: None,
+            tagline: None,
+            is_manual: false,
+        }];
+        let mut first = crate::db::repo::child::blank_season(1);
+        first.title = Some("One".into());
+        work.seasons = vec![first];
+        work.episodes = vec![given(7, 1, 2, "Two")];
+        work.images = vec![
+            poster("tmdb", "https://img.example/a.jpg"),
+            poster("tmdb", "https://img.example/b.jpg"),
+        ];
+        work.images[1].id = "chosen".into();
+        work.primary_images.poster = Some("chosen".into());
+
+        assert_eq!(value_at(&work, "item", "title", ""), Some(json!("Heat")));
+        assert_eq!(
+            value_at(&work, "item", "title", "fra"),
+            Some(json!("Heat (FR)"))
+        );
+        assert_eq!(value_at(&work, "item", "overview", "fra"), None);
+        assert_eq!(value_at(&work, "item", "runtime", ""), Some(json!(170)));
+        assert_eq!(
+            value_at(&work, "item", "genres", ""),
+            Some(json!(["Crime"]))
+        );
+        assert_eq!(
+            value_at(&work, "item", "externalIds", ""),
+            Some(json!({ "tmdb": 949 }))
+        );
+        assert_eq!(value_at(&work, "item", "tagline", ""), None);
+        assert_eq!(
+            value_at(&work, "item", "primaryPoster", ""),
+            Some(json!("https://img.example/b.jpg")),
+            "the picture chosen to lead"
+        );
+        assert_eq!(value_at(&work, "season:1", "title", ""), Some(json!("One")));
+        assert_eq!(value_at(&work, "season:2", "title", ""), None);
+        assert_eq!(
+            value_at(&work, "episode:1x2", "title", ""),
+            Some(json!("Two"))
+        );
+        assert_eq!(value_at(&work, "episode:1x2", "tvdbId", ""), Some(json!(7)));
+        assert_eq!(value_at(&work, "credit:actor:tmdb:1", "hidden", ""), None);
+    }
+
+    #[test]
+    fn the_childrens_fields_followed_are_fields_a_lock_can_hold() {
+        use crate::domain::fields::{EPISODE_FIELDS, SEASON_FIELDS};
+
+        for name in SEASON_WATCHED {
+            assert!(SEASON_FIELDS.iter().any(|def| def.name == *name), "{name}");
+        }
+        for name in EPISODE_WATCHED {
+            assert!(EPISODE_FIELDS.iter().any(|def| def.name == *name), "{name}");
+        }
     }
 }

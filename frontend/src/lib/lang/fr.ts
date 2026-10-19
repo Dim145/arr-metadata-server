@@ -5,6 +5,7 @@
  * noticed in production six weeks later.
  */
 
+import { plurals } from '../i18n'
 import type { Dict } from './en'
 
 /**
@@ -13,6 +14,13 @@ import type { Dict } from './en'
  */
 const agreed = (gender: number | undefined, feminine: string, masculine: string, both: string) =>
   gender === 1 ? feminine : gender === 2 ? masculine : both
+
+/**
+ * The form a count's words take, by French rules, where 0 is singular like
+ * 1: "0 œuvre". A word that means exactly one — "un compte" — is asked for
+ * with `n === 1` ahead of it, since French files 0 under `one` too.
+ */
+const plural = plurals('fr')
 
 export const fr: Dict = {
   brand: {
@@ -44,7 +52,7 @@ export const fr: Dict = {
     lead: 'Ce qu’il tient, de quand ça date, de quoi ça parle, d’où ça vient et comment c’est noté — compté tel qu’on vous le montre.',
     works: 'Œuvres',
     episodes: 'Épisodes',
-    addedRecently: (n: number) => (n <= 1 ? `${n} œuvre ajoutée ces trente derniers jours.` : `${n} œuvres ajoutées ces trente derniers jours.`),
+    addedRecently: (n: number) => plural(n, { one: `${n} œuvre ajoutée ces trente derniers jours.`, other: `${n} œuvres ajoutées ces trente derniers jours.` }),
     decades: 'Par décennie',
     genres: 'Par genre',
     networks: 'Par chaîne ou studio',
@@ -58,13 +66,18 @@ export const fr: Dict = {
   },
   palette: {
     open: 'Palette de commandes',
-    placeholder: 'Un titre, ou une page où aller…',
+    placeholder: 'Un titre, un nom, un épisode, ou une page où aller…',
     goTo: 'Aller à',
     works: 'Œuvres',
+    people: 'Personnes',
+    episodes: 'Épisodes',
     recent: 'Récents',
     random: 'Une œuvre au hasard',
     none: 'Rien ne correspond.',
-    hint: '↑ ↓ pour se déplacer, Entrée pour ouvrir, Échap pour fermer — ⌘K ou Ctrl K de n’importe où.',
+    namePrompt: 'Un nom après le @ : quelqu’un crédité sur une œuvre d’ici.',
+    credited: (n: number) => plural(n, { one: `${n} œuvre`, other: `${n} œuvres` }),
+    matched: (name: string) => `trouvée sous « ${name} »`,
+    hint: '↑ ↓ pour se déplacer, Entrée pour ouvrir, Échap pour fermer, @ pour les seules personnes — ⌘K ou Ctrl K de n’importe où.',
   },
   collections: {
     label: 'Collections',
@@ -72,7 +85,7 @@ export const fr: Dict = {
     lead: 'Les collections de films dont le catalogue tient une partie ou la totalité, telles que TMDB les groupe.',
     one: 'Collection',
     unnamed: (id: number) => `Collection ${id}`,
-    held: (n: number, of: number) => (of ? `${n} film${n > 1 ? 's' : ''} sur ${of} au catalogue` : n <= 1 ? `${n} film au catalogue` : `${n} films au catalogue`),
+    held: (n: number, of: number) => (of ? `${n} ${plural(n, { one: 'film', other: 'films' })} sur ${of} au catalogue` : plural(n, { one: `${n} film au catalogue`, other: `${n} films au catalogue` })),
     parts: 'Tous ses films',
     missing: 'Pas au catalogue',
     inCatalogue: 'Au catalogue',
@@ -87,7 +100,7 @@ export const fr: Dict = {
     one: 'Sélection',
     empty: 'Pas encore de sélection.',
     emptyHint: 'Qui tient le catalogue les compose sous Listes.',
-    count: (n: number) => (n <= 1 ? `${n} œuvre` : `${n} œuvres`),
+    count: (n: number) => plural(n, { one: `${n} œuvre`, other: `${n} œuvres` }),
     kind: { series: 'Séries', movie: 'Films', mixed: 'Séries et films' },
     byFilter: 'Tenue à jour par un filtre',
     byHand: 'Composée à la main',
@@ -121,8 +134,8 @@ export const fr: Dict = {
     searchPlaceholder: 'Rechercher une œuvre…',
     searchShortcut: 'Tapez / pour chercher',
     results: 'Résultats',
-    allResults: (n: number) => (n <= 1 ? `Voir le résultat` : `Voir les ${n} résultats`),
-    resultsFound: (n: number) => (n <= 1 ? `${n} résultat` : `${n} résultats`),
+    allResults: (n: number) => plural(n, { one: `Voir le résultat`, other: `Voir les ${n} résultats` }),
+    resultsFound: (n: number) => plural(n, { one: `${n} résultat`, other: `${n} résultats` }),
     noResults: (term: string) => `Rien pour « ${term} »`,
     searching: 'Recherche…',
     admin: 'Administration',
@@ -149,6 +162,32 @@ export const fr: Dict = {
     more: 'Plus',
     mainNavigation: 'Navigation principale',
     appearance: 'Apparence',
+  },
+  reader: {
+    title: 'Langue et lecture',
+    menu: (code: string) => `Langue et lecture (${code})`,
+    interface: 'Interface',
+    texts: 'Lire les textes en…',
+    textsHint: 'Titres et synopsis, là où une traduction existe. L’interface garde sa langue.',
+    asInterface: 'La langue de l’interface',
+    adult: 'Montrer les affiches pour adultes',
+    adultHint: 'Désactivé, les affiches des œuvres pour adultes restent floutées jusqu’à ce qu’on les touche.',
+    forAdults: 'Pour adultes',
+    show: 'Afficher l’affiche',
+    showPicture: 'Afficher l’image',
+  },
+  keys: {
+    title: 'Raccourcis clavier',
+    search: 'Chercher dans le catalogue',
+    palette: 'Ouvrir la palette de commandes',
+    browse: 'Aller au catalogue',
+    calendar: 'Aller au programme',
+    seasons: 'Aller au calendrier saisonnier',
+    random: 'Ouvrir une œuvre au hasard',
+    today: 'Aujourd’hui, au programme',
+    help: 'Cette liste',
+    then: 'puis',
+    hint: 'Aucun ne fait quoi que ce soit pendant la saisie dans un champ.',
   },
   home: {
     loadFailed: 'Le catalogue n’a pas pu être chargé pour le moment. Réessayez dans un instant.',
@@ -186,11 +225,15 @@ export const fr: Dict = {
     recent: 'Vus récemment',
     recentClear: 'Effacer les récents',
     recentHint: 'Les fiches ouvertes dernièrement — gardées dans ce navigateur seulement, envoyées nulle part.',
+    backThisWeek: 'De retour cette semaine',
+    newWithTrailer: 'Nouveautés avec bande-annonce',
+    wholeSelection: 'Toute la sélection',
+    allSelections: 'Toutes les sélections',
   },
   browse: {
     title: 'Parcourir',
     genresSearch: 'Chercher un genre',
-    genresOthers: (n: number) => (n <= 1 ? `L’autre` : `Les ${n} autres, de A à Z`),
+    genresOthers: (n: number) => plural(n, { one: `L’autre`, other: `Les ${n} autres, de A à Z` }),
     genresNone: 'Aucun genre de ce nom.',
     genreMode: 'Œuvres portant',
     genreAll: 'Tous ces genres',
@@ -208,13 +251,15 @@ export const fr: Dict = {
     sortAdded: 'Ajout récent',
     manualOnly: 'Édités à la main',
     clear: 'Effacer les filtres',
-    results: (n: number) => (n <= 1 ? `${n} œuvre` : `${n} œuvres`),
+    results: (n: number) => plural(n, { one: `${n} œuvre`, other: `${n} œuvres` }),
     noResults: 'Aucune œuvre ne correspond à ces filtres.',
     noResultsHint: 'Élargissez l’année, ou effacez les filtres.',
     noResultsTermHint:
       'Vérifiez l’orthographe, ou essayez le titre original. Le catalogue ne contient que les œuvres qu’un client a déjà demandées.',
     loadMore: 'En charger plus',
+    loadingMore: 'Chargement…',
     orders: {
+      relevant: 'Les plus pertinentes',
       popular: 'Les plus populaires',
       rated: 'Les mieux notées',
       newest: 'Les plus récentes',
@@ -222,14 +267,43 @@ export const fr: Dict = {
       title: 'Titre, de A à Z',
       titleDesc: 'Titre, de Z à A',
       added: 'Ajoutées récemment',
+      longest: 'Les plus longues',
+      shortest: 'Les plus courtes',
+      lastAired: 'Diffusées le plus récemment',
+      episodes: 'Le plus d’épisodes',
     },
+    applied: 'Filtres actifs',
+    clearAll: 'Tout effacer',
+    moreFilters: 'Plus de filtres',
+    clearMore: 'Effacer ceux-ci',
+    creditsAndWords: 'Générique et mots-clés',
+    person: 'Personne',
+    personHint: 'Un nom tel que le générique le donne, ou un identifiant TMDB.',
+    keyword: 'Mot-clé',
+    keywordHint: 'Tel que TMDB le range : time travel, heist.',
+    runtime: 'Durée',
+    runtimeMin: 'Au moins',
+    runtimeMax: 'Au plus',
+    minutes: 'min',
+    origin: 'Pays et classification',
+    country: 'Pays de production',
+    anyCountry: 'Tous les pays',
+    certification: (country?: string) => (country ? `Classification (${country})` : 'Classification'),
+    anyCertification: 'Toutes les classifications',
+    collection: 'Collection',
+    anyCollection: 'Toutes les collections',
+    withPerson: (name: string) => `Avec ${name}`,
+    runtimeChip: (min?: number, max?: number) =>
+      min !== undefined && max !== undefined ? `De ${min} à ${max} min` : min !== undefined ? `${min} min et plus` : `${max} min au plus`,
+    madeIn: (country: string) => `Pays : ${country}`,
+    rated: (rating: string) => `Classification : ${rating}`,
     quoted: (term: string) => `« ${term} »`,
     remove: (label: string) => `Retirer le filtre : ${label}`,
     noResultsFilterHint: 'Ces filtres ne laissent rien. Retirez-en un :',
     loadFailed: 'La liste n’a pas pu être chargée à l’instant. Réessayez dans un moment.',
     capped: (shown: string, total: string) => `Les ${shown} premières sur ${total}. Affinez la liste pour voir les autres.`,
     without: (label: string) => `Sans « ${label} »`,
-    show: (n: number) => (n <= 1 ? `Voir ${n} œuvre` : `Voir ${n} œuvres`),
+    show: (n: number) => plural(n, { one: `Voir ${n} œuvre`, other: `Voir ${n} œuvres` }),
     since: (year: string) => `Depuis ${year}`,
     until: (year: string) => `Jusqu’à ${year}`,
     atLeast: (score: string) => `${score} et plus`,
@@ -256,7 +330,7 @@ export const fr: Dict = {
     seasons: 'Saisons',
     episodes: 'Épisodes',
     season: (n: number) => (n === 0 ? 'Hors-série' : `Saison ${n}`),
-    episodeCount: (n: number) => (n <= 1 ? `${n} épisode` : `${n} épisodes`),
+    episodeCount: (n: number) => plural(n, { one: `${n} épisode`, other: `${n} épisodes` }),
     artwork: 'Images',
     details: 'Fiche',
     watch: 'Où regarder',
@@ -325,7 +399,7 @@ export const fr: Dict = {
     homepage: 'Site officiel',
     trailer: 'Bande-annonce',
     noOverview: 'Pas encore de synopsis pour cette œuvre.',
-    votes: (shown: string, n: number) => (n <= 1 ? `${n} vote` : `${shown} votes`),
+    votes: (shown: string, n: number) => plural(n, { one: `${n} vote`, other: `${shown} votes` }),
     ratings: 'Notes',
     outOfTen: 'sur 10',
     back: 'Retour au catalogue',
@@ -342,12 +416,12 @@ export const fr: Dict = {
     wholeCast: (n: number) => `Toute la distribution · ${n}`,
     seasonAiring: 'En cours',
     seasonComing: 'À venir',
-    airedOf: (aired: number, of: number) => `${aired} sur ${of} ${aired <= 1 ? 'diffusé' : 'diffusés'}`,
+    airedOf: (aired: number, of: number) => `${aired} sur ${of} ${plural(aired, { one: 'diffusé', other: 'diffusés' })}`,
     onAir: 'À l’antenne',
     latestEpisode: 'Dernier épisode',
     nextEpisode: 'Prochain épisode',
     nextUp: 'Prochain épisode :',
-    moreProviders: (n: number) => (n === 1 ? '+1 autre' : `+${n} autres`),
+    moreProviders: (n: number) => plural(n, { one: `+${n} autre`, other: `+${n} autres` }),
     fewerProviders: 'en afficher moins',
     collection: 'Dans la même collection',
     alsoKnownAs: 'Autres titres',
@@ -368,7 +442,7 @@ export const fr: Dict = {
     },
     noneIn: (country: string) => `${country} : aucune date connue.`,
     unratedIn: (country: string) => `${country} : aucune classification connue.`,
-    otherCountries: (n: number) => (n === 1 ? 'Un autre pays' : `${n} autres pays`),
+    otherCountries: (n: number) => (n === 1 ? 'Un autre pays' : plural(n, { one: `${n} autre pays`, other: `${n} autres pays` })),
     fewerCountries: 'Moins de pays',
     titleTypes: {
       romaji: 'Rōmaji',
@@ -379,7 +453,7 @@ export const fr: Dict = {
       abbreviation: 'Abréviation',
     },
     fewerIds: 'en afficher moins',
-    moreIds: (n: number) => (n === 1 ? '+1 autre' : `+${n} autres`),
+    moreIds: (n: number) => plural(n, { one: `+${n} autre`, other: `+${n} autres` }),
     tmdbNumbering: {
       heldByTmdb: 'Numérotée par TMDB',
       since: (day: string) => `Numérotée par TMDB depuis le ${day}`,
@@ -389,6 +463,13 @@ export const fr: Dict = {
       backDone: 'TheTVDB numérote de nouveau la série.',
       backFailed: 'TheTVDB ne répond toujours pas : TMDB garde la numérotation.',
     },
+    onThisPage: 'Sur cette page',
+    actions: 'Cette œuvre',
+    watchNow: 'Regarder',
+    allKeywords: (n: number) => `Les ${n} mots-clés`,
+    allIdentifiers: (n: number) => `Les ${n} identifiants`,
+    searchTitle: (title: string) => `Chercher « ${title} » dans le catalogue`,
+    withPerson: (name: string) => `Les œuvres du catalogue avec ${name}`,
   },
   elsewhere: {
     newTab: '(s’ouvre dans un nouvel onglet)',
@@ -473,9 +554,9 @@ export const fr: Dict = {
   },
   person: {
     label: 'Filmographie',
-    works: (n: number) => (n <= 1 ? `${n} œuvre ici` : `${n} œuvres ici`),
-    parts: (n: number) => (n <= 1 ? `${n} rôle` : `${n} rôles`),
-    jobs: (n: number) => (n <= 1 ? `${n} poste derrière la caméra` : `${n} postes derrière la caméra`),
+    works: (n: number) => plural(n, { one: `${n} œuvre ici`, other: `${n} œuvres ici` }),
+    parts: (n: number) => plural(n, { one: `${n} rôle`, other: `${n} rôles` }),
+    jobs: (n: number) => plural(n, { one: `${n} poste derrière la caméra`, other: `${n} postes derrière la caméra` }),
     partial: 'Seulement les œuvres présentes dans ce catalogue.',
     onTmdb: 'Toute la carrière sur TMDB',
     as: (character: string) => `rôle de ${character}`,
@@ -520,8 +601,8 @@ export const fr: Dict = {
     titleFuture: 'À l’antenne cette semaine-là',
     count: (episodes: number, releases = 0) =>
       [
-        episodes || !releases ? (episodes <= 1 ? `${episodes} épisode` : `${episodes} épisodes`) : '',
-        releases ? (releases <= 1 ? `${releases} sortie` : `${releases} sorties`) : '',
+        episodes || !releases ? (plural(episodes, { one: `${episodes} épisode`, other: `${episodes} épisodes` })) : '',
+        releases ? (plural(releases, { one: `${releases} sortie`, other: `${releases} sorties` })) : '',
       ]
         .filter(Boolean)
         .join(' · '),
@@ -555,16 +636,22 @@ export const fr: Dict = {
     previousMonth: 'Mois précédent',
     thisMonth: 'Ce mois-ci',
     nextMonth: 'Mois suivant',
-    more: (n: number) => (n <= 1 ? `+ ${n} autre` : `+ ${n} autres`),
+    more: (n: number) => plural(n, { one: `+ ${n} autre`, other: `+ ${n} autres` }),
     monthEmpty: 'Rien au programme ce mois-ci.',
     monthEmptyOther: 'Rien au programme ce mois-là.',
     openWeek: (day: string) => `Voir la semaine du ${day}`,
+    layouts: 'Afficher le mois en',
+    grid: 'Grille',
+    list: 'Liste',
+    listView: 'Le mois, jour par jour',
+    openEpisode: 'Ouvrir l’épisode',
+    openSeries: 'La série',
   },
   seasons: {
     label: 'Calendrier saisonnier',
     names: { winter: 'Hiver', spring: 'Printemps', summer: 'Été', autumn: 'Automne' },
     title: (name: string, year: number) => `${name} ${year}`,
-    count: (n: number) => (n <= 1 ? `${n} œuvre` : `${n} œuvres`),
+    count: (n: number) => plural(n, { one: `${n} œuvre`, other: `${n} œuvres` }),
     previous: 'Saison précédente :',
     next: 'Saison suivante :',
     current: 'Cette saison',
@@ -574,7 +661,7 @@ export const fr: Dict = {
     nextYear: (season: string) => `Année suivante : ${season}`,
     strip: 'La saison, semaine par semaine',
     frame: (week: string, n: number) =>
-      n <= 1 ? `Semaine du ${week} : ${n} première` : `Semaine du ${week} : ${n} premières`,
+      plural(n, { one: `Semaine du ${week} : ${n} première`, other: `Semaine du ${week} : ${n} premières` }),
     today: 'Aujourd’hui',
     kind: 'Type',
     kinds: {
@@ -605,7 +692,7 @@ export const fr: Dict = {
     releases: (when: string) => `Sortie le ${when}`,
     released: (when: string) => `Sorti le ${when}`,
     began: (when: string) => `Commencée le ${when}`,
-    episodes: (n: number) => (n <= 1 ? `${n} épisode` : `${n} épisodes`),
+    episodes: (n: number) => plural(n, { one: `${n} épisode`, other: `${n} épisodes` }),
     aired: (aired: number, of: number) => `${aired} sur ${of} diffusés`,
     nextEpisode: (n: number, when: string) => `Épisode ${n} le ${when}`,
     sequelOf: (title: string) => `Suite de ${title}`,
@@ -729,13 +816,13 @@ export const fr: Dict = {
       accounts: 'Comptes',
       viaOidc: (n: number) => `dont ${n} par OIDC`,
       pending: 'En attente de validation',
-      pendingHint: (n: number) => (n <= 1 ? `${n} inscription à examiner` : `${n} inscriptions à examiner`),
+      pendingHint: (n: number) => plural(n, { one: `${n} inscription à examiner`, other: `${n} inscriptions à examiner` }),
       admins: 'Administrateurs',
       search: 'Chercher un nom, un identifiant, une adresse',
       allRoles: 'Tous les rôles',
       allStatuses: 'Tous les statuts',
       create: 'Ouvrir un compte',
-      selected: (n: number) => (n <= 1 ? `${n} sélectionné` : `${n} sélectionnés`),
+      selected: (n: number) => plural(n, { one: `${n} sélectionné`, other: `${n} sélectionnés` }),
       clear: 'Effacer',
       setRole: 'Changer le rôle',
       apply: 'Appliquer',
@@ -762,10 +849,10 @@ export const fr: Dict = {
       passwordGenerate: 'Facultatif : laissé vide, il est généré et montré une fois.',
       opened: (name: string) => `Le compte de ${name} est ouvert`,
       generated: 'Son mot de passe, montré une fois :',
-      deleteTitle: (n: number) => (n <= 1 ? 'Supprimer ce compte ?' : `Supprimer ${n} comptes ?`),
+      deleteTitle: (n: number) => plural(n, { one: 'Supprimer ce compte ?', other: `Supprimer ${n} comptes ?` }),
       deleteBody: 'Ses sessions et ses clés partent avec lui. Ce qu’il a fait reste au journal, sous son nom.',
       deleteConfirm: 'Supprimer',
-      refused: (n: number) => (n <= 1 ? 'Un compte est resté tel quel :' : `${n} comptes sont restés tels quels :`),
+      refused: (n: number) => plural(n, { one: 'Un compte est resté tel quel :', other: `${n} comptes sont restés tels quels :` }),
       back: 'Tous les membres',
       access: 'Rôle et statut',
       resetPassword: 'Donner un nouveau mot de passe',
@@ -828,7 +915,7 @@ export const fr: Dict = {
       test: 'Tester la découverte',
       testing: 'Lecture…',
       found: (keys: number, algorithms: string) =>
-        `Trouvés : autorisation, jeton${keys ? `, ${keys === 1 ? 'une clé' : `${keys} clés`}` : ''}${algorithms ? ` · ${algorithms}` : ''}.`,
+        `Trouvés : autorisation, jeton${keys ? `, ${plural(keys, { one: 'une clé', other: `${keys} clés` })}` : ''}${algorithms ? ` · ${algorithms}` : ''}.`,
       testFailed: 'La découverte a échoué :',
     },
     invitations: {
@@ -837,14 +924,14 @@ export const fr: Dict = {
       usable: (n: number, places: number) =>
         n === 0
           ? 'aucune utilisable'
-          : `${n} utilisable${n > 1 ? 's' : ''} · ${places === 1 ? 'un compte' : `${places} comptes`} encore à ouvrir`,
+          : `${n} ${plural(n, { one: 'utilisable', other: 'utilisables' })} · ${places === 1 ? 'un compte' : plural(places, { one: `${places} compte`, other: `${places} comptes` })} encore à ouvrir`,
       code: 'Code',
       role: 'Rôle donné',
       uses: 'Utilisée',
       expires: 'Expire',
       maxUses: 'Comptes qu’elle ouvre',
       validity: 'Valable',
-      days: (n: number) => (n === 1 ? '1 jour' : `${n} jours`),
+      days: (n: number) => plural(n, { one: `${n} jour`, other: `${n} jours` }),
       note: 'Note',
       noteHint: 'Pour mémoire ; la personne ne la voit jamais.',
       notePlaceholder: 'Pour la famille',
@@ -877,13 +964,11 @@ export const fr: Dict = {
         open: 'chacun s’inscrit',
         apisAll: 'toutes les API répondent',
         apisSome: (on: string[]) =>
-          on.length ? `seul${on.length > 1 ? 's' : ''} ${on.join(', ')} répond${on.length > 1 ? 'ent' : ''}` : 'aucune API ne répond',
+          on.length ? `${plural(on.length, { one: 'seul', other: 'seuls' })} ${on.join(', ')} ${plural(on.length, { one: 'répond', other: 'répondent' })}` : 'aucune API ne répond',
         keys: (n: number) =>
           n === 0
             ? 'seuls les administrateurs créent des clés'
-            : n === 1
-              ? 'chaque membre peut créer une clé'
-              : `chaque membre peut créer ${n} clés`,
+            : plural(n, { one: 'chaque membre peut créer une clé', other: `chaque membre peut créer ${n} clés` }),
       },
       q1: 'Qui entre sur le site ?',
       q2: 'Qui peut s’inscrire ?',
@@ -902,10 +987,10 @@ export const fr: Dict = {
         approval: 'Chacun s’inscrit, et le compte attend qu’un administrateur l’active. Une invitation évite l’attente.',
         open: 'Chacun s’inscrit et entre aussitôt, avec le rôle ci-dessous — cinq comptes par heure depuis une même adresse, au plus.',
       },
-      pending: (n: number) => (n === 1 ? 'Un compte attend d’être validé.' : `${n} comptes attendent d’être validés.`),
+      pending: (n: number) => (n === 1 ? 'Un compte attend d’être validé.' : plural(n, { one: `${n} compte attend d’être validé.`, other: `${n} comptes attendent d’être validés.` })),
       review: 'Les examiner',
       invitations: (n: number) =>
-        n === 0 ? 'Aucune invitation utilisable.' : n === 1 ? 'Une invitation utilisable.' : `${n} invitations utilisables.`,
+        n === 0 ? 'Aucune invitation utilisable.' : plural(n, { one: 'Une invitation utilisable.', other: `${n} invitations utilisables.` }),
       manage: 'Invitations',
       newRole: 'Rôle une fois validé',
       newRoleHint: 'Pour un compte qui a attendu sa validation. Une inscription ouverte donne toujours un compte membre, sinon n’importe qui sur internet pourrait modifier.',
@@ -976,7 +1061,7 @@ export const fr: Dict = {
       policyNote: 'Ce que demande chaque API est fixé par le déploiement — AMS_ARR_AUTH, AMS_PLEX_AUTH, AMS_TMDB_AUTH, AMS_TVDB_AUTH, AMS_ANILIST_AUTH, AMS_NATIVE_AUTH — et les adresses sur la page Clés & réseau.',
       uptime: (since: string) => `Compté depuis le démarrage du serveur, ${since}.`,
       countedShared: (since: string) => `Compté sur toutes les instances depuis le début du décompte, ${since}.`,
-      rules: (n: number) => (n === 1 ? 'une adresse listée' : `${n} adresses listées`),
+      rules: (n: number) => (n === 1 ? 'une adresse listée' : plural(n, { one: `${n} adresse listée`, other: `${n} adresses listées` })),
       authDisabled: 'AMS_AUTH_DISABLED est défini : rien ne demande d’accès. Le site est ouvert à tous, comme toute API laissée ouverte ici.',
       listeners: {
         title: 'La porte des clients',
@@ -1009,7 +1094,7 @@ export const fr: Dict = {
       keysTitle: 'Clés par membre',
       keysHint: 'À 1, chaque membre a sa clé, qu’il régénère ; au-delà, il en tient une liste. À 0, seuls les administrateurs en créent. Les administrateurs, et les clés du serveur, ne comptent pas.',
       keysNow: (server: number, personal: number) =>
-        `${server === 1 ? 'une clé du serveur' : `${server} clés du serveur`} · ${personal === 1 ? 'une tenue par une personne' : `${personal} tenues par des personnes`}`,
+        `${server === 1 ? 'une clé du serveur' : plural(server, { one: `${server} clé du serveur`, other: `${server} clés du serveur` })} · ${personal === 1 ? 'une tenue par une personne' : plural(personal, { one: `${personal} tenue par une personne`, other: `${personal} tenues par des personnes` })}`,
       fewer: 'Une de moins',
       more: 'Une de plus',
       saved: 'Enregistré',
@@ -1068,7 +1153,7 @@ export const fr: Dict = {
       orderDesc: 'Du plus haut ou du plus récent',
       orderAsc: 'Du plus bas ou du plus ancien',
       limit: 'Au plus',
-      preview: (n: number) => (n <= 1 ? `Donne ${n} œuvre` : `Donne ${n} œuvres`),
+      preview: (n: number) => plural(n, { one: `Donne ${n} œuvre`, other: `Donne ${n} œuvres` }),
       colName: 'Nom',
       colKind: 'Contient',
       colMode: 'Composée',
@@ -1100,8 +1185,8 @@ export const fr: Dict = {
       kometaFile: (kind: string) => `Télécharger le fichier de métadonnées des ${kind}`,
       kometaDone: (kind: 'movie' | 'series', n: number) =>
         kind === 'movie'
-          ? `${n <= 1 ? `${n} film corrigé écrit` : `${n} films corrigés écrits`}.`
-          : `${n <= 1 ? `${n} série corrigée écrite` : `${n} séries corrigées écrites`}.`,
+          ? `${plural(n, { one: `${n} film corrigé écrit`, other: `${n} films corrigés écrits` })}.`
+          : `${plural(n, { one: `${n} série corrigée écrite`, other: `${n} séries corrigées écrites` })}.`,
       kometaEmpty: (kind: 'movie' | 'series') =>
         kind === 'movie' ? 'Aucun film n’a rien de verrouillé : rien à écrire.' : 'Aucune série n’a rien de verrouillé : rien à écrire.',
       kometaFailed: 'Le fichier n’a pas pu être écrit.',
@@ -1189,12 +1274,12 @@ export const fr: Dict = {
       memoryOf: (used: string, max: string) => `${used} utilisés sur ${max} (maxmemory)`,
       memoryUnbounded: (used: string) => `${used} utilisés, sans plafond (maxmemory)`,
       eviction: 'Éviction',
-      evicted: (n: number) => (n === 1 ? '1 clé évincée depuis son démarrage' : `${n} clés évincées depuis son démarrage`),
+      evicted: (n: number) => plural(n, { one: `${n} clé évincée depuis son démarrage`, other: `${n} clés évincées depuis son démarrage` }),
       clients: 'Clients',
       started: 'Démarré',
       latency: 'Aller-retour',
       lastError: 'Dernière erreur',
-      errors: (n: number) => (n === 1 ? '1 commande sans réponse' : `${n} commandes sans réponse`),
+      errors: (n: number) => plural(n, { one: `${n} commande sans réponse`, other: `${n} commandes sans réponse` }),
       none: 'aucune',
       evictionWarning: 'La politique d’éviction est noeviction : à mémoire pleine, le serveur refuse d’écrire et le cache cesse de se remplir. Réglez maxmemory-policy allkeys-lru.',
       unknownPolicy: 'inconnue',
@@ -1208,7 +1293,7 @@ export const fr: Dict = {
       stamp: (generation: number, epoch: number) => `génération ${generation} · époque ${epoch}`,
       instances: 'Instances',
       instancesOne: 'Une instance',
-      instancesMany: (n: number) => (n === 1 ? '1 instance, seule pour l’instant' : `${n} instances`),
+      instancesMany: (n: number) => plural(n, { one: `${n} instance, seule pour l’instant`, other: `${n} instances` }),
       instancesSingleHint:
         'Ce serveur tourne seul : il planifie ses propres tâches, et le serveur de cache, quand il y en a un, n’est qu’un second niveau. Définissez AMS_MODE=multi pour faire tourner plusieurs instances sur un même PostgreSQL, un même bucket et un même serveur de cache.',
       instancesMultiHint: (leader: string | null) =>
@@ -1258,7 +1343,7 @@ export const fr: Dict = {
       pushHint:
         'Un verrou posé sur une œuvre, une de ses saisons ou un de ses épisodes, changé ou levé ; une modification de ses saisons ou de ses épisodes ; une synchronisation ; un rafraîchissement qui a changé ce qui est servi : Sonarr (pour une série) ou Radarr (pour un film) est prié de relire l’œuvre, dix secondes après le dernier changement — une seule commande pour une rafale. Coupé, ils l’apprennent à leur propre prochain rafraîchissement.',
       pushNeeds: 'Reliez d’abord Sonarr ou Radarr : il n’y a encore personne à prévenir.',
-      waiting: (n: number) => (n === 1 ? 'Une œuvre attend d’être annoncée.' : `${n} œuvres attendent d’être annoncées.`),
+      waiting: (n: number) => (n === 1 ? 'Une œuvre attend d’être annoncée.' : plural(n, { one: `${n} œuvre attend d’être annoncée.`, other: `${n} œuvres attendent d’être annoncées.` })),
       seed: 'Remplir le catalogue depuis leur bibliothèque',
       seedLead:
         'Chaque série de Sonarr et chaque film de Radarr, importés ici s’ils n’y sont pas encore — comme le fait la page d’import, une œuvre après l’autre, sans hâte. Lancez-le avant de les tourner vers ce serveur, pour que leur premier rafraîchissement trouve le catalogue prêt ; relancez-le quand vous voulez, il ne va chercher que ce qui est arrivé depuis.',
@@ -1340,7 +1425,7 @@ export const fr: Dict = {
       engines: { sqlite: 'SQLite', postgres: 'PostgreSQL' },
       database: (engine: string) => `La base ${engine}`,
       unknownDatabase: 'Une base',
-      withMediaCount: (shown: string, n: number) => (n <= 1 ? `et ${shown} média` : `et ${shown} médias`),
+      withMediaCount: (shown: string, n: number) => plural(n, { one: `et ${shown} média`, other: `et ${shown} médias` }),
       encryptedChip: 'Chiffrée',
       missing: 'Absente',
       missingHint: 'Listée, mais plus là où les archives sont gardées.',
@@ -1433,7 +1518,7 @@ export const fr: Dict = {
       colError: 'Dernière erreur',
       retry: 'Réessayer',
       retryAll: 'Tout réessayer',
-      retried: (n: number) => (n <= 1 ? `${n} média remis dans la file.` : `${n} médias remis dans la file.`),
+      retried: (n: number) => plural(n, { one: `${n} média remis dans la file.`, other: `${n} médias remis dans la file.` }),
       kinds: { image: 'Image', audio: 'Son' },
       loadFailed: 'Le stockage des médias n’a pas pu être lu.',
       reset: 'Oublier toutes les copies',
@@ -1442,7 +1527,7 @@ export const fr: Dict = {
       resetTitle: 'Oublier toutes les copies stockées ?',
       resetBody:
         'Chaque fiche pointe à nouveau vers ses sources, et rien n’est effacé : pour un stockage déplacé ailleurs, ou dont les fichiers ont disparu. « Tout stocker » les récupère à nouveau ; le prochain nettoyage efface les fichiers que plus aucune ligne ne nomme.',
-      resetDone: (n: number) => (n <= 1 ? `${n} copie oubliée.` : `${n} copies oubliées.`),
+      resetDone: (n: number) => plural(n, { one: `${n} copie oubliée.`, other: `${n} copies oubliées.` }),
     },
     sourcesPage: {
       lead:
@@ -1569,7 +1654,7 @@ export const fr: Dict = {
         jikan: 'Jikan',
         tenrai: 'Tenrai',
         serving: (down: string[], serving: string) =>
-          `${down.join(' et ')} injoignable${down.length > 1 ? 's' : ''}, ${serving} sert`,
+          `${down.join(' et ')} ${plural(down.length, { one: 'injoignable', other: 'injoignables' })}, ${serving} sert`,
         none: 'MAL : aucune base ne répond',
       },
     },
@@ -1662,12 +1747,12 @@ export const fr: Dict = {
       signed: 'Signée',
       tokenSet: 'Jeton gardé',
       everyEvent: 'Tous les événements',
-      eventCount: (n: number) => (n <= 1 ? `${n} événement` : `${n} événements`),
+      eventCount: (n: number) => plural(n, { one: `${n} événement`, other: `${n} événements` }),
       counts: (pending: number, failed: number, delivered: number) =>
         [
           pending ? `${pending} en attente` : '',
-          failed ? (failed === 1 ? '1 abandonnée' : `${failed} abandonnées`) : '',
-          delivered ? (delivered === 1 ? '1 reçue' : `${delivered} reçues`) : '',
+          failed ? (plural(failed, { one: `${failed} abandonnée`, other: `${failed} abandonnées` })) : '',
+          delivered ? (plural(delivered, { one: `${delivered} reçue`, other: `${delivered} reçues` })) : '',
         ]
           .filter(Boolean)
           .join(' · ') || 'rien d’envoyé encore',
@@ -1768,33 +1853,33 @@ export const fr: Dict = {
       locksImport: 'Importer un fichier de verrous',
       locksImporting: 'Import en cours…',
       locksImported: (applied: number, works: number) =>
-        applied <= 1 ? `${applied} verrou posé sur ${works} œuvre${works > 1 ? 's' : ''}.` : `${applied} verrous posés sur ${works} œuvre${works > 1 ? 's' : ''}.`,
-      locksUnchanged: (n: number) => (n <= 1 ? `${n} verrou déjà en place.` : `${n} verrous déjà en place.`),
+        plural(applied, { one: `${applied} verrou posé sur ${works} ${plural(works, { one: 'œuvre', other: 'œuvres' })}.`, other: `${applied} verrous posés sur ${works} ${plural(works, { one: 'œuvre', other: 'œuvres' })}.` }),
+      locksUnchanged: (n: number) => plural(n, { one: `${n} verrou déjà en place.`, other: `${n} verrous déjà en place.` }),
       locksExportFailed: 'Les verrous n’ont pas pu être lus pour le moment.',
       locksTooBig: 'Cette partie du fichier a été refusée : trop volumineuse.',
       locksUnmatched: (titles: string[]) => `Absentes d’ici : ${titles.join(', ')}.`,
-      locksRefused: (n: number) => (n <= 1 ? `${n} verrou refusé.` : `${n} verrous refusés.`),
+      locksRefused: (n: number) => plural(n, { one: `${n} verrou refusé.`, other: `${n} verrous refusés.` }),
       locksFailed: 'Le fichier n’a pas pu être lu comme un document de verrous.',
       failing: (shown: string, n: number) =>
-        n <= 1
-          ? `${n} œuvre a échoué à son dernier rafraîchissement`
-          : `${shown} œuvres ont échoué à leur dernier rafraîchissement`,
+        plural(n, { one: `${n} œuvre a échoué à son dernier rafraîchissement`, other: `${shown} œuvres ont échoué à leur dernier rafraîchissement` }),
       todoTitle: 'À faire',
       todoNothing: 'Rien à faire. Le catalogue est en ordre.',
       todoLoadFailed: 'La liste de ce qu’il y a à faire n’a pas pu être chargée.',
-      todoNoPoster: (shown: string, n: number) => (n <= 1 ? `${shown} œuvre n’a pas d’affiche` : `${shown} œuvres n’ont pas d’affiche`),
+      todoNoPoster: (shown: string, n: number) => plural(n, { one: `${shown} œuvre n’a pas d’affiche`, other: `${shown} œuvres n’ont pas d’affiche` }),
       todoNoOverview: (shown: string, n: number) =>
-        n <= 1 ? `${shown} œuvre n’a pas de synopsis` : `${shown} œuvres n’ont pas de synopsis`,
+        plural(n, { one: `${shown} œuvre n’a pas de synopsis`, other: `${shown} œuvres n’ont pas de synopsis` }),
       todoNoImdb: (shown: string, n: number) =>
-        n <= 1 ? `${shown} œuvre n’a pas d’identifiant IMDb` : `${shown} œuvres n’ont pas d’identifiant IMDb`,
+        plural(n, { one: `${shown} œuvre n’a pas d’identifiant IMDb`, other: `${shown} œuvres n’ont pas d’identifiant IMDb` }),
       todoNeverRefreshed: (shown: string, n: number) =>
-        n <= 1 ? `${shown} œuvre n’a jamais été actualisée` : `${shown} œuvres n’ont jamais été actualisées`,
+        plural(n, { one: `${shown} œuvre n’a jamais été actualisée`, other: `${shown} œuvres n’ont jamais été actualisées` }),
       todoKeys: (shown: string, n: number, days: number) =>
-        n <= 1 ? `${shown} clé d’API expire d’ici ${days} jours` : `${shown} clés d’API expirent d’ici ${days} jours`,
+        plural(n, { one: `${shown} clé d’API expire d’ici ${days} jours`, other: `${shown} clés d’API expirent d’ici ${days} jours` }),
       todoMedia: (shown: string, n: number) =>
-        n <= 1 ? `${shown} image ou thème n’a pas pu être récupéré` : `${shown} images ou thèmes n’ont pas pu être récupérés`,
+        plural(n, { one: `${shown} image ou thème n’a pas pu être récupéré`, other: `${shown} images ou thèmes n’ont pas pu être récupérés` }),
       todoBackup: (when: string | undefined) =>
         when ? `La dernière archive de la base a été faite ${when}` : 'Aucune archive de la base n’a jamais été faite',
+      todoDiverging: (shown: string, n: number) =>
+        plural(n, { one: `${shown} œuvre a un verrou dont la source a changé`, other: `${shown} œuvres ont un verrou dont la source a changé` }),
       lead: 'Ce que ce serveur détient, et ce qu’il a fait dernièrement.',
       recentRuns: 'Dernières exécutions',
       allRuns: 'Toutes',
@@ -1816,7 +1901,7 @@ export const fr: Dict = {
 
     works: {
       bulk: {
-        selected: (n: number) => (n <= 1 ? `${n} sélectionnée` : `${n} sélectionnées`),
+        selected: (n: number) => plural(n, { one: `${n} sélectionnée`, other: `${n} sélectionnées` }),
         selectAll: 'Sélectionner toutes les œuvres affichées',
         select: (title: string) => `Sélectionner ${title}`,
         clear: 'Vider la sélection',
@@ -1825,25 +1910,31 @@ export const fr: Dict = {
         disable: 'Désactiver',
         delete: 'Supprimer',
         addTo: 'Ajouter à une liste…',
-        deleteTitle: (n: number) => (n <= 1 ? 'Supprimer cette œuvre ?' : `Supprimer ces ${n} œuvres ?`),
+        deleteTitle: (n: number) => plural(n, { one: 'Supprimer cette œuvre ?', other: `Supprimer ces ${n} œuvres ?` }),
         deleteBody: 'Elles disparaîtront du catalogue et de chaque client qui le lit. Impossible de revenir en arrière.',
         summary: (done: number, unchanged: number, skipped: number, failed: number) =>
           [
             `Fait pour ${done}`,
             unchanged ? `${unchanged} déjà à jour` : '',
-            skipped ? `${skipped} laissée${skipped > 1 ? 's' : ''} de côté` : '',
+            skipped ? `${skipped} ${plural(skipped, { one: 'laissée', other: 'laissées' })} de côté` : '',
             failed ? `échec pour ${failed}` : '',
           ]
             .filter(Boolean)
             .join(', ') + '.',
-        failures: (n: number) => (n <= 1 ? 'Ce qui a échoué, et pourquoi' : `Les ${n} échecs, et pourquoi`),
-        added: (n: number, list: string) => `${n} ajoutée${n > 1 ? 's' : ''} à « ${list} ».`,
+        failures: (n: number) => plural(n, { one: 'Ce qui a échoué, et pourquoi', other: `Les ${n} échecs, et pourquoi` }),
+        added: (n: number, list: string) => `${n} ${plural(n, { one: 'ajoutée', other: 'ajoutées' })} à « ${list} ».`,
         working: 'En cours…',
         progress: 'Avancement',
         editField: 'Modifier un champ…',
         reask: 'Réinterroger les sources…',
+        undo: 'Annuler',
+        undoOffer: (n: number) => plural(n, { one: `Le champ a été changé sur ${n} œuvre.`, other: `Le champ a été changé sur ${n} œuvres.` }),
+        undone: (done: number, failed: number) =>
+          failed
+            ? `Annulé sur ${done} ; ${plural(failed, { one: `${failed} a changé depuis, et reste telle quelle`, other: `${failed} ont changé depuis, et restent telles quelles` })}.`
+            : plural(done, { one: `Annulé sur ${done} œuvre.`, other: `Annulé sur ${done} œuvres.` }),
         field: {
-          title: (n: number) => (n <= 1 ? `Modifier un champ de ${n} œuvre` : `Modifier un champ de ${n} œuvres`),
+          title: (n: number) => plural(n, { one: `Modifier un champ de ${n} œuvre`, other: `Modifier un champ de ${n} œuvres` }),
           field: 'Champ',
           action: 'Que faire',
           set: 'Fixer à',
@@ -1856,14 +1947,14 @@ export const fr: Dict = {
           no: 'Non',
           languageHint: 'Un code de langue, comme les sources les donnent : ja, en, fra.',
           sets: (field: string, value: string, n: number) =>
-            `« ${field} » devient « ${value} » sur ${n <= 1 ? `${n} œuvre` : `${n} œuvres`}, chacune son changement au journal, et y est verrouillé : aucun rafraîchissement n’y touche jusqu’à ce que le verrou soit levé.`,
+            `« ${field} » devient « ${value} » sur ${plural(n, { one: `${n} œuvre`, other: `${n} œuvres` })}, chacune son changement au journal, et y est verrouillé : aucun rafraîchissement n’y touche jusqu’à ce que le verrou soit levé.`,
           adds: (genre: string, n: number) =>
-            `« ${genre} » rejoint les genres ${n <= 1 ? 'de l’œuvre choisie' : `des ${n} œuvres choisies`} qui ne l’ont pas encore, et leurs genres sont verrouillés. Celles qui l’ont déjà ne sont pas touchées.`,
+            `« ${genre} » rejoint les genres ${plural(n, { one: 'de l’œuvre choisie', other: `des ${n} œuvres choisies` })} qui ne l’ont pas encore, et leurs genres sont verrouillés. Celles qui l’ont déjà ne sont pas touchées.`,
           removes: (genre: string, n: number) =>
-            `« ${genre} » quitte les genres ${n <= 1 ? 'de l’œuvre choisie' : `des ${n} œuvres choisies`} qui l’ont, et leurs genres sont verrouillés. Celles qui ne l’ont pas ne sont pas touchées.`,
+            `« ${genre} » quitte les genres ${plural(n, { one: 'de l’œuvre choisie', other: `des ${n} œuvres choisies` })} qui l’ont, et leurs genres sont verrouillés. Celles qui ne l’ont pas ne sont pas touchées.`,
           unlocks: (field: string, n: number) =>
-            `« ${field} » est rendu aux sources sur ${n <= 1 ? `${n} œuvre` : `${n} œuvres`} : le prochain rafraîchissement lui donne leur valeur. Là où il n’est pas verrouillé, rien ne change.`,
-          apply: (n: number) => (n <= 1 ? `Appliquer à ${n} œuvre` : `Appliquer à ${n} œuvres`),
+            `« ${field} » est rendu aux sources sur ${plural(n, { one: `${n} œuvre`, other: `${n} œuvres` })} : le prochain rafraîchissement lui donne leur valeur. Là où il n’est pas verrouillé, rien ne change.`,
+          apply: (n: number) => plural(n, { one: `Appliquer à ${n} œuvre`, other: `Appliquer à ${n} œuvres` }),
           adultHint: 'Tant que les titres adultes sont masqués pour tous, une œuvre marquée adulte quitte aussi cette liste.',
           invalid: {
             empty: 'Donnez une valeur.',
@@ -1873,7 +1964,7 @@ export const fr: Dict = {
         },
         reaskDialog: {
           title: (n: number) =>
-            n <= 1 ? `Réinterroger les sources sur ${n} œuvre` : `Réinterroger les sources sur ${n} œuvres`,
+            plural(n, { one: `Réinterroger les sources sur ${n} œuvre`, other: `Réinterroger les sources sur ${n} œuvres` }),
           explain:
             'Chaque œuvre interroge celles des sources cochées qui la décrivent ; les autres gardent leur dernière réponse. Les champs verrouillés ne bougent pas, et l’actualisation complète garde son calendrier. Une œuvre saisie à la main, ou pas encore actualisée en entier depuis que le serveur note d’où viennent ses valeurs, est laissée de côté.',
           choose: 'Les sources à interroger à nouveau',
@@ -1881,7 +1972,7 @@ export const fr: Dict = {
           apply: (sources: number, works: number) =>
             sources === 0
               ? 'Cochez une source'
-              : `Interroger ${sources <= 1 ? `${sources} source` : `${sources} sources`} sur ${works <= 1 ? `${works} œuvre` : `${works} œuvres`}`,
+              : `Interroger ${plural(sources, { one: `${sources} source`, other: `${sources} sources` })} sur ${plural(works, { one: `${works} œuvre`, other: `${works} œuvres` })}`,
         },
       },
       missing: {
@@ -1890,6 +1981,7 @@ export const fr: Dict = {
         overview: 'Sans synopsis',
         imdb: 'Sans IMDb',
         refresh: 'Jamais rafraîchie',
+        divergingLock: 'Verrou à revoir',
         none: 'Rien ne manque',
         noneHint: 'Chaque œuvre conservée ici a ce que ces filtres cherchent.',
       },
@@ -1934,7 +2026,7 @@ export const fr: Dict = {
       served: 'Servie depuis les sources',
       enable: 'Activer',
       disable: 'Désactiver',
-      locks: (n: number) => (n <= 1 ? `${n} verrou` : `${n} verrous`),
+      locks: (n: number) => plural(n, { one: `${n} verrou`, other: `${n} verrous` }),
       empty: 'Rien ici pour l’instant',
       emptyHint:
         'Les fiches apparaissent à mesure que les clients les demandent, ou quand vous en créez une à la main.',
@@ -1992,7 +2084,7 @@ export const fr: Dict = {
       sourceHint: 'L’ordre habituel s’arrête à la première source qui trouve ; celle choisie ici est interrogée seule.',
       fankaiPage:
         'Le site de Fankai numérote ses productions autrement que son service de métadonnées, celui que ce serveur lit : ses adresses ne mènent à rien ici. Cherchez la production par son titre.',
-      resultsAt: (n: number, source: string) => `${n <= 1 ? `${n} résultat` : `${n} résultats`} chez ${source}`,
+      resultsAt: (n: number, source: string) => `${plural(n, { one: `${n} résultat`, other: `${n} résultats` })} chez ${source}`,
       kind: 'Type',
       bothKinds: 'Les deux',
       year: 'Année',
@@ -2001,7 +2093,7 @@ export const fr: Dict = {
       searching: 'Interrogation des sources…',
       found: 'Ce que les sources ont',
       slow: 'Ceci appelle TMDB et TheTVDB — et Fankai, quand cette source est active — par le réseau : ce n’est pas instantané. Quelques secondes sont normales.',
-      results: (n: number) => (n <= 1 ? `${n} résultat` : `${n} résultats`),
+      results: (n: number) => plural(n, { one: `${n} résultat`, other: `${n} résultats` }),
       import: 'Importer',
       importing: 'Récupération…',
       stored: 'Déjà détenue',
@@ -2051,7 +2143,7 @@ export const fr: Dict = {
       reachAlone:
         'Un lecteur de cette langue la reçoit, avant un verrou dans toutes les langues et avant la traduction ; les autres langues, non.',
       reachEvery: 'Toutes les langues la reçoivent, avant leur traduction — sauf celle qui a un verrou à elle.',
-      lockCount: (n: number) => (n <= 1 ? `${n} champ verrouillé` : `${n} champs verrouillés`),
+      lockCount: (n: number) => plural(n, { one: `${n} champ verrouillé`, other: `${n} champs verrouillés` }),
       saveAndLock: 'Enregistrer et verrouiller',
       unlock: 'Déverrouiller',
       unlockAll: 'Tout déverrouiller',
@@ -2059,13 +2151,9 @@ export const fr: Dict = {
       unlockAllBody:
         'Chaque champ verrouillé reprendra ce que disent les sources au prochain rafraîchissement, et ce que vous aviez saisi sera perdu.',
       unlockAllDeeper: (n: number) =>
-        n <= 1
-          ? `Cela comprend ${n} verrou sur une saison ou un épisode.`
-          : `Cela comprend ${n} verrous sur des saisons et des épisodes.`,
+        plural(n, { one: `Cela comprend ${n} verrou sur une saison ou un épisode.`, other: `Cela comprend ${n} verrous sur des saisons et des épisodes.` }),
       unlockAllGiven: (n: number) =>
-        n <= 1
-          ? `Et ${n} crédit, image ou titre masqué ou corrigé reprend ce que donne sa source.`
-          : `Et ${n} crédits, images ou titres masqués ou corrigés reprennent ce que donnent leurs sources.`,
+        plural(n, { one: `Et ${n} crédit, image ou titre masqué ou corrigé reprend ce que donne sa source.`, other: `Et ${n} crédits, images ou titres masqués ou corrigés reprennent ce que donnent leurs sources.` }),
       refresh: 'Rafraîchir depuis les sources',
       refreshing: 'Rafraîchissement…',
       refreshFailed: 'Le dernier rafraîchissement a échoué',
@@ -2084,7 +2172,7 @@ export const fr: Dict = {
       nextRefresh: 'Prochain rafraîchissement',
       content: 'Contenu',
       contentValue: (seasons: number, episodes: number) =>
-        `${seasons <= 1 ? `${seasons} saison` : `${seasons} saisons`} · ${episodes <= 1 ? `${episodes} épisode` : `${episodes} épisodes`}`,
+        `${plural(seasons, { one: `${seasons} saison`, other: `${seasons} saisons` })} · ${plural(episodes, { one: `${episodes} épisode`, other: `${episodes} épisodes` })}`,
       noSources: 'Aucune source n’a encore répondu pour cette fiche.',
       handEntered: 'Saisie à la main. Aucune source ne se porte garante de cette fiche.',
       origin: {
@@ -2103,21 +2191,21 @@ export const fr: Dict = {
           'L’origine des valeurs s’enregistre à chaque actualisation complète, et cette fiche n’en a pas eu depuis. Actualisez-la une fois pour la voir, et pour la synchroniser source par source.',
         same: (list: string) => `La même valeur chez ${list}.`,
         passed: (list: string, n: number, from: string) =>
-          `${list} n’en ${n === 1 ? 'donne' : 'donnent'} pas : ${from} complète.`,
+          `${list} n’en ${plural(n, { one: 'donne', other: 'donnent' })} pas : ${from} complète.`,
         differed: (list: string, n: number, from: string) =>
-          `${list} en ${n === 1 ? 'donne' : 'donnent'} une autre ; ${from} passe en premier.`,
+          `${list} en ${plural(n, { one: 'donne', other: 'donnent' })} une autre ; ${from} passe en premier.`,
         authority: 'Fait autorité pour le studio : remplace ce que disent les autres.',
         wholeList: 'Liste prise entière, chez la première source qui en a une.',
         underLock: (from: string) => `Sans le verrou, la valeur viendrait de ${from}.`,
         images: 'Images',
-        imageCount: (n: number) => (n === 1 ? '1 image' : `${n} images`),
+        imageCount: (n: number) => plural(n, { one: `${n} image`, other: `${n} images` }),
         imagesFrom: (list: string) => `Réunies : ${list}.`,
         episodes: 'Épisodes',
         episodesFrom: (from: string) => `La liste et sa numérotation, celle de Sonarr, viennent de ${from}.`,
         episodesTimes: 'Horaires de diffusion de TVmaze là où ses dates concordent.',
         episodesFill: (list: string) => `Résumés et images de ${list} là où la liste n’en a pas.`,
         credits: 'Distribution',
-        creditCount: (n: number) => (n === 1 ? '1 personne' : `${n} personnes`),
+        creditCount: (n: number) => plural(n, { one: `${n} personne`, other: `${n} personnes` }),
         creditsFrom:
           'La distribution d’une seule source, entière : rien ne permet de reconnaître un même acteur d’un fournisseur à l’autre.',
         view: 'Voir',
@@ -2129,13 +2217,13 @@ export const fr: Dict = {
         never: 'n’a jamais répondu pour cette fiche',
         off: 'désactivée',
         noId: 'aucun identifiant pour l’interroger',
-        fields: (n: number) => (n === 1 ? '1 champ' : `${n} champs`),
-        images: (n: number) => (n === 1 ? '1 image' : `${n} images`),
+        fields: (n: number) => plural(n, { one: `${n} champ`, other: `${n} champs` }),
+        images: (n: number) => plural(n, { one: `${n} image`, other: `${n} images` }),
         theEpisodes: 'les épisodes',
         theCredits: 'la distribution',
         theRelations: 'les œuvres liées',
-        translations: (n: number) => (n === 1 ? '1 traduction' : `${n} traductions`),
-        ratings: (n: number) => (n === 1 ? '1 note' : `${n} notes`),
+        translations: (n: number) => plural(n, { one: `${n} traduction`, other: `${n} traductions` }),
+        ratings: (n: number) => plural(n, { one: `${n} note`, other: `${n} notes` }),
         loadFailed: 'L’origine des valeurs n’a pas pu être chargée.',
         retry: 'Réessayer',
         noneAnswered: 'Aucune des sources interrogées n’a répondu : rien n’a changé.',
@@ -2144,10 +2232,10 @@ export const fr: Dict = {
         changed: 'La fiche a été écrite par autre chose pendant que ses sources étaient interrogées — une actualisation, peut-être. Rien n’a changé : synchronisez à nouveau.',
         bringsList: (numbering: string, by: string) =>
           `${numbering} est interrogé avec ${by} : la liste des épisodes est la sienne, ${by} ne fait que la compléter.`,
-        confirms: (n: number) => (n === 1 ? 'confirme 1 champ' : `confirme ${n} champs`),
+        confirms: (n: number) => plural(n, { one: `confirme ${n} champ`, other: `confirme ${n} champs` }),
         nothing: 'rien de gardé',
         ask: (name: string) => `Interroger ${name} à nouveau`,
-        button: (n: number) => (n === 1 ? 'Synchroniser depuis 1 source' : `Synchroniser depuis ${n} sources`),
+        button: (n: number) => plural(n, { one: `Synchroniser depuis ${n} source`, other: `Synchroniser depuis ${n} sources` }),
         choose: 'Cochez les sources à interroger à nouveau',
         syncing: 'Synchronisation…',
         explain:
@@ -2155,7 +2243,7 @@ export const fr: Dict = {
         brings: (by: string) => `TVmaze est interrogé avec ${by} : il donne l’heure de diffusion de chaque épisode.`,
         done: (list: string) => `Synchronisée depuis ${list}.`,
         silent: (list: string, n: number) =>
-          `${list} n’${n === 1 ? 'a' : 'ont'} pas répondu : ${n === 1 ? 'sa' : 'leur'} dernière réponse est gardée.`,
+          `${list} n’${plural(n, { one: 'a', other: 'ont' })} pas répondu : ${plural(n, { one: 'sa', other: 'leur' })} dernière réponse est gardée.`,
         refreshOnce: 'Tout actualiser',
         rules: 'Ce que garde chaque source',
         rulesBody: 'L’ordre et les règles, source par source, sont sur la page',
@@ -2170,6 +2258,81 @@ export const fr: Dict = {
         artwork: 'Images',
         people: 'Générique & titres',
         elsewhere: 'Ailleurs',
+        journal: 'Historique',
+      },
+      /** Ce qui a changé dans l’œuvre, valeur par valeur, et les retours : l’onglet de l’historique. */
+      journal: {
+        title: 'Historique',
+        lead: 'Ce qui a changé dans cette œuvre, valeur par valeur, du plus récent au plus ancien : ce que chacune valait et ce qu’elle est devenue, qui l’a changée et pourquoi. Une valeur qu’une source a changée sous un verrou a atteint la fiche, pas ce qui est servi. Gardé aussi longtemps que le dit history.keepDays.',
+        field: 'Champ',
+        allFields: 'Tous les champs',
+        who: 'Qui',
+        everybody: 'Tout le monde',
+        from: 'Du',
+        to: 'Au',
+        clear: 'Effacer les filtres',
+        empty: 'Rien n’a encore changé',
+        emptyHint: 'Dès le prochain rafraîchissement, la prochaine synchronisation ou le prochain verrou, chaque valeur qui change s’inscrit ici : ce qu’elle valait, ce qu’elle est devenue, et qui l’a changée.',
+        emptyFiltered: 'Aucun changement ne répond à ces filtres.',
+        loadFailed: 'L’historique n’a pas pu être chargé.',
+        more: 'Changements plus anciens',
+        csv: 'CSV',
+        json: 'JSON',
+        downloadHint: 'Tous les changements qui répondent aux filtres, pas seulement ceux affichés. Un CSV s’ouvre dans un tableur.',
+        nothing: 'rien',
+        schedule: 'par le calendrier',
+        by: (who: string) => `par ${who}`,
+        season: (n: number) => `Saison ${n}`,
+        moved: 'déplacé',
+        came: { season: 'ajoutée', episode: 'ajouté', image: 'ajoutée', credit: 'ajoutée', alternativeTitle: 'ajouté' },
+        went: { season: 'retirée', episode: 'retiré', image: 'retirée', credit: 'retirée', alternativeTitle: 'retiré' },
+        held: 'Sous un verrou : ce qui est servi n’a pas changé',
+        revert: 'Revenir à cette valeur',
+        revertHint: 'Verrouille le champ à la valeur qu’il avait avant ce changement. L’historique et le journal le disent retour en arrière.',
+        fields: {
+          number: 'Numéros',
+          season: 'Saison',
+          episode: 'Épisode',
+          image: 'Image',
+          credit: 'Personne au générique',
+          alternativeTitle: 'Autre titre',
+        },
+        causes: {
+          refresh: 'Rafraîchissement',
+          sync: 'Synchronisation',
+          fallback: 'Relais de numérotation',
+          lock: 'Verrou',
+          unlock: 'Verrou levé',
+          revert: 'Retour',
+          edit: 'Modification',
+          merge: 'Fusion',
+          import: 'Import',
+        },
+      },
+      /** Ce que changerait un rafraîchissement, montré avant qu’il soit lancé. */
+      review: {
+        title: 'Ce que changerait un rafraîchissement',
+        asking: 'Les sources sont interrogées, sans rien écrire…',
+        failed: 'Les sources n’ont pas pu être interrogées.',
+        nothing: 'Les sources disent ce que dit la fiche : un rafraîchissement ne changerait rien. Il peut tout de même être lancé, pour noter qu’elles ont été interrogées.',
+        lead: (n: number) =>
+          plural(n, {
+            one: 'Les sources ont été interrogées, et rien n’a été écrit. Un rafraîchissement remplacerait cette valeur — les verrouillées ne sont pas listées, aucun rafraîchissement ne les atteint. Cochez-la pour la verrouiller telle quelle d’abord, et le rafraîchissement la laisse en paix.',
+            other: `Les sources ont été interrogées, et rien n’a été écrit. Un rafraîchissement remplacerait ces ${n} valeurs — les verrouillées ne sont pas listées, aucun rafraîchissement ne les atteint. Cochez-en une pour la verrouiller telle quelle d’abord, et le rafraîchissement la laisse en paix.`,
+          }),
+        lockFirst: 'Verrouiller avant de rafraîchir',
+        lockAll: 'Toutes les verrouiller d’abord',
+        lockNone: 'N’en verrouiller aucune',
+        run: 'Rafraîchir',
+        lockAndRun: (n: number) => plural(n, { one: `Verrouiller ${n} valeur et rafraîchir`, other: `Verrouiller ${n} valeurs et rafraîchir` }),
+      },
+      /** Sous un verrou, ce que donnent ses sources maintenant quand c’est autre chose. */
+      diverging: {
+        sourceSays: (source: string) => `${source} dit maintenant :`,
+        sourcesSay: 'Les sources disent maintenant :',
+        sinceLock: 'changé depuis le verrou',
+        nothing: 'rien',
+        take: 'Reprendre cette valeur',
       },
       groups: {
         identity: 'Identité',
@@ -2183,7 +2346,7 @@ export const fr: Dict = {
           'Les champs de l’autre genre d’œuvre — les dates de sortie d’un film sur une série, la diffusion d’une série sur un film. Gardés au cas où une source en donnerait un, ou qu’un verrou en tienne un.',
         also: 'Aussi dans cette fiche',
       },
-      fieldCount: (n: number) => (n <= 1 ? `${n} champ` : `${n} champs`),
+      fieldCount: (n: number) => plural(n, { one: `${n} champ`, other: `${n} champs` }),
       filter: {
         label: 'Afficher',
         all: 'Tous',
@@ -2230,7 +2393,7 @@ export const fr: Dict = {
         pictures: {
           title: 'Images',
           none: 'Aucune image attachée à cette saison.',
-          hiddenCount: (n: number) => (n <= 1 ? `${n} masquée` : `${n} masquées`),
+          hiddenCount: (n: number) => plural(n, { one: `${n} masquée`, other: `${n} masquées` }),
           chosen: 'L’affiche choisie est montrée quoi qu’il soit masqué.',
         },
         shift: {
@@ -2246,11 +2409,11 @@ export const fr: Dict = {
           after: 'Après',
           none: 'Aucun épisode de cette saison n’a de date à décaler.',
           invalid: 'Un nombre entier de jours, de −3650 à 3650, autre que 0.',
-          apply: (n: number) => (n <= 1 ? `Décaler ${n} épisode` : `Décaler ${n} épisodes`),
+          apply: (n: number) => plural(n, { one: `Décaler ${n} épisode`, other: `Décaler ${n} épisodes` }),
           applying: (at: number, total: number) => `${at} épisodes sur ${total}…`,
-          done: (n: number) => (n <= 1 ? `${n} épisode décalé.` : `${n} épisodes décalés.`),
+          done: (n: number) => plural(n, { one: `${n} épisode décalé.`, other: `${n} épisodes décalés.` }),
           failed: (ok: number, failed: number) =>
-            `${ok} décalé${ok > 1 ? 's' : ''}, ${failed} refusé${failed > 1 ? 's' : ''} :`,
+            `${ok} ${plural(ok, { one: 'décalé', other: 'décalés' })}, ${failed} ${plural(failed, { one: 'refusé', other: 'refusés' })} :`,
           close: 'Fermer',
         },
       },
@@ -2287,7 +2450,7 @@ export const fr: Dict = {
         sending: 'Envoi…',
         chosenPoster: 'Affiche choisie',
         seasonImages: (n: number) =>
-          n <= 1 ? `${n} image attachée à une saison, à gérer depuis l’onglet Saisons.` : `${n} images attachées à des saisons, à gérer depuis l’onglet Saisons.`,
+          plural(n, { one: `${n} image attachée à une saison, à gérer depuis l’onglet Saisons.`, other: `${n} images attachées à des saisons, à gérer depuis l’onglet Saisons.` }),
         openSeasons: 'Ouvrir les saisons',
       },
       artworkTab: {
@@ -2306,7 +2469,7 @@ export const fr: Dict = {
         titleLanguage: 'Langue ou pays',
         titleLanguageHint: 'Un code : fr, eng, usa…',
         translations: 'Traductions',
-        translationCount: (n: number) => (n <= 1 ? `${n} langue` : `${n} langues`),
+        translationCount: (n: number) => plural(n, { one: `${n} langue`, other: `${n} langues` }),
         translationsHint:
           '« Afficher en », dans l’onglet Fiche, lit la fiche dans l’une d’elles. Elles viennent des sources, entières, et ne se modifient pas ici.',
         noTranslations: 'Aucune traduction conservée.',
@@ -2331,7 +2494,7 @@ export const fr: Dict = {
         airedBy: (source: string) => `Les épisodes de l’œuvre, tels que ${source} les numérote`,
         source: { tvdb: 'TheTVDB', tmdb: 'TMDB', local: 'Fait ici' },
         unread: (n: number) =>
-          n <= 1 ? `${n} épisode, selon TMDB ; lu au prochain rafraîchissement` : `${n} épisodes, selon TMDB ; lus au prochain rafraîchissement`,
+          plural(n, { one: `${n} épisode, selon TMDB ; lu au prochain rafraîchissement`, other: `${n} épisodes, selon TMDB ; lus au prochain rafraîchissement` }),
         reading: 'Lecture des ordres…',
         frozen: 'Figé comme numérotation de diffusion',
         notOffered: 'Pas proposé : le même ordre, tenu par la source qui numérote la série, le remplace',
@@ -2500,8 +2663,8 @@ export const fr: Dict = {
       colSeen: 'Vu la dernière fois',
       allowed: 'Autorisé',
       refused: 'Refusé',
-      refusedCount: (n: number) => (n <= 1 ? `${n} refus` : `${n} refus`),
-      callCount: (n: number) => (n <= 1 ? `${n} appel` : `${n} appels`),
+      refusedCount: (n: number) => `${n} refus`,
+      callCount: (n: number) => plural(n, { one: `${n} appel`, other: `${n} appels` }),
       unnamed: 'Sans nom',
       unnamedHint: 'Ni le fichier hosts ni le résolveur ne répondent pour cette adresse',
       alreadyAllowed: 'Déjà autorisée',
@@ -2594,6 +2757,7 @@ export const fr: Dict = {
         'update.check': 'Chercher une nouvelle version',
         'arr.seed': 'Amorcer depuis Sonarr et Radarr',
         'backup.run': 'Sauvegarder la base',
+        'search.rebuild': 'Reconstruire l’index de recherche',
         'backup.restore': 'Restaurer une archive',
         'refresh.item': 'Une fiche actualisée',
       },
@@ -2609,6 +2773,7 @@ export const fr: Dict = {
         'update.check': 'La dernière version de ce projet demandée à GitHub, une minute après le démarrage puis chaque jour — une requête anonyme, et seulement si la vérification est activée dans les réglages. Une version plus récente est signalée sur le tableau de bord, et annoncée une fois au webhook.',
         'arr.seed': 'Chaque série de votre Sonarr et chaque film de votre Radarr, importés ici s’ils n’y sont pas encore, l’un après l’autre — avant de les tourner vers ce serveur, ou plus tard pour ce qui est arrivé depuis. Peut être arrêté.',
         'backup.run': 'Une archive de la base, gardée là où le serveur les garde — selon le calendrier réglé sur Sauvegardes, les plus anciennes du calendrier au-delà de celles qu’il garde retirées. Lancée maintenant, c’est une archive faite à la main, qui reste jusqu’à ce qu’on la supprime.',
+        'search.rebuild': 'Chaque nom par lequel on trouve une œuvre, une personne ou un épisode, réécrit depuis le catalogue : chaque titre dans chaque langue, chaque personne créditée, chaque épisode. L’index se tient à jour à chaque écriture ; ceci sert quand il semble ne plus l’être. La recherche répond pendant ce temps.',
       },
       every: (seconds: number) =>
         seconds >= 604_800 && seconds % 604_800 === 0
@@ -2644,7 +2809,7 @@ export const fr: Dict = {
       history: 'Historique',
       failuresOnly: 'Échecs seulement',
       loadMore: 'En charger plus',
-      dayFailed: (n: number) => (n <= 1 ? '1 en échec' : `${n} en échec`),
+      dayFailed: (n: number) => `${n} en échec`,
       noFailures: 'Aucune exécution n’a échoué.',
       noFailuresHint: 'Tout ce qui a tourné a abouti. Retirez le filtre pour tout voir.',
       noMatch: 'Aucune exécution ne correspond à ces filtres.',
@@ -2663,7 +2828,7 @@ export const fr: Dict = {
       again: 'Relancer',
       showDetail: (name: string) => `Afficher ce qu’a fait ${name}`,
       hideDetail: (name: string) => `Masquer ce qu’a fait ${name}`,
-      entries: (n: number) => (n === 1 ? 'Une fiche traitée' : `${n.toLocaleString('fr')} fiches traitées`),
+      entries: (n: number) => (n === 1 ? 'Une fiche traitée' : plural(n, { one: `${n.toLocaleString('fr')} fiche traitée`, other: `${n.toLocaleString('fr')} fiches traitées` })),
       moreEntries: (n: number) => `et ${n.toLocaleString('fr')} de plus, non listées ici`,
       noEntries: 'Rien n’est consigné pour cette exécution : elle précède le détail, ou sa tâche n’en tient pas — seule une actualisation en tient.',
       noneDue: 'Aucune fiche n’était due : aucune n’a été traitée.',
@@ -2677,11 +2842,11 @@ export const fr: Dict = {
       goneWork: 'Une fiche supprimée depuis',
       summaries: {
         refreshed: (done: number, failed: number, of?: number) =>
-          `${done} actualisée${done > 1 ? 's' : ''}, ${failed} en échec${of === undefined ? '' : `, sur ${of}`}`,
+          `${done} ${plural(done, { one: 'actualisée', other: 'actualisées' })}, ${failed} en échec${of === undefined ? '' : `, sur ${of}`}`,
         stopped: (done: number, failed: number, of: number) =>
-          `Arrêtée : ${done} actualisée${done > 1 ? 's' : ''}, ${failed} en échec, sur ${of}`,
+          `Arrêtée : ${done} ${plural(done, { one: 'actualisée', other: 'actualisées' })}, ${failed} en échec, sur ${of}`,
         progress: (at: number, of: number, done: number, failed: number) =>
-          `${at} sur ${of} : ${done} actualisée${done > 1 ? 's' : ''}, ${failed} en échec`,
+          `${at} sur ${of} : ${done} ${plural(done, { one: 'actualisée', other: 'actualisées' })}, ${failed} en échec`,
         exported: (works: number, episodes: number, failed: number) =>
           `${works} œuvres, ${episodes} épisodes${failed ? `, ${failed} en échec` : ''}`,
         nothingDue: 'Rien n’était dû',
@@ -2691,16 +2856,16 @@ export const fr: Dict = {
         storedStopped: (done: number, failed: number, of: number) =>
           `Arrêté : ${done} stockés, ${failed} en échec, sur ${of}`,
         swept: (rows: number, files: number) =>
-          `${rows <= 1 ? `${rows} média oublié` : `${rows} médias oubliés`}, ${files <= 1 ? `${files} fichier effacé` : `${files} fichiers effacés`}`,
+          `${plural(rows, { one: `${rows} média oublié`, other: `${rows} médias oubliés` })}, ${plural(files, { one: `${files} fichier effacé`, other: `${files} fichiers effacés` })}`,
         renewed: (until: string) => `Renouvelé ; valable jusqu’au ${until}`,
         certValid: (until: string) => `Valable jusqu’au ${until} ; rien à faire`,
         synced: (list: string) => `Synchronisée depuis ${list}`,
         noneAnswered: (list: string) => `Aucune réponse de ${list}`,
         newer: (version: string) => `La version ${version} est sortie`,
         seeded: (here: number, imported: number, missing: number, failed: number, of: number) =>
-          `Sur ${of} : ${here} déjà là, ${imported} importée${imported > 1 ? 's' : ''}, ${missing} introuvable${missing > 1 ? 's' : ''}, ${failed} en échec`,
+          `Sur ${of} : ${here} déjà là, ${imported} ${plural(imported, { one: 'importée', other: 'importées' })}, ${missing} ${plural(missing, { one: 'introuvable', other: 'introuvables' })}, ${failed} en échec`,
         backedUp: (name: string, size: string, removed: number) =>
-          `${name}, ${size}${removed ? ` ; ${removed <= 1 ? '1 archive retirée' : `${removed} archives retirées`} au-delà de celles gardées` : ''}`,
+          `${name}, ${size}${removed ? ` ; ${plural(removed, { one: `${removed} archive retirée`, other: `${removed} archives retirées` })} au-delà de celles gardées` : ''}`,
         restored: (rows: number, media: number, safety?: string) =>
           `${rows} lignes remises en place${media ? `, ${media} médias` : ''}${safety ? ` ; restaurer ${safety} l’annule` : ''}`,
       },
@@ -2736,6 +2901,7 @@ export const fr: Dict = {
         'held there under no id to look it up by': 'Tenue là-bas sous aucun identifiant pour la retrouver',
         'archive written': 'Archive écrite',
         'past those the schedule keeps': 'Au-delà de celles que garde le calendrier',
+        'search index built again': 'Index de recherche reconstruit',
       },
     },
 
@@ -2757,6 +2923,8 @@ export const fr: Dict = {
       emptyHint: 'Les entrées apparaissent dès que quelque chose est créé, modifié ou révoqué.',
       emptyFilteredHint: 'Aucune entrée ne correspond à ce filtre.',
       loadFailed: 'Le journal n’a pas pu être chargé.',
+      download: { csv: 'CSV', json: 'JSON' },
+      downloadHint: 'Toutes les entrées qui répondent aux filtres, pas seulement cette page. Un CSV s’ouvre dans un tableur.',
       /** What each action is, in words, beside the name the logs keep. */
       says: {
         'item.created': 'Œuvre ajoutée à la main',
@@ -2829,7 +2997,7 @@ export const fr: Dict = {
       searchNone: (term: string) => `Aucun réglage ne répond à « ${term} ».`,
       searchNoneHint: 'Essayez un mot de son nom, de sa clé — refresh.batchSize — ou de ce qu’il explique.',
       searchClear: 'Effacer la recherche',
-      showing: (n: number, of: number) => (n <= 1 ? `${n} réglage sur ${of}` : `${n} réglages sur ${of}`),
+      showing: (n: number, of: number) => plural(n, { one: `${n} réglage sur ${of}`, other: `${n} réglages sur ${of}` }),
       changedOnly: 'Modifiés seulement',
       changedNone: 'Rien n’a été changé par rapport à ce que le serveur avait au départ.',
       startup: 'Lus au démarrage',
@@ -2875,7 +3043,7 @@ export const fr: Dict = {
       exportRun: 'Exporter',
       exportRunning: 'Export en cours…',
       exportDone: (works: number, episodes: number) =>
-        `${works <= 1 ? `${works} œuvre` : `${works} œuvres`}, ${episodes <= 1 ? `${episodes} épisode` : `${episodes} épisodes`}`,
+        `${plural(works, { one: `${works} œuvre`, other: `${works} œuvres` })}, ${plural(episodes, { one: `${episodes} épisode`, other: `${episodes} épisodes` })}`,
       exportFailed: (n: number) => `${n} en échec`,
       exportNoPath: 'AMS_NFO_EXPORT_PATH n’est pas défini.',
       exportBackground: 'Écrit en arrière-plan : cette page peut être quittée, et l’exécution est consignée.',
@@ -2963,6 +3131,7 @@ export const fr: Dict = {
       'refresh.ttlContinuing': 'Une œuvre en cours, gardée pendant',
       'refresh.ttlEnded': 'Une œuvre terminée, gardée pendant',
       'numbering.fallbackAfter': 'TMDB numérote une série après',
+      'history.keepDays': 'L’historique d’une œuvre garde un changement',
       'sources.priority': 'Ordre des sources',
       'updates.check': 'Chercher une nouvelle version',
       'backup.schedule': 'Sauvegarder la base',
@@ -3002,6 +3171,8 @@ export const fr: Dict = {
       'refresh.ttlEnded': 'En secondes : de même pour une série terminée ou un film sorti — 604800, c’est une semaine. Une minute au moins, dix ans au plus. Au-delà de 15552000 — 180 jours — TMDB est tout de même redemandé tous les six mois, ses conditions n’autorisant pas plus.',
       'numbering.fallbackAfter':
         'Rafraîchissements d’affilée pendant lesquels TheTVDB laisse une série sans réponse — à vingt heures d’écart au moins — avant que TMDB ne la numérote à sa place, jusqu’à ce que TheTVDB réponde de nouveau. 0 : jamais. Trois quand rien n’est réglé.',
+      'history.keepDays':
+        'En jours : combien de temps une valeur qu’une source ou une personne a changée reste dans l’historique de l’œuvre, d’où l’on peut y revenir — et où se dit un verrou sous lequel sa source a bougé. 0 garde tous les changements. Un an quand rien n’est réglé.',
       'sources.priority': 'Les sources, la plus fiable d’abord, séparées par des virgules. Elles se mettent en ordre sur la page Sources ; une œuvre prend un nouvel ordre à son prochain rafraîchissement.',
       'updates.check': 'Une fois par jour, et une minute après le démarrage, ce serveur demande à GitHub sa dernière version, et le tableau de bord signale quand une plus récente est sortie. Ce qui part est une seule requête GET anonyme vers api.github.com, avec le nom et la version que porte chaque requête de ce serveur — rien sur cette instance ni sur ce qu’elle contient. Coupé tant qu’on ne l’active pas.',
       'backup.schedule': 'Comptée depuis l’archive la plus récente, quelle qu’en soit l’origine ; coupé, des archives se font encore à la main et avant chaque restauration. Les archives sont sur Administration › Sauvegardes.',
@@ -3081,6 +3252,8 @@ export const fr: Dict = {
       password_login_off: 'Les mots de passe sont coupés ici : passez par le fournisseur d’identité. Seul l’administrateur que nomme l’environnement en garde un.',
       sign_in_first: 'Connectez-vous d’abord, puis liez votre compte depuis sa page.',
     },
+    usernameMissing: 'Saisissez votre identifiant.',
+    passwordMissing: 'Saisissez votre mot de passe.',
   },
   register: {
     title: 'Rejoindre le catalogue',
@@ -3121,6 +3294,8 @@ export const fr: Dict = {
       conflict: 'Cet identifiant est déjà pris.',
       rate_limited: 'Trop de comptes depuis cette adresse pour l’instant : réessayez dans une heure.',
     },
+    codeMissing: 'Saisissez le code de votre invitation.',
+    emailWrong: 'Ce n’est pas une adresse e-mail.',
   },
   share: {
     button: 'Partager',
@@ -3132,6 +3307,8 @@ export const fr: Dict = {
     loading: 'Chargement…',
     error: 'Quelque chose s’est mal passé.',
     errorHint: 'Cette page n’a pas pu s’afficher. C’est souvent passager — réessayez.',
+    offline: 'Pas de connexion',
+    offlineHint: 'Cet appareil est hors ligne, et la page a besoin du serveur. Elle revient d’elle-même avec la connexion.',
     retry: 'Réessayer',
     cancel: 'Annuler',
     actionFailed: 'Cela n’a pas fonctionné.',
@@ -3257,5 +3434,7 @@ export const fr: Dict = {
     openWork: (title: string) => `Ouvrir ${title}`,
     shelfBack: 'Revenir en arrière',
     shelfOn: 'Voir la suite',
+    toResults: 'Aller aux résultats',
+    toFilters: 'Revenir aux filtres',
   },
 }

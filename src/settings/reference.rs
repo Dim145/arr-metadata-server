@@ -251,6 +251,18 @@ const GROUPS: &[Group] = &[
         )],
     },
     Group {
+        title: "Journal",
+        lead: "On **Settings › Everything else**. See [The journal](editing.md#the-journal).",
+        entries: &[set(
+            "history.keepDays",
+            "How many days each work's journal keeps a change — a value a source gave or took, \
+             a lock set, changed or lifted — before the pass that prunes the audit trail takes it \
+             away; `0` keeps every one. A change taken away can no longer be gone back to from \
+             the journal, and a lock its source moved under before then is no longer counted \
+             among those the dashboard names. Unset, it is `365`.",
+        )],
+    },
+    Group {
         title: "Automatic refresh",
         lead: "On **Settings › Automatic refresh**: stored works are fetched again as what is \
                known about them ages.",

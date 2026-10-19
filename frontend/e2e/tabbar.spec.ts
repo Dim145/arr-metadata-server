@@ -149,7 +149,11 @@ test.describe('the bar along the foot of a phone', () => {
 
     await bar(page).getByRole('button', { name: MORE }).click()
     await expect(sheet(page)).toBeVisible()
-    await page.waitForFunction(() => document.getAnimations().every((a) => a.playState !== 'running'))
+    // The front page's plate is driven by the scroll, and runs for as long as
+    // the page is there: only what time drives is waited for.
+    await page.waitForFunction(() =>
+      document.getAnimations().every((a) => a.playState !== 'running' || a.timeline !== document.timeline),
+    )
     const results = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']).analyze()
     expect(results.violations.map((v) => `${v.id}: ${v.help}`)).toEqual([])
   })

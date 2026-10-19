@@ -1403,7 +1403,7 @@
           "Audit"
         ],
         "summary": "Read the audit trail, newest first.",
-        "description": "Administrative: it names who did what, so it requires an administrator or a\nkey carrying the `admin` scope.",
+        "description": "Administrative: it names who did what, so it requires an administrator or a\nkey carrying the `admin` scope. With `format`, every entry the filters\nmatch is handed over as a file: a CSV for a spreadsheet — a column for\nthe instant, who, the action, the target, the work it names, the note and\nthe address — or a JSON array of the entries.",
         "operationId": "audit_list",
         "parameters": [
           {
@@ -1455,14 +1455,34 @@
               "type": "integer",
               "format": "int64"
             }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "description": "`csv` or `json`: every entry the filters match, newest first, as a\nfile to download — the page asked for, `limit` and `offset`, set\naside.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "The forms a list is downloaded in: `csv` for a spreadsheet, `json` for a\nprogram.",
+              "enum": [
+                "csv",
+                "json"
+              ]
+            }
           }
         ],
         "responses": {
           "200": {
+            "description": "A page of the trail; with `format`, the whole of what the filters match, as a file",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/AuditListResponse"
+                }
+              },
+              "text/csv": {
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -2406,7 +2426,7 @@
           "Catalogue"
         ],
         "summary": "What the catalogue can be narrowed by next, with how many works each\nchoice would leave.",
-        "description": "Takes the list's own filters and counts under them — see\n[`repo::item::facets`] for how each is counted — and over what this caller\nmay see: an adult title's genre is not counted for somebody who would never\nbe shown it.",
+        "description": "Takes the list's own filters and counts under them — see\n[`repo::item::facets`] for how each is counted — and over what this caller\nmay see: an adult title's genre is not counted for somebody who would never\nbe shown it. A term counts the works the list finds for it, a misspelt one\nincluded.",
         "operationId": "browse_facets",
         "parameters": [
           {
@@ -2551,6 +2571,62 @@
             }
           },
           {
+            "name": "person",
+            "in": "query",
+            "description": "Somebody the works credit: their TMDB id, or their name — whatever\nits case and accents, but whole: `Wim Wenders`, not `Wenders`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "runtimeMin",
+            "in": "query",
+            "description": "The shortest a work may run, in minutes: a film's length, a series'\nepisodes'.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "runtimeMax",
+            "in": "query",
+            "description": "The longest a work may run, in minutes.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "country",
+            "in": "query",
+            "description": "A country the works were made in, ISO 3166-1 alpha-2: `FR`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "certification",
+            "in": "query",
+            "description": "The rating the works carry in the reader's country, as that country\nwrites it: `12`, `PG-13`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "region",
+            "in": "query",
+            "description": "The reader's country, ISO 3166-1 alpha-2, which `certification` is\nread in. Absent, the country this caller is answered for:\n`tmdb.watchRegion` as set for it, else its language's.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "minRating",
             "in": "query",
             "description": "The lowest score, out of ten, a work may have to be listed.",
@@ -2572,7 +2648,7 @@
           {
             "name": "missing",
             "in": "query",
-            "description": "Only works lacking these, comma-separated: `poster` — no poster of\ntheir own, nor one chosen by hand — `overview` — no overview in the\nlanguage they are stored in — `imdb` — no IMDb identifier — and\n`refresh` — never refreshed, though they have an identifier to be\nrefreshed by. Several narrow together: `poster,overview` lists the works\nlacking both. For those who may edit the catalogue, as `refreshFailed`.",
+            "description": "Only works lacking these, comma-separated: `poster` — no poster of\ntheir own, nor one chosen by hand — `overview` — no overview in the\nlanguage they are stored in — `imdb` — no IMDb identifier — and\n`refresh` — never refreshed, though they have an identifier to be\nrefreshed by — and `divergingLock` — a lock a source moved under since\nit was set, and which says something else now. Several narrow\ntogether: `poster,overview` lists the works lacking both. For those who\nmay edit the catalogue, as `refreshFailed`.",
             "required": false,
             "schema": {
               "type": "string"
@@ -2581,7 +2657,7 @@
           {
             "name": "sort",
             "in": "query",
-            "description": "`popularity` (the default), `rating`, `release`, `title`, `added` or\n`refreshed`.",
+            "description": "`relevance` — how well each work answers `term`, the default when\nthere is one — `popularity` (the default otherwise), `rating`,\n`release`, `title`, `added`, `refreshed`, `runtime`, `lastAired` or\n`episodes`.",
             "required": false,
             "schema": {
               "type": "string"
@@ -2620,7 +2696,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Facets"
+                  "$ref": "#/components/schemas/CatalogueFacets"
                 }
               }
             }
@@ -2812,7 +2888,7 @@
           "Catalogue"
         ],
         "summary": "List and search stored works.",
-        "description": "Searches this server's own store only — it does not reach out to a provider.\nManual overrides are applied, so what you see here is what clients are served.",
+        "description": "Searches this server's own store only — it does not reach out to a provider.\nManual overrides are applied, so what you see here is what clients are served.\n\nWith a `term`, the works are ranked by how well each answers it — a title\nthat is the term before one that starts with it, before one with a word\nthat does, before one that holds it — the better known first among those\nthat answer alike; a term misspelt finds what it resembles when its\nletters find little. `sort` still orders a search when it is given.",
         "operationId": "items_list",
         "parameters": [
           {
@@ -2957,6 +3033,62 @@
             }
           },
           {
+            "name": "person",
+            "in": "query",
+            "description": "Somebody the works credit: their TMDB id, or their name — whatever\nits case and accents, but whole: `Wim Wenders`, not `Wenders`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "runtimeMin",
+            "in": "query",
+            "description": "The shortest a work may run, in minutes: a film's length, a series'\nepisodes'.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "runtimeMax",
+            "in": "query",
+            "description": "The longest a work may run, in minutes.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "country",
+            "in": "query",
+            "description": "A country the works were made in, ISO 3166-1 alpha-2: `FR`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "certification",
+            "in": "query",
+            "description": "The rating the works carry in the reader's country, as that country\nwrites it: `12`, `PG-13`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "region",
+            "in": "query",
+            "description": "The reader's country, ISO 3166-1 alpha-2, which `certification` is\nread in. Absent, the country this caller is answered for:\n`tmdb.watchRegion` as set for it, else its language's.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "minRating",
             "in": "query",
             "description": "The lowest score, out of ten, a work may have to be listed.",
@@ -2978,7 +3110,7 @@
           {
             "name": "missing",
             "in": "query",
-            "description": "Only works lacking these, comma-separated: `poster` — no poster of\ntheir own, nor one chosen by hand — `overview` — no overview in the\nlanguage they are stored in — `imdb` — no IMDb identifier — and\n`refresh` — never refreshed, though they have an identifier to be\nrefreshed by. Several narrow together: `poster,overview` lists the works\nlacking both. For those who may edit the catalogue, as `refreshFailed`.",
+            "description": "Only works lacking these, comma-separated: `poster` — no poster of\ntheir own, nor one chosen by hand — `overview` — no overview in the\nlanguage they are stored in — `imdb` — no IMDb identifier — and\n`refresh` — never refreshed, though they have an identifier to be\nrefreshed by — and `divergingLock` — a lock a source moved under since\nit was set, and which says something else now. Several narrow\ntogether: `poster,overview` lists the works lacking both. For those who\nmay edit the catalogue, as `refreshFailed`.",
             "required": false,
             "schema": {
               "type": "string"
@@ -2987,7 +3119,7 @@
           {
             "name": "sort",
             "in": "query",
-            "description": "`popularity` (the default), `rating`, `release`, `title`, `added` or\n`refreshed`.",
+            "description": "`relevance` — how well each work answers `term`, the default when\nthere is one — `popularity` (the default otherwise), `rating`,\n`release`, `title`, `added`, `refreshed`, `runtime`, `lastAired` or\n`episodes`.",
             "required": false,
             "schema": {
               "type": "string"
@@ -3375,6 +3507,170 @@
           },
           "404": {
             "description": "No such work, or none this caller may see"
+          }
+        }
+      }
+    },
+    "/api/v1/items/{id}/changes": {
+      "get": {
+        "tags": [
+          "Audit"
+        ],
+        "summary": "Read a work's journal, newest first.",
+        "description": "Every value a refresh, a sync or a person changed — of the work, of its\nseasons and episodes, of a child a lock names — with what it held, what it\ntook, who and why: `refresh`, `sync` and `fallback` are a source's, `lock`,\n`unlock`, `revert` and `edit` a person's. Kept `history.keepDays` days.\nFor the people who keep the catalogue: it names who locked what. With\n`format`, every change the filters match is handed over as a file: a CSV\nfor a spreadsheet, or a JSON array of the changes.",
+        "operationId": "history_changes",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The work's identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "field",
+            "in": "query",
+            "description": "One field, as the field registry names it — `overview`, `genres` —\nwherever it is; `number` for the episodes that moved.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "actor",
+            "in": "query",
+            "description": "A person, a key or a source: who made the change, or whose answer it\nwas — `admin`, `tmdb`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "description": "Only the changes made at or after this instant (RFC 3339), or this\nday (`2026-10-01`, from its midnight UTC).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "description": "Only the changes made before this instant, or this day.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Where the page before ended: the `next` it was answered with.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "How many changes a page holds: fifty unless asked, five hundred at the\nmost.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "description": "`csv` or `json`: every change the filters match, newest first, as a\nfile to download — `cursor` and `limit` set aside.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "The forms a list is downloaded in: `csv` for a spreadsheet, `json` for a\nprogram.",
+              "enum": [
+                "csv",
+                "json"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of the journal; with `format`, the whole of what the filters match, as a file",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeList"
+                }
+              },
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A period that is neither an instant nor a day"
+          },
+          "403": {
+            "description": "The caller may not write"
+          },
+          "404": {
+            "description": "No such work"
+          }
+        }
+      }
+    },
+    "/api/v1/items/{id}/changes/undo": {
+      "post": {
+        "tags": [
+          "Audit"
+        ],
+        "summary": "Undo the caller's last change of one value of a work.",
+        "description": "The lock it set, changed or lifted is put back as it was — the lock it\nreplaced, with the value that held, or no lock at all — and the journal\nand the audit trail call that a `revert`. What the catalogue's \"Undo\"\ndoes for each work an action over a selection changed. Refused when\nsomething else changed the value since — a refresh, or somebody else —\nand for a row added or removed by hand, which is removed or added again.",
+        "operationId": "history_undo",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The work's identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UndoChangeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Put back as it was"
+          },
+          "400": {
+            "description": "Unparsable scope, a value the field cannot hold, or no language"
+          },
+          "403": {
+            "description": "The caller may not write"
+          },
+          "404": {
+            "description": "No change of that value to undo"
+          },
+          "409": {
+            "description": "Something else changed the value since, or the change added or removed a row by hand"
           }
         }
       }
@@ -4387,7 +4683,7 @@
           "Locks"
         ],
         "summary": "Record an edit, locking the field.",
-        "description": "From this point every refresh leaves the field alone. Sending a `null` value\nstores an explicit \"cleared\" state, which still locks it; to hand the field\nback to the provider, delete the override instead.\n\nWith a `language`, a text — a title, an overview, a tagline — is locked in\nthat language alone: a work served in it is given that text, over a lock\nin every language and over any translation; served in another, it is not.\nA scope naming a child the sources gave hides it (`hidden`, `true`) or\ncorrects a credit (`characterName`, `sortOrder`), whatever row a refresh\nwrites it in next.",
+        "description": "From this point every refresh leaves the field alone. Sending a `null` value\nstores an explicit \"cleared\" state, which still locks it; to hand the field\nback to the provider, delete the override instead.\n\nWith a `language`, a text — a title, an overview, a tagline — is locked in\nthat language alone: a work served in it is given that text, over a lock\nin every language and over any translation; served in another, it is not.\nA scope naming a child the sources gave hides it (`hidden`, `true`) or\ncorrects a credit (`characterName`, `sortOrder`), whatever row a refresh\nwrites it in next.\n\nThe work's journal is told what the value held and what it holds now: a\nlock, an edit of what was entered by hand, or — with `cause: revert` — a\nvalue put back from the journal.",
         "operationId": "overrides_set",
         "parameters": [
           {
@@ -4437,6 +4733,7 @@
           "Locks"
         ],
         "summary": "Unlock every field of a work at once.",
+        "description": "The work's journal is told, lock by lock, what each held and what is\nserved without it.",
         "operationId": "overrides_clear",
         "parameters": [
           {
@@ -4471,7 +4768,7 @@
           "Locks"
         ],
         "summary": "Unlock one field, handing it back to provider data on the next refresh.",
-        "description": "The scope may name a child the sources gave, as the lock does\n(`credit:actor:tmdb:17419`), percent-encoded; an image's, whose address\nholds slashes, is easier lifted from the image's own route.",
+        "description": "The scope may name a child the sources gave, as the lock does\n(`credit:actor:tmdb:17419`), percent-encoded; an image's, whose address\nholds slashes, is easier lifted from the image's own route. The work's\njournal is told what the lock held and what is served without it.",
         "operationId": "overrides_unset",
         "parameters": [
           {
@@ -4508,6 +4805,15 @@
             "required": false,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "cause",
+            "in": "query",
+            "description": "`revert` when the lock is lifted to put back what the work's journal\nsays the value was; absent otherwise.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/LockCause"
             }
           }
         ],
@@ -4571,7 +4877,7 @@
           "Catalogue"
         ],
         "summary": "Refetch from providers now, ignoring the refresh schedule.",
-        "description": "Provider data and provider-sourced children are replaced. Manual overrides\nare not touched — that is the point of them.",
+        "description": "Provider data and provider-sourced children are replaced. Manual overrides\nare not touched — that is the point of them. What the refresh changed is\nwritten to the work's journal, as the caller asked it. With `dryRun`,\nnothing is: the sources are asked and merged as a refresh asks and merges\nthem, and the answer is what would be written over.",
         "operationId": "items_refresh",
         "parameters": [
           {
@@ -4582,15 +4888,24 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "dryRun",
+            "in": "query",
+            "description": "`1` to be told what the refresh would write over — the values the\nsources give otherwise now, none of them locked — with nothing written,\nno run recorded and nobody told.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "The work as it now stands",
+            "description": "The work as it now stands; for a dry run, what the refresh would write over",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MediaItem"
+                  "$ref": "#/components/schemas/RefreshAnswer"
                 }
               }
             }
@@ -4601,8 +4916,11 @@
           "404": {
             "description": "No such work"
           },
+          "409": {
+            "description": "A manual entry, which has no source to refresh from"
+          },
           "502": {
-            "description": "The provider could not be reached"
+            "description": "The provider could not be reached; for a dry run, no provider could resolve the work"
           }
         }
       }
@@ -4850,7 +5168,7 @@
           "Catalogue"
         ],
         "summary": "Ask some of a work's sources again, and only them.",
-        "description": "What they say is weighed against what every other source said last time,\nby the usual priority: the result is what a full refresh would make had\nnobody else changed their mind. Fields locked by hand are not touched, and\nthe work's refresh schedule stands — this is not a refresh.",
+        "description": "What they say is weighed against what every other source said last time,\nby the usual priority: the result is what a full refresh would make had\nnobody else changed their mind. Fields locked by hand are not touched, and\nthe work's refresh schedule stands — this is not a refresh. What it\nchanged is written to the work's journal; with `dryRun`, nothing is, and\nthe answer is what would be written over.",
         "operationId": "items_sync",
         "parameters": [
           {
@@ -4860,6 +5178,15 @@
             "required": true,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "dryRun",
+            "in": "query",
+            "description": "`1` to be told what asking these sources again would write over, with\nnothing written and nobody told.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
             }
           }
         ],
@@ -4875,10 +5202,11 @@
         },
         "responses": {
           "200": {
+            "description": "What the sync did; for a dry run, what it would write over",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SyncOutcome"
+                  "$ref": "#/components/schemas/SyncAnswer"
                 }
               }
             }
@@ -5828,6 +6156,87 @@
           },
           "404": {
             "description": "Nobody by that id is credited on a work held here"
+          }
+        }
+      }
+    },
+    "/api/v1/search": {
+      "get": {
+        "tags": [
+          "Catalogue"
+        ],
+        "summary": "Search the works, the people and the episodes at once.",
+        "description": "Each kind ranked on its own — a name that is the term, then one that\nstarts with it, then one with a word that does, then one that holds it,\nthen, when those are few, one a misspelt term resembles; the better known\nfirst among those that answer alike. A work is found by any of its titles\n— original, alternative, translated, locked by hand — and named by the one\nit is shown under, with the one it was found by beside it. Only what the\ncaller may see: works switched on, adult ones as their policy allows, and\npeople credited on such a work.",
+        "operationId": "search_find",
+        "parameters": [
+          {
+            "name": "term",
+            "in": "query",
+            "description": "What to look for: a title, a name, an episode's title — as typed,\naccents, case and punctuation aside. A year at the end of a title,\n`dune 2021`, puts that year's work first.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "kinds",
+            "in": "query",
+            "description": "Which kinds of hit, comma-separated: `work`, `person`, `episode`.\nAll three when left out.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "The most hits of each kind, from 1 to 20; 6 when left out.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "language",
+            "in": "query",
+            "description": "Titles in this language, where a translation is held.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "includeAdult",
+            "in": "query",
+            "description": "Ask for adult titles. Honoured only as far as the server and this\ncaller's own policy allow, as the list does.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "includeDisabled",
+            "in": "query",
+            "description": "Works switched off too. For those who may edit the catalogue; anybody\nelse is answered as if it had not been asked.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchHits"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The term is too long, a kind is not one of work, person and episode, or the language is not a language tag"
           }
         }
       }
@@ -9642,6 +10051,44 @@
           }
         }
       },
+      "CatalogueFacets": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Facets"
+          },
+          {
+            "type": "object",
+            "required": [
+              "countries",
+              "certifications"
+            ],
+            "properties": {
+              "countries": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Facet"
+                },
+                "description": "The countries the works were made in, ISO 3166-1 alpha-2, most common\nfirst — counted as if no country were chosen."
+              },
+              "certifications": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Facet"
+                },
+                "description": "The ratings the works carry in the reader's country (`region`), as\nthat country writes them; mildest first where they are ages, most\ncommon first otherwise. Counted as if no rating were chosen."
+              },
+              "region": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The country those ratings are read in: the one asked for, else the\none this caller is answered for. Absent, the ratings are the ones the\nworks carry as their own."
+              }
+            }
+          }
+        ],
+        "description": "What the catalogue can be narrowed by next, with how many works each\nchoice would leave: the list's facets, and the countries and the ratings\nits further filters choose among."
+      },
       "Certificate": {
         "type": "object",
         "required": [
@@ -9681,6 +10128,126 @@
           },
           "Certification": {
             "type": "string"
+          }
+        }
+      },
+      "ChangeCause": {
+        "type": "string",
+        "description": "Why a value changed.",
+        "enum": [
+          "refresh",
+          "sync",
+          "fallback",
+          "lock",
+          "unlock",
+          "revert",
+          "edit",
+          "merge",
+          "import"
+        ]
+      },
+      "ChangeEntry": {
+        "type": "object",
+        "description": "A change, as the journal reads it.",
+        "required": [
+          "id",
+          "at",
+          "cause",
+          "actor",
+          "provider",
+          "scope",
+          "field",
+          "before",
+          "after",
+          "wasLocked"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "at": {
+            "type": "string"
+          },
+          "cause": {
+            "$ref": "#/components/schemas/ChangeCause"
+          },
+          "actor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who, as the audit trail names them — a person, or a key; nothing for\nthe schedule's own doing."
+          },
+          "provider": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The source whose answer the new value is, where one is known."
+          },
+          "scope": {
+            "type": "string",
+            "description": "`item`, `season:2`, `episode:2x5`, or a child a lock names, as a lock\nnames it: `credit:actor:tmdb:17419`."
+          },
+          "field": {
+            "type": "string",
+            "description": "The field, as the field registry names it; for an episode, `number`\nwhen it moved, `episode` when it came or went — `season` for a season."
+          },
+          "language": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The language a text was locked in alone (`fra`); absent for every\nlanguage, and for what is in none."
+          },
+          "before": {
+            "description": "What it held; `null` for nothing."
+          },
+          "after": {
+            "description": "What it took; `null` for nothing."
+          },
+          "wasLocked": {
+            "type": "boolean",
+            "description": "Whether a lock held the field as it changed: a source's change made\nunder one reached the record and not what is served."
+          }
+        }
+      },
+      "ChangeList": {
+        "type": "object",
+        "description": "A page of a work's journal.",
+        "required": [
+          "changes",
+          "fields",
+          "who"
+        ],
+        "properties": {
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChangeEntry"
+            },
+            "description": "Newest first; the changes one write made, in the order the work\nlists them."
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What to ask for the next page with, as `cursor`; absent after the\nlast."
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Every field the work's journal names, for a filter to offer."
+          },
+          "who": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Everybody it names — people, keys, sources — for a filter to offer."
           }
         }
       },
@@ -10894,6 +11461,44 @@
           }
         }
       },
+      "EpisodeHit": {
+        "type": "object",
+        "description": "An episode found by its title.",
+        "required": [
+          "workId",
+          "workTitle",
+          "seasonNumber",
+          "episodeNumber",
+          "title"
+        ],
+        "properties": {
+          "workId": {
+            "type": "string"
+          },
+          "workTitle": {
+            "type": "string",
+            "description": "The series' title, in the language asked for where one is held."
+          },
+          "seasonNumber": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "episodeNumber": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "title": {
+            "type": "string"
+          },
+          "airDate": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`YYYY-MM-DD`."
+          }
+        }
+      },
       "EpisodeOrder": {
         "type": "object",
         "description": "One of the orders a series' episodes come in: one of TheTVDB's besides\nthe aired one, a TMDB episode group, one made here — or the aired order\nitself, whose places are the work's own episodes and are not listed.",
@@ -11359,6 +11964,39 @@
               "null"
             ],
             "format": "int32"
+          }
+        }
+      },
+      "FieldChange": {
+        "type": "object",
+        "description": "One value of a work that changed — of the work itself, of a season or of\nan episode — as its journal writes it.",
+        "required": [
+          "scope",
+          "field",
+          "before",
+          "after"
+        ],
+        "properties": {
+          "scope": {
+            "type": "string",
+            "description": "Where the value is, as a lock names it: `item`, `season:2`,\n`episode:2x5` — an episode by the numbers it has after the change."
+          },
+          "field": {
+            "type": "string",
+            "description": "The field, as the field registry names it; for an episode, `number`\nwhen it moved, and `episode` when it came or went — `season` for a\nseason."
+          },
+          "before": {
+            "description": "What it held; `null` for nothing."
+          },
+          "after": {
+            "description": "What it holds now, or would; `null` for nothing."
+          },
+          "provider": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The source whose answer the new value is, where one is known."
           }
         }
       },
@@ -12774,6 +13412,46 @@
           },
           "value": {
             "description": "The value the field is locked to — any JSON value, as the field holds\nit — or `null` where it was cleared and locked so. Left out\naltogether, the lock is refused: nothing is guessed on a document's\nbehalf."
+          }
+        }
+      },
+      "LockCause": {
+        "type": "string",
+        "description": "What a lock is set or lifted for, besides an edit.",
+        "enum": [
+          "revert"
+        ]
+      },
+      "LockDivergence": {
+        "type": "object",
+        "description": "A lock whose sources say something else now.",
+        "required": [
+          "scope",
+          "field",
+          "value",
+          "moved"
+        ],
+        "properties": {
+          "scope": {
+            "type": "string",
+            "description": "Where the lock is, as it names it: `item`, `season:2`, `episode:2x5`."
+          },
+          "field": {
+            "type": "string"
+          },
+          "value": {
+            "description": "What the sources give the work now, merged as a refresh merges them;\n`null` for nothing."
+          },
+          "provider": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The source whose value that is, where one is known: of the work's own\nfields."
+          },
+          "moved": {
+            "type": "boolean",
+            "description": "Whether a source changed the value since the lock was set: one the\ndashboard counts among the locks to look at again."
           }
         }
       },
@@ -14463,6 +15141,32 @@
           }
         }
       },
+      "PersonHit": {
+        "type": "object",
+        "description": "Somebody the catalogue's works credit.",
+        "required": [
+          "name",
+          "works"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "tmdbId": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Their TMDB id, which their page is filed under; none for somebody\ncredited by name alone, whose works the list finds by that name."
+          },
+          "works": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many works of the catalogue credit them."
+          }
+        }
+      },
       "PersonRole": {
         "type": "object",
         "description": "One part a person played, or one job they did, on one work.",
@@ -15518,6 +16222,13 @@
               "$ref": "#/components/schemas/SyncSource"
             },
             "description": "Every provider that could describe the work, in the order a refresh\nasks them."
+          },
+          "diverging": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LockDivergence"
+            },
+            "description": "The locks whose sources say something else now, beside what they say."
           }
         }
       },
@@ -15727,6 +16438,47 @@
           },
           "Title": {
             "type": "string"
+          }
+        }
+      },
+      "RefreshAnswer": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/MediaItem"
+          },
+          {
+            "$ref": "#/components/schemas/RefreshPreview"
+          }
+        ],
+        "description": "What a refresh is answered with: the work as it now stands, or — for a\ndry run — what the refresh would write over."
+      },
+      "RefreshPreview": {
+        "type": "object",
+        "description": "What a refresh or a sync would write over, had it been asked for in\nearnest.",
+        "required": [
+          "changes"
+        ],
+        "properties": {
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FieldChange"
+            },
+            "description": "The values it would write over, none of them locked — the work's own\nfirst, then its seasons and its episodes — each with what it holds\nand what it would hold."
+          },
+          "answered": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "For a sync, the sources asked that answered."
+          },
+          "silent": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "For a sync, the sources asked that did not."
           }
         }
       },
@@ -16100,6 +16852,35 @@
           "client",
           "peer"
         ]
+      },
+      "SearchHits": {
+        "type": "object",
+        "description": "What a search found, kind by kind, the best of each first.",
+        "required": [
+          "works",
+          "people",
+          "episodes"
+        ],
+        "properties": {
+          "works": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkHit"
+            }
+          },
+          "people": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PersonHit"
+            }
+          },
+          "episodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EpisodeHit"
+            }
+          }
+        }
       },
       "Season": {
         "type": "object",
@@ -16475,6 +17256,17 @@
           },
           "value": {
             "description": "Absent or `null` stores an explicit \"cleared\" value, which still locks\nthe field. To hand it back to the provider, delete the override instead."
+          },
+          "cause": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/LockCause",
+                "description": "`revert` when the value is put back from the work's journal; absent\nfor an edit."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
@@ -17503,6 +18295,17 @@
           "open"
         ]
       },
+      "SyncAnswer": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/SyncOutcome"
+          },
+          {
+            "$ref": "#/components/schemas/RefreshPreview"
+          }
+        ],
+        "description": "What a sync is answered with: what it did, or — for a dry run — what it\nwould write over."
+      },
       "SyncOutcome": {
         "type": "object",
         "required": [
@@ -17632,7 +18435,8 @@
           "tls.renew",
           "update.check",
           "arr.seed",
-          "backup.run"
+          "backup.run",
+          "search.rebuild"
         ]
       },
       "TaskMode": {
@@ -17788,7 +18592,8 @@
           "keyHorizonDays",
           "failedMedia",
           "backupOverdue",
-          "lastBackupAt"
+          "lastBackupAt",
+          "divergingLocks"
         ],
         "properties": {
           "refreshFailed": {
@@ -17841,6 +18646,11 @@
               "null"
             ],
             "description": "When the newest archive was made; `null` when none was."
+          },
+          "divergingLocks": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Works with a lock a source moved under since it was set, and which\nsays something else than the lock now: worth a look, to keep the\nlock or to take what the source says."
           }
         }
       },
@@ -17926,6 +18736,28 @@
           "off",
           "noId"
         ]
+      },
+      "UndoChangeRequest": {
+        "type": "object",
+        "required": [
+          "field"
+        ],
+        "properties": {
+          "scope": {
+            "type": "string",
+            "description": "`item`, `season:3`, `episode:3x7`, or a child a lock names. Defaults\nto the work itself."
+          },
+          "field": {
+            "type": "string"
+          },
+          "language": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The language the value was locked in alone: `fr`, `fra`. Absent for\nevery language."
+          }
+        }
       },
       "UpdateAvailable": {
         "type": "object",
@@ -18738,6 +19570,41 @@
           "attribution": {
             "type": "string",
             "description": "Who the data comes from; shown beside it, as TMDB's terms ask."
+          }
+        }
+      },
+      "WorkHit": {
+        "type": "object",
+        "description": "A work found.",
+        "required": [
+          "id",
+          "kind",
+          "title"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/MediaKind"
+          },
+          "title": {
+            "type": "string",
+            "description": "Its title, in the language asked for where a translation is held."
+          },
+          "year": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "matched": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The other name it was found by, where that is not its title: its\noriginal title, one of its alternative ones."
           }
         }
       },

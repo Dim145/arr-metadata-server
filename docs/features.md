@@ -140,18 +140,39 @@ Sonarr's metadata service — and does what both did, from one catalogue.
   episode has its page, every credited person a filmography of what is held
   here, and a schedule lists what airs and what comes out each week —
   episodes in the reader's own timezone, films on the day they come out.
-  The list is filtered by genre, years, score, status, language and network,
-  and sorted by popularity, score, date, title or when a work arrived — all of
-  it kept in the address, so a view can be sent as a link — by the values each
-  work's page shows, IMDb's latest score included when that list is on. A
-  series' combined genres count as the film genres they stand for: "Action &
-  Adventure" is found under Action and under Adventure, beside the films.
+  The list is filtered by genre, years, score, status, language and network
+  — and, a sheet away, by a person credited, a keyword, a running time, the
+  country a work was made in, the rating the reader's country gives it and the
+  collection a film belongs to — and sorted by popularity, score, date, title,
+  when a work arrived, running time, when a series last aired or how many
+  episodes it holds — all of it kept in the address, so a view can be sent as
+  a link — by the values each work's page shows, IMDb's latest score included
+  when that list is on. What is applied heads the filters as chips, each taken
+  off with a press, and the next page arrives as the end of the list comes
+  near. A series' combined genres count as the film genres they stand for:
+  "Action & Adventure" is found under Action and under Adventure, beside the
+  films.
   The search lists what it finds as it is typed — `/` puts the cursor in it —
   and the front page opens on one of the most followed works, its own logo
   over its backdrop, a different one each day. Each identifier opens the
   work's page on the site it came from; the artwork opens in a viewer; a
   trailer plays from YouTube's no-cookie domain, and only once somebody
   presses play.
+- **A search that ranks, and forgives.** A title is found by any name the
+  work goes by — original, alternative, translated, locked by hand — whatever
+  its accents, case and punctuation (`ete` finds *Été 85*, `greys` *Grey's
+  Anatomy*, while `が` stays apart from `か`), and the people its credits name
+  and its episodes' titles are found too. What is found comes in order: a
+  name that is the term, then one that starts with it, then one with a word
+  that does, then one that holds it, the better known first among those alike;
+  a year at the end of a term (`dune 2021`) puts that year's work first. When
+  the letters find nothing a term was typed to find, the names sharing most of
+  its trigrams are offered — `breking bad` finds Breaking Bad. The command
+  palette groups the works, the people (`@` alone looks for them) and the
+  episodes (`S05E14 — Ozymandias`), each leading to its page; Sonarr's and
+  Radarr's searches find the work held here by that very name before
+  TMDB's. One index serves both engines, kept by the server as works are
+  written ([The API](api.md#searching-the-catalogue)).
 - **A season chart, past and to come.** One page for each quarter of the
   calendar — winter from January, spring from April, summer from July, autumn
   from October — as anime season charts have it, for series and films alike:

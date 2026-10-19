@@ -4,9 +4,10 @@
  * glance.
  *
  * The week is set like a programme: the day in the display face, the time in
- * the margin, the programme beside it. The month is a grid of days, each with
+ * the margin, the programme beside it. The month is a table of days, each with
  * what airs on it, for the other question — which days have something, when
- * a series is back — and every day of it a step down to its week.
+ * a series is back — and every day of it a step down to its week; or, for
+ * whoever does not read a grid, the same month as a list, day after day.
  *
  * Days run in the reader's own timezone, since "Monday" is theirs — an episode
  * with a known time falls on the day it is on where they are. One with only a
@@ -17,21 +18,27 @@
  */
 
 import { useQuery } from '@tanstack/react-query'
-import { Link, useSearchParams } from 'react-router'
+import { useEffect, useId, useRef, useState, type MouseEvent } from 'react'
+import { Link, useLocation, useSearchParams } from 'react-router'
 
-import { Artwork, Placeholder } from '../components/media'
-import { Button, Chip, EmptyState, Glyph, Label, Skeleton } from '../components/ui'
+import { Artwork, Placeholder, VEILED, Veil, useVeiled } from '../components/media'
+import { Button, Chip, EmptyState, Glyph, Label, POPOVER, Skeleton } from '../components/ui'
 import { api, query } from '../lib/api'
 import { feeds, webcal } from '../lib/feeds'
 import { useMe, useTitle } from '../lib/hooks'
 import { cn } from '../lib/cn'
 import * as fmt from '../lib/format'
 import { useI18n } from '../lib/i18n'
-import { airTime, episodeCode, poster } from '../lib/media'
+import { airTime, backdrop, episodeCode, poster } from '../lib/media'
+import { airsWhenOn, releaseDay, releasedNotAired } from '../lib/platforms'
 import { mondayOf, seasonOf, seasonPath, type SeasonRef } from '../lib/seasons'
+import { plainClick } from '../lib/transitions'
 import type { Airing, Calendar as CalendarData, CalendarEntry, Me, MediaItem, Release } from '../lib/types'
 
 type View = 'week' | 'month'
+
+/** How the month is laid out: a grid of its days, or a list of those with something on. */
+type Layout = 'grid' | 'list'
 
 type Episodic = Extract<CalendarEntry, { kind: 'episode' }>
 type Releasing = Extract<CalendarEntry, { kind: 'release' }>
@@ -172,6 +179,7 @@ function Week() {
   const { t, lang, locale } = useI18n()
   const me = useMe()
   const [params, setParams] = useSearchParams()
+  const { hash } = useLocation()
 
   const monday = weekFrom(params.get('week'))
   const nextMonday = new Date(monday)
@@ -183,6 +191,16 @@ function Week() {
     queryKey: ['calendar', localDate(monday), lang],
     queryFn: () => api.get<CalendarData>(`/calendar${query({ from, to, language: lang })}`),
   })
+
+  // Opened at a day — from a day of the month, or by `t` for today — the
+  // week is read from that day's line, once the listing has drawn it. A
+  // task later: a page newly opened is first put at its top by the shell,
+  // whose effects run after this one's.
+  useEffect(() => {
+    if (!listing.isSuccess || !hash.startsWith('#day-')) return
+    const later = window.setTimeout(() => document.getElementById(hash.slice(1))?.scrollIntoView({ block: 'start' }))
+    return () => window.clearTimeout(later)
+  }, [hash, listing.isSuccess])
 
   const { works, byDay } = filed(listing.data)
 
@@ -250,7 +268,13 @@ function Week() {
             <Button size="sm" onClick={() => move(-1)} aria-label={t.calendar.previous} className="size-11 px-0">
               <Glyph name="chevronLeft" className="size-4" />
             </Button>
-            <Button size="sm" variant={thisWeek ? 'quiet' : 'ghost'} disabled={thisWeek} onClick={() => setParams({})}>
+            <Button
+              size="sm"
+              variant={thisWeek ? 'quiet' : 'ghost'}
+              disabled={thisWeek}
+              onClick={() => setParams({})}
+              aria-keyshortcuts="t"
+            >
               {t.calendar.thisWeek}
             </Button>
             <Button size="sm" onClick={() => move(1)} aria-label={t.calendar.next} className="size-11 px-0">
@@ -277,7 +301,7 @@ function Week() {
             )
             const inner = (
               <>
-                <span aria-hidden className="text-[0.625rem] tracking-wider uppercase">
+                <span aria-hidden className="text-caption tracking-wider uppercase">
                   {new Intl.DateTimeFormat(locale, { weekday: 'short' }).format(day).replace('.', '')}
                 </span>
                 <span aria-hidden className="font-display text-base leading-none">
@@ -315,6 +339,7 @@ function Week() {
         </div>
       ) : listing.isError ? (
         <EmptyState
+          kind="error"
           title={t.common.error}
           hint={t.calendar.loadFailed}
           action={
@@ -345,7 +370,7 @@ function Week() {
                   key={from.key}
                   id={`day-${from.key}`}
                   aria-labelledby={`day-heading-${from.key}`}
-                  className="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-b border-rule py-2.5"
+                  className="flex scroll-mt-24 flex-wrap items-baseline gap-x-3 gap-y-1 border-b border-rule py-2.5"
                 >
                   <h2 id={`day-heading-${from.key}`} className="font-display text-base text-bone-faint first-letter:uppercase">
                     {heading}
@@ -374,22 +399,7 @@ function Week() {
                   {isToday ? <Chip tone="accent">{t.calendar.today}</Chip> : null}
                 </div>
 
-                <ul className="divide-y divide-rule">
-                  {listed?.episodes.map((airing) => (
-                    <Listing
-                      key={`${airing.workId}-${airing.episode.id}`}
-                      airing={airing}
-                      work={works.get(airing.workId)}
-                    />
-                  ))}
-                  {listed?.releases.map((release) => (
-                    <ReleaseListing
-                      key={`${release.workId}-${release.date}`}
-                      release={release}
-                      work={works.get(release.workId)}
-                    />
-                  ))}
-                </ul>
+                <DayListing listed={listed} works={works} />
               </section>
             )
           })}
@@ -407,11 +417,41 @@ function Week() {
   )
 }
 
+/** A day's programme: its episodes in the order they air, then its films. */
+function DayListing({ listed, works }: { listed: Day | undefined; works: Map<string, MediaItem> }) {
+  return (
+    <ul className="divide-y divide-rule">
+      {listed?.episodes.map((airing) => (
+        <Listing key={`${airing.workId}-${airing.episode.id}`} airing={airing} work={works.get(airing.workId)} />
+      ))}
+      {listed?.releases.map((release) => (
+        <ReleaseListing key={`${release.workId}-${release.date}`} release={release} work={works.get(release.workId)} />
+      ))}
+    </ul>
+  )
+}
+
+/** A work's poster, small, in a listing: veiled as every poster of a work for adults is. */
+function ListingPoster({ work, kind }: { work?: MediaItem; kind: MediaItem['kind'] }) {
+  const art = work ? poster(work) : undefined
+  const veiled = useVeiled(work ?? { id: '' })
+  const standIn = <Placeholder title={work?.title ?? ''} kind={work?.kind ?? kind} className="size-full" />
+
+  return (
+    <div className="aspect-2/3 w-full overflow-hidden rounded-card border border-rule bg-ink-high">
+      {art ? (
+        <Artwork url={art} role="card" alt="" className={cn('size-full object-cover', veiled && VEILED)} fallback={standIn} />
+      ) : (
+        standIn
+      )}
+    </div>
+  )
+}
+
 /** One programme in the listing: the time in the margin, the rest beside it. */
 function Listing({ airing, work }: { airing: Airing; work?: MediaItem }) {
   const { t, locale } = useI18n()
   const { episode } = airing
-  const art = work ? poster(work) : undefined
   const moment = airTime(episode)?.moment
   const time = moment ? fmt.clock(moment.toISOString(), locale) : undefined
 
@@ -420,22 +460,10 @@ function Listing({ airing, work }: { airing: Airing; work?: MediaItem }) {
       {/* A time nobody knows is said only to a screen reader: under the day's
           heading, a dash where the hour would be read as one. */}
       <span className="font-mono text-sm text-bone tabular-nums">
-        {time ?? <span className="sr-only">{t.calendar.noTime}</span>}
+        {moment && time ? <time dateTime={moment.toISOString()}>{time}</time> : <span className="sr-only">{t.calendar.noTime}</span>}
       </span>
 
-      <div className="aspect-2/3 w-full overflow-hidden rounded-card border border-rule bg-ink-high">
-        {art ? (
-          <Artwork
-            url={art}
-            role="card"
-            alt=""
-            className="size-full object-cover"
-            fallback={<Placeholder title={work?.title ?? ''} kind={work?.kind ?? 'series'} className="size-full" />}
-          />
-        ) : (
-          <Placeholder title={work?.title ?? ''} kind={work?.kind ?? 'series'} className="size-full" />
-        )}
-      </div>
+      <ListingPoster work={work} kind="series" />
 
       <div className="min-w-0">
         <p className="flex flex-wrap items-baseline gap-x-3">
@@ -467,25 +495,12 @@ function Listing({ airing, work }: { airing: Airing; work?: MediaItem }) {
  */
 function ReleaseListing({ release, work }: { release: Release; work?: MediaItem }) {
   const { t } = useI18n()
-  const art = work ? poster(work) : undefined
 
   return (
     <li className="grid grid-cols-[3.75rem_2.75rem_minmax(0,1fr)] items-center gap-4 py-3">
       <Glyph name="film" className="text-bone-faint" />
 
-      <div className="aspect-2/3 w-full overflow-hidden rounded-card border border-rule bg-ink-high">
-        {art ? (
-          <Artwork
-            url={art}
-            role="card"
-            alt=""
-            className="size-full object-cover"
-            fallback={<Placeholder title={work?.title ?? ''} kind="movie" className="size-full" />}
-          />
-        ) : (
-          <Placeholder title={work?.title ?? ''} kind="movie" className="size-full" />
-        )}
-      </div>
+      <ListingPoster work={work} kind="movie" />
 
       <div className="min-w-0">
         <p className="flex flex-wrap items-baseline gap-x-3">
@@ -510,21 +525,32 @@ function ReleaseListing({ release, work }: { release: Release; work?: MediaItem 
 /* ── The month ────────────────────────────────────────────────────────────── */
 
 /**
- * The month at a glance: a grid of its days, Monday first, the days before
- * and after it that fill the first and last weeks dimmed but drawn — a month
- * that begins on a Thursday does not hide the Monday before. Each day lists
- * what airs on it and then what comes out, a few at most, and leads to its
- * week for the rest.
+ * The month at a glance: a table of its days, Monday first, a week a row, the
+ * days before and after it that fill the first and last weeks dimmed but
+ * drawn — a month that begins on a Thursday does not hide the Monday before.
+ * A table, which a screen reader walks by column and row, its name the month
+ * and each column the day's name in full; a grid of list items announced the
+ * days with no week and no weekday.
+ *
+ * Each day lists what airs on it and then what comes out, a few at most, a
+ * poster beside each where the day is wide enough to show one, and leads to
+ * its week for the rest. An episode opens a look at itself over the month —
+ * what it is, when, and the way to its page — rather than taking the reader
+ * away from the month to see it.
  *
  * On a phone a grid of text is unreadable at this width; the days carry a
- * mark an entry each, and a tap opens the week at that day.
+ * mark an entry each, and a tap opens the week at that day. And for anyone
+ * who reads a month better as a list, the same days in order, as the week
+ * lists them.
  */
 function Month() {
   const { t, lang, locale } = useI18n()
   const me = useMe()
   const [params, setParams] = useSearchParams()
+  const id = useId()
 
   const first = monthFrom(params.get('month'))
+  const layout: Layout = params.get('as') === 'list' ? 'list' : 'grid'
   const last = new Date(first.getFullYear(), first.getMonth() + 1, 0)
   const start = weekStart(first)
   const end = weekStart(last)
@@ -537,6 +563,31 @@ function Month() {
     queryFn: () => api.get<CalendarData>(`/calendar${query({ from, to, language: lang })}`),
   })
 
+  // The episode looked at, and the entry it was opened from, which it is
+  // drawn beside and which the focus goes back to.
+  const [looking, setLooking] = useState<{ airing: Airing; key: string; keyboard: boolean } | null>(null)
+  const panel = useRef<HTMLDivElement>(null)
+  const opener = useRef<HTMLElement | null>(null)
+
+  useEffect(() => {
+    const node = panel.current
+    if (!looking || !node) return
+    if (!node.matches(':popover-open')) node.showPopover()
+    // From the keyboard, the look is read from its top, where it opens, and
+    // Tab walks on through it; a pointer leaves the focus where it was.
+    if (looking.keyboard) node.focus()
+  }, [looking])
+
+  // Where the engine has no popovers, an episode is the way to its page, as
+  // it always was; with a key held it is one too, for a tab of its own.
+  const look = (airing: Airing, key: string) => (event: MouseEvent<HTMLAnchorElement>) => {
+    if (!POPOVER || !plainClick(event)) return
+    event.preventDefault()
+    opener.current = event.currentTarget
+    // A click the keyboard made carries no count of presses.
+    setLooking({ airing, key, keyboard: event.detail === 0 })
+  }
+
   const { works, byDay } = filed(listing.data)
   const today = localDate(new Date())
   const now = new Date()
@@ -545,16 +596,22 @@ function Month() {
   const counts = tally(byDay, days.filter(inMonth))
   const total = counts.episodes + counts.releases
 
-  const move = (months: number) => {
-    const next = new Date(first.getFullYear(), first.getMonth() + months, 1)
-    setParams(monthKey(next) === monthKey(now) ? { view: 'month' } : { view: 'month', month: monthKey(next) })
+  /** The month's address, its layout kept unless another is asked for. */
+  const address = (month: Date, as: Layout = layout) => {
+    const next: Record<string, string> = { view: 'month' }
+    if (monthKey(month) !== monthKey(now)) next.month = monthKey(month)
+    if (as === 'list') next.as = 'list'
+    return next
   }
+  const move = (months: number) => setParams(address(new Date(first.getFullYear(), first.getMonth() + months, 1)))
 
   const title = new Intl.DateTimeFormat(locale, { month: 'long', year: 'numeric' }).format(first)
   const weekdays = daysBetween(start, new Date(start.getFullYear(), start.getMonth(), start.getDate() + 7))
+  const weeks = Array.from({ length: days.length / 7 }, (_, row) => days.slice(row * 7, row * 7 + 7))
   // The season the month is in — the middle of it, where a month always is.
   const season = seasonOf(new Date(first.getFullYear(), first.getMonth(), 15))
   const weekTo = thisMonth ? '/calendar' : `/calendar?week=${localDate(weekStart(first))}`
+  const layoutTo = (as: Layout) => `/calendar?${new URLSearchParams(address(first, as)).toString()}`
 
   return (
     <div className="pt-10 pb-12">
@@ -563,13 +620,14 @@ function Month() {
           <Label>{t.calendar.label}</Label>
           <h1 className="mt-2 font-display text-3xl font-medium text-bone first-letter:uppercase sm:text-4xl">{title}</h1>
           <p className="mt-2 font-mono text-sm text-bone-faint tabular-nums">
-            {listing.isSuccess ? t.calendar.count(counts.episodes, counts.releases) : ' '}
+            {listing.isSuccess ? t.calendar.count(counts.episodes, counts.releases) : ' '}
           </p>
           <Extras season={season} me={me.data} />
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
           <ViewToggle view="month" weekTo={weekTo} monthTo="/calendar?view=month" />
+          <LayoutToggle layout={layout} gridTo={layoutTo('grid')} listTo={layoutTo('list')} />
           <nav aria-label={t.calendar.months} className="flex items-center gap-1 rounded-full border border-rule p-1">
             <Button size="sm" onClick={() => move(-1)} aria-label={t.calendar.previousMonth} className="size-11 px-0">
               <Glyph name="chevronLeft" className="size-4" />
@@ -578,7 +636,8 @@ function Month() {
               size="sm"
               variant={thisMonth ? 'quiet' : 'ghost'}
               disabled={thisMonth}
-              onClick={() => setParams({ view: 'month' })}
+              onClick={() => setParams(address(now))}
+              aria-keyshortcuts="t"
             >
               {t.calendar.thisMonth}
             </Button>
@@ -593,6 +652,7 @@ function Month() {
         <Skeleton className="h-[32rem] w-full" />
       ) : listing.isError ? (
         <EmptyState
+          kind="error"
           title={t.common.error}
           hint={t.calendar.loadFailed}
           action={
@@ -602,121 +662,53 @@ function Month() {
             </Button>
           }
         />
+      ) : layout === 'list' ? (
+        <MonthList days={days.filter(inMonth)} byDay={byDay} works={works} />
       ) : (
         <>
-          {/* Wide: the grid, each day with what airs and comes out on it. */}
-          <div className="rise hidden overflow-hidden rounded-panel border border-rule bg-ink-raised md:block">
-            <div aria-hidden className="grid grid-cols-7 border-b border-rule">
-              {weekdays.map((day) => (
-                <span key={day.getDay()} className="label px-3 py-2.5">
-                  {new Intl.DateTimeFormat(locale, { weekday: 'short' }).format(day)}
-                </span>
-              ))}
-            </div>
-            <ol aria-label={t.calendar.monthDays} className="grid grid-cols-7">
-              {days.map((day, index) => {
-                const key = localDate(day)
-                const listed = byDay.get(key)
-                const entries: CalendarEntry[] = [...(listed?.episodes ?? []), ...(listed?.releases ?? [])]
-                const isToday = key === today
-                const outside = !inMonth(day)
-                return (
-                  <li
-                    key={key}
-                    data-day={key}
-                    aria-current={isToday ? 'date' : undefined}
-                    className={cn(
-                      'flex min-h-28 min-w-0 flex-col gap-1 border-rule p-2',
-                      index >= 7 && 'border-t',
-                      index % 7 !== 0 && 'border-l',
-                      outside && 'bg-ink/40',
-                      isToday && 'shadow-[inset_0_2px_0_var(--color-vermillion)]',
-                    )}
-                  >
-                    {/* The days outside the month are told by their cell's
-                        ground alone: text dimmed past that fails to read. */}
-                    <span
-                      className={cn(
-                        'self-end font-mono text-xs tabular-nums',
-                        isToday ? 'rounded-full bg-vermillion px-1.5 text-ink' : 'text-bone-faint',
-                      )}
-                    >
-                      <span className="sr-only">
-                        {fmt.dayHeading(day, locale)} · {entries.length ? counted(listed, t.calendar.count) : t.calendar.nothing}
+          <div className="rise overflow-hidden rounded-panel border border-rule bg-ink-raised">
+            <table className="w-full table-fixed border-collapse">
+              <caption className="sr-only">{title}</caption>
+              <thead>
+                <tr className="border-b border-rule">
+                  {weekdays.map((day) => (
+                    <th key={day.getDay()} scope="col" className="label px-1 py-2.5 text-center font-medium md:px-3 md:text-left">
+                      {/* The abbreviation for the eye, a letter on a phone;
+                          the name in full for the ear. */}
+                      <span aria-hidden className="md:hidden">
+                        {new Intl.DateTimeFormat(locale, { weekday: 'narrow' }).format(day)}
                       </span>
-                      <span aria-hidden>{day.getDate()}</span>
-                    </span>
-                    {entries.slice(0, SHOWN_A_DAY).map((entry) =>
-                      entry.kind === 'release' ? (
-                        <MonthRelease key={`${entry.workId}-${entry.date}`} release={entry} work={works.get(entry.workId)} />
-                      ) : (
-                        <MonthEntry key={`${entry.workId}-${entry.episode.id}`} airing={entry} work={works.get(entry.workId)} />
-                      ),
-                    )}
-                    {entries.length > SHOWN_A_DAY ? (
-                      <Link
-                        to={weekAddress(day)}
-                        title={t.calendar.openWeek(fmt.dayHeading(day, locale))}
-                        className="mt-auto text-xs font-medium text-vermillion transition-colors duration-150 hover:text-vermillion-bright"
-                      >
-                        {t.calendar.more(entries.length - SHOWN_A_DAY)}
-                      </Link>
-                    ) : null}
-                  </li>
-                )
-              })}
-            </ol>
-          </div>
-
-          {/* Narrow: a mark an entry, and the week a tap away. */}
-          <div className="rise rounded-panel border border-rule bg-ink-raised p-2 md:hidden">
-            <div aria-hidden className="grid grid-cols-7">
-              {weekdays.map((day) => (
-                <span key={day.getDay()} className="label py-1 text-center">
-                  {new Intl.DateTimeFormat(locale, { weekday: 'narrow' }).format(day)}
-                </span>
-              ))}
-            </div>
-            <ol aria-label={t.calendar.monthDays} className="grid grid-cols-7 gap-y-1">
-              {days.map((day) => {
-                const key = localDate(day)
-                const listed = byDay.get(key)
-                const n = sizeOf(listed)
-                const isToday = key === today
-                const outside = !inMonth(day)
-                const label = `${fmt.dayHeading(day, locale)} · ${n ? counted(listed, t.calendar.count) : t.calendar.nothing}`
-                const cell = cn(
-                  'flex min-h-11 flex-1 flex-col items-center justify-center gap-1 rounded-card font-mono text-xs tabular-nums transition-colors duration-150',
-                  isToday ? 'bg-vermillion/12 text-bone' : n && !outside ? 'text-bone' : 'text-bone-faint',
-                  n && 'hover:bg-ink-high',
-                )
-                const inner = (
-                  <>
-                    <span aria-hidden className="font-display text-sm leading-none">
-                      {day.getDate()}
-                    </span>
-                    <span aria-hidden className="flex h-1.5 gap-0.5">
-                      {Array.from({ length: Math.min(n, 3) }, (_, dot) => (
-                        <span key={dot} className="size-1.5 rounded-full bg-vermillion" />
-                      ))}
-                    </span>
-                  </>
-                )
-                return (
-                  <li key={key} data-day={key} className="flex">
-                    {n ? (
-                      <Link to={weekAddress(day)} aria-label={label} aria-current={isToday ? 'date' : undefined} className={cell}>
-                        {inner}
-                      </Link>
-                    ) : (
-                      <span role="img" aria-label={label} aria-current={isToday ? 'date' : undefined} className={cell}>
-                        {inner}
+                      <span aria-hidden className="hidden md:inline">
+                        {new Intl.DateTimeFormat(locale, { weekday: 'short' }).format(day)}
                       </span>
-                    )}
-                  </li>
-                )
-              })}
-            </ol>
+                      <span className="sr-only">{new Intl.DateTimeFormat(locale, { weekday: 'long' }).format(day)}</span>
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {weeks.map((week, row) => (
+                  <tr key={localDate(week[0]!)} className={cn(row > 0 && 'border-t border-rule')}>
+                    {week.map((day, column) => {
+                      const key = localDate(day)
+                      return (
+                        <MonthDay
+                          key={key}
+                          day={day}
+                          listed={byDay.get(key)}
+                          works={works}
+                          isToday={key === today}
+                          outside={!inMonth(day)}
+                          first={column === 0}
+                          looking={looking?.key}
+                          onLook={look}
+                        />
+                      )
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
 
           {total === 0 ? (
@@ -724,6 +716,45 @@ function Month() {
           ) : null}
         </>
       )}
+
+      {/* The look at an episode: one for the month, filled with the one
+          opened, and drawn beside it where the browser ties a popover to an
+          anchor — over the middle of the screen where it does not. */}
+      {POPOVER ? (
+        <div
+          ref={panel}
+          id={`${id}-look`}
+          popover="auto"
+          role="dialog"
+          aria-labelledby={`${id}-look-title`}
+          tabIndex={-1}
+          onToggle={(event) => {
+            if (event.newState === 'open') return
+            // Closed with the focus inside it: back to the entry it opened from.
+            if (panel.current?.contains(document.activeElement)) opener.current?.focus()
+            setLooking(null)
+          }}
+          // Below the entry, or above it, whichever side has the more room,
+          // and no taller than that room, its margins counted — a box that
+          // overflows its room by a margin's width is refused there. What
+          // does not fit scrolls.
+          className={cn(
+            'popover-in max-h-[calc(100%-0.75rem)] w-[min(20rem,calc(100vw-2rem))] overflow-y-auto overscroll-contain rounded-panel border border-rule-bright bg-(--surface-overlay) p-0 text-bone shadow-[var(--shadow-plate)]',
+            'supports-[anchor-name:--a]:[position-anchor:--episode-look] supports-[anchor-name:--a]:[inset:auto] supports-[anchor-name:--a]:m-0 supports-[anchor-name:--a]:my-1.5',
+            'supports-[anchor-name:--a]:[position-area:block-end_span-inline-end] supports-[anchor-name:--a]:[position-try-fallbacks:flip-block,flip-inline,flip-block_flip-inline]',
+            'supports-[anchor-name:--a]:[position-try-order:most-height]',
+          )}
+        >
+          {looking ? (
+            <EpisodeLook
+              airing={looking.airing}
+              work={works.get(looking.airing.workId)}
+              titleId={`${id}-look-title`}
+              onClose={() => panel.current?.hidePopover()}
+            />
+          ) : null}
+        </div>
+      ) : null}
 
       {listing.data?.truncated ? (
         <p role="note" className="mt-8 rounded-panel border border-brass-deep px-4 py-3 text-sm text-bone-dim">
@@ -736,63 +767,345 @@ function Month() {
   )
 }
 
-/** One episode in a day's cell: a sliver of its poster, its code, its series. */
-function MonthEntry({ airing, work }: { airing: Airing; work?: MediaItem }) {
-  const { episode } = airing
-  const art = work ? poster(work) : undefined
+/**
+ * One day of the month's table. Its number is the way to its week — on a
+ * phone the whole cell, with a mark an entry; wider, at the corner, above
+ * what airs and comes out that day. The days outside the month are told by
+ * their cell's ground alone: text dimmed past that fails to read.
+ */
+function MonthDay({
+  day,
+  listed,
+  works,
+  isToday,
+  outside,
+  first,
+  looking,
+  onLook,
+}: {
+  day: Date
+  listed: Day | undefined
+  works: Map<string, MediaItem>
+  isToday: boolean
+  outside: boolean
+  /** The first of its row, which has no rule on its left. */
+  first: boolean
+  /** The entry an episode is being looked at from, if any. */
+  looking: string | undefined
+  onLook: (airing: Airing, key: string) => (event: MouseEvent<HTMLAnchorElement>) => void
+}) {
+  const { t, locale } = useI18n()
+  const key = localDate(day)
+  const entries: CalendarEntry[] = [...(listed?.episodes ?? []), ...(listed?.releases ?? [])]
+  const n = entries.length
+  const label = `${fmt.dayHeading(day, locale)} · ${n ? counted(listed, t.calendar.count) : t.calendar.nothing}`
+  const number = (
+    <>
+      <time
+        dateTime={key}
+        aria-hidden
+        className={cn(
+          'font-display text-sm leading-none md:font-mono md:text-xs md:tabular-nums',
+          isToday && 'md:rounded-full md:bg-vermillion md:px-1.5 md:py-0.5 md:text-ink',
+        )}
+      >
+        {day.getDate()}
+      </time>
+      <span aria-hidden className="flex h-1.5 gap-0.5 md:hidden">
+        {Array.from({ length: Math.min(n, 3) }, (_, dot) => (
+          <span key={dot} className="size-1.5 rounded-full bg-vermillion" />
+        ))}
+      </span>
+    </>
+  )
+  const corner = cn(
+    'flex min-h-11 flex-col items-center justify-center gap-1 rounded-card transition-colors duration-150',
+    'md:min-h-0 md:items-end md:self-end',
+    isToday ? 'bg-vermillion/12 text-bone md:bg-transparent' : n && !outside ? 'text-bone' : 'text-bone-faint',
+  )
 
   return (
-    <Link
-      to={`/work/${airing.workId}/season/${episode.seasonNumber}/episode/${episode.episodeNumber}`}
-      title={`${work?.title ?? ''} · ${episodeCode(episode)}${episode.title ? ` · ${episode.title}` : ''}`}
-      className="flex min-w-0 items-center gap-1.5 rounded-card text-xs leading-tight text-bone-dim transition-colors duration-150 hover:text-bone"
+    <td
+      data-day={key}
+      aria-current={isToday ? 'date' : undefined}
+      className={cn(
+        'h-14 border-rule p-1 align-top md:h-28 md:p-2',
+        !first && 'border-l',
+        outside && 'bg-ink/40',
+        isToday && 'md:shadow-[inset_0_2px_0_var(--color-vermillion)]',
+      )}
     >
-      {/* A sliver too small for a stand-in: a picture that fails leaves the
-          box plain rather than the browser's broken-image mark. */}
-      <span className="aspect-2/3 w-4 shrink-0 overflow-hidden rounded-xs border border-rule bg-ink-high">
-        {art ? (
-          <Artwork url={art} role="thumb" alt="" className="size-full object-cover" fallback={<span className="block size-full" />} />
+      <div className="@container flex h-full min-w-0 flex-col gap-1">
+        {n ? (
+          <Link to={weekAddress(day)} aria-label={label} className={cn(corner, 'hover:bg-ink-high md:hover:bg-transparent md:hover:text-vermillion')}>
+            {number}
+          </Link>
+        ) : (
+          <span className={corner}>
+            <span className="sr-only">{label}</span>
+            {number}
+          </span>
+        )}
+        {n ? (
+          <ul className="hidden min-w-0 flex-col gap-1.5 md:flex">
+            {entries.slice(0, SHOWN_A_DAY).map((entry) =>
+              entry.kind === 'release' ? (
+                <MonthRelease key={`${entry.workId}-${entry.date}`} release={entry} work={works.get(entry.workId)} />
+              ) : (
+                <MonthEntry
+                  key={`${entry.workId}-${entry.episode.id}`}
+                  airing={entry}
+                  work={works.get(entry.workId)}
+                  anchored={looking === `${entry.workId}-${entry.episode.id}`}
+                  onLook={onLook(entry, `${entry.workId}-${entry.episode.id}`)}
+                />
+              ),
+            )}
+          </ul>
         ) : null}
-      </span>
-      <span className="truncate">
-        <span className="font-mono text-[0.625rem] text-bone-faint tabular-nums">{episodeCode(episode)}</span>{' '}
-        <span className="text-bone">{work?.title ?? '—'}</span>
-      </span>
-    </Link>
+        {n > SHOWN_A_DAY ? (
+          <Link
+            to={weekAddress(day)}
+            title={t.calendar.openWeek(fmt.dayHeading(day, locale))}
+            className="mt-auto hidden text-xs font-medium text-vermillion transition-colors duration-150 hover:text-vermillion-bright md:block"
+          >
+            {t.calendar.more(n - SHOWN_A_DAY)}
+          </Link>
+        ) : null}
+      </div>
+    </td>
   )
 }
 
 /**
- * A film coming out, in a day's cell: a sliver of its poster, the film's mark
- * where an episode's code is, its title; what comes out is said in full to
- * whoever hovers or listens.
+ * A work's poster in a day's cell: a sliver where the day is narrow, a small
+ * poster where it is wide enough to show one — as a reading diary sets them
+ * in its month. A picture that fails leaves the box plain rather than the
+ * browser's broken-image mark: a sliver is too small for a stand-in.
+ */
+function CellPoster({ work }: { work?: MediaItem }) {
+  const art = work ? poster(work) : undefined
+  const veiled = useVeiled(work ?? { id: '' })
+
+  return (
+    <span className="aspect-2/3 w-1 shrink-0 overflow-hidden rounded-xs border border-rule bg-ink-high @min-[7rem]:w-4 @min-[9rem]:w-7">
+      {art ? (
+        <Artwork
+          url={art}
+          role="thumb"
+          alt=""
+          className={cn('size-full object-cover', veiled && VEILED)}
+          fallback={<span className="block size-full" />}
+        />
+      ) : null}
+    </span>
+  )
+}
+
+/**
+ * One episode in a day's cell: its poster, its hour and code, its series.
+ * A press opens a look at it over the month (see `Month`); a press with a
+ * key held, or a browser without popovers, follows it to its page.
+ */
+function MonthEntry({
+  airing,
+  work,
+  anchored,
+  onLook,
+}: {
+  airing: Airing
+  work?: MediaItem
+  /** Whether the look is drawn beside this one. */
+  anchored: boolean
+  onLook: (event: MouseEvent<HTMLAnchorElement>) => void
+}) {
+  const { t, locale } = useI18n()
+  const { episode } = airing
+  const moment = airTime(episode)?.moment
+
+  return (
+    <li className="min-w-0">
+      <Link
+        to={`/work/${airing.workId}/season/${episode.seasonNumber}/episode/${episode.episodeNumber}`}
+        title={`${work?.title ?? ''} · ${episodeCode(episode)}${episode.title ? ` · ${episode.title}` : ''}`}
+        aria-haspopup={POPOVER ? 'dialog' : undefined}
+        onClick={onLook}
+        // The name the look is tied to, worn by one entry at a time.
+        style={anchored ? { anchorName: '--episode-look' } : undefined}
+        className="flex min-w-0 items-start gap-1.5 rounded-card text-xs leading-tight text-bone-dim transition-colors duration-150 hover:text-bone"
+      >
+        <CellPoster work={work} />
+        <span className="min-w-0">
+          <span className="flex items-baseline gap-1.5 font-mono text-caption text-bone-faint tabular-nums">
+            {moment ? (
+              <time dateTime={moment.toISOString()} className="hidden @min-[9rem]:inline">
+                {fmt.clock(moment.toISOString(), locale)}
+              </time>
+            ) : (
+              <time dateTime={airTime(episode)?.day} className="sr-only">
+                {t.calendar.noTime}
+              </time>
+            )}
+            <span>{episodeCode(episode)}</span>
+          </span>
+          <span className="block truncate text-bone">{work?.title ?? '—'}</span>
+        </span>
+      </Link>
+    </li>
+  )
+}
+
+/**
+ * A film coming out, in a day's cell: its poster, the film's mark where an
+ * episode's code is, its title; what comes out is said in full to whoever
+ * hovers or listens.
  */
 function MonthRelease({ release, work }: { release: Release; work?: MediaItem }) {
   const { t } = useI18n()
-  const art = work ? poster(work) : undefined
   const kinds = release.releaseTypes.map((type) => t.calendar.releaseType[type]).join(' · ')
 
   return (
-    <Link
-      to={`/work/${release.workId}`}
-      title={`${work?.title ?? ''} · ${kinds}`}
-      className="flex min-w-0 items-center gap-1.5 rounded-card text-xs leading-tight text-bone-dim transition-colors duration-150 hover:text-bone"
-    >
-      <span className="aspect-2/3 w-4 shrink-0 overflow-hidden rounded-xs border border-rule bg-ink-high">
-        {art ? (
-          <Artwork url={art} role="thumb" alt="" className="size-full object-cover" fallback={<span className="block size-full" />} />
+    <li className="min-w-0">
+      <Link
+        to={`/work/${release.workId}`}
+        title={`${work?.title ?? ''} · ${kinds}`}
+        className="flex min-w-0 items-start gap-1.5 rounded-card text-xs leading-tight text-bone-dim transition-colors duration-150 hover:text-bone"
+      >
+        <CellPoster work={work} />
+        <span className="min-w-0">
+          <Glyph name="film" className="size-3 text-bone-faint" />
+          <span className="block truncate text-bone">{work?.title ?? '—'}</span>
+          <span className="sr-only"> · {kinds}</span>
+        </span>
+      </Link>
+    </li>
+  )
+}
+
+/**
+ * The look at one episode, over the month: its picture, its series, its code
+ * and title, when it airs and where, a few lines of what it is about, and the
+ * way to its page.
+ */
+function EpisodeLook({
+  airing,
+  work,
+  titleId,
+  onClose,
+}: {
+  airing: Airing
+  work?: MediaItem
+  titleId: string
+  onClose: () => void
+}) {
+  const { t, locale } = useI18n()
+  const { episode } = airing
+  const when = airTime(episode)
+  const image = episode.image ?? (work ? backdrop(work) : undefined)
+  const veiled = useVeiled(work ?? { id: '' })
+  // A platform's midnight is the day it puts the episode up, not an hour it
+  // was on: said as a day, as its own page says it.
+  const released = when !== undefined && releasedNotAired(work?.network, when)
+  const shownDay = when ? (released ? releaseDay(when) : when.day) : undefined
+  const day = shownDay ? fmt.dayHeading(new Date(`${shownDay}T00:00`), locale) : undefined
+  const time = !released && when?.moment ? fmt.clock(when.moment.toISOString(), locale) : undefined
+  const moment = when && !released && when.moment ? when.moment.toISOString() : shownDay
+
+  return (
+    <div>
+      <div className="relative aspect-video overflow-hidden bg-ink-high">
+        {image ? (
+          <Artwork url={image} role="still" alt="" className={cn('size-full object-cover', veiled && VEILED)} />
+        ) : (
+          <div className="grid size-full place-items-center">
+            <Glyph name="tv" className="size-6 text-bone-faint" />
+          </div>
+        )}
+        {veiled && image ? <Veil id={airing.workId} shows={false} /> : null}
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label={t.nav.close}
+          className="absolute top-1.5 right-1.5 grid size-11 cursor-pointer place-items-center rounded-full bg-ink/80 text-bone transition-colors duration-150 hover:bg-ink"
+        >
+          <Glyph name="close" className="size-4" />
+        </button>
+      </div>
+
+      <div className="space-y-2 p-4">
+        <Link
+          to={`/work/${airing.workId}`}
+          className="label inline-flex min-h-6 items-center transition-colors duration-150 hover:text-vermillion"
+        >
+          {work?.title ?? t.calendar.openSeries}
+        </Link>
+        <h2 id={titleId} className="text-base leading-snug font-medium text-bone">
+          <span className="font-mono text-xs text-bone-faint tabular-nums">{episodeCode(episode)}</span>{' '}
+          {episode.title || t.episode.untitled(episode.episodeNumber)}
+        </h2>
+        <p className="text-xs text-bone-dim first-letter:uppercase">
+          {moment ? <time dateTime={moment}>{[day, time].filter(Boolean).join(' · ')}</time> : null}
+          {[when ? airsWhenOn(work?.network, when, locale) : undefined, work?.network]
+            .filter(Boolean)
+            .map((part) => ` · ${part}`)
+            .join('')}
+        </p>
+        {episode.overview ? (
+          <p className="line-clamp-3 text-sm leading-relaxed text-bone-dim">{episode.overview}</p>
         ) : null}
-      </span>
-      <Glyph name="film" className="size-3 text-bone-faint" />
-      <span className="truncate">
-        <span className="text-bone">{work?.title ?? '—'}</span>
-        <span className="sr-only"> · {kinds}</span>
-      </span>
-    </Link>
+        <Link
+          to={`/work/${airing.workId}/season/${episode.seasonNumber}/episode/${episode.episodeNumber}`}
+          className="-ml-3 inline-flex min-h-11 items-center gap-1.5 rounded-full px-3 text-sm font-medium text-vermillion transition-colors duration-150 hover:bg-vermillion/10"
+        >
+          {t.calendar.openEpisode}
+          <Glyph name="chevronRight" className="size-3.5" />
+        </Link>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * The month as a list, for whoever reads a list better than a grid: its days
+ * with something on, in order, each a heading and its programme as the week
+ * lists it. A screen reader hears it as one ordered list of days.
+ */
+function MonthList({ days, byDay, works }: { days: Date[]; byDay: Map<string, Day>; works: Map<string, MediaItem> }) {
+  const { t, locale } = useI18n()
+  const today = localDate(new Date())
+  const listed = days.filter((day) => sizeOf(byDay.get(localDate(day))))
+
+  if (!listed.length) return null
+
+  return (
+    <ol aria-label={t.calendar.listView} className="stagger space-y-10">
+      {listed.map((day) => {
+        const key = localDate(day)
+        return (
+          <li key={key} id={`day-${key}`} className="scroll-mt-24">
+            <div className="mb-3 flex items-baseline gap-3 border-b border-rule pb-2">
+              <h2 className="font-display text-xl font-medium text-bone first-letter:uppercase">
+                <time dateTime={key}>{fmt.dayHeading(day, locale)}</time>
+              </h2>
+              {key === today ? <Chip tone="accent">{t.calendar.today}</Chip> : null}
+            </div>
+            <DayListing listed={byDay.get(key)} works={works} />
+          </li>
+        )
+      })}
+    </ol>
   )
 }
 
 /* ── Shared ───────────────────────────────────────────────────────────────── */
+
+/** The classes of a choice in a pair of linked choices, the current one marked. */
+function choice(current: boolean) {
+  return cn(
+    'inline-flex min-h-9 items-center rounded-full px-3 text-sm transition-colors duration-150',
+    current ? 'bg-ink-top text-bone' : 'text-bone-dim hover:text-bone',
+  )
+}
 
 /**
  * Week or month: two links, the current one marked. A group rather than a
@@ -808,17 +1121,29 @@ function ViewToggle({ view, weekTo, monthTo }: { view: View; weekTo: string; mon
 
   return (
     <div role="group" aria-label={t.calendar.views} className="flex items-center gap-1 rounded-full border border-rule p-1">
-      {choices.map(([choice, to]) => (
-        <Link
-          key={choice}
-          to={to}
-          aria-current={view === choice ? 'true' : undefined}
-          className={cn(
-            'inline-flex min-h-9 items-center rounded-full px-3 text-sm transition-colors duration-150',
-            view === choice ? 'bg-ink-top text-bone' : 'text-bone-dim hover:text-bone',
-          )}
-        >
-          {t.calendar[choice]}
+      {choices.map(([value, to]) => (
+        <Link key={value} to={to} aria-current={view === value ? 'true' : undefined} className={choice(view === value)}>
+          {t.calendar[value]}
+        </Link>
+      ))}
+    </div>
+  )
+}
+
+/** The month as a grid or as a list: two links, as the views are. */
+function LayoutToggle({ layout, gridTo, listTo }: { layout: Layout; gridTo: string; listTo: string }) {
+  const { t } = useI18n()
+  const choices: [Layout, string, 'grid' | 'list'][] = [
+    ['grid', gridTo, 'grid'],
+    ['list', listTo, 'list'],
+  ]
+
+  return (
+    <div role="group" aria-label={t.calendar.layouts} className="flex items-center gap-1 rounded-full border border-rule p-1">
+      {choices.map(([value, to, glyph]) => (
+        <Link key={value} to={to} aria-current={layout === value ? 'true' : undefined} className={cn(choice(layout === value), 'gap-1.5')}>
+          <Glyph name={glyph} className="size-3.5" />
+          {t.calendar[value]}
         </Link>
       ))}
     </div>

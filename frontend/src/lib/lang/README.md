@@ -46,3 +46,17 @@ notes, audit actions — are keyed by what the server sends, so a key that is
 not in English is not refused by the build; keep them to the same keys.
 `npm test` holds French to it: `../i18n.test.ts` fails on a key one of the
 two dictionaries has and the other lacks, at any depth.
+
+## Counting
+
+A value that follows a count is written with the dictionary's own `plural`:
+start the file with `import { plurals } from '../i18n'` and
+`const plural = plurals('<tag>')`, then
+`count: (n: number) => plural(n, { one: \`${n} work\`, other: \`${n} works\` })`.
+Give the forms your language has (`zero`, `one`, `two`, `few`, `many`,
+`other` — the categories of `Intl.PluralRules`); `other` is required and
+stands in for any form left out. A word that means exactly one (« un
+compte ») goes in front with `n === 1 ? … :`, since some languages file 0
+under `one`. The rules are those of the dictionary's own language, not the
+reader's: an English sentence left in a partial translation keeps English
+grammar.

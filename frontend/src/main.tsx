@@ -1,6 +1,7 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { App } from './App'
+import { keepBadge } from './lib/badge'
 import { ready } from './lib/i18n'
 import './styles.css'
 
@@ -18,3 +19,7 @@ void ready().then(() =>
     </StrictMode>,
   ),
 )
+
+// The day's episodes on the installed app's icon, while the app is behind
+// another (lib/badge.ts). Nothing at all in a tab.
+keepBadge()

@@ -52,6 +52,7 @@ const TASKS: TaskId[] = [
   'update.check',
   'arr.seed',
   'backup.run',
+  'search.rebuild',
 ]
 
 /**

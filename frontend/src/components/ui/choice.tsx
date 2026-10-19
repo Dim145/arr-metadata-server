@@ -70,6 +70,7 @@ export function Segmented<T extends string>({
       }
       className={cn(
         'inline-flex flex-wrap gap-1 rounded-full border border-rule bg-ink p-1',
+        'forced-colors:border-[color:ButtonText]',
         disabled && 'opacity-50',
         className,
       )}
@@ -78,10 +79,13 @@ export function Segmented<T extends string>({
         <label
           key={option.value}
           className={cn(
-            'relative grid min-h-9 cursor-pointer place-items-center rounded-full px-3.5 text-[0.8125rem] whitespace-nowrap',
+            'relative grid min-h-9 cursor-pointer place-items-center rounded-full px-3.5 text-body-sm whitespace-nowrap',
             'transition-colors duration-150 has-focus-visible:outline-2 has-focus-visible:outline-vermillion',
+            // The chosen one is a lighter surface and an inset rule, both of
+            // which forced colours remove: there it wears the system's
+            // selection colours instead, as a chosen item does everywhere else.
             value === option.value
-              ? 'bg-ink-top text-bone shadow-[inset_0_0_0_1px_var(--color-rule-bright)]'
+              ? 'bg-ink-top text-bone shadow-[inset_0_0_0_1px_var(--color-rule-bright)] forced-colors:bg-[color:Highlight] forced-colors:text-[color:HighlightText]'
               : 'text-bone-dim hover:text-bone',
             disabled && 'cursor-not-allowed',
           )}
@@ -104,18 +108,26 @@ export function Segmented<T extends string>({
 
 type LampTone = 'moss' | 'brass' | 'faint' | 'vermillion'
 
+// A lamp is a state, so it reads the states' colours (styles.css): well,
+// wanting a look, failing — and the faint one, for a state not known.
 const LAMP: Record<LampTone, string> = {
-  moss: 'bg-moss shadow-[0_0_0_3px_color-mix(in_oklab,var(--color-moss)_18%,transparent)]',
-  brass: 'bg-brass shadow-[0_0_0_3px_color-mix(in_oklab,var(--color-brass)_18%,transparent)]',
+  moss: 'bg-status-ok shadow-[0_0_0_3px_color-mix(in_oklab,var(--color-status-ok)_18%,transparent)]',
+  brass: 'bg-status-warn shadow-[0_0_0_3px_color-mix(in_oklab,var(--color-status-warn)_18%,transparent)]',
   faint: 'bg-bone-faint shadow-[0_0_0_3px_color-mix(in_oklab,var(--color-bone-faint)_18%,transparent)]',
   vermillion:
-    'bg-vermillion shadow-[0_0_0_3px_color-mix(in_oklab,var(--color-vermillion)_18%,transparent)]',
+    'bg-status-error shadow-[0_0_0_3px_color-mix(in_oklab,var(--color-status-error)_18%,transparent)]',
 }
 
 export function Lamp({ tone, children }: { tone: LampTone; children: ReactNode }) {
   return (
-    <span className="inline-flex items-center gap-2 text-[0.8125rem] text-bone">
-      <span aria-hidden className={cn('size-2 shrink-0 rounded-full', LAMP[tone])} />
+    <span className="inline-flex items-center gap-2 text-body-sm text-bone">
+      {/* Forced colours paint the dot in the page's own colour, which would
+          leave a hole: a ring of the system's button colour keeps it there.
+          Its tone goes, which is why the word beside it says the state. */}
+      <span
+        aria-hidden
+        className={cn('size-2 shrink-0 rounded-full', LAMP[tone], 'forced-colors:border forced-colors:border-[color:ButtonText]')}
+      />
       {children}
     </span>
   )

@@ -11,9 +11,10 @@ import * as fmt from '../lib/format'
 import { workQuery } from '../lib/hooks'
 import { useI18n } from '../lib/i18n'
 import { fallBackToOriginal, hasSources, headlineRating, poster, sized, type ImageRole } from '../lib/media'
+import { forAdults, unveil, useAdultPostersShown, useUnveiled } from '../lib/prefs'
 import { plainClick, useTransitionNavigate } from '../lib/transitions'
 import type { MediaItem, MediaKind } from '../lib/types'
-import { Chip, Glyph, Shelf } from './ui'
+import { Chip, Glyph, Shelf, stockOf } from './ui'
 
 /* ── Score ────────────────────────────────────────────────────────────────── */
 
@@ -57,14 +58,27 @@ export function Score({
           : t.a11y.ratingOf(fmt.score(value, locale) ?? '')
       }
     >
-      <svg viewBox="0 0 36 36" className="size-full -rotate-90">
+      {/* The arc is the score drawn, which forced colours would erase: its
+          stroke is a gradient they discard. So the gauge keeps its own
+          colours there, redrawn in the system's — the track in its grey, the
+          length in its highlight — and the number beside it is left to the
+          palette like any other text. */}
+      <svg viewBox="0 0 36 36" className="size-full -rotate-90 forced-colors:forced-color-adjust-none">
         <defs>
           <linearGradient id="score-arc" x1="0" y1="0" x2="1" y2="1">
             <stop offset="0%" stopColor="var(--color-vermillion)" />
             <stop offset="100%" stopColor="var(--color-brass)" />
           </linearGradient>
         </defs>
-        <circle cx="18" cy="18" r={radius} fill="none" stroke="var(--color-rule)" strokeWidth="2.4" />
+        <circle
+          cx="18"
+          cy="18"
+          r={radius}
+          fill="none"
+          stroke="var(--color-rule)"
+          strokeWidth="2.4"
+          className="forced-colors:stroke-[color:GrayText]"
+        />
         <circle
           cx="18"
           cy="18"
@@ -75,15 +89,18 @@ export function Score({
           strokeLinecap="round"
           strokeDasharray={circumference}
           strokeDashoffset={circumference * (1 - fraction)}
+          className="forced-colors:stroke-[color:Highlight]"
         />
       </svg>
       <div className="absolute inset-0 flex flex-col items-center justify-center">
         <span className={cn('font-display leading-none text-bone', text)}>
           {fmt.score(value, locale)}
         </span>
+        {/* At the twelve-pixel floor, and short — "35K" — so that it still
+            fits inside the ring a two-million count would have overrun. */}
         {size === 'lg' && votes ? (
-          <span className="mt-1 font-mono text-[0.5rem] tracking-wider text-bone-faint">
-            {fmt.count(votes, locale)}
+          <span className="mt-1 font-mono text-caption leading-none tracking-wider text-bone-faint">
+            {new Intl.NumberFormat(locale, { notation: 'compact', maximumFractionDigits: 1 }).format(votes)}
           </span>
         ) : null}
       </div>
@@ -94,10 +111,29 @@ export function Score({
 /* ── Artwork ──────────────────────────────────────────────────────────────── */
 
 /**
+ * The shape each kind of picture comes in, so that its box has its height
+ * before the picture is there and nothing under it moves when it arrives: a
+ * poster's 2:3, a still's 16:9. `auto` first, so the picture's own proportions
+ * take over once it has loaded; a caller's own `aspect-` wins over these. A
+ * logo and the lightbox's picture have no shape to promise.
+ */
+const SHAPE: Partial<Record<ImageRole, string>> = {
+  card: 'aspect-[auto_2/3]',
+  thumb: 'aspect-[auto_2/3]',
+  poster: 'aspect-[auto_2/3]',
+  headshot: 'aspect-[auto_2/3]',
+  portrait: 'aspect-[auto_2/3]',
+  backdrop: 'aspect-[auto_16/9]',
+  still: 'aspect-[auto_16/9]',
+  frame: 'aspect-[auto_16/9]',
+}
+
+/**
  * An image from a provider, fetched at the size it is drawn at.
  *
  * Lazy unless told otherwise, because most of these are below the fold. A hero
- * backdrop is the exception and says so with `eager`.
+ * backdrop is the exception and says so with `eager`. Decoded off the main
+ * thread either way, so a grid of them arriving does not hold up a click.
  *
  * A thumbnail that fails is retried as the original it was made from; should
  * that fail too, the `fallback` takes the image's place — a drawn placeholder
@@ -110,6 +146,7 @@ export function Artwork({
   eager = false,
   sizes,
   fallback,
+  className,
   ...rest
 }: {
   url: string
@@ -135,6 +172,7 @@ export function Artwork({
   return (
     <img
       {...rest}
+      className={cn(SHAPE[role], className)}
       alt={alt}
       src={image.src}
       srcSet={image.srcSet}
@@ -159,6 +197,10 @@ export function Artwork({
  *
  * Decorative unless given a `label`, which a plate's poster is: there it is
  * the picture's stand-in and is described as one.
+ *
+ * It is a picture, drawn, so forced colours leave it as they leave a poster:
+ * its colours are a set that reads against itself, bone on ink, whatever the
+ * palette around it.
  */
 export function Placeholder({
   title,
@@ -181,6 +223,7 @@ export function Placeholder({
       aria-hidden={label ? undefined : true}
       className={cn(
         'hatch @container grid grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden bg-ink-high p-[7%] text-bone-faint',
+        'forced-colors:forced-color-adjust-none',
         className,
       )}
     >
@@ -197,11 +240,16 @@ export function Placeholder({
 
 /* ── Poster ───────────────────────────────────────────────────────────────── */
 
-/** What a card needs of a work: the whole record, or as much as was kept of it. */
+/**
+ * What a card needs of a work: the whole record, or as much as was kept of
+ * it — and, where the record is at hand, what says it is for adults, and the
+ * genres its plate is tinted by while the poster loads.
+ */
 export type PosterCardItem = Pick<
   MediaItem,
   'id' | 'title' | 'kind' | 'year' | 'images' | 'primaryImages' | 'ratings' | 'isManual' | 'externalIds'
->
+> &
+  Partial<Pick<MediaItem, 'isAdult' | 'contentRating' | 'genres'>>
 
 /**
  * One work in a grid.
@@ -235,6 +283,15 @@ export function PosterCard({
   const art = poster(item)
   const rating = headlineRating(item.ratings)
   const opensWork = to === `/work/${item.id}`
+  const veiled = useVeiled(item)
+  // What the plate shows while its poster is on the way: the tint of the
+  // work's first genre over the ink, the one colour a card earns from its
+  // record, or the ink alone for a work filed under none. The poster covers
+  // it once it has loaded.
+  const genre = item.genres?.[0]
+  const waiting = genre
+    ? { backgroundColor: `color-mix(in srgb, var(--color-stock-${stockOf(genre)}) 14%, var(--color-ink-high))` }
+    : undefined
 
   // The work is asked for as soon as a pointer rests on its card or focus
   // reaches it: by the time it is opened the page is there, and the poster
@@ -255,6 +312,13 @@ export function PosterCard({
       }}
       onFocus={prefetch}
       onClick={(event) => {
+        // A veiled poster is uncovered by the press that lands on it; the
+        // title under it, and Enter, still open the work.
+        if (veiled && art && plate.current?.contains(event.target as Node)) {
+          event.preventDefault()
+          unveil(item.id)
+          return
+        }
         if (!plainClick(event)) return
         event.preventDefault()
         go(to, { from: opensWork ? plate.current : null })
@@ -265,10 +329,15 @@ export function PosterCard({
           phone, and the lift adds nothing a border change does not say. */}
       <div
         ref={plate}
+        style={waiting}
         className={cn(
           'relative aspect-2/3 overflow-hidden rounded-panel border border-rule bg-ink-high',
           'shadow-[var(--shadow-lift)] transition-colors duration-150',
           'group-hover:border-vermillion/45',
+          // Under forced colours the card's edge is the text's colour rather
+          // than the link's: the outline of a thing rather than a word to
+          // follow, or a grid of them reads as one lattice of link colour.
+          'forced-colors:border-[color:CanvasText]',
         )}
       >
         {art ? (
@@ -276,12 +345,13 @@ export function PosterCard({
             url={art}
             role="card"
             alt={t.a11y.poster(item.title)}
-            className="size-full object-cover"
+            className={cn('size-full object-cover', veiled && VEILED)}
             fallback={<Placeholder title={item.title} kind={item.kind} className="size-full" />}
           />
         ) : (
           <Placeholder title={item.title} kind={item.kind} className="size-full" />
         )}
+        {veiled && art ? <Veil id={item.id} /> : null}
 
         {/* A scrim only where the badges sit, so the artwork is not dimmed. */}
         {rating?.value ? (
@@ -290,7 +360,7 @@ export function PosterCard({
               style={{
                 color: `var(--color-stock-${rating.value >= 8 ? 2 : rating.value >= 6.5 ? 3 : 6})`,
               }}
-              className="rounded-full bg-ink/85 px-2 py-0.5 font-mono text-[0.6875rem] font-medium"
+              className="rounded-full bg-ink/85 px-2 py-0.5 font-mono text-caption font-medium"
             >
               {fmt.score(rating.value, locale)}
             </span>
@@ -330,6 +400,7 @@ export function PosterShelf({ children, label }: { children: React.ReactNode; la
   return (
     <Shelf
       label={label}
+      onKeyDown={walkCards}
       // Room above and to the left for a card's focus ring, which the
       // scroller would otherwise cut off.
       className="-mt-2 -mr-4 -ml-2 sm:m-0"
@@ -346,17 +417,206 @@ export function PosterShelf({ children, label }: { children: React.ReactNode; la
   )
 }
 
-/** The grid posters live in. One definition, so every page spaces them alike. */
-export function PosterGrid({ children, className }: { children: React.ReactNode; className?: string }) {
+/**
+ * The grid posters live in. One definition, so every page spaces them alike —
+ * and lays out only the rows near the screen (`.poster-grid`, styles.css),
+ * and walks between its cards with the arrow keys (`walkCards`).
+ *
+ * A page whose grid is its results can name it (`id`), so that a link before
+ * its filters — "to the results" — lands on it, and can give it a way out
+ * before its first card (`skip`) — "to the filters", or past the results to
+ * what follows them — for a keyboard that would otherwise tab through every
+ * card to get there. Both links stay out of sight until they have the focus.
+ * While the page fetches what the grid will hold, it says so (`busy`).
+ */
+export function PosterGrid({
+  children,
+  className,
+  id,
+  skip,
+  busy,
+}: {
+  children: React.ReactNode
+  className?: string
+  /** The grid's name in the address, for a link elsewhere to lead to it. */
+  id?: string
+  /** A link that goes round the grid: where to, and its words. */
+  skip?: { to: string; label: string }
+  /** Its content is on its way (see the top of ui/feedback.tsx). */
+  busy?: boolean
+}) {
   return (
-    <div
-      className={cn(
-        'stagger grid grid-cols-2 gap-x-4 gap-y-7',
-        'sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6',
-        className,
-      )}
-    >
-      {children}
-    </div>
+    <>
+      {skip ? (
+        <a href={`#${skip.to}`} className={SKIP_LINK}>
+          {skip.label}
+        </a>
+      ) : null}
+      {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions -- the cards take the focus, one at a time; the grid hears their arrow keys */}
+      <div
+        id={id}
+        // Focusable from a link that leads to it, and not otherwise a stop.
+        tabIndex={id ? -1 : undefined}
+        aria-busy={busy || undefined}
+        onKeyDown={walkCards}
+        className={cn(
+          'poster-grid stagger grid grid-cols-2 gap-x-4 gap-y-7 outline-none',
+          'sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6',
+          className,
+        )}
+      >
+        {children}
+      </div>
+    </>
+  )
+}
+
+/** A link that shows itself only when it has the focus: the shells' "skip to content", in place. */
+const SKIP_LINK =
+  'sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-50 focus:rounded-card ' +
+  'focus:bg-vermillion focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-ink'
+
+/* ── Keyboard ─────────────────────────────────────────────────────────────── */
+
+/** What the arrow keys move along, by axis and sense. */
+const ARROWS: Record<string, { x: -1 | 0 | 1; y: -1 | 0 | 1 }> = {
+  ArrowLeft: { x: -1, y: 0 },
+  ArrowRight: { x: 1, y: 0 },
+  ArrowUp: { x: 0, y: -1 },
+  ArrowDown: { x: 0, y: 1 },
+}
+
+/** What takes the focus in a card: the card itself where it is the link, else the first control it holds. */
+const FOCUSABLE = 'a[href], button:not(:disabled), [tabindex]:not([tabindex="-1"])'
+
+/**
+ * The arrow keys, between the cards of a grid or a shelf.
+ *
+ * Every card stays a stop of its own for Tab: a catalogue read card by card
+ * is what most keyboards do, and the single stop of an ARIA grid would hide
+ * forty links behind one. The arrows are a quicker way across, to the card
+ * beside, above or below the one in focus — found from where the cards are
+ * drawn, not from their order in the page, which the columns rearrange at
+ * every width. Where there is no card that way, the key is left to the page,
+ * which scrolls as it would have; with a modifier held, or from inside a
+ * field, it is left alone.
+ */
+export function walkCards(event: React.KeyboardEvent<HTMLElement>) {
+  const way = ARROWS[event.key]
+  if (!way || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.defaultPrevented) return
+  const from = event.target
+  if (!(from instanceof HTMLElement) || from.matches(':read-write, select, input, [role="slider"]')) return
+
+  const cards = [...event.currentTarget.children]
+    .map((item) => (item.matches(FOCUSABLE) ? item : item.querySelector(FOCUSABLE)))
+    .filter((card): card is HTMLElement => card instanceof HTMLElement && card.getClientRects().length > 0)
+  if (!cards.includes(from)) return
+
+  const to = nearest(from, cards, way)
+  if (!to) return
+  event.preventDefault()
+  to.focus({ preventScroll: true })
+  to.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+}
+
+/**
+ * The card a step `way` from `from`, by the boxes on screen.
+ *
+ * A card is that way when its near edge is past the far edge of the one in
+ * focus. Of those, the ones in its row (or column) come first, the nearest
+ * of them. A card out of line is taken only when none is in line — a step
+ * down from the end of a full row onto a shorter last one — and then the one
+ * nearest the line, its drift from it weighed double against its distance.
+ */
+function nearest(from: HTMLElement, cards: HTMLElement[], way: { x: number; y: number }): HTMLElement | undefined {
+  const a = from.getBoundingClientRect()
+  // Sub-pixel layouts put neighbours a fraction over each other's edge.
+  const slack = 1
+  let best: { card: HTMLElement; aligned: boolean; score: number; drift: number } | undefined
+
+  for (const card of cards) {
+    if (card === from) continue
+    const b = card.getBoundingClientRect()
+    const gap = way.x > 0 ? b.left - a.right : way.x < 0 ? a.left - b.right : way.y > 0 ? b.top - a.bottom : a.top - b.bottom
+    if (gap < -slack) continue
+
+    const overlap = way.x
+      ? Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top)
+      : Math.min(a.right, b.right) - Math.max(a.left, b.left)
+    const drift = way.x
+      ? Math.abs(a.top + a.height / 2 - (b.top + b.height / 2))
+      : Math.abs(a.left + a.width / 2 - (b.left + b.width / 2))
+    const aligned = overlap > 0
+    const score = aligned ? gap : gap + 2 * drift
+
+    const better =
+      !best ||
+      (aligned && !best.aligned) ||
+      (aligned === best.aligned && (score < best.score || (score === best.score && drift < best.drift)))
+    if (better) best = { card, aligned, score, drift }
+  }
+
+  return best?.card
+}
+
+/* ── For adults ───────────────────────────────────────────────────────────── */
+
+/**
+ * How a veiled picture is drawn: blurred past recognition, a little larger
+ * than its frame so the blur's soft edge falls outside it, and dimmed under
+ * the words laid over it.
+ */
+export const VEILED = 'scale-110 blur-xl brightness-50'
+
+/**
+ * Whether a work's pictures are veiled for this reader: a work for adults
+ * (see `forAdults`), a reader who has not asked to see their posters, and a
+ * poster not uncovered in this visit.
+ */
+export function useVeiled(work: { id: string; isAdult?: boolean | null; contentRating?: string | null }): boolean {
+  const shown = useAdultPostersShown()
+  const unveiled = useUnveiled(work.id)
+  return !shown && !unveiled && forAdults(work)
+}
+
+/**
+ * What a veiled picture says over itself: that the work is for adults, and
+ * that a press shows it — the poster, or the picture where it is of another
+ * kind (an episode's still, a backdrop). On a plate it is the button that does; on a card,
+ * which is a link from edge to edge, it is words, and the card hears the
+ * press (see `PosterCard`) — a button inside a link is no button at all. A
+ * frame that leads elsewhere when pressed — an episode's, in a strip — says
+ * only what it is: its work's page is where it is shown.
+ */
+export function Veil({
+  id,
+  button = false,
+  shows = 'poster',
+}: {
+  id: string
+  button?: boolean
+  shows?: 'poster' | 'picture' | false
+}) {
+  const { t } = useI18n()
+  const shape = 'absolute inset-0 grid place-items-center p-3 text-center'
+  // On a ground of their own: the picture under them is dimmed in either
+  // theme, and the words are the theme's.
+  const words = (
+    <span className="grid justify-items-center gap-1 rounded-card bg-ink/85 px-3 py-2 shadow-[var(--shadow-lift)]">
+      <span className="label text-bone">{t.reader.forAdults}</span>
+      {shows ? (
+        <span className="text-caption text-bone-dim">{shows === 'poster' ? t.reader.show : t.reader.showPicture}</span>
+      ) : null}
+    </span>
+  )
+
+  return button ? (
+    <button type="button" onClick={() => unveil(id)} className={cn(shape, 'cursor-pointer')}>
+      {words}
+    </button>
+  ) : (
+    <span aria-hidden className={shape}>
+      {words}
+    </span>
   )
 }

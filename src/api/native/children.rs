@@ -13,6 +13,11 @@
 //! Only manual rows can be removed. Deleting a provider row would bring it back
 //! on the next refresh, which reads as the delete having silently failed; it is
 //! hidden instead.
+//!
+//! Each is written to the work's journal: a row added or removed by hand as
+//! an edit of its own scope (`season:2`, `episode:2x5`, `image:…`,
+//! `credit:…`, `alternativeTitle:…`), a hand-made credit corrected likewise,
+//! and what a source gave hidden or shown again as a lock set or lifted.
 
 use axum::{
     Extension, Json,
@@ -30,7 +35,11 @@ use crate::{
         extract::ClientIp,
     },
     auth::Identity,
-    db::repo::{self, audit::Action},
+    db::repo::{
+        self,
+        audit::Action,
+        change::{Cause, NewChange},
+    },
     domain::{
         CoverType, CreditType, MediaKind,
         fields::{self, Child, Scope},
@@ -135,6 +144,11 @@ async fn add_season(
         &ip,
         &id,
         &format!("added season {}", request.season_number),
+        &[super::history::came(
+            Scope::Season(request.season_number).to_string(),
+            super::history::SEASON,
+            super::history::summary::season(&season),
+        )],
     )
     .await;
 
@@ -161,7 +175,12 @@ async fn remove_season(
     ip: ClientIp,
     Path((id, season)): Path<(String, i32)>,
 ) -> AppResult<StatusCode> {
-    writable(&state, &identity, &id).await?;
+    let item = writable(&state, &identity, &id).await?;
+    let held = item
+        .seasons
+        .iter()
+        .find(|s| s.season_number == season)
+        .map_or_else(|| serde_json::json!({}), super::history::summary::season);
 
     if !repo::child::remove_season(&state.db, &id, season).await? {
         return Err(AppError::NotFound);
@@ -173,6 +192,11 @@ async fn remove_season(
         &ip,
         &id,
         &format!("removed season {season}"),
+        &[super::history::went(
+            Scope::Season(season).to_string(),
+            super::history::SEASON,
+            held,
+        )],
     )
     .await;
 
@@ -282,6 +306,15 @@ async fn add_episode(
             "added episode {}x{}",
             request.season_number, request.episode_number
         ),
+        &[super::history::came(
+            Scope::Episode {
+                season: request.season_number,
+                episode: request.episode_number,
+            }
+            .to_string(),
+            super::history::EPISODE,
+            super::history::summary::episode(&episode),
+        )],
     )
     .await;
 
@@ -309,7 +342,12 @@ async fn remove_episode(
     ip: ClientIp,
     Path((id, season, episode)): Path<(String, i32, i32)>,
 ) -> AppResult<StatusCode> {
-    writable(&state, &identity, &id).await?;
+    let item = writable(&state, &identity, &id).await?;
+    let held = item
+        .episodes
+        .iter()
+        .find(|e| e.season_number == season && e.episode_number == episode)
+        .map_or_else(|| serde_json::json!({}), super::history::summary::episode);
 
     if !repo::child::remove_episode(&state.db, &id, season, episode).await? {
         return Err(AppError::NotFound);
@@ -321,6 +359,11 @@ async fn remove_episode(
         &ip,
         &id,
         &format!("removed episode {season}x{episode}"),
+        &[super::history::went(
+            Scope::Episode { season, episode }.to_string(),
+            super::history::EPISODE,
+            held,
+        )],
     )
     .await;
 
@@ -395,6 +438,11 @@ async fn add_image(
         &ip,
         &id,
         &format!("added a {} image", cover_type.as_str()),
+        &[super::history::came(
+            Child::of_image(&image).to_string(),
+            super::history::IMAGE,
+            super::history::summary::image(&image),
+        )],
     )
     .await;
 
@@ -421,7 +469,20 @@ async fn remove_image(
     ip: ClientIp,
     Path((id, image_id)): Path<(String, String)>,
 ) -> AppResult<StatusCode> {
-    writable(&state, &identity, &id).await?;
+    let item = writable(&state, &identity, &id).await?;
+    // As the work was read: its own pictures, and its seasons'.
+    let gone = item
+        .images
+        .iter()
+        .chain(item.seasons.iter().flat_map(|s| &s.images))
+        .find(|i| i.id == image_id)
+        .map(|image| {
+            super::history::went(
+                Child::Image(state.media.unlocalize(&image.url)).to_string(),
+                super::history::IMAGE,
+                super::history::summary::image(image),
+            )
+        });
 
     // An upload's file goes with its row.
     let url = repo::child::image_url(&state.db, &id, &image_id).await?;
@@ -430,7 +491,15 @@ async fn remove_image(
     }
     super::media::forget_uploads(&state, url.as_deref()).await;
 
-    finish(&state, &identity, &ip, &id, "removed an image").await;
+    finish(
+        &state,
+        &identity,
+        &ip,
+        &id,
+        "removed an image",
+        gone.as_slice(),
+    )
+    .await;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -498,6 +567,11 @@ async fn add_credit(
         &ip,
         &id,
         &format!("added credit {name:?}"),
+        &[super::history::came(
+            Child::of_credit(&credit).to_string(),
+            super::history::CREDIT,
+            super::history::summary::credit(&credit),
+        )],
     )
     .await;
 
@@ -524,13 +598,32 @@ async fn remove_credit(
     ip: ClientIp,
     Path((id, credit_id)): Path<(String, String)>,
 ) -> AppResult<StatusCode> {
-    writable(&state, &identity, &id).await?;
+    let item = writable(&state, &identity, &id).await?;
+    let gone = item
+        .credits
+        .iter()
+        .find(|c| c.id == credit_id)
+        .map(|credit| {
+            super::history::went(
+                Child::of_credit(credit).to_string(),
+                super::history::CREDIT,
+                super::history::summary::credit(credit),
+            )
+        });
 
     if !repo::child::remove_credit(&state.db, &id, &credit_id).await? {
         return Err(AppError::NotFound);
     }
 
-    finish(&state, &identity, &ip, &id, "removed a credit").await;
+    finish(
+        &state,
+        &identity,
+        &ip,
+        &id,
+        "removed a credit",
+        gone.as_slice(),
+    )
+    .await;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -604,6 +697,11 @@ async fn add_alternative_title(
         &ip,
         &id,
         &format!("added alternative title {title:?}"),
+        &[super::history::came(
+            Child::of_title(&alternative).to_string(),
+            super::history::ALTERNATIVE_TITLE,
+            super::history::summary::alternative_title(&alternative),
+        )],
     )
     .await;
 
@@ -630,13 +728,32 @@ async fn remove_alternative_title(
     ip: ClientIp,
     Path((id, title_id)): Path<(String, String)>,
 ) -> AppResult<StatusCode> {
-    writable(&state, &identity, &id).await?;
+    let item = writable(&state, &identity, &id).await?;
+    let gone = item
+        .alternative_titles
+        .iter()
+        .find(|t| t.id == title_id)
+        .map(|title| {
+            super::history::went(
+                Child::of_title(title).to_string(),
+                super::history::ALTERNATIVE_TITLE,
+                super::history::summary::alternative_title(title),
+            )
+        });
 
     if !repo::child::remove_alternative_title(&state.db, &id, &title_id).await? {
         return Err(AppError::NotFound);
     }
 
-    finish(&state, &identity, &ip, &id, "removed an alternative title").await;
+    finish(
+        &state,
+        &identity,
+        &ip,
+        &id,
+        "removed an alternative title",
+        gone.as_slice(),
+    )
+    .await;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -746,12 +863,45 @@ async fn edit_credit(
         if !repo::child::edit_credit(&state.db, &id, &credit_id, character, order).await? {
             return Err(AppError::NotFound);
         }
+        // Corrected in its row, what it has no source to be locked against:
+        // an edit, of each value that moved.
+        let scope = Child::of_credit(credit).to_string();
+        let edited = |field: &str, before: Option<Value>, after: Option<Value>| NewChange {
+            cause: Cause::Edit,
+            scope: scope.clone(),
+            field: field.to_string(),
+            language: String::new(),
+            before,
+            after,
+            provider: None,
+            was_locked: false,
+        };
+        let mut changes = Vec::new();
+        if let Some(character) = character
+            && credit.character_name.as_deref() != character
+        {
+            changes.push(edited(
+                "characterName",
+                credit.character_name.clone().map(Value::String),
+                character.map(|c| Value::String(c.to_string())),
+            ));
+        }
+        if let Some(order) = order
+            && credit.sort_order != order
+        {
+            changes.push(edited(
+                "sortOrder",
+                Some(Value::from(credit.sort_order)),
+                Some(Value::from(order)),
+            ));
+        }
         finish(
             &state,
             &identity,
             &ip,
             &id,
             &format!("corrected credit {:?}", credit.person_name),
+            &changes,
         )
         .await;
         return Ok(StatusCode::NO_CONTENT);
@@ -900,6 +1050,7 @@ async fn edit_child(
     let scope = child.to_string();
     for (field, value) in changes {
         let target = format!("{id}#{scope}/{field}");
+        let by = identity.label();
         let action = match value {
             Some(value) => {
                 super::overrides::lock_child(
@@ -908,16 +1059,18 @@ async fn edit_child(
                     child,
                     field,
                     Some(value),
-                    &identity.label(),
+                    super::overrides::Hand {
+                        by: &by,
+                        cause: Cause::Lock,
+                    },
                 )
                 .await?;
                 Action::OverrideSet
             }
             None => {
-                if !repo::override_field::unset_in(&state.db, id, &scope, field, "").await? {
+                if !super::overrides::lift_child(state, id, child, field, &by).await? {
                     continue;
                 }
-                state.caches.touched(id).await;
                 Action::OverrideRemoved
             }
         };
@@ -1003,9 +1156,18 @@ fn check_url(url: &str) -> AppResult<()> {
     Ok(())
 }
 
-/// Drop the cached copy and record what happened.
-async fn finish(state: &AppState, identity: &Identity, ip: &ClientIp, id: &str, detail: &str) {
+/// Drop the cached copy and record what happened: in the work's journal,
+/// what changed, and in the audit trail, that something did.
+async fn finish(
+    state: &AppState,
+    identity: &Identity,
+    ip: &ClientIp,
+    id: &str,
+    detail: &str,
+    changes: &[NewChange],
+) {
     state.caches.touched(id).await;
+    super::history::write(state, id, &identity.label(), changes).await;
 
     audit::record(
         state,
@@ -1341,6 +1503,267 @@ mod tests {
                 .expect("read")[0]
                 .scope,
             "alternativeTitle:us:L.A. Takedown"
+        );
+    }
+
+    /// A change, as these tests read it: why, where, what, what it held and
+    /// what it took.
+    type Line = (Cause, String, String, Option<Value>, Option<Value>);
+
+    /// A work's journal, oldest first.
+    async fn journaled(state: &AppState, id: &str) -> Vec<Line> {
+        let mut changes =
+            repo::change::list(&state.db, id, &repo::change::Filter::default(), None, 500)
+                .await
+                .expect("the journal")
+                .entries;
+        // In the order they were written: one write's rows share an instant,
+        // and their ids, made in order, tell them apart.
+        changes.sort_by(|a, b| (a.at.as_str(), a.id.as_str()).cmp(&(b.at.as_str(), b.id.as_str())));
+        assert!(
+            changes
+                .iter()
+                .all(|c| c.actor.as_deref() == Some("anonymous")),
+            "{changes:#?}"
+        );
+        changes
+            .into_iter()
+            .map(|c| (c.cause, c.scope, c.field, c.before, c.after))
+            .collect()
+    }
+
+    /// Each row added by hand, and each removed, is a change of its own scope
+    /// in the work's journal — an edit, since no source stands behind it —
+    /// with a few words of it; a credit added by hand and corrected in its
+    /// row, an edit of the value corrected.
+    #[tokio::test]
+    async fn a_row_added_or_removed_by_hand_is_journaled_as_an_edit_of_its_own_scope() {
+        use serde_json::json;
+
+        let state = crate::api::native::testing::server().await;
+        let series = as_given(&state, MediaKind::Series, "The Wire").await;
+        let id = series.id.clone();
+        let who = || Extension(Identity::Anonymous);
+
+        let _ = add_season(
+            State(state.clone()),
+            who(),
+            ClientIp::NONE,
+            Path(id.clone()),
+            Json(NewSeason {
+                season_number: 7,
+                title: Some("Coda".into()),
+                overview: None,
+                air_date: Some("2008-01-06".into()),
+            }),
+        )
+        .await
+        .expect("a season");
+        let _ = add_episode(
+            State(state.clone()),
+            who(),
+            ClientIp::NONE,
+            Path(id.clone()),
+            Json(NewEpisode {
+                season_number: 7,
+                episode_number: 1,
+                title: Some("More with Less".into()),
+                overview: None,
+                air_date: None,
+                runtime: Some(58),
+                image: None,
+                absolute_episode_number: None,
+            }),
+        )
+        .await
+        .expect("an episode");
+        let (_, Json(picture)) = add_image(
+            State(state.clone()),
+            who(),
+            ClientIp::NONE,
+            Path(id.clone()),
+            Json(NewImage {
+                cover_type: "poster".into(),
+                url: "https://images.example/mine.jpg".into(),
+                season_number: Some(7),
+                language: None,
+                sort_order: None,
+            }),
+        )
+        .await
+        .expect("a picture");
+        let (_, Json(credit)) = add_credit(
+            State(state.clone()),
+            who(),
+            ClientIp::NONE,
+            Path(id.clone()),
+            Json(NewCredit {
+                credit_type: Some("actor".into()),
+                person_name: "Dominic West".into(),
+                character_name: Some("McNulty".into()),
+                image: None,
+                sort_order: Some(3),
+            }),
+        )
+        .await
+        .expect("a credit");
+        let (_, Json(title)) = add_alternative_title(
+            State(state.clone()),
+            who(),
+            ClientIp::NONE,
+            Path(id.clone()),
+            Json(NewAlternativeTitle {
+                title: "Sur écoute".into(),
+                title_type: None,
+                language: None,
+            }),
+        )
+        .await
+        .expect("a title");
+        edit_credit(
+            State(state.clone()),
+            who(),
+            ClientIp::NONE,
+            Path((id.clone(), credit.id.clone())),
+            credit_edit(None, Some(Some("Jimmy McNulty")), Some(Some(3))),
+        )
+        .await
+        .expect("corrected");
+
+        remove_alternative_title(
+            State(state.clone()),
+            who(),
+            ClientIp::NONE,
+            Path((id.clone(), title.id)),
+        )
+        .await
+        .expect("removed");
+        remove_credit(
+            State(state.clone()),
+            who(),
+            ClientIp::NONE,
+            Path((id.clone(), credit.id)),
+        )
+        .await
+        .expect("removed");
+        remove_image(
+            State(state.clone()),
+            who(),
+            ClientIp::NONE,
+            Path((id.clone(), picture.id)),
+        )
+        .await
+        .expect("removed");
+        remove_episode(
+            State(state.clone()),
+            who(),
+            ClientIp::NONE,
+            Path((id.clone(), 7, 1)),
+        )
+        .await
+        .expect("removed");
+        remove_season(
+            State(state.clone()),
+            who(),
+            ClientIp::NONE,
+            Path((id.clone(), 7)),
+        )
+        .await
+        .expect("removed");
+
+        let edit = |scope: &str, field: &str, before: Option<Value>, after: Option<Value>| {
+            (
+                Cause::Edit,
+                scope.to_string(),
+                field.to_string(),
+                before,
+                after,
+            )
+        };
+        let season = json!({ "title": "Coda", "airDate": "2008-01-06" });
+        let episode = json!({ "title": "More with Less" });
+        let image = json!({ "coverType": "poster", "seasonNumber": 7 });
+        let mcnulty = |character: &str| json!({ "personName": "Dominic West", "characterName": character, "creditType": "actor" });
+        let other_title = json!({ "title": "Sur écoute" });
+        let picture_scope = "image:https://images.example/mine.jpg";
+        let credit_scope = "credit:actor:name:Dominic West";
+        let title_scope = "alternativeTitle::Sur écoute";
+        assert_eq!(
+            journaled(&state, &id).await,
+            [
+                edit("season:7", "season", None, Some(season.clone())),
+                edit("episode:7x1", "episode", None, Some(episode.clone())),
+                edit(picture_scope, "image", None, Some(image.clone())),
+                edit(credit_scope, "credit", None, Some(mcnulty("McNulty"))),
+                edit(
+                    title_scope,
+                    "alternativeTitle",
+                    None,
+                    Some(other_title.clone())
+                ),
+                // Corrected in its row: the character moved, the order did not.
+                edit(
+                    credit_scope,
+                    "characterName",
+                    Some(json!("McNulty")),
+                    Some(json!("Jimmy McNulty"))
+                ),
+                edit(title_scope, "alternativeTitle", Some(other_title), None),
+                edit(credit_scope, "credit", Some(mcnulty("Jimmy McNulty")), None),
+                edit(picture_scope, "image", Some(image), None),
+                edit("episode:7x1", "episode", Some(episode), None),
+                edit("season:7", "season", Some(season), None),
+            ]
+        );
+    }
+
+    /// Hiding what a source gave is a lock on it, and showing it again lifts
+    /// the lock: each in the work's journal, with what the lock held.
+    #[tokio::test]
+    async fn a_child_a_source_gave_hidden_then_shown_again_is_journaled_as_a_lock_and_its_lifting()
+    {
+        let state = crate::api::native::testing::server().await;
+        let film = as_given(&state, MediaKind::Movie, "Heat").await;
+        let held = read(&state, &film.id).await;
+        let pacino = held
+            .credits
+            .iter()
+            .find(|c| c.person_name == "Al Pacino")
+            .map(|c| c.id.clone())
+            .expect("credited");
+        let edit = |hidden: bool| {
+            edit_credit(
+                State(state.clone()),
+                Extension(Identity::Anonymous),
+                ClientIp::NONE,
+                Path((film.id.clone(), pacino.clone())),
+                credit_edit(Some(hidden), None, None),
+            )
+        };
+
+        edit(true).await.expect("hidden");
+        edit(false).await.expect("shown again");
+        // Shown again where it is shown: no lock, nothing more written.
+        edit(false).await.expect("shown already");
+
+        assert_eq!(
+            journaled(&state, &film.id).await,
+            [
+                (
+                    Cause::Lock,
+                    "credit:actor:tmdb:1158".to_string(),
+                    "hidden".to_string(),
+                    None,
+                    Some(Value::Bool(true))
+                ),
+                (
+                    Cause::Unlock,
+                    "credit:actor:tmdb:1158".to_string(),
+                    "hidden".to_string(),
+                    Some(Value::Bool(true)),
+                    None
+                ),
+            ]
         );
     }
 }

@@ -4,6 +4,7 @@
 pub mod anime;
 pub mod asset;
 pub mod audit;
+pub mod change;
 pub mod child;
 pub mod client;
 pub mod imdb;
@@ -18,6 +19,7 @@ pub mod order;
 pub mod override_field;
 pub mod release;
 pub mod scene;
+pub mod search;
 pub mod season;
 pub mod snapshot;
 pub mod translation;

@@ -1,0 +1,11 @@
+# How the bundled SQLite is compiled. `libsqlite3-sys` reads the flags from
+# this variable and adds them to its build; the Dockerfile sets the same one
+# for the image, since the server stage copies no `.cargo/`.
+#
+# `SQLITE_DEFAULT_MEMSTATUS=0` turns off SQLite's memory statistics, which
+# take a global mutex on every allocation: with thirty connections searching
+# at once the lock, not the queries, was the ceiling (docs/perf/README.md).
+# It is on SQLite's own list of recommended compile-time options; nothing
+# reads the statistics here.
+[env]
+LIBSQLITE3_FLAGS = "-DSQLITE_DEFAULT_MEMSTATUS=0"

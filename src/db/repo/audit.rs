@@ -164,7 +164,7 @@ pub async fn record(db: &Db, entry: Record<'_>) -> Result<()> {
     Ok(())
 }
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Query {
     pub action: Option<String>,
     pub actor: Option<String>,
@@ -208,6 +208,20 @@ fn filtered(q: &Query) -> Result<(String, sqlx::any::AnyArguments)> {
     Ok((sql, args))
 }
 
+/// An entry as a row holds it, before its work is named.
+fn read(row: &sqlx::any::AnyRow) -> Result<Entry> {
+    Ok(Entry {
+        id: row.text("id")?,
+        at: row.text("at")?,
+        actor: row.opt_text("actor")?,
+        action: row.text("action")?,
+        target: row.opt_text("target")?,
+        detail: row.opt_text("detail")?,
+        ip: row.opt_text("ip")?,
+        work: None,
+    })
+}
+
 pub async fn list(db: &Db, q: &Query) -> Result<Vec<Entry>> {
     use sqlx::Arguments;
 
@@ -227,20 +241,41 @@ pub async fn list(db: &Db, q: &Query) -> Result<Vec<Entry>> {
         .fetch_all(db.pool())
         .await?;
 
-    rows.iter()
-        .map(|row| {
-            Ok(Entry {
-                id: row.text("id")?,
-                at: row.text("at")?,
-                actor: row.opt_text("actor")?,
-                action: row.text("action")?,
-                target: row.opt_text("target")?,
-                detail: row.opt_text("detail")?,
-                ip: row.opt_text("ip")?,
-                work: None,
-            })
-        })
-        .collect()
+    rows.iter().map(read).collect()
+}
+
+/// The entries a query's conditions match after `after` — the instant and the
+/// id of the last one read — newest first, `limit` at the most: what an export
+/// walks the whole trail with, a page at a time, however long it has grown
+/// and whatever is written to it meanwhile. The query's own page is passed
+/// over.
+pub async fn page_after(
+    db: &Db,
+    q: &Query,
+    after: Option<(&str, &str)>,
+    limit: i64,
+) -> Result<Vec<Entry>> {
+    use sqlx::Arguments;
+
+    let (conditions, mut args) = filtered(q)?;
+    let mut sql =
+        format!("SELECT id, at, actor, action, target, detail, ip FROM audit_log{conditions}");
+    if let Some((at, id)) = after {
+        sql.push_str(" AND (at < ? OR (at = ? AND id < ?))");
+        for value in [at, at, id] {
+            args.add(value.to_string())
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+        }
+    }
+    sql.push_str(" ORDER BY at DESC, id DESC LIMIT ?");
+    args.add(limit.clamp(1, 1000))
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    let rows = sqlx::query_with(db.sql(&sql), args)
+        .fetch_all(db.pool())
+        .await?;
+
+    rows.iter().map(read).collect()
 }
 
 /// How many entries a query's conditions match, however many pages of them.
@@ -315,5 +350,52 @@ mod tests {
         assert_eq!(list(&db, &query(1)).await.unwrap().len(), 1);
         assert!(list(&db, &query(2)).await.unwrap().is_empty());
         assert_eq!(count_matching(&db, &Query::default()).await.unwrap(), 5);
+    }
+
+    #[tokio::test]
+    async fn an_export_walks_every_entry_the_filters_match_a_page_at_a_time() {
+        let db = db().await;
+        for n in 0..7 {
+            record(
+                &db,
+                Record {
+                    actor: Some(if n % 2 == 0 { "admin" } else { "other" }),
+                    action: Action::OverrideSet,
+                    target: Some(&format!("target {n}")),
+                    detail: None,
+                    ip: None,
+                },
+            )
+            .await
+            .unwrap();
+        }
+
+        let mine = Query {
+            actor: Some("admin".into()),
+            // A page of the list is no page of the export.
+            limit: 1,
+            offset: 3,
+            ..Default::default()
+        };
+        let mut read = Vec::new();
+        let mut after: Option<(String, String)> = None;
+        loop {
+            let page = page_after(
+                &db,
+                &mine,
+                after.as_ref().map(|(at, id)| (at.as_str(), id.as_str())),
+                2,
+            )
+            .await
+            .unwrap();
+            let Some(last) = page.last() else { break };
+            after = Some((last.at.clone(), last.id.clone()));
+            read.extend(
+                page.into_iter()
+                    .map(|entry| entry.target.unwrap_or_default()),
+            );
+        }
+        // Newest first, every one of the actor's, once.
+        assert_eq!(read, ["target 6", "target 4", "target 2", "target 0"]);
     }
 }

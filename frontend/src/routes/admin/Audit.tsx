@@ -14,6 +14,7 @@ import { Link } from 'react-router'
 
 import {
   Button,
+  ButtonLink,
   Chip,
   EmptyState,
   Glyph,
@@ -107,7 +108,24 @@ export function Audit() {
           <p className="mt-1 text-xs text-bone-faint">{t.admin.trail.actorHint}</p>
         </div>
 
-        <span className="ml-auto flex items-center gap-3 self-center">
+        <span className="ml-auto flex flex-wrap items-center gap-3 self-center">
+          {/* Every entry the filters match, not only this page: a file a
+              spreadsheet opens, or JSON for a program. */}
+          <span className="flex items-center gap-1">
+            {(['csv', 'json'] as const).map((format) => (
+              <ButtonLink
+                key={format}
+                size="sm"
+                variant="quiet"
+                download
+                title={t.admin.trail.downloadHint}
+                href={`/api/v1/audit${query({ action, actor: settledActor, format })}`}
+              >
+                <Glyph name="download" className="size-3.5" />
+                {t.admin.trail.download[format]}
+              </ButtonLink>
+            ))}
+          </span>
           {log.isFetching ? <Spinner className="size-3.5 text-bone-faint" /> : null}
           {log.data ? (
             <span className="font-mono text-xs text-bone-faint tabular-nums">

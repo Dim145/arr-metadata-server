@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { bare, completed, dictionary, LANGS, preferred } from './i18n'
+import { bare, completed, dictionary, LANGS, plurals, preferred } from './i18n'
 import { en, type Dict } from './lang/en'
 import { fr } from './lang/fr'
 
@@ -76,6 +76,41 @@ describe('the dictionaries', () => {
     expect(de.nav.browse).toBe('Stöbern')
     expect(de.nav.lists).toBe(en.nav.lists)
     expect(de.figures.addedRecently(2)).toBe(en.figures.addedRecently(2))
+  })
+})
+
+describe('a count and the words after it', () => {
+  const forms = { one: 'one', other: 'other' }
+
+  it('follow English, where 1 alone is singular', () => {
+    const plural = plurals('en')
+    expect([0, 1, 2, 21].map((n) => plural(n, forms))).toEqual(['other', 'one', 'other', 'other'])
+  })
+
+  it('follow French, where 0 is singular too', () => {
+    const plural = plurals('fr')
+    expect([0, 1, 2, 21].map((n) => plural(n, forms))).toEqual(['one', 'one', 'other', 'other'])
+  })
+
+  it('take `other` for a form the language has and the dictionary does not give', () => {
+    // French files a round million under `many`: "1 000 000 de films".
+    const plural = plurals('fr')
+    expect(plural(1_000_000, { ...forms, many: 'many' })).toBe('many')
+    expect(plural(1_000_000, forms)).toBe('other')
+  })
+
+  it('are said by each dictionary in its own grammar', () => {
+    expect(en.figures.addedRecently(0)).toBe('0 works added in the last thirty days.')
+    expect(en.figures.addedRecently(1)).toBe('1 work added in the last thirty days.')
+    expect(fr.figures.addedRecently(0)).toBe('0 œuvre ajoutée ces trente derniers jours.')
+    expect(fr.figures.addedRecently(2)).toBe('2 œuvres ajoutées ces trente derniers jours.')
+  })
+
+  it('keep a word for exactly one to one, in French as in English', () => {
+    expect(en.work.otherCountries(1)).toBe('One other country')
+    expect(en.work.otherCountries(0)).toBe('0 other countries')
+    expect(fr.work.otherCountries(1)).toBe('Un autre pays')
+    expect(fr.work.otherCountries(0)).toBe('0 autre pays')
   })
 })
 

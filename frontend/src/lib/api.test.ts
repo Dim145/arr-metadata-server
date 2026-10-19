@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { ApiError, api, query, segment } from './api'
+import { ApiError, api, inTextLanguage, query, segment } from './api'
 
 describe('a query string', () => {
   it('leaves out what is empty, and keeps a nought', () => {
@@ -8,6 +8,25 @@ describe('a query string', () => {
       '?language=fr&page=0&all=true',
     )
     expect(query({ term: undefined })).toBe('')
+  })
+})
+
+describe('a read, in the language the reader chose for the texts', () => {
+  it('asks in that language what was asked in the interface’s', () => {
+    expect(inTextLanguage('/items/w1?language=en', 'de', '/work/w1')).toBe('/items/w1?language=de')
+    expect(inTextLanguage('/calendar?from=a&to=b&language=fr', 'pt-BR', '/calendar')).toBe(
+      '/calendar?from=a&to=b&language=pt-BR',
+    )
+  })
+
+  it('leaves alone a read that asks for no language, and every read where nothing was chosen', () => {
+    expect(inTextLanguage('/items/w1/orders', 'de', '/work/w1')).toBe('/items/w1/orders')
+    expect(inTextLanguage('/facets?kind=series', 'de', '/browse')).toBe('/facets?kind=series')
+    expect(inTextLanguage('/items/w1?language=en', undefined, '/work/w1')).toBe('/items/w1?language=en')
+  })
+
+  it('leaves the administration in the language it edits in', () => {
+    expect(inTextLanguage('/items/w1?language=fr', 'de', '/admin/catalogue/w1')).toBe('/items/w1?language=fr')
   })
 })
 
