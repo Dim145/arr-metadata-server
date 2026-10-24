@@ -10,6 +10,9 @@
  * What a record lacks — a poster, an overview, an IMDb id, a first refresh —
  * is four marks on its row and four filters above the table, kept in the
  * address so that the dashboard's to-do list links to one: `?missing=poster`.
+ * A work that looks like another — the duplicates the server proposes — is
+ * a filter of the same row, `?missing=duplicates`, and a mark on its row that
+ * opens the two side by side, to be merged or said not to be one work.
  * A row's actions are behind one button, which fits a phone as well as a
  * desk; the row itself opens the editor.
  */
@@ -50,6 +53,8 @@ import { hasSources, poster } from '../../lib/media'
 import type {
   CuratedListPage,
   CuratedLists,
+  DuplicateList,
+  DuplicatePair,
   Facets,
   ItemPage,
   MediaItem,
@@ -58,11 +63,13 @@ import type {
   SourceRules,
 } from '../../lib/types'
 
+import { MergeDialog, type MergeOpening } from './MergeDialog'
+
 /** What an operator is being asked to confirm, and about which entry. */
 type Asking = { item: MediaItem; what: 'delete' | 'disable' }
 
 /** What a record can lack, as the server's `missing` filter names it, in the order the filters are drawn. */
-const GAPS = ['poster', 'overview', 'imdb', 'refresh', 'divergingLock'] as const
+const GAPS = ['poster', 'overview', 'imdb', 'refresh', 'divergingLock', 'duplicates'] as const
 type Gap = (typeof GAPS)[number]
 
 const GAP_GLYPH: Record<Gap, GlyphName> = {
@@ -71,7 +78,14 @@ const GAP_GLYPH: Record<Gap, GlyphName> = {
   imdb: 'link',
   refresh: 'refresh',
   divergingLock: 'lock',
+  duplicates: 'copy',
 }
+
+/** What the merge dialog is opened on: a work, and the other one when a pair says which. */
+type Merging = { work: MergeOpening; other?: string; proposed?: boolean; flagged?: boolean }
+
+/** One work's partner in a pair the server proposes: the pair, and the other work. */
+type Partner = { pair: DuplicatePair; other: DuplicatePair['first'] }
 
 /** How one work came out of an action done to the whole selection. */
 type Outcome = 'done' | 'unchanged' | 'skipped'
@@ -128,10 +142,45 @@ export function Catalogue() {
   const [sort, setSort] = useState<'popularity' | 'title' | 'added' | 'refreshed'>('popularity')
   const [composing, setComposing] = useState(false)
   const [asking, setAsking] = useState<Asking | null>(null)
+  const [merging, setMerging] = useState<Merging | null>(null)
+  // What the last merge or dismissal came to, above the register rather than
+  // in the selection's bar: that bar goes with the rows, and the pair merged
+  // is often the last one the register narrowed to duplicates had.
+  const [mergeSaid, setMergeSaid] = useState<string | null>(null)
+  // A dialog of its own each time it opens: a pair, then another.
+  const [mergings, setMergings] = useState(0)
+  const mergeOn = (opening: Merging) => {
+    setMergings((n) => n + 1)
+    setMergeSaid(null)
+    setMerging(opening)
+  }
 
   const settled = useSettled(term)
 
+  // The pairs the server proposes, looked for again as they are read: asked
+  // while the register is narrowed to them, before the list — which reads
+  // what that look wrote.
+  const lookingForDuplicates = missing.includes('duplicates')
+  const pairs = useQuery({
+    queryKey: ['duplicates'],
+    queryFn: () => api.get<DuplicateList>('/admin/duplicates'),
+    enabled: lookingForDuplicates,
+  })
+  const partners = useMemo(() => {
+    const by = new Map<string, Partner[]>()
+    for (const pair of pairs.data?.pairs ?? []) {
+      for (const [one, other] of [
+        [pair.first, pair.second],
+        [pair.second, pair.first],
+      ] as const) {
+        by.set(one.id, [...(by.get(one.id) ?? []), { pair, other }])
+      }
+    }
+    return by
+  }, [pairs.data])
+
   const list = useQuery({
+    enabled: !lookingForDuplicates || !pairs.isPending,
     queryKey: ['items', settled, kind, manualOnly, failedOnly, missing.join(','), sort],
     queryFn: () =>
       api.get<ItemPage>(
@@ -343,6 +392,8 @@ export function Catalogue() {
   const filtered = Boolean(term || kind || manualOnly || failedOnly || missing.length)
   // Narrowed to what records lack and nothing else: an empty list is good news.
   const onlyGaps = missing.length > 0 && !term && !kind && !manualOnly && !failedOnly
+  // Nothing proposed is not something lacking, and is said in its own words.
+  const onlyDuplicates = onlyGaps && missing.length === 1 && missing[0] === 'duplicates'
 
   return (
     <div className="mx-auto max-w-6xl">
@@ -460,6 +511,12 @@ export function Catalogue() {
           {rowError}
         </p>
       ) : null}
+      {mergeSaid ? (
+        <p role="status" className="mb-3 flex items-start gap-2 text-sm text-bone-dim">
+          <Glyph name="copy" className="mt-0.5 size-4 shrink-0 text-brass" />
+          {mergeSaid}
+        </p>
+      ) : null}
 
       <Panel className="rise overflow-hidden" style={{ animationDelay: '60ms' }}>
         {list.isPending ? (
@@ -475,8 +532,18 @@ export function Catalogue() {
           </p>
         ) : list.data.items.length === 0 ? (
           <EmptyState
-            title={onlyGaps ? w.missing.none : filtered ? w.emptyFiltered : w.empty}
-            hint={onlyGaps ? w.missing.noneHint : filtered ? w.emptyFilteredHint : w.emptyHint}
+            title={
+              onlyDuplicates ? w.missing.noDuplicates : onlyGaps ? w.missing.none : filtered ? w.emptyFiltered : w.empty
+            }
+            hint={
+              onlyDuplicates
+                ? w.missing.noDuplicatesHint
+                : onlyGaps
+                  ? w.missing.noneHint
+                  : filtered
+                    ? w.emptyFilteredHint
+                    : w.emptyHint
+            }
           />
         ) : (
           <>
@@ -583,10 +650,12 @@ export function Catalogue() {
                       />
                     </Th>
                     <Th>{w.colTitle}</Th>
-                    <Th className="hidden lg:table-cell">{w.colIds}</Th>
+                    <Th className="hidden xl:table-cell">{w.colIds}</Th>
                     <Th className="hidden sm:table-cell">{w.marks.label}</Th>
                     <Th className="hidden sm:table-cell">{w.colState}</Th>
-                    <Th align="right" className="hidden md:table-cell">
+                    {/* Not beside the sidebar between 1024 and 1280 pixels, where
+                        the title needs the room; the editor says when. */}
+                    <Th align="right" className="hidden md:table-cell lg:hidden xl:table-cell">
                       {w.colUpdated}
                     </Th>
                     <Th align="right" className="w-12 pl-0">
@@ -607,6 +676,15 @@ export function Catalogue() {
                       onRefresh={() => refresh.mutate(item.id)}
                       onEnable={() => setEnabled.mutate({ id: item.id, enabled: true })}
                       onAsk={(what) => setAsking({ item, what })}
+                      partners={partners.get(item.id) ?? []}
+                      onMerge={(partner) =>
+                        mergeOn({
+                          work: { id: item.id, title: item.title, kind: item.kind },
+                          other: partner?.other.id,
+                          proposed: Boolean(partner),
+                          flagged: partner?.pair.confidence === 'flag',
+                        })
+                      }
                       selected={selected.has(item.id)}
                       onSelect={(on) => toggle(item.id, on)}
                     />
@@ -720,6 +798,22 @@ export function Catalogue() {
           void runBulk((item) => reask(item, sources))
         }}
       />
+
+      {merging ? (
+        <MergeDialog
+          key={`merge-${mergings}`}
+          open
+          work={merging.work}
+          other={merging.other}
+          proposed={merging.proposed}
+          flagged={merging.flagged}
+          onClose={() => setMerging(null)}
+          onDone={(said) => {
+            setMerging(null)
+            setMergeSaid(said)
+          }}
+        />
+      ) : null}
     </div>
   )
 }
@@ -807,6 +901,8 @@ function Row({
   onRefresh,
   onEnable,
   onAsk,
+  partners,
+  onMerge,
   selected,
   onSelect,
 }: {
@@ -816,6 +912,10 @@ function Row({
   onRefresh: () => void
   onEnable: () => void
   onAsk: (what: Asking['what']) => void
+  /** The pairs the server proposes this work in, while the register is narrowed to them. */
+  partners: Partner[]
+  /** Open the merge dialog: on a pair, or on the work alone. */
+  onMerge: (partner?: Partner) => void
   selected: boolean
   onSelect: (on: boolean) => void
 }) {
@@ -840,7 +940,7 @@ function Row({
           onChange={(event) => onSelect(event.target.checked)}
         />
       </Td>
-      <Td className="w-full max-w-0 py-1.5">
+      <Td className="w-full max-w-0 min-w-40 py-1.5">
         {/* The cell is the target: the pseudo-element grows the link to the
             height of the row, so a thumb landing anywhere in the column opens
             the editor while the link stays a link for the keyboard. */}
@@ -873,6 +973,7 @@ function Row({
             column, and neither is a thing to discover only after opening the
             entry. */}
         <span className="mt-1 ml-9 flex flex-wrap items-center gap-1.5 sm:hidden">
+          <Twins partners={partners} onMerge={onMerge} />
           {item.isEnabled ? null : <Chip tone="accent">{w.disabled}</Chip>}
           {locks > 0 ? (
             <Chip tone="manual">
@@ -884,7 +985,9 @@ function Row({
         </span>
       </Td>
 
-      <Td className="hidden lg:table-cell">
+      {/* From 1280 px only: on one line, the identifiers took the title's
+          room beside the sidebar at 1024 px. They are in the editor. */}
+      <Td className="hidden xl:table-cell">
         <span className="flex gap-x-3 font-mono text-[0.6875rem] whitespace-nowrap text-bone-faint tabular-nums">
           {ids.tvdb ? <span>tvdb:{ids.tvdb}</span> : null}
           {ids.tmdb ? <span>tmdb:{ids.tmdb}</span> : null}
@@ -898,6 +1001,7 @@ function Row({
 
       <Td className="hidden sm:table-cell">
         <span className="flex flex-wrap items-center gap-1.5">
+          <Twins partners={partners} onMerge={onMerge} />
           {item.isEnabled ? null : <Chip tone="accent">{w.disabled}</Chip>}
           {item.isManual ? (
             <Chip tone="manual">
@@ -916,13 +1020,13 @@ function Row({
               as "nothing unusual here". */}
           {/* On one line: wrapped in a narrow column, it made every row of
               the catalogue three lines tall. */}
-          {item.isEnabled && !item.isManual && locks === 0 ? (
+          {item.isEnabled && !item.isManual && locks === 0 && partners.length === 0 ? (
             <span className="text-xs whitespace-nowrap text-bone-faint">{w.served}</span>
           ) : null}
         </span>
       </Td>
 
-      <Td align="right" className="hidden whitespace-nowrap md:table-cell">
+      <Td align="right" className="hidden whitespace-nowrap md:table-cell lg:hidden xl:table-cell">
         <span className="font-mono text-xs text-bone-faint tabular-nums" title={fmt.dateTime(item.updatedAt, locale)}>
           {fmt.relative(item.updatedAt, locale)}
         </span>
@@ -960,6 +1064,15 @@ function Row({
               >
                 {item.isEnabled ? w.menu.disable : w.menu.enable}
               </MenuButton>
+              <MenuButton
+                glyph="copy"
+                onClick={() => {
+                  close()
+                  onMerge(partners[0])
+                }}
+              >
+                {w.menu.merge}
+              </MenuButton>
               <hr className="my-1 border-rule" />
               <MenuButton
                 glyph="trash"
@@ -977,6 +1090,34 @@ function Row({
       </Td>
     </Tr>
   )
+}
+
+/**
+ * The works one is proposed to be with, each a mark that opens the two side
+ * by side: the other's title on it, what makes them look alike to the pointer
+ * that rests on it. Only the title, kept short: a sentence around it made the
+ * column wide enough to squeeze the titles of the register out of their own.
+ * Above the stretched link, which would otherwise open the editor.
+ */
+function Twins({ partners, onMerge }: { partners: Partner[]; onMerge: (partner: Partner) => void }) {
+  const { t } = useI18n()
+  const d = t.admin.works.duplicate
+
+  return partners.map((partner) => (
+    <button
+      key={partner.other.id}
+      type="button"
+      title={d.confidence[partner.pair.confidence]}
+      aria-label={d.open(partner.other.title)}
+      onClick={() => onMerge(partner)}
+      className="relative z-10 cursor-pointer rounded-full transition-opacity duration-150 hover:opacity-80"
+    >
+      <Chip tone={partner.pair.confidence === 'certain' ? 'accent' : 'manual'}>
+        <Glyph name="copy" className="size-3" />
+        <span className="max-w-36 truncate normal-case">{partner.other.title}</span>
+      </Chip>
+    </button>
+  ))
 }
 
 /**

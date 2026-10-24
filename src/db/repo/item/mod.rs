@@ -13,6 +13,7 @@
 
 mod across;
 mod listed;
+mod merge;
 mod read;
 mod refresh;
 mod search;
@@ -22,6 +23,7 @@ mod write;
 
 pub use across::*;
 pub use listed::*;
+pub use merge::*;
 pub use read::*;
 pub use refresh::*;
 pub use search::*;

@@ -2,12 +2,12 @@
 //! work entered by hand, a work switched off or deleted.
 
 use anyhow::{Context, Result};
-use sqlx::{Any, Transaction};
+use sqlx::{Any, Arguments, Transaction, any::AnyArguments};
 
 use super::listed::{Listed, mark_changed};
 use crate::{
     db::{Db, from_bool, new_id, now, text_list},
-    domain::{ExternalSource, MediaItem},
+    domain::{Credit, ExternalSource, MediaItem},
 };
 
 /// Everything written for one work in a single transaction.
@@ -430,11 +430,27 @@ async fn upsert_external_ids(
 /// Creating a manual child therefore needs its own write path, which does not
 /// exist yet — the native API can only add whole works by hand today.
 async fn replace_children(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaItem) -> Result<()> {
+    // Whom the credits are filed under, read before they go: a credit given
+    // again keeps its person (see `repo::person`).
+    let kept = crate::db::repo::person::kept(db, tx, &item.id).await?;
+
+    // The work's own credits are given again whole; its episodes' only when
+    // a source gave some. None means nobody said — TMDB not asked, or not
+    // answering — and what is held of them stands, as an empty list stands
+    // for the rest in `service::keep_what_nobody_answered`.
+    sqlx::query(db.sql(
+        "DELETE FROM media_credit
+          WHERE media_id = ? AND is_manual = 0 AND (season_number IS NULL OR ? = 1)",
+    ))
+    .bind(&item.id)
+    .bind(from_bool(!item.people.episodes.is_empty()))
+    .execute(&mut **tx)
+    .await?;
+
     for table in [
         "media_season",
         "media_episode",
         "media_image",
-        "media_credit",
         "media_relation",
         "media_alternative_title",
         "media_translation",
@@ -592,34 +608,7 @@ async fn replace_children(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaIt
         .context("failed to write image")?;
     }
 
-    for credit in &item.credits {
-        if credit.is_manual {
-            continue;
-        }
-        sqlx::query(db.sql(
-            "INSERT INTO media_credit
-                 (id, media_id, credit_type, person_name, character_name, image,
-                  tmdb_person_id, credit_tmdb_id, sort_order, is_manual, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)",
-        ))
-        .bind(if credit.id.is_empty() {
-            new_id()
-        } else {
-            credit.id.clone()
-        })
-        .bind(&item.id)
-        .bind(credit.credit_type.as_str())
-        .bind(&credit.person_name)
-        .bind(&credit.character_name)
-        .bind(&credit.image)
-        .bind(credit.tmdb_person_id)
-        .bind(&credit.credit_tmdb_id)
-        .bind(credit.sort_order)
-        .bind(&created)
-        .execute(&mut **tx)
-        .await
-        .context("failed to write credit")?;
-    }
+    write_credits(db, tx, item, &kept, &created).await?;
 
     for relation in &item.relations {
         sqlx::query(db.sql(
@@ -721,6 +710,135 @@ async fn replace_children(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaIt
     crate::db::repo::release::replace(db, tx, &item.id, &item.releases).await?;
 
     Ok(())
+}
+
+/// How many credits one insert writes, at fourteen values each.
+const CREDITS_PER_INSERT: usize = 50;
+
+/// Write the credits the sources gave — the work's own, then its episodes',
+/// each on the episode of the work it is of — each filed under its person.
+async fn write_credits(
+    db: &Db,
+    tx: &mut Transaction<'_, Any>,
+    item: &MediaItem,
+    kept: &crate::db::repo::person::Kept,
+    created: &str,
+) -> Result<()> {
+    use crate::db::repo::person::{self, Linkable};
+
+    let mut credits: Vec<(&Credit, Option<(i32, i32)>)> = item
+        .credits
+        .iter()
+        .filter(|credit| !credit.is_manual)
+        .map(|credit| (credit, None))
+        .collect();
+    credits.extend(
+        placed_on_episodes(item)
+            .into_iter()
+            .map(|(credit, place)| (credit, Some(place))),
+    );
+    if credits.is_empty() {
+        return Ok(());
+    }
+
+    let linkables: Vec<Linkable<'_>> = credits
+        .iter()
+        .map(|(credit, place)| Linkable::of(credit, *place, item.people.of(credit)))
+        .collect();
+    let people = person::resolve(db, tx, kept, &linkables).await?;
+
+    let rows: Vec<_> = credits.iter().zip(people).collect();
+    for chunk in rows.chunks(CREDITS_PER_INSERT) {
+        let sql = format!(
+            "INSERT INTO media_credit
+                 (id, media_id, credit_type, person_name, character_name, image,
+                  tmdb_person_id, credit_tmdb_id, sort_order, is_manual, created_at,
+                  person_id, season_number, episode_number)
+             VALUES {}",
+            vec!["(?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)"; chunk.len()].join(", ")
+        );
+        let mut args = AnyArguments::default();
+        for ((credit, place), person) in chunk {
+            let id = if credit.id.is_empty() {
+                new_id()
+            } else {
+                credit.id.clone()
+            };
+            add(&mut args, id)?;
+            add(&mut args, item.id.clone())?;
+            add(&mut args, credit.credit_type.as_str().to_string())?;
+            add(&mut args, credit.person_name.clone())?;
+            add(&mut args, credit.character_name.clone())?;
+            add(&mut args, credit.image.clone())?;
+            add(&mut args, credit.tmdb_person_id)?;
+            add(&mut args, credit.credit_tmdb_id.clone())?;
+            add(&mut args, credit.sort_order)?;
+            add(&mut args, created.to_string())?;
+            add(&mut args, person.clone())?;
+            add(&mut args, place.map(|(season, _)| season))?;
+            add(&mut args, place.map(|(_, episode)| episode))?;
+        }
+        sqlx::query_with(db.sql(&sql), args)
+            .execute(&mut **tx)
+            .await
+            .context("failed to write credits")?;
+    }
+    Ok(())
+}
+
+/// Bind one more value to a statement being built.
+fn add<'t>(
+    args: &mut AnyArguments,
+    value: impl sqlx::Encode<'t, Any> + sqlx::Type<Any>,
+) -> Result<()> {
+    args.add(value).map_err(|e| anyhow::anyhow!("{e}"))
+}
+
+/// The episode credits a source gave, each on the episode of the work it is
+/// of: by the episode's TMDB id where the source gives one — TMDB numbers a
+/// series its own way where TheTVDB numbers the work, and the merge filed
+/// TMDB's id on the work's episode that is TMDB's — else by the numbers it
+/// gives. One the work has no episode for is left out, as the merge leaves
+/// out an episode only one source has. The same credit twice on one
+/// episode is one.
+fn placed_on_episodes(item: &MediaItem) -> Vec<(&Credit, (i32, i32))> {
+    use std::collections::{HashMap, HashSet};
+
+    if item.people.episodes.is_empty() {
+        return Vec::new();
+    }
+    let by_tmdb: HashMap<i64, (i32, i32)> = item
+        .episodes
+        .iter()
+        .filter_map(|e| Some((e.tmdb_id?, (e.season_number, e.episode_number))))
+        .collect();
+    let held: HashSet<(i32, i32)> = item
+        .episodes
+        .iter()
+        .map(|e| (e.season_number, e.episode_number))
+        .collect();
+
+    let mut seen: HashSet<(i32, i32, &'static str, String)> = HashSet::new();
+    let mut out = Vec::new();
+    for given in &item.people.episodes {
+        let place = match given.tmdb_episode_id {
+            Some(tmdb) => by_tmdb.get(&tmdb).copied(),
+            None => Some((given.season_number, given.episode_number))
+                .filter(|place| held.contains(place)),
+        };
+        let Some(place) = place else { continue };
+        let credit = &given.credit;
+        let standing = (
+            place.0,
+            place.1,
+            credit.credit_type.as_str(),
+            crate::db::repo::person::key(credit.tmdb_person_id, &credit.person_name),
+        );
+        if seen.insert(standing) {
+            out.push((credit, place));
+        }
+    }
+    out
 }
 
 pub async fn delete(db: &Db, id: &str) -> Result<bool> {

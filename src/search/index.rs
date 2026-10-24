@@ -184,54 +184,48 @@ fn is_placeholder(folded: &str) -> bool {
     }
 }
 
-/// Somebody credited on works of the catalogue, as the index names them.
+/// Somebody credited on works of the catalogue, as the index names them:
+/// their record, every name they are found by, and how many works credit
+/// them by a credit no lock hides.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PersonName {
-    /// `tmdb:<id>`, or `name:<name>` for somebody credited without one.
-    pub key: String,
-    pub name: String,
-    /// How many works credit them.
+pub struct PersonNames {
+    /// Their record's id.
+    pub id: String,
+    /// Their name first, then the one in their own script and the others
+    /// they go by.
+    pub names: Vec<String>,
     pub works: i64,
 }
 
-impl PersonName {
-    /// Their TMDB id, where they are known by one.
-    pub fn tmdb_id(key: &str) -> Option<i64> {
-        key.strip_prefix("tmdb:").and_then(|id| id.parse().ok())
+/// The rows of somebody credited: one for each distinct name they go by,
+/// each worth as many works as credit them. None for somebody no work
+/// credits, nor for a name that folds to nothing.
+pub fn person_entries(person: &PersonNames) -> Vec<Entry> {
+    if person.works <= 0 {
+        return Vec::new();
     }
-
-    /// The name they are filed under, where they are known by no id.
-    pub fn named(key: &str) -> Option<&str> {
-        key.strip_prefix("name:")
-    }
-}
-
-/// The key a credit files its person under.
-pub fn person_key(tmdb_person_id: Option<i64>, name: &str) -> String {
-    match tmdb_person_id {
-        Some(id) => format!("tmdb:{id}"),
-        None => format!("name:{}", name.trim()),
-    }
-}
-
-/// The row of somebody credited: their name, worth as many works as credit
-/// them. Nothing for a name that folds to nothing.
-pub fn person_entry(person: &PersonName) -> Option<Entry> {
-    let folded = norm(&person.name);
-    if folded.is_empty() {
-        return None;
-    }
-    Some(Entry {
-        id: entry_id(Kind::Person, &person.key, &folded),
-        kind: Kind::Person,
-        ref_id: person.key.clone(),
-        work_id: None,
-        lang: None,
-        norm: folded,
-        text: person.name.trim().to_string(),
-        popularity: Some(person.works as f64),
-        year: None,
-    })
+    let mut seen: HashSet<String> = HashSet::new();
+    person
+        .names
+        .iter()
+        .filter_map(|name| {
+            let folded = norm(name);
+            if folded.is_empty() || !seen.insert(folded.clone()) {
+                return None;
+            }
+            Some(Entry {
+                id: entry_id(Kind::Person, &person.id, &folded),
+                kind: Kind::Person,
+                ref_id: person.id.clone(),
+                work_id: None,
+                lang: None,
+                norm: folded,
+                text: name.trim().to_string(),
+                popularity: Some(person.works as f64),
+                year: None,
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -328,18 +322,27 @@ mod tests {
     }
 
     #[test]
-    fn a_person_is_keyed_by_their_tmdb_id_or_else_their_name() {
-        assert_eq!(person_key(Some(2725), "Wim Wenders"), "tmdb:2725");
-        assert_eq!(person_key(None, " Jane Doe "), "name:Jane Doe");
-        assert_eq!(PersonName::tmdb_id("tmdb:2725"), Some(2725));
-        assert_eq!(PersonName::named("name:Jane Doe"), Some("Jane Doe"));
-        let entry = person_entry(&PersonName {
-            key: "tmdb:2725".into(),
-            name: "Wim Wenders".into(),
+    fn a_person_is_found_by_each_of_their_names_once_and_not_without_a_work() {
+        let person = PersonNames {
+            id: "p1".into(),
+            names: vec![
+                "Wim Wenders".into(),
+                "WIM WENDERS".into(),
+                "Ernst Wilhelm Wenders".into(),
+                " ".into(),
+            ],
             works: 3,
-        })
-        .expect("a row");
-        assert_eq!(entry.norm, "wim wenders");
-        assert_eq!(entry.popularity, Some(3.0));
+        };
+        let rows = person_entries(&person);
+        let names: Vec<&str> = rows.iter().map(|e| e.norm.as_str()).collect();
+        assert_eq!(names, ["wim wenders", "ernst wilhelm wenders"]);
+        assert!(
+            rows.iter()
+                .all(|e| e.ref_id == "p1" && e.popularity == Some(3.0))
+        );
+        assert_ne!(rows[0].id, rows[1].id);
+
+        let uncredited = PersonNames { works: 0, ..person };
+        assert!(person_entries(&uncredited).is_empty());
     }
 }

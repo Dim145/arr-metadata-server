@@ -75,6 +75,15 @@ test.describe('the browse tab and its panel', () => {
     await expect(page.getByRole('heading', { level: 1 })).toHaveText(/^(the sagas|les sagas)$/i)
   })
 
+  test('leads to the index of people, which the bar has no place for', async ({ page }) => {
+    await page.goto('/')
+    await page.getByRole('button', { name: /browse: the menu|parcourir : le menu/i }).click()
+    const panel = page.getByRole('group', { name: /^(browse|parcourir)$/i })
+    await panel.getByRole('link', { name: /^(people|personnes)$/i }).click()
+    await expect(page).toHaveURL(/\/people$/)
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText(/^(people|personnes)$/i)
+  })
+
   test('the panel meets WCAG 2.1 AA', async ({ page }) => {
     await page.goto('/')
     await page.getByRole('button', { name: /browse: the menu|parcourir : le menu/i }).click()

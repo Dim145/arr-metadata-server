@@ -285,6 +285,118 @@ may change what the API or the configuration means, and says so here.
   countries and the ratings to choose from.
 - The task `search.rebuild` writes the search index again from the whole
   catalogue, the search answering throughout.
+- Two records of one work are found, merged and taken apart again. Two
+  films, or two series, are proposed as one when they are filed under one
+  identifier elsewhere — TMDB's, TheTVDB's, IMDb's, AniList's,
+  MyAnimeList's or Fan-Kai's, held or last said to be theirs — or under one
+  title a year apart at the most; a film and a series under one IMDb id are
+  pointed out, and never merged. The dashboard counts them, *N works look
+  like another one*, and leads to the catalogue narrowed to them
+  (`missing=duplicates`), each row naming the other; *Not the same work*
+  sets a pair aside for good. `GET /api/v1/admin/duplicates`,
+  `POST /api/v1/admin/duplicates/dismiss`.
+- **Merge…**, from a row of the catalogue or from a pair, sets the two side
+  by side and keeps the record its sources fill over one entered by hand,
+  which nothing refreshes; then the one somebody put something into by hand,
+  else the one filed under more identifiers, else the older — unless told
+  otherwise. Each field that differs can be kept from either side, a value
+  taken from the other locked. One transaction moves seasons, episodes,
+  pictures, credits, titles, translations, ratings, orders, places in
+  selections and the journal onto the kept work, its own standing wherever
+  both hold the same; the other stays as a switched-off record no list
+  shows, and its id, its slug and its identifiers answer with the kept work
+  for good: on the site, which puts the kept work's address in place of the
+  old one, in the API, and to Sonarr, Radarr and Plex, each answered under
+  the id it asked by. A write under the old id is refused with `409`
+  (`work_merged`), naming the kept work. The journal (*Merge*), the audit
+  trail (`item.merged`) and, with `arr.pushRefresh`, Sonarr or Radarr hear
+  of it (migration 0040).
+- A merge is undone from the kept work's editor for `merge.undoDays` days —
+  14 unless set, `0` for never: the record comes back as it was, what
+  changed on the kept one since stays, and the two are not proposed again.
+  `POST /api/v1/items/{id}/unmerge` (`410` past the window),
+  `GET /api/v1/items/{id}/merges`.
+- People, each a record of their own (migration 0041). Everybody the
+  credits name is one person, whatever the credits call them: a record
+  with the ids TMDB, TheTVDB and IMDb file them under, the other names they
+  go by and their name in their own script, which every credit is filed
+  under as it is written. A credit the sources give again keeps the person
+  it had, so a credit split off a homonym, given to somebody by hand, or
+  merged with its person into another stays where it was put. At the
+  upgrade, a record is made for each TMDB id the credits hold and for each
+  name the others give; a credit by name alone is taken for the one person
+  known by a TMDB id who goes by that name — and split off by hand where
+  that is a homonym.
+- A person's page reads their work by job — acting, directing, writing,
+  producing, each with how many works — in the order of the years, the
+  titles or the scores, films or series apart, a guest's episodes gathered
+  under their series with how many and which years; their name in their
+  own script is marked with its language. What TMDB says of them is asked
+  the first time their page is read and kept a month. A person TMDB does
+  not know has a page too, at `/people/{id}`, and the cast on a work's page
+  leads to it; `/person/{tmdbId}` still leads where it did.
+- The index of people, `/people`, from the Browse menu: by letter and by
+  job, the most credited first or by name, and a name found as the search
+  finds it (`GET /api/v1/people`).
+- Administration › People: everybody, those known by no TMDB id and those
+  who share a name — the likely homonyms and duplicates; two records merged
+  into one, credits split off onto a record of their own, somebody entered
+  or put right by hand with their ids, each on the audit trail
+  (`person.created`, `person.updated`, `person.merged`, `person.split`,
+  `person.credited`). The editor's People tab leads each credit to its
+  person and gives a credit typed by name the person it is of.
+  `POST /api/v1/people`, `PUT /api/v1/people/{id}`,
+  `POST /api/v1/people/{id}/merge`, `…/split` and `…/credits`.
+- Each episode's guests, director and writers, read from the season
+  documents TMDB already answers: credited on that episode — the work's
+  own, as TheTVDB may number it — and not on the series, whose cast is what
+  it was.
+- TheTVDB's characters, the first `tvdb.castLimit` of them (25 when
+  unset): matched into the cast another source gave by name, whatever its
+  accents, its case and the order of its words, giving the person
+  TheTVDB's id; those the cast lacks are added after it, and the editor's
+  sources credit TheTVDB beside the source of the cast.
+- The NFO's `<actor>` names the person by `<tmdbid>` and `<imdbid>` where
+  their record has them.
+- This server's own pages are given copies of the pictures it keeps, at
+  the widths they are drawn at — a poster at 240, 480 and 960 pixels, a
+  background at 640, 1280 and 1920, a logo at 400 and 800, a still at 320
+  and 640, a photograph of the cast at 120 and 240 — as WebP, never wider
+  than the picture nor than 1920 pixels. A copy is named by its picture's
+  hash and its width (`/media/<hash>-480.webp`), made the first time a page
+  asks for it, and kept beside the picture; the one a page asks for first,
+  a poster's 480 or a background's 1280, is made as the picture is stored.
+  On the development catalogue, at 1440 pixels on a dense screen, the home
+  page's pictures weigh half what they did and a work's 58 % less. Clients
+  are given the originals, as before; `docs/media.md` says how the copies
+  are made and kept.
+- What a page draws while a picture loads: the colour most of it is and a
+  ThumbHash sketch of it, worked out as the picture is stored and given by
+  the native API with its size (`pictures`, beside a work's `images`). The
+  interface paints them under the picture and gives its box its
+  proportions before a byte of it arrives; a poster card's frame takes the
+  poster's colour rather than its genre's.
+- **Prepare the pictures** (`media.variants`), on Tasks and on the Media
+  page, which says how many pictures kept before this version have neither
+  a placeholder nor their first copy: it prepares them a few at a time, can
+  be stopped, and takes up where it stopped. It runs only when somebody
+  runs it.
+- AVIF copies at night: with the new setting `media.avif` on (off until it
+  is set), the task `media.avif` makes, each night at 03:00 UTC and on
+  request, an AVIF copy of every poster at 480 and 960 pixels and of every
+  background at 1280 and 1920, one at a time on one core, a third lighter
+  than the WebP. A page offers them only where they exist. The container
+  image is built with rav1e's assembly (the `avif-asm` feature), which
+  makes a copy in less than half the time.
+- Key art, disc art and character art: `keyart` (a textless poster of
+  TMDB's or Fanart.tv's, or one put on by hand), `discart` (Fanart.tv's
+  `moviedisc`) and `characterart` (Fanart.tv's, filed as clear art until
+  now), shown in the editor's Artwork tab and offered when adding a
+  picture, and exported as `keyart.jpg`, `discart.png` with `disc.png`
+  beside it, and `characterart.png` — none of them ever a `<thumb>` of the
+  `.nfo`. Fanart.tv's 4K backgrounds are read too, after its HD ones.
+- Plex is given a `backgroundSquare`: the middle of a work's lead
+  background, 1080 pixels a side, where this server keeps the background.
 
 ### Changed
 
@@ -397,6 +509,32 @@ may change what the API or the configuration means, and says so here.
 - The bundled SQLite is compiled without its memory statistics
   (`SQLITE_DEFAULT_MEMSTATUS=0`), whose global mutex was the ceiling under
   many searches at once; `docs/perf/README.md` has the measurements.
+- The search finds a person by every name they go by — TMDB's other names,
+  their name in their own script — once, under their record, and a credit a
+  lock hides names nobody: somebody whose every credit is hidden is not
+  found. `GET /api/v1/search`'s people carry their record's `id`, their
+  portrait, what they did (`jobs`) and the name they were `matched` by, and
+  the palette leads to their page whether TMDB knows them or not; the
+  list's `person` filter takes a record's id too, and leaves out what a
+  lock hides.
+- `GET /api/v1/people/{id}` takes a record's id as well as a TMDB id;
+  `tmdbId` is absent for somebody TMDB does not know, and each of `roles`
+  carries its credit's id and, for an episode's credit, the season, the
+  episode, its title and the day it aired. Whoever may edit the catalogue
+  is also given `record`, the record as it is kept.
+- The first start after the upgrade writes the people's rows of the search
+  index, and the index of people's counts, again in the background, as the
+  works are written.
+- No JPEG thumbnail (`-t.jpg`) is made any more: the pages ask for the WebP
+  copies. Those already made are still served.
+- A picture is decoded with limits: past 16,384 pixels a side, 100 million
+  pixels or 256 MB of pixels it is not decoded at all, and is served whole.
+- `media_asset` keeps each picture's colour and sketch, and `media_variant`
+  lists the copies (migration 0042); a database transfer carries it. A
+  backup carries no copy, which is made again when asked for.
+- The Media page counts the copies and what they weigh, and
+  `GET /api/v1/media/status` says so (`variants`, `unprepared`, `avif`,
+  `preparing`).
 
 ### Removed
 
@@ -433,6 +571,10 @@ may change what the API or the configuration means, and says so here.
 - A shared address no longer carries the section the reader was at: pressing
   *Watch* or a section chip left `#watch` or `#details` in it, and the
   recipient landed mid-page.
+- The catalogue keeps its titles readable beside the sidebar between 1024
+  and 1280 pixels, where they were cut to a few letters: the identifiers
+  and the time of the last change show from 1280 pixels, and the title
+  column always keeps a width of its own.
 
 ### Security
 

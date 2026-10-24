@@ -31,6 +31,14 @@ WORKDIR /src
 # dependencies to the ones it was released with.
 RUN cargo install --locked --version 0.7.7 cargo-auditable
 
+# NASM assembles rav1e's x86_64 assembly, which makes an AVIF copy in less
+# than half the time (the `avif-asm` feature; docs/media.md has the figures).
+# On arm64 the C compiler already here assembles it, and NASM goes unused.
+# The build stage's alone: nothing of it reaches the image.
+RUN apt-get update \
+ && apt-get install --yes --no-install-recommends nasm \
+ && rm -rf /var/lib/apt/lists/*
+
 # Compile the dependency tree against a stub so it caches independently of the
 # application sources, which change far more often.
 #
@@ -41,7 +49,7 @@ ENV LIBSQLITE3_FLAGS="-DSQLITE_DEFAULT_MEMSTATUS=0"
 COPY Cargo.toml Cargo.lock build.rs ./
 RUN mkdir -p src \
  && echo 'fn main() {}' > src/main.rs \
- && cargo auditable build --release --locked \
+ && cargo auditable build --release --locked --features avif-asm \
  && rm -rf src
 
 COPY src/ ./src/
@@ -53,7 +61,7 @@ COPY --from=ui /ui/dist/ ./frontend/dist/
 
 # `touch` defeats the stale mtime left by the stub build.
 RUN touch src/main.rs build.rs \
- && cargo auditable build --release --locked \
+ && cargo auditable build --release --locked --features avif-asm \
  && strip target/release/arr-metadata-server \
  && mkdir -p /out/data
 

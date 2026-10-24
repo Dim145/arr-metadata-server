@@ -609,7 +609,7 @@ fn browsable(method: &axum::http::Method, path: &str) -> bool {
 
     match path.trim_end_matches('/') {
         "/api/v1/items" | "/api/v1/stats" | "/api/v1/sources" | "/api/v1/facets"
-        | "/api/v1/search" | "/api/v1/calendar" | "/api/v1/auth/me" => true,
+        | "/api/v1/search" | "/api/v1/calendar" | "/api/v1/auth/me" | "/api/v1/people" => true,
         // The feeds: the schedule again, and the arrivals, in shapes a
         // calendar app or a feed reader takes.
         "/api/v1/calendar.ics" | "/api/v1/feed/added.atom" | "/api/v1/feed/airing.atom" => true,
@@ -930,6 +930,12 @@ mod browse_tests {
         assert!(allowed("/api/v1/calendar"));
         assert!(allowed("/api/v1/people/17419"));
         assert!(!allowed("/api/v1/people/17419/secret"));
+        // Who is in it, by letter and by job; what is done to a record by
+        // hand is a change, and no visitor's.
+        assert!(allowed("/api/v1/people"));
+        assert!(!allowed(
+            "/api/v1/people/01a0c0e3-4c5d-7738-a2cf-4972b0bc2dcc/merge"
+        ));
         assert!(allowed("/api/v1/seasons/2026/autumn"));
         assert!(!allowed("/api/v1/seasons/2026/autumn/candidates"));
         assert!(!allowed("/api/v1/seasons/2026"));

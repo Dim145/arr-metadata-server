@@ -137,6 +137,17 @@ pub const REGISTRY: &[Definition] = &[
         scopes: SERVER_ONLY,
     },
     Definition {
+        // TheTVDB's characters kept of a series, in its order: matched into
+        // the cast another source gave, or the cast where none did. Unset,
+        // as many as `tmdb.castLimit` begins at (`providers::tvdb::cast_limit`).
+        key: "tvdb.castLimit",
+        kind: Kind::Int {
+            min: 1,
+            max: crate::providers::tmdb::map::MAX_CAST as i64,
+        },
+        scopes: SERVER_ONLY,
+    },
+    Definition {
         key: "skyhook.fallback",
         kind: Kind::Bool,
         scopes: SERVER_ONLY,
@@ -458,6 +469,14 @@ pub const REGISTRY: &[Definition] = &[
         kind: Kind::Bool,
         scopes: SERVER_ONLY,
     },
+    Definition {
+        // The night's AVIF copies of the posters and the backgrounds: off
+        // until somebody turns them on, as they cost seconds of a processor
+        // each.
+        key: "media.avif",
+        kind: Kind::Bool,
+        scopes: SERVER_ONLY,
+    },
     // ── Refresh ──────────────────────────────────────────────────────────────
     Definition {
         key: "refresh.enabled",
@@ -529,6 +548,15 @@ pub const REGISTRY: &[Definition] = &[
         // most. Read by the pass that prunes the audit trail.
         key: "history.keepDays",
         kind: Kind::Int { min: 0, max: 3650 },
+        scopes: SERVER_ONLY,
+    },
+    // ── Merges ───────────────────────────────────────────────────────────────
+    Definition {
+        // For how many days a merge of two works can be undone, `0` for not
+        // at all: two weeks unless set (`service::merge::DEFAULT_UNDO_DAYS`),
+        // a year at the most. Read when an undo is asked for.
+        key: "merge.undoDays",
+        kind: Kind::Int { min: 0, max: 365 },
         scopes: SERVER_ONLY,
     },
     // Webhooks were two settings here, an address and its events, until
@@ -688,6 +716,15 @@ mod tests {
     }
 
     #[test]
+    fn thetvdbs_cast_is_cut_where_tmdbs_is() {
+        assert_eq!(def("tvdb.castLimit").scopes, SERVER_ONLY);
+        assert!(validate(def("tvdb.castLimit"), "1").is_ok());
+        assert!(validate(def("tvdb.castLimit"), "200").is_ok());
+        assert!(validate(def("tvdb.castLimit"), "0").is_err());
+        assert!(validate(def("tvdb.castLimit"), "201").is_err());
+    }
+
+    #[test]
     fn a_refresh_interval_has_to_be_survivable() {
         // Thirty seconds would start a sweep before the last one finished.
         assert!(validate(def("refresh.intervalSeconds"), "30").is_err());
@@ -752,6 +789,15 @@ mod tests {
         assert!(validate(def("history.keepDays"), "365").is_ok());
         assert!(validate(def("history.keepDays"), "3651").is_err());
         assert!(validate(def("history.keepDays"), "-1").is_err());
+    }
+
+    #[test]
+    fn a_merge_is_undone_within_days_the_server_sets_or_never() {
+        assert_eq!(def("merge.undoDays").scopes, SERVER_ONLY);
+        assert!(validate(def("merge.undoDays"), "0").is_ok(), "no undo");
+        assert!(validate(def("merge.undoDays"), "14").is_ok());
+        assert!(validate(def("merge.undoDays"), "366").is_err());
+        assert!(validate(def("merge.undoDays"), "-1").is_err());
     }
 
     #[test]

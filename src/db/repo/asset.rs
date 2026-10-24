@@ -13,7 +13,10 @@ use anyhow::Result;
 use serde::Serialize;
 use utoipa::ToSchema;
 
-use crate::db::{Db, RowExt, new_id, now};
+use crate::{
+    db::{Db, RowExt, new_id, now},
+    domain::CoverType,
+};
 
 /// What an asset is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
@@ -78,14 +81,6 @@ impl Thumb {
             Self::Png => Some("png"),
         }
     }
-
-    pub const fn content_type(self) -> Option<&'static str> {
-        match self {
-            Self::None => None,
-            Self::Jpeg => Some("image/jpeg"),
-            Self::Png => Some("image/png"),
-        }
-    }
 }
 
 /// Where an asset stands.
@@ -137,6 +132,12 @@ pub struct Asset {
     pub has_thumb: bool,
     #[serde(skip)]
     pub thumb: Thumb,
+    /// The colour most of a picture is, `#rrggbb`, once worked out.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    /// A picture's ThumbHash, base64, once worked out.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thumbhash: Option<String>,
     pub attempts: i32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -153,7 +154,8 @@ pub struct Asset {
 }
 
 const COLUMNS: &str = "id, origin, kind, status, key, content_type, bytes, sha256, width, height, \
-     has_thumb, attempts, error, next_attempt_at, wanted_by, uploaded_by, created_at, stored_at";
+     has_thumb, color, thumbhash, attempts, error, next_attempt_at, wanted_by, uploaded_by, \
+     created_at, stored_at";
 
 fn map(row: &sqlx::any::AnyRow) -> Result<Asset> {
     Ok(Asset {
@@ -169,6 +171,8 @@ fn map(row: &sqlx::any::AnyRow) -> Result<Asset> {
         height: row.opt_int("height")?,
         has_thumb: Thumb::from_i64(row.big("has_thumb")?) != Thumb::None,
         thumb: Thumb::from_i64(row.big("has_thumb")?),
+        color: row.opt_text("color")?,
+        thumbhash: row.opt_text("thumbhash")?,
         attempts: row.int("attempts")?,
         error: row.opt_text("error")?,
         next_attempt_at: row.opt_text("next_attempt_at")?,
@@ -380,6 +384,12 @@ pub struct Stored<'a> {
     pub width: Option<i32>,
     pub height: Option<i32>,
     pub thumb: Thumb,
+    /// A picture's placeholder: its colour, `#rrggbb`, and its ThumbHash,
+    /// base64 — none for a sound, or a picture that could not be read.
+    pub color: Option<&'a str>,
+    pub thumbhash: Option<&'a str>,
+    /// What version of the server prepared it: 0 for nothing done.
+    pub prepared: i64,
 }
 
 /// Whether the row was still there to mark: one forgotten while its bytes
@@ -388,8 +398,8 @@ pub async fn mark_stored(db: &Db, id: &str, stored: &Stored<'_>) -> Result<bool>
     let done = sqlx::query(db.sql(
         "UPDATE media_asset
          SET status = 'stored', key = ?, content_type = ?, bytes = ?, sha256 = ?, width = ?,
-             height = ?, has_thumb = ?, error = NULL, next_attempt_at = NULL, stored_at = ?,
-             claimed_by = NULL, claimed_at = NULL
+             height = ?, has_thumb = ?, color = ?, thumbhash = ?, prepared = ?, error = NULL,
+             next_attempt_at = NULL, stored_at = ?, claimed_by = NULL, claimed_at = NULL
          WHERE id = ?",
     ))
     .bind(stored.key)
@@ -399,6 +409,9 @@ pub async fn mark_stored(db: &Db, id: &str, stored: &Stored<'_>) -> Result<bool>
     .bind(stored.width)
     .bind(stored.height)
     .bind(stored.thumb.as_i64())
+    .bind(stored.color)
+    .bind(stored.thumbhash)
+    .bind(stored.prepared)
     .bind(now())
     .bind(id)
     .execute(db.pool())
@@ -498,8 +511,8 @@ pub async fn insert_upload(db: &Db, upload: &Upload<'_>) -> Result<()> {
     sqlx::query(db.sql(
         "INSERT INTO media_asset
              (id, origin, kind, status, key, content_type, bytes, sha256, width, height, has_thumb,
-              attempts, wanted_by, uploaded_by, created_at, stored_at)
-         VALUES (?, ?, ?, 'stored', ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)",
+              color, thumbhash, prepared, attempts, wanted_by, uploaded_by, created_at, stored_at)
+         VALUES (?, ?, ?, 'stored', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)",
     ))
     .bind(upload.id)
     .bind(upload.origin)
@@ -511,6 +524,9 @@ pub async fn insert_upload(db: &Db, upload: &Upload<'_>) -> Result<()> {
     .bind(upload.stored.width)
     .bind(upload.stored.height)
     .bind(upload.stored.thumb.as_i64())
+    .bind(upload.stored.color)
+    .bind(upload.stored.thumbhash)
+    .bind(upload.stored.prepared)
     .bind(upload.wanted_by)
     .bind(upload.uploaded_by)
     .bind(now())
@@ -558,22 +574,49 @@ pub async fn by_origins(db: &Db, origins: &[String]) -> Result<Vec<Asset>> {
     Ok(out)
 }
 
-/// Everything stored, for the index kept in memory: origin, key, and the
-/// thumbnail made. The content type is the key's own.
+/// One asset stored, as the index kept in memory knows it: its origin, its
+/// key, the thumbnail made, and what a page draws before the picture is
+/// there. The content type is the key's own.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Indexed {
+    pub origin: String,
+    pub key: String,
+    pub thumb: Thumb,
+    pub width: Option<i32>,
+    pub height: Option<i32>,
+    pub color: Option<String>,
+    pub thumbhash: Option<String>,
+}
+
+/// Everything stored: origin, key, and the thumbnail made. The content
+/// type is the key's own.
 pub async fn stored_index(db: &Db) -> Result<Vec<(String, String, Thumb)>> {
+    Ok(indexed(db)
+        .await?
+        .into_iter()
+        .map(|row| (row.origin, row.key, row.thumb))
+        .collect())
+}
+
+/// Everything stored, for the index kept in memory.
+pub async fn indexed(db: &Db) -> Result<Vec<Indexed>> {
     let rows = sqlx::query(db.sql(
-        "SELECT origin, key, has_thumb FROM media_asset
+        "SELECT origin, key, has_thumb, width, height, color, thumbhash FROM media_asset
          WHERE status = 'stored' AND key IS NOT NULL",
     ))
     .fetch_all(db.pool())
     .await?;
     rows.iter()
         .map(|row| {
-            Ok((
-                row.text("origin")?,
-                row.text("key")?,
-                Thumb::from_i64(row.big("has_thumb")?),
-            ))
+            Ok(Indexed {
+                origin: row.text("origin")?,
+                key: row.text("key")?,
+                thumb: Thumb::from_i64(row.big("has_thumb")?),
+                width: row.opt_int("width")?,
+                height: row.opt_int("height")?,
+                color: row.opt_text("color")?,
+                thumbhash: row.opt_text("thumbhash")?,
+            })
         })
         .collect()
 }
@@ -772,6 +815,261 @@ pub async fn troubled(db: &Db, limit: i64) -> Result<Vec<Asset>> {
     rows.iter().map(map).collect()
 }
 
+/// What a work's rows have a picture as, by its address: a poster first,
+/// then a background, then whatever else — what decides the copy made of
+/// it as it is stored, and the night's. `None` for an address no work's
+/// pictures hold: a still, a photograph, a lock's.
+pub async fn cover_of(db: &Db, origin: &str) -> Result<Option<CoverType>> {
+    let row = sqlx::query(db.sql(
+        "SELECT cover_type FROM media_image WHERE url = ?
+         ORDER BY CASE cover_type WHEN 'poster' THEN 0 WHEN 'keyart' THEN 0
+                                  WHEN 'fanart' THEN 1 ELSE 2 END
+         LIMIT 1",
+    ))
+    .bind(origin)
+    .fetch_optional(db.pool())
+    .await?;
+    row.map(|row| -> Result<CoverType> {
+        Ok(row
+            .text("cover_type")?
+            .parse()
+            .unwrap_or(CoverType::Unknown))
+    })
+    .transpose()
+}
+
+/// The next pictures stored that this version has not prepared — no
+/// placeholder worked out, no first copy made — after `after` in the order
+/// of their ids: what the task `media.variants` takes, a few at a time,
+/// walking them once. Each one prepared leaves the list, so the next run
+/// takes up where one stopped partway.
+pub async fn unprepared(db: &Db, prepared: i64, after: &str, limit: i64) -> Result<Vec<Asset>> {
+    let rows = sqlx::query(db.sql(&format!(
+        "SELECT {COLUMNS} FROM media_asset
+         WHERE status = 'stored' AND kind = 'image' AND key IS NOT NULL AND prepared < ?
+           AND id > ?
+         ORDER BY id
+         LIMIT ?"
+    )))
+    .bind(prepared)
+    .bind(after)
+    .bind(limit.clamp(1, 500))
+    .fetch_all(db.pool())
+    .await?;
+    rows.iter().map(map).collect()
+}
+
+/// How many pictures stored this version has not prepared: what the media
+/// page says the task `media.variants` would do.
+pub async fn unprepared_count(db: &Db, prepared: i64) -> Result<i64> {
+    let row = sqlx::query(db.sql(
+        "SELECT COUNT(*) AS n FROM media_asset
+         WHERE status = 'stored' AND kind = 'image' AND key IS NOT NULL AND prepared < ?",
+    ))
+    .bind(prepared)
+    .fetch_one(db.pool())
+    .await?;
+    Ok(row.big("n")?)
+}
+
+/// Note a picture prepared: its placeholder, when one could be worked out,
+/// and the version that did it. Whether the row was still there.
+pub async fn mark_prepared(
+    db: &Db,
+    id: &str,
+    color: Option<&str>,
+    thumbhash: Option<&str>,
+    prepared: i64,
+) -> Result<bool> {
+    let done = sqlx::query(db.sql(
+        "UPDATE media_asset SET color = ?, thumbhash = ?, prepared = ?
+         WHERE id = ? AND status = 'stored'",
+    ))
+    .bind(color)
+    .bind(thumbhash)
+    .bind(prepared)
+    .bind(id)
+    .execute(db.pool())
+    .await?;
+    Ok(done.rows_affected() > 0)
+}
+
+/// The pictures a night's AVIF copies are made of: those a work has for a
+/// poster, a key art or a background, after `after` in the order of their
+/// ids — the run walks them all once — with what they are.
+pub async fn avif_candidates(db: &Db, after: &str, limit: i64) -> Result<Vec<(Asset, CoverType)>> {
+    let rows = sqlx::query(db.sql(&format!(
+        "SELECT {COLUMNS},
+                (SELECT i.cover_type FROM media_image i
+                  WHERE i.url = a.origin AND i.cover_type IN ('poster', 'keyart', 'fanart')
+                  ORDER BY CASE i.cover_type WHEN 'fanart' THEN 1 ELSE 0 END
+                  LIMIT 1) AS cover
+         FROM media_asset a
+         WHERE a.status = 'stored' AND a.kind = 'image' AND a.key IS NOT NULL AND a.id > ?
+           AND EXISTS (SELECT 1 FROM media_image i
+                        WHERE i.url = a.origin AND i.cover_type IN ('poster', 'keyart', 'fanart'))
+         ORDER BY a.id
+         LIMIT ?"
+    )))
+    .bind(after)
+    .bind(limit.clamp(1, 500))
+    .fetch_all(db.pool())
+    .await?;
+    rows.iter()
+        .map(|row| {
+            let cover = row
+                .opt_text("cover")?
+                .and_then(|c| c.parse().ok())
+                .unwrap_or(CoverType::Unknown);
+            Ok((map(row)?, cover))
+        })
+        .collect()
+}
+
+/// A copy made of a picture, as its row records it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Variant {
+    /// `<sha256>-480.webp`: see [`crate::media::file::Made`].
+    pub key: String,
+    /// The picture's hash.
+    pub stem: String,
+    pub width: i32,
+    pub height: i32,
+    /// `webp`, `avif` or `jpeg`.
+    pub format: String,
+    pub bytes: i64,
+}
+
+/// Note a copy made. One noted already — made again, here or by another
+/// instance — is left as it is.
+pub async fn add_variant(db: &Db, variant: &Variant) -> Result<()> {
+    sqlx::query(db.sql(
+        "INSERT INTO media_variant (key, stem, width, height, format, bytes, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (key) DO NOTHING",
+    ))
+    .bind(&variant.key)
+    .bind(&variant.stem)
+    .bind(variant.width)
+    .bind(variant.height)
+    .bind(&variant.format)
+    .bind(variant.bytes)
+    .bind(now())
+    .execute(db.pool())
+    .await?;
+    Ok(())
+}
+
+/// The copies made of a picture.
+pub async fn variants_of(db: &Db, stem: &str) -> Result<Vec<Variant>> {
+    let rows = sqlx::query(db.sql(
+        "SELECT key, stem, width, height, format, bytes FROM media_variant
+         WHERE stem = ? ORDER BY key",
+    ))
+    .bind(stem)
+    .fetch_all(db.pool())
+    .await?;
+    rows.iter().map(map_variant).collect()
+}
+
+fn map_variant(row: &sqlx::any::AnyRow) -> Result<Variant> {
+    Ok(Variant {
+        key: row.text("key")?,
+        stem: row.text("stem")?,
+        width: row.int("width")?,
+        height: row.int("height")?,
+        format: row.text("format")?,
+        bytes: row.big("bytes")?,
+    })
+}
+
+/// Forget a copy: its file is gone.
+pub async fn delete_variant(db: &Db, key: &str) -> Result<()> {
+    sqlx::query(db.sql("DELETE FROM media_variant WHERE key = ?"))
+        .bind(key)
+        .execute(db.pool())
+        .await?;
+    Ok(())
+}
+
+/// Every AVIF copy made, by its picture's hash and its width: what the
+/// index in memory tells the pages, which offer one only where it exists.
+pub async fn avif_index(db: &Db) -> Result<Vec<(String, u32)>> {
+    let rows = sqlx::query(
+        db.sql("SELECT stem, width FROM media_variant WHERE format = 'avif' ORDER BY stem, width"),
+    )
+    .fetch_all(db.pool())
+    .await?;
+    rows.iter()
+        .map(|row| {
+            Ok((
+                row.text("stem")?,
+                u32::try_from(row.int("width")?).unwrap_or(0),
+            ))
+        })
+        .collect()
+}
+
+/// The copies whose picture no row holds any more, among those noted
+/// before `created_before`: the sweep's to take away, with their files.
+pub async fn orphan_variants(
+    db: &Db,
+    held: &HashSet<String>,
+    created_before: &str,
+) -> Result<Vec<Variant>> {
+    let rows = sqlx::query(db.sql(
+        "SELECT key, stem, width, height, format, bytes FROM media_variant
+         WHERE created_at < ? ORDER BY key",
+    ))
+    .bind(created_before)
+    .fetch_all(db.pool())
+    .await?;
+    let mut out = Vec::new();
+    for row in &rows {
+        let variant = map_variant(row)?;
+        if !held.contains(&variant.stem) {
+            out.push(variant);
+        }
+    }
+    Ok(out)
+}
+
+/// What the copies made weigh, by what they are written as.
+#[derive(Debug, Default, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct VariantCounts {
+    /// The WebP copies the interface is given.
+    pub webp: i64,
+    pub webp_bytes: i64,
+    /// The AVIF copies the night's task made.
+    pub avif: i64,
+    pub avif_bytes: i64,
+    /// The squares Plex is given.
+    pub jpeg: i64,
+    pub jpeg_bytes: i64,
+}
+
+pub async fn variant_counts(db: &Db) -> Result<VariantCounts> {
+    let rows = sqlx::query(db.sql(
+        // Cast, as the store's own tallies are: see `counts`.
+        "SELECT format, COUNT(*) AS n, CAST(COALESCE(SUM(bytes), 0) AS BIGINT) AS b
+         FROM media_variant GROUP BY format",
+    ))
+    .fetch_all(db.pool())
+    .await?;
+    let mut counts = VariantCounts::default();
+    for row in &rows {
+        let (n, b) = (row.big("n")?, row.big("b")?);
+        match row.text("format")?.as_str() {
+            "webp" => (counts.webp, counts.webp_bytes) = (n, b),
+            "avif" => (counts.avif, counts.avif_bytes) = (n, b),
+            "jpeg" => (counts.jpeg, counts.jpeg_bytes) = (n, b),
+            _ => {}
+        }
+    }
+    Ok(counts)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -954,15 +1252,36 @@ mod tests {
                 width: Some(2),
                 height: Some(3),
                 thumb: Thumb::Jpeg,
+                color: Some("#14285a"),
+                thumbhash: Some("1QcSHQRnh493V4dIh4eXh1h4kJUI"),
+                prepared: 1,
             },
         )
         .await
         .unwrap();
 
-        let index = stored_index(&db).await.unwrap();
+        assert_eq!(
+            stored_index(&db).await.unwrap(),
+            vec![("https://a/1.jpg".into(), "ab.jpg".into(), Thumb::Jpeg)]
+        );
+        let index = indexed(&db).await.unwrap();
         assert_eq!(
             index,
-            vec![("https://a/1.jpg".into(), "ab.jpg".into(), Thumb::Jpeg)]
+            vec![Indexed {
+                origin: "https://a/1.jpg".into(),
+                key: "ab.jpg".into(),
+                thumb: Thumb::Jpeg,
+                width: Some(2),
+                height: Some(3),
+                color: Some("#14285a".into()),
+                thumbhash: Some("1QcSHQRnh493V4dIh4eXh1h4kJUI".into()),
+            }]
+        );
+        assert_eq!(unprepared_count(&db, 1).await.unwrap(), 0);
+        assert_eq!(
+            unprepared_count(&db, 2).await.unwrap(),
+            1,
+            "prepared by an earlier version"
         );
         let counts = counts(&db).await.unwrap();
         assert_eq!((counts.stored, counts.bytes, counts.pending), (1, 10, 0));
@@ -1070,6 +1389,9 @@ mod tests {
                     width: Some(2),
                     height: Some(3),
                     thumb: Thumb::Png,
+                    color: None,
+                    thumbhash: None,
+                    prepared: 0,
                 },
                 uploaded_by: "editor:bob",
                 wanted_by: "w",
@@ -1211,5 +1533,146 @@ mod tests {
         // Nothing names it: it goes.
         assert!(delete_unless_referenced(&db, &asset).await.unwrap());
         assert!(get(&db, &asset.id).await.unwrap().is_none());
+    }
+
+    /// A picture's copies are noted once each, counted by what they are
+    /// written as, and left to the sweep once no row holds their picture.
+    #[tokio::test]
+    async fn a_pictures_copies_are_noted_counted_and_found_orphaned() {
+        let db = db().await;
+        let variant = |made: &str, format: &str, bytes: i64| Variant {
+            key: format!("{SHA}-{made}"),
+            stem: SHA.into(),
+            width: 480,
+            height: 720,
+            format: format.into(),
+            bytes,
+        };
+        add_variant(&db, &variant("480.webp", "webp", 100))
+            .await
+            .unwrap();
+        add_variant(&db, &variant("480.webp", "webp", 999))
+            .await
+            .unwrap();
+        add_variant(&db, &variant("480.avif", "avif", 60))
+            .await
+            .unwrap();
+        assert_eq!(
+            variants_of(&db, SHA).await.unwrap().len(),
+            2,
+            "made again, noted once"
+        );
+        let counts = variant_counts(&db).await.unwrap();
+        assert_eq!(
+            (
+                counts.webp,
+                counts.webp_bytes,
+                counts.avif,
+                counts.avif_bytes
+            ),
+            (1, 100, 1, 60)
+        );
+        assert_eq!(avif_index(&db).await.unwrap(), vec![(SHA.to_string(), 480)]);
+
+        // No row holds the picture: its copies are the sweep's, once they
+        // have had their hour.
+        let nobody = HashSet::new();
+        assert_eq!(orphan_variants(&db, &nobody, LATER).await.unwrap().len(), 2);
+        assert!(
+            orphan_variants(&db, &nobody, "2000-01-01T00:00:00.000Z")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        let held: HashSet<String> = [SHA.to_string()].into();
+        assert!(orphan_variants(&db, &held, LATER).await.unwrap().is_empty());
+
+        delete_variant(&db, &format!("{SHA}-480.avif"))
+            .await
+            .unwrap();
+        assert!(avif_index(&db).await.unwrap().is_empty());
+    }
+
+    /// What a work has a picture as decides the copies made of it; the
+    /// pictures this version has not prepared are listed until each is, so
+    /// a run stopped partway is taken up where it stopped.
+    #[tokio::test]
+    async fn a_picture_is_known_by_what_its_work_has_it_as() {
+        let db = db().await;
+        work_with(&db, &["https://a/poster.jpg"], None).await;
+        assert_eq!(
+            cover_of(&db, "https://a/poster.jpg").await.unwrap(),
+            Some(CoverType::Poster)
+        );
+        assert_eq!(cover_of(&db, "https://a/still.jpg").await.unwrap(), None);
+
+        enqueue(
+            &db,
+            &[
+                wanted("https://a/poster.jpg"),
+                wanted("https://a/still.jpg"),
+            ],
+        )
+        .await
+        .unwrap();
+        for (n, row) in due(&db, 10).await.unwrap().into_iter().enumerate() {
+            let stem = format!("{n}{}", &SHA[1..]);
+            let key = format!("{stem}.jpg");
+            mark_stored(
+                &db,
+                &row.id,
+                &Stored {
+                    key: &key,
+                    content_type: "image/jpeg",
+                    bytes: 10,
+                    sha256: &stem,
+                    width: Some(2),
+                    height: Some(3),
+                    thumb: Thumb::None,
+                    color: None,
+                    thumbhash: None,
+                    prepared: 0,
+                },
+            )
+            .await
+            .unwrap();
+        }
+
+        let line = unprepared(&db, 1, "", 10).await.unwrap();
+        assert_eq!(line.len(), 2);
+        assert!(
+            unprepared(&db, 1, &line[1].id, 10)
+                .await
+                .unwrap()
+                .is_empty(),
+            "a run walks them once"
+        );
+        assert!(
+            mark_prepared(&db, &line[0].id, Some("#000000"), None, 1)
+                .await
+                .unwrap()
+        );
+        let rest = unprepared(&db, 1, "", 10).await.unwrap();
+        assert_eq!(rest.len(), 1);
+        assert_eq!(
+            rest[0].id, line[1].id,
+            "the next run takes up where it stopped"
+        );
+        assert_eq!(unprepared_count(&db, 1).await.unwrap(), 1);
+        let prepared = get(&db, &line[0].id).await.unwrap().unwrap();
+        assert_eq!(prepared.color.as_deref(), Some("#000000"));
+
+        // The night's: the poster, and not the still.
+        let candidates = avif_candidates(&db, "", 10).await.unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].0.origin, "https://a/poster.jpg");
+        assert_eq!(candidates[0].1, CoverType::Poster);
+        assert!(
+            avif_candidates(&db, &candidates[0].0.id, 10)
+                .await
+                .unwrap()
+                .is_empty(),
+            "walked once"
+        );
     }
 }

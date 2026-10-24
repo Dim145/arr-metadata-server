@@ -16,14 +16,17 @@ use std::{
 
 use crate::{
     config,
-    db::repo::asset::{Kind, Thumb, Wanted},
-    domain::MediaItem,
+    db::repo::asset::{Indexed, Kind, Thumb, Wanted},
+    domain::{CoverType, MediaItem, Picture},
 };
 
+pub mod encode;
 pub mod fetch;
 pub mod file;
+pub mod placeholder;
 pub mod serve;
 pub mod store;
+pub mod variants;
 pub mod worker;
 
 pub use file::valid_key;
@@ -61,7 +64,7 @@ pub struct Media {
 struct Index {
     by_origin: HashMap<String, Entry>,
     by_key: HashMap<String, Keyed>,
-    /// A thumbnail's key carries the hash and not the extension: the
+    /// A copy's key carries the hash and not the picture's extension: the
     /// picture's key, by its hash.
     by_sha: HashMap<String, String>,
     /// Every origin that holds a key: the same bytes from two providers are
@@ -81,6 +84,55 @@ pub struct Entry {
 pub struct Keyed {
     pub origin: Arc<str>,
     pub thumb: Thumb,
+    /// What a page is told of the picture: see [`Look`].
+    pub look: Arc<Look>,
+}
+
+/// What this server knows of a picture it keeps that a page draws it with:
+/// its size, its placeholder, and the AVIF copies made of it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Look {
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub color: Option<[u8; 3]>,
+    pub thumbhash: Option<Arc<[u8]>>,
+    /// The widths of the AVIF copies made, in order.
+    pub avif: Vec<u32>,
+}
+
+impl Look {
+    /// From the row: the size the bytes were inspected as, and the
+    /// placeholder worked out — each only when it reads.
+    pub fn of_row(row: &Indexed) -> Self {
+        let size = |n: Option<i32>| n.and_then(|n| u32::try_from(n).ok()).filter(|n| *n > 0);
+        Self {
+            width: size(row.width),
+            height: size(row.height),
+            color: row.color.as_deref().and_then(placeholder::parse_color),
+            thumbhash: row
+                .thumbhash
+                .as_deref()
+                .and_then(placeholder::parse_thumbhash)
+                .map(Arc::from),
+            avif: Vec::new(),
+        }
+    }
+
+    /// As the native API sends it.
+    pub fn as_picture(&self) -> Picture {
+        Picture {
+            width: self.width,
+            height: self.height,
+            color: self
+                .color
+                .map(|[r, g, b]| format!("#{r:02x}{g:02x}{b:02x}")),
+            thumbhash: self.thumbhash.as_deref().map(|hash| {
+                use base64::Engine as _;
+                base64::engine::general_purpose::STANDARD.encode(hash)
+            }),
+            avif: self.avif.clone(),
+        }
+    }
 }
 
 impl Media {
@@ -136,15 +188,52 @@ impl Media {
 
     /// Fill the index from the database, at start.
     pub async fn load_index(&self, db: &crate::db::Db) -> anyhow::Result<()> {
-        let rows = crate::db::repo::asset::stored_index(db).await?;
+        let rows = crate::db::repo::asset::indexed(db).await?;
         let mut index = Index::default();
-        for (origin, key, thumb) in rows {
-            index.insert(&origin, &key, thumb);
+        for row in &rows {
+            index.insert(&row.origin, &row.key, row.thumb, Some(Look::of_row(row)));
+        }
+        for (stem, width) in crate::db::repo::asset::avif_index(db).await? {
+            index.add_avif(&stem, width);
         }
         let n = index.by_origin.len();
         *self.index.write().unwrap_or_else(|e| e.into_inner()) = index;
         tracing::info!(stored = n, "media index loaded");
         Ok(())
+    }
+
+    /// Say what a picture kept looks like — its size and its placeholder —
+    /// once it is worked out. Here alone: another instance learns it when
+    /// it next loads its index.
+    pub fn describe(&self, key: &str, mut look: Look) {
+        let mut index = self.index.write().unwrap_or_else(|e| e.into_inner());
+        if let Some(keyed) = index.by_key.get_mut(key) {
+            look.avif.clone_from(&keyed.look.avif);
+            keyed.look = Arc::new(look);
+        }
+    }
+
+    /// Note an AVIF copy made of the picture of `stem`, so that a page is
+    /// offered it.
+    pub fn add_avif(&self, stem: &str, width: u32) {
+        self.index
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .add_avif(stem, width);
+    }
+
+    /// Forget an AVIF copy whose file is gone, so that no page asks for it
+    /// again.
+    pub fn drop_avif(&self, stem: &str, width: u32) {
+        let mut index = self.index.write().unwrap_or_else(|e| e.into_inner());
+        let Some(key) = index.by_sha.get(stem).cloned() else {
+            return;
+        };
+        if let Some(keyed) = index.by_key.get_mut(&key) {
+            let mut look = (*keyed.look).clone();
+            look.avif.retain(|w| *w != width);
+            keyed.look = Arc::new(look);
+        }
     }
 
     /// Note an asset as stored, here and on every other instance.
@@ -174,7 +263,7 @@ impl Media {
         self.index
             .write()
             .unwrap_or_else(|e| e.into_inner())
-            .insert(origin, key, thumb);
+            .insert(origin, key, thumb, None);
     }
 
     /// Forget an asset, here and on every other instance: its address is a
@@ -261,9 +350,9 @@ impl Media {
         let Some(key) = Self::key_in(url) else {
             return url.to_string();
         };
-        // A thumbnail's key carries its picture's hash, not its extension.
-        let stem = if file::is_thumb(key) {
-            key.split('-').next().and_then(|sha| self.keyed_by_sha(sha))
+        // A copy's key carries its picture's hash, not its extension.
+        let stem = if file::is_made(key) {
+            self.keyed_by_sha(file::stem_of(key))
         } else {
             Some(key.to_string())
         };
@@ -318,6 +407,47 @@ impl Media {
         for credit in &mut item.hidden.credits {
             self.localize_optional(&mut credit.image);
         }
+        self.describe_leads(item);
+    }
+
+    /// Say what the pictures a card or a plate leads with look like: the
+    /// poster, the background, the landscape and the logo — the one chosen,
+    /// one added by hand, or the first, as a page picks it — and the first
+    /// of each besides, which is what a card keeps of a work. Only the
+    /// copies kept here: of any other address nothing is known.
+    fn describe_leads(&self, item: &mut MediaItem) {
+        const LEADING: [CoverType; 4] = [
+            CoverType::Poster,
+            CoverType::Fanart,
+            CoverType::Landscape,
+            CoverType::Clearlogo,
+        ];
+        let own: Vec<&crate::domain::Image> = item
+            .images
+            .iter()
+            .filter(|image| image.season_number.is_none() && LEADING.contains(&image.cover_type))
+            .collect();
+        let mut urls: Vec<String> =
+            crate::domain::lead_images(own.iter().copied(), &item.primary_images)
+                .into_iter()
+                .map(|image| image.url.clone())
+                .collect();
+        for kind in LEADING {
+            if let Some(first) = own.iter().find(|image| image.cover_type == kind) {
+                urls.push(first.url.clone());
+            }
+        }
+
+        let index = self.index.read().unwrap_or_else(|e| e.into_inner());
+        item.pictures.clear();
+        for url in urls {
+            let Some(keyed) = Self::key_in(&url).and_then(|key| index.by_key.get(key)) else {
+                continue;
+            };
+            if keyed.look.width.is_some() {
+                item.pictures.insert(url, keyed.look.as_picture());
+            }
+        }
     }
 
     /// The address a reader elsewhere can follow, for one of this server's
@@ -338,6 +468,9 @@ impl Media {
     /// by a path only this server's own pages can follow, so each is given
     /// as [`Self::for_elsewhere`] has it.
     pub fn for_clients(&self, item: &mut MediaItem) {
+        // What this server's own pages are told of its pictures, by their
+        // paths here: nothing a client elsewhere reads.
+        item.pictures.clear();
         if !self.is_on() {
             return;
         }
@@ -463,11 +596,11 @@ impl Media {
 }
 
 /// Whether an entry is one this server could have filed: a picture's or a
-/// sound's key — never a thumbnail's, which is found by its picture's —
-/// served as the type its extension stands for, for an address or an upload.
+/// sound's key — never a copy's, which is found by its picture's — served
+/// as the type its extension stands for, for an address or an upload.
 fn fits_the_index(origin: &str, key: &str, content_type: &str) -> bool {
     valid_key(key)
-        && !file::is_thumb(key)
+        && !file::is_made(key)
         && file::content_type_of(key) == Some(content_type)
         && (origin.starts_with("https://")
             || origin.starts_with("http://")
@@ -475,7 +608,10 @@ fn fits_the_index(origin: &str, key: &str, content_type: &str) -> bool {
 }
 
 impl Index {
-    fn insert(&mut self, origin: &str, key: &str, thumb: Thumb) {
+    /// Note a key under an origin. What is known of the picture already —
+    /// the same bytes from another address — stays, unless `look` says
+    /// more.
+    fn insert(&mut self, origin: &str, key: &str, thumb: Thumb, look: Option<Look>) {
         let key: Arc<str> = Arc::from(key);
         let origin_arc: Arc<str> = Arc::from(origin);
         self.by_origin
@@ -484,15 +620,43 @@ impl Index {
         if !holders.iter().any(|o| o == origin) {
             holders.push(origin.to_string());
         }
+        let look = match (look, self.by_key.get(key.as_ref())) {
+            (Some(mut look), Some(known)) => {
+                // The same bytes under another address: what either row
+                // says of them holds.
+                look.color = look.color.or(known.look.color);
+                look.thumbhash = look.thumbhash.or_else(|| known.look.thumbhash.clone());
+                look.avif.clone_from(&known.look.avif);
+                Arc::new(look)
+            }
+            (Some(look), None) => Arc::new(look),
+            (None, Some(known)) => known.look.clone(),
+            (None, None) => Arc::default(),
+        };
         self.by_key.insert(
             key.to_string(),
             Keyed {
                 origin: origin_arc,
                 thumb,
+                look,
             },
         );
         if let Some(sha) = key.split('.').next() {
             self.by_sha.insert(sha.to_string(), key.to_string());
+        }
+    }
+
+    fn add_avif(&mut self, stem: &str, width: u32) {
+        let Some(key) = self.by_sha.get(stem).cloned() else {
+            return;
+        };
+        if let Some(keyed) = self.by_key.get_mut(&key)
+            && !keyed.look.avif.contains(&width)
+        {
+            let mut look = (*keyed.look).clone();
+            look.avif.push(width);
+            look.avif.sort_unstable();
+            keyed.look = Arc::new(look);
         }
     }
 }
@@ -682,6 +846,68 @@ mod tests {
         const SOUND: &str = "cb7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad.m4a";
         media.remember_quietly("upload:1", SOUND, Thumb::None, "audio/mp4");
         assert!(media.keyed(SOUND).is_some());
+    }
+
+    /// A page is told what the pictures a card or a plate leads with look
+    /// like, by their addresses here — and of a copy kept, nothing else; a
+    /// client elsewhere is told nothing of it.
+    #[test]
+    fn a_work_says_what_its_leading_pictures_look_like() {
+        let media = media(None);
+        let sha = KEY.split('.').next().unwrap();
+        media.remember("https://p/poster.jpg", KEY, Thumb::None, "image/jpeg");
+        media.describe(
+            KEY,
+            Look {
+                width: Some(2000),
+                height: Some(3000),
+                color: Some([20, 40, 90]),
+                thumbhash: Some(Arc::from(&[1u8, 2, 3, 4, 5][..])),
+                avif: Vec::new(),
+            },
+        );
+        media.add_avif(sha, 960);
+        media.add_avif(sha, 480);
+
+        let mut item = MediaItem::empty(MediaKind::Movie);
+        for (cover_type, url) in [
+            (CoverType::Poster, "https://p/poster.jpg"),
+            (CoverType::Poster, "https://p/other.jpg"),
+            (CoverType::Banner, "https://p/poster.jpg"),
+        ] {
+            item.images.push(Image {
+                id: crate::db::new_id(),
+                season_number: None,
+                cover_type,
+                url: url.into(),
+                language: None,
+                sort_order: 0,
+                source: Some("tmdb".into()),
+                is_manual: false,
+            });
+        }
+        media.localize(&mut item);
+        assert_eq!(
+            item.pictures.into_iter().collect::<Vec<_>>(),
+            [(
+                format!("/media/{KEY}"),
+                Picture {
+                    width: Some(2000),
+                    height: Some(3000),
+                    color: Some("#14285a".into()),
+                    thumbhash: Some("AQIDBAU=".into()),
+                    avif: vec![480, 960],
+                }
+            )]
+        );
+
+        let mut item = MediaItem::empty(MediaKind::Movie);
+        item.pictures.insert("/media/x".into(), Picture::default());
+        media.for_clients(&mut item);
+        assert!(item.pictures.is_empty());
+
+        media.drop_avif(sha, 480);
+        assert_eq!(media.keyed(KEY).unwrap().look.avif, [960]);
     }
 
     #[test]

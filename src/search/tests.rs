@@ -227,7 +227,11 @@ async fn a_name_finds_the_person_and_a_work_by_their_name_after_them() {
     let names: Vec<&str> = people.all().map(|row| row.text.as_str()).collect();
     assert_eq!(names, ["Wim Wenders"]);
     let row = people.all().next().expect("a row");
-    assert_eq!(row.ref_id, "tmdb:2725");
+    let wenders = crate::db::repo::person::find(&db, "2725")
+        .await
+        .expect("read")
+        .expect("a record");
+    assert_eq!(row.ref_id, wenders.id, "the person's record");
     assert_eq!(row.popularity, Some(2.0), "credited on two works");
 
     // The works are found by their titles, not by who made them.
@@ -627,5 +631,66 @@ async fn a_rating_is_read_in_the_readers_country() {
             .map(|f| (f.value.as_str(), f.count))
             .collect::<Vec<_>>(),
         [("12", 1)]
+    );
+}
+
+#[tokio::test]
+async fn a_work_merged_into_another_is_found_by_nobody() {
+    let db = db().await;
+    let kept = store(&db, MediaKind::Series, "Twin Peaks", |i| {
+        i.year = Some(1990);
+        i.episodes = vec![episode(1, 1, "Pilot")];
+    })
+    .await;
+    let merged = store(&db, MediaKind::Series, "Twin Peaks (copy)", |i| {
+        i.year = Some(1990);
+        i.episodes = vec![episode(1, 1, "Northwest Passage")];
+    })
+    .await;
+    let rows = |id: String| {
+        let db = db.clone();
+        async move {
+            sqlx::query_scalar::<_, i64>(
+                db.sql("SELECT COUNT(*) FROM search_doc WHERE work_id = ?"),
+            )
+            .bind(id)
+            .fetch_one(db.pool())
+            .await
+            .expect("counted")
+        }
+    };
+    assert!(rows(merged.id.clone()).await > 0);
+
+    // As a merge leaves it: switched off, naming the work it went into.
+    sqlx::query(db.sql(
+        "UPDATE media_item SET merged_into = ?, is_enabled = 0, search_stale = 1 WHERE id = ?",
+    ))
+    .bind(&kept.id)
+    .bind(&merged.id)
+    .execute(db.pool())
+    .await
+    .expect("merged");
+    repo::search::catch_up(&db, 10).await.expect("caught up");
+
+    assert_eq!(
+        rows(merged.id.clone()).await,
+        0,
+        "its titles and its episodes'"
+    );
+    assert!(rows(kept.id.clone()).await > 0);
+    let found = find(
+        &db,
+        &Term::parse("northwest passage"),
+        &Scope {
+            include_disabled: true,
+            ..scope(Kind::Episode)
+        },
+    )
+    .await
+    .expect("found");
+    assert_eq!(
+        found.all().count(),
+        0,
+        "not even for those who see what is off"
     );
 }

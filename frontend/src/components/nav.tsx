@@ -238,6 +238,9 @@ export function BrowseTab() {
                 <Row to="/collections" glyph="reel">
                   {t.collections.label}
                 </Row>
+                <Row to="/people" glyph="user">
+                  {t.people.title}
+                </Row>
                 {hasLists ? (
                   <Row to="/lists" glyph="list">
                     {t.nav.lists}
@@ -346,7 +349,7 @@ const PLACES: { to: string; glyph: GlyphName; label: (t: Dict) => string; end?: 
 ]
 
 /** What the sheet leads to, so that its tab can say the reader is in one of them. */
-const SHEET_PATHS = ['/collections', '/lists', '/stats', '/account']
+const SHEET_PATHS = ['/collections', '/people', '/lists', '/stats', '/account']
 
 /**
  * One cell of the bar: tall enough for a thumb, the glyph above its word.
@@ -477,6 +480,7 @@ function MoreSheet({ id, open, onClose, me }: { id: string; open: boolean; onClo
 
   const places: { to: string; glyph: GlyphName; label: string }[] = [
     { to: '/collections', glyph: 'reel', label: t.collections.label },
+    { to: '/people', glyph: 'user', label: t.people.title },
     ...(hasLists ? [{ to: '/lists', glyph: 'list' as const, label: t.nav.lists }] : []),
     { to: '/stats', glyph: 'gauge', label: t.nav.figures },
   ]

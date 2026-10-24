@@ -16,6 +16,7 @@ use std::fmt::Write as _;
 use crate::{
     domain::{
         CoverType, Credit, CreditType, Episode, EpisodeOrder, MediaItem, MediaKind, OrderKind,
+        person::PersonRef,
     },
     service::orders,
 };
@@ -209,7 +210,7 @@ pub fn for_item_in(
     }
 
     for credit in &item.credits {
-        write_credit(&mut out, credit);
+        write_credit(&mut out, credit, item.people.of(credit));
     }
 
     let _ = writeln!(out, "</{root}>");
@@ -523,7 +524,10 @@ fn artwork(out: &mut String, item: &MediaItem) {
     }
 }
 
-fn write_credit(out: &mut String, credit: &Credit) {
+/// One credit, as the element Kodi reads its kind from. An actor is named
+/// with the ids their record is known by — TMDB's, else the credit's own,
+/// and IMDb's — which Jellyfin and Emby file the person under.
+fn write_credit(out: &mut String, credit: &Credit, person: Option<&PersonRef>) {
     match credit.credit_type {
         CreditType::Actor | CreditType::Guest => {
             out.push_str("  <actor>\n");
@@ -534,6 +538,16 @@ fn write_credit(out: &mut String, credit: &Credit) {
             let _ = writeln!(out, "    <order>{}</order>", credit.sort_order);
             if let Some(image) = &credit.image {
                 let _ = writeln!(out, "    <thumb>{}</thumb>", escape(image));
+            }
+            if let Some(id) = person.and_then(|p| p.tmdb_id).or(credit.tmdb_person_id) {
+                let _ = writeln!(out, "    <tmdbid>{id}</tmdbid>");
+            }
+            if let Some(id) = person
+                .and_then(|p| p.imdb_id.as_deref())
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+            {
+                let _ = writeln!(out, "    <imdbid>{}</imdbid>", escape(id));
             }
             out.push_str("  </actor>\n");
         }
@@ -761,6 +775,38 @@ mod tests {
             nfo.contains("<actor>\n    <name>Bryan Cranston</name>\n    <role>Walter White</role>")
         );
         assert!(nfo.contains("<director>Vince Gilligan</director>"));
+        assert!(!nfo.contains("<tmdbid>"), "nobody here is known by an id");
+    }
+
+    #[test]
+    fn an_actor_carries_the_ids_their_record_is_known_by() {
+        let mut item = series();
+        item.credits[0].tmdb_person_id = Some(17419);
+        item.people.by_credit.insert(
+            "c1".into(),
+            PersonRef {
+                person_id: Some("p1".into()),
+                tmdb_id: Some(17419),
+                imdb_id: Some("nm0186505".into()),
+                ..PersonRef::default()
+            },
+        );
+        let nfo = for_item(&item);
+        assert!(
+            nfo.contains("    <tmdbid>17419</tmdbid>\n    <imdbid>nm0186505</imdbid>\n  </actor>"),
+            "{nfo}"
+        );
+
+        // A credit by name alone filed under somebody TMDB knows is named by
+        // their record's id; one TMDB names, by its own, record or not.
+        item.credits[0].tmdb_person_id = None;
+        item.people.by_credit.get_mut("c1").expect("held").imdb_id = None;
+        let nfo = for_item(&item);
+        assert!(nfo.contains("<tmdbid>17419</tmdbid>"));
+        assert!(!nfo.contains("<imdbid>"));
+        item.people.by_credit.clear();
+        item.credits[0].tmdb_person_id = Some(17419);
+        assert!(for_item(&item).contains("<tmdbid>17419</tmdbid>"));
     }
 
     #[test]

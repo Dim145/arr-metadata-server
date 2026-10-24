@@ -200,12 +200,11 @@ export function CommandPalette({ canWrite, isAdmin }: { canWrite: boolean; isAdm
       kind: 'work' as const,
     })),
     ...(hits?.people ?? []).map((person) => ({
-      id: `person:${person.tmdbId ?? person.name}`,
+      id: `person:${person.id}`,
       label: person.name,
       note: t.palette.credited(person.works),
-      // Somebody known by no TMDB id has no page of their own: the works
-      // that credit them are the list's, filtered by their name.
-      to: person.tmdbId ? `/person/${person.tmdbId}` : `/browse?person=${encodeURIComponent(person.name)}`,
+      // Everybody found has a record, and a page by it.
+      to: `/people/${encodeURIComponent(person.id)}`,
       kind: 'person' as const,
     })),
     ...(hits?.episodes ?? []).map((episode) => ({

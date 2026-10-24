@@ -16,7 +16,7 @@
  */
 
 import { useEffect, useState, useSyncExternalStore } from 'react'
-import { useParams } from 'react-router'
+import { useLocation, useNavigate, useParams } from 'react-router'
 
 import { Trailer } from '../components/Theatre'
 import { OnThisPage, Skeleton } from '../components/ui'
@@ -67,6 +67,19 @@ function useTwoColumns(): boolean {
 export function Work() {
   const { id = '' } = useParams()
   const work = useWork(id)
+  const navigate = useNavigate()
+  const { search, hash } = useLocation()
+  // An address a merge folded into another work — its old id, or its slug —
+  // is answered with that work: the address becomes the work's own, in place
+  // of the old one in the history, so that it is the one shared and kept. The
+  // work's own slug is an address of its own, and stays as it was typed.
+  const canonical = work.data?.id
+  const slug = work.data?.slug
+  useEffect(() => {
+    if (canonical && id !== canonical && id !== slug) {
+      navigate(`/work/${canonical}${search}${hash}`, { replace: true })
+    }
+  }, [canonical, slug, id, search, hash, navigate])
   const me = useMe()
   // A series' orders say who numbers it: TMDB, while TheTVDB does not answer
   // for it, is said in a banner. A film has none to ask for.
@@ -163,7 +176,7 @@ export function Work() {
         </aside>
 
         <div className="min-w-0 space-y-14 lg:col-start-1 lg:row-start-2">
-          <CastList credits={credits} />
+          <CastList credits={credits} people={item.people?.byCredit} />
           {item.kind === 'series' ? <Seasons item={item} /> : null}
           <Gallery item={item} />
           {item.kind === 'movie' && item.collectionTmdbId ? <Collection item={item} /> : null}

@@ -23,8 +23,9 @@ use crate::{
     config,
     db::{new_id, now},
     domain::{
-        CountryRelease, CoverType, Episode, EpisodeOrder, ExternalIds, Image, MediaItem, MediaKind,
-        OrderKind, OrderRecord, PlacedEpisode, Season, Translation, make_slug,
+        CountryRelease, CoverType, Credit, CreditType, Episode, EpisodeOrder, ExternalIds, Image,
+        MediaItem, MediaKind, OrderKind, OrderRecord, PlacedEpisode, Season, Translation,
+        make_slug, person::PersonRef,
     },
 };
 
@@ -217,7 +218,10 @@ impl TvdbClient {
     /// its list numbered by TMDB under a TheTVDB id, the way Sonarr files
     /// episodes under the wrong numbers. Failed, it is TheTVDB not answering,
     /// and what it gave before stands (`service::gather`).
-    pub async fn series(&self, tvdb_id: i64) -> Result<Option<(Value, MediaItem)>> {
+    ///
+    /// Its characters too, the first `cast` of them: the people TheTVDB
+    /// files under the series, by its people ids.
+    pub async fn series(&self, tvdb_id: i64, cast: usize) -> Result<Option<(Value, MediaItem)>> {
         if !self.is_enabled() {
             return Ok(None);
         }
@@ -271,7 +275,11 @@ impl TvdbClient {
         let envelope: Envelope<SeriesExtended> = serde_json::from_value(raw.clone())
             .context("TheTVDB returned a series this server could not interpret")?;
 
-        Ok(Some((raw, to_item(&envelope.data, &self.language))))
+        let mut item = to_item(&envelope.data, &self.language);
+        let (credits, known) = characters(&envelope.data, cast);
+        item.credits = credits;
+        item.people.by_credit = known;
+        Ok(Some((raw, item)))
     }
 
     /// Series matching a term, as TheTVDB ranks them.
@@ -755,6 +763,31 @@ struct SeriesExtended {
     artworks: Vec<ArtworkRecord>,
     #[serde(default)]
     translations: Option<Translations>,
+    /// The people of the series and the parts they play.
+    #[serde(default)]
+    characters: Vec<CharacterRecord>,
+}
+
+/// One of the people of a series, and their part.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CharacterRecord {
+    /// The part: `Skyler White`.
+    name: Option<String>,
+    people_id: Option<i64>,
+    person_name: Option<String>,
+    /// TheTVDB's kind of credit: 3 a part in the cast, 4 a guest star's.
+    #[serde(rename = "type")]
+    kind: Option<i64>,
+    /// Set on a part in one episode alone.
+    episode_id: Option<i64>,
+    /// The person's portrait.
+    #[serde(rename = "personImgURL")]
+    person_image: Option<String>,
+    /// The part's picture: the actor in character, or the character drawn.
+    image: Option<String>,
+    /// Where TheTVDB puts it among the others; 0 where it puts it nowhere.
+    sort: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1071,6 +1104,103 @@ fn to_item(series: &SeriesExtended, language: &str) -> MediaItem {
     item.updated_at = now();
 
     item
+}
+
+/// The kind of credit TheTVDB files a part in a series' cast under.
+const ACTOR: i64 = 3;
+
+/// How many of TheTVDB's characters a series keeps when the `tvdb.castLimit`
+/// setting says nothing: as many as of TMDB's cast.
+pub const DEFAULT_CAST: usize = 25;
+
+/// How many of TheTVDB's characters a series keeps, as the `tvdb.castLimit`
+/// setting says: from one to as many as `tmdb.castLimit` allows.
+pub fn cast_limit(settings: &crate::settings::Store) -> usize {
+    settings
+        .int_at("tvdb.castLimit", None, None)
+        .and_then(|n| usize::try_from(n).ok())
+        .map_or(DEFAULT_CAST, |n| {
+            n.clamp(1, crate::providers::tmdb::map::MAX_CAST)
+        })
+}
+
+/// The series' cast, as TheTVDB lists its characters: the first `limit` in
+/// TheTVDB's order — those it puts nowhere after — each person once, the
+/// parts of one who plays several put together, with TheTVDB's id of each
+/// person. Not a guest of one episode, whom the series' cast leaves out.
+fn characters(series: &SeriesExtended, limit: usize) -> (Vec<Credit>, BTreeMap<String, PersonRef>) {
+    let mut parts: Vec<(usize, &CharacterRecord)> = series
+        .characters
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.kind == Some(ACTOR) && c.episode_id.is_none())
+        .filter(|(_, c)| {
+            c.person_name
+                .as_deref()
+                .is_some_and(|n| !n.trim().is_empty())
+        })
+        .collect();
+    parts.sort_by_key(|(at, c)| {
+        let sort = c.sort.unwrap_or(0);
+        (sort <= 0, sort, *at)
+    });
+
+    let mut credits: Vec<Credit> = Vec::new();
+    let mut known: BTreeMap<String, PersonRef> = BTreeMap::new();
+    let mut people: Vec<(Option<i64>, String)> = Vec::new();
+    for (_, part) in parts {
+        let name = part.person_name.as_deref().unwrap_or_default().trim();
+        let character = non_empty(part.name.as_deref());
+        let held = people
+            .iter()
+            .position(|(id, n)| match (id, part.people_id) {
+                (Some(a), Some(b)) => *a == b,
+                _ => n == name,
+            });
+        if let Some(at) = held {
+            // Another part of somebody already listed: on their one credit.
+            if let Some(character) = character {
+                let credit = &mut credits[at];
+                credit.character_name = Some(match credit.character_name.take() {
+                    Some(parts) => format!("{parts} / {character}"),
+                    None => character,
+                });
+            }
+            continue;
+        }
+        if credits.len() == limit.clamp(1, crate::providers::tmdb::map::MAX_CAST) {
+            continue;
+        }
+        let credit = Credit {
+            id: new_id(),
+            credit_type: CreditType::Actor,
+            person_name: name.to_string(),
+            character_name: character,
+            image: part
+                .person_image
+                .as_deref()
+                .or(part.image.as_deref())
+                .map(str::trim)
+                .filter(|i| !i.is_empty())
+                .map(absolute),
+            tmdb_person_id: None,
+            credit_tmdb_id: None,
+            sort_order: i32::try_from(credits.len()).unwrap_or(i32::MAX),
+            is_manual: false,
+        };
+        if let Some(id) = part.people_id.filter(|id| *id > 0) {
+            known.insert(
+                credit.id.clone(),
+                PersonRef {
+                    tvdb_id: Some(id),
+                    ..PersonRef::default()
+                },
+            );
+        }
+        people.push((part.people_id, name.to_string()));
+        credits.push(credit);
+    }
+    (credits, known)
 }
 
 fn external_ids(series: &SeriesExtended) -> ExternalIds {
@@ -1650,7 +1780,7 @@ mod tests {
         assert!(format!("{first:#}").contains("InvalidAPIKey"), "{first:#}");
         // The relay's next call, and a refresh's: no second sign-in.
         assert!(tvdb.bearer().await.is_err());
-        assert!(tvdb.series(81189).await.is_err());
+        assert!(tvdb.series(81189, DEFAULT_CAST).await.is_err());
         let lines = asked.lock().clone();
         assert_eq!(lines.len(), 1, "{lines:?}");
         assert!(lines[0].starts_with("POST /login"), "{lines:?}");
@@ -1837,6 +1967,69 @@ mod tests {
             ],
             "{lines:?}"
         );
+    }
+
+    /// Shaped as `/series/{id}/extended` lists them: the people of the
+    /// series, each with TheTVDB's id, the part, the person's portrait.
+    #[test]
+    fn the_characters_are_the_cast_in_thetvdb_s_order_up_to_the_cap() {
+        let series: SeriesExtended = serde_json::from_value(serde_json::json!({
+            "id": 81189,
+            "name": "Breaking Bad",
+            "characters": [
+                { "name": "Skyler White", "peopleId": 269404, "personName": "Anna Gunn", "type": 3,
+                  "sort": 2, "personImgURL": "https://artworks.thetvdb.com/p/anna.jpg",
+                  "image": "/banners/actors/75476.jpg" },
+                { "name": "Walter White", "peopleId": 17419, "personName": "Bryan Cranston",
+                  "type": 3, "sort": 1, "image": "/banners/actors/walt.jpg" },
+                { "name": "Heisenberg", "peopleId": 17419, "personName": "Bryan Cranston",
+                  "type": 3, "sort": 4 },
+                { "name": "Somebody Unsorted", "peopleId": 5, "personName": "Late Comer",
+                  "type": 3, "sort": 0 },
+                { "name": "A Guest", "peopleId": 6, "personName": "Guest Of One", "type": 4, "sort": 3 },
+                { "name": "In One Episode", "peopleId": 7, "personName": "Episode Only", "type": 3,
+                  "sort": 3, "episodeId": 349232 },
+                { "name": "Nobody", "peopleId": 8, "personName": " ", "type": 3, "sort": 5 }
+            ]
+        }))
+        .expect("a series");
+
+        let (cast, known) = characters(&series, DEFAULT_CAST);
+        let read: Vec<(&str, Option<&str>, i32)> = cast
+            .iter()
+            .map(|c| {
+                (
+                    c.person_name.as_str(),
+                    c.character_name.as_deref(),
+                    c.sort_order,
+                )
+            })
+            .collect();
+        assert_eq!(
+            read,
+            [
+                ("Bryan Cranston", Some("Walter White / Heisenberg"), 0),
+                ("Anna Gunn", Some("Skyler White"), 1),
+                ("Late Comer", Some("Somebody Unsorted"), 2),
+            ],
+            "TheTVDB's order, the unsorted after; one credit for two parts; no \
+             guest, no part in one episode, nobody nameless"
+        );
+        assert!(cast.iter().all(|c| c.credit_type == CreditType::Actor));
+        assert_eq!(
+            cast[1].image.as_deref(),
+            Some("https://artworks.thetvdb.com/p/anna.jpg"),
+            "the person's portrait before the part's picture"
+        );
+        assert_eq!(
+            cast[0].image.as_deref(),
+            Some("https://artworks.thetvdb.com/banners/actors/walt.jpg")
+        );
+        assert_eq!(known[&cast[0].id].tvdb_id, Some(17419));
+        assert_eq!(known[&cast[1].id].tvdb_id, Some(269404));
+
+        let (cut, _) = characters(&series, 2);
+        assert_eq!(cut.len(), 2, "the cap is the setting's");
     }
 
     #[test]

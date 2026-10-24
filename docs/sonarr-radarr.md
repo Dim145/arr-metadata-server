@@ -211,6 +211,26 @@ The page lists what was told lately — the work, to which app, when, why (*Lock
 *Edit*, *Sync*, *Refresh*) and how it went (*Sent*, *Not held there*, *Failed*,
 with the reason). The latest fifty are shown; the newest 300 are kept.
 
+## After a merge
+
+A [merge](editing.md#duplicates) here moves nothing in Sonarr or Radarr: each keeps every series
+and film under the id it holds it by, and is answered under that id. The record merged away
+answers with the one kept — its title, its seasons and episodes, its pictures — under the id the
+client asked for: Sonarr asking for the merged series' TheTVDB id is given the kept series with
+that id on it, and Radarr asking for the merged film's TMDB id, on `/v1/movie/{id}` or in
+`/v1/movie/bulk`, the kept film with that `TmdbId`. Its next refresh reads the kept work's
+episodes and titles.
+
+A library that held both records holds two entries of one work afterwards, each under its own id
+and both answered with the kept work: remove there the one it no longer needs. Plex keeps the
+rating key it was handed — `movie-tmdb-604000` goes on answering, with the kept film — and a new
+match is given the kept work's own key.
+
+These ids answer for good: an id handed out once is not taken back, unless the merge is undone
+within `merge.undoDays`. With **Tell them of a change** on, a merge tells Sonarr (a series) or
+Radarr (a film) of both works at once, under the ids it holds them by, and so does an undo; the
+page lists them under *Merge*.
+
 ## Filling the catalogue from their library
 
 The first refresh after Sonarr and Radarr are pointed at this server would fetch

@@ -25,6 +25,8 @@ pub const IMPORT_IMDB: &str = repo::job::kinds::IMPORT_IMDB;
 pub const EXPORT_NFO: &str = repo::job::kinds::EXPORT_NFO;
 pub const MEDIA_STORE: &str = repo::job::kinds::MEDIA_STORE;
 pub const MEDIA_SWEEP: &str = repo::job::kinds::MEDIA_SWEEP;
+pub const MEDIA_VARIANTS: &str = crate::jobs::media::VARIANTS;
+pub const MEDIA_AVIF: &str = crate::jobs::media::AVIF;
 pub const TLS_RENEW: &str = repo::job::kinds::TLS_RENEW;
 pub const UPDATE_CHECK: &str = repo::job::kinds::UPDATE_CHECK;
 pub const ARR_SEED: &str = crate::arr::seed::KIND;
@@ -48,6 +50,10 @@ pub enum TaskId {
     MediaStore,
     #[serde(rename = "media.sweep")]
     MediaSweep,
+    #[serde(rename = "media.variants")]
+    MediaVariants,
+    #[serde(rename = "media.avif")]
+    MediaAvif,
     #[serde(rename = "tls.renew")]
     TlsRenew,
     #[serde(rename = "update.check")]
@@ -62,7 +68,7 @@ pub enum TaskId {
 
 impl TaskId {
     /// Every task, in the order the page shows them.
-    pub const ALL: [TaskId; 12] = [
+    pub const ALL: [TaskId; 14] = [
         Self::RefreshSweep,
         Self::RefreshAll,
         Self::ImportAnime,
@@ -70,6 +76,8 @@ impl TaskId {
         Self::ExportNfo,
         Self::MediaStore,
         Self::MediaSweep,
+        Self::MediaVariants,
+        Self::MediaAvif,
         Self::TlsRenew,
         Self::UpdateCheck,
         Self::ArrSeed,
@@ -87,6 +95,8 @@ impl TaskId {
             Self::ExportNfo => EXPORT_NFO,
             Self::MediaStore => MEDIA_STORE,
             Self::MediaSweep => MEDIA_SWEEP,
+            Self::MediaVariants => MEDIA_VARIANTS,
+            Self::MediaAvif => MEDIA_AVIF,
             Self::TlsRenew => TLS_RENEW,
             Self::UpdateCheck => UPDATE_CHECK,
             Self::ArrSeed => ARR_SEED,
@@ -119,6 +129,8 @@ pub enum Blocked {
     UpdatesOff,
     /// Neither Sonarr nor Radarr is connected.
     ArrOff,
+    /// The AVIF copies are off: `media.avif`.
+    AvifOff,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
@@ -181,6 +193,8 @@ fn lock_busy(id: &str) -> bool {
         EXPORT_NFO => crate::api::native::export::is_exporting(),
         MEDIA_STORE => crate::media::worker::is_storing(),
         MEDIA_SWEEP => crate::media::worker::is_sweeping(),
+        MEDIA_VARIANTS => crate::jobs::media::is_preparing(),
+        MEDIA_AVIF => crate::jobs::media::is_making_avif(),
         TLS_RENEW => crate::tls::is_renewing(),
         UPDATE_CHECK => crate::jobs::update_check::is_checking(),
         ARR_SEED => crate::arr::seed::is_busy(),
@@ -198,6 +212,8 @@ pub fn hold_of(id: &str) -> Option<&'static str> {
         IMPORT_ANIME | IMPORT_IMDB => Some(crate::jobs::datasets::HOLD),
         MEDIA_STORE => Some(repo::job::kinds::MEDIA_STORE),
         MEDIA_SWEEP => Some(repo::job::kinds::MEDIA_SWEEP),
+        MEDIA_VARIANTS => Some(crate::jobs::media::VARIANTS),
+        MEDIA_AVIF => Some(crate::jobs::media::AVIF),
         TLS_RENEW => Some(repo::job::kinds::TLS_RENEW),
         ARR_SEED => Some(crate::arr::seed::HOLD),
         BACKUP_RUN => Some(crate::jobs::backup::HOLD),
@@ -208,7 +224,10 @@ pub fn hold_of(id: &str) -> Option<&'static str> {
 
 /// Whether a run of this kind checks for a stop between two works.
 pub fn stops_partway(kind: &str) -> bool {
-    matches!(kind, REFRESH_ALL | MEDIA_STORE | ARR_SEED)
+    matches!(
+        kind,
+        REFRESH_ALL | MEDIA_STORE | MEDIA_VARIANTS | MEDIA_AVIF | ARR_SEED
+    )
 }
 
 async fn state_of(state: &AppState, task: TaskId) -> anyhow::Result<TaskState> {
@@ -291,6 +310,31 @@ async fn state_of(state: &AppState, task: TaskId) -> anyhow::Result<TaskState> {
                 (!on).then_some(Blocked::MediaOff),
             )
         }
+        // By hand only, never at start: preparing a catalogue's pictures is
+        // hours of decoding on a small machine, and when to spend them is
+        // the administrator's to say.
+        MEDIA_VARIANTS => {
+            let on = state.media.is_on();
+            (
+                if on { Mode::Manual } else { Mode::Off },
+                None,
+                (!on).then_some(Blocked::MediaOff),
+            )
+        }
+        // At night, once switched on.
+        MEDIA_AVIF => {
+            let store = state.media.is_on();
+            let on = store && state.flag("media.avif", false);
+            (
+                if on { Mode::Scheduled } else { Mode::Off },
+                on.then(|| crate::jobs::media::NIGHT_EVERY.as_secs() as i64),
+                if !store {
+                    Some(Blocked::MediaOff)
+                } else {
+                    (!on).then_some(Blocked::AvifOff)
+                },
+            )
+        }
         TLS_RENEW => {
             let on = crate::tls::renews(state);
             (
@@ -366,6 +410,8 @@ async fn state_of(state: &AppState, task: TaskId) -> anyhow::Result<TaskState> {
                 UPDATE_CHECK => crate::jobs::update_check::next_at(),
                 // An interval after the newest archive, whoever made it.
                 BACKUP_RUN => crate::jobs::backup::next_at(state).await?,
+                // The next night.
+                MEDIA_AVIF => Some(crate::jobs::media::next_night(now)),
                 _ => last
                     .as_ref()
                     .and_then(|job| job.started_at.as_deref())

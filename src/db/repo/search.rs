@@ -18,7 +18,7 @@ use crate::{
     domain::fields::Child,
     search::{
         Kind,
-        index::{self, Entry, EpisodeName, PersonName, WorkNames},
+        index::{self, Entry, EpisodeName, PersonNames, WorkNames},
     },
 };
 
@@ -49,9 +49,13 @@ fn holes(n: usize) -> String {
 
 /// Write the rows of these works again from what the database holds of them
 /// now, in `tx`, and mark them current. Returns the people their credits
-/// name, whose own rows the caller writes once `tx` is committed: a person
-/// is credited on many works, and two works' transactions holding the same
-/// person's row is how two refreshes deadlock.
+/// name, by their records' ids, whose own rows the caller writes once `tx`
+/// is committed: a person is credited on many works, and two works'
+/// transactions holding the same person's row is how two refreshes deadlock.
+///
+/// A credit added by hand names nobody until it is filed under its person,
+/// which is done here first: adding it marked its work, and every marked
+/// work passes this way within seconds.
 ///
 /// On PostgreSQL the works are held for update while they are read, so that
 /// a change to one made meanwhile is either read or marks it again after.
@@ -65,6 +69,7 @@ pub async fn index_works(
         let mut ids: Vec<String> = chunk.to_vec();
         ids.sort();
         ids.dedup();
+        people.extend(crate::db::repo::person::link_unlinked(db, tx, &ids).await?);
         let works = read_names(db, tx, &ids, &mut people).await?;
         write_entries(db, tx, &ids, &works).await?;
 
@@ -84,9 +89,9 @@ pub async fn index_works(
     Ok(people)
 }
 
-/// The people the credits of these works name, as they stand in `tx`: what a
-/// write reads before it replaces the credits, so that somebody it takes off
-/// a work is written again too.
+/// The people the credits of these works are filed under, as they stand in
+/// `tx`: what a write reads before it replaces the credits, so that somebody
+/// it takes off a work is written again too.
 pub async fn people_of(
     db: &Db,
     tx: &mut Transaction<'_, Any>,
@@ -95,7 +100,8 @@ pub async fn people_of(
     let mut people = BTreeSet::new();
     for chunk in ids.chunks(CHUNK) {
         let sql = format!(
-            "SELECT tmdb_person_id, person_name FROM media_credit WHERE media_id IN ({})",
+            "SELECT DISTINCT person_id FROM media_credit
+              WHERE media_id IN ({}) AND person_id IS NOT NULL",
             holes(chunk.len())
         );
         let mut args = AnyArguments::default();
@@ -106,10 +112,7 @@ pub async fn people_of(
             .fetch_all(&mut **tx)
             .await?
         {
-            people.insert(index::person_key(
-                row.opt_big("tmdb_person_id")?,
-                &row.text("person_name")?,
-            ));
+            people.insert(row.text("person_id")?);
         }
     }
     Ok(people)
@@ -137,7 +140,8 @@ async fn read_names(
         Dialect::Sqlite => " ORDER BY id",
     };
     let sql = format!(
-        "SELECT id, title, sort_title, original_title, original_language, year, popularity
+        "SELECT id, title, sort_title, original_title, original_language, year, popularity,
+                merged_into
          FROM media_item WHERE id IN ({marks}){lock}"
     );
     let mut works: BTreeMap<String, WorkNames> = BTreeMap::new();
@@ -145,6 +149,11 @@ async fn read_names(
         .fetch_all(&mut **tx)
         .await?
     {
+        // A work merged into another is found by nobody: its names are its
+        // survivor's now, and it keeps none of its own — those it had go.
+        if row.opt_text("merged_into")?.is_some() {
+            continue;
+        }
         let id = row.text("id")?;
         works.insert(
             id.clone(),
@@ -266,16 +275,15 @@ async fn read_names(
         }
     }
 
-    let sql =
-        format!("SELECT tmdb_person_id, person_name FROM media_credit WHERE media_id IN ({marks})");
+    let sql = format!(
+        "SELECT DISTINCT person_id FROM media_credit
+          WHERE media_id IN ({marks}) AND person_id IS NOT NULL"
+    );
     for row in sqlx::query_with(db.sql(&sql), args()?)
         .fetch_all(&mut **tx)
         .await?
     {
-        people.insert(index::person_key(
-            row.opt_big("tmdb_person_id")?,
-            &row.text("person_name")?,
-        ));
+        people.insert(row.text("person_id")?);
     }
 
     Ok(works.into_values().collect())
@@ -425,14 +433,15 @@ async fn insert(db: &Db, tx: &mut Transaction<'_, Any>, entries: &[&Entry]) -> R
     Ok(())
 }
 
-/// Write again the rows of the people these keys name — `tmdb:<id>`,
-/// `name:<name>` — from every credit that names them now: their name, as
-/// most of their credits spell it, and how many works credit them. Somebody
-/// no credit names any more has no row. One transaction, the people in the
-/// order of their keys.
-pub async fn index_people(db: &Db, keys: &BTreeSet<String>) -> Result<()> {
-    let keys: Vec<&String> = keys.iter().collect();
-    for chunk in keys.chunks(CHUNK) {
+/// Write again the rows of these people — by their records' ids — from
+/// their records: every name they go by, worth as many works as credit them
+/// by a credit no lock hides. Somebody no such credit names, or whose record
+/// went into another's, has no row. What the index of people counts them by
+/// is written beside (`repo::person::recount`). One transaction a few hundred
+/// people, in the order of their ids.
+pub async fn index_people(db: &Db, ids: &BTreeSet<String>) -> Result<()> {
+    let ids: Vec<&String> = ids.iter().collect();
+    for chunk in ids.chunks(CHUNK) {
         let mut tx = db.begin_write().await?;
         write_people(db, &mut tx, chunk).await?;
         tx.commit()
@@ -442,95 +451,73 @@ pub async fn index_people(db: &Db, keys: &BTreeSet<String>) -> Result<()> {
     Ok(())
 }
 
-async fn write_people(db: &Db, tx: &mut Transaction<'_, Any>, keys: &[&String]) -> Result<()> {
-    let ids: Vec<i64> = keys
-        .iter()
-        .filter_map(|key| PersonName::tmdb_id(key))
-        .collect();
-    let names: Vec<&str> = keys
-        .iter()
-        .filter_map(|key| PersonName::named(key))
-        .collect();
-
-    // Each person's credits: which works, under which names.
-    let mut credited: BTreeMap<String, (HashSet<String>, HashMap<String, usize>)> = BTreeMap::new();
-    let mut note = |key: String, work: String, name: String| {
-        let (works, spellings) = credited.entry(key).or_default();
-        works.insert(work);
-        *spellings.entry(name).or_default() += 1;
+async fn write_people(db: &Db, tx: &mut Transaction<'_, Any>, ids: &[&String]) -> Result<()> {
+    let marks = holes(ids.len());
+    let args = || -> Result<AnyArguments> {
+        let mut args = AnyArguments::default();
+        for id in ids {
+            bind(&mut args, (*id).clone())?;
+        }
+        Ok(args)
     };
-    if !ids.is_empty() {
-        let sql = format!(
-            "SELECT tmdb_person_id, person_name, media_id FROM media_credit
-             WHERE tmdb_person_id IN ({})",
-            holes(ids.len())
+
+    let mut people: BTreeMap<String, PersonNames> = BTreeMap::new();
+    let sql = format!(
+        "SELECT id, name, original_name FROM person
+          WHERE id IN ({marks}) AND merged_into IS NULL"
+    );
+    for row in sqlx::query_with(db.sql(&sql), args()?)
+        .fetch_all(&mut **tx)
+        .await?
+    {
+        let id = row.text("id")?;
+        let mut names = vec![row.text("name")?];
+        names.extend(row.opt_text("original_name")?);
+        people.insert(
+            id.clone(),
+            PersonNames {
+                id,
+                names,
+                works: 0,
+            },
         );
-        let mut args = AnyArguments::default();
-        for id in &ids {
-            bind(&mut args, *id)?;
-        }
-        for row in sqlx::query_with(db.sql(&sql), args)
-            .fetch_all(&mut **tx)
-            .await?
-        {
-            let name = row.text("person_name")?;
-            note(
-                index::person_key(row.opt_big("tmdb_person_id")?, &name),
-                row.text("media_id")?,
-                name.trim().to_string(),
-            );
+    }
+    let sql = format!(
+        "SELECT person_id, name FROM person_alias
+          WHERE person_id IN ({marks}) ORDER BY person_id, source, name"
+    );
+    for row in sqlx::query_with(db.sql(&sql), args()?)
+        .fetch_all(&mut **tx)
+        .await?
+    {
+        if let Some(person) = people.get_mut(&row.text("person_id")?) {
+            person.names.push(row.text("name")?);
         }
     }
-    if !names.is_empty() {
-        let sql = format!(
-            "SELECT person_name, media_id FROM media_credit
-             WHERE tmdb_person_id IS NULL AND person_name IN ({})",
-            holes(names.len())
-        );
-        let mut args = AnyArguments::default();
-        for name in &names {
-            bind(&mut args, name.to_string())?;
-        }
-        for row in sqlx::query_with(db.sql(&sql), args)
-            .fetch_all(&mut **tx)
-            .await?
-        {
-            let name = row.text("person_name")?;
-            note(
-                index::person_key(None, &name),
-                row.text("media_id")?,
-                name.trim().to_string(),
-            );
+    let sql = format!(
+        "SELECT c.person_id, COUNT(DISTINCT c.media_id) AS works FROM media_credit c
+          WHERE c.person_id IN ({marks}) AND NOT {}
+          GROUP BY c.person_id",
+        crate::db::repo::person::HIDDEN
+    );
+    for row in sqlx::query_with(db.sql(&sql), args()?)
+        .fetch_all(&mut **tx)
+        .await?
+    {
+        if let Some(person) = people.get_mut(&row.text("person_id")?) {
+            person.works = row.big("works")?;
         }
     }
 
-    let wanted: Vec<Entry> = credited
-        .into_iter()
-        .filter_map(|(key, (works, spellings))| {
-            // The spelling most of their credits use, the first of those in
-            // order when two are as common.
-            let name = spellings
-                .into_iter()
-                .max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0)))
-                .map(|(name, _)| name)?;
-            index::person_entry(&PersonName {
-                key,
-                name,
-                works: works.len() as i64,
-            })
-        })
-        .collect();
+    let wanted: Vec<Entry> = people.values().flat_map(index::person_entries).collect();
+    // And what the index of people counts them by, from the same credits.
+    crate::db::repo::person::recount(db, tx, ids).await?;
 
     let sql = format!(
-        "SELECT id, popularity FROM search_doc WHERE kind = 'person' AND ref_id IN ({})",
-        holes(keys.len())
+        "SELECT id, popularity FROM search_doc WHERE kind = 'person' AND ref_id IN ({marks})"
     );
-    let mut args = AnyArguments::default();
-    for key in keys {
-        bind(&mut args, (*key).clone())?;
-    }
     let mut standing: HashMap<i64, Option<f64>> = HashMap::new();
-    for row in sqlx::query_with(db.sql(&sql), args)
+    for row in sqlx::query_with(db.sql(&sql), args()?)
         .fetch_all(&mut **tx)
         .await?
     {
@@ -603,34 +590,25 @@ pub async fn mark_all_stale(db: &Db) -> Result<u64> {
     )
 }
 
-/// Write again the row of everybody the credits name, and take out the rows
-/// of people no credit names any more. Returns how many people there are.
+/// Write again the rows of everybody the catalogue keeps a record of, and
+/// take out the rows of anybody it does not — a record merged into another,
+/// a row nothing names. Returns how many people there are.
 pub async fn index_everybody(db: &Db) -> Result<usize> {
-    let mut keys: BTreeSet<String> = BTreeSet::new();
-    let rows = sqlx::query(db.sql(
-        "SELECT DISTINCT tmdb_person_id, person_name FROM media_credit
-         WHERE tmdb_person_id IS NULL
-         UNION
-         SELECT DISTINCT tmdb_person_id, '' AS person_name FROM media_credit
-         WHERE tmdb_person_id IS NOT NULL",
-    ))
-    .fetch_all(db.pool())
-    .await?;
-    for row in &rows {
-        keys.insert(index::person_key(
-            row.opt_big("tmdb_person_id")?,
-            &row.text("person_name")?,
-        ));
+    let mut ids: BTreeSet<String> = BTreeSet::new();
+    for row in sqlx::query(db.sql("SELECT id FROM person WHERE merged_into IS NULL"))
+        .fetch_all(db.pool())
+        .await?
+    {
+        ids.insert(row.text("id")?);
     }
-    index_people(db, &keys).await?;
+    index_people(db, &ids).await?;
 
-    // Whoever has a row and no credit: gone from every work since.
     let rows = sqlx::query(db.sql("SELECT id, ref_id FROM search_doc WHERE kind = 'person'"))
         .fetch_all(db.pool())
         .await?;
     let mut gone: Vec<i64> = Vec::new();
     for row in &rows {
-        if !keys.contains(&row.text("ref_id")?) {
+        if !ids.contains(&row.text("ref_id")?) {
             gone.push(row.big("id")?);
         }
     }
@@ -639,7 +617,7 @@ pub async fn index_everybody(db: &Db) -> Result<usize> {
         delete(db, &mut tx, chunk).await?;
         tx.commit().await?;
     }
-    Ok(keys.len())
+    Ok(ids.len())
 }
 
 /// How the index stands: its rows of each kind, and the works it is behind on.
@@ -679,25 +657,17 @@ pub async fn standings(db: &Db) -> Result<Standings> {
     Ok(found)
 }
 
-/// Of these people — `tmdb:<id>`, `name:<name>` — those credited on a work a
-/// reader may be shown: switched on, and not for adults unless they may see
-/// those. A person's row is everybody's, and only their works say whether
-/// a reader may be told of them.
+/// Of these people, by their records' ids, those credited on a work a
+/// reader may be shown — switched on, and not for adults unless they may see
+/// those — by a credit no lock hides. A person's row is everybody's, and
+/// only their works say whether a reader may be told of them.
 pub async fn shown_people(
     db: &Db,
-    keys: &[String],
+    ids: &[String],
     include_adult: bool,
     include_disabled: bool,
 ) -> Result<HashSet<String>> {
     let mut shown = HashSet::new();
-    let ids: Vec<i64> = keys
-        .iter()
-        .filter_map(|key| PersonName::tmdb_id(key))
-        .collect();
-    let names: Vec<&str> = keys
-        .iter()
-        .filter_map(|key| PersonName::named(key))
-        .collect();
     let mut works = String::new();
     if !include_disabled {
         works.push_str(" AND m.is_enabled = 1");
@@ -705,41 +675,23 @@ pub async fn shown_people(
     if !include_adult {
         works.push_str(" AND m.is_adult = 0");
     }
-
-    if !ids.is_empty() {
+    for chunk in ids.chunks(CHUNK) {
         let sql = format!(
-            "SELECT DISTINCT c.tmdb_person_id FROM media_credit c
+            "SELECT DISTINCT c.person_id FROM media_credit c
                JOIN media_item m ON m.id = c.media_id
-              WHERE c.tmdb_person_id IN ({}){works}",
-            holes(ids.len())
+              WHERE c.person_id IN ({}){works} AND NOT {}",
+            holes(chunk.len()),
+            crate::db::repo::person::HIDDEN
         );
         let mut args = AnyArguments::default();
-        for id in &ids {
-            bind(&mut args, *id)?;
+        for id in chunk {
+            bind(&mut args, id.clone())?;
         }
         for row in sqlx::query_with(db.sql(&sql), args)
             .fetch_all(db.pool())
             .await?
         {
-            shown.insert(index::person_key(row.opt_big("tmdb_person_id")?, ""));
-        }
-    }
-    if !names.is_empty() {
-        let sql = format!(
-            "SELECT DISTINCT c.person_name FROM media_credit c
-               JOIN media_item m ON m.id = c.media_id
-              WHERE c.tmdb_person_id IS NULL AND c.person_name IN ({}){works}",
-            holes(names.len())
-        );
-        let mut args = AnyArguments::default();
-        for name in &names {
-            bind(&mut args, name.to_string())?;
-        }
-        for row in sqlx::query_with(db.sql(&sql), args)
-            .fetch_all(db.pool())
-            .await?
-        {
-            shown.insert(index::person_key(None, &row.text("person_name")?));
+            shown.insert(row.text("person_id")?);
         }
     }
     Ok(shown)

@@ -50,12 +50,6 @@ static STORING: LazyLock<Arc<tokio::sync::Mutex<()>>> =
     LazyLock::new(|| Arc::new(tokio::sync::Mutex::new(())));
 static SWEEPING: LazyLock<Arc<tokio::sync::Mutex<()>>> =
     LazyLock::new(|| Arc::new(tokio::sync::Mutex::new(())));
-/// Thumbnails are made one at a time, whoever asks — the worker's fetches,
-/// an upload, a run of "store everything": decoding a large picture takes a
-/// few hundred megabytes, and four at once took more than a small server
-/// has.
-static THUMBNAILING: LazyLock<Arc<tokio::sync::Semaphore>> =
-    LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(1)));
 
 pub fn is_storing() -> bool {
     STORING.try_lock().is_err()
@@ -283,14 +277,26 @@ async fn store_one(state: &AppState, asset: &Asset) -> Result<(), Trouble> {
     if !repo::asset::reserve_key(&state.db, &asset.id, &key).await? {
         return Ok(());
     }
-    let kept = keep(store, key, sha256, fetched.bytes, &fetched.inspected).await?;
+    // What the work has the picture as decides the copy made of it now.
+    let cover = match asset.kind {
+        Kind::Image => repo::asset::cover_of(&state.db, &asset.origin)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::debug!(error = %e, "could not tell what a picture is to its work");
+                None
+            }),
+        Kind::Audio => None,
+    };
+    let kept = keep(store, key, sha256, fetched.bytes, &fetched.inspected, cover).await?;
     // Forgotten meanwhile, it is not remembered either: the bytes are the
     // next sweep's to remove.
     if repo::asset::mark_stored(&state.db, &asset.id, &kept.as_row()).await? {
         settle(store, &kept).await;
+        note_copies(state, &kept).await;
         state
             .media
             .remember(&asset.origin, &kept.key, kept.thumb, kept.content_type);
+        state.media.describe(&kept.key, kept.look());
     }
     Ok(())
 }
@@ -303,11 +309,29 @@ pub struct Kept {
     pub bytes: i64,
     pub width: Option<i32>,
     pub height: Option<i32>,
+    /// No thumbnail is made any more: the copies are.
     pub thumb: Thumb,
-    /// The bytes put, and their thumbnail's, held until the row naming
-    /// them is written: see [`settle`].
+    /// A picture's placeholder, when one could be worked out: its colour
+    /// and its ThumbHash, as the row keeps them.
+    pub color: Option<String>,
+    pub thumbhash: Option<String>,
+    /// What this version did to the picture: see
+    /// [`super::variants::PREPARED`]. Nothing for a sound.
+    pub prepared: i64,
+    /// The bytes put, and the copies made of them, held until the row
+    /// naming them is written: see [`settle`].
     data: Bytes,
-    small: Option<Bytes>,
+    copies: Vec<KeptCopy>,
+}
+
+/// A copy put beside the picture as it was kept.
+struct KeptCopy {
+    key: String,
+    content_type: &'static str,
+    width: u32,
+    height: u32,
+    format: super::variants::Format,
+    data: Bytes,
 }
 
 impl Kept {
@@ -320,73 +344,114 @@ impl Kept {
             width: self.width,
             height: self.height,
             thumb: self.thumb,
+            color: self.color.as_deref(),
+            thumbhash: self.thumbhash.as_deref(),
+            prepared: self.prepared,
         }
+    }
+
+    /// What a page is told of the picture, for the index in memory.
+    pub fn look(&self) -> super::Look {
+        super::Look::of_row(&repo::asset::Indexed {
+            origin: String::new(),
+            key: self.key.clone(),
+            thumb: self.thumb,
+            width: self.width,
+            height: self.height,
+            color: self.color.clone(),
+            thumbhash: self.thumbhash.clone(),
+        })
     }
 }
 
-/// Put bytes in the store under their key — `file::key_for`'s — and a
-/// thumbnail beside a picture's. Put every time, though the same picture
-/// from two providers may be there already: the same key is the same bytes,
-/// and a put is what tells a sweep that looked a moment ago that they are
-/// wanted.
+/// Put bytes in the store under their key — `file::key_for`'s — and, for a
+/// picture, work out its placeholder and put beside it the copy its kind is
+/// first asked for: a poster's 480, a background's 1280, by `cover`. Put
+/// every time, though the same picture from two providers may be there
+/// already: the same key is the same bytes, and a put is what tells a sweep
+/// that looked a moment ago that they are wanted.
+///
+/// A picture the decoders here cannot read — or panic on, which is caught —
+/// is kept all the same, and served whole.
 pub async fn keep(
     store: &Store,
     key: String,
     sha256: String,
     bytes: Bytes,
     inspected: &file::Inspected,
+    cover: Option<crate::domain::CoverType>,
 ) -> Result<Kept> {
     let size = i64::try_from(bytes.len()).unwrap_or(i64::MAX);
     store
         .put(&key, bytes.clone(), inspected.content_type)
         .await?;
 
-    let made = match inspected.kind {
-        Kind::Image => thumbnail(bytes.clone()).await,
-        Kind::Audio => None,
-    };
-    let (thumb, small) = match made {
-        Some((small, kind)) => {
-            let (thumb_key, content_type) = file::thumb_key(&key, kind)
-                .zip(kind.content_type())
-                .expect("a thumbnail made has a kind");
-            store.put(&thumb_key, small.clone(), content_type).await?;
-            (kind, Some(small))
-        }
-        None => (Thumb::None, None),
-    };
-
-    Ok(Kept {
+    let mut kept = Kept {
         key,
         sha256,
         content_type: inspected.content_type,
         bytes: size,
         width: inspected.width.and_then(|w| i32::try_from(w).ok()),
         height: inspected.height.and_then(|h| i32::try_from(h).ok()),
-        thumb,
-        data: bytes,
-        small,
-    })
+        thumb: Thumb::None,
+        color: None,
+        thumbhash: None,
+        prepared: 0,
+        data: bytes.clone(),
+        copies: Vec::new(),
+    };
+    if inspected.kind != Kind::Image {
+        return Ok(kept);
+    }
+
+    let prepared =
+        super::variants::off_thread(move || super::variants::prepare(&bytes, cover)).await;
+    // Done either way: a picture that cannot be read now never will be.
+    kept.prepared = super::variants::PREPARED;
+    match prepared {
+        Ok(prepared) => {
+            if let Some(placeholder) = &prepared.placeholder {
+                kept.color = Some(placeholder.color_hex());
+                kept.thumbhash = Some(placeholder.thumbhash_base64());
+            }
+            for copy in prepared.copies {
+                let copy_key = copy.key(&kept.sha256);
+                let content_type = copy.content_type();
+                let data = Bytes::from(copy.bytes);
+                store.put(&copy_key, data.clone(), content_type).await?;
+                kept.copies.push(KeptCopy {
+                    key: copy_key,
+                    content_type,
+                    width: copy.width,
+                    height: copy.height,
+                    format: copy.format,
+                    data,
+                });
+            }
+        }
+        Err(e) => tracing::debug!(
+            key = %kept.key,
+            error = format_args!("{e:#}"),
+            "no copy of the picture: it is served whole"
+        ),
+    }
+    Ok(kept)
 }
 
-/// A picture's thumbnail: made one at a time, off the server's own threads.
-/// None for one too large to be worth decoding, one the decoders here
-/// cannot read — or one they panic on, which is caught there: the picture
-/// is kept and served whole.
-async fn thumbnail(bytes: Bytes) -> Option<(Bytes, Thumb)> {
-    // Held by the decoding itself, so a request given up on meanwhile does
-    // not let another start beside it.
-    let permit = THUMBNAILING.clone().acquire_owned().await.ok()?;
-    let made = tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        file::thumbnail(&bytes)
-    })
-    .await;
-    match made {
-        Ok(made) => made.map(|(small, kind)| (Bytes::from(small), kind)),
-        Err(e) => {
-            tracing::warn!(error = %e, "no thumbnail: the decoder gave up on the picture");
-            None
+/// Note the copies put beside a picture kept, once its row is written.
+/// Quiet: a copy not noted is made again when it is next asked for.
+pub async fn note_copies(state: &AppState, kept: &Kept) {
+    for copy in &kept.copies {
+        let variant = repo::asset::Variant {
+            key: copy.key.clone(),
+            stem: kept.sha256.clone(),
+            width: i32::try_from(copy.width).unwrap_or(i32::MAX),
+            height: i32::try_from(copy.height).unwrap_or(i32::MAX),
+            format: copy.format.as_str().to_string(),
+            bytes: i64::try_from(copy.data.len()).unwrap_or(i64::MAX),
+        };
+        if let Err(e) = repo::asset::add_variant(&state.db, &variant).await {
+            tracing::warn!(key = %copy.key, error = %e, "could not note a copy made");
         }
     }
 }
@@ -413,21 +478,22 @@ async fn settle_files(store: &Store, kept: &Kept) -> Result<()> {
             .put(&kept.key, kept.data.clone(), kept.content_type)
             .await?;
     }
-    if let (Some(small), Some((thumb_key, content_type))) = (
-        &kept.small,
-        file::thumb_key(&kept.key, kept.thumb).zip(kept.thumb.content_type()),
-    ) && !store.exists(&thumb_key).await?
-    {
-        store.put(&thumb_key, small.clone(), content_type).await?;
+    for copy in &kept.copies {
+        if !store.exists(&copy.key).await? {
+            store
+                .put(&copy.key, copy.data.clone(), copy.content_type)
+                .await?;
+        }
     }
     Ok(())
 }
 
-/// Delete a key's files — the bytes and their thumbnail — unless a row
-/// still names the key: another holding the same bytes, or one in line for
-/// them whose fetch is under way. Called once the row they were kept for is
-/// gone. Best effort: what could not be deleted is said in the log and left
-/// to the sweep's pass over the store. How many went.
+/// Delete a key's files — the bytes, their thumbnail, every copy made of
+/// them — unless a row still names the key: another holding the same bytes,
+/// or one in line for them whose fetch is under way. Called once the row
+/// they were kept for is gone. Best effort: what could not be deleted is
+/// said in the log and left to the sweep's pass over the store. How many
+/// went.
 pub async fn delete_files(state: &AppState, store: &Store, key: &str, thumb: Thumb) -> usize {
     match repo::asset::key_named(&state.db, key).await {
         Ok(false) => {}
@@ -437,7 +503,29 @@ pub async fn delete_files(state: &AppState, store: &Store, key: &str, thumb: Thu
             return 0;
         }
     }
+    let stem = file::stem_of(key).to_string();
+    let copies = repo::asset::variants_of(&state.db, &stem)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(key, error = %e, "could not list a picture's copies; the sweep will");
+            Vec::new()
+        });
     let mut gone = 0;
+    for copy in &copies {
+        match store.delete(&copy.key).await {
+            Ok(()) => {
+                gone += 1;
+                if let Err(e) = repo::asset::delete_variant(&state.db, &copy.key).await {
+                    tracing::debug!(key = %copy.key, error = %e, "could not forget a copy");
+                }
+            }
+            Err(e) => tracing::warn!(
+                key = %copy.key,
+                error = format_args!("{e:#}"),
+                "could not delete a copy's file; the sweep will"
+            ),
+        }
+    }
     for key in file::thumb_key(key, thumb)
         .into_iter()
         .chain(std::iter::once(key.to_string()))
@@ -605,13 +693,19 @@ pub async fn sweep_now(state: &AppState, by: &str) -> AppResult<Option<String>> 
     Ok(Some(id))
 }
 
-/// The sweep, on its schedule: a day after the last, and an hour after the
-/// start, so a server that runs a day at a time still sweeps. The leader's
-/// to run; the others look again in an hour.
+/// The media's schedules: the sweep's, and the night's AVIF copies — see
+/// [`crate::jobs::media::run_nights`] — side by side.
 pub async fn run_sweeps(state: AppState) {
     if !state.media.is_on() {
         return;
     }
+    tokio::join!(sweeps(state.clone()), crate::jobs::media::run_nights(state));
+}
+
+/// The sweep, on its schedule: a day after the last, and an hour after the
+/// start, so a server that runs a day at a time still sweeps. The leader's
+/// to run; the others look again in an hour.
+async fn sweeps(state: AppState) {
     tokio::time::sleep(Duration::from_secs(3600)).await;
     loop {
         if !state.coord.leads() {
@@ -647,13 +741,14 @@ pub async fn run_sweeps(state: AppState) {
 /// its cover and no locked value does — asked again as it is deleted, since
 /// something may have come to name it since the list was read — once it has
 /// had its hour: an upload's row is written a moment before what points at
-/// it. Its file goes with it unless
-/// another row holds the same bytes. Then the store is listed, and a file
-/// no row names — one whose row was lost between the put and the write,
-/// say — goes too, once it has had its hour: asked again just before it
-/// goes, of the rows and of the store, as a row may have been written for
-/// it, or the file put again, since the list was read. One that cannot be
-/// deleted is counted and passed by; the rest are still swept.
+/// it. Its file goes with it, and the copies made of it, unless another row
+/// holds the same bytes. A copy whose picture no row holds goes too. Then
+/// the store is listed, and a file no row names — one whose row was lost
+/// between the put and the write, say, or a copy of a picture gone — goes
+/// too, once it has had its hour: asked again just before it goes, of the
+/// rows and of the store, as a row may have been written for it, or the
+/// file put again, since the list was read. One that cannot be deleted is
+/// counted and passed by; the rest are still swept.
 pub async fn sweep(state: &AppState) -> Result<String> {
     let store = state.media.store().context("no media store")?;
     let cutoff = chrono::Utc::now() - ORPHAN_GRACE;
@@ -681,7 +776,30 @@ pub async fn sweep(state: &AppState) -> Result<String> {
     }
 
     let held = repo::asset::held_stems(&state.db).await?;
-    let listed = match store.list().await {
+    // The copies whose picture no row holds: a picture removed while a page
+    // was having one made, say.
+    let cutoff_text = crate::db::to_rfc3339(cutoff);
+    for copy in repo::asset::orphan_variants(&state.db, &held, &cutoff_text).await? {
+        match store.delete(&copy.key).await {
+            Ok(()) => {
+                files += 1;
+                if let Err(e) = repo::asset::delete_variant(&state.db, &copy.key).await {
+                    tracing::warn!(key = %copy.key, error = %e, "the sweep could not forget a copy");
+                    troubles += 1;
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    key = %copy.key,
+                    error = format_args!("{e:#}"),
+                    "the sweep could not remove a copy"
+                );
+                troubles += 1;
+            }
+        }
+    }
+
+    let listed = match store.list_all().await {
         Ok(listed) => listed,
         Err(e) => {
             tracing::warn!(
@@ -700,6 +818,12 @@ pub async fn sweep(state: &AppState) -> Result<String> {
             Ok(true) => store.delete(&key).await.map(|()| true),
             other => other,
         };
+        if matches!(outcome, Ok(true)) && file::is_made(&key) {
+            // A copy's row, if it has one, goes with its file.
+            if let Err(e) = repo::asset::delete_variant(&state.db, &key).await {
+                tracing::debug!(key, error = %e, "could not forget a copy removed");
+            }
+        }
         match outcome {
             Ok(true) => files += 1,
             Ok(false) => {}

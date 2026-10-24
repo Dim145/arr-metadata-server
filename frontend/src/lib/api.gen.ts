@@ -415,6 +415,53 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/duplicates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The works that look like one, looked for again first.
+         * @description `certain`: two works of one kind filed under one identifier elsewhere —
+         *     TMDB's, TheTVDB's, IMDb's, AniList's, MyAnimeList's or Fankai's — held by
+         *     one, or last said by the other's journal or lock to be its own.
+         *     `probable`: two works of one kind under one title, as the search index
+         *     folds it, a year apart at the most or with a year unknown. `flag`: a film
+         *     and a series under one IMDb id, which are never merged. A pair somebody
+         *     dismissed is not listed. For those who may edit the catalogue; works for
+         *     adults as this caller may see them.
+         */
+        get: operations["merge_duplicates"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/duplicates/dismiss": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Say two works are not one: the pair is not proposed again, whatever is
+         *     found of it later. The audit trail says so (`duplicate.dismissed`).
+         */
+        post: operations["merge_dismiss"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/health": {
         parameters: {
             query?: never;
@@ -1679,8 +1726,8 @@ export interface paths {
          * Put a picture or a theme on a work, from a file.
          * @description A form with `file`, and: `kind` (`image`, the default, or `theme`);
          *     for a picture, `coverType` (`poster`, `fanart`, `banner`, `clearlogo`,
-         *     `clearart`, `landscape`) and `seasonNumber` for a season's, or `episode`
-         *     as `3x7` for a still. A picture becomes a hand-added one of the work's,
+         *     `clearart`, `landscape`, `keyart`, `discart`, `characterart`) and `seasonNumber` for a
+         *     season's, or `episode` as `3x7` for a still. A picture becomes a hand-added one of the work's,
          *     which no refresh replaces; a still or a theme locks the field it fills.
          *     The file is read for what it is, not for what it is called.
          */
@@ -1710,6 +1757,66 @@ export interface paths {
          *     its locks hold, or an upload made for it.
          */
         delete: operations["media_forget"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/items/{id}/merge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What merging a work into another would do, before it is done.
+         * @description Both works as they would be told apart; every field whose value differs,
+         *     as each is served, whether each locks it, and whether the merged work's
+         *     value can be kept; what the merged work holds, by kind of row; the names
+         *     the survivor would answer for; and which of the two the rule keeps — the
+         *     one with hand edits, else the one filed under more identifiers, else the
+         *     older — and why. Nothing is written.
+         */
+        get: operations["merge_preview"];
+        put?: never;
+        /**
+         * Merge a work into another, in one transaction.
+         * @description The merged work's seasons, episodes, pictures, credits, other titles,
+         *     translations, orders, releases, the copies its sources gave, its locks,
+         *     its journal and its places in selections move onto the survivor, but
+         *     where the survivor holds the same — a season of the same number, an
+         *     episode at the same place, a picture at the same address — whose own
+         *     stands. Its locks move where the survivor locks nothing of the same; a
+         *     field kept from it (`keep`) is the survivor's lock, set to its value
+         *     where it held none. Its identifiers become the survivor's where it has
+         *     none of their source, and its id, its slug and each identifier answer
+         *     with the survivor from now on, for the site, the API, Sonarr, Radarr and
+         *     Plex alike. The merged work stays as a tombstone, hidden from every list,
+         *     until the merge is undone (`merge.undoDays`). Written to the survivor's
+         *     journal (`merge`) and the audit trail (`item.merged`, with what the
+         *     survivor was and became); told to Sonarr or Radarr under both ids when
+         *     `arr.pushRefresh` is on.
+         */
+        post: operations["merge_merge_into"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/items/{id}/merges": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** What was merged into a work: what its editor offers to undo. */
+        get: operations["merge_merges"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -2094,6 +2201,33 @@ export interface paths {
          *     the answer is what would be written over.
          */
         post: operations["items_sync"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/items/{id}/unmerge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Undo a merge, by the merged work's id.
+         * @description The merged work comes back as a work of its own: what moved onto the
+         *     survivor and is still as the merge left it goes back — what a refresh of
+         *     the survivor replaced since does not, and comes back to the work at its
+         *     own refresh, which is due at once — what gave way to the survivor's rows
+         *     is put back, its locks and its identifiers are its own again but those
+         *     another work holds now, and its names stop answering with the survivor.
+         *     The pair is not proposed as duplicates again. Within `merge.undoDays` of
+         *     the merge; a `410` after, or when undos are not kept.
+         */
+        post: operations["merge_unmerge"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2502,7 +2636,7 @@ export interface paths {
         patch: operations["network_rename"];
         trace?: never;
     };
-    "/api/v1/people/{tmdb_id}": {
+    "/api/v1/people": {
         parameters: {
             query?: never;
             header?: never;
@@ -2510,13 +2644,120 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Somebody's work, as far as this catalogue holds it.
-         * @description By TMDB's person id, which is how TMDB files cast and crew; TheTVDB's
-         *     credits carry none and are not found here.
+         * The people the catalogue credits, as an index: by letter, by job, the
+         *     most credited first or in the order of their names.
+         * @description Those credited on a work anybody may see — switched on, and not for
+         *     adults — by a credit no lock hides, each counted by those works, as their
+         *     records keep the count. Whoever keeps the catalogue may also ask for
+         *     everybody, those known by no TMDB id, and those who share a name: the
+         *     records worth a second look.
          */
-        get: operations["browse_person"];
+        get: operations["people_index"];
         put?: never;
+        /**
+         * Enter somebody by hand.
+         * @description A record of its own, known by the ids given: credits a source gives them
+         *     under one of those ids are filed under it from then on, and what TMDB
+         *     says of them fills only what is left empty here.
+         */
+        post: operations["people_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/people/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Somebody, and their work as far as this catalogue holds it.
+         * @description By their record's id, or by their TMDB id — every digit — as the pages
+         *     were filed before there were records. A record merged into another
+         *     answers as that one. What TMDB says of them is asked the first time the
+         *     page is read, kept, and asked again in the background once it is a month
+         *     old; the biography is in the language asked for where TMDB has one.
+         */
+        get: operations["people_page"];
+        /**
+         * Put somebody right by hand.
+         * @description Every field as given — one left out is cleared — and the record marked as
+         *     put right: what TMDB says of them afterwards fills only what is empty.
+         */
+        put: operations["people_update"];
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/people/{id}/credits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * File credits under a record, whomever they were filed under.
+         * @description How a credit by name alone is given the person it is of — an actor typed
+         *     in by hand, a guest TheTVDB lists — or one filed under the wrong person
+         *     moved. A refresh leaves them where they were put.
+         */
+        post: operations["people_attach"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/people/{id}/merge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Merge a record into another: two records of one person.
+         * @description Every credit filed under it is filed under the other, which goes by its
+         *     names from then on and takes whatever ids and facts it lacks. The merged
+         *     record is kept as a pointer: a credit a source gives under one of its ids
+         *     is filed under the other, and its page leads there. A refresh leaves the
+         *     credits where they were put.
+         */
+        post: operations["people_merge"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/people/{id}/split": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Split credits off a record onto a new one: one name, two people.
+         * @description The way out of a homonym taken for somebody else — a credit by name alone
+         *     filed under the person known by a TMDB id who goes by that name. The new
+         *     record is made by hand; a refresh leaves the credits where they were put.
+         */
+        post: operations["people_split"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3658,6 +3899,10 @@ export interface components {
             /** Format: int32 */
             height?: number | null;
             hasThumb: boolean;
+            /** @description The colour most of a picture is, `#rrggbb`, once worked out. */
+            color?: string | null;
+            /** @description A picture's ThumbHash, base64, once worked out. */
+            thumbhash?: string | null;
             /** Format: int32 */
             attempts: number;
             error?: string | null;
@@ -3692,6 +3937,14 @@ export interface components {
          * @enum {string}
          */
         AssetStatus: "pending" | "stored" | "failed";
+        /** @description The credits filed under a person. */
+        AttachCredits: {
+            /**
+             * @description The credits, by id — a work's `credits[].id` — whomever they were
+             *     filed under.
+             */
+            credits: string[];
+        };
         AuditEntry: {
             id: string;
             at: string;
@@ -4265,7 +4518,7 @@ export interface components {
          *     surfaces can emit them without a translation table.
          * @enum {string}
          */
-        CoverType: "poster" | "banner" | "fanart" | "clearlogo" | "clearart" | "landscape" | "screenshot" | "headshot" | "unknown";
+        CoverType: "poster" | "banner" | "fanart" | "clearlogo" | "clearart" | "landscape" | "screenshot" | "headshot" | "keyart" | "discart" | "characterart" | "unknown";
         CreateClientRequest: {
             name: string;
             scopes?: string[];
@@ -4473,6 +4726,12 @@ export interface components {
             signingAlgorithms: string[];
             scopes: string[];
         };
+        DismissDuplicateRequest: {
+            /** @description One work of the pair, by its id. */
+            first: string;
+            /** @description The other. */
+            second: string;
+        };
         /** @description The clients' door. */
         Door: {
             bind: string;
@@ -4503,6 +4762,40 @@ export interface components {
          */
         DoorMode: "authority" | "own";
         /**
+         * @description How sure the server is that two works are one.
+         * @enum {string}
+         */
+        DuplicateConfidence: "certain" | "probable" | "flag";
+        /** @description The pairs proposed. */
+        DuplicateList: {
+            /**
+             * @description Surest first: an identifier shared, then a title, then an IMDb id on
+             *     a film and a series.
+             */
+            pairs: components["schemas"]["DuplicateView"][];
+        };
+        /**
+         * @description Why two works look like one.
+         * @enum {string}
+         */
+        DuplicateReason: "sharedId" | "title" | "imdbAcrossKinds";
+        /** @description A pair of duplicates as the catalogue shows it. */
+        DuplicateView: {
+            first: components["schemas"]["MergeWork"];
+            second: components["schemas"]["MergeWork"];
+            confidence: components["schemas"]["DuplicateConfidence"];
+            reason: components["schemas"]["DuplicateReason"];
+            /**
+             * @description What they share: an identifier as `imdb:tt0903747`, or the title as
+             *     it was folded.
+             */
+            detail: string | null;
+            foundAt: string;
+            /** @description The one of the two the rule would keep. */
+            survivor: string;
+            why: components["schemas"]["SurvivorRule"];
+        };
+        /**
          * @description One setting as the interface shows it: what it is, and where the answer
          *     currently comes from.
          */
@@ -4524,6 +4817,40 @@ export interface components {
              *     unset, whose reversal is to set nothing.
              */
             default?: string | null;
+        };
+        /** @description Somebody as they are entered, or put right, by hand. */
+        EnteredPerson: {
+            name: string;
+            /** Format: int64 */
+            tmdbId?: number | null;
+            /** @description `nm0186505`. */
+            imdbId?: string | null;
+            /** Format: int64 */
+            tvdbId?: number | null;
+            /**
+             * @description What the index files and sorts them under, where it is not their
+             *     name: `Toro, Guillermo del`.
+             */
+            sortName?: string | null;
+            /** @description Their name in their own script: 宮崎駿. */
+            originalName?: string | null;
+            /**
+             * Format: int32
+             * @description 1 a woman, 2 a man, 3 non-binary.
+             */
+            gender?: number | null;
+            /** @description `YYYY-MM-DD`. */
+            birthday?: string | null;
+            deathday?: string | null;
+            placeOfBirth?: string | null;
+            biography?: string | null;
+            /** @description Their portrait: an address a client can fetch. */
+            image?: string | null;
+            /**
+             * @description The other names they go by, typed by hand: those any other way —
+             *     their credits', TMDB's, a merged record's — are kept as they are.
+             */
+            aliases?: string[];
         };
         /**
          * @description What an entry of the chart is.
@@ -4558,6 +4885,26 @@ export interface components {
             tmdbId?: number | null;
             rating?: components["schemas"]["RatingValue"] | null;
             isManual: boolean;
+        };
+        /**
+         * @description A credit on one episode of a series rather than on the series: a guest,
+         *     the director or a writer of that episode.
+         */
+        EpisodeCredit: {
+            /**
+             * Format: int32
+             * @description Where the source numbers the episode.
+             */
+            seasonNumber: number;
+            /** Format: int32 */
+            episodeNumber: number;
+            /**
+             * Format: int64
+             * @description TMDB's id of the episode: how the credit finds the episode it is of
+             *     in the work's own numbering, which may be TheTVDB's.
+             */
+            tmdbEpisodeId?: number | null;
+            credit: components["schemas"]["Credit"];
         };
         /** @description An episode found by its title. */
         EpisodeHit: {
@@ -5513,6 +5860,12 @@ export interface components {
              */
             releases?: components["schemas"]["CountryRelease"][];
             /**
+             * @description What the sources say of the people the credits name — the credits of
+             *     single episodes among it — and, read back, whom each credit is filed
+             *     under: see [`person::People`].
+             */
+            people?: components["schemas"]["People"];
+            /**
              * @description Fields carrying a manual override, as `scope/field` paths. The web UI
              *     renders a lock next to each of these. A text locked in another
              *     language than the one served is `scope/field@fra`; a lock on a child
@@ -5536,6 +5889,18 @@ export interface components {
              *     maintains the catalogue, served to nobody.
              */
             hidden?: components["schemas"]["Hidden"];
+            /**
+             * @description What a page needs of the pictures it leads with — the poster, the
+             *     background, the landscape and the logo a card or a plate shows —
+             *     before they are there: their size, the colour and the sketch they
+             *     are drawn as while they load, the AVIF copies made of them. By the
+             *     address the work gives each, and only for the copies this server
+             *     keeps. Set as the work is read for this server's own pages; never
+             *     stored, and never sent to a client elsewhere.
+             */
+            pictures?: {
+                [key: string]: components["schemas"]["Picture"];
+            };
         };
         /** @enum {string} */
         MediaKind: "series" | "movie";
@@ -5551,9 +5916,21 @@ export interface components {
             /** @description Whether the served addresses can be followed from elsewhere. */
             publicUrl: boolean;
             counts: components["schemas"]["AssetCounts"];
+            /** @description The copies made of the pictures kept: what each kind weighs. */
+            variants: components["schemas"]["VariantCounts"];
+            /**
+             * Format: int64
+             * @description The pictures kept that this version has not prepared — no
+             *     placeholder, no first copy — which the task `media.variants` does.
+             */
+            unprepared: number;
+            /** @description Whether the night's task makes AVIF copies (`media.avif`). */
+            avif: boolean;
             /** @description Whether a fetch or a sweep is under way. */
             fetching: boolean;
             sweeping: boolean;
+            /** @description Whether the pictures are being prepared, or their AVIF copies made. */
+            preparing: boolean;
         };
         /**
          * @description What is kept of one address a work points at: where its asset stands,
@@ -5567,6 +5944,159 @@ export interface components {
             entries: number;
             /** Format: int64 */
             bytes?: number | null;
+        };
+        /** @description A name the survivor will answer for besides its own. */
+        MergeAlias: {
+            /** @description `id`, `slug`, or the source of an identifier elsewhere. */
+            source: string;
+            value: string;
+        };
+        /** @description One field whose value differs between the two, and whether each locks it. */
+        MergeField: {
+            /** @description As the field registry names it. */
+            field: string;
+            /** @description What the survivor is served with; `null` for nothing. */
+            survivor: unknown;
+            /** @description What the merged work is served with; `null` for nothing. */
+            merged: unknown;
+            survivorLocked: boolean;
+            mergedLocked: boolean;
+            /**
+             * @description Whether the merged work's value can be kept: a field a work cannot be
+             *     read without — its title, the poster it leads with — is never kept
+             *     empty.
+             */
+            choosable: boolean;
+        };
+        /**
+         * @description The merges into a work that can still be undone, and every name of the
+         *     works merged into it that it answers for.
+         */
+        MergeList: {
+            /** @description Newest first; none while undos are not kept. */
+            merges: components["schemas"]["MergeUndoable"][];
+            /**
+             * Format: int64
+             * @description For how many days a merge can be undone; `0`: not at all.
+             */
+            undoDays: number;
+            /** @description Newest merge first. */
+            aliases: components["schemas"]["WorkAlias"][];
+        };
+        /** @description What a merge came to. */
+        MergeOutcome: {
+            /** @description The work that stays. */
+            survivor: string;
+            /** @description The work merged into it, a tombstone now. */
+            merged: string;
+            /** @description Until when it can be undone; `null` when it cannot. */
+            undoUntil: string | null;
+            /** @description How many names of the merged work the survivor answers for now. */
+            aliases: number;
+            /** @description The rows moved over, by table. */
+            moved: {
+                [key: string]: number;
+            };
+            /** @description The rows that gave way to the survivor's, by table. */
+            dropped: {
+                [key: string]: number;
+            };
+        };
+        /** @description Into whom a record is merged. */
+        MergePerson: {
+            /** @description The record that is kept. */
+            into: string;
+        };
+        /** @description What a merge of one work into another would do. */
+        MergePreview: {
+            /** @description The work that would become a tombstone. */
+            merged: components["schemas"]["MergeWork"];
+            /** @description The work that would stay. */
+            survivor: components["schemas"]["MergeWork"];
+            /**
+             * @description The one of the two the rule would keep, and why: the dialog offers to
+             *     swap when it is not `survivor`.
+             */
+            proposed: string;
+            why: components["schemas"]["SurvivorRule"];
+            /** @description Every field whose value differs, as each is served. */
+            fields: components["schemas"]["MergeField"][];
+            /**
+             * @description What the merged work holds, by kind of row: moved over, or folded
+             *     into the survivor's own.
+             */
+            children: {
+                [key: string]: number;
+            };
+            /** @description What the survivor will answer for besides its own. */
+            aliases: components["schemas"]["MergeAlias"][];
+            /**
+             * Format: int64
+             * @description For how many days the merge could be undone; `0`: not at all.
+             */
+            undoDays: number;
+        };
+        MergeRequest: {
+            /** @description The work it is merged into: the one that stays. */
+            into: string;
+            /**
+             * @description The side each field is kept from, by its name in the field registry,
+             *     where the two differ: `survivor`, the default, or `merged`. Every
+             *     field the work may lock but its slug and its identifiers.
+             */
+            keep?: {
+                [key: string]: components["schemas"]["MergeSide"];
+            };
+        };
+        /**
+         * @description Which of two works a field's value is kept from.
+         * @enum {string}
+         */
+        MergeSide: "survivor" | "merged";
+        /** @description A merge into a work that can still be undone, as its editor offers it. */
+        MergeUndoable: {
+            work: components["schemas"]["MergedWork"];
+            undoUntil: string;
+        };
+        /**
+         * @description A work as a pair of duplicates or a merge names it: enough to tell the
+         *     two apart at a glance, and to choose which of them stays.
+         */
+        MergeWork: {
+            id: string;
+            /** @description As it is shown: a title locked in every language, else its own. */
+            title: string;
+            kind: components["schemas"]["MediaKind"];
+            /** Format: int32 */
+            year?: number | null;
+            slug: string;
+            /**
+             * @description The address of its first poster, the work's own; absent when it has
+             *     none.
+             */
+            poster?: string | null;
+            externalIds: components["schemas"]["ExternalIds"];
+            isManual: boolean;
+            isEnabled: boolean;
+            isAdult: boolean;
+            createdAt: string;
+            /**
+             * Format: int64
+             * @description Its locks and what was added to it by hand, counted, and one more
+             *     for a work entered by hand: what the survivor is chosen by once
+             *     whether its sources fill it is weighed.
+             */
+            handEdits: number;
+        };
+        /** @description A work merged into another, as the survivor's editor names it. */
+        MergedWork: {
+            /** @description The tombstone's id: what the undo is asked by. */
+            id: string;
+            title: string;
+            kind: components["schemas"]["MediaKind"];
+            /** Format: int32 */
+            year?: number | null;
+            mergedAt: string;
         };
         MovieResource: {
             /** Format: int64 */
@@ -5860,15 +6390,103 @@ export interface components {
             updatedAt: string;
             updatedBy?: string | null;
         };
+        /**
+         * @description What a work's sources say of the people its credits name, and, read back,
+         *     whom each credit is filed under.
+         */
+        People: {
+            /**
+             * @description The credits of single episodes, as a source gave them: written with
+             *     the work, never read back with it — a long series has thousands, and
+             *     a person's page reads its own.
+             */
+            episodes?: components["schemas"]["EpisodeCredit"][];
+            /** @description Who each credit names, by the credit's id: its own and its episodes'. */
+            byCredit?: {
+                [key: string]: components["schemas"]["PersonRef"];
+            };
+        };
+        /** @description A page of the index. */
+        PeoplePage: {
+            people: components["schemas"]["PersonCard"][];
+            /**
+             * Format: int64
+             * @description How many there are, past this page.
+             */
+            total: number;
+            /**
+             * @description The letters somebody is filed under, `#` among them, before the one
+             *     asked for narrowed the list: the ones worth offering.
+             */
+            letters: string[];
+        };
+        /** @description Somebody, and the part of their work this catalogue holds. */
         Person: {
+            /** @description Their record's id: their page is `/people/{id}`. */
+            id: string;
+            /**
+             * Format: int64
+             * @description Their TMDB id, where they are known by one: `/people/{tmdbId}` is
+             *     their page too.
+             */
+            tmdbId?: number | null;
             /** Format: int64 */
-            tmdbId: number;
+            tvdbId?: number | null;
             name: string;
+            /** @description Their name in the script of their own language, where it is another. */
+            originalName?: string | null;
+            /**
+             * @description The language that name is in, as a page's `lang` takes it: `ja`.
+             *     None where neither its script nor their works say.
+             */
+            originalNameLang?: string | null;
             image?: string | null;
-            /** @description Newest work first. */
+            /** @description The other names they go by. */
+            aliases?: string[];
+            /** @description Entered or put right by hand. */
+            isManual?: boolean;
+            /**
+             * @description Every credit on a work the caller may see, the newest work first: an
+             *     episode's under the work it is of.
+             */
             roles: components["schemas"]["PersonRole"][];
+            /** @description Those works, as cards, in the same order. */
             works: components["schemas"]["MediaItem"][];
             details?: components["schemas"]["PersonDetails"] | null;
+            record?: components["schemas"]["PersonRecord"] | null;
+        };
+        /** @description Another name somebody goes by, and where it came from. */
+        PersonAlias: {
+            name: string;
+            /**
+             * @description `credit` — a spelling one of their credits gives — `tmdb`, one TMDB
+             *     lists, `merged`, the name of a record merged into theirs, or
+             *     `manual`, one typed by hand.
+             */
+            source: string;
+        };
+        /** @description Somebody, as the index lists them. */
+        PersonCard: {
+            id: string;
+            name: string;
+            /** Format: int64 */
+            tmdbId?: number | null;
+            image?: string | null;
+            /**
+             * Format: int64
+             * @description How many works credit them — with the job asked for, when one was.
+             */
+            works: number;
+            /** @description What they did on those works. */
+            jobs: components["schemas"]["PersonJob"][];
+            /** @description For those who keep the catalogue. */
+            imdbId?: string | null;
+            /** Format: int64 */
+            tvdbId?: number | null;
+            /** @description Entered or put right by hand. */
+            isManual?: boolean;
+            /** @description The other names they go by. */
+            aliases?: string[];
         };
         /** @description Somebody as TMDB knows them, beside what this catalogue holds of theirs. */
         PersonDetails: {
@@ -5893,25 +6511,154 @@ export interface components {
         };
         /** @description Somebody the catalogue's works credit. */
         PersonHit: {
+            /** @description Their record's id, which their page is filed under: `/people/{id}`. */
+            id: string;
             name: string;
+            /** @description The other name they were found by, where that is not their own. */
+            matched?: string | null;
             /**
              * Format: int64
-             * @description Their TMDB id, which their page is filed under; none for somebody
-             *     credited by name alone, whose works the list finds by that name.
+             * @description Their TMDB id, where they are known by one.
              */
             tmdbId?: number | null;
+            /** @description Their portrait. */
+            image?: string | null;
+            /** @description What they did on the works anybody may see. */
+            jobs: components["schemas"]["PersonJob"][];
             /**
              * Format: int64
              * @description How many works of the catalogue credit them.
              */
             works: number;
         };
-        /** @description One part a person played, or one job they did, on one work. */
+        /** @description What became of a record: its id. */
+        PersonId: {
+            id: string;
+        };
+        /**
+         * @description What somebody did on a work, as their page puts their works together:
+         *     on screen, or behind the camera in one of three ways.
+         * @enum {string}
+         */
+        PersonJob: "acting" | "directing" | "writing" | "producing";
+        /** @description Somebody the catalogue credits, as it keeps them. */
+        PersonRecord: {
+            id: string;
+            /** Format: int64 */
+            tmdbId?: number | null;
+            /** @description `nm0186505`. */
+            imdbId?: string | null;
+            /** Format: int64 */
+            tvdbId?: number | null;
+            name: string;
+            /**
+             * @description What the index files and sorts them under, where it is not their
+             *     name: `Toro, Guillermo del`.
+             */
+            sortName?: string | null;
+            /**
+             * @description Their name in the script of their own language, where it is another
+             *     than the one above: 田中真弓.
+             */
+            originalName?: string | null;
+            /**
+             * Format: int32
+             * @description As TMDB has it — 1 a woman, 2 a man, 3 non-binary — for a language
+             *     that agrees its participles.
+             */
+            gender?: number | null;
+            /** @description `YYYY-MM-DD`. */
+            birthday?: string | null;
+            deathday?: string | null;
+            placeOfBirth?: string | null;
+            biography?: string | null;
+            /** @description Their portrait. */
+            image?: string | null;
+            /** @description A few more of them, in TMDB's order. */
+            photos?: string[];
+            /** @description What TMDB files them under: `Acting`, `Directing`, `Writing`, … */
+            knownFor?: string | null;
+            homepage?: string | null;
+            /** Format: double */
+            popularity?: number | null;
+            /** @description When TMDB was last asked about them; none until their page is read. */
+            refreshedAt?: string | null;
+            /** @description Entered, or put right, by hand: what TMDB says no longer replaces it. */
+            isManual: boolean;
+            /** @description The record this one was merged into, when it was. */
+            mergedInto?: string | null;
+            createdAt: string;
+            updatedAt: string;
+            /** @description The other names they go by. */
+            aliases?: components["schemas"]["PersonAlias"][];
+        };
+        /**
+         * @description Who a credit names, beyond the name it gives.
+         *
+         *     From a source: what it knows of them that a credit has no room for —
+         *     TheTVDB's id for its people, the name in its own script and the gender
+         *     TMDB gives — and what their record is made or completed with when the
+         *     credit is written. Read back: the record the credit is filed under, with
+         *     the ids it is known by, for whoever names them on — the NFO's actors.
+         */
+        PersonRef: {
+            /** @description The person here the credit is filed under. */
+            personId?: string | null;
+            /** Format: int64 */
+            tmdbId?: number | null;
+            imdbId?: string | null;
+            /** Format: int64 */
+            tvdbId?: number | null;
+            originalName?: string | null;
+            /** Format: int32 */
+            gender?: number | null;
+            /** Format: double */
+            popularity?: number | null;
+        };
+        /**
+         * @description One part a person played, or one job they did, on one work — or on one
+         *     episode of it.
+         */
         PersonRole: {
             workId: string;
             creditType: components["schemas"]["CreditType"];
             /** @description The character, or the job title for crew. */
             character?: string | null;
+            /**
+             * @description The credit, which those who keep the catalogue move from one person
+             *     to another by.
+             */
+            creditId: string;
+            /**
+             * Format: int32
+             * @description The episode it is on, where it is on one — a guest's, an episode's
+             *     director's — with its title and the day it aired.
+             */
+            seasonNumber?: number | null;
+            /** Format: int32 */
+            episodeNumber?: number | null;
+            episodeTitle?: string | null;
+            /** @description `YYYY-MM-DD`. */
+            airDate?: string | null;
+        };
+        /** @description What a page is told of a picture this server keeps, beside its address. */
+        Picture: {
+            /**
+             * Format: int32
+             * @description The picture's own size, in pixels: no copy is made wider.
+             */
+            width?: number | null;
+            /** Format: int32 */
+            height?: number | null;
+            /** @description The colour most of it is, `#rrggbb`: painted behind its frame at once. */
+            color?: string | null;
+            /**
+             * @description A sketch of it in two dozen bytes, base64: decoded into a tiny image
+             *     drawn under it until it arrives (evanw/thumbhash).
+             */
+            thumbhash?: string | null;
+            /** @description The widths at which an AVIF copy exists, for a `<picture>` to offer. */
+            avif?: number[];
         };
         /** @description One place of an order made here. */
         PlaceWrite: {
@@ -6003,7 +6750,10 @@ export interface components {
             id: string;
         };
         PlexImage: {
-            /** @description `coverPoster`, `background`, `clearLogo` or `snapshot`. */
+            /**
+             * @description `coverPoster`, `background`, `backgroundSquare`, `clearLogo` or
+             *     `snapshot`.
+             */
             type: string;
             url: string;
             alt?: string | null;
@@ -6986,6 +7736,16 @@ export interface components {
             memory: components["schemas"]["Memory"];
             server?: components["schemas"]["Shared"] | null;
         };
+        /** @description The credits split off, and what the new record is called. */
+        SplitPerson: {
+            /**
+             * @description The credits, by id — `credit_id` on the person's page — that are
+             *     somebody else's.
+             */
+            credits: string[];
+            /** @description That somebody's name; the person's own when left out. */
+            name?: string | null;
+        };
         Started: {
             /** @description The run, as the history files it, once it has one. */
             jobId?: string | null;
@@ -7039,6 +7799,11 @@ export interface components {
          */
         SurfacePolicy: "apikey" | "allowlist" | "open";
         /**
+         * @description Why the survivor is the one the rule names.
+         * @enum {string}
+         */
+        SurvivorRule: "sourced" | "handEdits" | "moreIds" | "older";
+        /**
          * @description What a sync is answered with: what it did, or — for a dry run — what it
          *     would write over.
          */
@@ -7076,12 +7841,12 @@ export interface components {
          * @description Why a task cannot be run now.
          * @enum {string}
          */
-        TaskBlocked: "source_off" | "not_configured" | "running" | "busy" | "media_off" | "no_authority" | "updates_off" | "arr_off";
+        TaskBlocked: "source_off" | "not_configured" | "running" | "busy" | "media_off" | "no_authority" | "updates_off" | "arr_off" | "avif_off";
         /**
          * @description A task, sent under the name the history files its runs by.
          * @enum {string}
          */
-        TaskId: "refresh.sweep" | "refresh.all" | "import.anime" | "import.imdb" | "export.nfo" | "media.store" | "media.sweep" | "tls.renew" | "update.check" | "arr.seed" | "backup.run" | "search.rebuild";
+        TaskId: "refresh.sweep" | "refresh.all" | "import.anime" | "import.imdb" | "export.nfo" | "media.store" | "media.sweep" | "media.variants" | "media.avif" | "tls.renew" | "update.check" | "arr.seed" | "backup.run" | "search.rebuild";
         /** @enum {string} */
         TaskMode: "scheduled" | "manual" | "off";
         TaskState: {
@@ -7179,6 +7944,13 @@ export interface components {
              *     lock or to take what the source says.
              */
             divergingLocks: number;
+            /**
+             * Format: int64
+             * @description Works that look like another one — under one identifier elsewhere,
+             *     under one title within a year, or a film and a series under one IMDb
+             *     id — that nobody said are not: each pair is two of them.
+             */
+            duplicates: number;
         };
         Translation: {
             language: string;
@@ -7221,6 +7993,22 @@ export interface components {
              *     every language.
              */
             language?: string | null;
+        };
+        /** @description What an undo came to. */
+        UnmergeOutcome: {
+            /** @description The work put back, a work of its own again. */
+            restored: string;
+            /** @description The work it had been merged into. */
+            survivor: string;
+            /** @description The identifiers it went without. */
+            taken: components["schemas"]["UnmergeTaken"][];
+        };
+        /** @description An identifier the work put back went without: another work holds it now. */
+        UnmergeTaken: {
+            source: string;
+            value: string;
+            /** @description The work that holds it. */
+            holder: string;
         };
         /** @description A release newer than the version running. */
         UpdateAvailable: {
@@ -7293,6 +8081,30 @@ export interface components {
              *     counted, or every field would name them.
              */
             passed?: string[];
+        };
+        /** @description What the copies made weigh, by what they are written as. */
+        VariantCounts: {
+            /**
+             * Format: int64
+             * @description The WebP copies the interface is given.
+             */
+            webp: number;
+            /** Format: int64 */
+            webpBytes: number;
+            /**
+             * Format: int64
+             * @description The AVIF copies the night's task made.
+             */
+            avif: number;
+            /** Format: int64 */
+            avifBytes: number;
+            /**
+             * Format: int64
+             * @description The squares Plex is given.
+             */
+            jpeg: number;
+            /** Format: int64 */
+            jpegBytes: number;
         };
         WatchProvider: {
             /** Format: int64 */
@@ -7527,6 +8339,20 @@ export interface components {
             regions: string[];
             /** @description Who the data comes from; shown beside it, as TMDB's terms ask. */
             attribution: string;
+        };
+        /** @description One name a merged work went by, as a reader of the survivor is told it. */
+        WorkAlias: {
+            /**
+             * @description `id`, `slug`, or the source of an identifier elsewhere: `tvdb_series`,
+             *     `tmdb_movie`, `imdb`…
+             */
+            source: string;
+            value: string;
+            /** @description The work that answers for it now. */
+            mediaId: string;
+            /** @description The work it named, kept as a tombstone. */
+            mergedId: string;
+            createdAt: string;
         };
         /** @description A work found. */
         WorkHit: {
@@ -8442,6 +9268,75 @@ export interface operations {
                 content?: never;
             };
             /** @description No such space */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    merge_duplicates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DuplicateList"];
+                };
+            };
+            /** @description The caller may not write */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    merge_dismiss: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DismissDuplicateRequest"];
+            };
+        };
+        responses: {
+            /** @description Not proposed again */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The two are one work */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The caller may not write */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such work */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -10051,8 +10946,9 @@ export interface operations {
                 /** @description The TMDB collection a film belongs to. */
                 collection?: number;
                 /**
-                 * @description Somebody the works credit: their TMDB id, or their name — whatever
-                 *     its case and accents, but whole: `Wim Wenders`, not `Wenders`.
+                 * @description Somebody the works credit: their record's id, their TMDB id, or their
+                 *     name — whatever its case and accents, but whole: `Wim Wenders`, not
+                 *     `Wenders`. A credit a lock hides does not count.
                  */
                 person?: string;
                 /**
@@ -10088,8 +10984,9 @@ export interface operations {
                  *     their own, nor one chosen by hand — `overview` — no overview in the
                  *     language they are stored in — `imdb` — no IMDb identifier — and
                  *     `refresh` — never refreshed, though they have an identifier to be
-                 *     refreshed by — and `divergingLock` — a lock a source moved under since
-                 *     it was set, and which says something else now. Several narrow
+                 *     refreshed by — `divergingLock` — a lock a source moved under since
+                 *     it was set, and which says something else now — and `duplicates` —
+                 *     in a pair proposed as one work, and not dismissed. Several narrow
                  *     together: `poster,overview` lists the works lacking both. For those who
                  *     may edit the catalogue, as `refreshFailed`.
                  */
@@ -10350,8 +11247,9 @@ export interface operations {
                 /** @description The TMDB collection a film belongs to. */
                 collection?: number;
                 /**
-                 * @description Somebody the works credit: their TMDB id, or their name — whatever
-                 *     its case and accents, but whole: `Wim Wenders`, not `Wenders`.
+                 * @description Somebody the works credit: their record's id, their TMDB id, or their
+                 *     name — whatever its case and accents, but whole: `Wim Wenders`, not
+                 *     `Wenders`. A credit a lock hides does not count.
                  */
                 person?: string;
                 /**
@@ -10387,8 +11285,9 @@ export interface operations {
                  *     their own, nor one chosen by hand — `overview` — no overview in the
                  *     language they are stored in — `imdb` — no IMDb identifier — and
                  *     `refresh` — never refreshed, though they have an identifier to be
-                 *     refreshed by — and `divergingLock` — a lock a source moved under since
-                 *     it was set, and which says something else now. Several narrow
+                 *     refreshed by — `divergingLock` — a lock a source moved under since
+                 *     it was set, and which says something else now — and `duplicates` —
+                 *     in a pair proposed as one work, and not dismissed. Several narrow
                  *     together: `poster,overview` lists the works lacking both. For those who
                  *     may edit the catalogue, as `refreshFailed`.
                  */
@@ -11405,6 +12304,142 @@ export interface operations {
             };
         };
     };
+    merge_preview: {
+        parameters: {
+            query: {
+                /** @description The work it would be merged into: the one that stays. */
+                into: string;
+            };
+            header?: never;
+            path: {
+                /** @description The work that would be merged into the other */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MergePreview"];
+                };
+            };
+            /** @description The two are one work */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The caller may not write */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such work */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A film and a series, or one of the two merged already */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    merge_merge_into: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The work merged into the other: the one that becomes a tombstone */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MergeRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MergeOutcome"];
+                };
+            };
+            /** @description The two are one work, or a field is not kept from either side, or the merged work's value of one cannot be kept */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The caller may not write */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such work */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A film and a series, or one of the two merged already */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    merge_merges: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The survivor */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MergeList"];
+                };
+            };
+            /** @description The caller may not write */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     export_item_nfo: {
         parameters: {
             query?: never;
@@ -12326,6 +13361,56 @@ export interface operations {
             };
         };
     };
+    merge_unmerge: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The merged work: the tombstone */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnmergeOutcome"];
+                };
+            };
+            /** @description The caller may not write */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No work by that id was merged into another */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The work it was merged into was merged in its turn: that merge is undone first */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The window to undo it is closed, undos are not kept, or the work it was merged into is gone */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     watch_where_to_watch: {
         parameters: {
             query?: {
@@ -13167,16 +14252,120 @@ export interface operations {
             };
         };
     };
-    browse_person: {
+    people_index: {
         parameters: {
             query?: {
-                /** @description Titles in this language, where a translation is held. */
+                /**
+                 * @description `A` to `Z`, or `#` for the names that start with anything else —
+                 *     the name they sort by, its accent and case aside.
+                 */
+                letter?: string;
+                /**
+                 * @description `acting`, `directing`, `writing` or `producing`: those who did it,
+                 *     with the works they did it on.
+                 */
+                job?: string;
+                /** @description `works` — the most works first, the default — or `name`. */
+                sort?: string;
+                /**
+                 * @description For those who keep the catalogue: a part of a name, theirs or one they
+                 *     go by, accents and case aside.
+                 */
+                term?: string;
+                /**
+                 * @description For those who keep the catalogue: everybody, credited on anything or
+                 *     not.
+                 */
+                all?: boolean;
+                /** @description For those who keep the catalogue: only those known by no TMDB id. */
+                withoutTmdb?: boolean;
+                /**
+                 * @description For those who keep the catalogue: only those who share a name — theirs
+                 *     or one they go by — with somebody else: the likely homonyms and the
+                 *     likely duplicates.
+                 */
+                homonyms?: boolean;
+                /** @description From 1 to 200; 60 when left out. */
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PeoplePage"];
+                };
+            };
+            /** @description A letter, a job or an order this index does not know */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    people_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EnteredPerson"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PersonId"];
+                };
+            };
+            /** @description No name, or an id, a day or an address that is not one */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The caller may not write */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Another record holds that TMDB id */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    people_page: {
+        parameters: {
+            query?: {
+                /** @description Titles, and the biography, in this language where one is held. */
                 language?: string;
             };
             header?: never;
             path: {
-                /** @description The person's TMDB id */
-                tmdb_id: number;
+                /** @description The person's record id, or their TMDB id */
+                id: string;
             };
             cookie?: never;
         };
@@ -13190,7 +14379,202 @@ export interface operations {
                     "application/json": components["schemas"]["Person"];
                 };
             };
-            /** @description Nobody by that id is credited on a work held here */
+            /** @description Nobody by that id is credited on a work the caller may see */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    people_update: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The person's record id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EnteredPerson"];
+            };
+        };
+        responses: {
+            /** @description Put right */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No name, or an id, a day or an address that is not one */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The caller may not write */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such record, or one merged into another */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Another record holds that TMDB id */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    people_attach: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The record the credits are filed under */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AttachCredits"];
+            };
+        };
+        responses: {
+            /** @description Filed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No credit, or one that does not exist */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The caller may not write */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such record, or one merged into another */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    people_merge: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The record merged away */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MergePerson"];
+            };
+        };
+        responses: {
+            /** @description The record kept */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PersonId"];
+                };
+            };
+            /** @description A record merged into itself */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The caller may not write */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Either record does not exist, or was merged already */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    people_split: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The record the credits are taken from */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SplitPerson"];
+            };
+        };
+        responses: {
+            /** @description The new record */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PersonId"];
+                };
+            };
+            /** @description No credit, or one that is not this person's */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The caller may not write */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such record, or one merged into another */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -13640,7 +15024,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Its source or its switch is off: no media store, no export path, no certificate of the server's own, the check for a newer version off, neither Sonarr nor Radarr connected */
+            /** @description Its source or its switch is off: no media store, no export path, no certificate of the server's own, the check for a newer version off, neither Sonarr nor Radarr connected, the AVIF copies off */
             503: {
                 headers: {
                     [name: string]: unknown;

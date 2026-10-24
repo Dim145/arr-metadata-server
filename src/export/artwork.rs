@@ -16,12 +16,18 @@
 //! | the specials' | `season-specials-poster.jpg` | the same |
 //! | an episode's still | `S01E01-thumb.jpg` | `S01E01.jpg` |
 //! | banner, clear art, landscape | `banner.jpg`, `clearart.png`, `landscape.jpg` | not read |
+//! | key art, disc art, character art | `keyart.jpg`, `discart.png`, `characterart.png` | not read |
 //!
 //! Where the names differ the picture is written once, under Kodi's, and the
 //! other is a hard link to it: the same bytes on the disk, which a second
 //! copy would double — a library's stills are thousands of files. A disk that
 //! cannot link (a network share, FAT) is given a copy instead, which is the
-//! one case that costs the space.
+//! one case that costs the space. The disc art goes by Emby's name as well,
+//! `disc.png`, which Jellyfin reads too; tinyMediaManager and Kodi read
+//! `discart.png`.
+//!
+//! Key art is a file and nothing else: the documents never name it, since
+//! Jellyfin reads any `<thumb>` it does not know as the work's poster.
 //!
 //! Cast headshots go in `.actors/`, and the theme beside the show as
 //! `theme.mp3`, where both programs and Jellyfin look for them.
@@ -93,11 +99,13 @@ pub fn plan(item: &MediaItem) -> Vec<Download> {
 
         let extension = extension(&image.url);
         // Plex reads a season's poster as `seasonNN.jpg`, where Kodi reads
-        // `seasonNN-poster.jpg`; the specials' is the same for both.
+        // `seasonNN-poster.jpg`; the specials' is the same for both. Emby
+        // reads a disc's art as `disc`, where Kodi reads `discart`.
         let aliases = match (image.cover_type, season) {
             (CoverType::Poster, Some(number)) if number > 0 => {
                 vec![format!("{folder}/season{number:02}.{extension}")]
             }
+            (CoverType::Discart, None) => vec![format!("{folder}/disc.{extension}")],
             _ => Vec::new(),
         };
 
@@ -199,6 +207,9 @@ fn file_stem(cover: CoverType, season: Option<i32>) -> Option<String> {
         CoverType::Clearlogo => "clearlogo",
         CoverType::Clearart => "clearart",
         CoverType::Landscape => "landscape",
+        CoverType::Keyart => "keyart",
+        CoverType::Discart => "discart",
+        CoverType::Characterart => "characterart",
         // A headshot outside a credit, and a still outside an episode, belong to
         // nothing a consumer would look for.
         CoverType::Screenshot | CoverType::Headshot | CoverType::Unknown => return None,
@@ -680,6 +691,94 @@ mod tests {
             file_stem(CoverType::Fanart, Some(3)).as_deref(),
             Some("season03-fanart")
         );
+    }
+
+    /// Key art lands as `keyart.jpg` and disc art as `discart.png`, which
+    /// Emby reads as `disc.png`; neither is named in the document, where
+    /// Jellyfin would take key art for the poster.
+    #[test]
+    fn key_art_and_disc_art_land_under_their_names_and_nowhere_else() {
+        let mut film = MediaItem::empty(MediaKind::Movie);
+        film.slug = "the-matrix-1999".into();
+        film.title = "The Matrix".into();
+        film.images = vec![
+            image(CoverType::Poster, None, "https://x.invalid/p.jpg"),
+            image(CoverType::Keyart, None, "https://x.invalid/k.jpg"),
+            image(CoverType::Keyart, None, "https://x.invalid/k2.jpg"),
+            image(CoverType::Discart, None, "https://x.invalid/d.png"),
+        ];
+        let named: Vec<(String, Vec<String>)> = plan(&film)
+            .into_iter()
+            .map(|d| (d.path, d.aliases))
+            .collect();
+        assert_eq!(
+            named,
+            [
+                ("movies/the-matrix-1999/poster.jpg".to_string(), vec![]),
+                ("movies/the-matrix-1999/keyart.jpg".to_string(), vec![]),
+                (
+                    "movies/the-matrix-1999/discart.png".to_string(),
+                    vec!["movies/the-matrix-1999/disc.png".to_string()]
+                ),
+            ]
+        );
+
+        let document = crate::export::nfo::for_item(&film);
+        assert!(document.contains("<thumb aspect=\"poster\">https://x.invalid/p.jpg</thumb>"));
+        for absent in ["keyart", "discart", "k.jpg", "d.png"] {
+            assert!(!document.contains(absent), "{absent} in {document}");
+        }
+    }
+
+    /// A series' character art is `characterart.png` beside its clear art,
+    /// and, like it, named by no document.
+    #[test]
+    fn character_art_lands_beside_the_clear_art() {
+        let mut item = series();
+        item.images = vec![
+            image(CoverType::Clearart, None, "https://x.invalid/clear.png"),
+            image(
+                CoverType::Characterart,
+                None,
+                "https://x.invalid/walter.png",
+            ),
+        ];
+        let paths: Vec<String> = plan(&item).into_iter().map(|d| d.path).collect();
+        assert_eq!(
+            paths,
+            [
+                "series/breaking-bad-2008/clearart.png",
+                "series/breaking-bad-2008/characterart.png"
+            ]
+        );
+        assert!(!crate::export::nfo::for_item(&item).contains("walter.png"));
+    }
+
+    /// One document per episode, as Kodi 22 reads them: never two
+    /// `<episodedetails>` in one file.
+    #[test]
+    fn each_episode_has_a_document_of_its_own() {
+        let mut item = series();
+        item.episodes = vec![
+            crate::db::repo::child::blank_episode(1, 1),
+            crate::db::repo::child::blank_episode(1, 2),
+        ];
+        let paths: Vec<String> = item
+            .episodes
+            .iter()
+            .map(|episode| crate::export::nfo::episode_relative_path(&item, episode))
+            .collect();
+        assert_eq!(
+            paths,
+            [
+                "series/breaking-bad-2008/Season 01/S01E01.nfo",
+                "series/breaking-bad-2008/Season 01/S01E02.nfo"
+            ]
+        );
+        for episode in &item.episodes {
+            let document = crate::export::nfo::for_episode(&item, episode, &[]);
+            assert_eq!(document.matches("<episodedetails>").count(), 1);
+        }
     }
 
     #[test]

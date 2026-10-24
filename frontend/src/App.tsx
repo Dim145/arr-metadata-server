@@ -25,6 +25,7 @@ const named = <K extends string>(load: () => Promise<Record<K, React.ComponentTy
 const Season = named(() => import('./routes/Season'), 'Season')
 const Episode = named(() => import('./routes/Episode'), 'Episode')
 const Person = named(() => import('./routes/Person'), 'Person')
+const People = named(() => import('./routes/People'), 'People')
 const Calendar = named(() => import('./routes/Calendar'), 'Calendar')
 const Seasons = named(() => import('./routes/Seasons'), 'Seasons')
 const Lists = named(() => import('./routes/Lists'), 'Lists')
@@ -42,6 +43,7 @@ const UserDetail = named(() => import('./routes/admin/UserDetail'), 'UserDetail'
 const AdminShell = named(() => import('./components/AdminShell'), 'AdminShell')
 const Dashboard = named(() => import('./routes/admin/Dashboard'), 'Dashboard')
 const Catalogue = named(() => import('./routes/admin/Catalogue'), 'Catalogue')
+const AdminPeople = named(() => import('./routes/admin/People'), 'People')
 const WorkEditor = named(() => import('./routes/admin/WorkEditor'), 'WorkEditor')
 const Discover = named(() => import('./routes/admin/Discover'), 'Discover')
 const Clients = named(() => import('./routes/admin/Clients'), 'Clients')
@@ -117,7 +119,11 @@ function Router() {
           <Route path="/work/:id" element={<Work />} />
           <Route path="/work/:id/season/:season" element={<Season />} />
           <Route path="/work/:id/season/:season/episode/:episode" element={<Episode />} />
+          {/* One page for a person, by their record or by TMDB's id, as the
+              pages were addressed before there were records. */}
           <Route path="/person/:tmdbId" element={<Person />} />
+          <Route path="/people" element={<People />} />
+          <Route path="/people/:id" element={<Person />} />
           <Route path="/calendar" element={<Calendar />} />
           <Route path="/lists" element={<Lists />} />
           <Route path="/stats" element={<Figures />} />
@@ -140,6 +146,7 @@ function Router() {
           <Route index element={<Dashboard />} />
           <Route path="catalogue" element={<Catalogue />} />
           <Route path="catalogue/:id" element={<WorkEditor />} />
+          <Route path="people" element={<AdminPeople />} />
           <Route path="discover" element={<Discover />} />
           <Route path="clients" element={<Clients />} />
           <Route path="users" element={<Users />} />

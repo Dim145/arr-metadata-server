@@ -35,8 +35,10 @@ const ALSO_TRACKED: &[&str] = &["popularity", "credits", "relations"];
 pub const STORED: &str = "stored";
 
 /// The lists the merge gathers from every source rather than takes whole
-/// from one: see `merge::union_keywords`.
-const GATHERED: &[&str] = &["keywords"];
+/// from one: the keywords (see `merge::union_keywords`), and the credits,
+/// one source's cast with TheTVDB's characters matched into it and those it
+/// lacks added after (`rules::merge_cast`).
+const GATHERED: &[&str] = &["keywords", "credits"];
 
 /// Whether a source's list holds any of what was kept, the two compared as
 /// [`normalized`] leaves them.
@@ -278,7 +280,7 @@ pub fn view(provider: &str, item: &MediaItem) -> View {
     let values = tracked()
         .filter_map(|name| {
             let value = json.get(name)?;
-            (!is_empty(value)).then(|| (name, normalized(value)))
+            (!is_empty(value)).then(|| (name, compared(name, value)))
         })
         .collect();
 
@@ -310,7 +312,7 @@ pub fn attribute(merged: &MediaItem, views: &[View]) -> Provenance {
         let Some(kept) = json.get(name).filter(|v| !is_empty(v)) else {
             continue;
         };
-        let kept = normalized(kept);
+        let kept = compared(name, kept);
         // A list gathered from every source is no one source's: each that
         // gave any of it gave it, the first of them first.
         let gathered = GATHERED.contains(&name);
@@ -1242,6 +1244,26 @@ fn is_empty(value: &serde_json::Value) -> bool {
 
 /// Compared without regard to case or the spaces around it: "Ended" and
 /// "ended" are one answer.
+/// A value as it is compared with another source's: [`normalized`], but for
+/// the credits, which each source files under ids of its own and which the
+/// merge completes — compared by what each is, a part and whose name.
+fn compared(name: &str, value: &serde_json::Value) -> serde_json::Value {
+    match (name, value) {
+        ("credits", serde_json::Value::Array(credits)) => credits
+            .iter()
+            .map(|credit| {
+                let field = |key: &str| credit.get(key).and_then(|v| v.as_str()).unwrap_or("");
+                serde_json::Value::String(format!(
+                    "{}|{}",
+                    field("creditType"),
+                    field("personName").trim().to_lowercase()
+                ))
+            })
+            .collect(),
+        _ => normalized(value),
+    }
+}
+
 fn normalized(value: &serde_json::Value) -> serde_json::Value {
     match value {
         serde_json::Value::String(s) => serde_json::Value::String(s.trim().to_lowercase()),
@@ -1810,6 +1832,59 @@ mod tests {
         assert_eq!(keywords.from, "tmdb");
         assert_eq!(keywords.agreed, ["anilist"]);
         assert!(keywords.differed.is_empty());
+    }
+
+    /// The cast is one source's, TheTVDB's characters matched into it and
+    /// those it lacks added after: given by the first, TheTVDB beside it,
+    /// whatever ids each files its credits under.
+    #[test]
+    fn the_credits_name_every_source_that_gave_some() {
+        let actor = |name: &str, tmdb: Option<i64>| Credit {
+            id: crate::db::new_id(),
+            credit_type: crate::domain::CreditType::Actor,
+            person_name: name.into(),
+            character_name: None,
+            image: None,
+            tmdb_person_id: tmdb,
+            credit_tmdb_id: None,
+            sort_order: 0,
+            is_manual: false,
+        };
+        let mut tmdb = item("Breaking Bad", None, None);
+        tmdb.credits = vec![
+            actor("Bryan Cranston", Some(17419)),
+            actor("Aaron Paul", Some(84497)),
+        ];
+        let mut tvdb = item("Breaking Bad", None, None);
+        let mut walter = actor("Bryan Cranston", None);
+        walter.character_name = Some("Walter White".into());
+        let mut gus = actor("Giancarlo Esposito", None);
+        gus.character_name = Some("Gus Fring".into());
+        for (credit, id) in [(&walter, 10), (&gus, 40)] {
+            tvdb.people.by_credit.insert(
+                credit.id.clone(),
+                crate::domain::person::PersonRef {
+                    tvdb_id: Some(id),
+                    ..Default::default()
+                },
+            );
+        }
+        tvdb.credits = vec![walter, gus];
+
+        let (merged, provenance) = merge(vec![("tmdb", tmdb), ("tvdb", tvdb)]);
+        let names: Vec<&str> = merged
+            .credits
+            .iter()
+            .map(|c| c.person_name.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            ["Bryan Cranston", "Aaron Paul", "Giancarlo Esposito"]
+        );
+        let credits = &provenance.fields["credits"];
+        assert_eq!(credits.from, "tmdb");
+        assert_eq!(credits.agreed, ["tvdb"]);
+        assert!(credits.differed.is_empty());
     }
 
     /// A sync from one source hands the others their countries back, and

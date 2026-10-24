@@ -17,6 +17,7 @@ pub mod gather;
 pub mod ids;
 pub mod language;
 pub mod listing;
+pub mod merge;
 pub mod movie;
 pub mod orders;
 pub mod scene;
@@ -53,6 +54,16 @@ pub async fn load(state: &AppState, id: &str) -> Result<Option<MediaItem>> {
         // A cache entry that no longer deserializes means the model changed
         // under us; drop it and fall through to the database.
         state.caches.items.invalidate(&cache_key).await;
+    }
+
+    // An id, or an address, a merge folded into another work answers with
+    // that work, read under its own key: nothing is kept under the old one,
+    // which the survivor's writes would never reach. Looked for only once
+    // the cache has missed, so a work read again costs nothing more.
+    if let Some(survivor) = repo::alias::for_address(&state.db, id).await?
+        && survivor != id
+    {
+        return Box::pin(load(state, &survivor)).await;
     }
 
     // The caches' marks as the read begins. A write that lands while the

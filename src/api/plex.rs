@@ -666,8 +666,10 @@ async fn held_whole(state: &AppState, item: &MediaItem) -> AppResult<Option<Medi
 /// with its locks: read from the store alone, and nothing fetched — not even
 /// when it is due again.
 async fn held_as(state: &AppState, kind: MediaKind, work: &Work) -> AppResult<Option<MediaItem>> {
+    // The work holding the id, or the one a merge folded the holder into:
+    // Plex keeps the key it was handed, and is answered under it.
     let by = |source: ExternalSource, value: String| async move {
-        repo::item::find_id_by_external(&state.db, source, &value).await
+        repo::alias::work_for_external(&state.db, source, &value).await
     };
     let id = match work {
         Work::Held(id) => Some(id.clone()),
@@ -1599,6 +1601,73 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
+    }
+
+    /// Plex keeps the rating key it was handed: a work merged into another
+    /// answers under it — by its TMDB id, its TheTVDB id or its own — with
+    /// the survivor; a match by the merged work's id finds the survivor, under
+    /// the survivor's own key.
+    #[tokio::test]
+    async fn a_work_merged_into_another_answers_under_the_key_plex_kept() {
+        let state = server().await;
+        let matrix = the_matrix(&state).await;
+        let held = kenshin(&state).await;
+        let mut copy = MediaItem::empty(MediaKind::Movie);
+        copy.title = "Matrix, The".into();
+        copy.slug = "matrix-the".into();
+        copy.year = Some(1999);
+        copy.external_ids = ExternalIds {
+            tmdb: Some(604_000),
+            ..Default::default()
+        };
+        let mut twin = MediaItem::empty(MediaKind::Series);
+        twin.title = "Kenshin".into();
+        twin.slug = "kenshin".into();
+        twin.external_ids = ExternalIds {
+            tvdb: Some(999_002),
+            ..Default::default()
+        };
+        for work in [&copy, &twin] {
+            store(&state, work).await;
+        }
+        for (merged, into) in [(&copy.id, &matrix.id), (&twin.id, &held.id)] {
+            crate::service::merge::merge(
+                &state,
+                &crate::service::merge::Asker { by: None, ip: None },
+                merged,
+                into,
+                Default::default(),
+            )
+            .await
+            .expect("asked")
+            .expect("merged");
+        }
+
+        for key in [
+            "movie-tmdb-604000".to_string(),
+            format!("movie-id-{}", copy.id),
+        ] {
+            let (status, answer) = ask(&state, &format!("/plex/library/metadata/{key}"), &[]).await;
+            assert_eq!(status, StatusCode::OK, "{key}: {answer}");
+            let item = &answer["MediaContainer"]["Metadata"][0];
+            assert_eq!(item["ratingKey"], key.as_str());
+            assert_eq!(item["title"], "The Matrix");
+        }
+        let (status, answer) = ask(
+            &state,
+            "/plex/library/metadata/show-tvdb-999002/children",
+            &[],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{answer}");
+        assert_eq!(
+            answer["MediaContainer"]["totalSize"], 2,
+            "the survivor's seasons"
+        );
+
+        let found = matched(&state, json!({ "type": 1, "guid": "tmdb://604000" })).await;
+        assert_eq!(found["size"], 1, "{found}");
+        assert_eq!(found["Metadata"][0]["ratingKey"], "movie-tmdb-603");
     }
 
     #[tokio::test]
