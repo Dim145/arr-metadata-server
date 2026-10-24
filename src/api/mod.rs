@@ -9,6 +9,7 @@
 pub mod anilist;
 pub mod audit;
 pub mod extract;
+pub mod merged;
 pub mod native;
 pub mod plex;
 pub mod radarr;
@@ -162,6 +163,8 @@ pub fn build(state: AppState) -> (Router<AppState>, utoipa::openapi::OpenApi) {
     let router = Router::new()
         .merge(
             native
+                // Inside the guard: only a caller let in learns a work was merged.
+                .layer(from_fn_with_state(state.clone(), merged::refuse_writes))
                 .layer(from_fn_with_state(state.clone(), guards::guard_native))
                 .layer(from_fn_with_state(
                     state.clone(),

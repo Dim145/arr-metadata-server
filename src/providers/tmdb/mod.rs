@@ -653,6 +653,8 @@ mod tests {
                     vote_average: None,
                     vote_count: None,
                     episode_type: None,
+                    guest_stars: Vec::new(),
+                    crew: Vec::new(),
                 })
                 .collect(),
         }

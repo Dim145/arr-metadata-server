@@ -7,7 +7,9 @@ use crate::{
     db::repo,
     domain::{ExternalSource, MediaItem, MediaKind},
     providers::{self, names, skyhook, tmdb::map as tmdb_map},
-    service::{FETCHING, Found, cached_search, gather, held, ids, load, local, or_held, persist},
+    service::{
+        FETCHING, Found, cached_search, gather, held, ids, load, local, merge, or_held, persist,
+    },
     state::AppState,
 };
 
@@ -43,6 +45,13 @@ pub async fn by_client_id(state: &AppState, requested_id: i64) -> Result<Option<
 pub async fn by_tvdb_id(state: &AppState, tvdb_id: i64) -> Result<Option<MediaItem>> {
     let value = tvdb_id.to_string();
     if let Some(item) = local(state, ExternalSource::TvdbSeries, &value).await? {
+        return Ok(Some(item));
+    }
+    // An id a merge folded into another series is that series', as it is
+    // held: fetched again by it, it would be stored as a series anew.
+    if let Some(item) =
+        merge::aliased(state, MediaKind::Series, ExternalSource::TvdbSeries, &value).await?
+    {
         return Ok(Some(item));
     }
 
@@ -158,6 +167,17 @@ pub async fn by_tmdb_id(state: &AppState, tmdb_id: i64) -> Result<Option<MediaIt
     if let Some(item) = local(state, ExternalSource::TmdbTv, &tmdb_id.to_string()).await? {
         return Ok(Some(item));
     }
+    // One a merge folded into another series: see `by_tvdb_id`.
+    if let Some(item) = merge::aliased(
+        state,
+        MediaKind::Series,
+        ExternalSource::TmdbTv,
+        &tmdb_id.to_string(),
+    )
+    .await?
+    {
+        return Ok(Some(item));
+    }
 
     let _fetching = FETCHING.lock(&format!("series:tmdb:{tmdb_id}")).await;
     if let Some(item) = local(state, ExternalSource::TmdbTv, &tmdb_id.to_string()).await? {
@@ -178,6 +198,12 @@ pub async fn by_tmdb_id(state: &AppState, tmdb_id: i64) -> Result<Option<MediaIt
 pub async fn by_imdb_id(state: &AppState, imdb_id: &str) -> Result<Option<MediaItem>> {
     if let Some(item) = local(state, ExternalSource::Imdb, imdb_id).await?
         && item.kind == MediaKind::Series
+    {
+        return Ok(Some(item));
+    }
+    // One a merge folded into another series: see `by_tvdb_id`.
+    if let Some(item) =
+        merge::aliased(state, MediaKind::Series, ExternalSource::Imdb, imdb_id).await?
     {
         return Ok(Some(item));
     }
@@ -238,10 +264,19 @@ pub async fn by_fankai_id(state: &AppState, fankai_id: i64) -> Result<Option<Med
     // the source was on is served as it was, however old, rather than going
     // missing from Sonarr the day its refresh falls due.
     if !state.flag("fankai.enabled", false) {
-        return held(state, ExternalSource::Fankai, &value).await;
+        if let Some(item) = held(state, ExternalSource::Fankai, &value).await? {
+            return Ok(Some(item));
+        }
+        return merge::aliased(state, MediaKind::Series, ExternalSource::Fankai, &value).await;
     }
 
     if let Some(item) = local(state, ExternalSource::Fankai, &value).await? {
+        return Ok(Some(item));
+    }
+    // One a merge folded into another series: see `by_tvdb_id`.
+    if let Some(item) =
+        merge::aliased(state, MediaKind::Series, ExternalSource::Fankai, &value).await?
+    {
         return Ok(Some(item));
     }
 
@@ -295,7 +330,10 @@ async fn by_anime_id(
             .await?
             .filter(|item| item.kind == MediaKind::Series)
             .and_then(|item| client_id(&item)),
-        None => None,
+        // An entry a merge folded into another series: that one's.
+        None => merge::aliased(state, MediaKind::Series, source, &value)
+            .await?
+            .and_then(|item| client_id(&item)),
     };
 
     let requested_id = match stored {

@@ -7,11 +7,16 @@
 //! reads each time it runs, so the table always says what the next merge will
 //! do.
 
+use std::collections::BTreeMap;
+
 use serde::Serialize;
 use utoipa::ToSchema;
 
 use crate::{
-    domain::MediaKind,
+    domain::{
+        Credit, MediaKind,
+        person::{People, PersonRef},
+    },
     providers::names::{
         ANILIST, FANART, FANKAI, FANKAI_WIKI, MAL, RADARR, SKYHOOK, TMDB, TVDB, TVMAZE,
     },
@@ -221,7 +226,19 @@ const LINES: &[Line] = &[
     ),
     line(Classification, "isAdult", Either, &[TMDB, ANILIST, MAL]),
     // People and pictures
-    line(People, "credits", Whole, &[TMDB, SKYHOOK, RADARR, FANKAI]),
+    line(
+        People,
+        "credits",
+        Whole,
+        &[TMDB, TVDB, SKYHOOK, RADARR, FANKAI],
+    ),
+    // TheTVDB's characters are matched into the list, whoever gave it: see
+    // `merge_cast`.
+    line(People, "castMatched", Union, &[TVDB]),
+    only(
+        line(People, "episodeCredits", First, &[TMDB]),
+        MediaKind::Series,
+    ),
     with_authorities(
         line(People, "studio", First, &[TMDB, RADARR, ANILIST, MAL]),
         STUDIO_AUTHORITIES,
@@ -283,6 +300,167 @@ const LINES: &[Line] = &[
         MediaKind::Series,
     ),
 ];
+
+/// The cast and crew as the merge makes them, one provider's into another's
+/// (`fold`): the list of the first that has one, whole, as before — nothing
+/// tells two providers' people apart well enough to blend two lists — with
+/// TheTVDB's characters matched into it, whoever gave it.
+///
+/// TheTVDB's credits are told by the people id they carry (`people`) where
+/// they name no TMDB id. They stand for nobody's cast: when they are all the
+/// list holds — TheTVDB ahead of the others in the priority — the next list
+/// that is not theirs is the list, and they are matched into it. Each is
+/// matched to the list's credit of the same kind for the same person — by
+/// TMDB's id where both give one, else by name, accents, case and the order
+/// of its words aside, or by the name the list's credit gives in its own
+/// script — and completes it: TheTVDB's id of the person, a character or a
+/// portrait it had none of. Unmatched, it is added after the list, in
+/// TheTVDB's order — a part TMDB's cast was cut short of, a series TMDB does
+/// not list the cast of — given the TMDB id of the guest of an episode it is,
+/// where one is. Everybody else's credits are dropped, as before.
+///
+/// The credits of single episodes are the first provider's to have any.
+pub fn merge_cast(
+    credits: &mut Vec<Credit>,
+    people: &mut People,
+    other_credits: Vec<Credit>,
+    other: People,
+) {
+    let People {
+        episodes,
+        by_credit: mut known,
+    } = other;
+    if people.episodes.is_empty() && !episodes.is_empty() {
+        for given in &episodes {
+            if let Some(person) = known.remove(&given.credit.id) {
+                people.by_credit.insert(given.credit.id.clone(), person);
+            }
+        }
+        people.episodes = episodes;
+    }
+
+    let (theirs, characters): (Vec<Credit>, Vec<Credit>) = other_credits
+        .into_iter()
+        .partition(|c| !is_character(c, &known));
+    let ours_are_characters =
+        !credits.is_empty() && credits.iter().all(|c| is_character(c, &people.by_credit));
+
+    if credits.is_empty() || (ours_are_characters && !theirs.is_empty()) {
+        // Their list is the list; TheTVDB's characters held so far are
+        // matched into it with theirs.
+        let held = std::mem::take(credits);
+        let mut held_known = BTreeMap::new();
+        for credit in &held {
+            if let Some(person) = people.by_credit.remove(&credit.id) {
+                held_known.insert(credit.id.clone(), person);
+            }
+        }
+        for credit in &theirs {
+            if let Some(person) = known.remove(&credit.id) {
+                people.by_credit.insert(credit.id.clone(), person);
+            }
+        }
+        *credits = theirs;
+        match_in(credits, people, held, held_known);
+    }
+    match_in(credits, people, characters, known);
+}
+
+/// Whether a credit is one of TheTVDB's characters: a TheTVDB people id, and
+/// no TMDB id.
+fn is_character(credit: &Credit, known: &BTreeMap<String, PersonRef>) -> bool {
+    credit.tmdb_person_id.is_none() && known.get(&credit.id).is_some_and(|p| p.tvdb_id.is_some())
+}
+
+/// Match TheTVDB's characters into the list, adding those it lacks after it.
+fn match_in(
+    credits: &mut Vec<Credit>,
+    people: &mut People,
+    characters: Vec<Credit>,
+    mut known: BTreeMap<String, PersonRef>,
+) {
+    let mut next = credits
+        .iter()
+        .map(|c| c.sort_order)
+        .max()
+        .map_or(0, |n| n.saturating_add(1));
+    for mut theirs in characters {
+        let Some(their_person) = known.remove(&theirs.id) else {
+            continue;
+        };
+        let matched = credits.iter_mut().find(|ours| {
+            ours.credit_type == theirs.credit_type
+                && same_person(ours, people.of(ours), &theirs, Some(&their_person))
+        });
+        match matched {
+            Some(ours) => {
+                let person = people.by_credit.entry(ours.id.clone()).or_default();
+                person.tvdb_id = person.tvdb_id.or(their_person.tvdb_id);
+                if ours.character_name.is_none() {
+                    ours.character_name = theirs.character_name;
+                }
+                if ours.image.is_none() {
+                    ours.image = theirs.image;
+                }
+            }
+            None => {
+                // A guest of an episode TMDB names is the same person by
+                // the same name on the same series.
+                if theirs.tmdb_person_id.is_none()
+                    && let Some(guest) = people.episodes.iter().find(|e| {
+                        e.credit.tmdb_person_id.is_some()
+                            && same_person(
+                                &e.credit,
+                                people.of(&e.credit),
+                                &theirs,
+                                Some(&their_person),
+                            )
+                    })
+                {
+                    theirs.tmdb_person_id = guest.credit.tmdb_person_id;
+                }
+                theirs.sort_order = next;
+                next = next.saturating_add(1);
+                people.by_credit.insert(theirs.id.clone(), their_person);
+                credits.push(theirs);
+            }
+        }
+    }
+}
+
+/// Whether two providers' credits name one person: the same TMDB id where
+/// both give one; else the same name, its accents, its case and the order
+/// of its words aside — TheTVDB writes some Japanese names family name
+/// first where TMDB does not — or the name one gives in its own script
+/// being the other's.
+fn same_person(
+    ours: &Credit,
+    our_person: Option<&PersonRef>,
+    theirs: &Credit,
+    their_person: Option<&PersonRef>,
+) -> bool {
+    if let (Some(a), Some(b)) = (ours.tmdb_person_id, theirs.tmdb_person_id) {
+        return a == b;
+    }
+    let words = |name: &str| {
+        let mut words: Vec<String> = crate::search::norm(name)
+            .split_whitespace()
+            .map(str::to_string)
+            .collect();
+        words.sort_unstable();
+        words
+    };
+    let theirs_named = words(&theirs.person_name);
+    if theirs_named.is_empty() {
+        return false;
+    }
+    std::iter::once(ours.person_name.as_str())
+        .chain(our_person.and_then(|p| p.original_name.as_deref()))
+        .any(|name| words(name) == theirs_named)
+        || their_person
+            .and_then(|p| p.original_name.as_deref())
+            .is_some_and(|name| words(name) == words(&ours.person_name))
+}
 
 /// A row as the page draws it.
 #[derive(Serialize, ToSchema)]
@@ -380,6 +558,7 @@ pub fn laid_out(priority: &[String]) -> Vec<Laid> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::CreditType;
 
     fn priority() -> Vec<String> {
         [
@@ -445,6 +624,190 @@ mod tests {
                 .contains("twice")
         );
         assert!(parse_priority(" , ").is_err());
+    }
+
+    fn credit(kind: CreditType, name: &str, tmdb: Option<i64>) -> Credit {
+        Credit {
+            id: crate::db::new_id(),
+            credit_type: kind,
+            person_name: name.into(),
+            character_name: None,
+            image: None,
+            tmdb_person_id: tmdb,
+            credit_tmdb_id: None,
+            sort_order: 0,
+            is_manual: false,
+        }
+    }
+
+    /// TheTVDB's credit of somebody, with its id of them.
+    fn tvdb(name: &str, id: i64, character: &str, people: &mut People) -> Credit {
+        let mut c = credit(CreditType::Actor, name, None);
+        c.character_name = Some(character.into());
+        c.image = Some(format!("https://tvdb/{id}.jpg"));
+        people.by_credit.insert(
+            c.id.clone(),
+            PersonRef {
+                tvdb_id: Some(id),
+                ..PersonRef::default()
+            },
+        );
+        c
+    }
+
+    #[test]
+    fn thetvdb_s_people_are_matched_into_the_cast_and_the_others_added_after_it() {
+        let mut ours = vec![
+            credit(CreditType::Actor, "Bryan Cranston", Some(17419)),
+            credit(CreditType::Actor, "Mayumi Tanaka", Some(1)),
+            credit(CreditType::Director, "Vince Gilligan", Some(66633)),
+        ];
+        ours[1].sort_order = 7;
+        let mut people = People::default();
+        people.by_credit.insert(
+            ours[1].id.clone(),
+            PersonRef {
+                original_name: Some("田中真弓".into()),
+                ..PersonRef::default()
+            },
+        );
+
+        let mut theirs_people = People::default();
+        let theirs = vec![
+            tvdb("bryan cranston", 10, "Walter White", &mut theirs_people),
+            tvdb("Tanaka Mayumi", 20, "Luffy", &mut theirs_people),
+            tvdb("田中真弓", 21, "Luffy", &mut theirs_people),
+            tvdb("Aaron Paul", 30, "Jesse Pinkman", &mut theirs_people),
+            // Skyhook's, say, with no TheTVDB id: one list, not a blend.
+            credit(CreditType::Actor, "Someone Else", None),
+        ];
+        merge_cast(&mut ours, &mut people, theirs, theirs_people);
+
+        let read: Vec<(&str, Option<&str>, i32)> = ours
+            .iter()
+            .map(|c| {
+                (
+                    c.person_name.as_str(),
+                    c.character_name.as_deref(),
+                    c.sort_order,
+                )
+            })
+            .collect();
+        assert_eq!(
+            read,
+            [
+                ("Bryan Cranston", Some("Walter White"), 0),
+                ("Mayumi Tanaka", Some("Luffy"), 7),
+                ("Vince Gilligan", None, 0),
+                ("Aaron Paul", Some("Jesse Pinkman"), 8),
+            ],
+            "matched whatever the case and the order of the words, or by the name in \
+             its own script; the rest after"
+        );
+        assert_eq!(people.of(&ours[0]).and_then(|p| p.tvdb_id), Some(10));
+        assert_eq!(people.of(&ours[1]).and_then(|p| p.tvdb_id), Some(20));
+        assert_eq!(
+            people.of(&ours[1]).and_then(|p| p.original_name.as_deref()),
+            Some("田中真弓"),
+            "what TMDB said of her stays"
+        );
+        assert_eq!(people.of(&ours[3]).and_then(|p| p.tvdb_id), Some(30));
+        assert_eq!(ours[0].image.as_deref(), Some("https://tvdb/10.jpg"));
+    }
+
+    #[test]
+    fn a_list_nobody_gave_is_the_next_one_s_and_so_are_its_episodes() {
+        let mut ours: Vec<Credit> = Vec::new();
+        let mut people = People::default();
+        let mut theirs_people = People::default();
+        let theirs = vec![tvdb(
+            "Anna Gunn",
+            269404,
+            "Skyler White",
+            &mut theirs_people,
+        )];
+        let guest = credit(CreditType::Guest, "A Guest", Some(5));
+        theirs_people.episodes = vec![crate::domain::person::EpisodeCredit {
+            season_number: 1,
+            episode_number: 2,
+            tmdb_episode_id: Some(62086),
+            credit: guest.clone(),
+        }];
+        theirs_people.by_credit.insert(
+            guest.id.clone(),
+            PersonRef {
+                gender: Some(2),
+                ..PersonRef::default()
+            },
+        );
+        merge_cast(&mut ours, &mut people, theirs, theirs_people);
+        assert_eq!(ours.len(), 1);
+        assert_eq!(people.of(&ours[0]).and_then(|p| p.tvdb_id), Some(269404));
+        assert_eq!(people.episodes.len(), 1);
+        assert_eq!(people.of(&guest).and_then(|p| p.gender), Some(2));
+
+        // A later provider's episodes do not replace the first's.
+        let later = People {
+            episodes: vec![crate::domain::person::EpisodeCredit {
+                season_number: 9,
+                episode_number: 9,
+                tmdb_episode_id: None,
+                credit: credit(CreditType::Guest, "Late", None),
+            }],
+            ..People::default()
+        };
+        merge_cast(&mut ours, &mut people, Vec::new(), later);
+        assert_eq!(people.episodes[0].season_number, 1);
+    }
+
+    #[test]
+    fn thetvdb_ahead_of_tmdb_gives_no_list_of_its_own_and_a_guest_s_id_is_taken() {
+        // TheTVDB first in the priority: its characters are the list only
+        // until a list that is not theirs comes.
+        let mut ours_people = People::default();
+        let mut ours = vec![
+            tvdb("Bryan Cranston", 10, "Walter White", &mut ours_people),
+            tvdb("Giancarlo Esposito", 40, "Gus Fring", &mut ours_people),
+        ];
+        let guest = credit(CreditType::Guest, "Giancarlo Esposito", Some(4808));
+        let tmdb = People {
+            episodes: vec![crate::domain::person::EpisodeCredit {
+                season_number: 2,
+                episode_number: 11,
+                tmdb_episode_id: Some(62171),
+                credit: guest,
+            }],
+            ..People::default()
+        };
+        let theirs = vec![
+            credit(CreditType::Actor, "Bryan Cranston", Some(17419)),
+            credit(CreditType::Actor, "Aaron Paul", Some(84497)),
+        ];
+        merge_cast(&mut ours, &mut ours_people, theirs, tmdb);
+
+        let read: Vec<(&str, Option<i64>)> = ours
+            .iter()
+            .map(|c| (c.person_name.as_str(), c.tmdb_person_id))
+            .collect();
+        assert_eq!(
+            read,
+            [
+                ("Bryan Cranston", Some(17419)),
+                ("Aaron Paul", Some(84497)),
+                ("Giancarlo Esposito", Some(4808)),
+            ],
+            "TMDB's list, TheTVDB's character matched into it, the one it lacks after it \
+             with the TMDB id the guest of the same name has"
+        );
+        assert_eq!(ours_people.of(&ours[0]).and_then(|p| p.tvdb_id), Some(10));
+        assert_eq!(ours_people.of(&ours[2]).and_then(|p| p.tvdb_id), Some(40));
+        assert_eq!(ours[0].character_name.as_deref(), Some("Walter White"));
+        assert_eq!(ours_people.episodes.len(), 1);
+
+        // Skyhook's list after it is dropped, as a second list always is.
+        let skyhook = vec![credit(CreditType::Actor, "Somebody Else", None)];
+        merge_cast(&mut ours, &mut ours_people, skyhook, People::default());
+        assert_eq!(ours.len(), 3);
     }
 
     #[test]

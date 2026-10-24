@@ -385,13 +385,31 @@ export type CalendarEntry = Schema<'CalendarEntry'>
 /** The schedule: the episodes and the films' releases of a window, and the works they belong to. */
 export type Calendar = Schema<'Calendar'>
 
-/** One part a person played, or one job they did, on one work. */
+/** One part a person played, or one job they did, on one work — or on one episode of it. */
 export type Role = Schema<'PersonRole'>
 
 /** Somebody as TMDB knows them, beside what this catalogue holds of theirs. */
 export type PersonDetails = Schema<'PersonDetails'>
 
 export type Person = Schema<'Person'>
+
+/** What somebody did on a work, as their page and the index put works together: acting, or one of three jobs behind the camera. */
+export type PersonJob = Schema<'PersonJob'>
+
+/** Somebody, as the index of people lists them; for those who keep the catalogue, with their ids and the other names they go by. */
+export type PersonCard = Schema<'PersonCard'>
+
+/** A page of the index of people, and the letters somebody is filed under. */
+export type PeoplePage = Schema<'PeoplePage'>
+
+/** Somebody as they are entered, or put right, by hand: every field, a field left out cleared. */
+export type EnteredPerson = Schema<'EnteredPerson'>
+
+/** What became of a record of somebody: its id. */
+export type PersonId = Schema<'PersonId'>
+
+/** Whom one of a work's credits is filed under, with the ids they are known by. */
+export type PersonRef = Schema<'PersonRef'>
 
 export type NetworkRule = Schema<'NetworkRule'>
 
@@ -453,3 +471,24 @@ export type Backup = Schema<'Backup'>
 
 /** Where the last restore stands. */
 export type BackupRestore = Schema<'BackupRestore'>
+
+/** Two works that look like one, as the catalogue shows them: each work, why, how sure, and the one the rule keeps. */
+export type DuplicatePair = Schema<'DuplicateView'>
+
+export type DuplicateList = Schema<'DuplicateList'>
+
+/** A work as a merge names it: enough to tell two apart, and to choose which stays. */
+export type MergeWork = Schema<'MergeWork'>
+
+/** What merging one work into another would do: the two, the fields that differ, what moves, the names kept. */
+export type MergePreview = Schema<'MergePreview'>
+
+export type MergeField = Schema<'MergeField'>
+
+/** Which of two works a field's value is kept from. */
+export type MergeSide = Schema<'MergeSide'>
+
+export type MergeOutcome = Schema<'MergeOutcome'>
+
+/** The merges into a work that can still be undone, and the names it answers for. */
+export type MergeList = Schema<'MergeList'>

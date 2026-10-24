@@ -48,6 +48,7 @@ type Entry = {
 const NAV: Entry[] = [
   { to: '/admin', glyph: 'gauge', label: (t) => t.admin.dashboard, end: true, tab: true, group: 'catalogue' },
   { to: '/admin/catalogue', glyph: 'list', label: (t) => t.admin.catalogue, tab: true, group: 'catalogue' },
+  { to: '/admin/people', glyph: 'user', label: (t) => t.admin.peopleNav, group: 'catalogue' },
   { to: '/admin/discover', glyph: 'discover', label: (t) => t.admin.discover, tab: true, group: 'catalogue' },
   { to: '/admin/lists', glyph: 'list', label: (t) => t.admin.lists, group: 'catalogue' },
   { to: '/admin/jobs', glyph: 'clock', label: (t) => t.admin.jobs, group: 'system', admin: true },

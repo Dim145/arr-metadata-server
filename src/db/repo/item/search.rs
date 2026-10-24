@@ -137,15 +137,38 @@ pub enum Missing {
     /// A lock a source moved under since it was set, and which says
     /// something else than the lock now: see `repo::change::DIVERGING_LOCK`.
     DivergingLock,
+    /// Another work that looks like the same one, as the duplicates were
+    /// last looked for, and nobody said it is not: see `repo::item::merge`.
+    /// Not a gap of the record, but the same register narrows to it, and
+    /// the same to-do list counts it.
+    Duplicates,
 }
 
+/// A work in a pair of duplicates proposed, whose other work the reader may
+/// be shown — of its own still, and not for adults when adult works are
+/// kept from them: [`Missing::Duplicates`], for each.
+const DUPLICATED: &str = r"EXISTS (SELECT 1 FROM media_duplicate d
+                         JOIN media_item o
+                           ON o.id = CASE WHEN d.first_id = media_item.id
+                                          THEN d.second_id ELSE d.first_id END
+                        WHERE (d.first_id = media_item.id OR d.second_id = media_item.id)
+                          AND d.dismissed_at IS NULL AND o.merged_into IS NULL)";
+const DUPLICATED_NOT_ADULT: &str = r"EXISTS (SELECT 1 FROM media_duplicate d
+                         JOIN media_item o
+                           ON o.id = CASE WHEN d.first_id = media_item.id
+                                          THEN d.second_id ELSE d.first_id END
+                        WHERE (d.first_id = media_item.id OR d.second_id = media_item.id)
+                          AND d.dismissed_at IS NULL AND o.merged_into IS NULL
+                          AND o.is_adult = 0)";
+
 impl Missing {
-    pub const ALL: [Missing; 5] = [
+    pub const ALL: [Missing; 6] = [
         Self::Poster,
         Self::Overview,
         Self::Imdb,
         Self::Refresh,
         Self::DivergingLock,
+        Self::Duplicates,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -155,6 +178,7 @@ impl Missing {
             Self::Imdb => "imdb",
             Self::Refresh => "refresh",
             Self::DivergingLock => "divergingLock",
+            Self::Duplicates => "duplicates",
         }
     }
 
@@ -164,7 +188,9 @@ impl Missing {
     /// language counts, and one in the stored language, which is the text the
     /// work is read with and over the other; one in another language is its
     /// readers' alone, and the stored record is what everybody else is given.
-    fn condition(self) -> (&'static str, usize) {
+    /// A duplicate is one whose other work the reader may see:
+    /// `include_adult` says whether they may see works for adults.
+    fn condition(self, include_adult: bool) -> (&'static str, usize) {
         let words = match self {
             // A poster of the work's own — a season's is the season's — or one
             // chosen by hand, which its lock brings back when the sources no
@@ -213,6 +239,8 @@ impl Missing {
             }
             // The dashboard's count is the same words, so the two agree.
             Self::DivergingLock => crate::db::repo::change::DIVERGING_LOCK,
+            Self::Duplicates if include_adult => DUPLICATED,
+            Self::Duplicates => DUPLICATED_NOT_ADULT,
         };
         (words, 0)
     }
@@ -227,7 +255,8 @@ impl std::str::FromStr for Missing {
             .find(|gap| gap.as_str() == s)
             .ok_or_else(|| {
                 format!(
-                    "unknown gap {s:?}: expected poster, overview, imdb, refresh or divergingLock"
+                    "unknown gap {s:?}: expected poster, overview, imdb, refresh, divergingLock \
+                     or duplicates"
                 )
             })
     }
@@ -1083,6 +1112,10 @@ fn narrowed(
         sql.push_str(&format!(" AND {plain}is_enabled = 1"));
     }
 
+    // A work merged into another is a tombstone, which no list, count or
+    // search holds, whoever asks: the survivor answers for it.
+    sql.push_str(" AND merged_into IS NULL");
+
     if let Some(kind) = q.kind {
         sql.push_str(&format!(" AND {plain}kind = ?"));
         args.add(kind.as_str().to_string())
@@ -1212,31 +1245,37 @@ fn narrowed(
         args.add(collection).map_err(|e| anyhow::anyhow!("{e}"))?;
     }
 
-    // Somebody by their TMDB id, or by their name as the search index folds
-    // it — so `wim wenders` and `Wim Wenders` are one person, and so is
-    // `Pedro Almodovar` without his accent — on either engine alike. The
-    // index's people's rows say which ids and which names that is.
+    // Somebody by their TMDB id, by their record's id, or by a name they go
+    // by as the search index folds it — so `wim wenders` and `Wim Wenders`
+    // are one person, and so is `Pedro Almodovar` without his accent — on
+    // either engine alike: the works of the credits filed under that record
+    // that no lock hides. The index's people's rows say which record a name
+    // is (see `repo::person`).
     if let Some(person) = q.person.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+        let hidden = crate::db::repo::person::HIDDEN;
         if let Ok(tmdb_id) = person.parse::<i64>() {
-            sql.push_str(" AND id IN (SELECT media_id FROM media_credit WHERE tmdb_person_id = ?)");
-            args.add(tmdb_id).map_err(|e| anyhow::anyhow!("{e}"))?;
-        } else {
-            sql.push_str(
+            sql.push_str(&format!(
                 " AND id IN (SELECT c.media_id FROM media_credit c
-                             WHERE c.tmdb_person_id IN (
-                                       SELECT CAST(substr(d.ref_id, 6) AS BIGINT) FROM search_doc d
-                                        WHERE d.kind = 'person' AND d.norm = ?
-                                          AND substr(d.ref_id, 1, 5) = 'tmdb:')
-                                OR (c.tmdb_person_id IS NULL AND c.person_name IN (
-                                       SELECT substr(d.ref_id, 6) FROM search_doc d
-                                        WHERE d.kind = 'person' AND d.norm = ?
-                                          AND substr(d.ref_id, 1, 5) = 'name:')))",
-            );
-            let folded = crate::search::norm(person);
+                             WHERE (c.person_id IN (SELECT COALESCE(p.merged_into, p.id)
+                                                      FROM person p WHERE p.tmdb_id = ?)
+                                    OR c.tmdb_person_id = ?)
+                               AND NOT {hidden})"
+            ));
             for _ in 0..2 {
-                args.add(folded.clone())
-                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                args.add(tmdb_id).map_err(|e| anyhow::anyhow!("{e}"))?;
             }
+        } else {
+            sql.push_str(&format!(
+                " AND id IN (SELECT c.media_id FROM media_credit c
+                             WHERE (c.person_id = ?
+                                    OR c.person_id IN (SELECT d.ref_id FROM search_doc d
+                                                        WHERE d.kind = 'person' AND d.norm = ?))
+                               AND NOT {hidden})"
+            ));
+            args.add(person.to_string())
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            args.add(crate::search::norm(person))
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
         }
     }
 
@@ -1311,7 +1350,7 @@ fn narrowed(
     // Each gap narrows further: asked for a poster and an overview, the list
     // is of the works lacking both.
     for gap in &q.missing {
-        let (condition, binds) = gap.condition();
+        let (condition, binds) = gap.condition(q.include_adult);
         sql.push_str(" AND ");
         sql.push_str(condition);
         // Empty, it matches the locks in every language alone.
@@ -1348,16 +1387,22 @@ fn narrowed(
     Ok(())
 }
 
+/// How many works the catalogue holds, of a kind or of both: the tombstones
+/// merges left are no works of their own, and are not counted.
 pub async fn count(db: &Db, kind: Option<MediaKind>) -> Result<i64> {
     let row = match kind {
         Some(k) => {
-            sqlx::query(db.sql("SELECT COUNT(*) AS n FROM media_item WHERE kind = ?"))
-                .bind(k.as_str())
-                .fetch_one(db.pool())
-                .await?
+            sqlx::query(
+                db.sql(
+                    "SELECT COUNT(*) AS n FROM media_item WHERE kind = ? AND merged_into IS NULL",
+                ),
+            )
+            .bind(k.as_str())
+            .fetch_one(db.pool())
+            .await?
         }
         None => {
-            sqlx::query(db.sql("SELECT COUNT(*) AS n FROM media_item"))
+            sqlx::query(db.sql("SELECT COUNT(*) AS n FROM media_item WHERE merged_into IS NULL"))
                 .fetch_one(db.pool())
                 .await?
         }

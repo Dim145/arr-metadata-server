@@ -1780,7 +1780,8 @@ async fn series_from_tvdb(state: &AppState, tvdb_id: Option<i64>) -> Asked {
         return Asked::Nothing;
     }
 
-    match state.tvdb.series(tvdb_id).await {
+    let cast = crate::providers::tvdb::cast_limit(&state.settings);
+    match state.tvdb.series(tvdb_id, cast).await {
         Ok(Some((raw, item))) => Asked::answered(Answer::new(names::TVDB, raw, item)),
         Ok(None) => Asked::Nothing,
         Err(e) => {

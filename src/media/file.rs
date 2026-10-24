@@ -1,9 +1,10 @@
 //! What a file is, from its bytes: never from its name or from what the
-//! provider said it was. And the thumbnail made of a picture kept.
+//! provider said it was. How the copies made of a picture kept are named,
+//! and how a picture is read to make them.
 
 use std::io::Cursor;
 
-use anyhow::{Result, bail};
+use anyhow::{Context as _, Result, bail};
 use sha2::{Digest as _, Sha256};
 
 use crate::db::repo::asset::{Kind, Thumb};
@@ -14,23 +15,20 @@ pub const MAX_IMAGE_BYTES: u64 = 25 * 1024 * 1024;
 /// A theme is a song: a Fan-Kai's runs to a few minutes of MP3.
 pub const MAX_AUDIO_BYTES: u64 = 60 * 1024 * 1024;
 
-/// Thumbnails: as wide as a card is drawn on a dense screen, and no wider.
-const THUMB_PORTRAIT_WIDTH: u32 = 480;
-const THUMB_LANDSCAPE_WIDTH: u32 = 960;
-
 /// The largest picture kept at all: a side no screen draws, or a canvas
 /// whose pixels alone would take gigabytes, is not artwork but a trap — for
 /// this server's decoder, and for every client it would be handed to.
-const MAX_SIDE: u32 = 16_384;
+pub const MAX_SIDE: u32 = 16_384;
 const MAX_PIXELS: u64 = 120_000_000;
 
-/// The largest picture a thumbnail is made of: an 8K backdrop, a poster from
-/// a good camera. Decoding one takes a few hundred megabytes — a progressive
-/// JPEG's coefficients are held whole beside its pixels — so a larger one is
-/// served as it is rather than decoded.
-const THUMB_MAX_PIXELS: u64 = 36_000_000;
-/// What a decoder may set aside for the pixels of one.
-const THUMB_MAX_ALLOC: u64 = 256 * 1024 * 1024;
+/// The largest picture this server decodes to make its copies: an 8K
+/// backdrop is a third of it. A larger one is kept and served as it is,
+/// and the interface is given the original — never a canvas a header
+/// promises and the memory cannot hold.
+pub const DECODE_MAX_PIXELS: u64 = 100_000_000;
+/// What a decoder may set aside, its pixels and its own working buffers
+/// alike: a progressive JPEG's coefficients are held whole beside them.
+const DECODE_MAX_ALLOC: u64 = 256 * 1024 * 1024;
 
 /// The kinds of file kept, by the extension their key carries.
 ///
@@ -131,6 +129,70 @@ pub fn key_for(bytes: &[u8], ext: &str) -> (String, String) {
     (format!("{sha}.{ext}"), sha)
 }
 
+/// What a key names: a file's own bytes, or a copy made of them — named by
+/// the same hash, a mark after it, and the copy's own extension.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Made {
+    /// The bytes themselves: `<hash>.jpg`.
+    Own,
+    /// The thumbnail earlier versions made of a picture: `<hash>-t.jpg`.
+    /// Still served; no new one is made.
+    Thumb,
+    /// A copy at a width, for the interface: `<hash>-480.webp`.
+    Width(u32),
+    /// A square cut of a background, for Plex: `<hash>-square.jpg`.
+    Square,
+}
+
+/// A key, read: the hash, what it names, and its extension.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Key<'a> {
+    pub stem: &'a str,
+    pub made: Made,
+    pub ext: &'a str,
+}
+
+/// A key read for what it names, when it is one this server files under:
+/// sixty-four hex digits; nothing more, `-t`, a width or `-square`; and one
+/// of the extensions kept — a WebP or an AVIF for a width, a JPEG for a
+/// square. Nothing else reaches the store from a request, so nothing else
+/// can name a path in it.
+pub fn parse_key(name: &str) -> Option<Key<'_>> {
+    let (head, ext) = name.rsplit_once('.')?;
+    if !EXTENSIONS.iter().any(|(e, _, _)| *e == ext) {
+        return None;
+    }
+    let (stem, made) = match head.split_once('-') {
+        None => (head, Made::Own),
+        Some((stem, "t")) => (stem, Made::Thumb),
+        Some((stem, "square")) => (stem, Made::Square),
+        Some((stem, digits)) => (stem, Made::Width(width_in(digits)?)),
+    };
+    let fits = match made {
+        Made::Own | Made::Thumb => true,
+        Made::Width(_) => matches!(ext, "webp" | "avif"),
+        Made::Square => ext == "jpg",
+    };
+    let hashed = stem.len() == 64
+        && stem
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase());
+    (fits && hashed).then_some(Key { stem, made, ext })
+}
+
+/// A width as a key writes it: digits, no leading nought, no wider than a
+/// picture this server keeps.
+fn width_in(digits: &str) -> Option<u32> {
+    if digits.is_empty()
+        || digits.len() > 5
+        || digits.starts_with('0')
+        || !digits.bytes().all(|b| b.is_ascii_digit())
+    {
+        return None;
+    }
+    digits.parse().ok().filter(|w| (1..=MAX_SIDE).contains(w))
+}
+
 /// The key of a key's thumbnail, when one was made: the same hash, `-t`,
 /// and the thumbnail's own extension.
 pub fn thumb_key(key: &str, thumb: Thumb) -> Option<String> {
@@ -138,19 +200,19 @@ pub fn thumb_key(key: &str, thumb: Thumb) -> Option<String> {
     thumb.ext().map(|ext| format!("{stem}-t.{ext}"))
 }
 
-/// Whether a name is a key this server files under: sixty-four hex digits,
-/// `-t` for a thumbnail, and one of the extensions kept. Nothing else reaches
-/// the store from a request, so nothing else can name a path in it.
+/// The key a copy of the bytes of `stem` is filed under.
+pub fn made_key(stem: &str, made: Made, ext: &str) -> String {
+    match made {
+        Made::Own => format!("{stem}.{ext}"),
+        Made::Thumb => format!("{stem}-t.{ext}"),
+        Made::Width(width) => format!("{stem}-{width}.{ext}"),
+        Made::Square => format!("{stem}-square.{ext}"),
+    }
+}
+
+/// Whether a name is a key this server files under: see [`parse_key`].
 pub fn valid_key(name: &str) -> bool {
-    let Some((stem, ext)) = name.rsplit_once('.') else {
-        return false;
-    };
-    let stem = stem.strip_suffix("-t").unwrap_or(stem);
-    stem.len() == 64
-        && stem
-            .bytes()
-            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
-        && EXTENSIONS.iter().any(|(e, _, _)| *e == ext)
+    parse_key(name).is_some()
 }
 
 /// The content type a key's bytes are served as: the one its extension
@@ -165,10 +227,13 @@ pub fn content_type_of(key: &str) -> Option<&'static str> {
 }
 
 /// The hash a key files its bytes under, whether it is the bytes' key or
-/// their thumbnail's.
+/// a copy's.
 pub fn stem_of(key: &str) -> &str {
+    if let Some(parsed) = parse_key(key) {
+        return parsed.stem;
+    }
     let stem = key.split('.').next().unwrap_or(key);
-    stem.strip_suffix("-t").unwrap_or(stem)
+    stem.split('-').next().unwrap_or(stem)
 }
 
 /// Every key the bytes of a hash could be filed under: one per extension
@@ -180,102 +245,74 @@ pub fn keys_of_stem(stem: &str) -> Vec<String> {
         .collect()
 }
 
-/// Whether a key names a thumbnail.
+/// Whether a key names a thumbnail of earlier versions'.
 pub fn is_thumb(key: &str) -> bool {
-    key.split('.')
-        .next()
-        .is_some_and(|stem| stem.ends_with("-t"))
+    parse_key(key).is_some_and(|parsed| parsed.made == Made::Thumb)
+}
+
+/// Whether a key names a copy made of other bytes — a thumbnail, a width,
+/// a square — rather than bytes of their own.
+pub fn is_made(key: &str) -> bool {
+    parse_key(key).is_some_and(|parsed| parsed.made != Made::Own)
 }
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// A small copy of the picture, no wider than a card is drawn, when the
-/// picture is wider than that: a JPEG, or a PNG where the picture is
-/// transparent somewhere — a logo laid over a backdrop. `None` for one
-/// already small, and for one the decoders here cannot read: the picture is
-/// kept as it is, and served whole.
+/// A picture's pixels, read within bounds — or why not.
 ///
-/// Decoded within limits: a picture's header can promise a canvas that
-/// would take every byte of memory to draw, so the header is read first, by
-/// the decoder that would draw it, and a picture past
-/// [`THUMB_MAX_PIXELS`] is not decoded at all.
-pub fn thumbnail(bytes: &[u8]) -> Option<(Vec<u8>, Thumb)> {
-    thumbnail_within(bytes, THUMB_MAX_PIXELS)
-}
+/// The header is read first, by the decoder that would draw it: a picture
+/// whose side is past [`MAX_SIDE`] or whose pixels are past
+/// [`DECODE_MAX_PIXELS`] is refused before a byte of it is decoded, and the
+/// buffer the pixels need is reserved against [`DECODE_MAX_ALLOC`] before it
+/// is allocated. Turned the way its EXIF orientation says, as a camera's
+/// photograph is shown. Pure Rust: no C decoder ever reads bytes somebody
+/// else chose. The caller runs it off the server's threads and catches what
+/// a decoder may still panic on.
+pub fn decode(bytes: &[u8]) -> Result<image::DynamicImage> {
+    use image::ImageDecoder as _;
 
-fn thumbnail_within(bytes: &[u8], max_pixels: u64) -> Option<(Vec<u8>, Thumb)> {
     let reader = || {
         image::ImageReader::new(Cursor::new(bytes))
             .with_guessed_format()
-            .ok()
+            .context("the picture could not be read")
     };
-    let (width, height) = reader()?.into_dimensions().ok()?;
-    if u64::from(width) * u64::from(height) > max_pixels {
-        tracing::debug!(
-            width,
-            height,
-            "no thumbnail: the picture is too large to decode"
-        );
-        return None;
+    let (width, height) = reader()?
+        .into_dimensions()
+        .context("the picture's header could not be read")?;
+    if width > MAX_SIDE
+        || height > MAX_SIDE
+        || u64::from(width) * u64::from(height) > DECODE_MAX_PIXELS
+    {
+        bail!("a picture of {width}×{height} is larger than this server decodes");
     }
 
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(MAX_SIDE);
     limits.max_image_height = Some(MAX_SIDE);
-    limits.max_alloc = Some(THUMB_MAX_ALLOC);
+    limits.max_alloc = Some(DECODE_MAX_ALLOC);
 
     let mut reader = reader()?;
-    reader.limits(limits);
-    let picture = match reader.decode() {
-        Ok(picture) => picture,
-        Err(e) => {
-            tracing::debug!(error = %e, "no thumbnail: the picture could not be decoded");
-            return None;
-        }
-    };
-
-    let (width, height) = (picture.width(), picture.height());
-    let target = if width > height {
-        THUMB_LANDSCAPE_WIDTH
-    } else {
-        THUMB_PORTRAIT_WIDTH
-    };
-    if width <= target {
-        return None;
-    }
-
-    let scaled_height = u32::try_from(u64::from(height) * u64::from(target) / u64::from(width))
-        .unwrap_or(1)
-        .max(1);
-    let small = picture.resize_exact(target, scaled_height, image::imageops::FilterType::Triangle);
-
-    // A picture with an alpha channel that is opaque everywhere is a JPEG
-    // like any other; only real transparency needs keeping.
-    let transparent = picture.color().has_alpha() && {
-        let rgba = small.to_rgba8();
-        rgba.pixels().any(|p| p[3] < 255)
-    };
-
-    let mut out = Vec::new();
-    let encoded = if transparent {
-        small
-            .to_rgba8()
-            .write_to(&mut Cursor::new(&mut out), image::ImageFormat::Png)
-            .map(|()| Thumb::Png)
-    } else {
-        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 82)
-            .encode_image(&small.to_rgb8())
-            .map(|()| Thumb::Jpeg)
-    };
-    match encoded {
-        Ok(thumb) => Some((out, thumb)),
-        Err(e) => {
-            tracing::debug!(error = %e, "no thumbnail: it could not be encoded");
-            None
-        }
-    }
+    reader.limits(limits.clone());
+    let mut decoder = reader
+        .into_decoder()
+        .context("the picture could not be read")?;
+    // What the pixels take is reserved against the bound first, and the
+    // decoder is left what remains of it for its own buffers.
+    limits
+        .reserve(decoder.total_bytes())
+        .context("the picture's pixels would take more than this server sets aside")?;
+    decoder
+        .set_limits(limits)
+        .context("the picture is larger than this server decodes")?;
+    let orientation = decoder
+        .orientation()
+        .unwrap_or(image::metadata::Orientation::NoTransforms);
+    let mut picture =
+        image::DynamicImage::from_decoder(decoder).context("the picture could not be decoded")?;
+    picture.apply_orientation(orientation);
+    Ok(picture)
 }
 
 #[cfg(test)]
@@ -336,6 +373,41 @@ mod tests {
         }
     }
 
+    /// A copy is named by its picture's hash, what it is, and its own
+    /// extension — and only the copies this server makes pass for one.
+    #[test]
+    fn a_copys_key_names_its_picture_and_its_width() {
+        let sha = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        for (key, made) in [
+            (format!("{sha}-480.webp"), Made::Width(480)),
+            (format!("{sha}-1920.webp"), Made::Width(1920)),
+            (format!("{sha}-960.avif"), Made::Width(960)),
+            (format!("{sha}-square.jpg"), Made::Square),
+            (format!("{sha}-t.jpg"), Made::Thumb),
+            (format!("{sha}.png"), Made::Own),
+        ] {
+            let parsed = parse_key(&key).unwrap_or_else(|| panic!("{key}"));
+            assert_eq!((parsed.stem, parsed.made), (sha, made), "{key}");
+            assert_eq!(made_key(sha, made, parsed.ext), key);
+            assert_eq!(stem_of(&key), sha);
+            assert_eq!(is_made(&key), made != Made::Own);
+        }
+        for bad in [
+            format!("{sha}-480.jpg"),
+            format!("{sha}-0480.webp"),
+            format!("{sha}-0.webp"),
+            format!("{sha}-99999.webp"),
+            format!("{sha}--480.webp"),
+            format!("{sha}-480x480.webp"),
+            format!("{sha}-square.webp"),
+            format!("{sha}-+480.webp"),
+            format!("{sha}-480.webp.webp"),
+            "480.webp".to_string(),
+        ] {
+            assert!(!valid_key(&bad), "{bad}");
+        }
+    }
+
     /// A PNG's signature and header, promising a canvas of this size, and
     /// nothing after: enough for the sniffer and the header reader.
     fn png_header(width: u32, height: u32) -> Vec<u8> {
@@ -363,6 +435,14 @@ mod tests {
         let sha = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
         assert_eq!(content_type_of(&format!("{sha}.jpg")), Some("image/jpeg"));
         assert_eq!(content_type_of(&format!("{sha}-t.png")), Some("image/png"));
+        assert_eq!(
+            content_type_of(&format!("{sha}-480.webp")),
+            Some("image/webp")
+        );
+        assert_eq!(
+            content_type_of(&format!("{sha}-960.avif")),
+            Some("image/avif")
+        );
         assert_eq!(content_type_of(&format!("{sha}.m4a")), Some("audio/mp4"));
         assert_eq!(content_type_of(&format!("{sha}.html")), None);
         assert_eq!(content_type_of(sha), None);
@@ -373,44 +453,57 @@ mod tests {
         assert!(keys.contains(&format!("{sha}.webp")) && keys.contains(&format!("{sha}.mp3")));
     }
 
-    #[test]
-    fn a_picture_too_large_to_decode_is_served_without_a_thumbnail() {
-        let wide = png(1200, 1800);
-        assert!(thumbnail_within(&wide, 1_000_000).is_none());
-        assert!(thumbnail_within(&wide, 2_160_000).is_some());
+    /// The same header as a decoder reads it — its checksums right, a PNG
+    /// chunk ending with the CRC-32 of its type and its data — then the
+    /// start of the pixels, empty: as far as a decoder reads before it says
+    /// what the picture is.
+    fn checked_png_header(width: u32, height: u32, colour: u8) -> Vec<u8> {
+        fn chunk(out: &mut Vec<u8>, kind: &[u8], data: &[u8]) {
+            out.extend_from_slice(&u32::try_from(data.len()).unwrap().to_be_bytes());
+            let mut crc = !0u32;
+            for byte in kind.iter().chain(data) {
+                crc ^= u32::from(*byte);
+                for _ in 0..8 {
+                    crc = if crc & 1 == 1 {
+                        (crc >> 1) ^ 0xEDB8_8320
+                    } else {
+                        crc >> 1
+                    };
+                }
+            }
+            out.extend_from_slice(kind);
+            out.extend_from_slice(data);
+            out.extend_from_slice(&(!crc).to_be_bytes());
+        }
+        let mut header = Vec::new();
+        header.extend_from_slice(&width.to_be_bytes());
+        header.extend_from_slice(&height.to_be_bytes());
+        header.extend_from_slice(&[8, colour, 0, 0, 0]);
+        let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
+        chunk(&mut out, b"IHDR", &header);
+        chunk(&mut out, b"IDAT", &[]);
+        chunk(&mut out, b"IEND", &[]);
+        out
     }
 
+    /// A header that promises a canvas larger than the decoder is let set
+    /// aside is refused before the pixels are asked for: the bytes are a
+    /// few dozen, the canvas would be hundreds of megabytes.
     #[test]
-    fn a_wide_picture_gets_a_thumbnail_and_a_small_one_does_not() {
-        let wide = png(1200, 1800);
-        let (thumb, kind) = thumbnail(&wide).expect("a thumbnail");
-        let size = imagesize::blob_size(&thumb).unwrap();
-        assert_eq!((size.width, size.height), (480, 720));
-        assert_eq!(inspect(&thumb, Kind::Image).unwrap().ext, "jpg");
-        assert_eq!(kind, Thumb::Jpeg);
-
-        assert!(thumbnail(&png(300, 450)).is_none());
-        assert!(thumbnail(b"not a picture at all").is_none());
-
-        let landscape = png(1920, 1080);
-        let (thumb, _) = thumbnail(&landscape).expect("a thumbnail");
-        assert_eq!(imagesize::blob_size(&thumb).unwrap().width, 960);
-
-        // Transparent somewhere: a PNG, with its transparency.
-        let mut out = Vec::new();
-        let mut logo = image::RgbaImage::from_pixel(1000, 400, image::Rgba([255, 255, 255, 255]));
-        logo.put_pixel(0, 0, image::Rgba([0, 0, 0, 0]));
-        logo.write_to(&mut Cursor::new(&mut out), image::ImageFormat::Png)
-            .unwrap();
-        let (thumb, kind) = thumbnail(&out).expect("a thumbnail");
-        assert_eq!(kind, Thumb::Png);
-        assert_eq!(inspect(&thumb, Kind::Image).unwrap().ext, "png");
-
-        // Opaque everywhere, alpha channel or not: a JPEG.
-        let mut out = Vec::new();
-        image::RgbaImage::from_pixel(1000, 400, image::Rgba([10, 20, 30, 255]))
-            .write_to(&mut Cursor::new(&mut out), image::ImageFormat::Png)
-            .unwrap();
-        assert_eq!(thumbnail(&out).expect("a thumbnail").1, Thumb::Jpeg);
+    fn a_decompression_bomb_is_refused_before_it_is_decoded() {
+        // Within what is kept, past what is decoded: 10 000 × 10 001.
+        let refused = decode(&checked_png_header(10_000, 10_001, 2)).unwrap_err();
+        assert!(
+            format!("{refused:#}").contains("larger than this server decodes"),
+            "{refused:#}"
+        );
+        // Under the count of pixels, past what may be set aside for them:
+        // 9 000 × 9 000 of RGBA is 324 megabytes.
+        let refused = decode(&checked_png_header(9_000, 9_000, 6)).unwrap_err();
+        assert!(format!("{refused:#}").contains("sets aside"), "{refused:#}");
+        // And a real picture is read.
+        let picture = decode(&png(30, 20)).expect("decoded");
+        assert_eq!((picture.width(), picture.height()), (30, 20));
+        assert!(decode(b"not a picture at all").is_err());
     }
 }

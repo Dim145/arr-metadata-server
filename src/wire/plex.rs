@@ -312,7 +312,8 @@ pub struct PlexChildren {
 
 #[derive(Clone, Debug, Serialize, ToSchema)]
 pub struct PlexImage {
-    /// `coverPoster`, `background`, `clearLogo` or `snapshot`.
+    /// `coverPoster`, `background`, `backgroundSquare`, `clearLogo` or
+    /// `snapshot`.
     #[serde(rename = "type")]
     pub kind: String,
     pub url: String,
@@ -1353,10 +1354,34 @@ pub fn images_of(
             spoken,
         )
     });
+    let square = square(&lead_images(images, chosen), alt, drawn);
     listed
         .into_iter()
         .filter_map(|image| plex_image(image, alt, drawn))
+        .chain(square)
         .collect()
+}
+
+/// The square Plex draws an item's tile with, `backgroundSquare`: cut from
+/// the middle of the background the item leads with — when this server
+/// keeps that background, and so can cut it (`crate::media::variants`).
+/// Plex alone is given one: Kodi, Jellyfin and Emby have no square picture
+/// to show.
+fn square(leads: &[&Image], alt: &str, drawn: &Drawn<'_>) -> Option<PlexImage> {
+    let background = leads
+        .iter()
+        .find(|image| image.cover_type == CoverType::Fanart)?;
+    let key = crate::media::Media::key_in(&background.url)?;
+    let kept = crate::media::file::parse_key(key)?;
+    if kept.made != crate::media::file::Made::Own {
+        return None;
+    }
+    let cut = crate::media::file::made_key(kept.stem, crate::media::file::Made::Square, "jpg");
+    Some(PlexImage {
+        kind: "backgroundSquare".to_string(),
+        url: absolute(drawn.origin, &format!("{}{cut}", crate::media::ROUTE)),
+        alt: Some(alt.to_string()),
+    })
 }
 
 /// A still, the one picture an episode has.
@@ -1398,6 +1423,7 @@ fn pictures(images: &[Image], chosen: &PrimaryImages, alt: &str, drawn: &Drawn<'
         images: leads
             .iter()
             .filter_map(|image| plex_image(image, alt, drawn))
+            .chain(square(&leads, alt, drawn))
             .collect(),
     }
 }
@@ -1412,7 +1438,8 @@ fn plex_image(image: &Image, alt: &str, drawn: &Drawn<'_>) -> Option<PlexImage> 
 
 /// Plex's word for a kind of picture (`src/models/Metadata.ts`,
 /// `Image.type`). The kinds it has none for — banners, clear art,
-/// landscapes — are not sent.
+/// landscapes, key art, disc art — are not sent; its square is cut from
+/// the background (see [`square`]).
 fn image_kind(kind: CoverType) -> Option<&'static str> {
     match kind {
         CoverType::Poster => Some("coverPoster"),
@@ -2042,6 +2069,65 @@ mod tests {
         film.content_rating_country = Some("US".into());
         film.content_rating = Some("R".into());
         assert_eq!(content_rating(&film, None).as_deref(), Some("R"));
+    }
+
+    /// Each kind Plex has a word for, under that word — the poster as
+    /// `coverPoster` and `thumb`, the background as `background` and `art`,
+    /// the logo as `clearLogo` — and the square cut from a background this
+    /// server keeps as `backgroundSquare`; key art and disc art not at all.
+    #[test]
+    fn plex_is_given_its_kinds_of_picture_and_the_square_of_a_kept_background() {
+        const SHA: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        let mut film = MediaItem::empty(MediaKind::Movie);
+        film.title = "The Matrix".into();
+        film.external_ids.tmdb = Some(603);
+        film.images = vec![
+            image("p", CoverType::Poster, "/media/poster.jpg", None),
+            image("b", CoverType::Fanart, &format!("/media/{SHA}.jpg"), None),
+            image("l", CoverType::Clearlogo, "https://f/logo.png", None),
+            image("k", CoverType::Keyart, "https://f/key.jpg", None),
+            image("d", CoverType::Discart, "https://f/disc.png", None),
+        ];
+        let drawn = drawn("eng");
+        let sent = serde_json::to_value(movie(&film, &Work::of(&film), &drawn)).unwrap();
+        assert_eq!(sent["thumb"], "http://ams.lan:8479/media/poster.jpg");
+        assert_eq!(sent["art"], format!("http://ams.lan:8479/media/{SHA}.jpg"));
+        let kinds: Vec<(&str, &str)> = sent["Image"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| (i["type"].as_str().unwrap(), i["url"].as_str().unwrap()))
+            .collect();
+        let square = format!("http://ams.lan:8479/media/{SHA}-square.jpg");
+        assert_eq!(
+            kinds,
+            [
+                ("coverPoster", "http://ams.lan:8479/media/poster.jpg"),
+                (
+                    "background",
+                    &*format!("http://ams.lan:8479/media/{SHA}.jpg")
+                ),
+                ("clearLogo", "https://f/logo.png"),
+                ("backgroundSquare", &*square),
+            ]
+        );
+        let listed = images_of(&film.images, &film.primary_images, &film.title, &drawn);
+        assert_eq!(
+            listed.last().map(|i| i.kind.as_str()),
+            Some("backgroundSquare")
+        );
+
+        // A background still at its provider's: nothing to cut it from here.
+        film.images[1].url = "https://image.tmdb.org/b.jpg".into();
+        let sent = serde_json::to_value(movie(&film, &Work::of(&film), &drawn)).unwrap();
+        assert!(
+            sent["Image"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|i| i["type"] != "backgroundSquare"),
+            "{sent}"
+        );
     }
 
     #[test]

@@ -96,9 +96,18 @@ pub struct MediaStatus {
     /// Whether the served addresses can be followed from elsewhere.
     pub public_url: bool,
     pub counts: repo::asset::Counts,
+    /// The copies made of the pictures kept: what each kind weighs.
+    pub variants: repo::asset::VariantCounts,
+    /// The pictures kept that this version has not prepared — no
+    /// placeholder, no first copy — which the task `media.variants` does.
+    pub unprepared: i64,
+    /// Whether the night's task makes AVIF copies (`media.avif`).
+    pub avif: bool,
     /// Whether a fetch or a sweep is under way.
     pub fetching: bool,
     pub sweeping: bool,
+    /// Whether the pictures are being prepared, or their AVIF copies made.
+    pub preparing: bool,
 }
 
 /// How the media store stands.
@@ -123,8 +132,13 @@ async fn status(
         audio: state.flag("media.audio", true),
         public_url: state.config.server.public_url.is_some(),
         counts: repo::asset::counts(&state.db).await?,
+        variants: repo::asset::variant_counts(&state.db).await?,
+        unprepared: repo::asset::unprepared_count(&state.db, crate::media::variants::PREPARED)
+            .await?,
+        avif: state.flag("media.avif", false),
         fetching: crate::media::worker::is_storing(),
         sweeping: crate::media::worker::is_sweeping(),
+        preparing: crate::jobs::media::is_busy(),
     }))
 }
 
@@ -473,8 +487,8 @@ pub struct Uploaded {
 ///
 /// A form with `file`, and: `kind` (`image`, the default, or `theme`);
 /// for a picture, `coverType` (`poster`, `fanart`, `banner`, `clearlogo`,
-/// `clearart`, `landscape`) and `seasonNumber` for a season's, or `episode`
-/// as `3x7` for a still. A picture becomes a hand-added one of the work's,
+/// `clearart`, `landscape`, `keyart`, `discart`, `characterart`) and `seasonNumber` for a
+/// season's, or `episode` as `3x7` for a still. A picture becomes a hand-added one of the work's,
 /// which no refresh replaces; a still or a theme locks the field it fills.
 /// The file is read for what it is, not for what it is called.
 #[utoipa::path(
@@ -626,7 +640,12 @@ async fn upload(
     let asset_id = crate::db::new_id();
     let origin = format!("upload:{asset_id}");
     let (key, sha256) = file::key_for(&bytes, inspected.ext);
-    let kept = crate::media::worker::keep(store, key, sha256, bytes, &inspected)
+    // What the picture is to the work decides the copy made of it now.
+    let cover = match &place {
+        Place::Picture { cover_type, .. } => Some(*cover_type),
+        Place::Still { .. } | Place::Theme => None,
+    };
+    let kept = crate::media::worker::keep(store, key, sha256, bytes, &inspected, cover)
         .await
         .map_err(|e| AppError::Internal(e.context("could not keep the upload")))?;
     let by = identity.label();
@@ -643,9 +662,11 @@ async fn upload(
     )
     .await?;
     crate::media::worker::settle(store, &kept).await;
+    crate::media::worker::note_copies(&state, &kept).await;
     state
         .media
         .remember(&origin, &kept.key, kept.thumb, inspected.content_type);
+    state.media.describe(&kept.key, kept.look());
 
     // Each told to the work's journal: a picture added by hand, or the lock
     // a still or a theme fills its field with, over what was served before.

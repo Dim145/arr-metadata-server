@@ -97,6 +97,7 @@ test.describe('the catalogue, to a visitor', () => {
     ['the schedule', '/calendar'],
     ['the schedule, a month at a glance', '/calendar?view=month'],
     ['the figures', '/stats'],
+    ['the index of people', '/people'],
     ['a season the catalogue holds nothing of', '/seasons/1890/winter'],
     ['sign-in', '/login'],
   ] as const) {
@@ -141,6 +142,17 @@ test.describe('the catalogue, to a visitor', () => {
       await page.waitForLoadState('networkidle')
       await scan(page, path)
     }
+  })
+
+  test('a person, by their record, meets WCAG 2.1 AA', async ({ page }) => {
+    // The most credited, whose page has the most jobs to read it by.
+    const { people } = await (await page.request.get('/api/v1/people?limit=1')).json()
+    const id = people[0]?.id as string | undefined
+    test.skip(!id, 'nobody is credited in this catalogue')
+
+    await page.goto(`/people/${id}`)
+    await page.waitForLoadState('networkidle')
+    await scan(page, 'a person')
   })
 
   test('a season chart, whole and filtered, meets WCAG 2.1 AA', async ({ page }) => {
@@ -227,13 +239,22 @@ test.describe('the administration side', () => {
     }
   }
 
-  // Seventeen screens, each loaded to rest and scanned whole, in three
+  // Some twenty screens, each loaded to rest and scanned whole, in four
   // sittings rather than one: as one test they took some thirty seconds on
   // a quiet machine and ran past their ninety beside the rest of the suite.
   test('the catalogue’s pages meet WCAG 2.1 AA', async ({ page }) => {
     test.slow()
     await signedIn(page)
     await scanned(page, ['/admin', '/admin/catalogue', '/admin/catalogue?refreshFailed=1', '/admin/discover', '/admin/clients', '/admin/jobs'])
+  })
+
+  test('the people’s records meet WCAG 2.1 AA', async ({ page }) => {
+    test.slow()
+    await signedIn(page)
+    // The list, and the most credited opened beside it.
+    const { people } = await (await page.request.get('/api/v1/people?limit=1')).json()
+    const id = people[0]?.id as string | undefined
+    await scanned(page, ['/admin/people', ...(id ? [`/admin/people?id=${id}`] : [])])
   })
 
   test('the system’s pages meet WCAG 2.1 AA', async ({ page }) => {

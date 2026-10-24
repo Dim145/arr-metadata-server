@@ -59,7 +59,7 @@ export function Media() {
     queryKey: ['media', 'status'],
     queryFn: () => api.get<MediaStatus>('/media/status'),
     // Live while something runs: the counts are the progress.
-    refetchInterval: (q) => (q.state.data?.fetching || q.state.data?.sweeping ? 3_000 : 30_000),
+    refetchInterval: (q) => (q.state.data?.fetching || q.state.data?.sweeping || q.state.data?.preparing ? 3_000 : 30_000),
   })
   const on = status.data?.backend !== undefined && status.data.backend !== 'off'
 
@@ -151,10 +151,23 @@ export function Media() {
                     </div>
                   ))}
                 </dl>
-                {(status.data.fetching || status.data.sweeping || !status.data.publicUrl) ? (
+                {/* The copies the pages are given, made of what is kept: what
+                    each kind weighs. */}
+                <p className="border-t border-rule px-5 py-3 text-sm text-bone-dim">
+                  <span className="label mr-2">{p.copies}</span>
+                  <span className="font-mono text-xs tabular-nums">
+                    {p.copiesLine(
+                      p.copiesOf(fmt.count(status.data.variants.webp, locale), fmt.bytes(status.data.variants.webpBytes, locale)),
+                      p.copiesOf(fmt.count(status.data.variants.avif, locale), fmt.bytes(status.data.variants.avifBytes, locale)),
+                      p.copiesOf(fmt.count(status.data.variants.jpeg, locale), fmt.bytes(status.data.variants.jpegBytes, locale)),
+                    )}
+                  </span>
+                </p>
+                {(status.data.fetching || status.data.sweeping || status.data.preparing || !status.data.publicUrl) ? (
                   <div className="space-y-2 border-t border-rule px-5 py-3 text-sm">
                     {status.data.fetching ? <Lamp tone="vermillion">{p.fetching}</Lamp> : null}
                     {status.data.sweeping ? <Lamp tone="vermillion">{p.sweeping}</Lamp> : null}
+                    {status.data.preparing ? <Lamp tone="vermillion">{p.preparing}</Lamp> : null}
                     {!status.data.publicUrl ? (
                       <p className="flex items-start gap-2 text-bone-dim">
                         <Glyph name="alert" className="mt-0.5 size-4 shrink-0 text-brass" />
@@ -188,6 +201,7 @@ export function Media() {
                       ['media.store', p.storeOn, p.storeOnHint, status.data.storing],
                       ['media.people', p.people, p.peopleHint, status.data.people],
                       ['media.audio', p.audio, p.audioHint, status.data.audio],
+                      ['media.avif', p.avif, p.avifHint, status.data.avif],
                     ] as const
                   ).map(([key, label, hint, checked]) => (
                     <li key={key} className="flex items-start gap-4 px-5 py-3">
@@ -261,6 +275,28 @@ export function Media() {
                         : t.common.actionFailed
                       : (notice ?? '')}
                   </p>
+                </div>
+                {/* What an earlier version stored and never prepared: the
+                    task is the administrator's to run, never the start's. */}
+                <div className="flex flex-wrap items-center gap-3 border-t border-rule px-5 py-4">
+                  {status.data.unprepared > 0 ? (
+                    <>
+                      <p className="max-w-prose flex-1 text-sm leading-relaxed text-bone-dim">{p.unprepared(status.data.unprepared)}</p>
+                      <Button
+                        disabled={run.isPending || status.data.preparing}
+                        onClick={() => run.mutate('media.variants')}
+                      >
+                        {run.isPending && run.variables === 'media.variants' ? (
+                          <Spinner className="size-4" />
+                        ) : (
+                          <Glyph name="image" className="size-4" />
+                        )}
+                        {p.prepareNow}
+                      </Button>
+                    </>
+                  ) : (
+                    <p className="text-sm text-bone-faint">{p.allPrepared}</p>
+                  )}
                 </div>
               </Panel>
 

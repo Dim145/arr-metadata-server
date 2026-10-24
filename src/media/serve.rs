@@ -7,20 +7,30 @@
 //! bytes. Ranges are honoured, one at a time: Safari plays no sound without.
 //! The type a file is served as is its key's extension's, whatever anybody
 //! said of it.
+//!
+//! A copy of a picture — `<hash>-480.webp`, `<hash>-square.jpg` — is made
+//! the first time it is asked for and kept: see [`super::variants`]. An
+//! AVIF is the night's to make, never a request's.
 
-use std::{ops::Range, time::Duration};
+use std::{ops::Range, sync::LazyLock, time::Duration};
 
+use anyhow::Context as _;
 use axum::{
     body::Body,
     extract::{Path, State},
     http::{HeaderMap, HeaderValue, Method, StatusCode, header},
     response::{IntoResponse, Response},
 };
+use bytes::Bytes;
 use object_store::GetRange;
 
-use crate::state::AppState;
+use crate::{db::repo, state::AppState};
 
-use super::file;
+use super::{
+    file::{self, Made},
+    store::Store,
+    variants::{self, Format},
+};
 
 /// How long a bucket's own address is good for, when a reader is sent to
 /// it. Longer than any download; shorter than a day's caching would be.
@@ -36,12 +46,15 @@ pub async fn get(
     Path(key): Path<String>,
     headers: HeaderMap,
 ) -> Response {
-    if !file::valid_key(&key) {
+    let Some(parsed) = file::parse_key(&key) else {
         return StatusCode::NOT_FOUND.into_response();
-    }
+    };
     let Some(store) = state.media.store() else {
         return StatusCode::NOT_FOUND.into_response();
     };
+    if matches!(parsed.made, Made::Width(_) | Made::Square) {
+        return copy(&state, store, &method, parsed, &headers).await;
+    }
 
     // A thumbnail is looked up by its picture's key.
     let is_thumb = file::is_thumb(&key);
@@ -169,6 +182,245 @@ pub async fn get(
     )
     .body(Body::from_stream(found.stream))
     .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+/// Copies made in the last minute, by their key: a page's first visit asks
+/// for a dozen at once, and a second reader asking for one being made waits
+/// for it rather than making it again beside it.
+static MADE: LazyLock<moka::future::Cache<String, Bytes>> = LazyLock::new(|| {
+    moka::future::Cache::builder()
+        .weigher(|_, bytes: &Bytes| u32::try_from(bytes.len()).unwrap_or(u32::MAX))
+        .max_capacity(64 * 1024 * 1024)
+        .time_to_live(Duration::from_secs(60))
+        .build()
+});
+
+/// A copy of a picture kept: from the store, or made now and kept.
+async fn copy(
+    state: &AppState,
+    store: &Store,
+    method: &Method,
+    asked: file::Key<'_>,
+    headers: &HeaderMap,
+) -> Response {
+    let not_found = || StatusCode::NOT_FOUND.into_response();
+    // The picture it is a copy of, which must be a picture this server
+    // keeps: a sound has no copies, and nothing else is made.
+    let Some(original) = state.media.keyed_by_sha(asked.stem) else {
+        return not_found();
+    };
+    let Some(known) = state.media.keyed(&original) else {
+        return not_found();
+    };
+    if !file::content_type_of(&original).is_some_and(|kind| kind.starts_with("image/")) {
+        return not_found();
+    }
+    let Some(format) = Format::of_ext(asked.ext) else {
+        return not_found();
+    };
+    // Never wider than the picture: a width past its own is its own.
+    let made = match asked.made {
+        Made::Width(width) => match known.look.width {
+            Some(own) => match variants::width_made(width, own) {
+                Some(made) => Made::Width(made),
+                None => return not_found(),
+            },
+            None if variants::WIDTHS.contains(&width) => Made::Width(width),
+            None => return not_found(),
+        },
+        Made::Square => {
+            if known
+                .look
+                .width
+                .zip(known.look.height)
+                .is_some_and(|(width, height)| height > width)
+            {
+                return not_found();
+            }
+            Made::Square
+        }
+        Made::Own | Made::Thumb => return not_found(),
+    };
+    let key = file::made_key(asked.stem, made, format.ext());
+
+    if format == Format::Avif {
+        return avif(
+            state, store, method, &original, asked.stem, made, &key, headers,
+        )
+        .await;
+    }
+
+    let etag = format!("\"{key}\"");
+    if none_match(headers, &etag) {
+        return not_modified(&etag);
+    }
+    // Sent to the bucket itself, when that is how it is set and the copy
+    // is there already; one that is not is made, and answered from here.
+    if state.text("media.serve").as_deref() == Some("redirect")
+        && store.exists(&key).await.unwrap_or(false)
+        && let Ok(Some(url)) = store.presign(&key, method.clone(), PRESIGNED_FOR).await
+    {
+        return redirect(url.as_str(), "private, max-age=3000");
+    }
+
+    match kept_or_made(state, store, &original, asked.stem, made, format, &key).await {
+        Ok(bytes) => whole(method, format_type(format), &key, &etag, bytes, IMMUTABLE),
+        Err(e) => {
+            tracing::warn!(
+                key,
+                error = format_args!("{e:#}"),
+                "could not make a copy of a picture"
+            );
+            // The picture itself, whole: a page shows it rather than nothing.
+            redirect(&state.media.url_for(&original), "no-store")
+        }
+    }
+}
+
+/// An AVIF copy: the night's task makes them, and a page is offered one
+/// only where it exists. One whose file has gone — a store moved, a restore
+/// onto a new machine — is answered with the WebP of the same width, not
+/// kept for long, and forgotten, so that the next night makes it again.
+#[allow(clippy::too_many_arguments)]
+async fn avif(
+    state: &AppState,
+    store: &Store,
+    method: &Method,
+    original: &str,
+    stem: &str,
+    made: Made,
+    key: &str,
+    headers: &HeaderMap,
+) -> Response {
+    let etag = format!("\"{key}\"");
+    if none_match(headers, &etag) {
+        return not_modified(&etag);
+    }
+    match store.read(key).await {
+        Ok(Some(bytes)) => {
+            return whole(method, "image/avif", key, &etag, bytes, IMMUTABLE);
+        }
+        Ok(None) => {}
+        Err(e) => {
+            tracing::warn!(
+                key,
+                error = format_args!("{e:#}"),
+                "could not read a medium"
+            );
+            return StatusCode::BAD_GATEWAY.into_response();
+        }
+    }
+    if let Made::Width(width) = made {
+        state.media.drop_avif(stem, width);
+        if let Err(e) = repo::asset::delete_variant(&state.db, key).await {
+            tracing::debug!(key, error = %e, "could not forget a copy whose file is gone");
+        }
+    }
+    let webp = file::made_key(stem, made, Format::Webp.ext());
+    match kept_or_made(state, store, original, stem, made, Format::Webp, &webp).await {
+        Ok(bytes) => whole(
+            method,
+            "image/webp",
+            &webp,
+            &format!("\"{webp}\""),
+            bytes,
+            "no-cache",
+        ),
+        Err(_) => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+/// A copy's bytes: the store's, or made now, put there and noted — once,
+/// however many ask for it at the same moment.
+async fn kept_or_made(
+    state: &AppState,
+    store: &Store,
+    original: &str,
+    stem: &str,
+    made: Made,
+    format: Format,
+    key: &str,
+) -> anyhow::Result<Bytes> {
+    if let Some(bytes) = store.read(key).await? {
+        return Ok(bytes);
+    }
+    MADE.try_get_with(key.to_string(), async {
+        let bytes = store
+            .read(original)
+            .await?
+            .context("the picture is not in the store")?;
+        // What the picture is to its work: a logo is copied without loss.
+        let cover = match state.media.keyed(original) {
+            Some(known) => repo::asset::cover_of(&state.db, &known.origin)
+                .await
+                .unwrap_or(None),
+            None => None,
+        };
+        let copy = variants::off_thread(move || {
+            let decoded = variants::Decoded::read(&bytes)?;
+            variants::make(&decoded, made, format, cover)
+        })
+        .await?;
+        // Filed under what was made: a width asked of a picture whose own
+        // was not known may have come out narrower.
+        let filed = copy.key(stem);
+        let content_type = copy.content_type();
+        let made_bytes = Bytes::from(copy.bytes);
+        store.put(&filed, made_bytes.clone(), content_type).await?;
+        if let Err(e) = repo::asset::add_variant(
+            &state.db,
+            &repo::asset::Variant {
+                key: filed.clone(),
+                stem: stem.to_string(),
+                width: i32::try_from(copy.width).unwrap_or(i32::MAX),
+                height: i32::try_from(copy.height).unwrap_or(i32::MAX),
+                format: format.as_str().to_string(),
+                bytes: i64::try_from(made_bytes.len()).unwrap_or(i64::MAX),
+            },
+        )
+        .await
+        {
+            tracing::warn!(key = filed, error = %e, "could not note a copy made");
+        }
+        Ok::<_, anyhow::Error>(made_bytes)
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("{e:#}"))
+}
+
+fn format_type(format: Format) -> &'static str {
+    match format {
+        Format::Webp => "image/webp",
+        Format::Avif => "image/avif",
+        Format::Jpeg => "image/jpeg",
+    }
+}
+
+/// A whole file's answer, from bytes in hand: nothing for a `HEAD`.
+fn whole(
+    method: &Method,
+    content_type: &str,
+    key: &str,
+    etag: &str,
+    bytes: Bytes,
+    cache: &'static str,
+) -> Response {
+    let length = bytes.len() as u64;
+    let body = if *method == Method::HEAD {
+        Body::empty()
+    } else {
+        Body::from(bytes)
+    };
+    let mut response = answer(content_type, key, etag, length, None)
+        .body(body)
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
+    // What `answer` says of caching, unless this one is to be asked again.
+    if cache != IMMUTABLE {
+        response
+            .headers_mut()
+            .insert(header::CACHE_CONTROL, HeaderValue::from_static(cache));
+    }
+    response
 }
 
 /// The headers of a file's answer, whole or in part: `length` is what the

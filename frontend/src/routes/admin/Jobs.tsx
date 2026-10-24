@@ -48,6 +48,8 @@ const TASKS: TaskId[] = [
   'export.nfo',
   'media.store',
   'media.sweep',
+  'media.variants',
+  'media.avif',
   'tls.renew',
   'update.check',
   'arr.seed',
@@ -76,6 +78,13 @@ export function describeDetail(detail: string | null | undefined, t: Dict, local
   if ((m = detail.match(/^(\d+) of (\d+): (\d+) stored, (\d+) failed$/))) return s.storedProgress(n(m[1]), n(m[2]), n(m[3]), n(m[4]))
   if ((m = detail.match(/^(\d+) stored, (\d+) failed, of (\d+)$/))) return s.stored(n(m[1]), n(m[2]), n(m[3]))
   if ((m = detail.match(/^(\d+) forgotten, (\d+) files removed$/))) return s.swept(n(m[1]), n(m[2]))
+  // The pictures prepared, and the night's AVIF copies.
+  if ((m = detail.match(/^stopped: (\d+) prepared, (\d+) failed, of (\d+)$/))) return s.preparedStopped(n(m[1]), n(m[2]), n(m[3]))
+  if ((m = detail.match(/^(\d+) of (\d+): (\d+) prepared, (\d+) failed$/))) return s.preparedProgress(n(m[1]), n(m[2]), n(m[3]), n(m[4]))
+  if ((m = detail.match(/^(\d+) prepared, (\d+) failed, of (\d+)$/))) return s.prepared(n(m[1]), n(m[2]), n(m[3]))
+  if ((m = detail.match(/^stopped: (\d+) copies made, (\d+) failed, of (\d+) pictures$/))) return s.avifStopped(n(m[1]), n(m[2]), n(m[3]))
+  if ((m = detail.match(/^(\d+) looked at: (\d+) copies made, (\d+) failed$/))) return s.avifProgress(n(m[1]), n(m[2]), n(m[3]))
+  if ((m = detail.match(/^(\d+) copies made, (\d+) failed, of (\d+) pictures$/))) return s.avif(n(m[1]), n(m[2]), n(m[3]))
   // A certificate's end, as the reader's locale writes a date.
   const day = (iso: string | undefined) => (iso ? new Date(`${iso}T00:00:00Z`).toLocaleDateString(undefined, { dateStyle: 'medium', timeZone: 'UTC' }) : '')
   if ((m = detail.match(/^renewed; valid until (\d{4}-\d{2}-\d{2})$/))) return s.renewed(day(m[1]))

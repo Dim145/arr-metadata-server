@@ -18,7 +18,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
-import { Link, useLocation, useParams, useSearchParams } from 'react-router'
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router'
 
 import { useAdminTitle } from '../../components/AdminShell'
 import { Artwork } from '../../components/media'
@@ -29,7 +29,7 @@ import * as fmt from '../../lib/format'
 import { useI18n } from '../../lib/i18n'
 import { statusLabel } from '../../lib/labels'
 import { backdrop, hasSources, poster } from '../../lib/media'
-import type { FieldRegistry, MediaItem, Override, ProvenanceReport, Uploaded } from '../../lib/types'
+import type { FieldRegistry, MediaItem, MergeList, Override, ProvenanceReport, Uploaded } from '../../lib/types'
 
 import { ArtworkTab } from './editor/ArtworkTab'
 import { ElsewhereTab } from './editor/ElsewhereTab'
@@ -83,6 +83,18 @@ export function WorkEditor() {
   })
 
   useAdminTitle(item.data?.title ?? null)
+
+  // A work merged into another is opened as that one, under its own address:
+  // a lock set here would otherwise be set on the record that is gone. The
+  // work's own slug is an address of its own, and stays as it was typed.
+  const navigate = useNavigate()
+  const canonical = item.data?.id
+  const slug = item.data?.slug
+  useEffect(() => {
+    if (canonical && id !== canonical && id !== slug) {
+      navigate(`/admin/catalogue/${canonical}${location.search}${location.hash}`, { replace: true })
+    }
+  }, [canonical, slug, id, location.search, location.hash, navigate])
 
   // The back button and a `?tab=` typed in: the address leads.
   useEffect(() => {
@@ -411,6 +423,8 @@ export function WorkEditor() {
         </div>
       </header>
 
+      <MergedBanner id={work.id} onChanged={invalidate} />
+
       {reviewing ? (
         <RefreshReview work={work} registry={registry.data} onClose={() => setReviewing(false)} onRefresh={() => refresh.mutate()} />
       ) : null}
@@ -498,6 +512,78 @@ export function WorkEditor() {
           )}
         </div>
       </EditorLocksContext>
+    </div>
+  )
+}
+
+/**
+ * What was merged into the work, while the merge can be undone: one line a
+ * merge, with the way back. Undone, the other record is a work of its own
+ * again, and the line says so and leads to it.
+ */
+function MergedBanner({ id, onChanged }: { id: string; onChanged: () => void }) {
+  const { t, locale } = useI18n()
+  const b = t.admin.editor.merged
+  const queryClient = useQueryClient()
+
+  const merges = useQuery({
+    queryKey: ['item', id, 'merges'],
+    queryFn: () => api.get<MergeList>(`/items/${segment(id)}/merges`),
+  })
+  // The title travels with the request: once undone, the merge is gone from
+  // the list the banner reads, and the line that says so still names it.
+  const undo = useMutation({
+    mutationFn: (gone: { id: string; title: string }) =>
+      api.post<{ restored: string; taken: unknown[] }>(`/items/${segment(gone.id)}/unmerge`),
+    onSuccess: () => {
+      onChanged()
+      void queryClient.invalidateQueries({ queryKey: ['item', id, 'merges'] })
+      void queryClient.invalidateQueries({ queryKey: ['duplicates'] })
+    },
+  })
+
+  const restored = undo.data
+  const open = merges.data?.merges.filter((one) => one.work.id !== restored?.restored) ?? []
+  if (!open.length && !restored) return null
+
+  return (
+    <div className="rise mb-4 space-y-2">
+      {open.map(({ work: gone, undoUntil }) => (
+        <p
+          key={gone.id}
+          className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-panel border border-brass-deep bg-brass/[0.06] px-4 py-2.5 text-sm text-bone"
+        >
+          <Glyph name="copy" className="size-4 shrink-0 text-brass" />
+          <span className="min-w-0 flex-1">
+            {b.banner(gone.title, fmt.relative(gone.mergedAt, locale) ?? '')}{' '}
+            <span className="text-bone-dim">{b.until(fmt.dateTime(undoUntil, locale) ?? undoUntil)}</span>
+          </span>
+          <Button size="sm" disabled={undo.isPending} onClick={() => undo.mutate({ id: gone.id, title: gone.title })}>
+            {undo.isPending && undo.variables.id === gone.id ? <Spinner className="size-3.5" /> : <Glyph name="arrowLeft" className="size-3.5" />}
+            {undo.isPending && undo.variables.id === gone.id ? b.undoing : b.undo}
+          </Button>
+        </p>
+      ))}
+      {restored ? (
+        <p role="status" className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-sm text-bone-dim">
+          <span>
+            {b.undone(undo.variables?.title ?? '')}
+            {restored.taken.length ? ` ${b.taken(restored.taken.length)}` : ''}
+          </span>
+          <Link
+            to={`/admin/catalogue/${restored.restored}`}
+            className="inline-flex min-h-11 items-center text-bone underline decoration-rule-bright underline-offset-4 hover:text-vermillion"
+          >
+            {b.open}
+          </Link>
+        </p>
+      ) : null}
+      {undo.isError ? (
+        <p role="alert" className="flex items-center gap-2 px-1 text-sm text-vermillion">
+          <Glyph name="alert" className="size-4 shrink-0" />
+          {undo.error.message || b.failed}
+        </p>
+      ) : null}
     </div>
   )
 }

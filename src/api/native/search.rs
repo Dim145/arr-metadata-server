@@ -5,7 +5,7 @@
 //! The list of works (`GET /items?term=`) searches the same index; this is the
 //! shape for a search box rather than a page of cards.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use axum::{
     Extension, Json,
@@ -102,11 +102,20 @@ pub struct WorkHit {
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PersonHit {
+    /// Their record's id, which their page is filed under: `/people/{id}`.
+    pub id: String,
     pub name: String,
-    /// Their TMDB id, which their page is filed under; none for somebody
-    /// credited by name alone, whose works the list finds by that name.
+    /// The other name they were found by, where that is not their own.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matched: Option<String>,
+    /// Their TMDB id, where they are known by one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tmdb_id: Option<i64>,
+    /// Their portrait.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
+    /// What they did on the works anybody may see.
+    pub jobs: Vec<crate::domain::person::Job>,
     /// How many works of the catalogue credit them.
     pub works: i64,
 }
@@ -345,9 +354,8 @@ async fn works(
         .collect())
 }
 
-/// The people found, among those credited on a work the reader may see.
-/// Somebody credited by name alone who bears the name of somebody known by
-/// their TMDB id is taken for them: one person, not two lines of one name.
+/// The people found, among those credited on a work the reader may see, each
+/// once whatever names of theirs the term found.
 async fn people(
     state: &AppState,
     term: &Term,
@@ -356,31 +364,39 @@ async fn people(
     adult: bool,
     disabled: bool,
 ) -> AppResult<Vec<PersonHit>> {
-    let keys: Vec<String> = found.all().map(|row| row.ref_id.clone()).collect();
-    if keys.is_empty() {
+    let ids: Vec<String> = found.all().map(|row| row.ref_id.clone()).collect();
+    if ids.is_empty() {
         return Ok(Vec::new());
     }
-    let shown = repo::search::shown_people(&state.db, &keys, adult, disabled).await?;
+    let shown = repo::search::shown_people(&state.db, &ids, adult, disabled).await?;
     let ranked = best(term, found.all(), |row| {
         shown
             .contains(&row.ref_id)
             .then_some((None, row.popularity, true))
     });
-
-    let mut named: HashSet<&str> = HashSet::new();
-    for (_, row) in &ranked {
-        if row.ref_id.starts_with("tmdb:") {
-            named.insert(row.norm.as_str());
-        }
-    }
-    Ok(ranked
+    let chosen: Vec<&Found> = ranked
         .into_iter()
-        .filter(|(_, row)| row.ref_id.starts_with("tmdb:") || !named.contains(row.norm.as_str()))
         .take(limit as usize)
-        .map(|(_, row)| PersonHit {
-            name: row.text.clone(),
-            tmdb_id: search::index::PersonName::tmdb_id(&row.ref_id),
-            works: row.popularity.unwrap_or(0.0) as i64,
+        .map(|(_, row)| row)
+        .collect();
+    let ids: Vec<String> = chosen.iter().map(|row| row.ref_id.clone()).collect();
+    let named = repo::person::named(&state.db, &ids).await?;
+    Ok(chosen
+        .into_iter()
+        .filter_map(|row| {
+            let person = named.get(&row.ref_id)?;
+            Some(PersonHit {
+                id: row.ref_id.clone(),
+                name: person.name.clone(),
+                matched: (search::norm(&person.name) != row.norm).then(|| row.text.clone()),
+                tmdb_id: person.tmdb_id,
+                image: person
+                    .image
+                    .as_deref()
+                    .map(|url| state.media.localized(url)),
+                jobs: person.jobs.clone(),
+                works: row.popularity.unwrap_or(0.0) as i64,
+            })
         })
         .collect())
 }
@@ -577,6 +593,11 @@ mod tests {
         assert_eq!(hits["people"][0]["name"], "Wim Wenders");
         assert_eq!(hits["people"][0]["tmdbId"], 2725);
         assert_eq!(hits["people"][0]["works"], 1);
+        assert_eq!(
+            hits["people"][0]["jobs"],
+            serde_json::json!(["directing"]),
+            "what they did, for the hit to say"
+        );
         assert_eq!(
             hits["works"],
             Value::Array(Vec::new()),

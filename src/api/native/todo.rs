@@ -8,7 +8,8 @@
 //! line of the list lands on exactly that many, and a figure of nought is one
 //! the dashboard says nothing about. The locks a source moved under are
 //! counted by the condition `?missing=divergingLock` is to list them by
-//! (`repo::change::DIVERGING_LOCK`).
+//! (`repo::change::DIVERGING_LOCK`), and the works that look like another
+//! one by `?missing=duplicates`'s, once the duplicates are looked for again.
 
 use axum::{Extension, Json, extract::State};
 use serde::Serialize;
@@ -73,6 +74,10 @@ pub struct Todo {
     /// says something else than the lock now: worth a look, to keep the
     /// lock or to take what the source says.
     pub diverging_locks: i64,
+    /// Works that look like another one — under one identifier elsewhere,
+    /// under one title within a year, or a film and a series under one IMDb
+    /// id — that nobody said are not: each pair is two of them.
+    pub duplicates: i64,
 }
 
 /// How many works the catalogue lists under one gap: the filter's own count,
@@ -137,6 +142,9 @@ async fn todo(
 
 async fn counted(state: &AppState, include_adult: bool) -> anyhow::Result<Todo> {
     let db = &state.db;
+    // Looked for again first: the figure, and the list it leads to, are of
+    // the catalogue as it stands now.
+    crate::service::merge::look_again(state).await?;
 
     Ok(Todo {
         // The list's own count, rather than another way of reaching it.
@@ -160,6 +168,7 @@ async fn counted(state: &AppState, include_adult: bool) -> anyhow::Result<Todo> 
         backup_overdue: crate::jobs::backup::overdue(state).await?,
         last_backup_at: state.backups.newest_at().await?,
         diverging_locks: repo::change::count_diverging(db, include_adult).await?,
+        duplicates: lacking(state, include_adult, Missing::Duplicates).await?,
     })
 }
 
@@ -239,6 +248,7 @@ mod tests {
                 backup_overdue: true,
                 last_backup_at: None,
                 diverging_locks: 0,
+                duplicates: 0,
             }
         );
     }
@@ -560,6 +570,48 @@ mod tests {
         moved_under("For adults", true).await;
         assert_eq!(asked(&state, false).await.diverging_locks, 1);
         assert_eq!(asked(&state, true).await.diverging_locks, 2);
+    }
+
+    #[tokio::test]
+    async fn the_works_that_look_like_another_are_counted_as_the_register_lists_them() {
+        let state = super::super::testing::server().await;
+        store(&state, "Solaris", |w| w.year = Some(1972)).await;
+        store(&state, "Solaris", |w| {
+            w.year = Some(1972);
+            w.slug = "solaris-again".into();
+        })
+        .await;
+        store(&state, "Stalker", |w| w.year = Some(1979)).await;
+        // A pair for adults is counted for whoever is shown adult works.
+        store(&state, "Nymph", |w| {
+            w.year = Some(2013);
+            w.is_adult = true;
+        })
+        .await;
+        store(&state, "Nymph", |w| {
+            w.year = Some(2014);
+            w.slug = "nymph-2014".into();
+            w.is_adult = true;
+        })
+        .await;
+
+        // Looked for as the figure is read: nothing was looked for before.
+        let todo = asked(&state, false).await;
+        assert_eq!(todo.duplicates, 2, "{todo:?}");
+        assert_eq!(asked(&state, true).await.duplicates, 4);
+
+        let query = super::super::items::to_query(
+            &state,
+            &Identity::Anonymous,
+            serde_urlencoded::from_str("includeDisabled=true&missing=duplicates").expect("a query"),
+        )
+        .expect("checked");
+        assert_eq!(
+            repo::item::count_matching(&state.db, &query)
+                .await
+                .expect("counted"),
+            todo.duplicates
+        );
     }
 
     #[tokio::test]

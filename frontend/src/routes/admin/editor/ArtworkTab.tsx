@@ -32,10 +32,10 @@ import { ImagePicker } from './ImagePicker'
 import { Count, Empty, hostOf, useRemove } from './shared'
 
 /** The kinds in the order the table shows them; anything else follows. */
-const KINDS = ['poster', 'fanart', 'landscape', 'banner', 'clearlogo', 'clearart', 'characterart']
+const KINDS = ['poster', 'keyart', 'fanart', 'landscape', 'banner', 'clearlogo', 'clearart', 'discart', 'characterart']
 
 /** The kinds offered when adding one by hand. */
-const ADDABLE = ['poster', 'fanart', 'banner', 'clearlogo', 'landscape', 'clearart'] as const
+const ADDABLE = ['poster', 'keyart', 'fanart', 'banner', 'clearlogo', 'landscape', 'clearart', 'characterart', 'discart'] as const
 
 /** The lock a work-level poster or background is chosen with; none for the rest. */
 type ChoiceField = 'primaryPoster' | 'primaryFanart'
@@ -44,8 +44,10 @@ function choiceFor(image: Image): ChoiceField | null {
   return image.coverType === 'poster' ? 'primaryPoster' : image.coverType === 'fanart' ? 'primaryFanart' : null
 }
 
-const isWide = (kind: string) => kind !== 'poster'
-const isDrawn = (kind: string) => kind === 'clearlogo' || kind === 'clearart' || kind === 'characterart'
+/** A poster's shape — a key art is a poster without its lettering — or a square, a disc's or a character's, or else a wide one. */
+const isTall = (kind: string) => kind === 'poster' || kind === 'keyart'
+const isWide = (kind: string) => !isTall(kind) && kind !== 'discart' && kind !== 'characterart'
+const isDrawn = (kind: string) => kind === 'clearlogo' || kind === 'clearart' || kind === 'characterart' || kind === 'discart'
 
 export function ArtworkTab({ work, onChanged }: { work: MediaItem; onChanged: () => void }) {
   const { t } = useI18n()
@@ -109,8 +111,20 @@ export function ArtworkTab({ work, onChanged }: { work: MediaItem; onChanged: ()
   const kinds = [...KINDS.filter((k) => own.some((image) => image.coverType === k)), ...[...new Set(own.map((image) => image.coverType))].filter((k) => !KINDS.includes(k))]
   const kindLabel = (value: string) => (t.gallery.kind as Record<string, string>)[value] ?? value
   const coverLabel = (value: string) =>
-    lookup({ poster: c.poster, fanart: c.fanart, banner: c.banner, clearlogo: c.clearlogo, landscape: c.landscape, clearart: c.clearart }, value) ??
-    value
+    lookup(
+      {
+        poster: c.poster,
+        keyart: c.keyart,
+        fanart: c.fanart,
+        banner: c.banner,
+        clearlogo: c.clearlogo,
+        landscape: c.landscape,
+        clearart: c.clearart,
+        characterart: c.characterart,
+        discart: c.discart,
+      },
+      value,
+    ) ?? value
 
   // Under a heading that already names the kind, the caption says only
   // where the picture is from.
@@ -259,7 +273,7 @@ export function ArtworkTab({ work, onChanged }: { work: MediaItem; onChanged: ()
         title={p.titleAdd}
         subtitle={work.title}
         work={work}
-        shape={addKind === 'poster' ? 'poster' : 'wide'}
+        shape={isTall(addKind) ? 'poster' : 'wide'}
         uploadFields={{ coverType: addKind }}
         onChoose={(url) =>
           api
@@ -345,6 +359,7 @@ function ArtCard({
   const { t } = useI18n()
   const c = t.admin.editor.children
   const wide = isWide(image.coverType)
+  const tall = isTall(image.coverType)
   // An upload whose copy is gone keeps its `upload:` origin as its address:
   // nothing a browser can show, so the frame stays empty rather than asking
   // for it and being refused.
@@ -358,11 +373,16 @@ function ArtCard({
         primary ? 'border-brass' : image.isManual || hidden ? 'border-brass-deep' : 'border-rule hover:border-rule-bright',
       )}
     >
-      <div className={cn('relative bg-ink-high', wide ? (image.coverType === 'banner' ? 'aspect-[758/140]' : 'aspect-video') : 'aspect-2/3')}>
+      <div
+        className={cn(
+          'relative bg-ink-high',
+          tall ? 'aspect-2/3' : wide ? (image.coverType === 'banner' ? 'aspect-[758/140]' : 'aspect-video') : 'aspect-square',
+        )}
+      >
         {showable ? (
           <Picture
             url={image.url}
-            role={isDrawn(image.coverType) ? 'logo' : wide ? 'still' : 'card'}
+            role={isDrawn(image.coverType) ? 'logo' : tall ? 'card' : 'still'}
             alt=""
             className={cn('size-full', isDrawn(image.coverType) ? 'object-contain p-3' : 'object-cover', hidden && 'opacity-40 grayscale')}
           />

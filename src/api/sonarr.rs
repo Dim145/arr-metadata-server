@@ -1087,6 +1087,70 @@ mod tests {
         assert_eq!(fetched, 1, "{:?}", paths.lock());
     }
 
+    /// A series merged into another is answered under the id Sonarr kept it
+    /// by — v4's and v5's alike — with the survivor's record: Sonarr keeps the
+    /// series it holds, and reads the survivor's episodes into it, rather
+    /// than finding the survivor's id taken by a series it may hold already.
+    #[tokio::test]
+    async fn a_series_merged_into_another_is_answered_under_the_id_sonarr_kept() {
+        let state = server().await;
+        let kept = stored(&state).await;
+        let mut typed = MediaItem::empty(MediaKind::Series);
+        typed.title = "Rurouni Kenshin (typed)".into();
+        typed.slug = "rurouni-kenshin-typed".into();
+        typed.external_ids = ExternalIds {
+            tvdb: Some(999_001),
+            ..Default::default()
+        };
+        repo::item::upsert(
+            &state.db,
+            ItemWrite {
+                item: &typed,
+                replace_children: true,
+            },
+        )
+        .await
+        .expect("stored");
+        crate::service::merge::merge(
+            &state,
+            &crate::service::merge::Asker { by: None, ip: None },
+            &typed.id,
+            &kept.id,
+            Default::default(),
+        )
+        .await
+        .expect("asked")
+        .expect("merged");
+
+        let Json(v5) = asked(&state, "eng", 999_001, "official")
+            .await
+            .expect("answered");
+        assert_eq!(v5.tvdb_id, 999_001);
+        assert_eq!(v5.title, "Rurouni Kenshin");
+        assert_eq!(v5.episodes.as_deref().map(<[_]>::len), Some(3));
+        let sent = serde_json::to_value(&v5).unwrap();
+        assert_eq!(sent["episodes"][0]["tvdbShowId"], 999_001);
+
+        let Json(v4) = show(
+            State(state.clone()),
+            Path(ShowPath {
+                language: "en".into(),
+                tvdb_id: 999_001,
+            }),
+        )
+        .await
+        .expect("answered");
+        assert_eq!(v4.tvdb_id, 999_001);
+        assert_eq!(v4.title, "Rurouni Kenshin");
+        assert_eq!(v4.episodes.len(), 3);
+
+        // Its own id still answers as it did.
+        let Json(own) = asked(&state, "eng", 416802, "official")
+            .await
+            .expect("answered");
+        assert_eq!(own.tvdb_id, 416802);
+    }
+
     /// Locks for the series, in a language or in every one, read afresh.
     async fn locked(state: &AppState, id: &str, locks: &[(&str, &str, &str, &str)]) {
         for (scope, field, language, value) in locks {

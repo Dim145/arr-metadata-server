@@ -312,11 +312,14 @@ fn fold(into: &mut MediaItem, other: MediaItem) {
     union_ratings(&mut into.ratings, other.ratings);
     union_translations(&mut into.translations, other.translations);
 
-    // One provider's cast, not a blend of several: nothing identifies a person
-    // across providers, so a union would list the same actor twice.
-    if into.credits.is_empty() {
-        into.credits = other.credits;
-    }
+    // One provider's cast, not a blend of several, but for TheTVDB's people,
+    // matched into it: see `rules::merge_cast`.
+    rules::merge_cast(
+        &mut into.credits,
+        &mut into.people,
+        other.credits,
+        other.people,
+    );
 
     // Likewise what a work is filed beside: one provider's relations, whole.
     if into.relations.is_empty() {

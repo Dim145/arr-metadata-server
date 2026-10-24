@@ -608,6 +608,15 @@ function Footer({ onKeys }: { onKeys: () => void }) {
           >
             {t.nav.figures}
           </Link>
+          {/* Here rather than in the bar, which has no room between a tablet's
+              width and a laptop's: a person is mostly reached from a work's
+              cast, and the index of them all is a way in like the figures. */}
+          <Link
+            to="/people"
+            className="inline-flex min-h-11 items-center text-xs text-bone-dim transition-colors duration-150 hover:text-bone"
+          >
+            {t.people.title}
+          </Link>
           {/* The list of the keys, for whoever reads with a keyboard and has
               not met `?` yet: not drawn under a finger, which has none. */}
           <button

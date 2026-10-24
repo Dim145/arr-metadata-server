@@ -9,6 +9,7 @@ import {
   hasSources,
   headlineRating,
   latestEpisode,
+  lookOf,
   nextEpisode,
   pick,
   poster,
@@ -38,11 +39,50 @@ describe('an image in a role', () => {
     expect(sized(tmdb, 'full')).toEqual({ src: tmdb, original: tmdb })
   })
 
-  it('is a copy kept here’s thumbnail, with the copy itself for a wide screen', () => {
-    const kept = `/media/${'a'.repeat(64)}.png`
-    const sourced = sized(kept, 'poster')
-    expect(sourced.src).toBe(`/media/${'a'.repeat(64)}-t.jpg`)
-    expect(sourced.srcSet).toBe(`/media/${'a'.repeat(64)}-t.jpg 480w, ${kept} 2000w`)
+  describe('a copy kept here', () => {
+    const stem = `/media/${'a'.repeat(64)}`
+    const kept = `${stem}.png`
+    const at = (widths: number[], format = 'webp') => widths.map((w) => `${stem}-${w}.${format} ${w}w`).join(', ')
+
+    it('is offered at its role’s widths, as WebP, the original kept to fall back on', () => {
+      const sourced = sized(kept, 'poster')
+      expect(sourced.src).toBe(`${stem}-480.webp`)
+      expect(sourced.srcSet).toBe(at([240, 480, 960]))
+      expect(sourced.avif).toBeUndefined()
+      expect(sourced.original).toBe(kept)
+      expect(sized(kept, 'backdrop').srcSet).toBe(at([640, 1280, 1920]))
+      expect(sized(kept, 'still').srcSet).toBe(at([320, 640]))
+      expect(sized(kept, 'headshot').srcSet).toBe(at([120, 240]))
+    })
+
+    it('is never offered wider than 1920, the lightbox’s included', () => {
+      expect(sized(kept, 'full').srcSet).toBe(at([640, 1280, 1920]))
+    })
+
+    it('is never offered wider than it is, and offered at its own width', () => {
+      const sourced = sized(kept, 'card', { width: 680, height: 1000 })
+      expect(sourced.srcSet).toBe(at([240, 480, 680]))
+      expect([sourced.width, sourced.height]).toEqual([480, 706])
+      expect(sized(kept, 'card', { width: 200, height: 300 }).srcSet).toBe(at([200]))
+    })
+
+    it('offers its AVIF copies where they reach as wide as the WebP', () => {
+      const poster = { width: 2000, height: 3000, avif: [480, 960] }
+      expect(sized(kept, 'card', poster).avif).toBe(at([480, 960], 'avif'))
+      expect(sized(kept, 'thumb', poster).avif).toBe(at([480], 'avif'))
+      // A background's 1280 would draw a dense screen's 1920 soft.
+      expect(sized(kept, 'backdrop', { width: 3840, height: 2160, avif: [1280] }).avif).toBeUndefined()
+      expect(sized(kept, 'backdrop', { width: 1280, height: 720, avif: [1280] }).avif).toBe(at([1280], 'avif'))
+    })
+
+    it('is found by its address once a work has said what it looks like', () => {
+      const look = { width: 1000, height: 1500, color: '#14285a', thumbhash: 'AQIDBAU=' }
+      const item = work({ images: [image('p', { url: `${stem}.jpg` })], pictures: { [`${stem}.jpg`]: look } })
+      expect(poster(item)).toBe(`${stem}.jpg`)
+      expect(lookOf(`${stem}.jpg`)).toEqual(look)
+      expect(sized(`${stem}.jpg`, 'card').srcSet).toBe(at([240, 480, 960]))
+      expect(sized(`${stem}.jpg`, 'poster').width).toBe(480)
+    })
   })
 
   it('is TheTVDB’s thumbnail in the small roles, and its original elsewhere', () => {

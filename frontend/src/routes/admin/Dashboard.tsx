@@ -238,6 +238,15 @@ function errandLines(todo: Errands, k: Dict['admin']['overview'], locale: string
       text: (shown) => k.todoDiverging(shown, todo.divergingLocks),
     },
     {
+      // Two records of one work, or what looks like it: merged, or said not
+      // to be one, from the catalogue narrowed to them.
+      key: 'duplicates',
+      to: '/admin/catalogue?missing=duplicates',
+      glyph: 'copy',
+      count: todo.duplicates,
+      text: (shown) => k.todoDuplicates(shown, todo.duplicates),
+    },
+    {
       key: 'keys',
       to: '/admin/clients',
       glyph: 'key',
@@ -270,12 +279,12 @@ function errandLines(todo: Errands, k: Dict['admin']['overview'], locale: string
  *
  * A line for each thing that is true — works whose last refresh failed, works
  * with no poster, no synopsis, no IMDb identifier, works never refreshed,
- * works with a lock their source moved under, keys about to lapse, media given
- * up on — each the way into the catalogue filtered to those works, or into the
- * page that settles it. A figure of nought is not
- * a line: a list that is always there, reading zero, is one nobody reads on
- * the day it says something. With nothing left, it says so once, as a thing
- * that is true too.
+ * works with a lock their source moved under, works that look like another,
+ * keys about to lapse, media given up on — each the way into the catalogue
+ * filtered to those works, or into the page that settles it. A figure of
+ * nought is not a line: a list that is always there, reading zero, is one
+ * nobody reads on the day it says something. With nothing left, it says so
+ * once, as a thing that is true too.
  */
 function ToDo() {
   const { t, locale } = useI18n()

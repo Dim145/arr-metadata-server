@@ -111,9 +111,18 @@ network you do not trust.
 | An item | `GET /plex/library/metadata/{ratingKey}` | A film, a series, a season or an episode. With `includeChildren=1`, a series' seasons or a season's episodes come with it. |
 | Its children | `GET /plex/library/metadata/{ratingKey}/children` | A series' seasons, or a season's episodes, a page at a time. |
 | Its grandchildren | `GET /plex/library/metadata/{ratingKey}/grandchildren` | A series' episodes, every season's, a page at a time. |
-| Its pictures | `GET /plex/library/metadata/{ratingKey}/images` | Posters (`coverPoster`), backgrounds (`background`), logos (`clearLogo`) — the one the work leads with first — and an episode's still (`snapshot`). |
+| Its pictures | `GET /plex/library/metadata/{ratingKey}/images` | Posters (`coverPoster`), backgrounds (`background`), logos (`clearLogo`) — the one the work leads with first — an episode's still (`snapshot`), and the square cut from the background the work leads with (`backgroundSquare`) when this server keeps it. |
 
 All of it is in the OpenAPI document under *Plex provider*.
+
+An item carries its poster as `thumb` and as an `Image` of type `coverPoster`, its
+background as `art` and `background`, its logo as `clearLogo` and an episode's still as
+`snapshot`: the one the work leads with, as Plex keeps one of each. A background this
+server keeps is also cut into a square from its middle, 1080 pixels a side, and given as
+`backgroundSquare`, which the square tiles of Plex's newer apps show; Kodi, Jellyfin and
+Emby have no square picture, and are given none. Banners, clear art, landscapes, key art
+and disc art have no word in Plex, and are not sent. Plex is given the pictures as they
+were fetched, JPEG and PNG, never the WebP copies this server's own pages are given.
 
 ### Rating keys
 

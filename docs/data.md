@@ -114,6 +114,76 @@ people. How many of TMDB's **actors** a work keeps is the setting `tmdb.castLimi
 A film made from Radarr's service alone no longer lists its composer and its editor among the actors: its
 directors, writers and producers are kept, and the rest left out.
 
+### TheTVDB's characters
+
+TheTVDB lists a series' **characters** — the part, the person who plays it, TheTVDB's id of that person and
+their portrait. The first of them, in TheTVDB's order, are read into the cast, and how many is the setting
+`tvdb.castLimit`:
+
+| Setting | Default | Range | What it does |
+|---|---|---|---|
+| `tvdb.castLimit` | `25` when unset | 1 to 200 | How many of TheTVDB's characters a series keeps, in TheTVDB's order. A work already held takes the new figure at its next refresh |
+
+Each is matched to the person of the cast another source gave — by TMDB's id where both give one, else by the
+name, whatever its accents, its case and the order of its words (TheTVDB writes some Japanese names family name
+first), or by the name in its own script TMDB gives — and gives that person TheTVDB's id, and a part or a
+portrait where the cast had none. One nobody else listed is added after the cast. Somebody who plays two parts is
+one credit, the parts put together. A guest of one episode is not in the series' cast.
+
+### A guest is credited on the episode
+
+TMDB's season documents, which a series is read with already, name each episode's **guests**, its **director**
+and its **writers**. They are kept on that episode, not on the work: the work's cast and crew — what Sonarr,
+Radarr, Plex and the NFO are given — are what they were. An episode is the work's own, as TheTVDB may number
+it: TMDB's id of the episode places the credit on the episode the merge gave that id, and a credit of an episode
+the work does not list is left out. Each episode keeps as many guests as `tmdb.castLimit` keeps of the cast, in
+TMDB's order; never a producer, whom a series credits on every episode. A refresh that brings no episode credits
+— TMDB not asked, or not answering — keeps those held. A person's page lists them under the series, with how
+many episodes and which years.
+
+### Each person a record
+
+Everybody the credits name is a **person**, a record of their own: one, whatever the credits call them, with the
+ids TMDB, TheTVDB and IMDb file them under, the other names they go by, their name in their own script, and —
+once their page has been read — what TMDB says of them: born when and where, a biography, portraits, what they
+are known for. That is asked of TMDB the first time the page is read and kept a month, never for everybody a
+refresh credits; a biography in another language than the catalogue's is asked when a reader asks for it, and
+kept a day.
+
+A credit is filed under its person as it is written, by these rules, in this order:
+
+1. **Kept.** A credit the sources give again — the same kind, on the same episode or on none, naming the same
+   TMDB id or else the same name — keeps the person it had. Whatever was decided by hand outlives the next
+   refresh.
+2. **TMDB's id.** The person with that TMDB id, or the one a person with it was merged into; else the person
+   TheTVDB's id names, who is given the TMDB id; else a new record.
+3. **TheTVDB's id**, for a credit TMDB gives no id for.
+4. **The name**, the person's own or one they go by: the one person known by a TMDB id who goes by it; else the
+   first person known by that name alone; else a new record.
+
+What a source says beyond the name — TheTVDB's id, the name in its own script, a portrait — completes a record
+found by an id, never one found by a name, which is a guess. A credit added by hand is filed the same way within
+seconds of being added.
+
+**At the upgrade** (migration 0041), a record is made of everybody the credits held name: one for each TMDB id,
+under the name most of its credits give it, its other spellings kept among its names; one for each name the
+other credits give. A credit giving a name and no TMDB id where exactly one person known by a TMDB id is
+credited under that name somewhere is taken for that person — the actor typed in by hand, the guest TheTVDB
+lists, are far more often the actor TMDB credits elsewhere than somebody else. Two people known by TMDB ids
+under one name: the credit by name alone is neither. The risk is a **homonym** — somebody else of the same
+name, filed under the better-known one — and the way out is to split the credit off on the People page.
+
+On **People** in the administration, whoever maintains the catalogue lists everybody with what they did and how
+many works credit them, or those known by no TMDB id, or those who share a name with somebody else — the likely
+homonyms and duplicates — and puts a record right: **merges** two records of one person (the credits filed under
+the one kept, which goes by the other's names and takes the ids it lacks; the other kept as a pointer, so that its
+ids and its address lead there), **splits** credits off onto a record of their own, gives a credit typed by name
+**the person it is of**, and **enters** somebody by hand with their ids. A record put right by hand keeps what
+was typed: TMDB fills only what is left empty. A credit a lock hides names nobody: a person whose every credit is
+hidden is neither in the index nor found by the search. Each of these writes is on the audit trail, under the
+record it was made to: `person.created`, `person.updated`, `person.merged`, `person.split` and
+`person.credited`.
+
 ## Wikidata, AniList's format and tags
 
 TMDB's **Wikidata item** is kept as an identifier — `Q1079`, whether it arrives so or as a Wikidata address —

@@ -141,6 +141,7 @@ asked the sources again:
 | `edit` | a person | a field of what was entered by hand, which has no source to be locked against; a season, an episode, a picture, a credit or an alternative title added or removed by hand, and a credit added by hand corrected |
 | `revert` | a person | a value gone back to from the journal, or a change undone |
 | `import` | a person | a lock brought in from a file (`POST /api/v1/admin/locks`) |
+| `merge` | a person | another record merged into this one: a line naming it, and each field kept from it — see [Duplicates](#duplicates). Undone, the same lines go back as a `revert` |
 
 A refresh writes everything it changed at once, in one transaction, and nothing when it
 changed nothing — what most refreshes find. Of a season the journal follows the title, the
@@ -259,6 +260,7 @@ sent, and a value the server does not know is refused with a `400`. Exactly:
 | `overview` | has an empty overview in the language it is stored in: none from its sources, or one cleared by hand. An overview locked for one other language alone does not count |
 | `imdb` | has no IMDb identifier |
 | `refresh` | was never refreshed although it has an identifier to be refreshed by. A work entered by hand is never refreshed, and is not counted |
+| `duplicates` | is one of a pair proposed as one work, not said to be two, the other still a work of its own: see [Duplicates](#duplicates) |
 
 ### Doing one thing to many works
 
@@ -362,6 +364,76 @@ edited. Its identifiers are what Sonarr and Radarr find it by — TheTVDB's for 
 for a film — and where its links lead. An identifier that another entry already claims is
 refused with a `409`.
 
+## Duplicates
+
+Two records of one work turn up in a catalogue now and then: a film entered by hand before a
+client asked for it, a series filed under TMDB's id and again under TheTVDB's, two entries TMDB
+has since merged into one. The server looks for them, proposes them, folds two into one when
+asked — and takes them apart again for two weeks.
+
+### Found
+
+Two works are proposed as one when:
+
+| How sure | When |
+|---|---|
+| *certain* | both are films, or both series, and are filed under one identifier elsewhere — TMDB's, TheTVDB's, IMDb's, AniList's, MyAnimeList's or Fan-Kai's. An identifier is held by one work at a time, and a refresh of one may take it from the other: the other still counts as filed under it while its journal says it was, or a lock on its identifiers |
+| *probable* | both are films, or both series, under one title as the search folds it — accents, case and punctuation aside — and a year apart at the most, or one of them without a year |
+| *flag* | a film and a series carry one IMDb id: one of them is filed wrongly. Said, and never merged — put its identifiers right in its editor |
+
+They are looked for again whenever the dashboard's list of errands, or the list of pairs, is
+read. The dashboard counts the works in a pair — *N works look like another one* — and leads to
+the register narrowed to them, `/admin/catalogue?missing=duplicates`, where each row carries
+the other's title: pressed, it sets the two side by side. *Not the same work*, there, says the
+two are not one work: the pair is remembered, and never proposed again whatever is found later.
+
+### Merged
+
+**Merge…**, in a row's **⋯** menu, merges the work with another found by its title; a pair's
+mark opens the same dialog on the two. One record is kept, and the other is merged into it.
+The rule keeps the one its sources fill over one entered by hand, which is never refreshed:
+kept, a stub typed in by hand would hold what the sources said on the day of the merge, for
+good. Then the one somebody put something into by hand — a lock, a season, an episode, a
+picture, a credit, a title — else the one filed under more identifiers, else the older; *Keep
+this one instead* keeps the other. Each field the two give
+different values of is listed, the kept record's value chosen unless the other is: a value taken
+from the merged record is locked on the kept one, as an edit is. The dialog says in a paragraph
+what the merge does before anything is done, and one transaction does it:
+
+- what the merged record holds moves onto the kept one, table by table — its seasons and
+  episodes, pictures, credits, other titles, translations, ratings, its places in selections
+  and its journal, and its orders, thawed: the kept one's numbering stands. Where the kept one
+  holds the same — a season of the same number, an episode at the same place, a picture at the
+  same address, a translation into the same language, a credit of the same person in the same
+  part, an order under the same key — the kept one's stands, and the merged one's is set aside
+  in the merge's record. What its sources last answered is not kept: the kept one has its own;
+- its locks move where the kept one locks nothing of the same; where both lock a field, the
+  choice made for it decides, and the kept one's lock stands without one;
+- its identifiers become the kept one's where the kept one has none of their source;
+- its id, its slug and each of its identifiers are filed as **aliases** of the kept one, for
+  good: the site, the API, Sonarr, Radarr and Plex go on answering under them, with the kept
+  work — see [After a merge](sonarr-radarr.md#after-a-merge). The site puts the kept work's
+  address in place of an old one;
+- the merged record stays, switched off, never refreshed and in no list, beside what the merge
+  did.
+
+The kept one's journal says so — a line naming the record merged in, and each field kept from
+it, under *Merge* — and the audit trail has `item.merged`, with what the kept work was and
+became. With [Tell them of a change](sonarr-radarr.md#telling-them-of-a-change) on, Sonarr or
+Radarr is told of both works. A film and a series are never merged, whatever they share.
+
+### Undone
+
+For `merge.undoDays` days — 14 unless set, 365 at most, `0` for no undo at all — the kept
+one's editor opens on a line saying what was merged into it, with *Undo the merge*. The merged
+record comes back as it was: what moved over and is still as the merge left it moves back, what
+was set aside is put back, its locks and identifiers with them, and the aliases go. What changed
+on the kept one since — a lock set again, a refresh — stays the kept one's, and an identifier
+another work has taken since stays with it, which the undo says. The record put back is due a
+refresh, which asks its sources again — unless it was entered by hand. The two are not proposed
+as one work again. The journal writes the way back as a `revert`, and the audit trail
+`item.unmerged`. The routes are in [Two records of one work](api.md#two-records-of-one-work).
+
 ## The order of the sources
 
 When several sources describe a work, the first with a value gives it, and the next fill in
@@ -415,12 +487,13 @@ it counts, and a figure of nought is no line; with nothing left, the card says s
 | Works with a lock whose source has changed | a lock a source moved under since it was set, and which says something else now | `/admin/catalogue?missing=divergingLock` |
 | API keys about to lapse | enabled, not yet expired, expiring within 14 days | `/admin/clients` |
 | Pictures and themes given up on | media whose every fetch failed | `/admin/media` |
+| Works that look like another one | `missing=duplicates`, the pairs looked for again first | `/admin/catalogue?missing=duplicates` |
 
 The four gaps are counted through the catalogue filter's own definition, over the same works
 its list shows — those switched off among them, and adult titles as the server's policy has
 them — so that a figure and the list it leads to agree. The answer is camel-cased:
 `refreshFailed`, `noPoster`, `noOverview`, `noImdb`, `neverRefreshed`, `expiringKeys`,
-`keyHorizonDays`, `failedMedia` and `divergingLocks`.
+`keyHorizonDays`, `failedMedia`, `divergingLocks` and `duplicates`.
 
 The banner of failed refreshes is the first line of the list. The count of locked fields is the
 last, quiet figure among the others, and the explanation of how locking works folds to its

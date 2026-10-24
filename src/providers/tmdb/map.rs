@@ -5,12 +5,15 @@
 //! handles movies as well as series. Rendering to Sonarr's or Radarr's wire
 //! format happens later, in `api::compat`, from the canonical form.
 
+use std::collections::BTreeMap;
+
 use crate::{
     db::{new_id, now},
     domain::{
         AlternativeTitle, CountryRelease, CoverType, Credit, CreditType, Episode, EpisodeOrder,
         ExternalIds, Image, MediaItem, MediaKind, OrderKind, OrderRecord, PlacedEpisode, Rating,
         RatingValue, ReleaseKind, Season, Translation, make_slug,
+        person::{EpisodeCredit, PersonRef},
     },
     providers::{
         lang::{iso_639_1_to_3, iso_3166_2_to_3},
@@ -111,7 +114,10 @@ pub fn tv_to_item(tv: &models::Tv, seasons: &[models::Season], cast: usize) -> M
         tv.backdrop_path.as_deref(),
         tv.images.as_ref(),
     );
-    item.credits = credits(tv.credits.as_ref(), &tv.created_by, cast);
+    let (cast_and_crew, mut known) = credits(tv.credits.as_ref(), &tv.created_by, cast);
+    item.credits = cast_and_crew;
+    item.people.episodes = episode_credits(seasons, cast, &mut known);
+    item.people.by_credit = known;
     item.alternative_titles = tv
         .alternative_titles
         .as_ref()
@@ -406,7 +412,9 @@ pub fn movie_to_item(movie: &models::Movie, cast: usize) -> MediaItem {
         movie.backdrop_path.as_deref(),
         movie.images.as_ref(),
     );
-    item.credits = credits(movie.credits.as_ref(), &[], cast);
+    let (cast_and_crew, known) = credits(movie.credits.as_ref(), &[], cast);
+    item.credits = cast_and_crew;
+    item.people.by_credit = known;
     item.alternative_titles = movie
         .alternative_titles
         .as_ref()
@@ -787,17 +795,21 @@ fn artwork(
     extra: Option<&models::Images>,
 ) -> Vec<Image> {
     let mut out = Vec::new();
-    let mut seen: Vec<String> = Vec::new();
+    // One picture may be two kinds: a textless poster is key art as well.
+    let mut seen: Vec<(CoverType, String)> = Vec::new();
 
-    let push =
-        |out: &mut Vec<Image>, seen: &mut Vec<String>, kind: CoverType, path: &str, order: i32| {
-            let url = image_url(path);
-            if seen.contains(&url) {
-                return;
-            }
-            seen.push(url.clone());
-            out.push(image(kind, &url, None, order));
-        };
+    let push = |out: &mut Vec<Image>,
+                seen: &mut Vec<(CoverType, String)>,
+                kind: CoverType,
+                path: &str,
+                order: i32| {
+        let url = image_url(path);
+        if seen.iter().any(|(k, u)| *k == kind && *u == url) {
+            return;
+        }
+        seen.push((kind, url.clone()));
+        out.push(image(kind, &url, None, order));
+    };
 
     if let Some(path) = poster {
         push(&mut out, &mut seen, CoverType::Poster, path, 0);
@@ -814,6 +826,25 @@ fn artwork(
                 CoverType::Poster,
                 &p.file_path,
                 order as i32 + 1,
+            );
+        }
+        // A poster TMDB files under no language has no title written on it:
+        // key art, the picture alone, which a client shows where the title
+        // is said beside it. The posters are asked for in the configured
+        // language and in none.
+        for (order, p) in images
+            .posters
+            .iter()
+            .filter(|p| p.iso_639_1.is_none())
+            .take(3)
+            .enumerate()
+        {
+            push(
+                &mut out,
+                &mut seen,
+                CoverType::Keyart,
+                &p.file_path,
+                order as i32,
             );
         }
         for (order, b) in images.backdrops.iter().take(5).enumerate() {
@@ -839,12 +870,39 @@ fn artwork(
     out
 }
 
-/// The cast, the first `limit` of it, then the crew.
+/// What TMDB says of a credited person beyond the name, by the credit's id:
+/// the name in their own script, their gender, how well known they are.
+type Known = BTreeMap<String, PersonRef>;
+
+/// What TMDB says of somebody it credits, where it says anything the credit
+/// has no room for.
+fn person_ref(
+    name: &str,
+    original_name: Option<&str>,
+    gender: Option<i64>,
+    popularity: Option<f64>,
+) -> Option<PersonRef> {
+    let known = PersonRef {
+        original_name: original_name
+            .and_then(crate::domain::person::in_own_script)
+            .filter(|o| o != name.trim()),
+        gender: gender
+            .and_then(|g| u8::try_from(g).ok())
+            .filter(|g| (1..=3).contains(g)),
+        popularity: popularity.filter(|p| *p > 0.0),
+        ..PersonRef::default()
+    };
+    (known != PersonRef::default()).then_some(known)
+}
+
+/// The cast, the first `limit` of it, then the crew, with what TMDB says of
+/// each person beyond the name.
 fn credits(
     credits: Option<&models::Credits>,
     creators: &[models::Creator],
     limit: usize,
-) -> Vec<Credit> {
+) -> (Vec<Credit>, Known) {
+    let mut known = Known::new();
     let mut out: Vec<Credit> = credits
         .map(|credits| {
             credits
@@ -852,23 +910,43 @@ fn credits(
                 .iter()
                 .take(limit.clamp(1, MAX_CAST))
                 .enumerate()
-                .map(|(i, member)| Credit {
-                    id: new_id(),
-                    credit_type: CreditType::Actor,
-                    person_name: member.name.clone(),
-                    character_name: non_empty(member.character.as_deref()),
-                    image: member.profile_path.as_deref().map(image_url),
-                    tmdb_person_id: member.id,
-                    credit_tmdb_id: member.credit_id.clone(),
-                    sort_order: member.order.unwrap_or(i as i32),
-                    is_manual: false,
+                .map(|(i, member)| {
+                    let credit = cast_credit(CreditType::Actor, member, i);
+                    if let Some(person) = person_ref(
+                        &member.name,
+                        member.original_name.as_deref(),
+                        member.gender,
+                        member.popularity,
+                    ) {
+                        known.insert(credit.id.clone(), person);
+                    }
+                    credit
                 })
                 .collect()
         })
         .unwrap_or_default();
 
-    out.extend(crew(credits.map_or(&[][..], |c| &c.crew), creators));
-    out
+    out.extend(crew(
+        credits.map_or(&[][..], |c| &c.crew),
+        creators,
+        &mut known,
+    ));
+    (out, known)
+}
+
+/// One of a cast, in its place: TMDB's order, else where it is listed.
+fn cast_credit(kind: CreditType, member: &models::CastMember, at: usize) -> Credit {
+    Credit {
+        id: new_id(),
+        credit_type: kind,
+        person_name: member.name.clone(),
+        character_name: non_empty(member.character.as_deref()),
+        image: member.profile_path.as_deref().map(image_url),
+        tmdb_person_id: member.id,
+        credit_tmdb_id: member.credit_id.clone(),
+        sort_order: member.order.unwrap_or(at as i32),
+        is_manual: false,
+    }
 }
 
 /// Who made the work behind the camera: its directors, whoever created a
@@ -878,12 +956,19 @@ fn credits(
 /// Each person once a kind, with the job TMDB gives them first, `Screenplay`
 /// or `Novel`, where Radarr and the NFO read the kind alone. Radarr shows a
 /// director and a writer; Sonarr ignores the crew entirely.
-fn crew(members: &[models::CrewMember], creators: &[models::Creator]) -> Vec<Credit> {
+fn crew(
+    members: &[models::CrewMember],
+    creators: &[models::Creator],
+    known: &mut Known,
+) -> Vec<Credit> {
     struct Member<'a> {
         id: Option<i64>,
         credit_id: Option<&'a String>,
         name: &'a str,
         profile: Option<&'a str>,
+        original_name: Option<&'a str>,
+        gender: Option<i64>,
+        popularity: Option<f64>,
     }
 
     let mut out: Vec<Credit> = Vec::new();
@@ -899,7 +984,7 @@ fn crew(members: &[models::CrewMember], creators: &[models::Creator]) -> Vec<Cre
         if name.is_empty() || out.iter().any(same) {
             return false;
         }
-        out.push(Credit {
+        let credit = Credit {
             id: new_id(),
             credit_type: kind,
             person_name: name.to_string(),
@@ -909,7 +994,13 @@ fn crew(members: &[models::CrewMember], creators: &[models::Creator]) -> Vec<Cre
             credit_tmdb_id: member.credit_id.cloned(),
             sort_order: i32::try_from(out.len()).unwrap_or(i32::MAX),
             is_manual: false,
-        });
+        };
+        if let Some(person) =
+            person_ref(name, member.original_name, member.gender, member.popularity)
+        {
+            known.insert(credit.id.clone(), person);
+        }
+        out.push(credit);
         true
     };
     fn of(m: &models::CrewMember) -> Member<'_> {
@@ -918,6 +1009,9 @@ fn crew(members: &[models::CrewMember], creators: &[models::Creator]) -> Vec<Cre
             credit_id: m.credit_id.as_ref(),
             name: &m.name,
             profile: m.profile_path.as_deref(),
+            original_name: m.original_name.as_deref(),
+            gender: m.gender,
+            popularity: m.popularity,
         }
     }
 
@@ -937,6 +1031,9 @@ fn crew(members: &[models::CrewMember], creators: &[models::Creator]) -> Vec<Cre
                 credit_id: creator.credit_id.as_ref(),
                 name: &creator.name,
                 profile: creator.profile_path.as_deref(),
+                original_name: creator.original_name.as_deref(),
+                gender: creator.gender,
+                popularity: None,
             },
         );
     }
@@ -974,6 +1071,65 @@ fn crew(members: &[models::CrewMember], creators: &[models::Creator]) -> Vec<Cre
         }
     }
 
+    out
+}
+
+/// Each episode's own credits, as the season documents carry them: its
+/// guests, the first `limit` of them in TMDB's order, then its director and
+/// its writers. Each on the episode as TMDB numbers it, with TMDB's id of
+/// the episode — which is how it finds its place in the work's numbering
+/// when TheTVDB's is the work's — and what TMDB says of each person.
+///
+/// Never a producer: a series' producers are credited on every episode, and
+/// on the series already.
+fn episode_credits(
+    seasons: &[models::Season],
+    limit: usize,
+    known: &mut Known,
+) -> Vec<EpisodeCredit> {
+    let mut out = Vec::new();
+    for season in seasons {
+        for episode in &season.episodes {
+            let place = |credit: Credit| EpisodeCredit {
+                season_number: episode.season_number,
+                episode_number: episode.episode_number,
+                tmdb_episode_id: episode.id,
+                credit,
+            };
+            let mut guests: Vec<&models::CastMember> = episode
+                .guest_stars
+                .iter()
+                .filter(|g| !g.name.trim().is_empty())
+                .collect();
+            guests.sort_by_key(|g| g.order.unwrap_or(i32::MAX));
+            for (at, member) in guests
+                .into_iter()
+                .take(limit.clamp(1, MAX_CAST))
+                .enumerate()
+            {
+                let credit = cast_credit(CreditType::Guest, member, at);
+                if let Some(person) = person_ref(
+                    &member.name,
+                    member.original_name.as_deref(),
+                    member.gender,
+                    member.popularity,
+                ) {
+                    known.insert(credit.id.clone(), person);
+                }
+                out.push(place(credit));
+            }
+            for credit in crew(&episode.crew, &[], known) {
+                if matches!(
+                    credit.credit_type,
+                    CreditType::Director | CreditType::Writer
+                ) {
+                    out.push(place(credit));
+                } else {
+                    known.remove(&credit.id);
+                }
+            }
+        }
+    }
     out
 }
 
@@ -1290,10 +1446,46 @@ mod tests {
 
         let images = artwork(Some("/p.jpg"), Some("/b.jpg"), Some(&extra));
 
-        assert_eq!(images.len(), 2);
-        assert_eq!(images[0].cover_type, CoverType::Poster);
+        // The textless poster is key art too, once.
+        let kinds: Vec<CoverType> = images.iter().map(|i| i.cover_type).collect();
+        assert_eq!(
+            kinds,
+            [CoverType::Poster, CoverType::Fanart, CoverType::Keyart]
+        );
         assert_eq!(images[0].sort_order, 0);
-        assert_eq!(images[1].cover_type, CoverType::Fanart);
+        assert_eq!(images[2].url, images[0].url);
+    }
+
+    #[test]
+    fn a_poster_filed_under_no_language_is_key_art_and_one_with_text_is_not() {
+        let poster = |path: &str, language: Option<&str>| models::ImageRef {
+            file_path: path.into(),
+            iso_639_1: language.map(str::to_string),
+            vote_average: None,
+            width: None,
+        };
+        let extra = models::Images {
+            posters: vec![
+                poster("/fr.jpg", Some("fr")),
+                poster("/bare-1.jpg", None),
+                poster("/bare-2.jpg", None),
+                poster("/bare-3.jpg", None),
+                poster("/bare-4.jpg", None),
+            ],
+            backdrops: vec![],
+            logos: vec![],
+        };
+
+        let images = artwork(Some("/fr.jpg"), None, Some(&extra));
+        let keyart: Vec<(&str, i32)> = images
+            .iter()
+            .filter(|i| i.cover_type == CoverType::Keyart)
+            .map(|i| (i.url.rsplit('/').next().unwrap_or(""), i.sort_order))
+            .collect();
+        assert_eq!(
+            keyart,
+            [("bare-1.jpg", 0), ("bare-2.jpg", 1), ("bare-3.jpg", 2)]
+        );
     }
 
     #[test]
@@ -1344,6 +1536,8 @@ mod tests {
             vote_average: None,
             vote_count: None,
             episode_type: None,
+            guest_stars: Vec::new(),
+            crew: Vec::new(),
         }
     }
 
@@ -1766,6 +1960,8 @@ mod fixtures {
             vote_average: None,
             vote_count: None,
             episode_type: None,
+            guest_stars: Vec::new(),
+            crew: Vec::new(),
         };
         let seasons = [models::Season {
             season_number: 2,
@@ -2028,6 +2224,7 @@ mod fixtures {
 
         let kept: Vec<(CreditType, String, Option<String>, i32)> =
             credits(Some(&document), &[], DEFAULT_CAST)
+                .0
                 .into_iter()
                 .map(|c| (c.credit_type, c.person_name, c.character_name, c.sort_order))
                 .collect();
@@ -2043,6 +2240,97 @@ mod fixtures {
                 crew(CreditType::Producer, "Shawn Levy", "Producer", 3),
             ]
         );
+    }
+
+    /// Shaped as a season document carries them: each episode's guests and
+    /// crew, with the name in its own script TMDB gives.
+    #[test]
+    fn each_episode_s_guests_director_and_writers_are_credited_on_it_and_nobody_else() {
+        let season: models::Season = serde_json::from_value(serde_json::json!({
+            "season_number": 1,
+            "episodes": [{
+                "id": 62085,
+                "season_number": 1,
+                "episode_number": 1,
+                "name": "Pilot",
+                "guest_stars": [
+                    { "id": 2, "credit_id": "g2", "name": "Second Guest", "character": "B", "order": 1 },
+                    { "id": 1, "credit_id": "g1", "name": "Mayumi Tanaka", "original_name": "田中真弓",
+                      "gender": 1, "popularity": 4.5, "character": "Luffy", "order": 0 },
+                    { "id": 3, "credit_id": "g3", "name": " ", "order": 2 }
+                ],
+                "crew": [
+                    { "id": 66633, "credit_id": "d", "name": "Vince Gilligan", "job": "Director", "department": "Directing" },
+                    { "id": 66633, "credit_id": "w", "name": "Vince Gilligan", "job": "Writer", "department": "Writing" },
+                    { "id": 9, "credit_id": "p", "name": "A Producer", "job": "Producer", "department": "Production" },
+                    { "id": 8, "credit_id": "e", "name": "An Editor", "job": "Editor", "department": "Editing" }
+                ]
+            }]
+        }))
+        .unwrap();
+
+        let item = tv_to_item(&tv(), &[season], 1);
+        // Where each credit is, what it is, of whom, and as what.
+        type Placed<'a> = (i32, i32, Option<i64>, CreditType, &'a str, Option<&'a str>);
+        let credited: Vec<Placed<'_>> = item
+            .people
+            .episodes
+            .iter()
+            .map(|e| {
+                (
+                    e.season_number,
+                    e.episode_number,
+                    e.tmdb_episode_id,
+                    e.credit.credit_type,
+                    e.credit.person_name.as_str(),
+                    e.credit.character_name.as_deref(),
+                )
+            })
+            .collect();
+        // The guests cut where the cast is — the first in TMDB's order, not
+        // in the document's — then the director and the writer; no producer,
+        // no editor, nobody nameless.
+        assert_eq!(
+            credited,
+            [
+                (
+                    1,
+                    1,
+                    Some(62085),
+                    CreditType::Guest,
+                    "Mayumi Tanaka",
+                    Some("Luffy")
+                ),
+                (
+                    1,
+                    1,
+                    Some(62085),
+                    CreditType::Director,
+                    "Vince Gilligan",
+                    Some("Director")
+                ),
+                (
+                    1,
+                    1,
+                    Some(62085),
+                    CreditType::Writer,
+                    "Vince Gilligan",
+                    Some("Writer")
+                ),
+            ]
+        );
+        let guest = &item.people.episodes[0].credit;
+        let known = item.people.of(guest).expect("what TMDB says of her");
+        assert_eq!(known.original_name.as_deref(), Some("田中真弓"));
+        assert_eq!((known.gender, known.popularity), (Some(1), Some(4.5)));
+        assert!(
+            item.credits
+                .iter()
+                .all(|c| c.credit_type != CreditType::Guest),
+            "a guest is not in the work's cast"
+        );
+        let crew = &item.people.episodes[1].credit;
+        assert_eq!(item.people.of(crew), None, "TMDB says nothing more of him");
     }
 
     #[test]

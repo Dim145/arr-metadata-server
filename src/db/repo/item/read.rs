@@ -13,6 +13,7 @@ use crate::{
     domain::{
         AlternativeTitle, CoverType, Credit, CreditType, Episode, ExternalIds, ExternalSource,
         Image, MediaItem, MediaKind, Rating, RatingValue, Relation, Season, Translation,
+        person::{People, PersonRef},
     },
 };
 
@@ -83,10 +84,12 @@ pub(super) fn map_item(row: &sqlx::any::AnyRow) -> Result<MediaItem> {
         translations: Vec::new(),
         relations: Vec::new(),
         releases: Vec::new(),
+        people: Default::default(),
         locked_fields: Vec::new(),
         primary_images: Default::default(),
         locked_texts: Vec::new(),
         hidden: Default::default(),
+        pictures: Default::default(),
     })
 }
 
@@ -325,10 +328,12 @@ pub async fn load_children(db: &Db, item: &mut MediaItem) -> Result<()> {
             .collect();
     }
 
+    let (credits, people) = credits;
     item.seasons = seasons;
     item.episodes = episodes;
     item.images = item_images;
     item.credits = credits;
+    item.people = people;
     item.alternative_titles = alt_titles;
     item.ratings = ratings;
     item.translations = translations;
@@ -585,17 +590,41 @@ fn map_relation(row: &sqlx::any::AnyRow) -> Result<Relation> {
     })
 }
 
-async fn load_credits(db: &Db, media_id: &str) -> Result<Vec<Credit>> {
+/// The work's own credits — its episodes' are not its cast, and are read
+/// where an episode or a person is — each with the person it is filed under.
+async fn load_credits(db: &Db, media_id: &str) -> Result<(Vec<Credit>, People)> {
     let rows = sqlx::query(db.sql(
-        "SELECT id, credit_type, person_name, character_name, image,
-                tmdb_person_id, credit_tmdb_id, sort_order, is_manual
-         FROM media_credit WHERE media_id = ? ORDER BY credit_type, sort_order",
+        "SELECT c.id, c.credit_type, c.person_name, c.character_name, c.image,
+                c.tmdb_person_id, c.credit_tmdb_id, c.sort_order, c.is_manual, c.person_id,
+                p.tmdb_id AS person_tmdb_id, p.imdb_id AS person_imdb_id,
+                p.tvdb_id AS person_tvdb_id
+           FROM media_credit c LEFT JOIN person p ON p.id = c.person_id
+          WHERE c.media_id = ? AND c.season_number IS NULL
+          ORDER BY c.credit_type, c.sort_order",
     ))
     .bind(media_id)
     .fetch_all(db.pool())
     .await?;
 
-    rows.iter().map(map_credit).collect()
+    let mut credits = Vec::with_capacity(rows.len());
+    let mut people = People::default();
+    for row in &rows {
+        let credit = map_credit(row)?;
+        if let Some(person_id) = row.opt_text("person_id")? {
+            people.by_credit.insert(
+                credit.id.clone(),
+                PersonRef {
+                    person_id: Some(person_id),
+                    tmdb_id: row.opt_big("person_tmdb_id")?,
+                    imdb_id: row.opt_text("person_imdb_id")?,
+                    tvdb_id: row.opt_big("person_tvdb_id")?,
+                    ..PersonRef::default()
+                },
+            );
+        }
+        credits.push(credit);
+    }
+    Ok((credits, people))
 }
 
 pub(super) fn map_credit(row: &sqlx::any::AnyRow) -> Result<Credit> {

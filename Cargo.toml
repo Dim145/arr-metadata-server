@@ -109,9 +109,21 @@ object_store = { version = "0.14.2", features = ["aws", "fs"] }
 # picture is, from its header alone.
 infer = "0.22.0"
 imagesize = "0.15.0"
-# Thumbnails of the pictures kept, so a page of cards is not a page of
-# originals. Only the formats posters come in.
+# The pictures kept, read in Rust for the copies made of them, so a page of
+# cards is not a page of originals. Only the formats posters come in.
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp", "gif"] }
+# Those copies resized: Lanczos3, a transparent picture's colours weighed by
+# its alpha, with the processor's SIMD.
+fast_image_resize = { version = "6.1.0", default-features = false, features = ["std"] }
+# And written as lossy WebP, which `image` does not write: libwebp's encoder,
+# built from its C sources and called directly (src/media/encode.rs). Its
+# decoder is never called.
+libwebp-sys = "0.14.4"
+# The night's AVIF copies: rav1e, in Rust. Its assembly is the `avif-asm`
+# feature below, which the container image's build turns on.
+ravif = { version = "0.13.0", default-features = false }
+# What a picture is drawn as while it loads: a sketch in two dozen bytes.
+thumbhash = "0.1.0"
 rcgen = { version = "0.14.10", default-features = false, features = ["aws_lc_rs", "pem", "x509-parser"] }
 x509-parser = "0.18.1"
 # The authority checks what it issued the way rustls will judge it.
@@ -143,6 +155,13 @@ age = { version = "0.12.1", default-features = false }
 # A blocking reader and writer over a bucket's streams: the archive is
 # written and read by the synchronous tar, zstd and age, off the runtime.
 tokio-util = { version = "0.7.19", features = ["io", "io-util"] }
+
+[features]
+# rav1e's assembly: an AVIF copy in less than half the time (see
+# docs/media.md). On x86_64 it is NASM's to assemble, which a build then
+# needs; on arm64 the C compiler does. Off by default, so that a build
+# anywhere needs nothing but a C compiler; the Dockerfile turns it on.
+avif-asm = ["ravif/asm"]
 
 [dev-dependencies]
 tokio = { version = "1.53.1", features = ["full", "test-util"] }
@@ -180,3 +199,41 @@ strip = false
 # Keep incremental debug builds usable on a large dependency tree.
 opt-level = 0
 debug = 1
+
+# The picture codecs, unoptimised, take seconds over a poster the release
+# takes milliseconds over — minutes for an AVIF — which the tests and a
+# debug server would wait on. None of them is this crate's own code.
+[profile.dev.package.rav1e]
+opt-level = 3
+# Its hot loops are full of debug assertions, which alone make an AVIF
+# twenty times slower.
+debug-assertions = false
+overflow-checks = false
+[profile.dev.package.ravif]
+opt-level = 3
+debug-assertions = false
+overflow-checks = false
+[profile.dev.package.v_frame]
+opt-level = 3
+debug-assertions = false
+overflow-checks = false
+[profile.dev.package.av1-grain]
+opt-level = 3
+debug-assertions = false
+overflow-checks = false
+[profile.dev.package.bitstream-io]
+opt-level = 3
+debug-assertions = false
+overflow-checks = false
+[profile.dev.package.libwebp-sys]
+opt-level = 3
+[profile.dev.package.fast_image_resize]
+opt-level = 3
+[profile.dev.package.zune-jpeg]
+opt-level = 3
+[profile.dev.package.image]
+opt-level = 3
+[profile.dev.package.png]
+opt-level = 3
+[profile.dev.package.fdeflate]
+opt-level = 3

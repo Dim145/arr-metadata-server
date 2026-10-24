@@ -42,6 +42,9 @@ const TABLES: &[&str] = &[
     "media_season",
     "media_episode",
     "media_image",
+    // The people the credits are of, before the credits.
+    "person",
+    "person_alias",
     "media_credit",
     "media_relation",
     // An order before its places; who numbers a series beside them.
@@ -56,6 +59,9 @@ const TABLES: &[&str] = &[
     "media_language_fetch",
     // What changed in each work, after the works.
     "media_change",
+    // What a merged work was known by, and the pairs that look like one work.
+    "media_alias",
+    "media_duplicate",
     // The search index, after the works it names: carried rather than built
     // again, its rows numbered by what they are and not by a counter.
     "search_doc",
@@ -78,6 +84,7 @@ const TABLES: &[&str] = &[
     // The media kept: its rows only — the files stay in the store they
     // were put in, which both databases can be pointed at.
     "media_asset",
+    "media_variant",
     "network_rule",
     "network_caller",
     "setting",

@@ -9,20 +9,38 @@
  * A provider's is hidden instead, and a credit corrected — the character,
  * the place — each a lock the next refresh keeps: a hidden row stays in the
  * list, faded, with "hidden" in brass, to be shown again.
+ *
+ * Each credit names the person it is filed under: their page from the name,
+ * their record from the mark beside it. A credit by name alone — an actor
+ * typed in here, a guest TheTVDB lists — is filed under somebody from its
+ * row, found by a part of their name.
  */
 
-import { useMutation } from '@tanstack/react-query'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Link } from 'react-router'
 
 import { Artwork } from '../../../components/media'
-import { Button, Chip, FormField, Glyph, Input, Panel, PanelHead, Segmented, Select, Spinner } from '../../../components/ui'
-import { api } from '../../../lib/api'
+import {
+  Button,
+  Chip,
+  FormField,
+  Glyph,
+  Input,
+  Panel,
+  PanelHead,
+  Segmented,
+  Select,
+  Spinner,
+  useTooltip,
+} from '../../../components/ui'
+import { api, segment } from '../../../lib/api'
 import { cn } from '../../../lib/cn'
 import { useI18n } from '../../../lib/i18n'
 import { jobLabel, providerName, titleOrigin } from '../../../lib/labels'
-import type { Credit, MediaItem, ProvenanceReport } from '../../../lib/types'
+import type { Credit, MediaItem, PersonCard, ProvenanceReport } from '../../../lib/types'
 
+import { PersonPicker, afterPeopleWrite } from '../People'
 import { creditScope, locksOn, useEditorLocks } from './locks'
 import { AddForm, Count, Empty, Yours, useRemove } from './shared'
 
@@ -58,6 +76,7 @@ function Credits({ work, onChanged, onRemove }: PanelProps) {
   const { t, lang } = useI18n()
   const c = t.admin.editor.children
   const e = t.admin.editor
+  const p = t.admin.peoplePage
   const [filter, setFilter] = useState<CastFilter>('all')
   const [name, setName] = useState('')
   const [character, setCharacter] = useState('')
@@ -77,6 +96,10 @@ function Credits({ work, onChanged, onRemove }: PanelProps) {
   // Hidden, corrected: a lock on the credit, set by the row it is read in.
   const locks = useEditorLocks()
   const [correcting, setCorrecting] = useState<string | null>(null)
+  // A credit by name alone being filed under somebody, and whom the last one went to.
+  const [filing, setFiling] = useState<string | null>(null)
+  const [filed, setFiled] = useState<string | null>(null)
+  const people = work.people?.byCredit ?? {}
   const edit = useMutation({
     mutationFn: ({ id, body }: { id: string; body: Record<string, unknown> }) => api.patch(`/items/${work.id}/credits/${id}`, body),
     onSuccess: () => {
@@ -143,6 +166,14 @@ function Credits({ work, onChanged, onRemove }: PanelProps) {
             const isHidden = hidden.has(credit.id)
             const corrected = !credit.isManual && locksOn(locks, creditScope(credit)).some((lock) => lock.field !== 'hidden')
             const busy = edit.isPending && edit.variables?.id === credit.id
+            // The person it is filed under: their page by TMDB's id, as it
+            // always was, or by their record where TMDB knows them not.
+            const personId = people[credit.id]?.personId
+            const page = credit.tmdbPersonId
+              ? `/person/${credit.tmdbPersonId}`
+              : personId
+                ? `/people/${encodeURIComponent(personId)}`
+                : undefined
             return (
               <li
                 key={credit.id}
@@ -159,14 +190,17 @@ function Credits({ work, onChanged, onRemove }: PanelProps) {
                   <span className={cn('contents', isHidden && '[&>*]:opacity-60')}>
                     {face}
                     <span className="min-w-0 flex-1">
-                      <span className={cn('block truncate text-sm font-medium text-bone', isHidden && 'line-through decoration-bone-faint')}>
-                        {credit.tmdbPersonId ? (
-                          <Link to={`/person/${credit.tmdbPersonId}`} className="transition-colors duration-150 hover:text-vermillion">
-                            {credit.personName}
-                          </Link>
-                        ) : (
-                          credit.personName
-                        )}
+                      <span className="flex min-w-0 items-center gap-1.5">
+                        <span className={cn('truncate text-sm font-medium text-bone', isHidden && 'line-through decoration-bone-faint')}>
+                          {page ? (
+                            <Link to={page} className="transition-colors duration-150 hover:text-vermillion">
+                              {credit.personName}
+                            </Link>
+                          ) : (
+                            credit.personName
+                          )}
+                        </span>
+                        {personId ? <RecordLink id={personId} name={credit.personName} /> : null}
                       </span>
                       <span className="block truncate text-xs text-bone-faint">
                         {credit.creditType === 'actor'
@@ -203,6 +237,21 @@ function Credits({ work, onChanged, onRemove }: PanelProps) {
                       <Glyph name="pencil" className="size-4" />
                     </button>
                   )}
+                  {/* By name alone, the credit is filed under somebody by
+                      hand: TMDB's id, where there is one, files it already. */}
+                  {isHidden || credit.tmdbPersonId ? null : (
+                    <button
+                      type="button"
+                      id={`file-${credit.id}`}
+                      onClick={() => setFiling(filing === credit.id ? null : credit.id)}
+                      aria-expanded={filing === credit.id}
+                      aria-label={p.fileUnder(credit.personName)}
+                      title={p.fileUnder(credit.personName)}
+                      className="grid size-11 shrink-0 cursor-pointer place-items-center rounded-card text-bone-faint transition-colors duration-150 hover:bg-ink-high hover:text-bone"
+                    >
+                      <Glyph name="link" className="size-4" />
+                    </button>
+                  )}
                   {credit.isManual ? (
                     <Yours onRemove={() => onRemove({ path: `credits/${credit.id}`, label: credit.personName })} />
                   ) : (
@@ -228,6 +277,23 @@ function Credits({ work, onChanged, onRemove }: PanelProps) {
                     onCancel={() => setCorrecting(null)}
                   />
                 ) : null}
+                {filing === credit.id ? (
+                  <FileUnder
+                    credit={credit}
+                    current={personId}
+                    onFiled={(name) => {
+                      setFiling(null)
+                      setFiled(name)
+                      onChanged()
+                      // The box it was found in is gone: the focus goes back to the row's button.
+                      requestAnimationFrame(() => document.getElementById(`file-${credit.id}`)?.focus())
+                    }}
+                    onCancel={() => {
+                      setFiling(null)
+                      requestAnimationFrame(() => document.getElementById(`file-${credit.id}`)?.focus())
+                    }}
+                  />
+                ) : null}
               </li>
             )
           })}
@@ -236,6 +302,11 @@ function Credits({ work, onChanged, onRemove }: PanelProps) {
       {edit.isError && correcting === null ? (
         <p role="alert" className="border-t border-rule px-5 py-2 text-xs text-vermillion">
           {edit.error.message || t.common.actionFailed}
+        </p>
+      ) : null}
+      {filed ? (
+        <p role="status" className="border-t border-rule px-5 py-2 text-xs text-bone-dim">
+          {p.filed(filed)}
         </p>
       ) : null}
       {credits.some((credit) => !credit.isManual) ? (
@@ -359,6 +430,77 @@ function Correction({
         {credit.isManual ? null : <span className="text-xs text-bone-faint">{c.correctHint}</span>}
       </div>
     </form>
+  )
+}
+
+/**
+ * The record a credit is filed under, among the people: a glyph beside the
+ * name, named in full for whoever does not see it, and shown its name by the
+ * site's own tooltip.
+ */
+function RecordLink({ id, name }: { id: string; name: string }) {
+  const { t } = useI18n()
+  const label = t.admin.peoplePage.inPeople(name)
+  const { trigger, tip } = useTooltip(label)
+
+  return (
+    <Link
+      to={`/admin/people?id=${encodeURIComponent(id)}`}
+      aria-label={label}
+      {...trigger}
+      className="hit grid size-6 shrink-0 place-items-center rounded-card text-bone-faint transition-colors duration-150 hover:bg-ink-high hover:text-bone"
+    >
+      <Glyph name="user" className="size-3.5" />
+      {tip}
+    </Link>
+  )
+}
+
+/**
+ * A credit by name alone filed under somebody: found by a part of their
+ * name, theirs or one they go by, and filed the moment they are chosen. A
+ * refresh leaves it where it was put.
+ */
+function FileUnder({
+  credit,
+  current,
+  onFiled,
+  onCancel,
+}: {
+  credit: Credit
+  /** The record it is filed under now, which is no choice. */
+  current?: string
+  onFiled: (name: string) => void
+  onCancel: () => void
+}) {
+  const { t } = useI18n()
+  const client = useQueryClient()
+  const file = useMutation({
+    mutationFn: async (person: PersonCard) => {
+      await api.post(`/people/${segment(person.id)}/credits`, { credits: [credit.id] })
+      return person.name
+    },
+    onSuccess: (name) => {
+      afterPeopleWrite(client)
+      onFiled(name)
+    },
+  })
+
+  return (
+    <div className="mt-2 space-y-3 rounded-card border border-rule bg-ink/40 p-3">
+      <PersonPicker id={`file-${credit.id}-find`} exclude={current} onPick={(person) => file.mutate(person)} autoFocus />
+      {file.isError ? (
+        <p role="alert" className="text-xs text-vermillion">
+          {file.error.message || t.common.actionFailed}
+        </p>
+      ) : null}
+      <div className="flex items-center gap-2">
+        <Button type="button" size="sm" onClick={onCancel}>
+          {t.common.cancel}
+        </Button>
+        {file.isPending ? <Spinner className="size-4 text-bone-faint" /> : null}
+      </div>
+    </div>
   )
 }
 

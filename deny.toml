@@ -36,6 +36,11 @@ ignore = [
     { id = "RUSTSEC-2026-0367", reason = "zip 8 only serves utoipa-swagger-ui's build script, which opens the Swagger UI vendored in a crate pinned by checksum and writes its files itself; utoipa-swagger-ui 10.0.1, the latest, cannot take the fixed zip 9" },
     { id = "RUSTSEC-2026-0368", reason = "zip 8 only serves utoipa-swagger-ui's build script, which never calls ZipArchive::extract and confines each path by enclosed_name; utoipa-swagger-ui 10.0.1, the latest, cannot take the fixed zip 9" },
     { id = "RUSTSEC-2026-0369", reason = "zip 8 only serves utoipa-swagger-ui's build script, which never calls ZipArchive::extract or ZipStreamReader::extract; utoipa-swagger-ui 10.0.1, the latest, cannot take the fixed zip 9" },
+    # RUSTSEC-2024-0436, `paste` unmaintained: a proc-macro that rav1e — the
+    # AVIF encoder of the night's copies — runs at build time to paste
+    # identifiers together. Nothing of it is in the binary, and it is
+    # finished rather than broken; cargo-audit only warns of it.
+    { id = "RUSTSEC-2024-0436", reason = "paste is a build-time proc-macro of rav1e's; nothing of it runs in the server, and rav1e 0.8.1, the latest, still uses it" },
 ]
 
 [licenses]

@@ -136,7 +136,7 @@ pub struct Started {
         (status = 403, description = "The caller is not an administrator"),
         (status = 404, description = "No such task"),
         (status = 409, description = "It is running already, or a backup is being restored"),
-        (status = 503, description = "Its source or its switch is off: no media store, no export path, no certificate of the server's own, the check for a newer version off, neither Sonarr nor Radarr connected"),
+        (status = 503, description = "Its source or its switch is off: no media store, no export path, no certificate of the server's own, the check for a newer version off, neither Sonarr nor Radarr connected, the AVIF copies off"),
     ),
 )]
 async fn run(
@@ -166,6 +166,8 @@ async fn run(
         }
         tasks::MEDIA_STORE => crate::media::worker::store_all(&state, &by).await?,
         tasks::MEDIA_SWEEP => crate::media::worker::sweep_now(&state, &by).await?,
+        tasks::MEDIA_VARIANTS => jobs::media::prepare_now(&state, &by).await?,
+        tasks::MEDIA_AVIF => jobs::media::avif_now(&state, Some(&by)).await?,
         tasks::TLS_RENEW => crate::tls::renew_now(&state, &by).await?,
         tasks::UPDATE_CHECK => jobs::update_check::check_now(&state, &by).await?,
         tasks::ARR_SEED => crate::arr::seed::start(&state, &by).await?,

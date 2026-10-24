@@ -197,6 +197,13 @@ pub struct Episode {
     pub vote_count: Option<i64>,
     /// `finale`, `mid_season`, … on recent API versions.
     pub episode_type: Option<String>,
+    /// Who was a guest on it, in TMDB's order: a season's document carries
+    /// them with each episode.
+    #[serde(default)]
+    pub guest_stars: Vec<CastMember>,
+    /// Who made it, director and writers among them.
+    #[serde(default)]
+    pub crew: Vec<CrewMember>,
 }
 
 impl Episode {
@@ -401,6 +408,11 @@ pub struct CastMember {
     pub credit_id: Option<String>,
     #[serde(default)]
     pub name: String,
+    /// Their name in their own script, where TMDB knows it: 田中真弓.
+    pub original_name: Option<String>,
+    /// 0 not known, 1 a woman, 2 a man, 3 non-binary.
+    pub gender: Option<i64>,
+    pub popularity: Option<f64>,
     pub character: Option<String>,
     pub profile_path: Option<String>,
     pub order: Option<i32>,
@@ -412,6 +424,9 @@ pub struct CrewMember {
     pub credit_id: Option<String>,
     #[serde(default)]
     pub name: String,
+    pub original_name: Option<String>,
+    pub gender: Option<i64>,
+    pub popularity: Option<f64>,
     pub job: Option<String>,
     pub department: Option<String>,
     pub profile_path: Option<String>,
@@ -425,6 +440,8 @@ pub struct Creator {
     pub credit_id: Option<String>,
     #[serde(default)]
     pub name: String,
+    pub original_name: Option<String>,
+    pub gender: Option<i64>,
     pub profile_path: Option<String>,
 }
 
@@ -496,10 +513,10 @@ pub struct Images {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ImageRef {
     pub file_path: String,
-    // Unread: the language is the one asked for, and the pictures are kept
-    // in the order TMDB ranks them.
-    #[allow(dead_code)]
+    /// The language written on the picture: none for a textless one, which
+    /// a poster of none makes key art.
     pub iso_639_1: Option<String>,
+    // Unread: the pictures are kept in the order TMDB ranks them.
     #[allow(dead_code)]
     pub vote_average: Option<f64>,
     #[allow(dead_code)]
@@ -564,6 +581,8 @@ mod tests {
             vote_average: None,
             vote_count: None,
             episode_type: None,
+            guest_stars: Vec::new(),
+            crew: Vec::new(),
         }
     }
 

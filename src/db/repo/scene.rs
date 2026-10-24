@@ -46,10 +46,13 @@ pub async fn series_titles(db: &Db) -> Result<Vec<SeriesTitles>> {
     let mut by_id: HashMap<String, SeriesTitles> = HashMap::new();
     let mut order = Vec::new();
 
+    // A series merged into another is not one of its own: counted, its title
+    // would make the survivor its own homonym, and Sonarr would be served
+    // the survivor's name with a year it never had.
     let rows = sqlx::query(db.sql(
         "SELECT id, title, original_title, original_language, is_enabled, title_qualifier, year \
          FROM media_item \
-         WHERE kind = 'series' ORDER BY id",
+         WHERE kind = 'series' AND merged_into IS NULL ORDER BY id",
     ))
     .fetch_all(db.pool())
     .await?;

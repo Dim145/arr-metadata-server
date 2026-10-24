@@ -11,6 +11,13 @@ import * as fmt from './format'
 import type { Credit, Episode, Image, MediaItem, Rating } from './types'
 
 /**
+ * What the server says of a picture it keeps, beside its address: its own
+ * size, the colour and the sketch it is drawn as while it loads, and the
+ * widths at which an AVIF copy exists.
+ */
+export type Picture = NonNullable<MediaItem['pictures']>[string]
+
+/**
  * What an image is on the page, which decides how big a file it needs.
  *
  * `card` is a poster in a grid, `poster` the one on a work's own page,
@@ -81,19 +88,30 @@ const SIZES: Record<ImageRole, string> = {
 }
 
 const TMDB = /^(https:\/\/image\.tmdb\.org\/t\/p\/)original(\/[^?#]+\.(?:jpe?g|png|webp))$/i
-/** A copy this server keeps: its hash, and a thumbnail beside it under `-t`. */
+/** A copy this server keeps: its hash, under which its own copies are made. */
 const KEPT = /^(.*\/media\/)([0-9a-f]{64})\.(?:jpe?g|png|webp|gif|avif)$/i
-/** The roles a thumbnail is wide enough for, and how wide it is drawn. */
-const KEPT_THUMB_WIDTH: Partial<Record<ImageRole, number>> = {
-  card: 480,
-  thumb: 480,
-  poster: 480,
-  headshot: 480,
-  portrait: 480,
-  logo: 960,
-  still: 960,
-  frame: 960,
-  backdrop: 960,
+
+/**
+ * The widths the server makes its copies of a picture at, by role, once and
+ * twice over for a dense screen — `src/media/variants.rs` makes these and
+ * no others, never wider than the picture itself. None past 1920: the
+ * interface is never sent a picture wider, whatever the original.
+ */
+const POSTER_WIDTHS = [240, 480, 960] as const
+const BACKDROP_WIDTHS = [640, 1280, 1920] as const
+const KEPT_LADDER: Record<ImageRole, readonly number[]> = {
+  card: POSTER_WIDTHS,
+  thumb: [240, 480],
+  logo: [400, 800],
+  poster: POSTER_WIDTHS,
+  backdrop: BACKDROP_WIDTHS,
+  headshot: [120, 240],
+  still: [320, 640],
+  // An episode's still drawn the width of the page.
+  frame: BACKDROP_WIDTHS,
+  // A person's photograph on their own page, as wide as a poster there.
+  portrait: [240, 480],
+  full: BACKDROP_WIDTHS,
 }
 const TVDB = /^(https:\/\/artworks\.thetvdb\.com\/banners\/.+?)(\.(?:jpe?g|png))$/i
 
@@ -102,30 +120,91 @@ export interface Sourced {
   src: string
   srcSet?: string
   sizes?: string
-  /** The full-size original, to fall back on if a thumbnail is missing. */
+  /** The AVIF copies, for a `<picture>`'s `<source>`, where they exist. */
+  avif?: string
+  /** The size the `src` is drawn at, where it is known: its proportions, for the box. */
+  width?: number
+  height?: number
+  /** The full-size original, to fall back on if a copy is missing. */
   original: string
+}
+
+/**
+ * The widths of a kept picture's copies a role is offered: the role's
+ * ladder, never past the picture's own width — which is offered itself
+ * where the ladder would go past it. Without its width, the whole ladder:
+ * the server makes a width past a picture's own at its own.
+ */
+function keptWidths(role: ImageRole, own: number | undefined): number[] {
+  const ladder = KEPT_LADDER[role]
+  if (!own) return [...ladder]
+  const under = ladder.filter((width) => width < own)
+  return own <= ladder[ladder.length - 1]! ? [...under, own] : under
+}
+
+/**
+ * What the server said of the pictures it keeps, by address: learnt from
+ * every work a page reads (see `learn`) and asked by the picture drawn, so
+ * that a page that has only an address — a card's, a plate's — draws it
+ * with its proportions and its placeholder, and offers its AVIF copies.
+ * The oldest are forgotten past a few thousand.
+ */
+const LOOKS = new Map<string, Picture>()
+const LEARNT = new WeakSet<object>()
+const MOST_LOOKS = 4000
+
+/** Remember what a work says of its pictures. Cheap to call again. */
+export function learn(pictures: Record<string, Picture> | undefined) {
+  if (!pictures || LEARNT.has(pictures)) return
+  LEARNT.add(pictures)
+  for (const [url, picture] of Object.entries(pictures)) {
+    LOOKS.delete(url)
+    LOOKS.set(url, picture)
+  }
+  for (const url of LOOKS.keys()) {
+    if (LOOKS.size <= MOST_LOOKS) break
+    LOOKS.delete(url)
+  }
+}
+
+/** What the server said of a picture it keeps, when a page read it. */
+export function lookOf(url: string): Picture | undefined {
+  return LOOKS.get(url)
 }
 
 /**
  * The right file for an image in a role.
  *
- * TMDB gets its ladder. TheTVDB publishes a thumbnail beside each artwork —
- * the same path with `_t` before the extension — which is used for the small
- * roles, with the original kept as a fallback because an old upload is not
+ * A copy this server keeps is offered at the widths of its role's ladder,
+ * as WebP — and as AVIF where the night's copies reach as wide. TMDB gets
+ * its ladder. TheTVDB publishes a thumbnail beside each artwork — the same
+ * path with `_t` before the extension — which is used for the small roles,
+ * with the original kept as a fallback because an old upload is not
  * guaranteed to have one. Anything else, including a URL somebody typed by
  * hand, is used as it is.
  */
-export function sized(url: string, role: ImageRole): Sourced {
-  // A copy kept here: the thumbnail for the small roles, with the original
-  // for a wide screen — and served whole where no thumbnail was made.
+export function sized(url: string, role: ImageRole, look: Picture | undefined = lookOf(url)): Sourced {
   const kept = KEPT.exec(url)
-  const width = KEPT_THUMB_WIDTH[role]
-  if (kept && width) {
-    const thumb = `${kept[1]}${kept[2]}-t.jpg`
+  if (kept) {
+    const stem = `${kept[1]}${kept[2]}`
+    const widths = keptWidths(role, look?.width)
+    const srcSet = widths.map((width) => `${stem}-${width}.webp ${width}w`).join(', ')
+    // The middle of the ladder for a browser that reads no `srcset`.
+    const src = `${stem}-${widths[Math.min(1, widths.length - 1)]}.webp`
+    const drawn = widths[Math.min(1, widths.length - 1)]!
+    // AVIF only where its copies reach as wide as the WebP ones: a source
+    // the browser picks is the only one it looks at, and a narrower one
+    // would draw a dense screen's picture soft.
+    const largest = widths[widths.length - 1]!
+    const avif = (look?.avif ?? []).filter((width) => width <= largest)
     return {
-      src: thumb,
-      srcSet: `${thumb} ${width}w, ${url} 2000w`,
+      src,
+      srcSet,
       sizes: SIZES[role],
+      avif: avif.includes(largest) ? avif.map((width) => `${stem}-${width}.avif ${width}w`).join(', ') : undefined,
+      ...(look?.width && look.height
+        ? { width: drawn, height: Math.max(1, Math.round((look.height * drawn) / look.width)) }
+        : {}),
       original: url,
     }
   }
@@ -161,24 +240,6 @@ export function sized(url: string, role: ImageRole): Sourced {
   return { src: url, original: url }
 }
 
-/**
- * Swap a thumbnail that failed for the original it was made from.
- *
- * Wired to `onError`, and only once: the original failing too is a broken
- * image, not a reason to loop.
- */
-export function fallBackToOriginal(original: string) {
-  return (event: { currentTarget: HTMLImageElement }) => {
-    const img = event.currentTarget
-    if (img.dataset.fellBack) {
-      return
-    }
-    img.dataset.fellBack = 'true'
-    img.removeAttribute('srcset')
-    img.src = original
-  }
-}
-
 /** Cover types as the server spells them. */
 const COVER = {
   poster: 'poster',
@@ -208,7 +269,15 @@ export function pick(images: Image[] | undefined, kind: string, season?: number,
   return (chosen ? matches.find((image) => image.id === chosen) : undefined) ?? matches.find((image) => image.isManual) ?? matches[0]
 }
 
-export function poster(item: Pick<MediaItem, 'images' | 'primaryImages'>, season?: number) {
+/**
+ * What a page reads a work's pictures from: its images and its choices, and
+ * what the server says of the copies it keeps — learnt as they are asked
+ * for, so that the picture drawn finds it.
+ */
+type Pictured = Pick<MediaItem, 'images' | 'primaryImages'> & Partial<Pick<MediaItem, 'pictures'>>
+
+export function poster(item: Pictured, season?: number) {
+  learn(item.pictures)
   return pick(item.images, COVER.poster, season, season === undefined ? item.primaryImages?.poster : undefined)?.url
 }
 
@@ -216,7 +285,7 @@ export function poster(item: Pick<MediaItem, 'images' | 'primaryImages'>, season
  * A season's own poster, where it has one: providers file it with the season
  * rather than with the work, and the work's own stands in otherwise.
  */
-export function seasonPoster(item: Pick<MediaItem, 'images' | 'seasons' | 'primaryImages'>, season: number) {
+export function seasonPoster(item: Pictured & Pick<MediaItem, 'seasons'>, season: number) {
   const own = item.seasons?.find((s) => s.seasonNumber === season)
   return pick(own?.images, COVER.poster, season, own?.primaryImages?.poster)?.url ?? poster(item, season) ?? poster(item)
 }
@@ -230,11 +299,13 @@ export function seasonImages(item: Pick<MediaItem, 'images' | 'seasons'>, season
   return filed.filter((image, index) => filed.findIndex((other) => other.id === image.id) === index)
 }
 
-export function backdrop(item: Pick<MediaItem, 'images' | 'primaryImages'>) {
+export function backdrop(item: Pictured) {
+  learn(item.pictures)
   return pick(item.images, COVER.fanart, undefined, item.primaryImages?.fanart)?.url ?? pick(item.images, COVER.landscape)?.url
 }
 
-export function logo(item: Pick<MediaItem, 'images'>) {
+export function logo(item: Pick<MediaItem, 'images'> & Partial<Pick<MediaItem, 'pictures'>>) {
+  learn(item.pictures)
   return pick(item.images, COVER.clearlogo)?.url
 }
 

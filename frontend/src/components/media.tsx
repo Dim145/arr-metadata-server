@@ -3,15 +3,16 @@
  */
 
 import { useQueryClient } from '@tanstack/react-query'
-import { Children, useRef, useState, type ImgHTMLAttributes, type ReactNode } from 'react'
+import { Children, useRef, useState, type CSSProperties, type ImgHTMLAttributes, type ReactNode } from 'react'
 import { Link } from 'react-router'
 
 import { cn } from '../lib/cn'
 import * as fmt from '../lib/format'
 import { workQuery } from '../lib/hooks'
 import { useI18n } from '../lib/i18n'
-import { fallBackToOriginal, hasSources, headlineRating, poster, sized, type ImageRole } from '../lib/media'
+import { hasSources, headlineRating, lookOf, poster, sized, type ImageRole, type Picture } from '../lib/media'
 import { forAdults, unveil, useAdultPostersShown, useUnveiled } from '../lib/prefs'
+import { hasAlpha, thumbHashToDataURL } from '../lib/thumbhash'
 import { plainClick, useTransitionNavigate } from '../lib/transitions'
 import type { MediaItem, MediaKind } from '../lib/types'
 import { Chip, Glyph, Shelf, stockOf } from './ui'
@@ -129,13 +130,61 @@ const SHAPE: Partial<Record<ImageRole, string>> = {
 }
 
 /**
- * An image from a provider, fetched at the size it is drawn at.
+ * The sketch a picture kept is drawn as while it loads, as a `data:`
+ * address, and whether the picture is transparent somewhere: worked out
+ * once for each, whatever draws it.
+ */
+const SKETCHES = new Map<string, { url?: string; alpha: boolean }>()
+
+function sketchOf(thumbhash: string): { url?: string; alpha: boolean } {
+  let sketch = SKETCHES.get(thumbhash)
+  if (!sketch) {
+    if (SKETCHES.size > 2000) SKETCHES.clear()
+    let alpha = false
+    try {
+      alpha = hasAlpha(Uint8Array.from(atob(thumbhash), (c) => c.charCodeAt(0)))
+    } catch {
+      // Not base64: no sketch, as below.
+    }
+    sketch = { url: alpha ? undefined : thumbHashToDataURL(thumbhash), alpha }
+    SKETCHES.set(thumbhash, sketch)
+  }
+  return sketch
+}
+
+/**
+ * What lies under a picture kept until it arrives: the colour most of it
+ * is, at once, and its blurred sketch over that, filling the box as the
+ * picture will. Nothing for one that is transparent somewhere — a logo
+ * shows what is behind it, and a sketch would stay there — nor for the
+ * lightbox's, which is drawn on its own dark.
+ */
+export function placeholderStyle(picture: Picture | undefined, role: ImageRole): CSSProperties | undefined {
+  if (!picture?.color || role === 'logo' || role === 'full') return undefined
+  const sketch = picture.thumbhash ? sketchOf(picture.thumbhash) : undefined
+  if (sketch?.alpha) return undefined
+  return {
+    backgroundColor: picture.color,
+    ...(sketch?.url ? { backgroundImage: `url("${sketch.url}")`, backgroundSize: 'cover', backgroundPosition: 'center' } : {}),
+  }
+}
+
+/**
+ * An image, fetched at the size it is drawn at.
+ *
+ * A copy this server keeps comes at the widths of its role, as WebP — under
+ * a `<picture>` offering AVIF first where the night made those — with its
+ * proportions given to the box and, until it arrives, its colour and its
+ * sketch under it (see `placeholderStyle`). What the server says of a
+ * picture comes with the work it is in, and is found by its address; a
+ * caller that holds it may pass it as `picture`.
  *
  * Lazy unless told otherwise, because most of these are below the fold. A hero
- * backdrop is the exception and says so with `eager`. Decoded off the main
- * thread either way, so a grid of them arriving does not hold up a click.
+ * backdrop is the exception and says so with `eager` — with `fetchPriority`
+ * high, where it is the page's largest paint. Decoded off the main thread
+ * either way, so a grid of them arriving does not hold up a click.
  *
- * A thumbnail that fails is retried as the original it was made from; should
+ * A copy that fails is retried as the original it was made from; should
  * that fail too, the `fallback` takes the image's place — a drawn placeholder
  * rather than the browser's broken-image glyph beside the alternative text.
  */
@@ -146,7 +195,10 @@ export function Artwork({
   eager = false,
   sizes,
   fallback,
+  picture,
   className,
+  style,
+  onLoad,
   ...rest
 }: {
   url: string
@@ -158,36 +210,61 @@ export function Artwork({
   sizes?: string
   /** What stands in once the image and its original have both failed. */
   fallback?: ReactNode
+  /** What the server says of the picture, where the caller holds it. */
+  picture?: Picture
 } & Omit<ImgHTMLAttributes<HTMLImageElement>, 'src' | 'srcSet' | 'sizes' | 'alt'>) {
-  const image = sized(url, role)
-  const retry = image.src === image.original ? undefined : fallBackToOriginal(image.original)
-  // Remembered by address, so a card that moves on to another work starts
-  // afresh rather than wearing the last one's failure.
+  const look = picture ?? lookOf(url)
+  const image = sized(url, role, look)
+  // Each remembered by address, so a card that moves on to another work
+  // starts afresh rather than wearing the last one's failure, or its load.
+  const [retried, setRetried] = useState<string>()
   const [failed, setFailed] = useState<string>()
+  const [loaded, setLoaded] = useState<string>()
 
   if (failed === url && fallback) {
     return <>{fallback}</>
   }
 
-  return (
+  const original = retried === url || image.src === image.original
+  const under = loaded === url ? undefined : placeholderStyle(look, role)
+  const img = (
     <img
       {...rest}
       className={cn(SHAPE[role], className)}
+      style={under ? { ...under, ...style } : style}
       alt={alt}
-      src={image.src}
-      srcSet={image.srcSet}
-      sizes={image.srcSet ? (sizes ?? image.sizes) : undefined}
+      src={original ? image.original : image.src}
+      srcSet={original ? undefined : image.srcSet}
+      sizes={!original && image.srcSet ? (sizes ?? image.sizes) : undefined}
+      width={original ? undefined : image.width}
+      height={original ? undefined : image.height}
       loading={eager ? undefined : 'lazy'}
       decoding="async"
-      onError={(event) => {
-        if (retry && !event.currentTarget.dataset.fellBack) {
-          retry(event)
+      onLoad={(event) => {
+        setLoaded(url)
+        onLoad?.(event)
+      }}
+      onError={() => {
+        if (!original) {
+          setRetried(url)
         } else {
           setFailed(url)
         }
       }}
     />
   )
+
+  if (image.avif && !original) {
+    // The box is the `<img>`'s: the `<picture>` around it lays out as
+    // nothing, so a caller's sizes and shapes hold as they did.
+    return (
+      <picture className="contents">
+        <source type="image/avif" srcSet={image.avif} sizes={sizes ?? image.sizes} />
+        {img}
+      </picture>
+    )
+  }
+  return img
 }
 
 /**
@@ -249,7 +326,7 @@ export type PosterCardItem = Pick<
   MediaItem,
   'id' | 'title' | 'kind' | 'year' | 'images' | 'primaryImages' | 'ratings' | 'isManual' | 'externalIds'
 > &
-  Partial<Pick<MediaItem, 'isAdult' | 'contentRating' | 'genres'>>
+  Partial<Pick<MediaItem, 'isAdult' | 'contentRating' | 'genres' | 'pictures'>>
 
 /**
  * One work in a grid.
@@ -284,14 +361,18 @@ export function PosterCard({
   const rating = headlineRating(item.ratings)
   const opensWork = to === `/work/${item.id}`
   const veiled = useVeiled(item)
-  // What the plate shows while its poster is on the way: the tint of the
-  // work's first genre over the ink, the one colour a card earns from its
-  // record, or the ink alone for a work filed under none. The poster covers
-  // it once it has loaded.
+  // What the plate shows while its poster is on the way: the colour most of
+  // the poster is, where this server keeps it and said so — its sketch lies
+  // on the picture itself — else the tint of the work's first genre over
+  // the ink, the one colour a card earns from its record, or the ink alone
+  // for a work filed under none. The poster covers it once it has loaded.
+  const look = art ? (item.pictures?.[art] ?? lookOf(art)) : undefined
   const genre = item.genres?.[0]
-  const waiting = genre
-    ? { backgroundColor: `color-mix(in srgb, var(--color-stock-${stockOf(genre)}) 14%, var(--color-ink-high))` }
-    : undefined
+  const waiting = look?.color
+    ? { backgroundColor: look.color }
+    : genre
+      ? { backgroundColor: `color-mix(in srgb, var(--color-stock-${stockOf(genre)}) 14%, var(--color-ink-high))` }
+      : undefined
 
   // The work is asked for as soon as a pointer rests on its card or focus
   // reaches it: by the time it is opened the page is there, and the poster
@@ -344,6 +425,7 @@ export function PosterCard({
           <Artwork
             url={art}
             role="card"
+            picture={look}
             alt={t.a11y.poster(item.title)}
             className={cn('size-full object-cover', veiled && VEILED)}
             fallback={<Placeholder title={item.title} kind={item.kind} className="size-full" />}

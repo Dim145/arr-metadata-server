@@ -83,8 +83,9 @@ pub struct ListQuery {
     /// The TMDB collection a film belongs to.
     #[serde(default, deserialize_with = "crate::api::extract::empty_as_none")]
     pub collection: Option<i64>,
-    /// Somebody the works credit: their TMDB id, or their name — whatever
-    /// its case and accents, but whole: `Wim Wenders`, not `Wenders`.
+    /// Somebody the works credit: their record's id, their TMDB id, or their
+    /// name — whatever its case and accents, but whole: `Wim Wenders`, not
+    /// `Wenders`. A credit a lock hides does not count.
     pub person: Option<String>,
     /// The shortest a work may run, in minutes: a film's length, a series'
     /// episodes'.
@@ -114,8 +115,9 @@ pub struct ListQuery {
     /// their own, nor one chosen by hand — `overview` — no overview in the
     /// language they are stored in — `imdb` — no IMDb identifier — and
     /// `refresh` — never refreshed, though they have an identifier to be
-    /// refreshed by — and `divergingLock` — a lock a source moved under since
-    /// it was set, and which says something else now. Several narrow
+    /// refreshed by — `divergingLock` — a lock a source moved under since
+    /// it was set, and which says something else now — and `duplicates` —
+    /// in a pair proposed as one work, and not dismissed. Several narrow
     /// together: `poster,overview` lists the works lacking both. For those who
     /// may edit the catalogue, as `refreshFailed`.
     pub missing: Option<String>,

@@ -7,8 +7,9 @@
 pub mod fields;
 pub mod ids;
 pub mod orders;
+pub mod person;
 
-use std::{fmt, str::FromStr};
+use std::{collections::BTreeMap, fmt, str::FromStr};
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -185,6 +186,11 @@ pub struct MediaItem {
     /// there: a country's, whole, from the first source that has any.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub releases: Vec<CountryRelease>,
+    /// What the sources say of the people the credits name — the credits of
+    /// single episodes among it — and, read back, whom each credit is filed
+    /// under: see [`person::People`].
+    #[serde(default, skip_serializing_if = "person::People::is_empty")]
+    pub people: person::People,
 
     /// Fields carrying a manual override, as `scope/field` paths. The web UI
     /// renders a lock next to each of these. A text locked in another
@@ -206,6 +212,36 @@ pub struct MediaItem {
     /// maintains the catalogue, served to nobody.
     #[serde(default, skip_serializing_if = "fields::Hidden::is_empty")]
     pub hidden: fields::Hidden,
+    /// What a page needs of the pictures it leads with — the poster, the
+    /// background, the landscape and the logo a card or a plate shows —
+    /// before they are there: their size, the colour and the sketch they
+    /// are drawn as while they load, the AVIF copies made of them. By the
+    /// address the work gives each, and only for the copies this server
+    /// keeps. Set as the work is read for this server's own pages; never
+    /// stored, and never sent to a client elsewhere.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub pictures: BTreeMap<String, Picture>,
+}
+
+/// What a page is told of a picture this server keeps, beside its address.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Picture {
+    /// The picture's own size, in pixels: no copy is made wider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+    /// The colour most of it is, `#rrggbb`: painted behind its frame at once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    /// A sketch of it in two dozen bytes, base64: decoded into a tiny image
+    /// drawn under it until it arrives (evanw/thumbhash).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thumbhash: Option<String>,
+    /// The widths at which an AVIF copy exists, for a `<picture>` to offer.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub avif: Vec<u32>,
 }
 
 /// The images a person chose, by id among the work's own.
@@ -322,10 +358,12 @@ impl MediaItem {
             translations: Vec::new(),
             relations: Vec::new(),
             releases: Vec::new(),
+            people: person::People::default(),
             locked_fields: Vec::new(),
             primary_images: PrimaryImages::default(),
             locked_texts: Vec::new(),
             hidden: fields::Hidden::default(),
+            pictures: BTreeMap::new(),
         }
     }
 
@@ -636,14 +674,25 @@ pub enum CoverType {
     Banner,
     Fanart,
     Clearlogo,
-    /// Character artwork on a transparent background. Kodi and Jellyfin use it;
-    /// Sonarr and Radarr map anything they do not know to `Unknown`, which is
-    /// harmless — they simply ignore it.
+    /// The work's characters and its title on a transparent background. Kodi
+    /// and Jellyfin use it; Sonarr and Radarr map anything they do not know to
+    /// `Unknown`, which is harmless — they simply ignore it.
     Clearart,
     /// Wide 16:9 artwork, `<thumb aspect="landscape">` in a Kodi document.
     Landscape,
     Screenshot,
     Headshot,
+    /// A poster without its lettering: Kodi's and tinyMediaManager's
+    /// `keyart`. A textless poster of Fanart.tv's or TMDB's, or one put on
+    /// by hand.
+    Keyart,
+    /// The picture printed on a film's disc, round, on a transparent
+    /// ground: Fanart.tv's `moviedisc`.
+    Discart,
+    /// One character of a series, cut out on a transparent ground, without
+    /// the title clear art carries: Fanart.tv's `characterart`, Kodi's and
+    /// tinyMediaManager's `characterart`.
+    Characterart,
     Unknown,
 }
 
@@ -658,9 +707,12 @@ impl CoverType {
             Self::Clearlogo => 3,
             Self::Clearart => 4,
             Self::Landscape => 5,
-            Self::Screenshot => 6,
-            Self::Headshot => 7,
-            Self::Unknown => 8,
+            Self::Keyart => 6,
+            Self::Discart => 7,
+            Self::Characterart => 8,
+            Self::Screenshot => 9,
+            Self::Headshot => 10,
+            Self::Unknown => 11,
         }
     }
 
@@ -674,6 +726,9 @@ impl CoverType {
             Self::Landscape => "landscape",
             Self::Screenshot => "screenshot",
             Self::Headshot => "headshot",
+            Self::Keyart => "keyart",
+            Self::Discart => "discart",
+            Self::Characterart => "characterart",
             Self::Unknown => "unknown",
         }
     }
@@ -694,6 +749,9 @@ impl FromStr for CoverType {
             "landscape" | "thumb" => Self::Landscape,
             "screenshot" | "still" => Self::Screenshot,
             "headshot" | "profile" => Self::Headshot,
+            "keyart" => Self::Keyart,
+            "discart" | "disc" | "cdart" => Self::Discart,
+            "characterart" => Self::Characterart,
             _ => Self::Unknown,
         })
     }

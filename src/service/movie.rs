@@ -11,7 +11,7 @@ use crate::{
     db::repo,
     domain::{ExternalSource, MediaItem, MediaKind},
     providers::{names, tmdb, tmdb::map as tmdb_map},
-    service::{FETCHING, Found, cached_search, gather, ids, local, or_held, persist},
+    service::{FETCHING, Found, cached_search, gather, ids, local, merge, or_held, persist},
     state::AppState,
     wire::radarr::{Beside, NamedCollection},
 };
@@ -28,6 +28,13 @@ const MAX_BULK: usize = 100;
 pub async fn by_tmdb_id(state: &AppState, tmdb_id: i64) -> Result<Option<MediaItem>> {
     let value = tmdb_id.to_string();
     if let Some(item) = local(state, ExternalSource::TmdbMovie, &value).await? {
+        return Ok(Some(item));
+    }
+    // An id a merge folded into another film is that film's, as it is held:
+    // fetched again by it, it would be stored as a film anew.
+    if let Some(item) =
+        merge::aliased(state, MediaKind::Movie, ExternalSource::TmdbMovie, &value).await?
+    {
         return Ok(Some(item));
     }
 
@@ -58,6 +65,12 @@ pub async fn by_imdb_id(state: &AppState, imdb_id: &str) -> Result<Option<MediaI
 
     if let Some(item) = local(state, ExternalSource::Imdb, &normalized).await?
         && item.kind == MediaKind::Movie
+    {
+        return Ok(Some(item));
+    }
+    // One a merge folded into another film: see `by_tmdb_id`.
+    if let Some(item) =
+        merge::aliased(state, MediaKind::Movie, ExternalSource::Imdb, &normalized).await?
     {
         return Ok(Some(item));
     }
@@ -100,11 +113,13 @@ async fn fetch_by_imdb_id(state: &AppState, imdb_id: &str) -> Result<Option<Medi
     from_radarr(state, tmdb_id, Some(imdb_id)).await
 }
 
-/// Several movies at once, in the order requested.
+/// Several movies at once, in the order requested, each with the id it was
+/// asked by: a film a merge folded into another is the survivor, and Radarr
+/// matches each answer to the film it holds by that id.
 ///
 /// A title that cannot be resolved is skipped rather than failing the batch:
 /// Radarr expects a partial answer, not an error, when one entry has gone away.
-pub async fn bulk(state: &AppState, tmdb_ids: &[i64]) -> Result<Vec<MediaItem>> {
+pub async fn bulk(state: &AppState, tmdb_ids: &[i64]) -> Result<Vec<(i64, MediaItem)>> {
     let wanted: Vec<i64> = tmdb_ids.iter().copied().take(MAX_BULK).collect();
 
     let resolved = join_all(wanted.iter().map(|&id| by_tmdb_id(state, id))).await;
@@ -113,7 +128,7 @@ pub async fn bulk(state: &AppState, tmdb_ids: &[i64]) -> Result<Vec<MediaItem>> 
         .into_iter()
         .zip(&wanted)
         .filter_map(|(result, id)| match result {
-            Ok(item) => item,
+            Ok(item) => item.map(|item| (*id, item)),
             Err(e) => {
                 tracing::warn!(tmdb_id = id, error = %e, "bulk lookup failed for one title");
                 None
@@ -772,7 +787,9 @@ mod tests {
             by_tmdb_id(&state, 603).await.map(ids),
             by_imdb_id(&state, "tt0133093").await.map(ids),
             search(&state, "tmdb:603", None).await.map(ids),
-            bulk(&state, &[603]).await.map(ids),
+            bulk(&state, &[603])
+                .await
+                .map(|found| ids(found.into_iter().map(|(_, film)| film))),
         ] {
             assert_eq!(found.expect("answered"), [matrix.id.as_str()]);
         }
@@ -799,7 +816,14 @@ mod tests {
 
         // Radarr's bulk request keeps it, and leaves out a film nobody holds.
         let bulked = bulk(&state, &[129, 1]).await.expect("answered");
-        assert_eq!(ids(bulked), [spirited_away.id.as_str()]);
+        assert_eq!(
+            bulked.iter().map(|(asked, _)| *asked).collect::<Vec<_>>(),
+            [129]
+        );
+        assert_eq!(
+            ids(bulked.into_iter().map(|(_, film)| film)),
+            [spirited_away.id.as_str()]
+        );
         assert!(
             now_held(&state, &spirited_away)
                 .await

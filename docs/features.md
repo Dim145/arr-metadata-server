@@ -82,7 +82,8 @@ Sonarr's metadata service — and does what both did, from one catalogue.
   catalogue holds it and to AniList when it does not; the seasonal chart says
   what a series is the sequel of. A person's page adds who they are as
   TMDB has it: born when and where, known for what, a biography in the
-  reader's language and a few portraits.
+  reader's language and a few portraits — kept with their record, and asked
+  again once a month.
 - **The other orders, and a lamp.** Where TheTVDB numbers a series another
   way — its DVDs, straight through, an alternate or a regional order — the
   season page offers that numbering too (`GET /api/v1/items/{id}/orders`),
@@ -173,6 +174,22 @@ Sonarr's metadata service — and does what both did, from one catalogue.
   Radarr's searches find the work held here by that very name before
   TMDB's. One index serves both engines, kept by the server as works are
   written ([The API](api.md#searching-the-catalogue)).
+- **People, each a record of their own.** Everybody the credits name is one
+  person, whatever the credits call them: a record with the ids TMDB, TheTVDB and
+  IMDb file them under and the other names they go by, which every credit is filed
+  under as it is written, and which a refresh leaves as somebody put it. A
+  person's page opens on what they did — acting, directing, writing, producing,
+  each with how many works — in the order of the years, the titles or the scores,
+  films or series apart, a guest's episodes under their series with how many and
+  which years; their name in their own script is marked as in its language for a
+  screen reader. What TMDB says of them is asked the first time their page is read
+  and kept a month. An index of everybody (`/people`) goes by letter and by job,
+  the most credited first, and finds a name as the search does. TheTVDB's
+  characters join TMDB's cast, matched by name, and each episode's guests, director
+  and writers are credited on it rather than on the series. Whoever maintains the
+  catalogue merges two records of one person, splits a homonym off another, gives
+  a credit typed by name the person it is of, and enters somebody by hand with
+  their ids ([The people](data.md#the-people), [The API](api.md#people)).
 - **A season chart, past and to come.** One page for each quarter of the
   calendar — winter from January, spring from April, summer from July, autumn
   from October — as anime season charts have it, for series and films alike:

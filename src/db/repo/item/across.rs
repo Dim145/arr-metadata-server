@@ -1,5 +1,6 @@
 //! Reads across works: many at once by id, what the works on view can be
-//! narrowed by next, the calendar's window, and a person's credits.
+//! narrowed by next, and the calendar's window. A person's credits are
+//! `repo::person`'s.
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -7,12 +8,12 @@ use sqlx::{Arguments, any::AnyArguments};
 use utoipa::ToSchema;
 
 use super::{
-    read::{EPISODE_COLUMNS, ITEM_COLUMNS, map_credit, map_episode, map_item},
+    read::{EPISODE_COLUMNS, ITEM_COLUMNS, map_episode, map_item},
     search::{Query, attach_external_ids, from_clause, narrow},
 };
 use crate::{
     db::{Db, RowExt},
-    domain::{Credit, Episode, MediaItem},
+    domain::{Episode, MediaItem},
 };
 
 /// Works by id, with their identifiers and nothing hanging off them — the
@@ -451,59 +452,33 @@ pub async fn releasing(
 }
 
 /// One of a person's credits, on an enabled work.
+#[cfg(test)]
 #[derive(Clone, Debug)]
 pub struct PersonCredit {
-    pub media_id: String,
-    pub credit: Credit,
+    pub credit: crate::domain::Credit,
 }
 
-/// Every credit TMDB files under one person, on works this catalogue shows.
+/// Every credit filed under the person TMDB knows by this id, on works this
+/// catalogue shows, as `repo::person::credits` reads them: what the tests
+/// of a work's locks look for on the person's page.
+#[cfg(test)]
 pub async fn person_credits(
     db: &Db,
     tmdb_person_id: i64,
     include_adult: bool,
 ) -> Result<Vec<PersonCredit>> {
-    let adult = if include_adult {
-        ""
-    } else {
-        " AND m.is_adult = 0"
+    let Some(person) = crate::db::repo::person::find(db, &tmdb_person_id.to_string()).await? else {
+        return Ok(Vec::new());
     };
-    let sql = format!(
-        "SELECT c.media_id, c.id, c.credit_type, c.person_name, c.character_name, c.image,
-                c.tmdb_person_id, c.credit_tmdb_id, c.sort_order, c.is_manual
-         FROM media_credit c JOIN media_item m ON m.id = c.media_id
-         WHERE c.tmdb_person_id = ? AND m.is_enabled = 1{adult}
-         ORDER BY m.year DESC NULLS LAST, m.title
-         LIMIT 500"
-    );
-
-    let rows = sqlx::query(db.sql(&sql))
-        .bind(tmdb_person_id)
-        .fetch_all(db.pool())
-        .await?;
-
-    let found = rows
-        .iter()
-        .map(|row| {
-            Ok(PersonCredit {
-                media_id: row.text("media_id")?,
-                credit: map_credit(row)?,
+    Ok(
+        crate::db::repo::person::credits(db, &person.id, include_adult)
+            .await?
+            .into_iter()
+            .map(|credited| PersonCredit {
+                credit: credited.credit,
             })
-        })
-        .collect::<Result<Vec<_>>>()?;
-
-    // As each work's locks have the credit: hidden there, it is not one of
-    // the person's here; corrected, it is played as corrected.
-    let works: Vec<String> = found.iter().map(|c| c.media_id.clone()).collect();
-    let locks = crate::db::repo::override_field::list_for_many(db, &works).await?;
-    Ok(found
-        .into_iter()
-        .filter_map(|PersonCredit { media_id, credit }| {
-            let locked = locks.get(&media_id).map(Vec::as_slice).unwrap_or_default();
-            let credit = crate::domain::fields::edit_credit(credit, locked)?;
-            Some(PersonCredit { media_id, credit })
-        })
-        .collect())
+            .collect(),
+    )
 }
 
 #[cfg(test)]
@@ -511,7 +486,7 @@ mod tests {
     use super::*;
     use crate::{
         db::{repo::item::testing::stored, testing::db},
-        domain::{CreditType, MediaKind},
+        domain::MediaKind,
     };
 
     #[tokio::test]
@@ -793,49 +768,6 @@ mod tests {
         assert_eq!(
             read(week.0, week.1, false).await,
             [at_home.id.clone(), cinema.id.clone(), long_out.id.clone()]
-        );
-    }
-
-    #[tokio::test]
-    async fn a_persons_credits_are_found_on_every_work_newest_first() {
-        let db = db().await;
-        let credit = |character: &str| Credit {
-            id: String::new(),
-            credit_type: CreditType::Actor,
-            person_name: "Bryan Cranston".into(),
-            character_name: Some(character.into()),
-            image: None,
-            tmdb_person_id: Some(17419),
-            credit_tmdb_id: None,
-            sort_order: 0,
-            is_manual: false,
-        };
-
-        stored(&db, |i| {
-            i.title = "Older".into();
-            i.year = Some(1998);
-            i.credits = vec![credit("Hal")];
-        })
-        .await;
-        stored(&db, |i| {
-            i.title = "Newer".into();
-            i.year = Some(2008);
-            i.credits = vec![credit("Walter White")];
-        })
-        .await;
-
-        let found = person_credits(&db, 17419, false).await.expect("read");
-        let characters: Vec<_> = found
-            .iter()
-            .map(|c| c.credit.character_name.as_deref())
-            .collect();
-
-        assert_eq!(characters, [Some("Walter White"), Some("Hal")]);
-        assert!(
-            person_credits(&db, 1, false)
-                .await
-                .expect("read")
-                .is_empty()
         );
     }
 }

@@ -1,6 +1,7 @@
 //! Repositories. One module per aggregate; every query goes through
 //! [`crate::db::Db::sql`] so it works on both engines.
 
+pub mod alias;
 pub mod anime;
 pub mod asset;
 pub mod audit;
@@ -17,6 +18,7 @@ pub mod list;
 pub mod network;
 pub mod order;
 pub mod override_field;
+pub mod person;
 pub mod release;
 pub mod scene;
 pub mod search;

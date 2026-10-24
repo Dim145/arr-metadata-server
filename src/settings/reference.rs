@@ -114,6 +114,14 @@ const GROUPS: &[Group] = &[
                 "Search TheTVDB when what is stored and TMDB both found nothing: TheTVDB knows \
                  series TMDB has never heard of.",
             ),
+            set(
+                "tvdb.castLimit",
+                "How many of TheTVDB's characters a series keeps, in TheTVDB's order: each is \
+                 matched to the person of the cast another source gave — by name, whatever its \
+                 accents and the order of its words — or added after it, and gives the person \
+                 TheTVDB's id. A work already held takes a new figure at its next refresh. \
+                 Unset, it is `25`.",
+            ),
             seeded(
                 "skyhook.fallback",
                 &["AMS_SKYHOOK_FALLBACK"],
@@ -260,6 +268,20 @@ const GROUPS: &[Group] = &[
              away; `0` keeps every one. A change taken away can no longer be gone back to from \
              the journal, and a lock its source moved under before then is no longer counted \
              among those the dashboard names. Unset, it is `365`.",
+        )],
+    },
+    Group {
+        title: "Merges",
+        lead: "On **Settings › Everything else**. See [Duplicates](editing.md#duplicates).",
+        entries: &[set(
+            "merge.undoDays",
+            "For how many days a merge of two works can be undone from the survivor's editor, or \
+             with `POST /api/v1/items/{id}/unmerge`: the merged work comes back as a work of its \
+             own, what moved onto the survivor and is still as the merge left it goes back, and \
+             the names it was known by stop answering with the survivor. Past it, the merge \
+             stands, and the API answers `410 Gone`; the names stay the survivor's for good. \
+             `0`: no merge can be undone. Read when an undo is asked for, so a longer window \
+             reaches the merges already made. Unset, it is `14`.",
         )],
     },
     Group {
@@ -530,6 +552,14 @@ const GROUPS: &[Group] = &[
             set(
                 "media.audio",
                 "The themes: a Fan-Kai's, a few megabytes each.",
+            ),
+            set(
+                "media.avif",
+                "Make an AVIF copy of every poster, at 480 and 960 pixels, and of every \
+                 background, at 1280, each night at 03:00 UTC — the task `media.avif`, also run \
+                 by hand from **Tasks**. A third lighter than the WebP the interface is given \
+                 otherwise, and a second or two of a processor each to make: off until it is \
+                 set. See [AVIF](media.md#avif).",
             ),
         ],
     },

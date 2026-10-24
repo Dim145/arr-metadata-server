@@ -783,6 +783,63 @@
         }
       }
     },
+    "/api/v1/admin/duplicates": {
+      "get": {
+        "tags": [
+          "Catalogue"
+        ],
+        "summary": "The works that look like one, looked for again first.",
+        "description": "`certain`: two works of one kind filed under one identifier elsewhere —\nTMDB's, TheTVDB's, IMDb's, AniList's, MyAnimeList's or Fankai's — held by\none, or last said by the other's journal or lock to be its own.\n`probable`: two works of one kind under one title, as the search index\nfolds it, a year apart at the most or with a year unknown. `flag`: a film\nand a series under one IMDb id, which are never merged. A pair somebody\ndismissed is not listed. For those who may edit the catalogue; works for\nadults as this caller may see them.",
+        "operationId": "merge_duplicates",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DuplicateList"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller may not write"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/duplicates/dismiss": {
+      "post": {
+        "tags": [
+          "Catalogue"
+        ],
+        "summary": "Say two works are not one: the pair is not proposed again, whatever is\nfound of it later. The audit trail says so (`duplicate.dismissed`).",
+        "operationId": "merge_dismiss",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DismissDuplicateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Not proposed again"
+          },
+          "400": {
+            "description": "The two are one work"
+          },
+          "403": {
+            "description": "The caller may not write"
+          },
+          "404": {
+            "description": "No such work"
+          }
+        }
+      }
+    },
     "/api/v1/admin/health": {
       "get": {
         "tags": [
@@ -2573,7 +2630,7 @@
           {
             "name": "person",
             "in": "query",
-            "description": "Somebody the works credit: their TMDB id, or their name — whatever\nits case and accents, but whole: `Wim Wenders`, not `Wenders`.",
+            "description": "Somebody the works credit: their record's id, their TMDB id, or their\nname — whatever its case and accents, but whole: `Wim Wenders`, not\n`Wenders`. A credit a lock hides does not count.",
             "required": false,
             "schema": {
               "type": "string"
@@ -2648,7 +2705,7 @@
           {
             "name": "missing",
             "in": "query",
-            "description": "Only works lacking these, comma-separated: `poster` — no poster of\ntheir own, nor one chosen by hand — `overview` — no overview in the\nlanguage they are stored in — `imdb` — no IMDb identifier — and\n`refresh` — never refreshed, though they have an identifier to be\nrefreshed by — and `divergingLock` — a lock a source moved under since\nit was set, and which says something else now. Several narrow\ntogether: `poster,overview` lists the works lacking both. For those who\nmay edit the catalogue, as `refreshFailed`.",
+            "description": "Only works lacking these, comma-separated: `poster` — no poster of\ntheir own, nor one chosen by hand — `overview` — no overview in the\nlanguage they are stored in — `imdb` — no IMDb identifier — and\n`refresh` — never refreshed, though they have an identifier to be\nrefreshed by — `divergingLock` — a lock a source moved under since\nit was set, and which says something else now — and `duplicates` —\nin a pair proposed as one work, and not dismissed. Several narrow\ntogether: `poster,overview` lists the works lacking both. For those who\nmay edit the catalogue, as `refreshFailed`.",
             "required": false,
             "schema": {
               "type": "string"
@@ -3035,7 +3092,7 @@
           {
             "name": "person",
             "in": "query",
-            "description": "Somebody the works credit: their TMDB id, or their name — whatever\nits case and accents, but whole: `Wim Wenders`, not `Wenders`.",
+            "description": "Somebody the works credit: their record's id, their TMDB id, or their\nname — whatever its case and accents, but whole: `Wim Wenders`, not\n`Wenders`. A credit a lock hides does not count.",
             "required": false,
             "schema": {
               "type": "string"
@@ -3110,7 +3167,7 @@
           {
             "name": "missing",
             "in": "query",
-            "description": "Only works lacking these, comma-separated: `poster` — no poster of\ntheir own, nor one chosen by hand — `overview` — no overview in the\nlanguage they are stored in — `imdb` — no IMDb identifier — and\n`refresh` — never refreshed, though they have an identifier to be\nrefreshed by — and `divergingLock` — a lock a source moved under since\nit was set, and which says something else now. Several narrow\ntogether: `poster,overview` lists the works lacking both. For those who\nmay edit the catalogue, as `refreshFailed`.",
+            "description": "Only works lacking these, comma-separated: `poster` — no poster of\ntheir own, nor one chosen by hand — `overview` — no overview in the\nlanguage they are stored in — `imdb` — no IMDb identifier — and\n`refresh` — never refreshed, though they have an identifier to be\nrefreshed by — `divergingLock` — a lock a source moved under since\nit was set, and which says something else now — and `duplicates` —\nin a pair proposed as one work, and not dismissed. Several narrow\ntogether: `poster,overview` lists the works lacking both. For those who\nmay edit the catalogue, as `refreshFailed`.",
             "required": false,
             "schema": {
               "type": "string"
@@ -4139,7 +4196,7 @@
           "Catalogue"
         ],
         "summary": "Put a picture or a theme on a work, from a file.",
-        "description": "A form with `file`, and: `kind` (`image`, the default, or `theme`);\nfor a picture, `coverType` (`poster`, `fanart`, `banner`, `clearlogo`,\n`clearart`, `landscape`) and `seasonNumber` for a season's, or `episode`\nas `3x7` for a still. A picture becomes a hand-added one of the work's,\nwhich no refresh replaces; a still or a theme locks the field it fills.\nThe file is read for what it is, not for what it is called.",
+        "description": "A form with `file`, and: `kind` (`image`, the default, or `theme`);\nfor a picture, `coverType` (`poster`, `fanart`, `banner`, `clearlogo`,\n`clearart`, `landscape`, `keyart`, `discart`, `characterart`) and `seasonNumber` for a\nseason's, or `episode` as `3x7` for a still. A picture becomes a hand-added one of the work's,\nwhich no refresh replaces; a still or a theme locks the field it fills.\nThe file is read for what it is, not for what it is called.",
         "operationId": "media_upload",
         "parameters": [
           {
@@ -4222,6 +4279,145 @@
           },
           "404": {
             "description": "No such work, or no copy of the work's"
+          }
+        }
+      }
+    },
+    "/api/v1/items/{id}/merge": {
+      "get": {
+        "tags": [
+          "Catalogue"
+        ],
+        "summary": "What merging a work into another would do, before it is done.",
+        "description": "Both works as they would be told apart; every field whose value differs,\nas each is served, whether each locks it, and whether the merged work's\nvalue can be kept; what the merged work holds, by kind of row; the names\nthe survivor would answer for; and which of the two the rule keeps — the\none with hand edits, else the one filed under more identifiers, else the\nolder — and why. Nothing is written.",
+        "operationId": "merge_preview",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The work that would be merged into the other",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "into",
+            "in": "query",
+            "description": "The work it would be merged into: the one that stays.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MergePreview"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The two are one work"
+          },
+          "403": {
+            "description": "The caller may not write"
+          },
+          "404": {
+            "description": "No such work"
+          },
+          "409": {
+            "description": "A film and a series, or one of the two merged already"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Catalogue"
+        ],
+        "summary": "Merge a work into another, in one transaction.",
+        "description": "The merged work's seasons, episodes, pictures, credits, other titles,\ntranslations, orders, releases, the copies its sources gave, its locks,\nits journal and its places in selections move onto the survivor, but\nwhere the survivor holds the same — a season of the same number, an\nepisode at the same place, a picture at the same address — whose own\nstands. Its locks move where the survivor locks nothing of the same; a\nfield kept from it (`keep`) is the survivor's lock, set to its value\nwhere it held none. Its identifiers become the survivor's where it has\nnone of their source, and its id, its slug and each identifier answer\nwith the survivor from now on, for the site, the API, Sonarr, Radarr and\nPlex alike. The merged work stays as a tombstone, hidden from every list,\nuntil the merge is undone (`merge.undoDays`). Written to the survivor's\njournal (`merge`) and the audit trail (`item.merged`, with what the\nsurvivor was and became); told to Sonarr or Radarr under both ids when\n`arr.pushRefresh` is on.",
+        "operationId": "merge_merge_into",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The work merged into the other: the one that becomes a tombstone",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MergeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MergeOutcome"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The two are one work, or a field is not kept from either side, or the merged work's value of one cannot be kept"
+          },
+          "403": {
+            "description": "The caller may not write"
+          },
+          "404": {
+            "description": "No such work"
+          },
+          "409": {
+            "description": "A film and a series, or one of the two merged already"
+          }
+        }
+      }
+    },
+    "/api/v1/items/{id}/merges": {
+      "get": {
+        "tags": [
+          "Catalogue"
+        ],
+        "summary": "What was merged into a work: what its editor offers to undo.",
+        "operationId": "merge_merges",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The survivor",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MergeList"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller may not write"
           }
         }
       }
@@ -5229,6 +5425,50 @@
         }
       }
     },
+    "/api/v1/items/{id}/unmerge": {
+      "post": {
+        "tags": [
+          "Catalogue"
+        ],
+        "summary": "Undo a merge, by the merged work's id.",
+        "description": "The merged work comes back as a work of its own: what moved onto the\nsurvivor and is still as the merge left it goes back — what a refresh of\nthe survivor replaced since does not, and comes back to the work at its\nown refresh, which is due at once — what gave way to the survivor's rows\nis put back, its locks and its identifiers are its own again but those\nanother work holds now, and its names stop answering with the survivor.\nThe pair is not proposed as duplicates again. Within `merge.undoDays` of\nthe merge; a `410` after, or when undos are not kept.",
+        "operationId": "merge_unmerge",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The merged work: the tombstone",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnmergeOutcome"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller may not write"
+          },
+          "404": {
+            "description": "No work by that id was merged into another"
+          },
+          "409": {
+            "description": "The work it was merged into was merged in its turn: that merge is undone first"
+          },
+          "410": {
+            "description": "The window to undo it is closed, undos are not kept, or the work it was merged into is gone"
+          }
+        }
+      }
+    },
     "/api/v1/items/{id}/watch": {
       "get": {
         "tags": [
@@ -6115,29 +6355,174 @@
         }
       }
     },
-    "/api/v1/people/{tmdb_id}": {
+    "/api/v1/people": {
       "get": {
         "tags": [
           "Catalogue"
         ],
-        "summary": "Somebody's work, as far as this catalogue holds it.",
-        "description": "By TMDB's person id, which is how TMDB files cast and crew; TheTVDB's\ncredits carry none and are not found here.",
-        "operationId": "browse_person",
+        "summary": "The people the catalogue credits, as an index: by letter, by job, the\nmost credited first or in the order of their names.",
+        "description": "Those credited on a work anybody may see — switched on, and not for\nadults — by a credit no lock hides, each counted by those works, as their\nrecords keep the count. Whoever keeps the catalogue may also ask for\neverybody, those known by no TMDB id, and those who share a name: the\nrecords worth a second look.",
+        "operationId": "people_index",
         "parameters": [
           {
-            "name": "tmdb_id",
-            "in": "path",
-            "description": "The person's TMDB id",
-            "required": true,
+            "name": "letter",
+            "in": "query",
+            "description": "`A` to `Z`, or `#` for the names that start with anything else —\nthe name they sort by, its accent and case aside.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "job",
+            "in": "query",
+            "description": "`acting`, `directing`, `writing` or `producing`: those who did it,\nwith the works they did it on.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "`works` — the most works first, the default — or `name`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "term",
+            "in": "query",
+            "description": "For those who keep the catalogue: a part of a name, theirs or one they\ngo by, accents and case aside.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "all",
+            "in": "query",
+            "description": "For those who keep the catalogue: everybody, credited on anything or\nnot.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "withoutTmdb",
+            "in": "query",
+            "description": "For those who keep the catalogue: only those known by no TMDB id.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "homonyms",
+            "in": "query",
+            "description": "For those who keep the catalogue: only those who share a name — theirs\nor one they go by — with somebody else: the likely homonyms and the\nlikely duplicates.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "From 1 to 200; 60 when left out.",
+            "required": false,
             "schema": {
               "type": "integer",
               "format": "int64"
             }
           },
           {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PeoplePage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A letter, a job or an order this index does not know"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Catalogue"
+        ],
+        "summary": "Enter somebody by hand.",
+        "description": "A record of its own, known by the ids given: credits a source gives them\nunder one of those ids are filed under it from then on, and what TMDB\nsays of them fills only what is left empty here.",
+        "operationId": "people_create",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnteredPerson"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonId"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No name, or an id, a day or an address that is not one"
+          },
+          "403": {
+            "description": "The caller may not write"
+          },
+          "409": {
+            "description": "Another record holds that TMDB id"
+          }
+        }
+      }
+    },
+    "/api/v1/people/{id}": {
+      "get": {
+        "tags": [
+          "Catalogue"
+        ],
+        "summary": "Somebody, and their work as far as this catalogue holds it.",
+        "description": "By their record's id, or by their TMDB id — every digit — as the pages\nwere filed before there were records. A record merged into another\nanswers as that one. What TMDB says of them is asked the first time the\npage is read, kept, and asked again in the background once it is a month\nold; the biography is in the language asked for where TMDB has one.",
+        "operationId": "people_page",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The person's record id, or their TMDB id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "language",
             "in": "query",
-            "description": "Titles in this language, where a translation is held.",
+            "description": "Titles, and the biography, in this language where one is held.",
             "required": false,
             "schema": {
               "type": "string"
@@ -6155,7 +6540,202 @@
             }
           },
           "404": {
-            "description": "Nobody by that id is credited on a work held here"
+            "description": "Nobody by that id is credited on a work the caller may see"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Catalogue"
+        ],
+        "summary": "Put somebody right by hand.",
+        "description": "Every field as given — one left out is cleared — and the record marked as\nput right: what TMDB says of them afterwards fills only what is empty.",
+        "operationId": "people_update",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The person's record id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnteredPerson"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Put right"
+          },
+          "400": {
+            "description": "No name, or an id, a day or an address that is not one"
+          },
+          "403": {
+            "description": "The caller may not write"
+          },
+          "404": {
+            "description": "No such record, or one merged into another"
+          },
+          "409": {
+            "description": "Another record holds that TMDB id"
+          }
+        }
+      }
+    },
+    "/api/v1/people/{id}/credits": {
+      "post": {
+        "tags": [
+          "Catalogue"
+        ],
+        "summary": "File credits under a record, whomever they were filed under.",
+        "description": "How a credit by name alone is given the person it is of — an actor typed\nin by hand, a guest TheTVDB lists — or one filed under the wrong person\nmoved. A refresh leaves them where they were put.",
+        "operationId": "people_attach",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The record the credits are filed under",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AttachCredits"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Filed"
+          },
+          "400": {
+            "description": "No credit, or one that does not exist"
+          },
+          "403": {
+            "description": "The caller may not write"
+          },
+          "404": {
+            "description": "No such record, or one merged into another"
+          }
+        }
+      }
+    },
+    "/api/v1/people/{id}/merge": {
+      "post": {
+        "tags": [
+          "Catalogue"
+        ],
+        "summary": "Merge a record into another: two records of one person.",
+        "description": "Every credit filed under it is filed under the other, which goes by its\nnames from then on and takes whatever ids and facts it lacks. The merged\nrecord is kept as a pointer: a credit a source gives under one of its ids\nis filed under the other, and its page leads there. A refresh leaves the\ncredits where they were put.",
+        "operationId": "people_merge",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The record merged away",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MergePerson"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The record kept",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonId"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A record merged into itself"
+          },
+          "403": {
+            "description": "The caller may not write"
+          },
+          "404": {
+            "description": "Either record does not exist, or was merged already"
+          }
+        }
+      }
+    },
+    "/api/v1/people/{id}/split": {
+      "post": {
+        "tags": [
+          "Catalogue"
+        ],
+        "summary": "Split credits off a record onto a new one: one name, two people.",
+        "description": "The way out of a homonym taken for somebody else — a credit by name alone\nfiled under the person known by a TMDB id who goes by that name. The new\nrecord is made by hand; a refresh leaves the credits where they were put.",
+        "operationId": "people_split",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The record the credits are taken from",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SplitPerson"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The new record",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonId"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No credit, or one that is not this person's"
+          },
+          "403": {
+            "description": "The caller may not write"
+          },
+          "404": {
+            "description": "No such record, or one merged into another"
           }
         }
       }
@@ -6701,7 +7281,7 @@
             "description": "It is running already, or a backup is being restored"
           },
           "503": {
-            "description": "Its source or its switch is off: no media store, no export path, no certificate of the server's own, the check for a newer version off, neither Sonarr nor Radarr connected"
+            "description": "Its source or its switch is off: no media store, no export path, no certificate of the server's own, the check for a newer version off, neither Sonarr nor Radarr connected, the AVIF copies off"
           }
         }
       }
@@ -8977,6 +9557,20 @@
           "hasThumb": {
             "type": "boolean"
           },
+          "color": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The colour most of a picture is, `#rrggbb`, once worked out."
+          },
+          "thumbhash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A picture's ThumbHash, base64, once worked out."
+          },
           "attempts": {
             "type": "integer",
             "format": "int32"
@@ -9062,6 +9656,22 @@
           "stored",
           "failed"
         ]
+      },
+      "AttachCredits": {
+        "type": "object",
+        "description": "The credits filed under a person.",
+        "required": [
+          "credits"
+        ],
+        "properties": {
+          "credits": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The credits, by id — a work's `credits[].id` — whomever they were\nfiled under."
+          }
+        }
       },
       "AuditEntry": {
         "type": "object",
@@ -10577,6 +11187,9 @@
           "landscape",
           "screenshot",
           "headshot",
+          "keyart",
+          "discart",
+          "characterart",
           "unknown"
         ]
       },
@@ -11229,6 +11842,23 @@
           }
         }
       },
+      "DismissDuplicateRequest": {
+        "type": "object",
+        "required": [
+          "first",
+          "second"
+        ],
+        "properties": {
+          "first": {
+            "type": "string",
+            "description": "One work of the pair, by its id."
+          },
+          "second": {
+            "type": "string",
+            "description": "The other."
+          }
+        }
+      },
       "Door": {
         "type": "object",
         "description": "The clients' door.",
@@ -11300,6 +11930,85 @@
           "own"
         ]
       },
+      "DuplicateConfidence": {
+        "type": "string",
+        "description": "How sure the server is that two works are one.",
+        "enum": [
+          "certain",
+          "probable",
+          "flag"
+        ]
+      },
+      "DuplicateList": {
+        "type": "object",
+        "description": "The pairs proposed.",
+        "required": [
+          "pairs"
+        ],
+        "properties": {
+          "pairs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DuplicateView"
+            },
+            "description": "Surest first: an identifier shared, then a title, then an IMDb id on\na film and a series."
+          }
+        }
+      },
+      "DuplicateReason": {
+        "type": "string",
+        "description": "Why two works look like one.",
+        "enum": [
+          "sharedId",
+          "title",
+          "imdbAcrossKinds"
+        ]
+      },
+      "DuplicateView": {
+        "type": "object",
+        "description": "A pair of duplicates as the catalogue shows it.",
+        "required": [
+          "first",
+          "second",
+          "confidence",
+          "reason",
+          "detail",
+          "foundAt",
+          "survivor",
+          "why"
+        ],
+        "properties": {
+          "first": {
+            "$ref": "#/components/schemas/MergeWork"
+          },
+          "second": {
+            "$ref": "#/components/schemas/MergeWork"
+          },
+          "confidence": {
+            "$ref": "#/components/schemas/DuplicateConfidence"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/DuplicateReason"
+          },
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What they share: an identifier as `imdb:tt0903747`, or the title as\nit was folded."
+          },
+          "foundAt": {
+            "type": "string"
+          },
+          "survivor": {
+            "type": "string",
+            "description": "The one of the two the rule would keep."
+          },
+          "why": {
+            "$ref": "#/components/schemas/SurvivorRule"
+          }
+        }
+      },
       "Effective": {
         "type": "object",
         "description": "One setting as the interface shows it: what it is, and where the answer\ncurrently comes from.",
@@ -11330,6 +12039,101 @@
               "null"
             ],
             "description": "What the server scope held before anybody changed it: the value the\nenvironment or the code gave it when the server began, which a change\nis measured against and a reversal returns to. Said of the server\nscope only, and never of a secret; absent for a setting that starts\nunset, whose reversal is to set nothing."
+          }
+        }
+      },
+      "EnteredPerson": {
+        "type": "object",
+        "description": "Somebody as they are entered, or put right, by hand.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "tmdbId": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "imdbId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`nm0186505`."
+          },
+          "tvdbId": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "sortName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the index files and sorts them under, where it is not their\nname: `Toro, Guillermo del`."
+          },
+          "originalName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Their name in their own script: 宮崎駿."
+          },
+          "gender": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "1 a woman, 2 a man, 3 non-binary.",
+            "minimum": 0
+          },
+          "birthday": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`YYYY-MM-DD`."
+          },
+          "deathday": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "placeOfBirth": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "biography": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "image": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Their portrait: an address a client can fetch."
+          },
+          "aliases": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The other names they go by, typed by hand: those any other way —\ntheir credits', TMDB's, a merged record's — are kept as they are."
           }
         }
       },
@@ -11458,6 +12262,37 @@
           },
           "isManual": {
             "type": "boolean"
+          }
+        }
+      },
+      "EpisodeCredit": {
+        "type": "object",
+        "description": "A credit on one episode of a series rather than on the series: a guest,\nthe director or a writer of that episode.",
+        "required": [
+          "seasonNumber",
+          "episodeNumber",
+          "credit"
+        ],
+        "properties": {
+          "seasonNumber": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Where the source numbers the episode."
+          },
+          "episodeNumber": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "tmdbEpisodeId": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "TMDB's id of the episode: how the credit finds the episode it is of\nin the work's own numbering, which may be TheTVDB's."
+          },
+          "credit": {
+            "$ref": "#/components/schemas/Credit"
           }
         }
       },
@@ -14046,6 +14881,10 @@
             },
             "description": "When the work came out in each country, and the rating it carries\nthere: a country's, whole, from the first source that has any."
           },
+          "people": {
+            "$ref": "#/components/schemas/People",
+            "description": "What the sources say of the people the credits name — the credits of\nsingle episodes among it — and, read back, whom each credit is filed\nunder: see [`person::People`]."
+          },
           "lockedFields": {
             "type": "array",
             "items": {
@@ -14067,6 +14906,16 @@
           "hidden": {
             "$ref": "#/components/schemas/Hidden",
             "description": "What the sources gave and a person hid: kept apart for whoever\nmaintains the catalogue, served to nobody."
+          },
+          "pictures": {
+            "type": "object",
+            "description": "What a page needs of the pictures it leads with — the poster, the\nbackground, the landscape and the logo a card or a plate shows —\nbefore they are there: their size, the colour and the sketch they\nare drawn as while they load, the AVIF copies made of them. By the\naddress the work gives each, and only for the copies this server\nkeeps. Set as the work is read for this server's own pages; never\nstored, and never sent to a client elsewhere.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/Picture"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
           }
         }
       },
@@ -14088,8 +14937,12 @@
           "audio",
           "publicUrl",
           "counts",
+          "variants",
+          "unprepared",
+          "avif",
           "fetching",
-          "sweeping"
+          "sweeping",
+          "preparing"
         ],
         "properties": {
           "backend": {
@@ -14116,12 +14969,29 @@
           "counts": {
             "$ref": "#/components/schemas/AssetCounts"
           },
+          "variants": {
+            "$ref": "#/components/schemas/VariantCounts",
+            "description": "The copies made of the pictures kept: what each kind weighs."
+          },
+          "unprepared": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The pictures kept that this version has not prepared — no\nplaceholder, no first copy — which the task `media.variants` does."
+          },
+          "avif": {
+            "type": "boolean",
+            "description": "Whether the night's task makes AVIF copies (`media.avif`)."
+          },
           "fetching": {
             "type": "boolean",
             "description": "Whether a fetch or a sweep is under way."
           },
           "sweeping": {
             "type": "boolean"
+          },
+          "preparing": {
+            "type": "boolean",
+            "description": "Whether the pictures are being prepared, or their AVIF copies made."
           }
         }
       },
@@ -14163,6 +15033,360 @@
           }
         ],
         "description": "The first tier: this process's memory."
+      },
+      "MergeAlias": {
+        "type": "object",
+        "description": "A name the survivor will answer for besides its own.",
+        "required": [
+          "source",
+          "value"
+        ],
+        "properties": {
+          "source": {
+            "type": "string",
+            "description": "`id`, `slug`, or the source of an identifier elsewhere."
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "MergeField": {
+        "type": "object",
+        "description": "One field whose value differs between the two, and whether each locks it.",
+        "required": [
+          "field",
+          "survivor",
+          "merged",
+          "survivorLocked",
+          "mergedLocked",
+          "choosable"
+        ],
+        "properties": {
+          "field": {
+            "type": "string",
+            "description": "As the field registry names it."
+          },
+          "survivor": {
+            "description": "What the survivor is served with; `null` for nothing."
+          },
+          "merged": {
+            "description": "What the merged work is served with; `null` for nothing."
+          },
+          "survivorLocked": {
+            "type": "boolean"
+          },
+          "mergedLocked": {
+            "type": "boolean"
+          },
+          "choosable": {
+            "type": "boolean",
+            "description": "Whether the merged work's value can be kept: a field a work cannot be\nread without — its title, the poster it leads with — is never kept\nempty."
+          }
+        }
+      },
+      "MergeList": {
+        "type": "object",
+        "description": "The merges into a work that can still be undone, and every name of the\nworks merged into it that it answers for.",
+        "required": [
+          "merges",
+          "undoDays",
+          "aliases"
+        ],
+        "properties": {
+          "merges": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MergeUndoable"
+            },
+            "description": "Newest first; none while undos are not kept."
+          },
+          "undoDays": {
+            "type": "integer",
+            "format": "int64",
+            "description": "For how many days a merge can be undone; `0`: not at all."
+          },
+          "aliases": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkAlias"
+            },
+            "description": "Newest merge first."
+          }
+        }
+      },
+      "MergeOutcome": {
+        "type": "object",
+        "description": "What a merge came to.",
+        "required": [
+          "survivor",
+          "merged",
+          "undoUntil",
+          "aliases",
+          "moved",
+          "dropped"
+        ],
+        "properties": {
+          "survivor": {
+            "type": "string",
+            "description": "The work that stays."
+          },
+          "merged": {
+            "type": "string",
+            "description": "The work merged into it, a tombstone now."
+          },
+          "undoUntil": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Until when it can be undone; `null` when it cannot."
+          },
+          "aliases": {
+            "type": "integer",
+            "description": "How many names of the merged work the survivor answers for now.",
+            "minimum": 0
+          },
+          "moved": {
+            "type": "object",
+            "description": "The rows moved over, by table.",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "dropped": {
+            "type": "object",
+            "description": "The rows that gave way to the survivor's, by table.",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "MergePerson": {
+        "type": "object",
+        "description": "Into whom a record is merged.",
+        "required": [
+          "into"
+        ],
+        "properties": {
+          "into": {
+            "type": "string",
+            "description": "The record that is kept."
+          }
+        }
+      },
+      "MergePreview": {
+        "type": "object",
+        "description": "What a merge of one work into another would do.",
+        "required": [
+          "merged",
+          "survivor",
+          "proposed",
+          "why",
+          "fields",
+          "children",
+          "aliases",
+          "undoDays"
+        ],
+        "properties": {
+          "merged": {
+            "$ref": "#/components/schemas/MergeWork",
+            "description": "The work that would become a tombstone."
+          },
+          "survivor": {
+            "$ref": "#/components/schemas/MergeWork",
+            "description": "The work that would stay."
+          },
+          "proposed": {
+            "type": "string",
+            "description": "The one of the two the rule would keep, and why: the dialog offers to\nswap when it is not `survivor`."
+          },
+          "why": {
+            "$ref": "#/components/schemas/SurvivorRule"
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MergeField"
+            },
+            "description": "Every field whose value differs, as each is served."
+          },
+          "children": {
+            "type": "object",
+            "description": "What the merged work holds, by kind of row: moved over, or folded\ninto the survivor's own.",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "aliases": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MergeAlias"
+            },
+            "description": "What the survivor will answer for besides its own."
+          },
+          "undoDays": {
+            "type": "integer",
+            "format": "int64",
+            "description": "For how many days the merge could be undone; `0`: not at all."
+          }
+        }
+      },
+      "MergeRequest": {
+        "type": "object",
+        "required": [
+          "into"
+        ],
+        "properties": {
+          "into": {
+            "type": "string",
+            "description": "The work it is merged into: the one that stays."
+          },
+          "keep": {
+            "type": "object",
+            "description": "The side each field is kept from, by its name in the field registry,\nwhere the two differ: `survivor`, the default, or `merged`. Every\nfield the work may lock but its slug and its identifiers.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/MergeSide"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "MergeSide": {
+        "type": "string",
+        "description": "Which of two works a field's value is kept from.",
+        "enum": [
+          "survivor",
+          "merged"
+        ]
+      },
+      "MergeUndoable": {
+        "type": "object",
+        "description": "A merge into a work that can still be undone, as its editor offers it.",
+        "required": [
+          "work",
+          "undoUntil"
+        ],
+        "properties": {
+          "work": {
+            "$ref": "#/components/schemas/MergedWork"
+          },
+          "undoUntil": {
+            "type": "string"
+          }
+        }
+      },
+      "MergeWork": {
+        "type": "object",
+        "description": "A work as a pair of duplicates or a merge names it: enough to tell the\ntwo apart at a glance, and to choose which of them stays.",
+        "required": [
+          "id",
+          "title",
+          "kind",
+          "slug",
+          "externalIds",
+          "isManual",
+          "isEnabled",
+          "isAdult",
+          "createdAt",
+          "handEdits"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string",
+            "description": "As it is shown: a title locked in every language, else its own."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/MediaKind"
+          },
+          "year": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "poster": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The address of its first poster, the work's own; absent when it has\nnone."
+          },
+          "externalIds": {
+            "$ref": "#/components/schemas/ExternalIds"
+          },
+          "isManual": {
+            "type": "boolean"
+          },
+          "isEnabled": {
+            "type": "boolean"
+          },
+          "isAdult": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "handEdits": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Its locks and what was added to it by hand, counted, and one more\nfor a work entered by hand: what the survivor is chosen by once\nwhether its sources fill it is weighed."
+          }
+        }
+      },
+      "MergedWork": {
+        "type": "object",
+        "description": "A work merged into another, as the survivor's editor names it.",
+        "required": [
+          "id",
+          "title",
+          "kind",
+          "mergedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The tombstone's id: what the undo is asked by."
+          },
+          "title": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/MediaKind"
+          },
+          "year": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "mergedAt": {
+            "type": "string"
+          }
+        }
       },
       "MovieResource": {
         "type": "object",
@@ -15021,21 +16245,103 @@
           }
         }
       },
+      "People": {
+        "type": "object",
+        "description": "What a work's sources say of the people its credits name, and, read back,\nwhom each credit is filed under.",
+        "properties": {
+          "episodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EpisodeCredit"
+            },
+            "description": "The credits of single episodes, as a source gave them: written with\nthe work, never read back with it — a long series has thousands, and\na person's page reads its own."
+          },
+          "byCredit": {
+            "type": "object",
+            "description": "Who each credit names, by the credit's id: its own and its episodes'.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/PersonRef"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "PeoplePage": {
+        "type": "object",
+        "description": "A page of the index.",
+        "required": [
+          "people",
+          "total",
+          "letters"
+        ],
+        "properties": {
+          "people": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PersonCard"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many there are, past this page."
+          },
+          "letters": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The letters somebody is filed under, `#` among them, before the one\nasked for narrowed the list: the ones worth offering."
+          }
+        }
+      },
       "Person": {
         "type": "object",
+        "description": "Somebody, and the part of their work this catalogue holds.",
         "required": [
-          "tmdbId",
+          "id",
           "name",
           "roles",
           "works"
         ],
         "properties": {
+          "id": {
+            "type": "string",
+            "description": "Their record's id: their page is `/people/{id}`."
+          },
           "tmdbId": {
-            "type": "integer",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Their TMDB id, where they are known by one: `/people/{tmdbId}` is\ntheir page too."
+          },
+          "tvdbId": {
+            "type": [
+              "integer",
+              "null"
+            ],
             "format": "int64"
           },
           "name": {
             "type": "string"
+          },
+          "originalName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Their name in the script of their own language, where it is another."
+          },
+          "originalNameLang": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The language that name is in, as a page's `lang` takes it: `ja`.\nNone where neither its script nor their works say."
           },
           "image": {
             "type": [
@@ -15043,29 +16349,137 @@
               "null"
             ]
           },
+          "aliases": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The other names they go by."
+          },
+          "isManual": {
+            "type": "boolean",
+            "description": "Entered or put right by hand."
+          },
           "roles": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/PersonRole"
             },
-            "description": "Newest work first."
+            "description": "Every credit on a work the caller may see, the newest work first: an\nepisode's under the work it is of."
           },
           "works": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/MediaItem"
-            }
+            },
+            "description": "Those works, as cards, in the same order."
           },
           "details": {
             "oneOf": [
               {
                 "$ref": "#/components/schemas/PersonDetails",
-                "description": "What TMDB says of them, when it is configured and answered."
+                "description": "What TMDB says of them, once it has been asked."
               },
               {
                 "type": "null"
               }
             ]
+          },
+          "record": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PersonRecord",
+                "description": "The record as it is kept — every field as `PUT /people/{id}` takes\nit, the portrait's address at its source, the other names with where\neach came from — for whoever may put it right; nobody else."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "PersonAlias": {
+        "type": "object",
+        "description": "Another name somebody goes by, and where it came from.",
+        "required": [
+          "name",
+          "source"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string",
+            "description": "`credit` — a spelling one of their credits gives — `tmdb`, one TMDB\nlists, `merged`, the name of a record merged into theirs, or\n`manual`, one typed by hand."
+          }
+        }
+      },
+      "PersonCard": {
+        "type": "object",
+        "description": "Somebody, as the index lists them.",
+        "required": [
+          "id",
+          "name",
+          "works",
+          "jobs"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "tmdbId": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "image": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "works": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many works credit them — with the job asked for, when one was."
+          },
+          "jobs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PersonJob"
+            },
+            "description": "What they did on those works."
+          },
+          "imdbId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For those who keep the catalogue."
+          },
+          "tvdbId": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "isManual": {
+            "type": "boolean",
+            "description": "Entered or put right by hand."
+          },
+          "aliases": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The other names they go by."
           }
         }
       },
@@ -15145,12 +16559,25 @@
         "type": "object",
         "description": "Somebody the catalogue's works credit.",
         "required": [
+          "id",
           "name",
+          "jobs",
           "works"
         ],
         "properties": {
+          "id": {
+            "type": "string",
+            "description": "Their record's id, which their page is filed under: `/people/{id}`."
+          },
           "name": {
             "type": "string"
+          },
+          "matched": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The other name they were found by, where that is not their own."
           },
           "tmdbId": {
             "type": [
@@ -15158,7 +16585,21 @@
               "null"
             ],
             "format": "int64",
-            "description": "Their TMDB id, which their page is filed under; none for somebody\ncredited by name alone, whose works the list finds by that name."
+            "description": "Their TMDB id, where they are known by one."
+          },
+          "image": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Their portrait."
+          },
+          "jobs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PersonJob"
+            },
+            "description": "What they did on the works anybody may see."
           },
           "works": {
             "type": "integer",
@@ -15167,12 +16608,242 @@
           }
         }
       },
+      "PersonId": {
+        "type": "object",
+        "description": "What became of a record: its id.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        }
+      },
+      "PersonJob": {
+        "type": "string",
+        "description": "What somebody did on a work, as their page puts their works together:\non screen, or behind the camera in one of three ways.",
+        "enum": [
+          "acting",
+          "directing",
+          "writing",
+          "producing"
+        ]
+      },
+      "PersonRecord": {
+        "type": "object",
+        "description": "Somebody the catalogue credits, as it keeps them.",
+        "required": [
+          "id",
+          "name",
+          "isManual",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "tmdbId": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "imdbId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`nm0186505`."
+          },
+          "tvdbId": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "name": {
+            "type": "string"
+          },
+          "sortName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the index files and sorts them under, where it is not their\nname: `Toro, Guillermo del`."
+          },
+          "originalName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Their name in the script of their own language, where it is another\nthan the one above: 田中真弓."
+          },
+          "gender": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "As TMDB has it — 1 a woman, 2 a man, 3 non-binary — for a language\nthat agrees its participles.",
+            "minimum": 0
+          },
+          "birthday": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`YYYY-MM-DD`."
+          },
+          "deathday": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "placeOfBirth": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "biography": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "image": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Their portrait."
+          },
+          "photos": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "A few more of them, in TMDB's order."
+          },
+          "knownFor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What TMDB files them under: `Acting`, `Directing`, `Writing`, …"
+          },
+          "homepage": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "popularity": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "refreshedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When TMDB was last asked about them; none until their page is read."
+          },
+          "isManual": {
+            "type": "boolean",
+            "description": "Entered, or put right, by hand: what TMDB says no longer replaces it."
+          },
+          "mergedInto": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The record this one was merged into, when it was."
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          },
+          "aliases": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PersonAlias"
+            },
+            "description": "The other names they go by."
+          }
+        }
+      },
+      "PersonRef": {
+        "type": "object",
+        "description": "Who a credit names, beyond the name it gives.\n\nFrom a source: what it knows of them that a credit has no room for —\nTheTVDB's id for its people, the name in its own script and the gender\nTMDB gives — and what their record is made or completed with when the\ncredit is written. Read back: the record the credit is filed under, with\nthe ids it is known by, for whoever names them on — the NFO's actors.",
+        "properties": {
+          "personId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The person here the credit is filed under."
+          },
+          "tmdbId": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "imdbId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tvdbId": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "originalName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "gender": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "popularity": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          }
+        }
+      },
       "PersonRole": {
         "type": "object",
-        "description": "One part a person played, or one job they did, on one work.",
+        "description": "One part a person played, or one job they did, on one work — or on one\nepisode of it.",
         "required": [
           "workId",
-          "creditType"
+          "creditType",
+          "creditId"
         ],
         "properties": {
           "workId": {
@@ -15187,6 +16858,84 @@
               "null"
             ],
             "description": "The character, or the job title for crew."
+          },
+          "creditId": {
+            "type": "string",
+            "description": "The credit, which those who keep the catalogue move from one person\nto another by."
+          },
+          "seasonNumber": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The episode it is on, where it is on one — a guest's, an episode's\ndirector's — with its title and the day it aired."
+          },
+          "episodeNumber": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "episodeTitle": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "airDate": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`YYYY-MM-DD`."
+          }
+        }
+      },
+      "Picture": {
+        "type": "object",
+        "description": "What a page is told of a picture this server keeps, beside its address.",
+        "properties": {
+          "width": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The picture's own size, in pixels: no copy is made wider.",
+            "minimum": 0
+          },
+          "height": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "color": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The colour most of it is, `#rrggbb`: painted behind its frame at once."
+          },
+          "thumbhash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A sketch of it in two dozen bytes, base64: decoded into a tiny image\ndrawn under it until it arrives (evanw/thumbhash)."
+          },
+          "avif": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            },
+            "description": "The widths at which an AVIF copy exists, for a `<picture>` to offer."
           }
         }
       },
@@ -15412,7 +17161,7 @@
         "properties": {
           "type": {
             "type": "string",
-            "description": "`coverPoster`, `background`, `clearLogo` or `snapshot`."
+            "description": "`coverPoster`, `background`, `backgroundSquare`, `clearLogo` or\n`snapshot`."
           },
           "url": {
             "type": "string"
@@ -18135,6 +19884,29 @@
           }
         }
       },
+      "SplitPerson": {
+        "type": "object",
+        "description": "The credits split off, and what the new record is called.",
+        "required": [
+          "credits"
+        ],
+        "properties": {
+          "credits": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The credits, by id — `credit_id` on the person's page — that are\nsomebody else's."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "That somebody's name; the person's own when left out."
+          }
+        }
+      },
       "Started": {
         "type": "object",
         "properties": {
@@ -18295,6 +20067,16 @@
           "open"
         ]
       },
+      "SurvivorRule": {
+        "type": "string",
+        "description": "Why the survivor is the one the rule names.",
+        "enum": [
+          "sourced",
+          "handEdits",
+          "moreIds",
+          "older"
+        ]
+      },
       "SyncAnswer": {
         "oneOf": [
           {
@@ -18418,7 +20200,8 @@
           "media_off",
           "no_authority",
           "updates_off",
-          "arr_off"
+          "arr_off",
+          "avif_off"
         ]
       },
       "TaskId": {
@@ -18432,6 +20215,8 @@
           "export.nfo",
           "media.store",
           "media.sweep",
+          "media.variants",
+          "media.avif",
           "tls.renew",
           "update.check",
           "arr.seed",
@@ -18593,7 +20378,8 @@
           "failedMedia",
           "backupOverdue",
           "lastBackupAt",
-          "divergingLocks"
+          "divergingLocks",
+          "duplicates"
         ],
         "properties": {
           "refreshFailed": {
@@ -18651,6 +20437,11 @@
             "type": "integer",
             "format": "int64",
             "description": "Works with a lock a source moved under since it was set, and which\nsays something else than the lock now: worth a look, to keep the\nlock or to take what the source says."
+          },
+          "duplicates": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Works that look like another one — under one identifier elsewhere,\nunder one title within a year, or a film and a series under one IMDb\nid — that nobody said are not: each pair is two of them."
           }
         }
       },
@@ -18756,6 +20547,53 @@
               "null"
             ],
             "description": "The language the value was locked in alone: `fr`, `fra`. Absent for\nevery language."
+          }
+        }
+      },
+      "UnmergeOutcome": {
+        "type": "object",
+        "description": "What an undo came to.",
+        "required": [
+          "restored",
+          "survivor",
+          "taken"
+        ],
+        "properties": {
+          "restored": {
+            "type": "string",
+            "description": "The work put back, a work of its own again."
+          },
+          "survivor": {
+            "type": "string",
+            "description": "The work it had been merged into."
+          },
+          "taken": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UnmergeTaken"
+            },
+            "description": "The identifiers it went without."
+          }
+        }
+      },
+      "UnmergeTaken": {
+        "type": "object",
+        "description": "An identifier the work put back went without: another work holds it now.",
+        "required": [
+          "source",
+          "value",
+          "holder"
+        ],
+        "properties": {
+          "source": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          },
+          "holder": {
+            "type": "string",
+            "description": "The work that holds it."
           }
         }
       },
@@ -19020,6 +20858,47 @@
               "type": "string"
             },
             "description": "Those ahead of it in priority that gave none: why a lower source's\nvalue stands. Sources that describe nothing — artwork alone — are not\ncounted, or every field would name them."
+          }
+        }
+      },
+      "VariantCounts": {
+        "type": "object",
+        "description": "What the copies made weigh, by what they are written as.",
+        "required": [
+          "webp",
+          "webpBytes",
+          "avif",
+          "avifBytes",
+          "jpeg",
+          "jpegBytes"
+        ],
+        "properties": {
+          "webp": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The WebP copies the interface is given."
+          },
+          "webpBytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "avif": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The AVIF copies the night's task made."
+          },
+          "avifBytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "jpeg": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The squares Plex is given."
+          },
+          "jpegBytes": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
@@ -19570,6 +21449,37 @@
           "attribution": {
             "type": "string",
             "description": "Who the data comes from; shown beside it, as TMDB's terms ask."
+          }
+        }
+      },
+      "WorkAlias": {
+        "type": "object",
+        "description": "One name a merged work went by, as a reader of the survivor is told it.",
+        "required": [
+          "source",
+          "value",
+          "mediaId",
+          "mergedId",
+          "createdAt"
+        ],
+        "properties": {
+          "source": {
+            "type": "string",
+            "description": "`id`, `slug`, or the source of an identifier elsewhere: `tvdb_series`,\n`tmdb_movie`, `imdb`…"
+          },
+          "value": {
+            "type": "string"
+          },
+          "mediaId": {
+            "type": "string",
+            "description": "The work that answers for it now."
+          },
+          "mergedId": {
+            "type": "string",
+            "description": "The work it named, kept as a tombstone."
+          },
+          "createdAt": {
+            "type": "string"
           }
         }
       },

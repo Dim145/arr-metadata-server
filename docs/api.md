@@ -48,14 +48,47 @@ work's journal are handed over whole as a file, under the same filters as their 
 `?format=csv` — a spreadsheet opens it — or `?format=json`. See
 [The journal](editing.md#the-journal).
 
+## Two records of one work
+
+For whoever may edit the catalogue. `GET /api/v1/admin/duplicates` lists the pairs proposed as
+one work, looked for again first: each pair's two works (`first`, `second`, with their
+identifiers, how many hand edits each holds and when each was added), how sure the server is
+(`confidence`: `certain`, `probable` or `flag`) and why (`reason`: `sharedId`, `title` or
+`imdbAcrossKinds`, with the identifier or the folded title in `detail`), and the one the rule
+keeps (`survivor`, and `why`: `sourced`, `handEdits`, `moreIds` or `older`). `POST
+/api/v1/admin/duplicates/dismiss`, with `{"first": …, "second": …}`, says two works are not one,
+for good; `GET /api/v1/items?missing=duplicates` lists the works still in a pair.
+
+`GET /api/v1/items/{id}/merge?into=…` says what merging `{id}` into `into` would do, and writes
+nothing: the two works, each field they give different values of — both values, whether either
+locks it, whether the merged work's may be kept — the rows that would move over, the aliases that
+would be filed, and how many days it could be undone for. `POST /api/v1/items/{id}/merge`, with
+`{"into": …, "keep": {"overview": "merged"}}`, merges it: a field named in `keep` is kept from
+the side it names, `survivor` or `merged`, and every other field is the survivor's. The answer
+names the two, says until when the merge can be undone (`undoUntil`, `null` when it cannot), and
+counts the rows that moved over and gave way, table by table. A film and a series, or a work
+merged already, are refused with a `409`.
+
+`POST /api/v1/items/{id}/unmerge` takes `{id}` apart from the work it was merged into, and
+answers with `restored` and the identifiers another work has taken since (`taken`). A `410` says
+why it no longer can, in `code`: `merge_undo_off`, `merge_undo_expired` or
+`merge_survivor_gone`; a `409`, that the survivor was merged in its turn, which is undone first.
+`GET /api/v1/items/{id}/merges` lists what was merged into `{id}` and can still be taken apart,
+with the aliases it answers under.
+
+A merged work's id and slug are read as the survivor's: `GET /api/v1/items/{id}` answers the
+survivor, under its own id. A write is sent under that id. See [Duplicates](editing.md#duplicates).
+
 ## Searching the catalogue
 
 `GET /api/v1/search?term=…` is the search box's: the works, the people credited on them and the
 episodes a term finds, each kind ranked on its own — `kinds=work,person,episode` to ask for fewer,
 `limit` (six by default, twenty at most) for more of each, `language` for the titles. A work comes
 under the title it is shown by, with `matched` naming the other title it was found by when that is
-not the one; a person with the TMDB id their page is filed under, when the credits give one, and
-how many works credit them; an episode with its series, its season and its number.
+not the one; a person with their record's id — their page is `/people/{id}` — the TMDB id they
+are known by, when they are, their portrait, what they did (`jobs`, as the index of people counts
+it), the other name they were found by, and how many works credit them; an episode with its series,
+its season and its number.
 
 `GET /api/v1/items?term=…` searches the same index for a page of works, in the order of how well
 each answers — the term itself, then a name that starts with it, then a word that does, then one
@@ -65,18 +98,57 @@ letters find nothing it was typed to find is taken for a misspelling, and the na
 of its trigrams are what it finds; Sonarr's and Radarr's lookups and Plex's match read the letters
 alone, which TMDB's own search follows with its own forgiveness.
 
-The list also takes `person` (a TMDB id, or a name whole, whatever its case and accents),
-`runtimeMin` and `runtimeMax` (minutes), `country` (where a work was made, `FR`),
-`certification` (a rating as the reader's country writes it, read in `region` — by default the
-country the caller is answered for) and `collection`, and sorts by `runtime`, `lastAired` and
-`episodes` besides. `GET /api/v1/facets` takes the same filters and adds the countries and the
-ratings they leave to choose from.
+The list also takes `person` (a TMDB id, a person's record id, or a name they go by whole,
+whatever its case and accents; a credit a lock hides names nobody), `runtimeMin` and `runtimeMax`
+(minutes), `country` (where a work was made, `FR`), `certification` (a rating as the reader's
+country writes it, read in `region` — by default the country the caller is answered for) and
+`collection`, and sorts by `runtime`, `lastAired` and `episodes` besides. `GET /api/v1/facets`
+takes the same filters and adds the countries and the ratings they leave to choose from.
 
 The index is kept by the server: a work is written into it as it is stored, and anything else
 that changes what it is found by — a title locked, an alternative title added by hand — has it
 written again within seconds. The task `search.rebuild` writes all of it again. On PostgreSQL it
 reads `pg_trgm`, which the migration installs where it may; without it a search reads every row
 and forgives no misspelling, and the server says so when it starts.
+
+## People
+
+Everybody the credits name is a record of their own (see [The people](data.md#the-people)).
+`GET /api/v1/people` is the index: everybody credited by a credit no lock hides on a work anybody
+may see — switched on, and not for adults — the most credited first or by name
+(`sort=works|name`), by the letter they are filed under (`letter=A` to `Z`, or `#`) and by what they
+did (`job=acting|directing|writing|producing`, each counted by the works they did it on), a page at
+a time (`limit`, sixty by default, and `offset`). The counts are kept on each record and written
+again whenever a work's credits change, as the search index is. Each comes with their record's id,
+their TMDB id when they have one, their portrait, how many works and which jobs; `letters` lists
+the letters somebody is filed under, before the one asked for narrowed the list. Whoever may edit
+the catalogue may also ask for `term` (a part of a name, theirs or one they go by), `all=true`
+(those credited on nothing too), `withoutTmdb=true` and `homonyms=true` (those who share a name
+with somebody else), and is given each record's other ids and names.
+
+`GET /api/v1/people/{id}` is a person's page, by their record's id — or by their TMDB id, every
+digit, as the pages were addressed before there were records, which answers the same. It gives
+who they are — their name, the one in their own script with the language it is in
+(`originalNameLang`, for a `lang` attribute), the other names they go by, what TMDB says of their
+life (`details`, asked of TMDB the first time the page is read, then once a month) — and every
+credit on a work the caller may see, the newest work first (`roles`): the kind of credit, the
+part or the job, the credit's id, and for a guest or an episode's director the season, the
+episode, its title and the day it aired; `works` holds those works as cards. A record merged into
+another answers as that one. Whoever may edit the catalogue is also given `record`, the record as
+it is kept: every field `PUT` takes, the portrait's address at its source, and the other names
+with where each came from (`credit`, `tmdb`, `merged`, `manual`).
+
+For whoever may edit the catalogue: `POST /api/v1/people` enters somebody by hand, with the ids
+they are known by (`tmdbId`, `imdbId` as IMDb files a person, `nm…`, `tvdbId`), and answers their
+id; a TMDB id another record holds is a `409` that names it. `PUT /api/v1/people/{id}` puts a
+record right — every field as given; its `aliases` are the names typed by hand, which replace those
+typed before, the others staying — after which TMDB fills only what it leaves empty. `POST
+/api/v1/people/{id}/merge` with `{"into": …}` files every credit of `{id}` under `into`, which
+goes by `{id}`'s names and takes the ids it lacks; `{id}` is kept as a pointer to it. `POST
+/api/v1/people/{id}/split` with `{"credits": […], "name": …}` moves those credits to a new record
+— the way out of a homonym — and answers its id. `POST /api/v1/people/{id}/credits` with
+`{"credits": […]}` files credits under `{id}`, whomever they were filed under: how a credit typed
+by name is given the person it is of. A refresh leaves a credit where any of these put it.
 
 ## What stays, and how something goes
 

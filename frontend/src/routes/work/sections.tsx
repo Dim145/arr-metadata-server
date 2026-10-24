@@ -134,7 +134,14 @@ const SHOWN_CAST = 6
  * The top of the bill, then the rest folded — out of the page's height, still
  * found by the browser's search (see `Fold`).
  */
-export function CastList({ credits }: { credits: Credit[] }) {
+export function CastList({
+  credits,
+  people,
+}: {
+  credits: Credit[]
+  /** Whom each credit is filed under, by the credit's id. */
+  people?: NonNullable<MediaItem['people']>['byCredit']
+}) {
   const { t } = useI18n()
 
   if (!credits.length) return null
@@ -162,12 +169,20 @@ export function CastList({ credits }: { credits: Credit[] }) {
       </div>
     )
 
+    // Everybody credited has a page: everything else they are in, as far as
+    // this catalogue holds it — by TMDB's id, as it always was, or by their
+    // record where TMDB knows them not.
+    const record = people?.[person.id]?.personId
+    const page = person.tmdbPersonId
+      ? `/person/${person.tmdbPersonId}`
+      : record
+        ? `/people/${encodeURIComponent(record)}`
+        : undefined
+
     return (
       <li key={person.id} tabIndex={-1} className="rounded-card">
-        {/* A person TMDB has an id for has a page: everything else they
-            are in, as far as this catalogue holds it. */}
-        {person.tmdbPersonId ? (
-          <Link to={`/person/${person.tmdbPersonId}`} className="group flex items-center gap-3.5 rounded-card">
+        {page ? (
+          <Link to={page} className="group flex items-center gap-3.5 rounded-card">
             {face}
             {words}
           </Link>

@@ -111,9 +111,14 @@ async fn by_tmdb(
     Extension(identity): Extension<Identity>,
     Path(tmdb_id): Path<i64>,
 ) -> AppResult<Json<MovieResource>> {
-    let item = movie::by_tmdb_id(&state, tmdb_id)
+    let mut item = movie::by_tmdb_id(&state, tmdb_id)
         .await?
         .ok_or(AppError::NotFound)?;
+    // Under the id Radarr asked by, which a film merged into another is
+    // answered under: Radarr keeps the film it holds, and reads the
+    // survivor's record into it, rather than finding a film it may hold
+    // already under the other id.
+    item.external_ids.tmdb = Some(tmdb_id);
 
     let mut answer = served_beside(&state, &identity, vec![item]).await;
 
@@ -190,7 +195,15 @@ async fn bulk(
     Extension(identity): Extension<Identity>,
     Json(tmdb_ids): Json<Vec<i64>>,
 ) -> AppResult<Json<Vec<MovieResource>>> {
-    let items = movie::bulk(&state, &tmdb_ids).await?;
+    // Each under the id it was asked by, as `by_tmdb` answers it.
+    let items: Vec<MediaItem> = movie::bulk(&state, &tmdb_ids)
+        .await?
+        .into_iter()
+        .map(|(asked, mut item)| {
+            item.external_ids.tmdb = Some(asked);
+            item
+        })
+        .collect();
 
     Ok(Json(served_beside(&state, &identity, items).await))
 }
@@ -420,6 +433,73 @@ async fn trending(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        db::repo::{self, item::ItemWrite},
+        domain::{ExternalIds, MediaKind},
+    };
+
+    /// A film merged into another is answered under the TMDB id Radarr asked
+    /// by — alone and in bulk — with the survivor's record: Radarr keeps the
+    /// film it holds, and matches each answer of a bulk refresh to it.
+    #[tokio::test]
+    async fn a_film_merged_into_another_is_answered_under_the_id_radarr_asked_by() {
+        let state = crate::api::native::testing::server().await;
+        let film = |title: &str, tmdb: i64| {
+            let mut film = MediaItem::empty(MediaKind::Movie);
+            film.title = title.into();
+            film.slug = crate::domain::make_slug(title, Some(1995));
+            film.year = Some(1995);
+            film.external_ids = ExternalIds {
+                tmdb: Some(tmdb),
+                ..Default::default()
+            };
+            film
+        };
+        let (heat, copy) = (film("Heat", 949), film("Heat, a copy", 950));
+        for work in [&heat, &copy] {
+            repo::item::upsert(
+                &state.db,
+                ItemWrite {
+                    item: work,
+                    replace_children: true,
+                },
+            )
+            .await
+            .expect("stored");
+        }
+        crate::service::merge::merge(
+            &state,
+            &crate::service::merge::Asker { by: None, ip: None },
+            &copy.id,
+            &heat.id,
+            Default::default(),
+        )
+        .await
+        .expect("asked")
+        .expect("merged");
+
+        let Json(one) = by_tmdb(
+            State(state.clone()),
+            Extension(Identity::Network(None)),
+            Path(950),
+        )
+        .await
+        .expect("answered");
+        assert_eq!((one.tmdb_id, one.title.as_str()), (950, "Heat"));
+
+        let Json(many) = bulk(
+            State(state.clone()),
+            Extension(Identity::Network(None)),
+            Json(vec![949, 950]),
+        )
+        .await
+        .expect("answered");
+        let said: Vec<(i64, &str)> = many
+            .iter()
+            .map(|film| (film.tmdb_id, film.title.as_str()))
+            .collect();
+        assert_eq!(said, [(949, "Heat"), (950, "Heat")]);
+    }
 
     #[test]
     fn only_imdbs_lists_are_asked_of_the_service() {

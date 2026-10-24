@@ -12,6 +12,10 @@ test.describe('the command palette', () => {
     const work = items[0] as { id: string; title: string } | undefined
 
     await page.goto('/')
+    // The bar is drawn in the same pass as the palette, whose key is heard
+    // from then on: pressed before, after the page's own code has loaded
+    // but before it is drawn, the key would meet nobody.
+    await expect(page.getByRole('banner')).toBeVisible()
     await page.keyboard.press('ControlOrMeta+k')
     const box = page.getByRole('combobox', { name: /command palette|palette de commandes/i })
     await expect(box).toBeVisible()
@@ -49,6 +53,7 @@ test.describe('the command palette', () => {
     await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
 
     await page.goto('/')
+    await expect(page.getByRole('banner')).toBeVisible()
     await page.keyboard.press('ControlOrMeta+k')
     const box = page.getByRole('combobox', { name: /command palette|palette de commandes/i })
     await expect(box).toBeVisible()

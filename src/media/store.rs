@@ -3,7 +3,10 @@
 //! One interface over both, from `object_store`, so that everything above it
 //! — fetching, serving, sweeping — is written once. A key names its bytes:
 //! `<sha256>.<ext>`, filed two levels deep so a directory of a hundred
-//! thousand pictures is not one directory.
+//! thousand pictures is not one directory. The copies made of a picture go
+//! in a directory of their own beside it, named by its hash —
+//! `<sha256>/480.webp` — where a backup, which carries what cannot be made
+//! again, does not look.
 
 use std::{ops::Range, sync::Arc, time::Duration};
 
@@ -15,6 +18,7 @@ use object_store::{
     PutOptions, PutPayload, aws::AmazonS3, local::LocalFileSystem, path::Path, signer::Signer as _,
 };
 
+use super::file::Made;
 use crate::config;
 
 /// The store, as configured.
@@ -94,12 +98,21 @@ impl Store {
         }
     }
 
-    /// Where a key is filed.
+    /// Where a key is filed: a picture or a thumbnail by its own name, a copy
+    /// under its picture's hash.
     fn path(&self, key: &str) -> Path {
+        let name = match super::file::parse_key(key) {
+            Some(parsed) => match parsed.made {
+                Made::Width(width) => format!("{}/{width}.{}", parsed.stem, parsed.ext),
+                Made::Square => format!("{}/square.{}", parsed.stem, parsed.ext),
+                Made::Own | Made::Thumb => key.to_string(),
+            },
+            None => key.to_string(),
+        };
         let fan = if key.len() >= 4 {
-            format!("{}/{}/{key}", &key[0..2], &key[2..4])
+            format!("{}/{}/{name}", &key[0..2], &key[2..4])
         } else {
-            key.to_string()
+            name
         };
         match &self.prefix {
             Some(prefix) => Path::from(format!("{prefix}/{fan}")),
@@ -107,10 +120,20 @@ impl Store {
         }
     }
 
-    /// The key of a filed path, when it is one this store filed.
+    /// The key of a filed path, when it is one this store filed: a name of
+    /// its own, or a copy's name under its picture's hash.
     fn key_of(&self, path: &Path) -> Option<String> {
-        let name = path.parts().next_back()?.as_ref().to_string();
-        super::valid_key(&name).then_some(name)
+        let mut parts = path.parts();
+        let name = parts.next_back()?.as_ref().to_string();
+        if super::valid_key(&name) {
+            return Some(name);
+        }
+        let stem = parts.next_back()?.as_ref().to_string();
+        let (made, ext) = name.rsplit_once('.')?;
+        let key = format!("{stem}-{made}.{ext}");
+        super::file::parse_key(&key)
+            .is_some_and(|parsed| matches!(parsed.made, Made::Width(_) | Made::Square))
+            .then_some(key)
     }
 
     pub async fn put(&self, key: &str, bytes: Bytes, content_type: &str) -> Result<()> {
@@ -213,8 +236,21 @@ impl Store {
         }
     }
 
-    /// Every key filed, with when it was put there.
+    /// Every picture, sound and thumbnail filed, with when it was put there:
+    /// what a row names, and what a backup holds. Not the copies made of
+    /// them — see [`Self::list_all`].
     pub async fn list(&self) -> Result<Vec<(String, chrono::DateTime<chrono::Utc>)>> {
+        let mut keys = self.list_all().await?;
+        keys.retain(|(key, _)| {
+            super::file::parse_key(key)
+                .is_some_and(|parsed| matches!(parsed.made, Made::Own | Made::Thumb))
+        });
+        Ok(keys)
+    }
+
+    /// Every key filed, the copies made of the pictures among them, with
+    /// when each was put there: what the sweep looks through.
+    pub async fn list_all(&self) -> Result<Vec<(String, chrono::DateTime<chrono::Utc>)>> {
         let prefix = self.prefix.as_ref().map(|p| Path::from(p.as_str()));
         let mut stream = self.inner.list(prefix.as_ref());
         let mut keys = Vec::new();
@@ -244,5 +280,67 @@ impl Store {
             .await
             .with_context(|| format!("could not sign a URL for {key}"))?;
         Ok(Some(url))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SHA: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+
+    /// A copy is filed in a directory of its picture's, found there again,
+    /// and listed apart from what a row names and a backup carries.
+    #[tokio::test]
+    async fn a_copy_is_filed_beside_its_picture_and_listed_apart() {
+        // nosemgrep: rust.lang.security.temp-dir.temp-dir — a test's scratch directory, named after a fresh id: nothing security-relevant lives in it
+        let dir = std::env::temp_dir().join(format!("ams-store-{}", crate::db::new_id()));
+        let store = Store::open(&config::Media {
+            storage: config::MediaStorage::Filesystem,
+            dir: dir.clone(),
+            s3: None,
+        })
+        .unwrap()
+        .expect("a store");
+
+        let keys = [
+            format!("{SHA}-480.webp"),
+            format!("{SHA}-square.jpg"),
+            format!("{SHA}-t.jpg"),
+            format!("{SHA}.jpg"),
+        ];
+        for key in &keys {
+            store
+                .put(key, Bytes::from_static(b"bytes"), "image/jpeg")
+                .await
+                .unwrap();
+            assert!(store.exists(key).await.unwrap(), "{key}");
+        }
+        assert!(dir.join("ba/78").join(SHA).join("480.webp").is_file());
+        assert!(dir.join("ba/78").join(format!("{SHA}.jpg")).is_file());
+
+        let mut all: Vec<String> = store
+            .list_all()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|(key, _)| key)
+            .collect();
+        all.sort();
+        assert_eq!(all, keys);
+        let mut named: Vec<String> = store
+            .list()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|(key, _)| key)
+            .collect();
+        named.sort();
+        assert_eq!(named, [format!("{SHA}-t.jpg"), format!("{SHA}.jpg")]);
+
+        store.delete(&keys[0]).await.unwrap();
+        assert!(!store.exists(&keys[0]).await.unwrap());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -23,11 +23,13 @@ pub mod items;
 pub mod lists;
 pub mod locks;
 pub mod media;
+pub mod merge;
 pub mod meta;
 pub mod network;
 pub mod oidc;
 pub mod orders;
 pub mod overrides;
+pub mod people;
 pub mod recommend;
 pub mod rules;
 pub mod search;
@@ -79,7 +81,9 @@ pub(crate) async fn visible_work(
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .merge(items::router())
+        .merge(merge::router())
         .merge(browse::router())
+        .merge(people::router())
         .merge(search::router())
         .merge(feeds::router())
         .merge(lists::router())

@@ -268,6 +268,11 @@ Plex or Kodi library that holds those works alone.
   `<thumb aspect="poster" type="season" season="N">`.
 - The usual `<thumb>`, `<fanart>` and `<actor>`. U+FFFE and U+FFFF are left out of every
   document, since one made the whole document unreadable to a strict XML reader.
+- Each `<actor>` with the ids the person's record is known by — `<tmdbid>`, and
+  `<imdbid>` once TMDB has been asked about them (their page read) — which Jellyfin and
+  Emby file the person under. A credit TMDB names its person on gives its TMDB id even
+  where nobody has looked them up; a credit by name alone filed under somebody TMDB
+  knows gives theirs (see [The people](data.md#the-people)).
 - For a series with an order frozen as its aired numbering (see
   [Orders](sonarr-radarr.md#orders)), its episodes' documents — and the files they are
   written to — are numbered by that order, as Sonarr then names the files, and the
@@ -297,6 +302,18 @@ FAT, is given a copy.
 | the specials' poster | `season-specials-poster.jpg` | the same | once |
 | an episode's still | `S01E01-thumb.jpg` | `S01E01.jpg` | `S01E01-thumb.jpg` and a hard link `S01E01.jpg` |
 | banner, clear art, landscape | `banner.jpg`, `clearart.png`, `landscape.jpg` | not read | once |
+| key art | `keyart.jpg` | not read | once |
+| disc art | `discart.png` | not read | `discart.png` and a hard link `disc.png` |
+| character art | `characterart.png` | not read | once |
+
+Key art is a poster without its lettering, which Kodi and tinyMediaManager show where a
+title is written beside it: a textless poster from Fanart.tv (filed under no language,
+`00`), or one put on by hand as key art. Disc art is Fanart.tv's `moviedisc`; Emby
+reads it as `disc.png`, which Jellyfin reads too. Character art is Fanart.tv's
+`characterart`: one character of a series cut out, where clear art carries the title
+too. None of the three is named in a document: Kodi reads them from the files, and
+Jellyfin takes any `<thumb>` it does not know for the work's poster. Each episode has a document of its own, as Kodi 22 requires: a file
+holding several `<episodedetails>` is no longer read.
 
 Cast photographs go in `.actors/`, and a Fan-Kai's theme beside the show as `theme.mp3`.
 The pictures are fetched as the media store fetches them, since the addresses are
