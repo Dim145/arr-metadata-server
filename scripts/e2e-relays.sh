@@ -330,6 +330,8 @@ ok
 
 step "a list read the way Yamtrack reads one — entries named by MyAnimeList's id — is patched, and never kept"
 asked_reset
+# GraphQL's own $variables, meant as written.
+# shellcheck disable=SC2016
 LIST='{"query":"query ($userName: String) { MediaListCollection(userName: $userName, type: ANIME) { lists { entries { status media { title { userPreferred } coverImage { large } idMal episodes } } } } }","variables":{"userName":"somebody"}}'
 anilist -X POST "$ANILIST_DOOR/" -H 'content-type: application/json' -d "$LIST" \
   | py 'm = json.load(sys.stdin)["data"]["MediaListCollection"]["lists"][0]["entries"][0]["media"]; assert m["title"]["userPreferred"] == "Locked Anime Title", m; assert m["idMal"] == 16498, m' \

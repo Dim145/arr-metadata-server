@@ -493,7 +493,7 @@ test.describe('settings', () => {
 
       // A fact ticked besides, kept across a reload. The change is itself an
       // event the destination is ticked for.
-      await row().getByRole('button', { name: new RegExp(`^(change|modifier) ${literally(name)}$`, 'i') }).click()
+      await row().getByRole('button', { name: pattern(`^(change|modifier) ${literally(name)}$`, 'i') }).click()
       // An address at another host is another receiver, given a secret of
       // its own: the editor says so before anything is saved, and an address
       // left empty keeps the one kept, and its secret.
@@ -506,7 +506,7 @@ test.describe('settings', () => {
       await editor.getByRole('button', { name: /^(save|enregistrer)$/i }).click()
       await expect(editor).toBeHidden()
       await page.reload()
-      await row().getByRole('button', { name: new RegExp(`^(change|modifier) ${literally(name)}$`, 'i') }).click()
+      await row().getByRole('button', { name: pattern(`^(change|modifier) ${literally(name)}$`, 'i') }).click()
       await expect(fact()).toBeChecked()
       await actions().click()
       await expect(changed()).toBeChecked()
@@ -515,12 +515,12 @@ test.describe('settings', () => {
       // Its log: the change, owed to it.
       await row().getByRole('button', { name: /^(log|journal)$/i }).click()
       const log = page.getByRole('region', {
-        name: new RegExp(`^(what was told to|ce qui a été envoyé à) ${literally(name)}$`, 'i'),
+        name: pattern(`^(what was told to|ce qui a été envoyé à) ${literally(name)}$`, 'i'),
       })
       await expect(log.getByRole('row').filter({ hasText: 'notification.updated' }).first()).toBeVisible()
 
       // Switched off, what waited is given up; switched on, it can be told again.
-      const send = row().getByRole('switch', { name: new RegExp(`(send to|envoyer à) ${literally(name)}`, 'i') })
+      const send = row().getByRole('switch', { name: pattern(`(send to|envoyer à) ${literally(name)}`, 'i') })
       await send.click()
       await expect(send).toHaveAttribute('aria-checked', 'false')
       const given = log.getByRole('row').filter({ hasText: /given up|abandonné/i }).first()
@@ -533,7 +533,7 @@ test.describe('settings', () => {
       // However far it got: the destination goes, with its log.
       await page.goto('/admin/notifications')
       if (await row().count()) {
-        await row().getByRole('button', { name: new RegExp(`^(delete|supprimer) ${literally(name)}$`, 'i') }).click()
+        await row().getByRole('button', { name: pattern(`^(delete|supprimer) ${literally(name)}$`, 'i') }).click()
         await page.getByRole('dialog').getByRole('button', { name: /^(delete|supprimer)$/i }).click()
         await expect(row()).toHaveCount(0)
       }
@@ -595,7 +595,7 @@ test.describe('settings', () => {
     const name = /check for a newer version|chercher une nouvelle version/i
     const toggle = () => page.getByRole('switch', { name })
     // What leaves the server is said beside the switch.
-    await expect(page.getByText(/api\.github\.com/).first()).toBeVisible()
+    await expect(page.getByText('api.github.com').first()).toBeVisible()
     const was = (await toggle().getAttribute('aria-checked')) === 'true'
 
     try {

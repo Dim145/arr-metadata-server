@@ -234,17 +234,19 @@ mod tests {
             assert_eq!(read["entries"][0]["fields"][0]["name"], "error");
         }
 
-        for identity in [
+        for (case, identity) in [
             key(&["read", "write"], Some(Role::Editor)),
             key(&["metrics"], None),
             Identity::Visitor,
             Identity::Network(None),
-        ] {
+        ]
+        .into_iter()
+        .enumerate()
+        {
             let refused = asked(&state, identity.clone(), "").await.err();
             assert!(
                 matches!(refused, Some(AppError::Forbidden)),
-                "{}: {refused:?}",
-                identity.label()
+                "case {case}: {refused:?}"
             );
         }
     }

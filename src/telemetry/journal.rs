@@ -492,13 +492,13 @@ mod tests {
         let lines = kept("secret-line-marker");
         let line = lines.first().expect("the line");
         let text = line.as_text();
-        for secret in [
+        for planted in [
             "abcdef123456",
             "abcdefghijklmnop",
             "journal-test-registered-secret",
             "hunter22",
         ] {
-            assert!(!text.contains(secret), "{secret} in {text}");
+            assert!(!text.contains(planted), "{planted} in {text}");
         }
         assert!(text.contains("api_key=***"), "{text}");
     }

@@ -401,9 +401,7 @@ mod tests {
     }
 
     fn tempdir() -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("ams-archive-{}", uuid::Uuid::now_v7()));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+        crate::testing::scratch_dir("archive")
     }
 
     #[test]

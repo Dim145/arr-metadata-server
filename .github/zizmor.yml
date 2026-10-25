@@ -1,0 +1,9 @@
+# zizmor's settings for the workflows and the action beside them, each
+# exception with its reason.
+rules:
+  # GitHub names an action of the repository itself `$/…` now, which it holds
+  # to the commit being run. Forgejo, which runs ci.yml and parity.yml too,
+  # and actionlint know only the path in the checkout, `./…`: that is the form
+  # used, after a checkout that keeps no token.
+  self-repository:
+    disable: true

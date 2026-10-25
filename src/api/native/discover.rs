@@ -399,7 +399,7 @@ pub struct BatchRequest {
     #[serde(default)]
     pub language: Option<String>,
     /// The hand-made selections the works go into, held already or
-    /// imported, by id or slug.
+    /// imported, by id or slug. Twenty at the most.
     #[serde(default)]
     pub lists: Vec<String>,
     /// Whether the works imported are switched on; those held already keep
@@ -450,7 +450,15 @@ async fn import_batch(
             AppError::BadRequest(format!("{raw} is not a language: write it fr, de or pt-BR"))
         })?),
     };
-    let mut lists = Vec::with_capacity(request.lists.len());
+    // Each selection is looked up before anything starts: a handful, not
+    // whatever a request may carry.
+    if request.lists.len() > MOST_LISTS {
+        return Err(AppError::BadRequest(format!(
+            "a batch goes into {MOST_LISTS} selections at the most; this one names {}",
+            request.lists.len()
+        )));
+    }
+    let mut lists = Vec::new();
     for key in &request.lists {
         lists.push(hand_made(&state, key).await?);
     }
@@ -501,6 +509,9 @@ async fn import_batch(
         }),
     ))
 }
+
+/// How many selections a batch may go into.
+const MOST_LISTS: usize = 20;
 
 fn too_many(lines: &[Line]) -> AppResult<()> {
     if lines.len() > import::MOST_LINES {

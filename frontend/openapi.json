@@ -11724,7 +11724,7 @@
             "items": {
               "type": "string"
             },
-            "description": "The hand-made selections the works go into, held already or\nimported, by id or slug."
+            "description": "The hand-made selections the works go into, held already or\nimported, by id or slug. Twenty at the most."
           },
           "enabled": {
             "type": [
@@ -24058,6 +24058,7 @@
         "enum": [
           "not_web",
           "internal",
+          "cleartext",
           "unsent"
         ]
       },
@@ -24093,7 +24094,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/WebhookRefusal",
-                "description": "Why nothing was sent: `not_web`, not an http(s) address or one that\nnames this machine; `internal`, a name that resolves to an address\nonly reachable from here; `unsent`, the post could not be made — a\nstandard destination without its secret — as `error` says."
+                "description": "Why nothing was sent: `not_web`, not an http(s) address or one that\nnames this machine; `internal`, a name that resolves to an address\nonly reachable from here; `cleartext`, a token over plain http beyond\nthe home network; `unsent`, the post could not be made — a\nstandard destination without its secret — as `error` says."
               },
               {
                 "type": "null"

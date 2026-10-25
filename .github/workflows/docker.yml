@@ -19,10 +19,8 @@ on:
     tags: ['v*.*.*']
   workflow_dispatch:
 
-# The token writes packages and nothing else.
-permissions:
-  contents: read
-  packages: write
+# Nothing for the workflow as a whole: each job names what it needs.
+permissions: {}
 
 # A push that lands while the previous one is still building takes its place.
 concurrency:
@@ -33,6 +31,11 @@ jobs:
   build:
     name: Build ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
+    # Each platform's image is pushed by its digest: the token writes
+    # packages and nothing else.
+    permissions:
+      contents: read
+      packages: write # this platform's image, pushed by its digest
     strategy:
       fail-fast: false
       matrix:
@@ -46,6 +49,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # The registry wants the name in lower case, whatever the repository's.
       - name: Name the image
@@ -107,14 +112,13 @@ jobs:
     name: Publish
     runs-on: ubuntu-24.04
     needs: build
-    # What this job adds to the workflow's token and the builds do not need: an
-    # identity to sign with, and the right to store an attestation. Naming
-    # permissions replaces the workflow's, so the first two again.
+    # What the builds have, and what they do not need: an identity to sign
+    # with, and the right to store an attestation.
     permissions:
       contents: read
-      packages: write
-      id-token: write
-      attestations: write
+      packages: write # the manifest that names both platforms
+      id-token: write # an identity to sign the image with
+      attestations: write # the build's provenance, kept beside the image
 
     steps:
       # The registry wants the name in lower case, whatever the repository's.

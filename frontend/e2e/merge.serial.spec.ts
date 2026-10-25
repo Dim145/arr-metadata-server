@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
+import { escaped, pattern } from './support/regex'
 
 /**
  * Two records of one work: proposed as a pair, set side by side, merged, the
@@ -92,15 +93,15 @@ test.describe('duplicates', () => {
       const merged = outcome.merged === first.id ? first : second
       for (const address of [merged.id, merged.slug]) {
         await page.goto(`/work/${address}`)
-        await expect(page).toHaveURL(new RegExp(`/work/${outcome.survivor}$`))
-        await expect(page.getByRole('heading', { level: 1, name: new RegExp(title) })).toBeVisible()
+        await expect(page).toHaveURL(pattern(`/work/${escaped(outcome.survivor)}$`))
+        await expect(page.getByRole('heading', { level: 1, name: pattern(escaped(title)) })).toBeVisible()
       }
       const read = await page.request.get(`/api/v1/items/${merged.id}`)
       expect(((await read.json()) as Entry).id).toBe(outcome.survivor)
 
       // The kept one's editor says what was merged into it, and undoes it.
       await page.goto(`/admin/catalogue/${merged.id}`)
-      await expect(page).toHaveURL(new RegExp(`/admin/catalogue/${outcome.survivor}$`))
+      await expect(page).toHaveURL(pattern(`/admin/catalogue/${escaped(outcome.survivor)}$`))
       await expect(page.getByText(`“${title}” was merged into this work`, { exact: false })).toBeVisible()
       await page.getByRole('button', { name: 'Undo the merge' }).click()
       await expect(page.getByRole('status').getByText(`“${title}” is a work of its own again.`)).toBeVisible()

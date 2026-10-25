@@ -4767,7 +4767,7 @@ export interface components {
             language?: string | null;
             /**
              * @description The hand-made selections the works go into, held already or
-             *     imported, by id or slug.
+             *     imported, by id or slug. Twenty at the most.
              */
             lists?: string[];
             /**
@@ -9395,7 +9395,7 @@ export interface components {
          * @description Why a test was not sent.
          * @enum {string}
          */
-        WebhookRefusal: "not_web" | "internal" | "unsent";
+        WebhookRefusal: "not_web" | "internal" | "cleartext" | "unsent";
         /** @description What a test of a destination came to. */
         WebhookTest: {
             /** @description Whether the address took it: it answered, with a success. */

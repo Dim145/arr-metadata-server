@@ -2030,6 +2030,7 @@ export const en = {
       unsent: 'Not sent: the post could not be made.',
       notWeb: 'Not sent: this server posts only to an http or https address that names no machine of its own.',
       internal: 'Not sent: that name resolves to an address only reachable from this server.',
+      cleartext: 'Not sent: a destination’s token goes out only over https, or to an address of the home network.',
       /** The events, ticked: shared by every destination's form. */
       events: {
         title: 'Events',

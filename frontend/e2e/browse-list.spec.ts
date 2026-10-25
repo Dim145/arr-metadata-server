@@ -1,5 +1,6 @@
 import AxeBuilder from '@axe-core/playwright'
 import { expect, test, type Page } from '@playwright/test'
+import { escaped, pattern } from './support/regex'
 
 /**
  * The catalogue as a list, beside the grid it is also offered as.
@@ -136,7 +137,8 @@ test.describe('the catalogue as a list', () => {
     const row = rows(page).first()
     const href = await row.locator('a[href^="/work/"]').getAttribute('href')
     await row.click({ position: { x: 24, y: 24 } })
-    await expect(page).toHaveURL(new RegExp(`${href}$`))
+    expect(href).toBeTruthy()
+    await expect(page).toHaveURL(pattern(`${escaped(href!)}$`))
     await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
   })
 

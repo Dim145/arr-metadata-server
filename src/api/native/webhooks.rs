@@ -537,6 +537,8 @@ pub enum Refused {
     NotWeb,
     /// A name that resolves to an address only reachable from here.
     Internal,
+    /// A token over plain http to a host beyond the home network.
+    Cleartext,
     /// The post could not be made: a standard destination without its
     /// secret.
     Unsent,
@@ -547,6 +549,7 @@ impl From<webhook::Refusal> for Refused {
         match refusal {
             webhook::Refusal::NotWeb => Self::NotWeb,
             webhook::Refusal::Internal => Self::Internal,
+            webhook::Refusal::Cleartext => Self::Cleartext,
         }
     }
 }
@@ -566,7 +569,8 @@ pub struct WebhookTest {
     pub error: Option<String>,
     /// Why nothing was sent: `not_web`, not an http(s) address or one that
     /// names this machine; `internal`, a name that resolves to an address
-    /// only reachable from here; `unsent`, the post could not be made — a
+    /// only reachable from here; `cleartext`, a token over plain http beyond
+    /// the home network; `unsent`, the post could not be made — a
     /// standard destination without its secret — as `error` says.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub refused: Option<Refused>,

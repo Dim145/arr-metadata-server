@@ -22,6 +22,8 @@ mod service;
 mod settings;
 mod state;
 mod telemetry;
+#[cfg(test)]
+mod testing;
 mod tls;
 mod ui;
 mod web;

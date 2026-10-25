@@ -143,6 +143,10 @@ pub struct Post {
     pub url: String,
     pub headers: Vec<(HeaderName, HeaderValue)>,
     pub body: Vec<u8>,
+    /// Whether it carries what lets anybody post as this server: a token in
+    /// a header, or one written into the address itself. Such a post goes
+    /// out only over https, or to an address of the home network.
+    pub carries_credential: bool,
 }
 
 /// How much an event matters to somebody reading it on a phone.
@@ -196,6 +200,7 @@ pub fn post(
                 .ok_or("this destination's signing secret is not one: make another")?;
             Ok(Post {
                 url: url.to_string(),
+                carries_credential: false,
                 headers: vec![
                     json_type,
                     (HeaderName::from_static("webhook-id"), header(message_id)?),
@@ -213,11 +218,13 @@ pub fn post(
         }
         Kind::Json => Ok(Post {
             url: url.to_string(),
+            carries_credential: false,
             headers: vec![json_type],
             body: to_vec(&legacy(told)),
         }),
         Kind::Discord => Ok(Post {
             url: url.to_string(),
+            carries_credential: true,
             headers: vec![json_type],
             body: to_vec(&json!({
                 "content": crate::providers::clip(&line(told), DISCORD_CHARS),
@@ -228,6 +235,7 @@ pub fn post(
         }),
         Kind::Slack => Ok(Post {
             url: url.to_string(),
+            carries_credential: true,
             headers: vec![json_type],
             body: to_vec(&json!({ "text": slack_escaped(&line(told)) })),
         }),
@@ -255,6 +263,7 @@ pub fn post(
             }
             Ok(Post {
                 url: url.to_string(),
+                carries_credential: secret.is_some(),
                 headers,
                 body: message(told).into_bytes(),
             })
@@ -263,6 +272,7 @@ pub fn post(
             let token = secret.ok_or("a Gotify destination needs its application's token")?;
             Ok(Post {
                 url: gotify_url(url)?,
+                carries_credential: true,
                 headers: vec![
                     json_type,
                     (HeaderName::from_static("x-gotify-key"), header(token)?),
@@ -279,6 +289,7 @@ pub fn post(
         }
         Kind::Apprise => Ok(Post {
             url: url.to_string(),
+            carries_credential: false,
             headers: vec![json_type],
             body: to_vec(&json!({
                 "title": title(told),

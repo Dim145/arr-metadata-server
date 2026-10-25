@@ -450,6 +450,12 @@ mod tests {
         answer
     }
 
+    /// An answer's status line, and its body.
+    fn parts(answer: &str) -> (&str, &str) {
+        let (head, body) = answer.split_once("\r\n\r\n").unwrap_or((answer, ""));
+        (head.lines().next().unwrap_or_default(), body)
+    }
+
     #[tokio::test]
     async fn a_door_answers_through_its_limits() {
         let (addr, handle) = door(Limits {
@@ -458,8 +464,7 @@ mod tests {
         })
         .await;
         let answer = ask(addr).await;
-        assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
-        assert!(answer.ends_with("here"), "{answer}");
+        assert_eq!(parts(&answer), ("HTTP/1.1 200 OK", "here"));
         handle.shutdown();
     }
 
@@ -529,7 +534,7 @@ mod tests {
             .await
             .expect("the waiting connection should be answered")
             .unwrap();
-        assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+        assert_eq!(parts(&answer).0, "HTTP/1.1 200 OK");
         handle.shutdown();
     }
 

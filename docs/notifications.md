@@ -33,7 +33,12 @@ this machine or an address only it can reach — loopback, link-local, a cloud's
 metadata service. It is checked when the destination is saved, and what its name
 resolves to is checked again at every post. Addresses on your own network
 (`192.168.x.x`, `10.x`, a Tailscale address) are fine: an ntfy or a Gotify beside
-the server is the usual case. A name is at most 100 characters; a token is at most
+the server is the usual case. What lets anybody post as the server — a Gotify
+application's token, an ntfy topic's token, a Discord or Slack address, which holds
+its own — goes over plain `http` only to such an address, or to a name only a home
+network knows (`.lan`, `.local`, `.home.arpa`, `.internal`, a name without a dot);
+anywhere else it needs `https`, said when the destination is saved and again at
+every post. A name is at most 100 characters; a token is at most
 500 visible characters. Webhooks are posted directly, whatever `HTTP_PROXY` says.
 
 ## Events

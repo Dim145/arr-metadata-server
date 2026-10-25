@@ -79,6 +79,7 @@ pub fn webp(pixels: &Pixels<'_>, lossless: bool, sharp: bool) -> Result<Vec<u8>>
     let mut config = std::mem::MaybeUninit::<webp::WebPConfig>::uninit();
     // SAFETY: libwebp writes every field of the configuration it is handed
     // before it answers yes, and checks the version against its own.
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage — libwebp's C API, held by the SAFETY note
     let ready = unsafe {
         webp::WebPConfigInitInternal(
             config.as_mut_ptr(),
@@ -89,12 +90,14 @@ pub fn webp(pixels: &Pixels<'_>, lossless: bool, sharp: bool) -> Result<Vec<u8>>
     };
     ensure!(ready != 0, "libwebp refused its own configuration");
     // SAFETY: written whole just above, and libwebp said so.
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage — libwebp's C API, held by the SAFETY note
     let mut config = unsafe { config.assume_init() };
     config.method = WEBP_METHOD;
     config.use_sharp_yuv = c_int::from(sharp && !lossless);
     if lossless {
         // SAFETY: the configuration is a whole one; the preset writes a few
         // of its fields and reads nothing else.
+        // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage — libwebp's C API, held by the SAFETY note
         let set = unsafe { webp::WebPConfigLosslessPreset(&mut config, WEBP_LOSSLESS_LEVEL) };
         ensure!(set != 0, "libwebp refused its lossless preset");
     }
@@ -106,9 +109,11 @@ pub fn webp(pixels: &Pixels<'_>, lossless: bool, sharp: bool) -> Result<Vec<u8>>
 
     let mut picture = std::mem::MaybeUninit::<webp::WebPPicture>::uninit();
     // SAFETY: as for the configuration: every field written before a yes.
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage — libwebp's C API, held by the SAFETY note
     let ready = unsafe { webp::WebPPictureInitInternal(picture.as_mut_ptr(), version) };
     ensure!(ready != 0, "libwebp refused its own picture");
     // SAFETY: written whole just above. Freed by the guard from here on.
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage — libwebp's C API, held by the SAFETY note
     let mut picture = Picture(unsafe { picture.assume_init() });
     picture.0.use_argb = c_int::from(lossless);
     picture.0.width = width;
@@ -116,6 +121,7 @@ pub fn webp(pixels: &Pixels<'_>, lossless: bool, sharp: bool) -> Result<Vec<u8>>
     // SAFETY: the buffer holds `height` rows of `stride` bytes, as checked
     // above; libwebp copies them into memory of the picture's own, which the
     // guard frees, and keeps no pointer into the buffer.
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage — libwebp's C API, held by the SAFETY note
     let imported = unsafe {
         if pixels.alpha {
             webp::WebPPictureImportRGBA(&mut picture.0, pixels.data.as_ptr(), stride)
@@ -129,14 +135,17 @@ pub fn webp(pixels: &Pixels<'_>, lossless: bool, sharp: bool) -> Result<Vec<u8>>
     // stays where it is for as long as the encoding runs.
     // SAFETY: a memory writer is pointers and sizes: all zero is a valid
     // one, and libwebp initialises it again just below.
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage — libwebp's C API, held by the SAFETY note
     let mut written = Written(Box::new(unsafe { std::mem::zeroed() }));
     // SAFETY: initialises the writer it is handed.
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage — libwebp's C API, held by the SAFETY note
     unsafe { webp::WebPMemoryWriterInit(&mut *written.0) };
     picture.0.writer = Some(webp::WebPMemoryWrite);
     picture.0.custom_ptr = std::ptr::from_mut::<webp::WebPMemoryWriter>(&mut *written.0).cast();
     // SAFETY: the configuration and the picture are whole and valid; the
     // picture's writer appends to the memory writer `custom_ptr` names,
     // which lives on the heap until its guard is dropped, after this call.
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage — libwebp's C API, held by the SAFETY note
     let encoded = unsafe { webp::WebPEncode(&config, &mut picture.0) };
     if encoded == 0 {
         bail!(
@@ -146,6 +155,7 @@ pub fn webp(pixels: &Pixels<'_>, lossless: bool, sharp: bool) -> Result<Vec<u8>>
     }
     // SAFETY: once the encoding succeeded the writer holds `size` bytes at
     // `mem`, its own until it is cleared; they are copied out before that.
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage — libwebp's C API, held by the SAFETY note
     let bytes = unsafe { std::slice::from_raw_parts(written.0.mem, written.0.size) }.to_vec();
     Ok(bytes)
 }
@@ -157,6 +167,7 @@ impl Drop for Picture {
     fn drop(&mut self) {
         // SAFETY: frees what libwebp allocated for this picture, once; a
         // picture that holds nothing is freed as nothing.
+        // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage — libwebp's C API, held by the SAFETY note
         unsafe { webp::WebPPictureFree(&mut self.0) }
     }
 }
@@ -168,6 +179,7 @@ impl Drop for Written {
     fn drop(&mut self) {
         // SAFETY: frees the memory the writer gathered, once; an empty
         // writer is cleared as nothing.
+        // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage — libwebp's C API, held by the SAFETY note
         unsafe { webp::WebPMemoryWriterClear(&mut *self.0) }
     }
 }

@@ -39,6 +39,9 @@ elif [ -n "${AMS_CA_URL:-}" ]; then
     case "${AMS_CA_URL}" in
         [Hh][Tt][Tt][Pp]://*)
             if [ -z "${AMS_CA_FINGERPRINT:-}" ]; then
+                # ASCII words alone are compared (true, yes, on), and a minimal
+                # busybox `tr` may know no character classes.
+                # shellcheck disable=SC2018,SC2019
                 case "$(printf '%s' "${AMS_CA_INSECURE:-}" | tr 'A-Z' 'a-z')" in
                     1|true|yes|on)
                         echo "[trust-ca] WARNING: installing an authority fetched over plain HTTP without AMS_CA_FINGERPRINT (AMS_CA_INSECURE is set): anyone on the way could have substituted their own" >&2

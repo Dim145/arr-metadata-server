@@ -293,8 +293,7 @@ mod tests {
     /// and listed apart from what a row names and a backup carries.
     #[tokio::test]
     async fn a_copy_is_filed_beside_its_picture_and_listed_apart() {
-        // nosemgrep: rust.lang.security.temp-dir.temp-dir — a test's scratch directory, named after a fresh id: nothing security-relevant lives in it
-        let dir = std::env::temp_dir().join(format!("ams-store-{}", crate::db::new_id()));
+        let dir = crate::testing::scratch_path("store");
         let store = Store::open(&config::Media {
             storage: config::MediaStorage::Filesystem,
             dir: dir.clone(),

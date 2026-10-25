@@ -253,6 +253,7 @@ export function Notifications() {
 function tested(result: WebhookTest, n: Words) {
   if (result.refused === 'not_web') return { fine: false, text: n.notWeb }
   if (result.refused === 'internal') return { fine: false, text: n.internal }
+  if (result.refused === 'cleartext') return { fine: false, text: n.cleartext }
   if (result.refused === 'unsent') return { fine: false, text: n.unsent }
   if (result.status !== undefined) {
     return result.delivered

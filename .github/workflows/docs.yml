@@ -72,8 +72,8 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
-      pages: write
-      id-token: write
+      pages: write # the site, published to GitHub Pages
+      id-token: write # tells Pages which build the site comes from
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

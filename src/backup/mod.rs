@@ -354,7 +354,7 @@ impl Backups {
         // whatever the environment says — never the repository's `data` —
         // made only if an archive is.
         #[cfg(test)]
-        let named = Some(std::env::temp_dir().join(format!("ams-backup-{}", crate::db::new_id())));
+        let named = Some(crate::testing::scratch_path("backup"));
         let dir = named
             .clone()
             .unwrap_or_else(|| default_dir(&config.database.url));
@@ -963,31 +963,42 @@ struct Work(PathBuf);
 /// it away: older than any backup takes.
 const LEFTOVER_AFTER: std::time::Duration = std::time::Duration::from_secs(24 * 3600);
 
+/// What the working directories made in the system's temporary directory
+/// are named by, before an id nobody can guess.
+const SYSTEM_WORK_PREFIX: &str = "ams-backup-";
+
 impl Work {
-    /// A directory under `under`, or under the system's own when `under`
-    /// cannot be written — a container with a read-only root and no volume
-    /// for the backups — said, since that one is often a small tmpfs.
+    /// A directory under `under`, or in the system's temporary directory
+    /// when `under` cannot be written — a container with a read-only root
+    /// and no volume for the backups — said, since that one is often a small
+    /// tmpfs.
+    ///
+    /// The system's directory is shared with every user of the machine, so
+    /// nothing there goes under a name known in advance, which another user
+    /// could have made first — as a link to a directory of this server's,
+    /// whose old folders the sweep for leftovers would then have taken away.
+    /// The directory is made there, under an id, by this process alone (the
+    /// making fails rather than take one that is there already), readable by
+    /// this user only.
     fn new(under: &Path) -> Result<Self> {
         sweep_leftovers(under);
         let dir = under.join(crate::db::new_id());
         match std::fs::create_dir_all(&dir) {
             Ok(()) => Ok(Self(dir)),
             Err(e) => {
-                let fallback = std::env::temp_dir().join("ams-backups");
-                if under.starts_with(&fallback) {
-                    return Err(e).with_context(|| format!("could not create {}", dir.display()));
-                }
+                // Made there privately, under an id: see the paragraph above.
+                // nosemgrep: rust.lang.security.temp-dir.temp-dir
+                let system = std::env::temp_dir();
                 tracing::warn!(
                     dir = %under.display(),
                     error = %e,
-                    instead = %fallback.display(),
+                    instead = %system.display(),
                     "the backups' working directory cannot be written; working in the system's \
                      temporary directory instead, which a copy of the database has to fit in"
                 );
-                sweep_leftovers(&fallback);
-                let dir = fallback.join(crate::db::new_id());
-                std::fs::create_dir_all(&dir)
-                    .with_context(|| format!("could not create {}", dir.display()))?;
+                let dir = system.join(format!("{SYSTEM_WORK_PREFIX}{}", crate::db::new_id()));
+                private_dir(&dir).with_context(|| format!("could not create {}", dir.display()))?;
+                sweep_own_leftovers(&system, &dir);
                 Ok(Self(dir))
             }
         }
@@ -1041,12 +1052,69 @@ fn sweep_leftovers(work: &Path) {
     }
 }
 
+/// A directory made by this process alone — the making fails rather than
+/// take one that is there already — readable by this user only.
+fn private_dir(dir: &Path) -> std::io::Result<()> {
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(dir)
+}
+
+/// Take away, in the system's temporary directory, the working directories
+/// a crash left there: those named as this server names them, that are
+/// directories and not links, that belong to the user `ours` belongs to,
+/// and that are older than any backup takes. Nothing else of the shared
+/// directory is touched.
+fn sweep_own_leftovers(system: &Path, ours: &Path) {
+    let Ok(mine) = std::fs::symlink_metadata(ours) else {
+        return;
+    };
+    let Ok(entries) = std::fs::read_dir(system) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path == ours
+            || !entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(SYSTEM_WORK_PREFIX)
+        {
+            continue;
+        }
+        let Ok(meta) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        let old = meta
+            .modified()
+            .ok()
+            .and_then(|at| at.elapsed().ok())
+            .is_some_and(|age| age > LEFTOVER_AFTER);
+        if meta.file_type().is_dir() && same_owner(&meta, &mine) && old {
+            let _ = std::fs::remove_dir_all(&path);
+        }
+    }
+}
+
+#[cfg(unix)]
+fn same_owner(a: &std::fs::Metadata, b: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    a.uid() == b.uid()
+}
+
+#[cfg(not(unix))]
+fn same_owner(_: &std::fs::Metadata, _: &std::fs::Metadata) -> bool {
+    true
+}
+
 /// A directory of its own for a test.
 #[cfg(test)]
 pub(crate) fn scratch() -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("ams-backup-{}", uuid::Uuid::now_v7()));
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
+    crate::testing::scratch_dir("backup")
 }
 
 #[cfg(test)]
@@ -1055,6 +1123,80 @@ mod tests {
 
     fn at(text: &str) -> chrono::DateTime<chrono::Utc> {
         crate::db::parse_rfc3339(text).unwrap()
+    }
+
+    /// Older than any backup takes: what a crash would have left.
+    #[cfg(unix)]
+    fn age(path: &Path) {
+        let long_ago = std::time::SystemTime::now() - LEFTOVER_AFTER - LEFTOVER_AFTER;
+        std::fs::File::open(path)
+            .unwrap()
+            .set_modified(long_ago)
+            .unwrap();
+    }
+
+    /// Where the backups cannot be written, the working directory goes to
+    /// the system's temporary directory under a name nobody can guess,
+    /// readable by this user alone; one that is there already is never
+    /// taken; and the sweep for leftovers follows no link and takes only
+    /// its own kind of directory.
+    #[cfg(unix)]
+    #[test]
+    fn the_system_directory_is_worked_in_privately_and_swept_with_care() {
+        use std::os::unix::fs::PermissionsExt;
+
+        // A file stands where the backups' directory should be: nothing
+        // can be made under it, whoever runs the tests.
+        let base = scratch();
+        let blocked = base.join("not-a-directory");
+        std::fs::write(&blocked, b"").unwrap();
+        let work = Work::new(&blocked.join(".work")).expect("a working directory");
+        let made = work.path().to_path_buf();
+        // nosemgrep: rust.lang.security.temp-dir.temp-dir
+        assert!(made.starts_with(std::env::temp_dir()), "{}", made.display());
+        let name = made.file_name().unwrap().to_string_lossy().to_string();
+        assert!(name.starts_with(SYSTEM_WORK_PREFIX), "{name}");
+        let mode = std::fs::metadata(&made).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700);
+        // Made by this process alone: one already there is refused.
+        assert!(private_dir(&made).is_err());
+
+        // The sweep, in a directory standing for the system's.
+        let system = base.join("system");
+        std::fs::create_dir_all(&system).unwrap();
+        let ours = system.join(format!("{SYSTEM_WORK_PREFIX}now"));
+        private_dir(&ours).unwrap();
+        // A crash's leftover, old enough: taken away.
+        let leftover = system.join(format!("{SYSTEM_WORK_PREFIX}crashed"));
+        std::fs::create_dir(&leftover).unwrap();
+        age(&leftover);
+        // Somebody else's directory under another name: left alone.
+        let other = system.join("someone-else");
+        std::fs::create_dir(&other).unwrap();
+        age(&other);
+        // A link named as ours, to a directory of this server's whose old
+        // folders must survive: neither followed nor taken for a directory.
+        let precious = base.join("data");
+        std::fs::create_dir_all(precious.join("old-folder")).unwrap();
+        age(&precious.join("old-folder"));
+        let planted = system.join(format!("{SYSTEM_WORK_PREFIX}planted"));
+        std::os::unix::fs::symlink(&precious, &planted).unwrap();
+
+        sweep_own_leftovers(&system, &ours);
+        assert!(!leftover.exists(), "the leftover is taken away");
+        assert!(ours.exists() && other.exists());
+        assert!(
+            precious.join("old-folder").exists(),
+            "the link was not followed"
+        );
+        assert!(
+            std::fs::symlink_metadata(&planted).is_ok(),
+            "the link itself is left"
+        );
+
+        drop(work);
+        assert!(!made.exists(), "the working directory goes with its work");
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

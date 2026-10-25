@@ -20,6 +20,12 @@ on:
 # and only the one that opens the pull request, which runs none of it, writes.
 permissions: {}
 
+# One drawing at a time on a branch: two at once would open two pull
+# requests of the same pictures.
+concurrency:
+  group: visual-update-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   # As CI's `visual` job (ci.yml), but writing the pictures that differ instead
   # of failing on them, and handing them on.
@@ -32,9 +38,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install the toolchain
-        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        uses: ./.github/actions/rust-toolchain
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
@@ -64,6 +72,9 @@ jobs:
       - name: Make this run's administrator
         run: |
           password="$(openssl rand -hex 24)"
+          # A throwaway password, for a server that lives and dies in this job:
+          # masked as a courtesy, nothing relies on it staying unseen.
+          # nosemgrep: yaml.github-actions.security.audit.unsafe-add-mask-workflow-command.unsafe-add-mask-workflow-command
           echo "::add-mask::${password}"
           {
             echo "VISUAL_DIR=${RUNNER_TEMP}/visual"
@@ -124,11 +135,13 @@ jobs:
     needs: draw
     runs-on: ubuntu-24.04
     permissions:
-      contents: write
-      pull-requests: write
+      contents: write # the branch the pull request is opened from
+      pull-requests: write # the pull request that proposes the pictures
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -152,7 +165,11 @@ jobs:
           git commit \
             -m "Draw the pictures of the interface again" \
             -m "Drawn in the Playwright image by run ${GITHUB_RUN_ID} of ${GITHUB_WORKFLOW}, from ${GITHUB_REF_NAME} at ${GITHUB_SHA}."
-          git push origin "$branch"
+          # The checkout keeps no token on disk: this push alone is given one,
+          # in the header the checkout would have written.
+          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth}" \
+            push origin "$branch"
 
           {
             echo "The pictures the visual tests hold the interface to, drawn again in the Playwright image from \`${GITHUB_REF_NAME}\` at ${GITHUB_SHA}."

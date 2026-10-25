@@ -497,7 +497,8 @@ mod tests {
         )
         .await
         .expect("tried");
-        assert!(tried.ok, "{:?}", tried.error);
+        assert_eq!(tried.error, None);
+        assert!(tried.ok);
         assert_eq!(seen_here.lock()[0].key.as_deref(), Some("0123456789abcdef"));
 
         // At another address, it is not sent: the test is refused, saying
