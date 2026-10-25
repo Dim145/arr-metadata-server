@@ -897,8 +897,7 @@ mod tests {
         // waiting could not make the snapshot fresh again. A real file and a
         // real pool here, because an in-memory database with one connection
         // cannot have two writers.
-        // nosemgrep: rust.lang.security.temp-dir.temp-dir — a test's scratch directory, named after a fresh id: nothing security-relevant lives in it
-        let path = std::env::temp_dir().join(format!("ams-writers-{}.db", crate::db::new_id()));
+        let path = crate::testing::scratch_path("writers").with_extension("db");
         let db = Db::connect(&config::Database {
             url: format!("sqlite://{}?mode=rwc", path.display()),
             max_connections: 8,

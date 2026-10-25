@@ -34,7 +34,10 @@ RUN cargo install --locked --version 0.7.7 cargo-auditable
 # NASM assembles rav1e's x86_64 assembly, which makes an AVIF copy in less
 # than half the time (the `avif-asm` feature; docs/media.md has the figures).
 # On arm64 the C compiler already here assembles it, and NASM goes unused.
-# The build stage's alone: nothing of it reaches the image.
+# The build stage's alone: nothing of it reaches the image. Unpinned: it
+# comes from the base image's Debian release, and a pinned revision would
+# break the build at Debian's next point release.
+# hadolint ignore=DL3008
 RUN apt-get update \
  && apt-get install --yes --no-install-recommends nasm \
  && rm -rf /var/lib/apt/lists/*

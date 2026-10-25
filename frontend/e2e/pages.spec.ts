@@ -454,7 +454,7 @@ test.describe('where to watch', () => {
     const more = page.getByRole('button', { name: /^\+\d+ (more|autres?)$/ }).first()
     await expect(more).toBeVisible()
     await expect(more).toHaveAttribute('aria-expanded', 'false')
-    await expect(more).toHaveText(new RegExp(`^\\+${found!.count - 4} `))
+    await expect(more).toHaveText(pattern(`^\\+${found!.count - 4} `))
 
     // Four services and the count, then every one and the way back. The
     // list is pinned by its place among the lists that fold: once the
@@ -748,7 +748,7 @@ test.describe('a trailer', () => {
 
     // Played for real, the frame would be YouTube's; what is tested is ours.
     const asked: string[] = []
-    await page.route(/youtube(-nocookie)?\.com/, (route) => {
+    await page.route(/^https:\/\/([a-z0-9-]+\.)*youtube(-nocookie)?\.com\//, (route) => {
       asked.push(route.request().url())
       return route.abort()
     })

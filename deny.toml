@@ -41,6 +41,14 @@ ignore = [
     # identifiers together. Nothing of it is in the binary, and it is
     # finished rather than broken; cargo-audit only warns of it.
     { id = "RUSTSEC-2024-0436", reason = "paste is a build-time proc-macro of rav1e's; nothing of it runs in the server, and rav1e 0.8.1, the latest, still uses it" },
+    # RUSTSEC-2026-0387, timing variability in `crypto-bigint` 0.5 on secret
+    # integers, through `p256`, used here on public values alone (ES256
+    # signatures verified, backups encrypted with a passphrase). Drop it
+    # once `openidconnect` and `age` take `p256` 0.14.
+    { id = "RUSTSEC-2026-0387", reason = "p256 only verifies an identity provider's public ES256 signatures and age encrypts with a passphrase: no secret P-256 arithmetic runs; the fix needs p256 0.14, which openidconnect and age do not take yet" },
+    # RUSTSEC-2026-0374, `basic-toml` unmaintained: read by age's
+    # translations' proc-macros at compile time, on age's own file.
+    { id = "RUSTSEC-2026-0374", reason = "basic-toml is read at compile time by age's i18n proc-macros, on age's own configuration file; nothing of it runs in the server" },
 ]
 
 [licenses]

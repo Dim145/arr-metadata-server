@@ -1,5 +1,6 @@
 import AxeBuilder from '@axe-core/playwright'
 import { expect, test, type Page } from '@playwright/test'
+import { escaped, pattern } from './support/regex'
 
 /**
  * The catalogue's own pages — a genre's, a network's, a year's, a decade's —
@@ -69,7 +70,7 @@ test.describe('the pages of the catalogue', () => {
 
     // Then every one of them, in the catalogue's own list: the same count.
     await expect(page.getByRole('heading', { level: 2, name: 'Everything filed here' })).toBeVisible()
-    await expect(page.getByText(new RegExp(`^${total} works?$`))).toBeVisible()
+    await expect(page.getByText(pattern(`^${total} works?$`))).toBeVisible()
     await expect(page).toHaveTitle(/^Drama · /)
   })
 
@@ -102,17 +103,17 @@ test.describe('the pages of the catalogue', () => {
 
     await page.goto(`/work/${dated!.id}`)
     await page.locator(`h1 a[href="/year/${year}"]`).click()
-    await expect(page).toHaveURL(new RegExp(`/year/${year}$`))
+    await expect(page).toHaveURL(pattern(`/year/${year}$`))
     await expect(page.getByRole('heading', { level: 1, name: String(year) })).toBeVisible()
 
     const around = page.getByRole('navigation', { name: 'The years around it' })
     await around.getByRole('link', { name: String(year + 1) }).click()
-    await expect(page).toHaveURL(new RegExp(`/year/${year + 1}$`))
+    await expect(page).toHaveURL(pattern(`/year/${year + 1}$`))
 
     // A decade by any of its years, under its first.
     const first = year - (year % 10)
     await page.goto(`/decade/${first + 4}`)
-    await expect(page).toHaveURL(new RegExp(`/decade/${first}$`))
+    await expect(page).toHaveURL(pattern(`/decade/${first}$`))
     await expect(page.getByRole('heading', { level: 1, name: `The ${first}s` })).toBeVisible()
   })
 
@@ -170,7 +171,7 @@ test.describe('two works side by side', () => {
     await expect(page).not.toHaveURL(/[?&]b=/)
     const search = page.getByRole('searchbox', { name: 'The second' })
     await search.fill(second!.title.slice(0, 6))
-    await page.getByRole('button', { name: new RegExp(second!.title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')) }).first().click()
-    await expect(page).toHaveURL(new RegExp(`[?&]b=${second!.id}`))
+    await page.getByRole('button', { name: pattern(escaped(second!.title)) }).first().click()
+    await expect(page).toHaveURL(pattern(`[?&]b=${escaped(second!.id)}`))
   })
 })

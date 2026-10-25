@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
+import { escaped, pattern } from './support/regex'
 
 /**
  * Plex's provider, as Plex reads its manifest and as the Keys & network
@@ -96,7 +97,7 @@ test.describe('the Plex panel', () => {
     try {
       expect(client.key).toMatch(/^ams_/)
       expect(client.scopes).toEqual(['read'])
-      await expect(address).toHaveValue(new RegExp(`^https?://[^/]+/plex/${client.key}$`))
+      await expect(address).toHaveValue(pattern(`^https?://[^/]+/plex/${escaped(client.key)}$`))
       await expect(panel.getByRole('button', { name: /^(copy|copier)$/i })).toBeVisible()
       await expect(panel).toContainText(/shown this once|montrée que cette fois/i)
     } finally {

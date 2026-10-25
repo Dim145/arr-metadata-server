@@ -1177,6 +1177,9 @@ pub enum Refusal {
     NotWeb,
     /// A name that resolves to an address only reachable from here.
     Internal,
+    /// A token, or an address that holds one, over plain http to a host
+    /// beyond the home network: anybody on the way could read it.
+    Cleartext,
 }
 
 impl Refusal {
@@ -1190,23 +1193,41 @@ impl Refusal {
             Self::Internal => {
                 "not sent: the address's name resolves to an address only reachable from this server"
             }
+            Self::Cleartext => {
+                "not sent: a destination's token goes out only over https, or to an address of the \
+                 home network"
+            }
         }
     }
 }
 
-/// Post one, and say how it went.
-async fn send(client: &reqwest::Client, post: &kinds::Post) -> Outcome {
+/// Why a post is not to be sent, when it is not.
+async fn refusal(post: &kinds::Post) -> Option<Refusal> {
     // An address to post to, and not one that only means something from in
     // here: the operator names it, but a destination is a thing that can be
     // set by whoever holds the administration.
     if acceptable(&post.url).is_none() {
-        return Outcome::Refused(Refusal::NotWeb);
+        return Some(Refusal::NotWeb);
     }
     // Asked again, of the resolver, just before the post — and by the
     // client's own resolver as it connects: a name that meant a public
     // address when it was set can mean this machine now.
     if outbound::resolves_internally(&post.url).await {
-        return Outcome::Refused(Refusal::Internal);
+        return Some(Refusal::Internal);
+    }
+    // What lets anybody post as this server crosses no network in clear but
+    // the home one, where a Gotify or an ntfy beside the server is often
+    // reached over plain http.
+    if post.carries_credential && cleartext_beyond_home(&post.url) {
+        return Some(Refusal::Cleartext);
+    }
+    None
+}
+
+/// Post one, and say how it went.
+async fn send(client: &reqwest::Client, post: &kinds::Post) -> Outcome {
+    if let Some(refusal) = refusal(post).await {
+        return Outcome::Refused(refusal);
     }
     let started = Instant::now();
     let mut request = client.post(&post.url).body(post.body.clone());
@@ -1292,6 +1313,35 @@ pub async fn test(state: &AppState, destination: &Destination, by: &str) -> Outc
 
 /// The host of an address this server will post to: http or https, and not
 /// an address that only means something from where the server stands.
+/// Whether an address is plain http to a host beyond the home network: one
+/// that is no private address (RFC 1918, the shared space of carrier and
+/// mesh networks, an IPv6 unique local one) nor a name only a home network
+/// knows (`.lan`, `.local`, `.home.arpa`, `.internal`, a name without a
+/// dot).
+fn cleartext_beyond_home(url: &str) -> bool {
+    let Ok(parsed) = url::Url::parse(url) else {
+        return true;
+    };
+    if parsed.scheme() != "http" {
+        return false;
+    }
+    let home = match parsed.host() {
+        Some(url::Host::Ipv4(v4)) => {
+            v4.is_private() || (v4.octets()[0] == 100 && (v4.octets()[1] & 0xc0) == 64)
+        }
+        Some(url::Host::Ipv6(v6)) => (v6.segments()[0] & 0xfe00) == 0xfc00,
+        Some(url::Host::Domain(name)) => {
+            let name = name.trim_end_matches('.').to_ascii_lowercase();
+            !name.contains('.')
+                || [".lan", ".local", ".home.arpa", ".internal"]
+                    .iter()
+                    .any(|end| name.ends_with(end))
+        }
+        None => false,
+    };
+    !home
+}
+
 fn acceptable(url: &str) -> Option<String> {
     let parsed = url::Url::parse(url).ok()?;
     if !matches!(parsed.scheme(), "http" | "https") || outbound::names_internal_host(url) {
@@ -1351,6 +1401,17 @@ pub fn check_address(kind: Kind, address: &str) -> Result<String, String> {
         return Err(
             "the address names this machine, or an address only it can reach — loopback, \
              link-local, a cloud's metadata service"
+                .to_string(),
+        );
+    }
+    // These always carry what lets anybody post as this server: never in
+    // clear beyond the home network. An ntfy topic's token, when it has one,
+    // is held to the same when it is sent.
+    if matches!(kind, Kind::Gotify | Kind::Discord | Kind::Slack) && cleartext_beyond_home(address)
+    {
+        return Err(
+            "this destination's token would cross the internet in clear: give it an https \
+             address, or one of the home network"
                 .to_string(),
         );
     }
@@ -2279,7 +2340,7 @@ mod tests {
     /// stale — and one whose every try was taken that way is given up on.
     #[tokio::test]
     async fn what_is_owed_outlives_a_restart() {
-        let path = std::env::temp_dir().join(format!("ams-webhooks-{}.db", db::new_id()));
+        let path = crate::testing::scratch_path("webhooks").with_extension("db");
         let config = crate::config::Database {
             url: format!("sqlite://{}?mode=rwc", path.display()),
             max_connections: 1,
@@ -2483,6 +2544,61 @@ mod tests {
         // ntfy needs its topic.
         assert!(check_address(Kind::Ntfy, "https://ntfy.sh/").is_err());
         assert!(check_address(Kind::Ntfy, "https://ntfy.sh/ams-alerts").is_ok());
+
+        // A token crosses no network in clear but the home one.
+        assert!(check_address(Kind::Gotify, "http://gotify.example.com").is_err());
+        assert!(check_address(Kind::Discord, "http://discord.com/api/webhooks/1/abc").is_err());
+        assert!(check_address(Kind::Gotify, "https://gotify.example.com").is_ok());
+        assert!(check_address(Kind::Gotify, "http://gotify.lan").is_ok());
+        assert!(check_address(Kind::Json, "http://example.com/hook").is_ok());
+    }
+
+    #[test]
+    fn plain_http_is_told_from_the_home_network() {
+        for beyond in [
+            "http://8.8.8.8/hook",
+            "http://203.0.113.5/topic",
+            "http://ntfy.example.com/topic",
+            "http://[2001:db8::1]/hook",
+        ] {
+            assert!(cleartext_beyond_home(beyond), "{beyond}");
+        }
+        for home in [
+            "https://ntfy.example.com/topic",
+            "http://10.0.0.5/hook",
+            "http://172.16.4.2/hook",
+            "http://192.168.1.20:8080",
+            "http://100.100.1.1/hook",
+            "http://[fd00::1]/hook",
+            "http://nas:8080/hook",
+            "http://gotify.lan",
+            "http://gotify.home.arpa",
+            "http://printer.local/x",
+        ] {
+            assert!(!cleartext_beyond_home(home), "{home}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_token_is_not_sent_in_clear_beyond_the_home_network() {
+        let told = Told {
+            event: "webhook.test".to_string(),
+            actor: None,
+            target: None,
+            detail: None,
+            at: at_now(),
+            count: None,
+        };
+        let post = kinds::post(
+            Kind::Ntfy,
+            "http://203.0.113.5/ams-alerts",
+            Some("tk_secret"),
+            &kinds::message_id(),
+            &told,
+            0,
+        )
+        .expect("a post");
+        assert!(matches!(refusal(&post).await, Some(Refusal::Cleartext)));
     }
 
     #[tokio::test]

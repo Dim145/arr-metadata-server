@@ -300,12 +300,12 @@ mod tests {
         );
         let scrubbed = scrub(report).expect("a report that reads through");
         let text = serde_json::to_string(&scrubbed).unwrap();
-        for secret in [
+        for planted in [
             "abcdef123456",
             "abcdefghijklmnop",
             "report-test-registered-secret",
         ] {
-            assert!(!text.contains(secret), "{secret} in {text}");
+            assert!(!text.contains(planted), "{planted} in {text}");
         }
         assert_eq!(
             scrubbed.message.as_deref(),

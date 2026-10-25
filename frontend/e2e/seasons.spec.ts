@@ -195,7 +195,7 @@ test.describe('the season chart', () => {
     test.skip(!found, 'no season holds a work with a trailer')
 
     // Played for real, the frame would be YouTube's; what is tested is ours.
-    await page.route(/youtube(-nocookie)?\.com/, (route) => route.abort())
+    await page.route(/^https:\/\/([a-z0-9-]+\.)*youtube(-nocookie)?\.com\//, (route) => route.abort())
 
     await page.goto(found!.path)
     const play = page.getByRole('button', { name: /^(trailer|bande-annonce)\s?: /i }).first()

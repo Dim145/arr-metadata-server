@@ -819,8 +819,7 @@ mod tests {
 
     /// A directory for a test to write in.
     fn scratch(name: &str) -> PathBuf {
-        // nosemgrep: rust.lang.security.temp-dir.temp-dir — a test's scratch directory, named after a fresh id: nothing security-relevant lives in it
-        std::env::temp_dir().join(format!("ams-{name}-{}", crate::db::new_id()))
+        crate::testing::scratch_path(name)
     }
 
     #[tokio::test]

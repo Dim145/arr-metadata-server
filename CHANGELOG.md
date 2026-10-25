@@ -809,6 +809,37 @@ may change what the API or the configuration means, and says so here.
   DNS-rebinding and session-leak advisories; `/mcp` answers only under the
   server's own names, refuses other sites' pages, takes no cookie, and is
   rate limited like the API.
+- Where the backups' directory cannot be written, a backup is put together
+  in the system's temporary directory under a name nobody can guess, in a
+  directory only the server's user may read, made afresh each time —
+  never under a fixed name another user of the machine could have made
+  first, nor swept there beyond the server's own leftovers: a link planted
+  under the old name would have led the sweep into a directory of the
+  server's.
+- `rustls-webpki` 0.103.16, `webpki-roots` and `webpki-root-certs` 1.0.11,
+  `ctutils` 0.4.5 and `tokio` 1.54.1, past their advisories
+  (RUSTSEC-2026-0381, -0382, -0383, -0385, -0386); the interface's `zod`
+  and the documentation site's `vite` and `zod` likewise. The advisory on
+  `crypto-bigint` 0.5 (RUSTSEC-2026-0387) is set aside with its reason:
+  `p256` only verifies public signatures and age encrypts with a
+  passphrase here, and the fix waits for `openidconnect` and `age`.
+- The workflows keep no token in a checkout, give the image's write right
+  to the jobs that push it rather than to the whole workflow, pin the
+  databases their tests start by digest, and run one at a time where two
+  would collide. Rust is installed by rustup through an action of the
+  repository's own, `.github/actions/rust-toolchain`: the commits of
+  `dtolnay/rust-toolchain` they were pinned to had been left on no branch
+  of it as its branches were rewritten, where nothing told them from a
+  fork's. The minimum version's job reads the version from Cargo.toml.
+- What lets anybody post as the server — a Gotify application's token, an
+  ntfy topic's token, the address of a Discord or Slack webhook, which holds
+  its own — goes over plain `http` only to an address of the home network
+  (a private or Tailscale address, a name without a dot, `.lan`, `.local`,
+  `.home.arpa`, `.internal`). Anywhere else it needs `https`: the
+  destination is refused when it is saved, and a post says `cleartext`
+  instead of sending it.
+- A batch from Discover goes into twenty selections at the most; one that
+  names more is refused before any is looked up.
 
 ## [0.8.3] — 2026-10-18
 

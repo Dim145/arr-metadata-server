@@ -27,4 +27,17 @@ ignore = [
     # broken, and rav1e 0.8.1, the latest, still uses it. Kept in step with
     # deny.toml.
     "RUSTSEC-2024-0436",
+    # RUSTSEC-2026-0387, timing variability in `crypto-bigint` 0.5's
+    # arithmetic on secret integers. It comes in through `p256`, which this
+    # server uses on public values alone: `openidconnect` verifies an
+    # identity provider's ES256 signatures with its public key, and `age`
+    # encrypts the backups with a passphrase, never with a P-256 key. The
+    # fixed 0.7.6 needs `p256` 0.14, which neither takes yet; drop this once
+    # they do. Kept in step with deny.toml.
+    "RUSTSEC-2026-0387",
+    # RUSTSEC-2026-0374, `basic-toml` unmaintained: `age`'s translations'
+    # macros read their own configuration with it while the server is
+    # compiled. Nothing of it runs in the server, and it reads only that
+    # file. Kept in step with deny.toml.
+    "RUSTSEC-2026-0374",
 ]

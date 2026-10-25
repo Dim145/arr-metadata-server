@@ -1047,7 +1047,7 @@ mod tests {
     /// and so is taking it away again.
     #[tokio::test]
     async fn an_upload_and_its_removal_are_journaled_as_the_lock_or_the_picture_they_are() {
-        let dir = std::env::temp_dir().join(format!("ams-media-{}", crate::db::new_id()));
+        let dir = crate::testing::scratch_path("media");
         let state = server(&dir).await;
 
         let mut series = MediaItem::empty(MediaKind::Series);

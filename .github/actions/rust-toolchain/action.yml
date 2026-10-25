@@ -1,0 +1,43 @@
+# The Rust toolchain a job builds with, installed by rustup: the one the
+# runner's image carries, or, where the image has none (a Forgejo runner's
+# may not), the Rust project's own installer first. Kept here rather than
+# taken from somebody else's action: the branches such an action is pinned
+# to are rewritten as they move on, and leave the commit pinned on no branch
+# of its repository, where nothing tells it from a fork's.
+name: Rust toolchain
+description: Installs a Rust toolchain with rustup and makes it the default.
+
+inputs:
+  toolchain:
+    description: The toolchain, as rustup names it — stable, or a version.
+    default: stable
+  components:
+    description: Components to add to it, separated by commas.
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Install the toolchain
+      shell: bash
+      env:
+        TOOLCHAIN: ${{ inputs.toolchain }}
+        COMPONENTS: ${{ inputs.components }}
+      # The one path written to GITHUB_PATH is rustup's own, under the
+      # runner's home: nothing of the event's goes there.
+      run: | # zizmor: ignore[github-env]
+        if ! command -v rustup >/dev/null; then
+          # Fetched whole before any of it runs: a download cut short fails
+          # here, rather than running as far as it got.
+          installer="$RUNNER_TEMP/rustup-init.sh"
+          curl --proto '=https' --tlsv1.2 --retry 10 --location --silent --show-error --fail \
+            --output "$installer" https://sh.rustup.rs
+          sh "$installer" -y --no-modify-path --profile minimal --default-toolchain none
+          bin="${CARGO_HOME:-$HOME/.cargo}/bin"
+          echo "$bin" >> "$GITHUB_PATH"
+          export PATH="$bin:$PATH"
+        fi
+        rustup toolchain install "$TOOLCHAIN" --profile minimal --no-self-update \
+          ${COMPONENTS:+--component "$COMPONENTS"}
+        rustup default "$TOOLCHAIN"
+        rustc --version

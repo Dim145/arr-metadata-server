@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
+import { escaped, pattern } from './support/regex'
 
 /**
  * The server's own log, read in the administration: the lines it wrote, the
@@ -156,7 +157,7 @@ test.describe('the server log', () => {
 
     await items(page)
       .first()
-      .getByRole('button', { name: new RegExp(`only the lines of trace ${TRACE}`, 'i') })
+      .getByRole('button', { name: pattern(`only the lines of trace ${escaped(TRACE)}`, 'i') })
       .click()
     await expect(page.getByLabel(/^find$/i)).toHaveValue(TRACE)
     await expect(items(page)).toHaveCount(2)

@@ -25,6 +25,11 @@ env:
   # Debug info is the bulk of the target directory and nothing here reads it.
   CARGO_PROFILE_DEV_DEBUG: 0
 
+# One comparison at a time; a second one would only repeat the first.
+concurrency:
+  group: parity
+  cancel-in-progress: false
+
 jobs:
   parity:
     name: Skyhook v2 parity
@@ -52,11 +57,13 @@ jobs:
           fi
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
         if: steps.keys.outputs.present == 'true'
 
       - name: Install the toolchain
         if: steps.keys.outputs.present == 'true'
-        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        uses: ./.github/actions/rust-toolchain
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: steps.keys.outputs.present == 'true'

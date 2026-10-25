@@ -2021,6 +2021,7 @@ export const fr: Dict = {
       unsent: 'Rien d’envoyé : l’envoi n’a pas pu être préparé.',
       notWeb: 'Rien d’envoyé : ce serveur n’envoie qu’à une adresse http ou https qui ne désigne aucune machine à lui.',
       internal: 'Rien d’envoyé : ce nom désigne une adresse joignable seulement depuis ce serveur.',
+      cleartext: 'Non envoyé : le jeton d’une destination ne part qu’en https, ou vers une adresse du réseau local.',
       events: {
         title: 'Événements',
         every: 'Tous les événements, y compris ceux ajoutés plus tard',

@@ -17,6 +17,12 @@ env:
   # Debug info is the bulk of the target directory and nothing here reads it.
   CARGO_PROFILE_DEV_DEBUG: 0
 
+# A newer push to a pull request makes its older run moot; every push to
+# main is checked to the end.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   backend:
     name: Backend
@@ -25,7 +31,9 @@ jobs:
     services:
       # The schema is maintained separately per engine, so CI has to apply both.
       postgres:
-        image: postgres:18-alpine
+        # Pinned by its digest, the tag kept for the reader; `docker buildx imagetools
+        # inspect <tag>` gives the next one.
+        image: postgres:18-alpine@sha256:898c60cb390d1085bc97bdd6a1ae968757421df394b071848b52b1c09c89d6a5
         env:
           POSTGRES_USER: ams
           POSTGRES_PASSWORD: ams
@@ -40,11 +48,13 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install the toolchain
-        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        uses: ./.github/actions/rust-toolchain
         with:
-          components: rustfmt, clippy
+          components: rustfmt,clippy
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
@@ -87,7 +97,9 @@ jobs:
 
     services:
       postgres:
-        image: postgres:18-alpine
+        # Pinned by its digest, the tag kept for the reader; `docker buildx imagetools
+        # inspect <tag>` gives the next one.
+        image: postgres:18-alpine@sha256:898c60cb390d1085bc97bdd6a1ae968757421df394b071848b52b1c09c89d6a5
         env:
           POSTGRES_USER: ams
           POSTGRES_PASSWORD: ams
@@ -110,9 +122,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install the toolchain
-        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        uses: ./.github/actions/rust-toolchain
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
@@ -135,9 +149,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install the toolchain
-        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        uses: ./.github/actions/rust-toolchain
         with:
           components: llvm-tools-preview
 
@@ -165,6 +181,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -230,7 +248,9 @@ jobs:
       # The cache's second tier, which the cache spec reads back; the server is
       # pointed at it below. Without one that spec checks the memory tier alone.
       cache:
-        image: valkey/valkey:8-alpine
+        # Pinned by its digest, the tag kept for the reader; `docker buildx imagetools
+        # inspect <tag>` gives the next one.
+        image: valkey/valkey:8-alpine@sha256:081c2f5cb575efc901aa80ff9cdbd1ec6a301682fd35e1ebb4b0990a4a4a8507
         options: >-
           --health-cmd "valkey-cli ping"
           --health-interval 10s
@@ -257,11 +277,13 @@ jobs:
           fi
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
         if: steps.keys.outputs.present == 'true'
 
       - name: Install the toolchain
         if: steps.keys.outputs.present == 'true'
-        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        uses: ./.github/actions/rust-toolchain
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: steps.keys.outputs.present == 'true'
@@ -304,6 +326,9 @@ jobs:
         if: steps.keys.outputs.present == 'true'
         run: |
           password="$(openssl rand -hex 24)"
+          # A throwaway password, for a server that lives and dies in this job:
+          # masked as a courtesy, nothing relies on it staying unseen.
+          # nosemgrep: yaml.github-actions.security.audit.unsafe-add-mask-workflow-command.unsafe-add-mask-workflow-command
           echo "::add-mask::${password}"
           {
             echo "E2E_DIR=${RUNNER_TEMP}/e2e"
@@ -423,9 +448,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install the toolchain
-        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        uses: ./.github/actions/rust-toolchain
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
@@ -462,6 +489,9 @@ jobs:
       - name: Make this run's administrator
         run: |
           password="$(openssl rand -hex 24)"
+          # A throwaway password, for a server that lives and dies in this job:
+          # masked as a courtesy, nothing relies on it staying unseen.
+          # nosemgrep: yaml.github-actions.security.audit.unsafe-add-mask-workflow-command.unsafe-add-mask-workflow-command
           echo "::add-mask::${password}"
           {
             echo "VISUAL_DIR=${RUNNER_TEMP}/visual"
@@ -522,17 +552,25 @@ jobs:
 
   # `rust-version` in Cargo.toml promises that 1.94 builds this, and nothing
   # else ever tries it: a dependency, or a newer language feature, can break the
-  # promise without anyone noticing. The ref of the action is the toolchain it
-  # installs, so when the promise moves, this moves with it.
+  # promise without anyone noticing. The version installed is read from
+  # Cargo.toml, so when the promise moves, this moves with it.
   msrv:
     name: Minimum Rust version
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Read the declared minimum
+        id: msrv
+        run: echo "version=$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' Cargo.toml)" >> "$GITHUB_OUTPUT"
 
       - name: Install the declared minimum
-        uses: dtolnay/rust-toolchain@b31b393ee3a9000c6a2886412d0787436f5b6d2d # 1.94
+        uses: ./.github/actions/rust-toolchain
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
@@ -559,6 +597,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
@@ -572,10 +612,12 @@ jobs:
     # below. Naming a permission replaces the workflow's, so `contents` again.
     permissions:
       contents: read
-      security-events: write
+      security-events: write # the scan's findings, filed under code scanning
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 

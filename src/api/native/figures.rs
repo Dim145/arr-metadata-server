@@ -629,33 +629,38 @@ mod tests {
     async fn the_figures_are_read_by_a_scrapers_key_and_by_an_administrator() {
         let state = super::super::testing::server().await;
 
-        for identity in [
+        for (case, identity) in [
             key(&["metrics"], None),
             key(&["read", "metrics"], None),
             key(&["admin"], None),
             Identity::Anonymous,
-        ] {
+        ]
+        .into_iter()
+        .enumerate()
+        {
             let (headers, body) = metrics(State(state.clone()), Extension(identity.clone()))
                 .await
-                .unwrap_or_else(|e| panic!("{}: {e:?}", identity.label()));
+                .unwrap_or_else(|e| panic!("case {case}: {e:?}"));
             assert_eq!(headers[0].1, "text/plain; version=0.0.4; charset=utf-8");
             assert!(body.contains("ams_uptime_seconds"), "{body}");
             assert!(body.contains("ams_works{"), "{body}");
         }
 
-        for identity in [
+        for (case, identity) in [
             key(&["read"], None),
             key(&["read", "write"], Some(Role::Editor)),
             Identity::Visitor,
             Identity::Network(None),
-        ] {
+        ]
+        .into_iter()
+        .enumerate()
+        {
             let refused = metrics(State(state.clone()), Extension(identity.clone()))
                 .await
                 .err();
             assert!(
                 matches!(refused, Some(AppError::Forbidden)),
-                "{}: {refused:?}",
-                identity.label()
+                "case {case}: {refused:?}"
             );
         }
     }

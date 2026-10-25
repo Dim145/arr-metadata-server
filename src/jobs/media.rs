@@ -701,7 +701,7 @@ mod tests {
     /// told what the picture looks like.
     #[tokio::test]
     async fn the_pictures_are_prepared_once_and_a_stopped_run_is_taken_up() {
-        let dir = std::env::temp_dir().join(format!("ams-variants-{}", crate::db::new_id()));
+        let dir = crate::testing::scratch_path("variants");
         let state = server(&dir).await;
         let store = state.media.store().unwrap().clone();
         let origins = kept_as_before(&state, &[600, 620, 640]).await;
@@ -778,7 +778,7 @@ mod tests {
         assert_eq!(variants::avif_widths(Some(CoverType::Fanart)), [1280, 1920]);
         assert!(variants::avif_widths(Some(CoverType::Clearlogo)).is_empty());
 
-        let dir = std::env::temp_dir().join(format!("ams-avif-{}", crate::db::new_id()));
+        let dir = crate::testing::scratch_path("avif");
         let state = server(&dir).await;
         let origins = kept_as_before(&state, &[160]).await;
 
