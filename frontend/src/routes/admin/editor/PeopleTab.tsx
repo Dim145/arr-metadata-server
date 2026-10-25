@@ -210,7 +210,7 @@ function Credits({ work, onChanged, onRemove }: PanelProps) {
                           : jobLabel(credit.characterName ?? credit.creditType, lang)}
                       </span>
                     </span>
-                    <span className="hidden shrink-0 font-mono text-[0.6875rem] tracking-[0.08em] text-slate uppercase sm:inline">
+                    <span className="hidden shrink-0 font-mono text-label tracking-[0.08em] text-slate uppercase sm:inline">
                       {roles.find(([value]) => value === credit.creditType)?.[1] ?? credit.creditType}
                     </span>
                   </span>
@@ -300,7 +300,7 @@ function Credits({ work, onChanged, onRemove }: PanelProps) {
         </ul>
       )}
       {edit.isError && correcting === null ? (
-        <p role="alert" className="border-t border-rule px-5 py-2 text-xs text-vermillion">
+        <p role="alert" className="border-t border-rule px-5 py-2 text-xs text-status-error">
           {edit.error.message || t.common.actionFailed}
         </p>
       ) : null}
@@ -409,7 +409,7 @@ function Correction({
         </FormField>
       </div>
       {error ? (
-        <p role="alert" className="text-xs text-vermillion">
+        <p role="alert" className="text-xs text-status-error">
           {error.message || t.common.actionFailed}
         </p>
       ) : null}
@@ -490,7 +490,7 @@ function FileUnder({
     <div className="mt-2 space-y-3 rounded-card border border-rule bg-ink/40 p-3">
       <PersonPicker id={`file-${credit.id}-find`} exclude={current} onPick={(person) => file.mutate(person)} autoFocus />
       {file.isError ? (
-        <p role="alert" className="text-xs text-vermillion">
+        <p role="alert" className="text-xs text-status-error">
           {file.error.message || t.common.actionFailed}
         </p>
       ) : null}
@@ -607,7 +607,7 @@ function AlternativeTitles({ work, onChanged, onRemove }: PanelProps) {
         </ul>
       )}
       {hide.isError ? (
-        <p role="alert" className="border-t border-rule px-5 py-2 text-xs text-vermillion">
+        <p role="alert" className="border-t border-rule px-5 py-2 text-xs text-status-error">
           {hide.error.message || t.common.actionFailed}
         </p>
       ) : null}
@@ -674,11 +674,11 @@ function Translations({ work, report }: { work: MediaItem; report?: ProvenanceRe
               key={translation.language}
               title={translation.overview?.slice(0, 200)}
               className={cn(
-                'inline-flex max-w-full items-center gap-2 rounded-full border px-3 py-1.5 text-[0.8125rem]',
+                'inline-flex max-w-full items-center gap-2 rounded-full border px-3 py-1.5 text-body-sm',
                 translation.isManual ? 'border-brass-deep text-brass' : 'border-rule text-bone-dim',
               )}
             >
-              <span className="font-mono text-[0.6875rem] font-medium text-bone uppercase">{translation.language}</span>
+              <span className="font-mono text-label font-medium text-bone uppercase">{translation.language}</span>
               <span className="min-w-0 truncate">{translation.title || p.untitled}</span>
               {from[translation.language] ? (
                 <span className="font-mono text-[0.625rem] tracking-[0.08em] text-slate uppercase">{providerName(from[translation.language]!)}</span>

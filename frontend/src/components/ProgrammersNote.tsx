@@ -99,9 +99,10 @@ export function ProgrammersNote({
     queryKey: ['note', scope, id, lang],
     queryFn: async () => {
       try {
-        return await api.get<EditorialNote>(`/editorial/${scope}/${segment(id)}${query({ language: lang })}`)
+        // Nothing written about it is `null`, no note and no failure.
+        return await api.get<EditorialNote | null>(`/editorial/${scope}/${segment(id)}${query({ language: lang })}`)
       } catch (error) {
-        // Nothing written about it: no note, not a failure.
+        // A work or a selection the reader may not see: no note either.
         if (error instanceof ApiError && error.status === 404) return null
         throw error
       }
@@ -233,12 +234,12 @@ function NoteEditor({
         <span className="ml-2 font-mono tabular-nums">{t.note.count(Array.from(body).length, MAX_NOTE)}</span>
       </p>
       {issue ? (
-        <p role="alert" className="mt-1.5 text-xs text-vermillion">
+        <p role="alert" className="mt-1.5 text-xs text-status-error">
           {issues[issue]}
         </p>
       ) : null}
       {failure ? (
-        <p role="alert" className="mt-1.5 text-xs text-vermillion">
+        <p role="alert" className="mt-1.5 text-xs text-status-error">
           {failure.message || t.note.failed}
         </p>
       ) : null}

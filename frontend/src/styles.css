@@ -287,7 +287,20 @@
      error's colour, not vermillion's, so the day the two must part — an
      error that is not the way through the building — is a line here, not a
      search across every screen. Each follows its colour into the light theme.
-     A state is never said by its colour alone (see `Lamp`). */
+     A state is never said by its colour alone (see `Lamp`).
+
+     - `status-ok`: done, well, switched on — a saved form, a lamp that is
+       lit, a source that answers.
+     - `status-warn`: wants a look — something waits, something is set but
+       not in use. Brass's other meaning, a person's hand, stays `brass`.
+     - `status-error`: failed — a line that says what went wrong
+       (`role="alert"`), a lamp that is out. The accent's other meaning, the
+       way through the building, stays `vermillion`.
+
+     Every name here that points at another colour is pointed again in the
+     light theme's block below, so that a part of a page drawn in the other
+     theme (the styleguide's columns) follows: a custom property is worked
+     out where it is declared, and inherited as that answer. */
   --color-status-ok: var(--color-moss);
   --color-status-warn: var(--color-brass);
   --color-status-error: var(--color-vermillion);
@@ -301,14 +314,35 @@
   --font-sans: "Public Sans Variable", "Public Sans", "Public Sans Fallback", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, monospace;
 
-  /* The small steps of type, named, so a page asks for a step rather than a
-     number in brackets. Twelve pixels is the floor for anything a reader has
-     to read: a caption, a count, a field's name (`.label`). `label` is the one
-     step under it, for a mono tag that only decorates — its words said in
-     full by a visually hidden text beside it. Each is a size alone: the line
-     height stays the one the text around it has. Registered with
-     tailwind-merge in lib/cn.ts, which would otherwise read `text-caption`
-     as a colour and drop it for the next `text-bone`. */
+  /* ── Type ───────────────────────────────────────────────────────────────
+     The scale, smallest first. A page asks for a step, never a number in
+     brackets: the lint refuses `text-[0.75rem]` where a step says it
+     (eslint.config.js, `ams/tokens`), so a change to a step reaches every
+     use of it.
+
+       label     11  a mono tag that only decorates, its words said in full
+                     by a visually hidden text beside it — the one step
+                     under the floor
+       caption   12  the floor for anything a reader has to read: a count, a
+                     date, a field's name (`.label`); `xs` is the same size
+                     with its own line height
+       body-sm   13  a dense row, a chip's neighbour, a hint in a toolbar
+       sm        14  the body of the administration and of every form;
+                     `body` is the same size, for text whose line height is
+                     its surroundings'
+       lead      15  the first lines of a work's entry
+       base      16  a paragraph read at length
+       lg        18  a dialog's title, an empty screen's words
+       xl, 2xl   20, 24  section titles (`SectionTitle`)
+       3xl, 4xl  30, 36  a page's title
+       5xl–7xl   48–72  the front page's marquee
+       plate     28–48  a work's title, with its column (below)
+
+     The named steps are sizes alone: the line height stays the one the text
+     around it has, as with the bracketed sizes they replaced. Tailwind's
+     own (`xs`, `sm`, `lg`…) bring a line height with them. The named ones
+     are registered with tailwind-merge in lib/cn.ts, which would otherwise
+     read `text-caption` as a colour and drop it for the next `text-bone`. */
   --text-label: 0.6875rem;
   --text-caption: 0.75rem;
   --text-body-sm: 0.8125rem;
@@ -322,13 +356,33 @@
      past which a reader's zoom could no longer double the text. */
   --text-plate: clamp(1.75rem, 4cqi + 1rem, 3rem);
 
+  /* ── Corners ────────────────────────────────────────────────────────────
+     Nearly square: the register is printed matter. From the smallest,
+     Tailwind's own steps first:
+
+       xs     2   the top of a bar in a chart
+       sm     4   a key cap, a thumbnail the height of a line
+       md     6   an item inside something with a larger corner: a row of
+                  a menu, a tip, an option, a head that orders a column
+       card   10  a card, a field, a button that is not a pill
+       panel  14  a panel, a dialog
+       plate  18  a work's plate
+       full       a pill: a button, a chip, a choice
+
+     The lint refuses a bracketed corner where a step says it. */
   --radius-card: 10px;
   --radius-panel: 14px;
   --radius-plate: 18px;
 
   /* Shadows carry a little of the accent rather than being neutral black: a
-     pure-black shadow on near-black is a smudge, and a warm one reads as depth. */
-  --shadow-plate: 0 18px 40px -20px rgb(0 0 0 / 0.9), 0 2px 8px -4px rgb(224 68 52 / 0.18);
+     pure-black shadow on near-black is a smudge, and a warm one reads as
+     depth. Mixed from the accent rather than written out, so it is the
+     accent's whatever the accent becomes — it had stayed the colour the
+     accent was before it was lifted. Shadows are asked for as
+     `shadow-[var(--shadow-lift)]`: the plain `shadow-lift` would carry the
+     dark theme's value into the light one, written out when the stylesheet
+     is built. */
+  --shadow-plate: 0 18px 40px -20px rgb(0 0 0 / 0.9), 0 2px 8px -4px color-mix(in srgb, var(--color-vermillion) 18%, transparent);
   --shadow-lift: 0 10px 28px -16px rgb(0 0 0 / 0.85);
 
   /* ── Motion ─────────────────────────────────────────────────────────────
@@ -381,8 +435,13 @@
    turned into pale tints, the film-stock casts darkened to the same end. Worn
    when the reader asks for it, or the system does and the reader has not said
    — `public/theme.js` settles which before the first paint. Every pair here
-   was measured to WCAG AA, as the dark set was. */
-:root[data-theme="light"] {
+   was measured to WCAG AA, as the dark set was.
+
+   Worn by the page, or by a part of it that says so (`data-theme="light"`
+   on any element: the styleguide's columns), which is why the names that
+   point at a colour are pointed again at the end. It outweighs the dark
+   set, which Tailwind writes in its `theme` layer, by being in no layer. */
+[data-theme="light"] {
   --color-ink: #f6f3ee;
   --color-ink-raised: #fdfcfa;
   --color-ink-high: #efece6;
@@ -406,7 +465,7 @@
 
   --color-moss: #3f7a33;
 
-  --shadow-plate: 0 18px 40px -20px rgb(20 16 12 / 0.35), 0 2px 8px -4px rgb(184 57 42 / 0.12);
+  --shadow-plate: 0 18px 40px -20px rgb(20 16 12 / 0.35), 0 2px 8px -4px color-mix(in srgb, var(--color-vermillion) 12%, transparent);
   --shadow-lift: 0 10px 28px -16px rgb(20 16 12 / 0.3);
 
   /* Dark enough to be read as text on their own pale tint: 5:1 and better. */
@@ -418,6 +477,13 @@
   --color-stock-6: #2b5a92;
   --color-stock-7: #55458f;
   --color-stock-8: #7f3d5e;
+
+  /* The names that point at a colour (`@theme`), pointed again here. */
+  --color-status-ok: var(--color-moss);
+  --color-status-warn: var(--color-brass);
+  --color-status-error: var(--color-vermillion);
+  --color-selection: var(--color-vermillion);
+  --surface-overlay: var(--color-ink-raised);
 }
 
 /* ── More contrast, when it is asked for ────────────────────────────────────
@@ -427,10 +493,11 @@
    which is what WCAG asks of a control's boundary, where the everyday rules
    stay near 1.3:1 because they separate rather than enclose. The grain and
    the washes go too (below, beside their classes). The tones stay: this is
-   still the same room, with the lights up. */
+   still the same room, with the lights up. The light set comes last: with
+   no more weight than `:root`, it wins by its place. */
 @media (prefers-contrast: more) {
   :root,
-  :root[data-theme="light"] {
+  [data-theme="light"] {
     --color-bone-faint: var(--color-bone-dim);
   }
 
@@ -439,7 +506,7 @@
     --color-rule-bright: #7e7e86;
   }
 
-  :root[data-theme="light"] {
+  [data-theme="light"] {
     --color-rule: #857e73;
     --color-rule-bright: #6f695f;
   }
@@ -484,8 +551,14 @@
     text-wrap-style: pretty;
   }
 
-  html[data-theme="light"] {
+  /* The browser's own parts — a box's tick, a scrollbar, a list a select
+     opens — in the theme of whatever wears one. */
+  [data-theme="light"] {
     color-scheme: light;
+  }
+
+  [data-theme="dark"] {
+    color-scheme: dark;
   }
 
   body {
@@ -619,9 +692,30 @@
      height with the vermillion mark on the chosen one — and the field keeps
      its chevron, drawn in its background like everywhere else. Elsewhere the
      system's list opens, as it always has; the field is the same either way,
-     and so are its name, its label and what it sends. */
+     and so are its name, its label and what it sends.
+
+     The chevron is a picture, and a picture cannot take its colour from the
+     page: it is drawn once in each theme's dim bone, and a part of the page
+     in the other theme draws its own. It used to be written in the field's
+     classes, where the spaces of the picture's address split it into a
+     dozen classes Tailwind could not read: no select had a chevron, and the
+     merge of classes took the pieces for a background and dropped the
+     field's ink. */
+  :root,
+  [data-theme="dark"] {
+    --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5 6 6.5 11 1.5' stroke='%23a5a099' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+  }
+
+  [data-theme="light"] {
+    --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5 6 6.5 11 1.5' stroke='%234f4b45' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+  }
+
   .select-base {
     appearance: none;
+    background-image: var(--chevron);
+    background-position: right 0.75rem center;
+    background-size: 12px 8px;
+    background-repeat: no-repeat;
   }
 
   @supports (appearance: base-select) {
@@ -646,7 +740,7 @@
 
     .select-base option {
       min-block-size: 2.75rem;
-      border-radius: 6px;
+      border-radius: var(--radius-md);
       padding-inline: 0.75rem;
       color: var(--color-bone-dim);
     }
@@ -1161,7 +1255,7 @@
     content: attr(data-label);
     content: attr(data-label) / "";
     font-family: var(--font-sans);
-    font-size: 0.8125rem;
+    font-size: var(--text-body-sm);
     letter-spacing: 0;
     text-transform: none;
     color: var(--color-bone-dim);
@@ -1210,7 +1304,7 @@
     content: attr(data-label) / "";
     flex: 0 0 6.5rem;
     font-family: var(--font-mono);
-    font-size: 0.75rem;
+    font-size: var(--text-caption);
     letter-spacing: 0.08em;
     text-transform: uppercase;
     color: var(--color-bone-faint);

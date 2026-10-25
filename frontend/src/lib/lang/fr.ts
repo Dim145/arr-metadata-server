@@ -565,6 +565,10 @@ export const fr: Dict = {
       series: 'Fin de série',
       midseason: 'Fin de mi-saison',
     },
+    imdb: {
+      byNumber: 'd’après son numéro',
+      byNumberHint: 'Rapproché de l’épisode d’IMDb de même saison et de même numéro, qu’IMDb peut compter autrement.',
+    },
   },
   season: {
     watchTime: (runtime: string) => `${runtime} au total`,
@@ -1854,6 +1858,35 @@ export const fr: Dict = {
           'Un Fan-Kai n’est décrit que par Fankai, avec son wiki pour ce dont il est tiré : aucune autre source ne s’y mêle, sinon le remontage serait fondu dans l’anime d’origine.',
       },
       loadFailed: 'Les règles n’ont pas pu être chargées.',
+      datasets: {
+        title: 'Listes téléchargées en entier',
+        lead: 'Certaines sources ne sont pas interrogées œuvre par œuvre : leurs listes sont téléchargées en entier selon un calendrier, lues à mesure qu’elles arrivent, et seul ce qui concerne les œuvres présentes ici est gardé. Chacune s’active dans Réglages › Sources complémentaires.',
+        names: {
+          'imdb-ratings': 'Notes IMDb',
+          'imdb-akas': 'Titres IMDb par pays',
+          'imdb-episodes': 'Épisodes IMDb',
+          'anime-lists': 'Liste des identifiants d’anime',
+        },
+        brings: {
+          'imdb-ratings': 'La note IMDb de chaque œuvre présente — et de chaque épisode, tant que les épisodes d’IMDb sont lus.',
+          'imdb-akas': 'Les titres qu’IMDb donne à chaque œuvre dans chaque pays. Radarr reçoit ceux d’un film, dans les pays qui lui sont réglés, à côté de ceux de TMDB ; rien d’autre ne les reçoit.',
+          'imdb-episodes': 'Quel épisode d’IMDb est chaque épisode, d’après la saison et le numéro qu’IMDb leur donne : son identifiant IMDb dans son document .nfo, sa note IMDb sur sa page.',
+          'anime-lists': 'Quelles entrées AniList et MyAnimeList sont une série ou un film, pour l’anime.',
+        },
+        on: 'Activée',
+        off: 'Désactivée',
+        never: 'Pas encore téléchargée',
+        kept: (rows: string, when: string) => `${rows} lignes gardées, ${when}`,
+        status: {
+          succeeded: (when: string) => `Dernier passage réussi ${when}`,
+          failed: (when: string) => `Dernier passage en échec ${when}`,
+          running: (when: string) => `En cours depuis ${when}`,
+          stopped: (when: string) => `Dernier passage arrêté ${when}`,
+        },
+        next: (when: string) => `Prochain ${when}`,
+        task: (name: string) => `« ${name} » sur la page Tâches`,
+        loadFailed: 'Les listes n’ont pas pu être lues.',
+      },
       terms: {
         title: 'Conditions d’utilisation',
         lead: 'Chaque source répond sous ses propres conditions. Ce serveur garde une copie de ce qu’elles ont répondu pour les œuvres qu’il détient, la rafraîchit, ne recopie aucun catalogue et n’entraîne rien dessus ; le reste est à elles de le dire, et chaque page publique crédite les sources actives.',
@@ -3244,6 +3277,9 @@ export const fr: Dict = {
       metrics: 'Relevé',
       metricsHint:
         'Relevé seul lit les chiffres de /api/v1/admin/metrics et rien d’autre : la clé que Prometheus garde dans son fichier de configuration.',
+      mcp: 'MCP',
+      mcpHint:
+        'MCP ouvre le serveur MCP, /mcp, par lequel un agent comme Claude Code lit le catalogue. Seul, il n’ouvre rien d’autre : la clé qu’un agent garde dans sa configuration. Ses outils ne font que lire.',
       issued: 'Clés émises',
       keyFor: (name: string) => `La clé de ${name}`,
       onlyOnce:
@@ -3300,6 +3336,34 @@ export const fr: Dict = {
         `${served.toLocaleString('fr')} réponses, ${refused.toLocaleString('fr')} refus depuis le démarrage.`,
     },
 
+    mcp: {
+      title: 'MCP, pour les agents',
+      lead: 'Des agents comme Claude Code et Open WebUI lisent le catalogue par le serveur MCP de ce serveur : ils y cherchent, lisent une œuvre et ses épisodes, le programme de la semaine, les listes, d’où vient une valeur, la santé du serveur et ce qui demande un coup de main. Chaque appel est inscrit au journal d’audit.',
+      toggle: 'Répondre aux agents',
+      on: 'Répond',
+      off: 'Éteint',
+      onHint: 'Un agent muni d’une clé de portée MCP reçoit une réponse.',
+      offHint: 'Éteint, /mcp répond 503 à tout agent.',
+      address: 'L’adresse à donner à un agent',
+      claude: 'La ligne qui connecte Claude Code',
+      copy: 'Copier',
+      copyCommand: 'Copier la ligne',
+      copied: 'Copiée',
+      copyManual: 'Le presse-papiers est hors de portée sur cette page : le texte est sélectionné, copiez-le vous-même.',
+      makeKey: 'Créer une clé pour un agent',
+      keyName: 'Agent',
+      keyHint:
+        'Lancez-la avec une clé de portée MCP à la place de <key> : créez-en une ici, ou émettez-en une plus haut avec la portée MCP.',
+      keyOnce:
+        'Lancez cette ligne dès maintenant : la clé qu’elle porte n’est montrée que cette fois, seule son empreinte est gardée. Révoquez la clé dans la liste ci-dessus pour couper l’accès à l’agent.',
+      openWebUi:
+        'Dans Open WebUI, ajoutez l’adresse dans les outils externes comme serveur MCP en Streamable HTTP, avec la clé pour jeton Bearer.',
+      reads:
+        'Ses outils ne font que lire : aucun ne change le catalogue. Un agent lit ce qu’un administrateur lirait : ne donnez sa clé qu’à un agent à qui vous le confieriez, et à personne d’autre.',
+      names:
+        'Un agent appelle ce serveur par l’hôte de son adresse publique, par localhost ou par un nom d’AMS_ALLOWED_HOSTS ; sous tout autre nom il est refusé, comme une requête venue de la page d’un autre site.',
+    },
+
     tasks: {
       lead: 'Ce que le serveur fait de lui-même : quand chaque tâche tourne, comment s’est passé son dernier passage, et quand vient le prochain. Chacune peut être lancée tout de suite ; un passage lancé par quelqu’un dit par qui.',
       names: {
@@ -3307,6 +3371,8 @@ export const fr: Dict = {
         'refresh.all': 'Tout actualiser',
         'import.anime': 'Liste des identifiants d’anime',
         'import.imdb': 'Notes IMDb',
+        'imdb.akas': 'Titres IMDb par pays',
+        'imdb.episodes': 'Épisodes IMDb',
         'export.nfo': 'Export NFO',
         'media.store': 'Stocker les médias',
         'media.sweep': 'Nettoyer les médias',
@@ -3328,6 +3394,8 @@ export const fr: Dict = {
         'refresh.all': 'Toutes les fiches qui ont un identifiant ailleurs, redemandées à leurs sources maintenant, l’une après l’autre. On peut l’arrêter ; le reste est alors actualisé par le programme.',
         'import.anime': 'La liste qui relie AniList et MyAnimeList à TheTVDB et TMDB, téléchargée en entier.',
         'import.imdb': 'Le fichier des notes d’IMDb, téléchargé en entier et gardé pour les œuvres présentes ici.',
+        'imdb.akas': 'Le fichier des titres d’IMDb — un demi-gigaoctet — lu à mesure qu’il arrive, et les titres des œuvres présentes ici gardés : Radarr reçoit les titres d’un film dans les pays qui lui sont réglés. Chaque semaine, une fois activé dans les réglages. Il peut être arrêté : les œuvres atteintes gardent leurs nouveaux titres, les autres les anciens.',
+        'imdb.episodes': 'Le fichier des épisodes d’IMDb lu en entier, et les épisodes des séries présentes ici gardés selon la saison et le numéro qu’IMDb leur donne : l’identifiant IMDb et la note d’un épisode, sur sa page et dans son document .nfo. Chaque semaine, une fois activé dans les réglages. Il peut être arrêté.',
         'export.nfo': 'Un document .nfo pour chaque œuvre, pour une bibliothèque que lisent Plex, Jellyfin ou Kodi.',
         'media.store': 'Chaque image et chaque musique que le catalogue référence et qui n’est pas encore stockée, récupérée maintenant, quelques-unes à la fois. Peut être arrêtée ; le reste se récupère au fil de l’eau.',
         'media.sweep': 'Les médias que plus rien ne référence — une fiche supprimée, une image abandonnée par sa source, un envoi retiré — oubliés et effacés.',
@@ -3505,6 +3573,24 @@ export const fr: Dict = {
           `${name}, ${size}${removed ? ` ; ${plural(removed, { one: `${removed} archive retirée`, other: `${removed} archives retirées` })} au-delà de celles gardées` : ''}`,
         restored: (rows: number, media: number, safety?: string) =>
           `${rows} lignes remises en place${media ? `, ${media} médias` : ''}${safety ? ` ; restaurer ${safety} l’annule` : ''}`,
+        rated: (works: number, of: number, episodes?: number, episodesOf?: number) =>
+          `${plural(works, { one: `${works} œuvre notée`, other: `${works} œuvres notées` })} sur ${of}${
+            episodes === undefined ? '' : `, ${plural(episodes, { one: `${episodes} épisode`, other: `${episodes} épisodes` })} sur ${episodesOf}`
+          }`,
+        reading: (kind: 'titles' | 'episodes', read: number, kept: number, total?: number) =>
+          `${total === undefined ? `${read} Mo lus` : `${read} Mo lus sur ${total}`}, ${
+            kind === 'titles'
+              ? plural(kept, { one: `${kept} titre gardé`, other: `${kept} titres gardés` })
+              : plural(kept, { one: `${kept} épisode gardé`, other: `${kept} épisodes gardés` })
+          }`,
+        titles: (titles: number, works: number, of: number) =>
+          `${plural(titles, { one: `${titles} titre`, other: `${titles} titres` })} pour ${plural(works, { one: `${works} œuvre`, other: `${works} œuvres` })} sur ${of}`,
+        titlesStopped: (titles: number, works: number) =>
+          `Arrêtée : ${plural(titles, { one: `${titles} titre écrit`, other: `${titles} titres écrits` })} pour ${plural(works, { one: `${works} œuvre`, other: `${works} œuvres` })} ; les autres gardent les leurs`,
+        episodes: (episodes: number, series: number, of: number) =>
+          `${plural(episodes, { one: `${episodes} épisode`, other: `${episodes} épisodes` })} de ${plural(series, { one: `${series} série`, other: `${series} séries` })} sur ${of}`,
+        episodesStopped: (episodes: number, series: number) =>
+          `Arrêtée : ${plural(episodes, { one: `${episodes} épisode écrit`, other: `${episodes} épisodes écrits` })} pour ${plural(series, { one: `${series} série`, other: `${series} séries` })} ; les autres gardent les leurs`,
       },
     },
     runs: {
@@ -3672,6 +3758,7 @@ export const fr: Dict = {
         'order.deleted': 'Ordre supprimé',
         'order.frozen': 'Ordre figé comme numérotation de diffusion',
         'order.thawed': 'Ordre dégelé',
+        'mcp.called': 'Lu par MCP',
       },
       season: (n: number) => (n === 0 ? 'Hors-série' : `Saison ${n}`),
     },
@@ -3710,7 +3797,11 @@ export const fr: Dict = {
       animeList: 'Liste d’identifiants anime',
       animeEntries: (n: string) => `${n} entrées`,
       imdbRatings: 'Notes IMDb',
-      imdbWorks: (n: string) => `${n} œuvres notées`,
+      imdbWorks: (n: string) => `${n} notes gardées`,
+      imdbTitles: 'Titres IMDb par pays',
+      imdbTitleRows: (n: string) => `${n} titres gardés`,
+      imdbEpisodes: 'Épisodes IMDb',
+      imdbEpisodeRows: (n: string) => `${n} épisodes gardés`,
       notImported: 'Pas téléchargée',
       malVia: 'MyAnimeList par',
       malOfficial: 'Son API officielle',
@@ -3801,6 +3892,9 @@ export const fr: Dict = {
       'mal.enabled': 'MyAnimeList, pour les animes',
       'mal.fallback': 'Une autre voie vers MyAnimeList, quand l’une ne répond pas',
       'imdb.enabled': 'Les notes d’IMDb',
+      'imdb.akas': 'Les titres d’IMDb par pays, pour Radarr',
+      'imdb.episodes': 'Les épisodes d’IMDb',
+      'imdb.regions': 'Pays dont Radarr reçoit les titres',
       'fankai.enabled': 'Fankai, pour les fan-kai',
       'fankai.wiki': 'Le wiki Fankai, pour l’anime d’origine',
       'keys.maxPerUser': 'Clés par membre',
@@ -3814,6 +3908,7 @@ export const fr: Dict = {
       'api.anilist': 'Relais AniList',
       'api.plex': 'Fournisseur Plex',
       'api.native': 'API native, avec une clé',
+      'mcp.enabled': 'Serveur MCP, pour les agents',
       'refresh.enabled': 'Rafraîchir en arrière-plan',
       'refresh.intervalSeconds': 'Entre deux passages',
       'refresh.batchSize': 'Œuvres par passage',
@@ -3856,9 +3951,13 @@ export const fr: Dict = {
       'mal.enabled': 'La note et les titres de MyAnimeList — par son API officielle si AMS_MAL_CLIENT_ID est défini, par Tenrai sinon, un miroir au schéma de Jikan qui ne demande pas de clé mais peut avoir quelques jours de retard. L’API publique de Jikan a fermé le 1er octobre 2026. Utilise la même liste d’identifiants.',
       'mal.fallback': 'Quand la voie vers MyAnimeList interrogée ne répond pas — pas de connexion, une erreur de sa part, une limite de débit qui dure au-delà de l’attente —, la suivante l’est : Tenrai après l’API officielle, puis le Jikan de AMS_JIKAN_UPSTREAM, le vôtre désormais que le public a fermé. Celle qui n’a pas répondu est écartée cinq minutes ; un 404 est une réponse et n’en fait interroger aucune autre. Désactivé, seule la première est interrogée.',
       'imdb.enabled': 'Les notes d’IMDb, téléchargées chaque jour pour les œuvres présentes ici. C’est aussi la note transmise à Sonarr, comme le fait Skyhook. Pour un usage personnel et non commercial uniquement.',
+      'imdb.akas': 'Les titres d’IMDb par pays, lus chaque semaine — un demi-gigaoctet, dont seules les œuvres présentes ici sont gardées. Radarr reçoit les titres d’un film dans les pays ci-dessous parmi ses titres alternatifs, pour reconnaître une sortie nommée d’après l’un d’eux. Rien d’autre ne les reçoit : pour Sonarr, chacun serait une recherche de plus. Pour un usage personnel et non commercial uniquement.',
+      'imdb.episodes': 'Les épisodes d’IMDb, lus chaque semaine — cinquante mégaoctets, dont seules les séries présentes ici sont gardées. Chaque épisode qu’IMDb numérote comme l’ordre officiel porte son identifiant IMDb dans son document .nfo et sur sa page, avec la note d’IMDb tant que les notes d’IMDb sont activées. Rapproché d’après ses numéros, la page dit que ce rapprochement est moins sûr.',
+      'imdb.regions': 'Des codes de deux lettres — FR, BE, CA — ou ceux d’IMDb : XWW est le monde, en anglais. Réglé pour une clé ou une adresse, c’est celui de ce Radarr. Non réglé, le pays de la langue dans laquelle un Radarr reçoit ses réponses : fr-FR lui donne les titres français.',
       'fankai.enabled': 'Les productions Fan-Kai, depuis le service de métadonnées de Fankai : chaque anime remonté comme une série, ses arcs comme des saisons et ses films comme des épisodes, numérotés comme Fankai nomme ses fichiers — S02E08 est le huitième film en tout, dans le deuxième arc. Trouvées par leur titre, ou par « fankai: » suivi d’un identifiant, et récupérées seulement à la demande. Sonarr reçoit un identifiant propre à ce serveur, TheTVDB n’en ayant aucun pour elles. Sans clé ; Fankai est crédité sur chaque page. Désactivée, ce qui a été récupéré reste tel quel.',
       'fankai.wiki': 'La page de chaque Fan-Kai sur le wiki de la communauté Fankai, fan-kai.fandom.com : les entrées AniList et MyAnimeList dont il est tiré, et le Fan-Kai qui lui fait suite. La fiche d’un Fan-Kai mène alors à son anime, et celle de l’anime — une fois que Sonarr la détient — à ses Fan-Kai. Un appel par récupération d’un Fan-Kai, et seulement tant que Fankai est actif ; avec AniList actif, le titre, l’année et l’affiche de l’anime viennent de là. Sans clé ; son contenu est sous CC BY-SA et crédité sur chaque page.',
       'keys.maxPerUser': 'Combien de clés API un membre ou un éditeur peut créer pour lui-même. À 1, chacun a sa clé et la régénère ; à 0, seuls les administrateurs en créent. Les administrateurs, et les clés du serveur, ne comptent pas.',
+      'mcp.enabled': 'Des agents comme Claude Code lisent le catalogue à /mcp, avec une clé de portée MCP. Ses outils ne font que lire. Éteint, /mcp répond 503. L’adresse et une clé sont sur Clés & réseau.',
       'refresh.enabled': 'Les œuvres stockées sont récupérées à nouveau, régulièrement, à mesure que ce qu’on en sait vieillit.',
       'refresh.intervalSeconds': 'En secondes. Une minute au minimum, une semaine au maximum.',
       'refresh.batchSize': 'Le nombre d’œuvres récupérées à nouveau à chaque réveil du planificateur.',

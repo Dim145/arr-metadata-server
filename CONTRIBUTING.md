@@ -89,6 +89,56 @@ why. Say in the pull request why a new dependency is worth carrying.
 `gitleaks detect --source . --redact` reads the history with
 [`.gitleaks.toml`](.gitleaks.toml).
 
+## The interface's design system
+
+**Tokens.** The colours, the steps of type and the corners are named in
+[`frontend/src/styles.css`](frontend/src/styles.css) (`@theme`), each with what
+it is for. A page asks for what a colour says rather than the colour:
+`text-status-error` for something that failed, `status-ok` for done or on,
+`status-warn` for what wants a look — vermillion stays the way through the
+building, brass a person's hand, slate a machine's answer. The lint refuses a
+bracketed value where a token says it (`text-[0.75rem]` is `text-caption`,
+`rounded-[6px]` is `rounded-md`); `npx eslint --fix` writes the token in.
+
+**States.** Every component in `frontend/src/components/ui/` says what it looks
+like at rest, under the pointer, reached by the keyboard, pressed, disabled,
+waiting, failed and with nothing to show — or whose state it is instead. A new
+component, or a new state, says so too, and gets its row in the styleguide.
+
+**The styleguide** draws every component in each of those states, in both themes
+and both languages, side by side: `/__styleguide` on the Vite dev server
+(`npm run dev`), or in a build made with `npx vite build --mode styleguide`.
+What ships never has it.
+
+**The visual tests** (`frontend/e2e/visual.spec.ts`) hold every gallery of the
+styleguide, and a few pages as a visitor and an administrator first meet them,
+to the pictures in `frontend/e2e/__screenshots__/`. Those pictures are drawn in
+one place only, the official Playwright image of the version
+`frontend/package-lock.json` pins: type is drawn differently by every system's
+fonts, so on anything but Linux the spec stands aside. They want the styleguide
+build, served by the debug binary on a new database (the pages are drawn on an
+empty catalogue, within ten minutes of the start), with its administrator named
+`admin` — CI's `visual` job, in [`.github/workflows/ci.yml`](.github/workflows/ci.yml),
+starts it so. Then, from `frontend/`:
+
+```bash
+docker run --rm --ipc=host --network host -v "$PWD/..:/work" -w /work/frontend \
+  -e AMS_E2E_URL=http://127.0.0.1:8503 -e AMS_E2E_USER=admin -e AMS_E2E_PASSWORD \
+  mcr.microsoft.com/playwright:v1.64.0-noble \
+  ./node_modules/.bin/playwright test --project visual
+```
+
+On a Mac, Docker's host network is not the Mac's: drop `--network host` and reach
+the server at `http://host.docker.internal:8503`. CI runs on x86-64; a Mac with
+Apple silicon runs the arm64 image, whose pictures can differ from CI's by a
+pixel's shade at an edge, which the comparison lets through.
+
+A change that means to change a picture draws it again: run **Draw the pictures
+again** (`visual-update.yml`) from your branch under *Actions*, which opens a pull
+request against it with the pictures that changed — or add
+`--update-snapshots=changed` to the command above. Look at each picture before it
+goes in: from then on it is what the interface is held to.
+
 ## Commits and pull requests
 
 One logical change to a commit: a summary in the imperative, in sentence case and

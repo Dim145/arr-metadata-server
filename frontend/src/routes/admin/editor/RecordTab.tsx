@@ -386,7 +386,7 @@ function Maintenance({
           />
         </div>
         {setEnabled.isError ? (
-          <p role="alert" className="text-xs text-vermillion">
+          <p role="alert" className="text-xs text-status-error">
             {setEnabled.error.message || t.common.actionFailed}
           </p>
         ) : null}
@@ -423,7 +423,7 @@ function Maintenance({
         {deeperLocks > 0 ? <p className="mt-3 text-sm text-brass">{e.unlockAllDeeper(deeperLocks)}</p> : null}
         {givenLocks > 0 ? <p className="mt-3 text-sm text-brass">{e.unlockAllGiven(givenLocks)}</p> : null}
         {unlockAll.isError ? (
-          <p role="alert" className="mt-3 text-sm text-vermillion">
+          <p role="alert" className="mt-3 text-sm text-status-error">
             {unlockAll.error.message || t.common.actionFailed}
           </p>
         ) : null}
@@ -461,7 +461,7 @@ function Maintenance({
       >
         {t.admin.works.deleteBody(work.title)}
         {remove.isError ? (
-          <p role="alert" className="mt-3 text-sm text-vermillion">
+          <p role="alert" className="mt-3 text-sm text-status-error">
             {remove.error.message || t.common.actionFailed}
           </p>
         ) : null}
@@ -579,7 +579,7 @@ function RawSnapshot({ itemId, provider, onClose }: { itemId: string; provider: 
       {raw.isPending ? (
         <Skeleton className="h-64 w-full" />
       ) : raw.isError ? (
-        <p role="alert" className="text-sm text-vermillion">
+        <p role="alert" className="text-sm text-status-error">
           {t.admin.editor.rawFailed}
         </p>
       ) : (
@@ -587,7 +587,7 @@ function RawSnapshot({ itemId, provider, onClose }: { itemId: string; provider: 
           tabIndex={0}
           role="region"
           aria-label={provider ? t.admin.editor.rawOf(providerName(provider)) : undefined}
-          className="max-h-[60dvh] overflow-auto rounded-card border border-rule bg-ink p-3 font-mono text-[0.6875rem] leading-relaxed text-bone-dim"
+          className="max-h-[60dvh] overflow-auto rounded-card border border-rule bg-ink p-3 font-mono text-label leading-relaxed text-bone-dim"
         >
           {text}
         </pre>

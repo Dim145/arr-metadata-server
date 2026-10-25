@@ -136,7 +136,7 @@ export function Editorial() {
             <Skeleton className="h-12 w-full" />
           </div>
         ) : notes.isError ? (
-          <p role="alert" className="flex items-center gap-2 p-5 text-sm text-vermillion">
+          <p role="alert" className="flex items-center gap-2 p-5 text-sm text-status-error">
             <Glyph name="alert" className="size-4" />
             {notes.error.message}
           </p>
@@ -211,7 +211,7 @@ export function Editorial() {
       >
         <p>{removing ? p.removeBody(p.scopes[removing.scope], removing.key, languageName(removing.language, locale) ?? removing.language) : null}</p>
         {remove.error ? (
-          <p role="alert" className="mt-2 text-sm text-vermillion">
+          <p role="alert" className="mt-2 text-sm text-status-error">
             {remove.error.message}
           </p>
         ) : null}
@@ -300,12 +300,12 @@ function NoteForm({ note, onDone, onCancel }: { note?: EditorialNote; onDone: ()
         <span className="ml-2 font-mono tabular-nums">{t.note.count(Array.from(body).length, MAX_NOTE)}</span>
       </p>
       {issue ? (
-        <p role="alert" className="mt-1.5 text-xs text-vermillion">
+        <p role="alert" className="mt-1.5 text-xs text-status-error">
           {issues[issue]}
         </p>
       ) : null}
       {save.error ? (
-        <p role="alert" className="mt-1.5 text-xs text-vermillion">
+        <p role="alert" className="mt-1.5 text-xs text-status-error">
           {save.error.message}
         </p>
       ) : null}

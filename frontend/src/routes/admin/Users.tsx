@@ -220,7 +220,7 @@ export function Users() {
             aria-label={t.admin.people.setRole}
             value={roleChoice}
             onChange={(event) => setRoleChoice(event.target.value)}
-            className="min-h-9 w-auto py-0 text-[0.8125rem]"
+            className="min-h-9 w-auto py-0 text-body-sm"
           >
             <option value="">{t.admin.people.setRole}</option>
             {ROLES.map((r) => (

@@ -19,6 +19,22 @@
  *
  * A page describes its columns once (`Column`), asks `useDataTable` for the
  * table's state, and writes its rows as before, naming each cell's column.
+ *
+ * States, for a row (`Tr`), a head (`Th`) and the frame:
+ * - rest: 45px rows, a rule between them, dim words, figures to the right;
+ *   heads in the label's capitals over a rule.
+ * - hover: a row on the high ink; a head that orders the rows, its words
+ *   bone on the high ink.
+ * - focus: a row of a dense table on the high ink, inside an outline of the
+ *   accent drawn within it; a head's button, the ring.
+ * - active: as hover.
+ * - ordered: the head that orders the rows in bone, its chevron in the
+ *   accent, the order said (`aria-sort`); the others show a faint arrow.
+ * - compact: rows of 36px. As cards, under 600px of the frame's own width:
+ *   each row a card, its values after their columns' names.
+ * - disabled: none — a row is there or not.
+ * - loading, error, empty: the page's — the frame `aria-busy` while its rows
+ *   come, an `EmptyState` in their place when there are none.
  */
 
 import {
@@ -506,7 +522,7 @@ export function Th({
           onClick={() => table.sortBy(column)}
           title={t.admin.table.sortBy(described.label)}
           className={cn(
-            'label -mx-1.5 inline-flex min-h-8 cursor-pointer items-center gap-1 rounded-[6px] px-1.5 transition-colors duration-150',
+            'label -mx-1.5 inline-flex min-h-8 cursor-pointer items-center gap-1 rounded-md px-1.5 transition-colors duration-150',
             'hover:bg-ink-high hover:text-bone',
             sorted ? 'text-bone' : '',
             right && 'flex-row-reverse',
@@ -603,6 +619,11 @@ export function Tr({
  * Which columns a table shows and how tightly it is set, behind one button:
  * a box per column that can be hidden, the two densities, and the way back
  * to the table's own. Kept with the person's account.
+ *
+ * States: its button's — at rest a bright rule and bone words, under the
+ * pointer the high ink, the ring for the keyboard, the high ink while its
+ * panel is open — and one of its own: changed, a brass dot after the words,
+ * since a person set the table their way (`Menu` for the panel).
  */
 export function TableOptions({ table, className }: { table: DataTableState; className?: string }) {
   const { t } = useI18n()
@@ -645,7 +666,7 @@ export function TableOptions({ table, className }: { table: DataTableState; clas
         <ul className="space-y-0.5">
           {optional.map((column) => (
             <li key={column.id}>
-              <label className="flex min-h-11 cursor-pointer items-center gap-3 rounded-[6px] px-2 text-sm text-bone hover:bg-ink-high">
+              <label className="flex min-h-11 cursor-pointer items-center gap-3 rounded-md px-2 text-sm text-bone hover:bg-ink-high">
                 <input
                   type="checkbox"
                   className="size-4 accent-vermillion"

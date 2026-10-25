@@ -8,6 +8,7 @@
 
 pub mod anilist;
 pub mod audit;
+pub mod cursor;
 pub mod extract;
 pub mod merged;
 pub mod native;

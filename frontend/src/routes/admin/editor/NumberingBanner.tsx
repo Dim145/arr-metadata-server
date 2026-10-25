@@ -53,7 +53,7 @@ export function NumberingBanner({
   if (!numbering?.heldByTmdb) {
     // Given back: said once, where the banner was.
     return said ? (
-      <p role="status" className={cn('flex items-center gap-2 text-sm text-moss', className)}>
+      <p role="status" className={cn('flex items-center gap-2 text-sm text-status-ok', className)}>
         <Glyph name="check" className="size-4 shrink-0" />
         {said}
       </p>
@@ -79,7 +79,7 @@ export function NumberingBanner({
           </p>
         ) : null}
         {back.error ? (
-          <p role="alert" className="mt-1 flex items-center gap-1.5 text-xs text-vermillion">
+          <p role="alert" className="mt-1 flex items-center gap-1.5 text-xs text-status-error">
             <Glyph name="alert" className="size-3.5 shrink-0" />
             {back.error.message || t.common.actionFailed}
           </p>

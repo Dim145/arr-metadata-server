@@ -1,5 +1,8 @@
 /**
  * Type set as the page's own: labels, figures and section heads.
+ *
+ * States: none — they are read, and take the states of what holds them. The
+ * steps they are set in are the type scale's (styles.css, `@theme`).
  */
 
 import { type ReactNode } from 'react'

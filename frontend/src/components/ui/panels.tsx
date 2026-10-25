@@ -14,6 +14,11 @@ import { Label } from './typography'
  * is a plain box. That is the rule rather than a preference: an unnamed
  * `<section>` is not a region to assistive technology, so rendering one would
  * only add an element nobody can navigate to and everybody has to step through.
+ *
+ * States: it frames, so it has one — the raised ink, lit from above
+ * (`.plate`), inside a rule, at the panel's corner. Waiting, failing and
+ * having nothing are its contents' to say (`Skeleton`, `EmptyState` with
+ * `size="line"`).
  */
 export function Panel({
   children,
@@ -57,6 +62,16 @@ export function Panel({
  * tall; getting from the fields to the sources meant scrolling past every
  * episode. Anchors, so the address and the back button know where the reader
  * went.
+ *
+ * States:
+ * - rest: the sections' names in dim words, in a row that stays under the
+ *   bars on a faintly see-through ink.
+ * - hover: a name turns bone.
+ * - focus: the ring.
+ * - current: the section in view on the top ink, in bone, and said to be
+ *   where the reader is (`aria-current`); under forced colours, in the
+ *   system's selection colours.
+ * - active: as hover. It has no disabled, waiting, failed or empty state.
  */
 export function OnThisPage({
   entries,
@@ -128,6 +143,7 @@ export function OnThisPage({
   )
 }
 
+/** A panel's head: its name as a label, and what can be done to it at the other end. Static; its action has its own states. */
 export function PanelHead({ title, action }: { title: ReactNode; action?: ReactNode }) {
   return (
     <header className="flex items-center justify-between gap-4 border-b border-rule px-5 py-3">
@@ -137,7 +153,7 @@ export function PanelHead({ title, action }: { title: ReactNode; action?: ReactN
   )
 }
 
-/** A label/value row, the unit a catalogue entry is made of. */
+/** A label/value row, the unit a catalogue entry is made of. Static: the name in the label's capitals, the value in bone, its hint under it. */
 export function Field({
   label,
   children,

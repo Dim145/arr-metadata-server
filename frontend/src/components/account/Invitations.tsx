@@ -186,7 +186,7 @@ export function Invitations() {
               <Skeleton className="h-32 w-full" />
             </div>
           ) : list.isError ? (
-            <p role="alert" className="p-5 text-sm text-vermillion">
+            <p role="alert" className="p-5 text-sm text-status-error">
               {list.error.message}
             </p>
           ) : list.data.invitations.length === 0 ? (
@@ -212,7 +212,7 @@ export function Invitations() {
                   return (
                     <Tr key={invitation.id} row={invitation.id} className={live ? undefined : 'opacity-60'}>
                       <Td column="code">
-                        <span className="font-mono text-[0.8125rem] text-bone">{invitation.codePrefix}-…</span>
+                        <span className="font-mono text-body-sm text-bone">{invitation.codePrefix}-…</span>
                         {invitation.note ? (
                           <span className="block max-w-48 truncate text-xs text-bone-faint" title={invitation.note}>
                             {invitation.note}
@@ -327,7 +327,7 @@ export function Invitations() {
               </FormField>
               <p className="text-xs text-bone-faint">{inv.editorNote}</p>
               {create.isError ? (
-                <p role="alert" className="text-sm text-vermillion">
+                <p role="alert" className="text-sm text-status-error">
                   {create.error.message}
                 </p>
               ) : null}

@@ -1,0 +1,168 @@
+# Draws the pictures the visual tests hold the interface to again
+# (frontend/e2e/__screenshots__) in the one place they are drawn, the official
+# Playwright image, and opens a pull request with the ones that changed, for a
+# person to look at before they are taken. Run by hand from the branch whose
+# change means to change a picture: Actions › Draw the pictures again › Run
+# workflow. The pull request goes to that branch.
+#
+# GitHub only: the pull request is opened with `gh`, and the repository has to
+# let workflows open one (Settings › Actions › General, "Allow GitHub Actions to
+# create and approve pull requests"). A pull request opened with a workflow's
+# token starts no workflow of its own — GitHub's rule against loops — so CI runs
+# on the pictures once they are merged into the branch, or when the pull request
+# is closed and opened again.
+name: Draw the pictures again
+
+on:
+  workflow_dispatch:
+
+# Each job asks for what it needs: the one that builds and runs the code reads,
+# and only the one that opens the pull request, which runs none of it, writes.
+permissions: {}
+
+jobs:
+  # As CI's `visual` job (ci.yml), but writing the pictures that differ instead
+  # of failing on them, and handing them on.
+  draw:
+    name: Draw the pictures
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install the toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install the web UI's dependencies
+        working-directory: frontend
+        run: npm ci --no-audit --no-fund
+
+      - name: Build the web UI with its styleguide
+        working-directory: frontend
+        run: npx vite build --mode styleguide
+
+      - name: Build the server
+        run: cargo build --locked --config 'profile.dev.package."*".opt-level = 2'
+
+      - name: Fetch the Playwright image
+        run: |
+          version="$(node -p "require('./frontend/node_modules/@playwright/test/package.json').version")"
+          echo "PLAYWRIGHT_IMAGE=mcr.microsoft.com/playwright:v${version}-noble" >> "$GITHUB_ENV"
+          docker pull "mcr.microsoft.com/playwright:v${version}-noble"
+
+      - name: Make this run's administrator
+        run: |
+          password="$(openssl rand -hex 24)"
+          echo "::add-mask::${password}"
+          {
+            echo "VISUAL_DIR=${RUNNER_TEMP}/visual"
+            echo "AMS_E2E_USER=admin"
+            echo "AMS_E2E_PASSWORD=${password}"
+          } >> "$GITHUB_ENV"
+
+      - name: Start the server
+        run: |
+          mkdir -p "$VISUAL_DIR/media"
+          env -i PATH="$PATH" HOME="$HOME" \
+            AMS_DATABASE_URL="sqlite://$VISUAL_DIR/visual.db?mode=rwc" \
+            AMS_BIND_ADDRESS=127.0.0.1:8503 \
+            AMS_PUBLIC_URL=http://127.0.0.1:8503 \
+            AMS_PUBLIC_BROWSE=true \
+            AMS_RATE_LIMIT_PER_MINUTE=6000 \
+            AMS_REFRESH_ENABLED=false \
+            AMS_MEDIA_STORAGE=filesystem \
+            AMS_MEDIA_DIR="$VISUAL_DIR/media" \
+            AMS_ADMIN_USERNAME="$AMS_E2E_USER" \
+            AMS_ADMIN_PASSWORD="$AMS_E2E_PASSWORD" \
+            nohup ./target/debug/arr-metadata-server > "$VISUAL_DIR/server.log" 2>&1 &
+
+          for _ in $(seq 1 90); do
+            curl -sf -o /dev/null http://127.0.0.1:8503/health && break
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:8503/ready | grep -q '"database":true'
+
+      # The pictures that differ are drawn again, and the missing ones drawn;
+      # the others are left as they are, byte for byte.
+      - name: Draw the pictures that changed
+        run: |
+          docker run --rm --ipc=host --network host \
+            --user "$(id -u):$(id -g)" -e HOME=/tmp -e CI=true \
+            -e AMS_E2E_URL=http://127.0.0.1:8503 -e AMS_E2E_USER -e AMS_E2E_PASSWORD \
+            -v "$PWD:/work" -w /work/frontend \
+            "$PLAYWRIGHT_IMAGE" \
+            ./node_modules/.bin/playwright test --project visual --update-snapshots=changed --reporter=line
+
+      - name: Show the server's log
+        if: ${{ failure() }}
+        run: |
+          echo "::group::server.log"
+          cat "$VISUAL_DIR/server.log" || true
+          echo "::endgroup::"
+
+      - name: Hand the pictures on
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pictures
+          path: frontend/e2e/__screenshots__
+          if-no-files-found: error
+          retention-days: 7
+
+  propose:
+    name: Open a pull request with them
+    needs: draw
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: pictures
+          path: frontend/e2e/__screenshots__
+
+      - name: Open the pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -z "$(git status --porcelain -- frontend/e2e/__screenshots__)" ]; then
+            echo "::notice title=No picture changed::Every picture is the one ${GITHUB_REF_NAME} holds."
+            exit 0
+          fi
+
+          branch="visual/${GITHUB_REF_NAME}-${GITHUB_RUN_ID}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add -- frontend/e2e/__screenshots__
+          git commit \
+            -m "Draw the pictures of the interface again" \
+            -m "Drawn in the Playwright image by run ${GITHUB_RUN_ID} of ${GITHUB_WORKFLOW}, from ${GITHUB_REF_NAME} at ${GITHUB_SHA}."
+          git push origin "$branch"
+
+          {
+            echo "The pictures the visual tests hold the interface to, drawn again in the Playwright image from \`${GITHUB_REF_NAME}\` at ${GITHUB_SHA}."
+            echo
+            echo "Look at each one before merging: a picture taken here is what CI will hold the interface to from then on."
+            echo
+            echo '```'
+            git diff --stat HEAD~1 -- frontend/e2e/__screenshots__
+            echo '```'
+          } > "$RUNNER_TEMP/body.md"
+          gh pr create --base "$GITHUB_REF_NAME" --head "$branch" \
+            --title "Draw the pictures of the interface again" \
+            --body-file "$RUNNER_TEMP/body.md"

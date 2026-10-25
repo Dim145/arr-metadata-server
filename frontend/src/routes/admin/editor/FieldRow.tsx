@@ -226,13 +226,13 @@ export function FieldRow({
             {draft ? <Changed /> : null}
           </span>
           {hint && !editing && labelled ? (
-            <span className="mt-0.5 block font-mono text-[0.6875rem] text-bone-faint">{hint}</span>
+            <span className="mt-0.5 block font-mono text-label text-bone-faint">{hint}</span>
           ) : null}
         </div>
 
         <div className={cn('col-span-2 min-w-0', wide ? '' : '@xl:col-span-1 @xl:flex-1', editing && !wide ? '@xl:col-span-2' : '')}>
           {unlock.isError ? (
-            <p role="alert" className="mb-2 text-xs text-vermillion">
+            <p role="alert" className="mb-2 text-xs text-status-error">
               {unlock.error.message || t.common.actionFailed}
             </p>
           ) : null}
@@ -281,7 +281,7 @@ export function FieldRow({
           )}
 
           {draft?.error && !editing ? (
-            <p role="alert" className="mt-1.5 flex items-start gap-1.5 text-xs text-vermillion">
+            <p role="alert" className="mt-1.5 flex items-start gap-1.5 text-xs text-status-error">
               <Glyph name="alert" className="mt-px size-3.5 shrink-0" />
               <span>
                 {e.inPlace.failed} {draft.error}
@@ -352,7 +352,7 @@ export function FieldRow({
 function Changed() {
   const { t } = useI18n()
   return (
-    <span className="inline-flex items-center gap-1.5 font-mono text-[0.6875rem] font-medium tracking-[0.1em] text-brass uppercase">
+    <span className="inline-flex items-center gap-1.5 font-mono text-label font-medium tracking-[0.1em] text-brass uppercase">
       <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-brass" />
       <span aria-hidden>{t.admin.editor.inPlace.changed}</span>
       <span className="sr-only">{t.admin.editor.inPlace.changedLong}</span>
@@ -455,7 +455,7 @@ function Shown({ def, value, locked }: { def: FieldDef; value: unknown; locked: 
         </p>
       )
     case 'slug':
-      return <p className={cn('font-mono text-[0.8125rem] break-all', tone)}>{String(value)}</p>
+      return <p className={cn('font-mono text-body-sm break-all', tone)}>{String(value)}</p>
     case 'runtime':
       return <p className={text}>{fmt.runtime(Number(value), locale) ?? String(value)}</p>
     default:

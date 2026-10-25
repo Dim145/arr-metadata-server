@@ -1298,7 +1298,7 @@
         "tags": [
           "Server"
         ],
-        "summary": "What was told to a destination, the newest first: kept thirty days, the\nnewest thousand of it.",
+        "summary": "What was told to a destination, the newest first: kept thirty days, the\nnewest thousand of it. A page is read from `offset`, or from a `cursor`:\nthe `nextCursor` the page before was answered with.",
         "operationId": "webhooks_log",
         "parameters": [
           {
@@ -1328,6 +1328,15 @@
               "type": "integer",
               "format": "int64"
             }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Where the page starts: the `nextCursor` the page before was answered\nwith. It goes on past the last delivery read, so what is told\nmeanwhile neither repeats one nor skips one, as an offset would.\nGiven instead of `offset`, never with one.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -1339,6 +1348,9 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "A cursor is not one the log gave, or was given beside an offset"
           },
           "403": {
             "description": "The caller is not an administrator"
@@ -1698,7 +1710,7 @@
           "Audit"
         ],
         "summary": "Read the audit trail, newest first.",
-        "description": "Administrative: it names who did what, so it requires an administrator or a\nkey carrying the `admin` scope. With `format`, every entry the filters\nmatch is handed over as a file: a CSV for a spreadsheet — a column for\nthe instant, who, the action, the target, the work it names, the note and\nthe address — or a JSON array of the entries.",
+        "description": "Administrative: it names who did what, so it requires an administrator or a\nkey carrying the `admin` scope. A page is read from `offset`, or from a\n`cursor`: the `nextCursor` the page before was answered with, which goes\non past the last entry it held. With `format`, every entry the filters\nmatch is handed over as a file: a CSV for a spreadsheet — a column for\nthe instant, who, the action, the target, the work it names, the note and\nthe address — or a JSON array of the entries.",
         "operationId": "audit_list",
         "parameters": [
           {
@@ -1752,9 +1764,18 @@
             }
           },
           {
+            "name": "cursor",
+            "in": "query",
+            "description": "Where the page starts: the `nextCursor` the page before was answered\nwith, under the same filters. It goes on past the last entry read, so\nwhat is recorded meanwhile neither repeats an entry nor skips one, as\nan offset would. Given instead of `offset`, never with one.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "format",
             "in": "query",
-            "description": "`csv` or `json`: every entry the filters match, newest first, as a\nfile to download — the page asked for, `limit` and `offset`, set\naside.",
+            "description": "`csv` or `json`: every entry the filters match, newest first, as a\nfile to download — the page asked for, `limit`, `offset` and\n`cursor`, set aside.",
             "required": false,
             "schema": {
               "type": "string",
@@ -1781,6 +1802,9 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "A cursor is not one the trail gave, or was given beside an offset"
           },
           "403": {
             "description": "The caller is not an administrator"
@@ -2529,13 +2553,13 @@
           "Server"
         ],
         "summary": "Download one of the lists the further sources work from, now.",
-        "description": "`anime-lists` or `imdb-ratings`. Refused while the source that needs the\nlist is off, and while another import is running. An import that takes\nlonger than a request is given carries on after the answer, 202, and is\nfollowed under Jobs like any other.",
+        "description": "`anime-lists`, `imdb-ratings`, `imdb-akas` (IMDb's titles by region) or\n`imdb-episodes`. Refused while the switch that needs the list is off, and\nwhile another import is running. An import that takes longer than a\nrequest is given carries on after the answer, 202, and is followed under\nJobs like any other: IMDb's titles, half a gigabyte, usually do.",
         "operationId": "meta_import_dataset",
         "parameters": [
           {
             "name": "name",
             "in": "path",
-            "description": "`anime-lists` or `imdb-ratings`",
+            "description": "`anime-lists`, `imdb-ratings`, `imdb-akas` or `imdb-episodes`",
             "required": true,
             "schema": {
               "type": "string"
@@ -2822,10 +2846,18 @@
         ],
         "responses": {
           "200": {
+            "description": "The note, or `null` where nothing is written about it: no note is no failure, and a page asking for one says nothing in a reader's console",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EditorialNote"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/EditorialNote"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 }
               }
             }
@@ -2834,7 +2866,7 @@
             "description": "Not a scope, a key or a language"
           },
           "404": {
-            "description": "Nothing is written about it, or the reader may not see it"
+            "description": "No such work or selection, or the reader may not see it"
           }
         }
       }
@@ -3318,6 +3350,15 @@
               "type": "integer",
               "format": "int64"
             }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Where the page starts: the `nextCursor` the page before was answered\nwith, under the same filters and order. It goes on from the last work\nread, so a work added or removed meanwhile neither repeats one nor\nskips one, as an offset would. Given instead of `offset`, never with\none.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -3792,7 +3833,7 @@
           "Catalogue"
         ],
         "summary": "List and search stored works.",
-        "description": "Searches this server's own store only — it does not reach out to a provider.\nManual overrides are applied, so what you see here is what clients are served.\n\nWith a `term`, the works are ranked by how well each answers it — a title\nthat is the term before one that starts with it, before one with a word\nthat does, before one that holds it — the better known first among those\nthat answer alike; a term misspelt finds what it resembles when its\nletters find little. `sort` still orders a search when it is given.",
+        "description": "Searches this server's own store only — it does not reach out to a provider.\nManual overrides are applied, so what you see here is what clients are served.\n\nWith a `term`, the works are ranked by how well each answers it — a title\nthat is the term before one that starts with it, before one with a word\nthat does, before one that holds it — the better known first among those\nthat answer alike; a term misspelt finds what it resembles when its\nletters find little. `sort` still orders a search when it is given.\n\nA page is read from `offset`, or from a `cursor`: the `nextCursor` the\npage before was answered with, which goes on past the last work it held.",
         "operationId": "items_list",
         "parameters": [
           {
@@ -4055,6 +4096,15 @@
               "type": "integer",
               "format": "int64"
             }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Where the page starts: the `nextCursor` the page before was answered\nwith, under the same filters and order. It goes on from the last work\nread, so a work added or removed meanwhile neither repeats one nor\nskips one, as an offset would. Given instead of `offset`, never with\none.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -4067,6 +4117,9 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "A filter is not one the list takes, or a cursor is not one it gave, or was given beside an offset"
           },
           "401": {
             "description": "No valid credential was presented"
@@ -5039,6 +5092,51 @@
           },
           "404": {
             "description": "No such work or image"
+          }
+        }
+      }
+    },
+    "/api/v1/items/{id}/imdb/episodes": {
+      "get": {
+        "tags": [
+          "Catalogue"
+        ],
+        "summary": "Which of IMDb's episodes each of a work's is, with IMDb's rating of it.",
+        "description": "Matched by the season and the number the episode has in the official\norder, against the ones IMDb gives its own — which IMDb may count\notherwise: the page says the match is the less sure for it. Read from\nIMDb's episodes list (`imdb.episodes`) and its ratings (`imdb.enabled`),\nboth downloaded here, never asked of IMDb as the page is read.",
+        "operationId": "datasets_imdb_episodes",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The work's identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "season",
+            "in": "query",
+            "description": "One season's episodes alone.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImdbEpisodes"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such work, or none this caller may see"
           }
         }
       }
@@ -6452,7 +6550,7 @@
           {
             "name": "kind",
             "in": "query",
-            "description": "A task's name: `refresh.sweep`, `refresh.item`, `refresh.all`,\n`import.anime`, `import.imdb`, `export.nfo`.",
+            "description": "A task's name: `refresh.sweep`, `refresh.item`, `refresh.all`,\n`import.anime`, `import.imdb`, `imdb.akas`, `imdb.episodes`,\n`export.nfo`.",
             "required": false,
             "schema": {
               "type": "string"
@@ -8192,6 +8290,32 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/api/v1/sources/datasets": {
+      "get": {
+        "tags": [
+          "Catalogue"
+        ],
+        "summary": "The lists the further sources work from: whether each is on, when it\nlast landed and how much of it was kept, how its last run went, and\nwhen it is downloaded next. For whoever keeps the catalogue, as the\nsources' rules are; a run's error, which can name hosts, is on the Jobs\npage, for an administrator.",
+        "operationId": "datasets_list",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Dataset"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller may not write"
           }
         }
       }
@@ -10954,6 +11078,13 @@
               "type": "string"
             },
             "description": "Every action name, so a UI can offer them as filters without hard-coding."
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where the next page begins: give it back as `cursor`. Absent after\nthe last page."
           }
         }
       },
@@ -13118,6 +13249,72 @@
           }
         }
       },
+      "Dataset": {
+        "type": "object",
+        "description": "A list downloaded whole, as the Sources page says of it.",
+        "required": [
+          "id",
+          "task",
+          "on",
+          "everySeconds",
+          "imported"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "`imdb-ratings`, `imdb-akas` — IMDb's titles by region —,\n`imdb-episodes` or `anime-lists`."
+          },
+          "task": {
+            "$ref": "#/components/schemas/TaskId",
+            "description": "The task that downloads it, on the Jobs page."
+          },
+          "on": {
+            "type": "boolean",
+            "description": "Whether a switch that needs it is on."
+          },
+          "everySeconds": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Seconds between two downloads, by its own cadence."
+          },
+          "imported": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ListImport",
+                "description": "When it last landed, and how many of its rows were kept; absent\nuntil it has landed once."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lastStatus": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/JobStatus",
+                "description": "How its last run ended, whether it landed or not."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lastRunAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When its last run ended, or began while it runs."
+          },
+          "nextAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the schedule downloads it next, while it is on."
+          }
+        }
+      },
       "Definition": {
         "type": "object",
         "required": [
@@ -14619,7 +14816,9 @@
         "required": [
           "malVia",
           "animeList",
-          "imdbRatings"
+          "imdbRatings",
+          "imdbTitles",
+          "imdbEpisodes"
         ],
         "properties": {
           "malVia": {
@@ -14642,6 +14841,28 @@
               {
                 "$ref": "#/components/schemas/ListImport",
                 "description": "IMDb's ratings; absent until they have been downloaded once."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "imdbTitles": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ListImport",
+                "description": "The titles IMDb gives each work by region; absent until they have\nbeen read once."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "imdbEpisodes": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ListImport",
+                "description": "The episodes IMDb lists of each series; absent until they have been\nread once."
               },
               {
                 "type": "null"
@@ -14940,6 +15161,83 @@
             "type": "string"
           }
         }
+      },
+      "ImdbEpisode": {
+        "type": "object",
+        "description": "One episode of a work, and the one of IMDb's it is matched to.",
+        "required": [
+          "episodeId",
+          "seasonNumber",
+          "episodeNumber",
+          "imdbId",
+          "matchedBy"
+        ],
+        "properties": {
+          "episodeId": {
+            "type": "string",
+            "description": "The episode's id in the catalogue."
+          },
+          "seasonNumber": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "episodeNumber": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "imdbId": {
+            "type": "string",
+            "description": "IMDb's id of the episode: `tt0959621`."
+          },
+          "rating": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "IMDb's rating of it, out of ten, while IMDb's ratings are read\n(`imdb.enabled`) and it has one."
+          },
+          "votes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "How many votes the rating is of."
+          },
+          "matchedBy": {
+            "$ref": "#/components/schemas/ImdbMatch",
+            "description": "How it was matched to IMDb's."
+          }
+        }
+      },
+      "ImdbEpisodes": {
+        "type": "object",
+        "description": "What IMDb's episodes say of a work's.",
+        "required": [
+          "on",
+          "episodes"
+        ],
+        "properties": {
+          "on": {
+            "type": "boolean",
+            "description": "Whether IMDb's episodes are read (`imdb.episodes`): while they are\nnot, the list is empty."
+          },
+          "episodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImdbEpisode"
+            },
+            "description": "Each episode IMDb numbers as the work does, in their order."
+          }
+        }
+      },
+      "ImdbMatch": {
+        "type": "string",
+        "description": "How an episode was matched to one of IMDb's.",
+        "enum": [
+          "numbers"
+        ]
       },
       "ImportLine": {
         "type": "object",
@@ -15701,6 +15999,13 @@
           "total": {
             "type": "integer",
             "format": "int64"
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where the next page begins: give it back as `cursor`. Absent after\nthe last page."
           }
         }
       },
@@ -22497,6 +22802,8 @@
           "refresh.all",
           "import.anime",
           "import.imdb",
+          "imdb.akas",
+          "imdb.episodes",
           "import.batch",
           "import.rules",
           "export.nfo",
@@ -23373,6 +23680,13 @@
             "type": "integer",
             "format": "int64",
             "description": "How many the log holds: thirty days of it, the newest thousand."
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where the next page begins: give it back as `cursor`. Absent after\nthe last page."
           }
         }
       },

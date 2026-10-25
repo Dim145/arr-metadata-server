@@ -18,6 +18,7 @@ import {
   Chip,
   DataTable,
   Dialog,
+  EmptyState,
   Glyph,
   Label,
   Lamp,
@@ -145,7 +146,7 @@ export function Media() {
       {status.isPending ? (
         <Skeleton className="h-40 w-full" />
       ) : status.isError ? (
-        <p role="alert" className="flex items-center gap-2 text-sm text-vermillion">
+        <p role="alert" className="flex items-center gap-2 text-sm text-status-error">
           <Glyph name="alert" className="size-4" />
           {p.loadFailed}
         </p>
@@ -267,7 +268,7 @@ export function Media() {
                   ) : null}
                 </ul>
                 {set.isError ? (
-                  <p role="alert" className="border-t border-rule px-5 py-3 text-sm text-vermillion">
+                  <p role="alert" className="border-t border-rule px-5 py-3 text-sm text-status-error">
                     {set.error instanceof ApiError ? set.error.message : t.common.actionFailed}
                   </p>
                 ) : null}
@@ -343,7 +344,7 @@ export function Media() {
               >
                 {p.resetBody}
                 {reset.isError ? (
-                  <p role="alert" className="mt-3 text-sm text-vermillion">
+                  <p role="alert" className="mt-3 text-sm text-status-error">
                     {reset.error instanceof ApiError ? reset.error.message : t.common.actionFailed}
                   </p>
                 ) : null}
@@ -365,13 +366,13 @@ export function Media() {
                   }
                 />
                 <p className="px-5 pt-3 text-xs leading-relaxed text-bone-faint">{p.troubledLead}</p>
-                <div role="status" className="px-5 text-sm text-moss">
+                <div role="status" className="px-5 text-sm text-status-ok">
                   {retryAll.isSuccess ? p.retried(retryAll.data.retried) : ''}
                 </div>
                 {troubled.isPending ? (
                   <Skeleton className="m-5 h-24" />
                 ) : !troubled.data?.length ? (
-                  <p className="px-5 py-4 text-sm text-bone-faint">{p.none}</p>
+                  <EmptyState size="line" title={p.none} />
                 ) : (
                   <DataTable table={troubledTable} label={p.troubled}>
                     <THead>
@@ -513,11 +514,11 @@ function ByWork() {
       {works.isPending ? (
         <Skeleton className="m-5 h-24" />
       ) : works.isError ? (
-        <p role="alert" className="px-5 py-4 text-sm text-vermillion">
+        <p role="alert" className="px-5 py-4 text-sm text-status-error">
           {w.loadFailed}
         </p>
       ) : rows.length === 0 ? (
-        <p className="px-5 py-4 text-sm text-bone-faint">{w.none}</p>
+        <EmptyState size="line" title={w.none} />
       ) : (
         <>
           <DataTable table={table} label={w.title} onOpen={(id) => void navigate(`/admin/catalogue/${id}`)}>

@@ -175,7 +175,7 @@ export function JournalTab({
       </div>
 
       {revert.isError ? (
-        <p role="alert" className="flex items-center gap-2 border-b border-rule px-5 py-3 text-sm text-vermillion">
+        <p role="alert" className="flex items-center gap-2 border-b border-rule px-5 py-3 text-sm text-status-error">
           <Glyph name="alert" className="size-4 shrink-0" />
           {revert.error instanceof ApiError ? revert.error.message : t.common.actionFailed}
         </p>
@@ -188,7 +188,7 @@ export function JournalTab({
           ))}
         </div>
       ) : journal.isError ? (
-        <p role="alert" className="flex items-center gap-2 px-5 py-6 text-sm text-vermillion">
+        <p role="alert" className="flex items-center gap-2 px-5 py-6 text-sm text-status-error">
           <Glyph name="alert" className="size-4" />
           {j.loadFailed}
         </p>

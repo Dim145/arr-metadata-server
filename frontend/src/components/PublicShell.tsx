@@ -481,7 +481,7 @@ function SearchBox({
           {['/', paletteShortcut()].map((key) => (
             <kbd
               key={key}
-              className="rounded-[4px] border border-rule px-1 font-mono text-caption leading-[1.125rem] text-bone-faint"
+              className="rounded-sm border border-rule px-1 font-mono text-caption leading-[1.125rem] text-bone-faint"
             >
               {key}
             </kbd>
@@ -512,7 +512,7 @@ function SearchBox({
                 index === active ? 'bg-ink-high' : 'hover:bg-ink-high',
               )}
             >
-              <span className="aspect-2/3 w-8 shrink-0 overflow-hidden rounded-[4px] bg-ink-high">
+              <span className="aspect-2/3 w-8 shrink-0 overflow-hidden rounded-sm bg-ink-high">
                 {poster(item) ? <ResultThumb item={item} /> : null}
               </span>
               <span className="min-w-0">

@@ -268,7 +268,7 @@ export function People() {
                 ))}
               </div>
             ) : list.isError ? (
-              <p role="alert" className="flex items-center gap-2 px-4 py-6 text-sm text-vermillion">
+              <p role="alert" className="flex items-center gap-2 px-4 py-6 text-sm text-status-error">
                 <Glyph name="alert" className="size-4" />
                 {list.error instanceof ApiError && list.error.status === 400 ? list.error.message : p.loadFailed}
               </p>
@@ -650,7 +650,7 @@ function Detail({
             ) : null}
           </div>
           {split.isError ? (
-            <p role="alert" className="mt-1 text-xs text-vermillion">
+            <p role="alert" className="mt-1 text-xs text-status-error">
               {split.error.message || t.common.actionFailed}
             </p>
           ) : null}
@@ -873,7 +873,7 @@ export function PersonPicker({
         {asked && found.isSuccess && !found.isPlaceholderData ? (people.length ? p.found(people.length) : p.nobody) : ''}
       </p>
       {!asked ? null : found.isError ? (
-        <p role="alert" className="mt-3 text-xs text-vermillion">
+        <p role="alert" className="mt-3 text-xs text-status-error">
           {found.error.message || t.common.actionFailed}
         </p>
       ) : found.isPending ? (

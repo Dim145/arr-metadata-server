@@ -150,7 +150,7 @@ const SHORTCUTS: Shortcut[] = [
   { keys: ['?'], label: (t) => t.keys.help },
 ]
 
-const KEY = 'inline-flex min-w-7 items-center justify-center rounded-[4px] border border-rule-bright bg-ink px-1.5 py-0.5 font-mono text-xs text-bone'
+const KEY = 'inline-flex min-w-7 items-center justify-center rounded-sm border border-rule-bright bg-ink px-1.5 py-0.5 font-mono text-xs text-bone'
 
 /**
  * The list of the keys, in a dialog: the browser's own, so the focus is held

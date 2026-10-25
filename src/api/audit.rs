@@ -150,9 +150,14 @@ pub struct ListQuery {
     pub limit: Option<i64>,
     #[serde(default, deserialize_with = "crate::api::extract::empty_as_none")]
     pub offset: Option<i64>,
+    /// Where the page starts: the `nextCursor` the page before was answered
+    /// with, under the same filters. It goes on past the last entry read, so
+    /// what is recorded meanwhile neither repeats an entry nor skips one, as
+    /// an offset would. Given instead of `offset`, never with one.
+    pub cursor: Option<String>,
     /// `csv` or `json`: every entry the filters match, newest first, as a
-    /// file to download — the page asked for, `limit` and `offset`, set
-    /// aside.
+    /// file to download — the page asked for, `limit`, `offset` and
+    /// `cursor`, set aside.
     // Inlined: a format is no schema of its own, and a reference to one
     // only a parameter names would lead nowhere.
     #[param(inline)]
@@ -170,12 +175,35 @@ pub struct ListResponse {
     pub total: i64,
     /// Every action name, so a UI can offer them as filters without hard-coding.
     pub actions: Vec<&'static str>,
+    /// Where the next page begins: give it back as `cursor`. Absent after
+    /// the last page.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+}
+
+/// Where the next page of the trail begins: past the entry read last, by
+/// the instant it was recorded and its id, which order the trail.
+#[derive(Debug, Serialize, Deserialize)]
+struct Place {
+    at: String,
+    id: String,
+}
+
+impl Place {
+    fn of(entry: &Entry) -> String {
+        crate::api::cursor::encode(&Place {
+            at: entry.at.clone(),
+            id: entry.id.clone(),
+        })
+    }
 }
 
 /// Read the audit trail, newest first.
 ///
 /// Administrative: it names who did what, so it requires an administrator or a
-/// key carrying the `admin` scope. With `format`, every entry the filters
+/// key carrying the `admin` scope. A page is read from `offset`, or from a
+/// `cursor`: the `nextCursor` the page before was answered with, which goes
+/// on past the last entry it held. With `format`, every entry the filters
 /// match is handed over as a file: a CSV for a spreadsheet — a column for
 /// the instant, who, the action, the target, the work it names, the note and
 /// the address — or a JSON array of the entries.
@@ -188,6 +216,7 @@ pub struct ListResponse {
             (ListResponse = "application/json"),
             (String = "text/csv"),
         )),
+        (status = 400, description = "A cursor is not one the trail gave, or was given beside an offset"),
         (status = 403, description = "The caller is not an administrator"),
     ),
 )]
@@ -200,6 +229,9 @@ async fn list(
         return Err(AppError::Forbidden);
     }
 
+    let cursor = crate::api::cursor::given(query.cursor.as_deref(), query.offset)?
+        .map(crate::api::cursor::decode::<Place>)
+        .transpose()?;
     let filter = repo::audit::Query {
         action: query.action,
         actor: query.actor,
@@ -213,14 +245,42 @@ async fn list(
         return Ok(export(state, filter, format));
     }
 
-    let mut entries = repo::audit::list(&state.db, &filter).await?;
+    let limit = filter.limit.clamp(1, 500);
+    let (mut entries, next_cursor) = match &cursor {
+        // Past the entry read last: one more than the page, to know whether
+        // another follows.
+        Some(after) => {
+            let mut entries = repo::audit::page_after(
+                &state.db,
+                &filter,
+                Some((after.at.as_str(), after.id.as_str())),
+                limit + 1,
+            )
+            .await?;
+            let more = entries.len() as i64 > limit;
+            entries.truncate(limit as usize);
+            let next = more.then(|| entries.last().map(Place::of)).flatten();
+            (entries, next)
+        }
+        None => (repo::audit::list(&state.db, &filter).await?, None),
+    };
+    // As many as the filters match, so the pages end where the entries do.
+    let total = repo::audit::count_matching(&state.db, &filter).await?;
+    // A page read by offset says where the next begins too, so a reader can
+    // go on by cursor from any page.
+    let next_cursor = match cursor {
+        Some(_) => next_cursor,
+        None => (filter.offset.max(0) + (entries.len() as i64) < total)
+            .then(|| entries.last().map(Place::of))
+            .flatten(),
+    };
     name_works(&state, &mut entries).await?;
 
     Ok(Json(ListResponse {
         entries,
-        // As many as the filters match, so the pages end where the entries do.
-        total: repo::audit::count_matching(&state.db, &filter).await?,
+        total,
         actions: Action::ALL.iter().map(|a| a.as_str()).collect(),
+        next_cursor,
     })
     .into_response())
 }
@@ -633,6 +693,94 @@ mod tests {
             file(Identity::Visitor, "format=csv").await,
             Err(AppError::Forbidden)
         ));
+    }
+
+    #[tokio::test]
+    async fn the_trail_pages_by_cursor_past_what_is_recorded_meanwhile() {
+        use axum::body::to_bytes;
+
+        let state = crate::api::native::testing::server().await;
+        let record = |target: &'static str| {
+            let state = state.clone();
+            async move {
+                repo::audit::record(
+                    &state.db,
+                    repo::audit::Record {
+                        actor: Some("admin:alice"),
+                        action: Action::SettingChanged,
+                        target: Some(target),
+                        detail: None,
+                        ip: None,
+                    },
+                )
+                .await
+                .unwrap();
+            }
+        };
+        for target in ["one", "two", "three", "four", "five"] {
+            record(target).await;
+        }
+        let page = |query: String| {
+            let state = state.clone();
+            async move {
+                let response = list(
+                    State(state),
+                    Extension(Identity::Anonymous),
+                    AxumQuery(serde_urlencoded::from_str(&query).unwrap()),
+                )
+                .await?;
+                let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+                Ok::<_, AppError>(serde_json::from_slice::<serde_json::Value>(&body).unwrap())
+            }
+        };
+        let targets = |page: &serde_json::Value| -> Vec<String> {
+            page["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|entry| entry["target"].as_str().unwrap().to_string())
+                .collect()
+        };
+
+        // Newest first, two at a time; the first page read by offset.
+        let first = page("limit=2".into()).await.unwrap();
+        assert_eq!(targets(&first), ["five", "four"]);
+        let cursor = first["nextCursor"].as_str().expect("more").to_string();
+
+        // Recorded while the reader reads: no entry repeats, none is skipped.
+        record("six").await;
+        let second = page(format!("limit=2&cursor={}", urlencoding::encode(&cursor)))
+            .await
+            .unwrap();
+        assert_eq!(targets(&second), ["three", "two"]);
+        assert_eq!(second["total"], 6);
+        let last = page(format!(
+            "limit=2&cursor={}",
+            urlencoding::encode(second["nextCursor"].as_str().expect("more"))
+        ))
+        .await
+        .unwrap();
+        assert_eq!(targets(&last), ["one"]);
+        assert!(last.get("nextCursor").is_none());
+
+        // The filters still narrow it.
+        let narrowed = page(format!(
+            "limit=2&target=one&cursor={}",
+            urlencoding::encode(&cursor)
+        ))
+        .await
+        .unwrap();
+        assert_eq!(targets(&narrowed), ["one"]);
+
+        for refused in [
+            format!("offset=2&cursor={}", urlencoding::encode(&cursor)),
+            "cursor=nonsense".to_string(),
+        ] {
+            assert!(
+                matches!(page(refused.clone()).await, Err(AppError::BadRequest(_))),
+                "{refused}"
+            );
+        }
     }
 
     #[test]

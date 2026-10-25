@@ -564,6 +564,11 @@ export const en = {
       series: 'Series finale',
       midseason: 'Mid-season finale',
     },
+    /** IMDb's figure for the episode, from its lists: matched by the episode's numbers. */
+    imdb: {
+      byNumber: 'by number',
+      byNumberHint: 'Matched to IMDb’s episode of the same season and number, which IMDb may count otherwise.',
+    },
   },
   season: {
     watchTime: (runtime: string) => `${runtime} in all`,
@@ -1862,6 +1867,35 @@ export const en = {
           'A Fan-Kai is described by Fankai alone, with its wiki for what it was cut from: no other source is mixed in, or the recut would be merged with the anime it came from.',
       },
       loadFailed: 'The rules could not be loaded.',
+      datasets: {
+        title: 'Lists downloaded whole',
+        lead: 'Some sources are not asked work by work: their lists are downloaded whole on a schedule, read as they arrive, and only what concerns the works held here is kept. Each is switched on under Settings › Further sources.',
+        names: {
+          'imdb-ratings': 'IMDb ratings',
+          'imdb-akas': 'IMDb titles by region',
+          'imdb-episodes': 'IMDb episodes',
+          'anime-lists': 'Anime identifier list',
+        } as Record<string, string>,
+        brings: {
+          'imdb-ratings': 'IMDb’s rating of every work held — and of every episode, while IMDb’s episodes are read.',
+          'imdb-akas': 'The titles IMDb gives each work in each region. Radarr is given a film’s, in the regions it is set to, beside TMDB’s; nothing else is given them.',
+          'imdb-episodes': 'Which of IMDb’s episodes each episode is, by the season and number IMDb gives them: its IMDb id in its .nfo document, its IMDb rating on its page.',
+          'anime-lists': 'Which AniList and MyAnimeList entries a series or a film is, for anime.',
+        } as Record<string, string>,
+        on: 'On',
+        off: 'Off',
+        never: 'Not downloaded yet',
+        kept: (rows: string, when: string) => `${rows} rows kept, ${when}`,
+        status: {
+          succeeded: (when: string) => `Last run succeeded ${when}`,
+          failed: (when: string) => `Last run failed ${when}`,
+          running: (when: string) => `Running since ${when}`,
+          stopped: (when: string) => `Last run stopped ${when}`,
+        },
+        next: (when: string) => `Next ${when}`,
+        task: (name: string) => `“${name}” on the Jobs page`,
+        loadFailed: 'The lists could not be read.',
+      },
       terms: {
         title: 'Terms of use',
         lead: 'Each source answers under terms of its own. This server keeps a copy of what they answered for the works held here, refreshes it, mirrors no catalogue and trains nothing on it; the rest is theirs to say, and every public page credits the sources that are on.',
@@ -3241,6 +3275,9 @@ export const en = {
       metrics: 'Scrape',
       metricsHint:
         'Scrape alone reads the figures at /api/v1/admin/metrics and nothing else: the key Prometheus keeps in its configuration file.',
+      mcp: 'MCP',
+      mcpHint:
+        'MCP opens the MCP server, /mcp, which an agent such as Claude Code reads the catalogue through. Alone, it opens nothing else: the key an agent keeps in its configuration. Its tools only read.',
       issued: 'Issued keys',
       keyFor: (name: string) => `The key for ${name}`,
       onlyOnce:
@@ -3297,6 +3334,34 @@ export const en = {
         `${served.toLocaleString('en')} answered, ${refused.toLocaleString('en')} refused since the start.`,
     },
 
+    mcp: {
+      title: 'MCP, for agents',
+      lead: 'Agents such as Claude Code and Open WebUI read the catalogue through this server’s MCP server: they search it, read a work and its episodes, the week’s schedule, the curated lists, where a value came from, how the server is doing and what needs a hand. Every call is written in the audit trail.',
+      toggle: 'Answer agents',
+      on: 'Answering',
+      off: 'Switched off',
+      onHint: 'An agent with a key of the MCP scope is answered.',
+      offHint: 'Switched off, /mcp answers 503 to every agent.',
+      address: 'The address to give an agent',
+      claude: 'The line that connects Claude Code',
+      copy: 'Copy',
+      copyCommand: 'Copy the line',
+      copied: 'Copied',
+      copyManual: 'The clipboard is out of reach on this page: the text is selected, copy it yourself.',
+      makeKey: 'Make a key for an agent',
+      keyName: 'Agent',
+      keyHint:
+        'Run it with a key of the MCP scope in place of <key>: make one here, or issue one above with the MCP scope.',
+      keyOnce:
+        'Run this line now: the key in it is shown this once, and only a hash of it is kept. Revoke the key in the list above to shut the agent out.',
+      openWebUi:
+        'In Open WebUI, add the address under External Tools as an MCP server over Streamable HTTP, with the key as its bearer token.',
+      reads:
+        'Its tools only read: none changes the catalogue. An agent reads what an administrator would, so give its key to an agent you trust with that, and to no one else.',
+      names:
+        'An agent calls this server by the host of its public address, by localhost, or by a name in AMS_ALLOWED_HOSTS; under any other name it is refused, and so is a request from another site’s page.',
+    },
+
     tasks: {
       lead: 'What the server does on its own: when each task runs, how it last went, and when it runs next. Any of them can be run now; a run somebody started says whose it was.',
       names: {
@@ -3304,6 +3369,8 @@ export const en = {
         'refresh.all': 'Refresh everything',
         'import.anime': 'Anime identifier list',
         'import.imdb': 'IMDb ratings',
+        'imdb.akas': 'IMDb titles by region',
+        'imdb.episodes': 'IMDb episodes',
         'export.nfo': 'NFO export',
         'media.store': 'Store the media',
         'media.sweep': 'Sweep the media',
@@ -3325,6 +3392,8 @@ export const en = {
         'refresh.all': 'Every work that has an identifier elsewhere, asked of its sources now, one after the other. It can be stopped; what is left is then refreshed by the schedule.',
         'import.anime': 'The list that ties AniList and MyAnimeList to TheTVDB and TMDB, downloaded whole.',
         'import.imdb': 'IMDb’s ratings file, downloaded whole and kept for the works held here.',
+        'imdb.akas': 'IMDb’s titles file — half a gigabyte — read through as it arrives, and the titles of the works held here kept: Radarr is given a film’s titles in the regions it is set to. Weekly, once switched on in the settings. It can be stopped: the works it reached keep their new titles, the others their old ones.',
+        'imdb.episodes': 'IMDb’s episodes file read through, and the episodes of the series held here kept by the season and number IMDb gives them: an episode’s IMDb id and rating, on its page and in its .nfo document. Weekly, once switched on in the settings. It can be stopped.',
         'export.nfo': 'A .nfo document for every work, for a library Plex, Jellyfin or Kodi reads.',
         'media.store': 'Every picture and theme the catalogue points at that is not kept yet, fetched now and kept, a few at a time. It can be stopped; the rest are fetched as they come up.',
         'media.sweep': 'The media nobody points at any more — a work removed, a picture a provider dropped, an upload taken off — forgotten and deleted.',
@@ -3501,6 +3570,25 @@ export const en = {
           `${name}, ${size}${removed ? `; ${plural(removed, { one: '1 archive', other: `${removed} archives` })} past those kept taken away` : ''}`,
         restored: (rows: number, media: number, safety?: string) =>
           `${rows} rows put back${media ? `, ${media} media` : ''}${safety ? `; restoring ${safety} undoes it` : ''}`,
+        // IMDb's lists: the ratings, and the titles and the episodes, read as they arrive.
+        rated: (works: number, of: number, episodes?: number, episodesOf?: number) =>
+          `${works} of ${plural(of, { one: '1 work', other: `${of} works` })} rated${
+            episodes === undefined ? '' : `, ${episodes} of ${plural(episodesOf ?? 0, { one: '1 episode', other: `${episodesOf} episodes` })}`
+          }`,
+        reading: (kind: 'titles' | 'episodes', read: number, kept: number, total?: number) =>
+          `${total === undefined ? `${read} MB read` : `${read} of ${total} MB read`}, ${
+            kind === 'titles'
+              ? plural(kept, { one: '1 title kept', other: `${kept} titles kept` })
+              : plural(kept, { one: '1 episode kept', other: `${kept} episodes kept` })
+          }`,
+        titles: (titles: number, works: number, of: number) =>
+          `${plural(titles, { one: '1 title', other: `${titles} titles` })} for ${works} of ${plural(of, { one: '1 work', other: `${of} works` })}`,
+        titlesStopped: (titles: number, works: number) =>
+          `Stopped: ${plural(titles, { one: '1 title', other: `${titles} titles` })} written for ${plural(works, { one: '1 work', other: `${works} works` })}; the others keep theirs`,
+        episodes: (episodes: number, series: number, of: number) =>
+          `${plural(episodes, { one: '1 episode', other: `${episodes} episodes` })} of ${series} of ${of} series`,
+        episodesStopped: (episodes: number, series: number) =>
+          `Stopped: ${plural(episodes, { one: '1 episode', other: `${episodes} episodes` })} written for ${series} series; the others keep theirs`,
       },
     },
     runs: {
@@ -3668,6 +3756,7 @@ export const en = {
         'order.deleted': 'Order deleted',
         'order.frozen': 'Order frozen as the aired numbering',
         'order.thawed': 'Order thawed',
+        'mcp.called': 'Read through MCP',
       } as Record<string, string>,
       season: (n: number) => (n === 0 ? 'Specials' : `Season ${n}`),
     },
@@ -3707,7 +3796,11 @@ export const en = {
       animeList: 'Anime identifier list',
       animeEntries: (n: string) => `${n} entries`,
       imdbRatings: 'IMDb ratings',
-      imdbWorks: (n: string) => `${n} works rated`,
+      imdbWorks: (n: string) => `${n} ratings kept`,
+      imdbTitles: 'IMDb titles by region',
+      imdbTitleRows: (n: string) => `${n} titles kept`,
+      imdbEpisodes: 'IMDb episodes',
+      imdbEpisodeRows: (n: string) => `${n} episodes kept`,
       notImported: 'Not downloaded',
       malVia: 'MyAnimeList through',
       malOfficial: 'Its own API',
@@ -3804,6 +3897,9 @@ export const en = {
       'mal.enabled': 'MyAnimeList, for anime',
       'mal.fallback': 'Another way into MyAnimeList, when one does not answer',
       'imdb.enabled': 'IMDb’s ratings',
+      'imdb.akas': 'IMDb’s titles by region, for Radarr',
+      'imdb.episodes': 'IMDb’s episodes',
+      'imdb.regions': 'Regions whose titles Radarr is given',
       'fankai.enabled': 'Fankai, for Fan-Kai recuts',
       'fankai.wiki': 'The Fankai wiki, for the original anime',
       'keys.maxPerUser': 'Keys per member',
@@ -3817,6 +3913,7 @@ export const en = {
       'api.anilist': 'AniList relay',
       'api.plex': 'Plex provider',
       'api.native': 'Native API, with a key',
+      'mcp.enabled': 'MCP server, for agents',
       'refresh.enabled': 'Refresh in the background',
       'refresh.intervalSeconds': 'Between sweeps',
       'refresh.batchSize': 'Works per sweep',
@@ -3859,9 +3956,13 @@ export const en = {
       'mal.enabled': 'MyAnimeList’s score and titles — through its own API when AMS_MAL_CLIENT_ID is set, through Tenrai otherwise, a mirror written to Jikan’s schema that needs no key but can be days behind. Jikan’s own public API closed on 1 October 2026. Uses the same identifier list.',
       'mal.fallback': 'When the way into MyAnimeList asked does not answer — no connection, an error of its own, a rate limit that outlasts the wait — the next is asked: Tenrai after the official API, then the Jikan at AMS_JIKAN_UPSTREAM, which is one of your own now that the public one has closed. One that did not answer is passed over for five minutes; a 404 is an answer and asks no other. Off, only the first is asked.',
       'imdb.enabled': 'IMDb’s own ratings, downloaded daily for the works held here. IMDb’s rating is also the one Sonarr is given, as Skyhook does. For personal, non-commercial use only.',
+      'imdb.akas': 'IMDb’s titles by region, read through weekly — half a gigabyte, of which only the works held here are kept. Radarr is given a film’s titles in the regions below among its alternative titles, so that a release named after one is recognised. Nothing else is given them: to Sonarr, each would be one more search. For personal, non-commercial use only.',
+      'imdb.episodes': 'IMDb’s episodes, read through weekly — fifty megabytes, of which only the series held here are kept. Each episode IMDb numbers as the official order does carries IMDb’s id in its .nfo document and on its page, with IMDb’s rating of it while IMDb’s ratings are on. Matched by its numbers, the page says the match is the less sure for it.',
+      'imdb.regions': 'Two-letter codes — FR, BE, CA — or IMDb’s own: XWW is the world, in English. Set for a key or an address, it is that Radarr’s own. Not set, the country of the language a Radarr is answered in: fr-FR gives it the French titles.',
       'fankai.enabled': 'The Fan-Kai productions, from Fankai’s own metadata service: each recut anime as a series, its sagas as seasons and its films as episodes, numbered the way Fankai names its files — S02E08 is the eighth film overall, in the second saga. Found by title, or by ‘fankai:’ followed by an id, and fetched only when asked for. Sonarr is handed an id of this server’s own, TheTVDB having none for them. No key; Fankai is credited on every page. Switched off, what was fetched stays as it is.',
       'fankai.wiki': 'Each Fan-Kai’s page on the Fankai community’s wiki, fan-kai.fandom.com: the AniList and MyAnimeList entries it was cut from, and the Fan-Kai that follows it. A Fan-Kai’s page then leads to its anime, and the anime’s page — once Sonarr holds it — to its Fan-Kai. One call per Fan-Kai fetch, and only while Fankai is on; with AniList on, the anime’s title, year and poster come from there. No key; its content is CC BY-SA and credited on every page.',
       'keys.maxPerUser': 'How many API keys a member or an editor may make for themselves. At 1, each has their own key and regenerates it; at 0, only administrators make keys. Administrators, and the server’s own keys, are not counted.',
+      'mcp.enabled': 'Agents such as Claude Code read the catalogue at /mcp, with a key of the MCP scope. Its tools only read. Off, /mcp answers 503. The address and a key are on Keys & network.',
       'refresh.enabled': 'Stored works are fetched again on a schedule as what is known about them ages.',
       'refresh.intervalSeconds': 'In seconds. A minute at the least, a week at the most.',
       'refresh.batchSize': 'How many works are re-fetched each time the scheduler wakes.',

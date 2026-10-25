@@ -23,7 +23,7 @@ export function RoleChip({ role, className }: { role: AccountRole; className?: s
   return (
     <span
       className={cn(
-        'inline-flex items-center rounded-full border px-2.5 py-1 font-mono text-[0.6875rem] font-medium tracking-[0.12em] uppercase',
+        'inline-flex items-center rounded-full border px-2.5 py-1 font-mono text-label font-medium tracking-[0.12em] uppercase',
         ROLE_TONE[role],
         className,
       )}

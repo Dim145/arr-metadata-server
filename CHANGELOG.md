@@ -418,7 +418,8 @@ may change what the API or the configuration means, and says so here.
   place on the page, with what it will look like beneath the field, or
   from *Administration › Catalogue › Programmer's notes*; each change is
   `editorial.updated` in the audit trail; `/api/v1/editorial` reads and
-  writes them (migration 0043).
+  writes them, a thing nothing is written about answering `null`
+  (migration 0043).
 - Two works side by side, `/compare?a=…&b=…`, from a work's *Compare with
   another work*: their scores source by source, running times, seasons and
   episodes, networks or studios, genres, and the people both credit with
@@ -515,6 +516,57 @@ may change what the API or the configuration means, and says so here.
   (`GET /api/v1/media/works`), a work's media list gives its `totals`, and
   a dashboard tile says what is kept, what it weighs, names the three
   heaviest works and leads to the works whose pictures were given up on.
+- IMDb's titles by region and its episodes, two more of its
+  non-commercial lists, each off until switched on (`imdb.akas`,
+  `imdb.episodes`) and each downloaded weekly by a task of its own —
+  *IMDb titles by region*, *IMDb episodes* — that can be run by hand,
+  given a window or a cron expression, and stopped. Neither list is ever
+  held whole: half a gigabyte and fifty-five megabytes are read as they
+  arrive, a line at a time, and only the works and series held here are
+  kept (migration 0046), written a batch at a time. Radarr is given a
+  film's titles in the regions of the new setting `imdb.regions` — per key
+  and per address too; unset, the country of the language it is answered
+  in — among its alternative titles, each once; Sonarr is given none,
+  since each alias would cost it a search. The data stays out of the
+  search, the feeds, the exports and the relays, as IMDb's terms ask.
+- An episode's IMDb id, matched by its season and number in the official
+  order where IMDb numbers it alike — never a special, nor a number IMDb
+  gives twice, nor a season IMDb counts with fewer episodes than the
+  catalogue but the last: `<uniqueid type="imdb">` in its `.nfo` document,
+  and on its page IMDb's rating of it, marked *by number*, with a link to
+  IMDb. `GET /api/v1/items/{id}/imdb/episodes` gives them; IMDb's daily
+  ratings list keeps the episodes' ratings while the episodes are read.
+- *Lists downloaded whole* on Administration › Sources: what IMDb's three
+  lists and the anime identifier list bring, whether each is on, when it
+  last landed and ran, and when it comes next
+  (`GET /api/v1/sources/datasets`).
+- A styleguide for whoever works on the interface: every component in each
+  of its states — at rest, under the pointer, reached by the keyboard,
+  pressed, disabled, waiting, failed and empty — in both themes and both
+  languages, side by side, at `/__styleguide` in a development build or
+  one made with `vite build --mode styleguide`. What ships never has it.
+- The interface is held to pictures: CI compares every gallery of the
+  styleguide, and a few pages as a visitor and an administrator first meet
+  them, with pictures drawn in the official Playwright image; **Draw the
+  pictures again**, a workflow run by hand, draws them anew and opens a
+  pull request with the ones that changed.
+- Five glyphs: *compare*, now beside a work's *Compare with another work*,
+  *bookmark*, *keyboard*, *filter* and *history*.
+- **The catalogue for agents.** An MCP server at `/mcp`, off until an
+  administrator switches it on (`mcp.enabled`, on **Keys & network**):
+  Claude Code, Open WebUI or any agent that speaks the Model Context
+  Protocol can search the catalogue, read a work and its episodes, the
+  week's schedule, the curated lists, where a value came from, the
+  server's health and what needs a hand — eight tools that only read, each
+  call written in the audit trail as `mcp.called`. It takes a key with the
+  new `mcp` scope, in a header; given that scope alone, a key opens `/mcp`
+  and nothing else. The panel makes one and gives the line that connects
+  Claude Code. See *Connecting Claude Code or Open WebUI* in the API's
+  documentation.
+- **Pages by cursor.** The catalogue's list, the audit trail and a
+  notification destination's log answer with `nextCursor`; given back as
+  `cursor`, the next page begins just after the last row read, whatever
+  was added or removed meanwhile. The offset keeps working.
 
 ### Changed
 
@@ -674,6 +726,20 @@ may change what the API or the configuration means, and says so here.
   administration's other tables: the head stays in view, columns hide, a
   narrow screen gets cards, and the rows are walked with the keyboard —
   Enter opens what a run did, or a work's editor.
+- The IMDb ratings' line under the further sources counts the ratings
+  kept, episodes included, rather than calling them works.
+- The colours that say a state are named for it — done, wants a look,
+  failed — and the interface asks for them by that name wherever it says
+  one. The lint refuses a bracketed size, corner or colour where the theme
+  has a step for it, and writes the step in.
+- The log no longer writes the MCP SDK's own lines below a warning
+  (`rmcp=warn` in the default filter); `AMS_LOG` decides as before.
+- `/.well-known/oauth-protected-resource`,
+  `/.well-known/oauth-authorization-server` and
+  `/.well-known/openid-configuration` answer `404` rather than the
+  interface's page.
+- `ams_http_requests_total` and its kin count `/mcp` under
+  `surface="mcp"`.
 
 ### Removed
 
@@ -716,6 +782,13 @@ may change what the API or the configuration means, and says so here.
   column always keeps a width of its own.
 - Every dialog is named by its title, which a screen reader says as it
   opens: they were announced as a dialog and nothing more.
+- Lists to choose from show their chevron, in each theme's colour, on the
+  field's own ink, with their words centred: the chevron had never been
+  drawn, and the field had lost its fill.
+- A disabled field looks disabled, and a field the page says is wrong
+  wears the error's edge everywhere, not only on the sign-in forms.
+- A plate's shadow carries the accent as it is, not as it was before it
+  was lifted.
 
 ### Security
 
@@ -731,6 +804,11 @@ may change what the API or the configuration means, and says so here.
 - The server's pages may be framed by the server itself, and still by
   nobody else (`frame-ancestors 'self'`, `X-Frame-Options: SAMEORIGIN`),
   for the editor's preview.
+- The MCP SDK is pinned to `rmcp` 3.7, past GHSA-4432-vg92-fqh6 (an
+  unauthenticated memory exhaustion in 3.0–3.5) and the earlier
+  DNS-rebinding and session-leak advisories; `/mcp` answers only under the
+  server's own names, refuses other sites' pages, takes no cookie, and is
+  rate limited like the API.
 
 ## [0.8.3] — 2026-10-18
 

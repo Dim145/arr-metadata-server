@@ -124,6 +124,30 @@ impl Identity {
         }
     }
 
+    /// Whether this identity may call the MCP server, `/mcp`: a key with the
+    /// `mcp` scope, and nothing else — the door takes no session and no
+    /// address, only a key made for it (see `crate::mcp`).
+    pub fn can_use_mcp(&self) -> bool {
+        matches!(self, Self::Client(c) if c.scopes.iter().any(|s| s == crate::mcp::SCOPE))
+    }
+
+    /// Whether this is an agent's key: one given the `mcp` scope and no
+    /// other. It opens `/mcp` and nothing else, as a scraper's opens the
+    /// figures: it sits in an agent's configuration, and what the agent does
+    /// with it goes through tools that only read.
+    pub fn only_mcp(&self) -> bool {
+        match self {
+            Self::Client(c) => {
+                c.scopes.iter().any(|s| s == crate::mcp::SCOPE)
+                    && !c
+                        .scopes
+                        .iter()
+                        .any(|s| matches!(s.as_str(), "read" | "write" | "admin" | "metrics"))
+            }
+            _ => false,
+        }
+    }
+
     /// The API key this is, if it is one. Settings resolve against it.
     pub fn client_id(&self) -> Option<&str> {
         match self {
@@ -258,6 +282,37 @@ mod tests {
         assert!(!Identity::Visitor.can_read_private());
         assert!(!Identity::Network(Some("lan".into())).can_read_private());
         assert!(Identity::Anonymous.can_read_private());
+    }
+
+    #[test]
+    fn an_agents_key_opens_mcp_and_nothing_else() {
+        // What Claude Code is given: MCP, and no say over anything.
+        let agent = key(&["mcp"], None);
+        assert!(agent.can_use_mcp());
+        assert!(agent.only_mcp());
+        assert!(!agent.can_write());
+        assert!(!agent.is_admin());
+        assert!(!agent.can_read_private());
+        assert!(!agent.only_scrapes());
+
+        // Beside another scope, a key does what that scope says too.
+        for both in [&["read", "mcp"][..], &["admin", "mcp"], &["metrics", "mcp"]] {
+            let key = key(both, None);
+            assert!(key.can_use_mcp(), "{both:?}");
+            assert!(!key.only_mcp(), "{both:?}");
+        }
+
+        // Nobody else calls MCP: not the interface's session, nor a key made
+        // for anything else, nor a caller let in by address.
+        assert!(!key(&["read", "write", "admin"], None).can_use_mcp());
+        for other in [
+            Identity::Anonymous,
+            Identity::Visitor,
+            Identity::Network(Some("lan".into())),
+        ] {
+            assert!(!other.can_use_mcp());
+            assert!(!other.only_mcp());
+        }
     }
 
     #[test]

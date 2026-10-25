@@ -577,6 +577,38 @@ pub async fn log(
     Ok((rows.iter().map(delivery).collect::<Result<_, _>>()?, total))
 }
 
+/// A destination's log after a delivery — newest first, past the one made
+/// at `after`'s instant with its id — `limit` at the most, and how many the
+/// whole log holds: what a page read by cursor holds, whatever was told
+/// meanwhile.
+pub async fn log_after(
+    db: &Db,
+    destination_id: &str,
+    after: (&str, &str),
+    limit: i64,
+) -> Result<(Vec<Delivery>, i64)> {
+    let (at, id) = after;
+    let rows = sqlx::query(db.sql(&format!(
+        "SELECT {DELIVERY_COLUMNS} FROM webhook_delivery WHERE destination_id = ?
+            AND (created_at < ? OR (created_at = ? AND id < ?))
+         ORDER BY created_at DESC, id DESC LIMIT ?"
+    )))
+    .bind(destination_id)
+    .bind(at)
+    .bind(at)
+    .bind(id)
+    .bind(limit.clamp(1, 201))
+    .fetch_all(db.pool())
+    .await?;
+    let total =
+        sqlx::query(db.sql("SELECT COUNT(*) AS n FROM webhook_delivery WHERE destination_id = ?"))
+            .bind(destination_id)
+            .fetch_one(db.pool())
+            .await?
+            .big("n")?;
+    Ok((rows.iter().map(delivery).collect::<Result<_, _>>()?, total))
+}
+
 /// One delivery of one destination.
 pub async fn find_delivery(db: &Db, destination_id: &str, id: &str) -> Result<Option<Delivery>> {
     let row = sqlx::query(db.sql(&format!(

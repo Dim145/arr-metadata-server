@@ -259,6 +259,13 @@ export type ListImport = Schema<'ListImport'>
 
 export type FurtherSources = Schema<'FurtherSources'>
 
+/** A list downloaded whole, as the Sources page says of it: on or off, last landed, next due. */
+export type Dataset = Schema<'Dataset'>
+
+/** Which of IMDb's episodes each of a work's is, with IMDb's rating of it. */
+export type ImdbEpisodes = Schema<'ImdbEpisodes'>
+export type ImdbEpisode = Schema<'ImdbEpisode'>
+
 /** Where the data comes from, for the credits: only what is switched on. */
 export type Sources = Schema<'Sources'>
 

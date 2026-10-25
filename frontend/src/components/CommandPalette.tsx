@@ -277,7 +277,7 @@ export function Keys({ keys, className }: { keys: string; className?: string }) 
           {stroke.map((key) => (
             <kbd
               key={key}
-              className="inline-flex min-w-6 items-center justify-center rounded-[4px] border border-rule-bright bg-ink px-1.5 py-0.5 font-mono text-xs text-bone-dim"
+              className="inline-flex min-w-6 items-center justify-center rounded-sm border border-rule-bright bg-ink px-1.5 py-0.5 font-mono text-xs text-bone-dim"
             >
               {key}
             </kbd>
@@ -682,7 +682,7 @@ export function CommandPalette({
           </kbd>
         </div>
         {failure ? (
-          <p role="alert" className="flex items-start gap-2 border-b border-rule px-4 py-2 text-sm text-vermillion">
+          <p role="alert" className="flex items-start gap-2 border-b border-rule px-4 py-2 text-sm text-status-error">
             <Glyph name="alert" className="mt-0.5 size-4 shrink-0" />
             <span>
               {t.palette.failed} {failure}

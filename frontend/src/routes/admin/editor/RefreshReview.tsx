@@ -101,7 +101,7 @@ export function RefreshReview({
           <Skeleton className="h-10 w-4/5" />
         </div>
       ) : preview.isError ? (
-        <p role="alert" className="flex items-start gap-2 text-sm text-vermillion">
+        <p role="alert" className="flex items-start gap-2 text-sm text-status-error">
           <Glyph name="alert" className="mt-0.5 size-4 shrink-0" />
           {preview.error instanceof ApiError ? preview.error.message : r.failed}
         </p>
@@ -138,7 +138,7 @@ export function RefreshReview({
         </>
       )}
       {run.isError ? (
-        <p role="alert" className="mt-3 flex items-start gap-2 text-sm text-vermillion">
+        <p role="alert" className="mt-3 flex items-start gap-2 text-sm text-status-error">
           <Glyph name="alert" className="mt-0.5 size-4 shrink-0" />
           {run.error instanceof ApiError ? run.error.message : t.common.actionFailed}
         </p>

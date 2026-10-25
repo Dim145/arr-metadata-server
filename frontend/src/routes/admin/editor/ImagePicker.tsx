@@ -296,7 +296,7 @@ export function ImagePicker({
                 >
                   <Glyph name={tabGlyph[one]} className="size-3.5" />
                   {tabLabel[one]}
-                  {one === 'own' ? <span className="font-mono text-[0.6875rem] text-bone-faint tabular-nums">{offered.length}</span> : null}
+                  {one === 'own' ? <span className="font-mono text-label text-bone-faint tabular-nums">{offered.length}</span> : null}
                   {selected ? <span aria-hidden className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-vermillion" /> : null}
                 </button>
               )
@@ -319,12 +319,12 @@ export function ImagePicker({
                         aria-pressed={on}
                         onClick={() => setGroup(one)}
                         className={cn(
-                          'inline-flex min-h-9 cursor-pointer items-center gap-1.5 rounded-full border px-3 text-[0.8125rem] transition-colors duration-150',
+                          'inline-flex min-h-9 cursor-pointer items-center gap-1.5 rounded-full border px-3 text-body-sm transition-colors duration-150',
                           on ? 'border-vermillion-deep bg-vermillion/10 text-bone' : 'border-rule-bright text-bone-dim hover:text-bone',
                         )}
                       >
                         {p.groups[one]}
-                        <span className="font-mono text-[0.6875rem] text-bone-faint tabular-nums">{n}</span>
+                        <span className="font-mono text-label text-bone-faint tabular-nums">{n}</span>
                       </button>
                     )
                   })}
@@ -429,7 +429,7 @@ export function ImagePicker({
                     onChange={(event) => takeFile(event.target.files?.[0])}
                   />
                 </div>
-                <p className="mt-3 font-mono text-[0.6875rem] text-bone-faint">{p.formats}</p>
+                <p className="mt-3 font-mono text-label text-bone-faint">{p.formats}</p>
               </div>
             )
           ) : (
@@ -478,7 +478,7 @@ export function ImagePicker({
           )}
 
           {error ? (
-            <p role="alert" className="mt-3 text-xs text-vermillion">
+            <p role="alert" className="mt-3 text-xs text-status-error">
               {error.message || t.common.actionFailed}
             </p>
           ) : null}

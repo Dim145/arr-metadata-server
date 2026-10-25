@@ -401,6 +401,125 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  # The interface as pictures (frontend/e2e/visual.spec.ts): every gallery of
+  # the styleguide, and a few pages as a visitor and an administrator first
+  # meet them, held to the pictures in frontend/e2e/__screenshots__. On a
+  # runner of its own, apart from the end-to-end job, whose accessibility
+  # scan already strains a small runner: a picture taken under load is a
+  # slower one, and a timeout fails a run all the same. It needs no secret —
+  # the pages are drawn on an empty catalogue — so a fork's pull request is
+  # held to the pictures too.
+  #
+  # The pictures are drawn in the official Playwright image of the version
+  # package-lock.json pins, and nowhere else (CONTRIBUTING.md): the browser
+  # and the suite run inside it, against the server this runner builds and
+  # starts, on the runner's own network. A change that means to change a
+  # picture draws them again with visual-update.yml, which opens a pull
+  # request with the ones that moved.
+  visual:
+    name: Visual regression
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install the toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install the web UI's dependencies
+        working-directory: frontend
+        run: npm ci --no-audit --no-fund
+
+      # The styleguide is in a build asked for it alone; what ships leaves it
+      # out. The binary reads frontend/dist from disk, being a debug build.
+      - name: Build the web UI with its styleguide
+        working-directory: frontend
+        run: npx vite build --mode styleguide
+
+      - name: Build the server
+        run: cargo build --locked --config 'profile.dev.package."*".opt-level = 2'
+
+      # The image of the version the suite was installed at, fetched before
+      # the server starts: the dashboard's picture is the one a server shows
+      # in its first ten minutes (visual.spec.ts says why).
+      - name: Fetch the Playwright image
+        run: |
+          version="$(node -p "require('./frontend/node_modules/@playwright/test/package.json').version")"
+          echo "PLAYWRIGHT_IMAGE=mcr.microsoft.com/playwright:v${version}-noble" >> "$GITHUB_ENV"
+          docker pull "mcr.microsoft.com/playwright:v${version}-noble"
+
+      # The administrator's name is in a picture, so it is fixed; its password
+      # is drawn here and kept out of the log.
+      - name: Make this run's administrator
+        run: |
+          password="$(openssl rand -hex 24)"
+          echo "::add-mask::${password}"
+          {
+            echo "VISUAL_DIR=${RUNNER_TEMP}/visual"
+            echo "AMS_E2E_USER=admin"
+            echo "AMS_E2E_PASSWORD=${password}"
+          } >> "$GITHUB_ENV"
+
+      # As the pictures were drawn: a new database, a public site, no provider
+      # key, no refresh, and nothing else from the environment.
+      - name: Start the server
+        run: |
+          mkdir -p "$VISUAL_DIR/media"
+          env -i PATH="$PATH" HOME="$HOME" \
+            AMS_DATABASE_URL="sqlite://$VISUAL_DIR/visual.db?mode=rwc" \
+            AMS_BIND_ADDRESS=127.0.0.1:8503 \
+            AMS_PUBLIC_URL=http://127.0.0.1:8503 \
+            AMS_PUBLIC_BROWSE=true \
+            AMS_RATE_LIMIT_PER_MINUTE=6000 \
+            AMS_REFRESH_ENABLED=false \
+            AMS_MEDIA_STORAGE=filesystem \
+            AMS_MEDIA_DIR="$VISUAL_DIR/media" \
+            AMS_ADMIN_USERNAME="$AMS_E2E_USER" \
+            AMS_ADMIN_PASSWORD="$AMS_E2E_PASSWORD" \
+            nohup ./target/debug/arr-metadata-server > "$VISUAL_DIR/server.log" 2>&1 &
+
+          for _ in $(seq 1 90); do
+            curl -sf -o /dev/null http://127.0.0.1:8503/health && break
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:8503/ready | grep -q '"database":true'
+
+      - name: Compare the pictures
+        run: |
+          docker run --rm --ipc=host --network host \
+            --user "$(id -u):$(id -g)" -e HOME=/tmp -e CI=true \
+            -e AMS_E2E_URL=http://127.0.0.1:8503 -e AMS_E2E_USER -e AMS_E2E_PASSWORD \
+            -v "$PWD:/work" -w /work/frontend \
+            "$PLAYWRIGHT_IMAGE" \
+            ./node_modules/.bin/playwright test --project visual --reporter=line
+
+      - name: Show the server's log
+        if: ${{ failure() }}
+        run: |
+          echo "::group::server.log"
+          cat "$VISUAL_DIR/server.log" || true
+          echo "::endgroup::"
+
+      # Each picture that differs, beside the one it was held to and a
+      # picture of the difference.
+      - name: Keep the differences
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: visual-differences
+          path: frontend/test-results
+          if-no-files-found: ignore
+          retention-days: 7
+
   # `rust-version` in Cargo.toml promises that 1.94 builds this, and nothing
   # else ever tries it: a dependency, or a newer language feature, can break the
   # promise without anyone noticing. The ref of the action is the toolchain it

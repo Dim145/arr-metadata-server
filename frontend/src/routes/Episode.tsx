@@ -5,26 +5,47 @@
  * moment it aired — in the reader's own timezone, since that is when it was on
  * for them, with UTC beside it for anyone comparing against a release log.
  * Everything else a provider said about the episode follows, then the way to
- * the ones either side of it.
+ * the ones either side of it. Where IMDb's episodes are read, IMDb's figure
+ * for it too, and the way to its page there: matched by its numbers, and
+ * said so.
  */
 
+import { useQuery } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router'
 
 import { Elsewhere, ExternalLink, Trail } from '../components/elsewhere'
 import { Placement, finaleLabel } from '../components/episodes'
 import { Artwork, Score, VEILED, Veil, useVeiled } from '../components/media'
 import { Chip, Field, Glyph, Panel, PanelHead, SectionTitle, Skeleton } from '../components/ui'
-import { ApiError } from '../lib/api'
+import { ApiError, api } from '../lib/api'
 import { cn } from '../lib/cn'
 import * as fmt from '../lib/format'
 import { useMe, useTitle, useWork } from '../lib/hooks'
 import { useI18n } from '../lib/i18n'
 import { providerName } from '../lib/labels'
-import { episodeLinks } from '../lib/links'
+import { episodeLinks, type Destination } from '../lib/links'
 import { adjacentEpisodes, airTime, airValue, episodeCode, hasAired, seasonName } from '../lib/media'
 import { airsWhenOn, releaseDay, releasedNotAired } from '../lib/platforms'
-import type { Episode as EpisodeData, MediaItem } from '../lib/types'
+import type { Episode as EpisodeData, ImdbEpisode, ImdbEpisodes, MediaItem } from '../lib/types'
 import { NotFound, Unavailable } from './NotFound'
+
+/**
+ * The one of IMDb's episodes this is, where IMDb's episodes are read: asked
+ * for the episode's season at once, so the next episode of it is in hand.
+ * Nothing for a film, or while the server reads none.
+ */
+function useImdbEpisode(item: MediaItem, episode: EpisodeData): ImdbEpisode | undefined {
+  const season = useQuery({
+    queryKey: ['work', item.id, 'imdb-episodes', episode.seasonNumber],
+    queryFn: () =>
+      api.get<ImdbEpisodes>(
+        `/items/${encodeURIComponent(item.id)}/imdb/episodes?season=${episode.seasonNumber}`,
+      ),
+    enabled: item.kind === 'series',
+    staleTime: 10 * 60_000,
+  })
+  return season.data?.episodes.find((found) => found.episodeId === episode.id)
+}
 
 export function Episode() {
   const { id = '', season = '', episode = '' } = useParams()
@@ -76,7 +97,14 @@ function Card({ item, episode }: { item: MediaItem; episode: EpisodeData }) {
   const day = fmt.weekdayDate(shown, locale)
   const { before, after } = adjacentEpisodes(item, episode)
   const title = episode.title || t.episode.untitled(episode.episodeNumber)
-  const links = episodeLinks(item, episode)
+  const imdb = useImdbEpisode(item, episode)
+  const links: Destination[] = [
+    ...episodeLinks(item, episode),
+    ...(imdb ? [{ source: 'imdb', href: `https://www.imdb.com/title/${imdb.imdbId}/` }] : []),
+  ]
+  // What each link is to, by its own id.
+  const idOf = (source: string) =>
+    source === 'tvdb' ? episode.tvdbId : source === 'imdb' ? imdb?.imdbId : episode.tmdbId
   useTitle(`${code} ${title}`, item.title)
 
   return (
@@ -166,6 +194,22 @@ function Card({ item, episode }: { item: MediaItem; episode: EpisodeData }) {
                 ) : null}
               </div>
             ) : null}
+            {/* IMDb's, named: matched by the episode's numbers, which the
+                slate words under it say — a machine's match, not a fact. */}
+            {imdb?.rating ? (
+              <div data-imdb-rating className="flex items-center gap-3">
+                <Score value={imdb.rating} votes={imdb.votes} source={providerName('imdb')} size="sm" />
+                <div className="leading-tight">
+                  <p aria-hidden className="label">
+                    {providerName('imdb')}
+                  </p>
+                  <p className="mt-1 font-mono text-caption text-bone-faint tabular-nums">
+                    {imdb.votes ? `${t.work.votes(fmt.count(imdb.votes, locale), imdb.votes)} · ` : null}
+                    <span className="text-slate">{t.episode.imdb.byNumber}</span>
+                  </p>
+                </div>
+              </div>
+            ) : null}
             {fmt.runtime(episode.runtime, locale) ? (
               <span className="text-sm text-bone-dim">{fmt.runtime(episode.runtime, locale)}</span>
             ) : null}
@@ -223,8 +267,13 @@ function Card({ item, episode }: { item: MediaItem; episode: EpisodeData }) {
               {links.map((link) => (
                 <Field key={link.source} label={providerName(link.source)}>
                   <ExternalLink href={link.href} className="font-mono text-body-sm tabular-nums">
-                    {link.source === 'tvdb' ? episode.tvdbId : episode.tmdbId}
+                    {idOf(link.source)}
                   </ExternalLink>
+                  {link.source === 'imdb' ? (
+                    <span className="mt-1 block text-caption leading-snug text-bone-faint">
+                      {t.episode.imdb.byNumberHint}
+                    </span>
+                  ) : null}
                 </Field>
               ))}
             </dl>

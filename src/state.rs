@@ -409,6 +409,10 @@ impl AppState {
                 ("mal.enabled", cfg.mal.enabled.to_string()),
                 ("mal.fallback", "true".to_string()),
                 ("imdb.enabled", cfg.imdb.enabled.to_string()),
+                // IMDb's titles and episodes: off until somebody switches
+                // them on, each a weekly download of its own.
+                ("imdb.akas", "false".to_string()),
+                ("imdb.episodes", "false".to_string()),
                 ("fankai.enabled", cfg.fankai.enabled.to_string()),
                 ("fankai.wiki", cfg.fankai_wiki.enabled.to_string()),
                 ("keys.maxPerUser", DEFAULT_KEYS_PER_USER.to_string()),
@@ -443,6 +447,8 @@ impl AppState {
                 ("api.tvdb", "true".to_string()),
                 ("api.anilist", "true".to_string()),
                 ("api.plex", "true".to_string()),
+                // Off: an agent is let in when an administrator says so.
+                (crate::mcp::SETTING, "false".to_string()),
                 // Off: the relays spend the operator's quotas, and with
                 // sign-ups open a member is anybody.
                 ("api.tmdbMembers", "false".to_string()),

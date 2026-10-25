@@ -49,6 +49,17 @@ const LEAVING_MS = 200
  * the account deleted, the choice made — and a frame fading out empty reads
  * as a glitch. Its content is unmounted once it has gone, as before, so a
  * dialog opened again starts afresh.
+ *
+ * States:
+ * - closed: nothing is drawn.
+ * - open: a frame on the overlay surface, a rule round it and between its
+ *   head, body and foot, the page dimmed under the ink at 80%. It rises in
+ *   (180ms), or is simply there for a reader who asked for less motion.
+ * - focus: inside it from the moment it opens — the browser's choice, or a
+ *   field the caller gave `autoFocus` — and back on what opened it after.
+ * - leaving: falling away (150ms), still saying what it said.
+ * - loading, error: the caller's, in its body and its foot — a button that
+ *   waits, an alert line. It has no disabled or empty state.
  */
 export function Dialog({
   open,
@@ -152,6 +163,10 @@ export function Dialog({
  * It waits a beat before it shows (`.wait-in`): an answer that comes back at
  * once never flashes a grey grid, and one that takes its time is marked as
  * coming as soon as the wait is worth marking.
+ *
+ * States: it is itself a loading state — the high ink in the shape of what
+ * is coming, a sweep of light across it (still, for a reader who asked for
+ * less motion), and under forced colours an outline in the system's grey.
  */
 export function Skeleton({ className }: { className?: string }) {
   // A raised surface and a sweep of light, neither of which survives forced
@@ -190,6 +205,9 @@ export function useOnline(): boolean {
 /** Why there is nothing to show: see `EmptyState`. */
 export type EmptyKind = 'empty' | 'filtered' | 'error'
 
+/** How much room saying so takes: see `EmptyState`. */
+export type EmptySize = 'page' | 'line'
+
 const EMPTY_GLYPH: Record<EmptyKind, GlyphName> = {
   empty: 'reel',
   filtered: 'sliders',
@@ -210,29 +228,72 @@ const EMPTY_GLYPH: Record<EmptyKind, GlyphName> = {
  *   since it is not the server's doing and the page comes back by itself
  *   once the connection does (React Query asks again on reconnecting).
  *
- * Its words wrap evenly: a title of two lines reads as one thought.
+ * In two sizes, which are the two ways the interface had of saying it:
+ *
+ * - `page`, where the nothing is the screen's or a grid's — its glyph, its
+ *   words in the display face, centred, with room around them. Its words
+ *   wrap evenly: a title of two lines reads as one thought.
+ * - `line`, where it is one list's among others, inside a panel — one quiet
+ *   sentence at the panel's own padding, as the "nothing here" lines under a
+ *   panel's head were written by hand. A failure keeps its glyph and the
+ *   error's colour.
+ *
+ * States: the kinds above are its states — at rest, in faint bone; failed,
+ * in the error's colour; offline, in faint bone with the struck cloud. The
+ * `action` it holds has its own.
  */
 export function EmptyState({
   title,
   hint,
   action,
   kind = 'empty',
+  size = 'page',
+  className,
 }: {
   title: ReactNode
   hint?: ReactNode
   action?: ReactNode
   kind?: EmptyKind
+  size?: EmptySize
+  /** Its spacing, where the line sits in something without a panel's padding. */
+  className?: string
 }) {
   const { t } = useI18n()
   const online = useOnline()
   const offline = kind === 'error' && !online
+  const failed = kind === 'error' && !offline
+
+  if (size === 'line') {
+    const line = (
+      <p
+        role={kind === 'error' ? 'alert' : undefined}
+        className={cn(
+          'flex flex-wrap items-baseline gap-x-2 gap-y-1 px-5 py-4 text-sm',
+          failed ? 'text-status-error' : 'text-bone-faint',
+          !action && className,
+        )}
+      >
+        {kind === 'error' ? <Glyph name={offline ? 'offline' : 'alert'} className="size-4 shrink-0 self-center" /> : null}
+        <span>{offline ? t.common.offline : title}</span>
+        {offline || hint ? <span className="text-bone-faint">{offline ? t.common.offlineHint : hint}</span> : null}
+      </p>
+    )
+    return action ? (
+      <div className={cn('flex flex-wrap items-center justify-between gap-x-4 pr-5', className)}>
+        {line}
+        {action}
+      </div>
+    ) : (
+      line
+    )
+  }
 
   return (
-    <div role={kind === 'error' ? 'alert' : undefined} className="flex flex-col items-center gap-3 px-6 py-16 text-center">
-      <Glyph
-        name={offline ? 'offline' : EMPTY_GLYPH[kind]}
-        className={cn('size-8', kind === 'error' && !offline ? 'text-status-error' : 'text-bone-faint')}
-      />
+    <div
+      role={kind === 'error' ? 'alert' : undefined}
+      className={cn('flex flex-col items-center gap-3 px-6 py-16 text-center', className)}
+    >
+      <Glyph name={offline ? 'offline' : EMPTY_GLYPH[kind]} className={cn('size-8', failed ? 'text-status-error' : 'text-bone-faint')} />
       <p className="font-display text-lg text-bone [text-wrap-style:balance]">{offline ? t.common.offline : title}</p>
       {offline || hint ? (
         <p className="max-w-sm text-sm text-bone-dim [text-wrap-style:balance]">{offline ? t.common.offlineHint : hint}</p>

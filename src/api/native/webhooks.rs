@@ -706,6 +706,11 @@ pub struct LogQuery {
     pub limit: Option<i64>,
     #[serde(default, deserialize_with = "crate::api::extract::empty_as_none")]
     pub offset: Option<i64>,
+    /// Where the page starts: the `nextCursor` the page before was answered
+    /// with. It goes on past the last delivery read, so what is told
+    /// meanwhile neither repeats one nor skips one, as an offset would.
+    /// Given instead of `offset`, never with one.
+    pub cursor: Option<String>,
 }
 
 /// A page of a destination's log.
@@ -716,16 +721,39 @@ pub struct DeliveriesPage {
     pub deliveries: Vec<DeliveryView>,
     /// How many the log holds: thirty days of it, the newest thousand.
     pub total: i64,
+    /// Where the next page begins: give it back as `cursor`. Absent after
+    /// the last page.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+}
+
+/// Where the next page of a log begins: past the delivery read last, by
+/// when it was made and its id, which order the log.
+#[derive(Debug, Serialize, Deserialize)]
+struct LogPlace {
+    at: String,
+    id: String,
+}
+
+impl LogPlace {
+    fn of(delivery: &Delivery) -> String {
+        crate::api::cursor::encode(&LogPlace {
+            at: delivery.created_at.clone(),
+            id: delivery.id.clone(),
+        })
+    }
 }
 
 /// What was told to a destination, the newest first: kept thirty days, the
-/// newest thousand of it.
+/// newest thousand of it. A page is read from `offset`, or from a `cursor`:
+/// the `nextCursor` the page before was answered with.
 #[utoipa::path(
     get, path = "/admin/notifications/{id}/deliveries", tag = TAG,
     operation_id = "webhooks_log",
     params(("id" = String, Path, description = "The destination's identifier"), LogQuery),
     responses(
         (status = 200, body = DeliveriesPage),
+        (status = 400, description = "A cursor is not one the log gave, or was given beside an offset"),
         (status = 403, description = "The caller is not an administrator"),
         (status = 404, description = "No such destination"),
     ),
@@ -738,16 +766,30 @@ async fn log(
 ) -> AppResult<Json<DeliveriesPage>> {
     identity.require_admin()?;
     found(&state, &id).await?;
-    let (deliveries, total) = repo::webhook::log(
-        &state.db,
-        &id,
-        page.limit.unwrap_or(50),
-        page.offset.unwrap_or(0),
-    )
-    .await?;
+    let cursor = crate::api::cursor::given(page.cursor.as_deref(), page.offset)?
+        .map(crate::api::cursor::decode::<LogPlace>)
+        .transpose()?;
+    let limit = page.limit.unwrap_or(50).clamp(1, 200);
+    let offset = page.offset.unwrap_or(0).max(0);
+
+    let (mut deliveries, total) = match &cursor {
+        // One more than the page, to know whether another follows.
+        Some(after) => {
+            repo::webhook::log_after(&state.db, &id, (&after.at, &after.id), limit + 1).await?
+        }
+        None => repo::webhook::log(&state.db, &id, limit, offset).await?,
+    };
+    let more = match cursor {
+        Some(_) => deliveries.len() as i64 > limit,
+        None => offset + (deliveries.len() as i64) < total,
+    };
+    deliveries.truncate(limit as usize);
+    let next_cursor = more.then(|| deliveries.last().map(LogPlace::of)).flatten();
+
     Ok(Json(DeliveriesPage {
         deliveries: deliveries.into_iter().map(DeliveryView::from).collect(),
         total,
+        next_cursor,
     }))
 }
 
@@ -1237,6 +1279,7 @@ mod tests {
             Query(LogQuery {
                 limit: Some(1),
                 offset: None,
+                cursor: None,
             }),
         )
         .await
@@ -1335,12 +1378,113 @@ mod tests {
                 Path("nothing".into()),
                 Query(LogQuery {
                     limit: None,
-                    offset: None
+                    offset: None,
+                    cursor: None,
                 })
             )
             .await,
             Err(AppError::NotFound)
         ));
+    }
+
+    #[tokio::test]
+    async fn the_log_pages_by_cursor_past_what_is_told_meanwhile() {
+        let state = crate::api::native::testing::server().await;
+        let (_, Json(made)) = create(
+            State(state.clone()),
+            admin(),
+            ip(&state).await,
+            Json(DestinationInput {
+                events: Some(vec!["notification.updated".into()]),
+                ..input("json", "Self", "https://hooks.example.com/in")
+            }),
+        )
+        .await
+        .expect("made");
+        // Each change of it is told to it: one delivery a change.
+        let rename = |name: String| {
+            let state = state.clone();
+            let id = made.id.clone();
+            async move {
+                let Json(_) = change(
+                    State(state.clone()),
+                    admin(),
+                    ip(&state).await,
+                    Path(id),
+                    Json(DestinationInput {
+                        name: Some(name),
+                        ..nothing()
+                    }),
+                )
+                .await
+                .expect("changed");
+            }
+        };
+        for n in 1..=5 {
+            rename(format!("Self, {n}")).await;
+        }
+        let page = |limit: i64, offset: Option<i64>, cursor: Option<String>| {
+            let state = state.clone();
+            let id = made.id.clone();
+            async move {
+                log(
+                    State(state),
+                    admin(),
+                    Path(id),
+                    Query(LogQuery {
+                        limit: Some(limit),
+                        offset,
+                        cursor,
+                    }),
+                )
+                .await
+                .map(|Json(page)| page)
+            }
+        };
+        let named = |page: &DeliveriesPage| -> Vec<String> {
+            page.deliveries
+                .iter()
+                .map(|d| {
+                    d.told
+                        .as_ref()
+                        .and_then(|t| t.target.clone())
+                        .unwrap_or_default()
+                })
+                .collect()
+        };
+
+        let first = page(2, None, None).await.expect("a page");
+        assert_eq!(named(&first), ["Self, 5", "Self, 4"]);
+        let cursor = first.next_cursor.clone().expect("more");
+
+        // Told something more while the reader reads.
+        rename("Self, 6".into()).await;
+        let second = page(2, None, Some(cursor.clone())).await.expect("a page");
+        assert_eq!(named(&second), ["Self, 3", "Self, 2"]);
+        assert_eq!(second.total, 6);
+        let last = page(2, None, second.next_cursor.clone())
+            .await
+            .expect("a page");
+        assert_eq!(named(&last), ["Self, 1"]);
+        assert!(last.next_cursor.is_none());
+
+        // A page read by offset says where the next begins too.
+        let middle = page(2, Some(2), None).await.expect("a page");
+        assert_eq!(named(&middle), ["Self, 4", "Self, 3"]);
+        let after = page(2, None, middle.next_cursor.clone())
+            .await
+            .expect("a page");
+        assert_eq!(named(&after), ["Self, 2", "Self, 1"]);
+
+        for (offset, cursor) in [
+            (Some(2), Some(cursor)),
+            (None, Some("nonsense".to_string())),
+        ] {
+            assert!(matches!(
+                page(2, offset, cursor).await,
+                Err(AppError::BadRequest(_))
+            ));
+        }
     }
 
     #[tokio::test]

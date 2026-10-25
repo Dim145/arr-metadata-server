@@ -83,7 +83,7 @@ export function Elsewhere({
             rel="noreferrer"
             className={cn(
               'inline-flex min-h-11 items-center gap-1.5 rounded-full border border-slate-deep px-3.5',
-              'text-[0.8125rem] font-medium text-slate',
+              'text-body-sm font-medium text-slate',
               'transition-colors duration-150 hover:border-slate hover:bg-slate/10 hover:text-bone',
             )}
           >
@@ -121,7 +121,7 @@ export function Trail({ steps }: { steps: { label: string; to?: string }[] }) {
 
   return (
     <nav aria-label={t.elsewhere.trail}>
-      <ol className="flex min-w-0 items-center gap-x-1.5 overflow-hidden font-mono text-[0.6875rem] tracking-[0.12em] whitespace-nowrap uppercase">
+      <ol className="flex min-w-0 items-center gap-x-1.5 overflow-hidden font-mono text-label tracking-[0.12em] whitespace-nowrap uppercase">
         {steps.map((step, index) => (
           <Fragment key={`${step.label}-${index}`}>
             {index > 0 ? (

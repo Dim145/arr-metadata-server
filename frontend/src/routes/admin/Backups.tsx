@@ -22,6 +22,7 @@ import {
   Chip,
   DataTable,
   Dialog,
+  EmptyState,
   FormField,
   Glyph,
   Input,
@@ -206,7 +207,7 @@ export function Backups() {
         </div>
       ) : !data ? (
         followingUnder ? null : (
-          <p role="alert" className="flex items-center gap-2 text-sm text-vermillion">
+          <p role="alert" className="flex items-center gap-2 text-sm text-status-error">
             <Glyph name="alert" className="size-4" />
             {listing.error instanceof ApiError ? listing.error.message : p.loadFailed}
           </p>
@@ -319,7 +320,7 @@ export function Backups() {
               </li>
             </ul>
             {set.isError ? (
-              <p role="alert" className="border-t border-rule px-5 py-3 text-sm text-vermillion">
+              <p role="alert" className="border-t border-rule px-5 py-3 text-sm text-status-error">
                 {set.error instanceof ApiError ? set.error.message : t.common.actionFailed}
               </p>
             ) : null}
@@ -366,7 +367,7 @@ export function Backups() {
               <LastRestore state={data.restore} />
             ) : null}
             {data.archives.length === 0 ? (
-              <p className="px-5 py-4 text-sm text-bone-faint">{p.none}</p>
+              <EmptyState size="line" title={p.none} />
             ) : (
               <DataTable table={table} label={p.archives}>
                 <THead>
@@ -426,7 +427,7 @@ export function Backups() {
           >
             {deleting ? (deleting.present ? p.deleteBody(deleting.name) : p.forgetBody(deleting.name)) : null}
             {remove.isError ? (
-              <p role="alert" className="mt-3 text-sm text-vermillion">
+              <p role="alert" className="mt-3 text-sm text-status-error">
                 {remove.error instanceof ApiError ? remove.error.message : t.common.actionFailed}
               </p>
             ) : null}
@@ -486,7 +487,7 @@ export function Backups() {
                 </FormField>
               ) : null}
               {restore.isError ? (
-                <p role="alert" className="text-vermillion">
+                <p role="alert" className="text-status-error">
                   {restore.error instanceof ApiError ? restore.error.message : t.common.actionFailed}
                 </p>
               ) : null}
@@ -612,7 +613,7 @@ function Follow({ following, onClose }: { following: Following; onClose: () => v
         <PanelHead title={p.doneTitle} />
         <div className="space-y-3 px-5 py-4 text-sm">
           <p className="flex items-start gap-2 text-bone">
-            <Glyph name="check" className="mt-0.5 size-4 shrink-0 text-moss" />
+            <Glyph name="check" className="mt-0.5 size-4 shrink-0 text-status-ok" />
             {p.signInAgain}
           </p>
           {/* A page of its own: what this one held went with the session. */}
@@ -663,7 +664,7 @@ function Follow({ following, onClose }: { following: Following; onClose: () => v
         {state.state === 'succeeded' && restored ? (
           <>
             <p className="flex items-start gap-2 text-bone">
-              <Glyph name="check" className="mt-0.5 size-4 shrink-0 text-moss" />
+              <Glyph name="check" className="mt-0.5 size-4 shrink-0 text-status-ok" />
               {p.done(fmt.count(restored.rows, locale))}
               {restored.mediaRestored > 0 ? ` ${p.doneMedia(fmt.count(restored.mediaRestored, locale))}` : ''}
             </p>
@@ -676,11 +677,11 @@ function Follow({ following, onClose }: { following: Following; onClose: () => v
           </>
         ) : state.state === 'succeeded' ? (
           <p className="flex items-start gap-2 text-bone">
-            <Glyph name="check" className="mt-0.5 size-4 shrink-0 text-moss" />
+            <Glyph name="check" className="mt-0.5 size-4 shrink-0 text-status-ok" />
             {p.doneTitle}
           </p>
         ) : (
-          <p role="alert" className="flex items-start gap-2 text-vermillion">
+          <p role="alert" className="flex items-start gap-2 text-status-error">
             <Glyph name="alert" className="mt-0.5 size-4 shrink-0" />
             <span>
               {p.failed}

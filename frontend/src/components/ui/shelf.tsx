@@ -8,6 +8,17 @@
  * which has no hover to show them on. The list itself stays the scroller a
  * finger, a wheel and a tabbing keyboard already had; the arrows are a way
  * along it, not the only one.
+ *
+ * States:
+ * - rest: a row that fits has no arrows and no fades; one that goes on fades
+ *   into the page at the edge where it does.
+ * - hover, focus within: the two arrows, round, on a see-through ink; an
+ *   arrow under the pointer brightens its edge, one reached by the keyboard
+ *   wears the ring.
+ * - at an end: the arrow with no way on stays, dimmed, and says so
+ *   (`aria-disabled`).
+ * - a finger: the way there is to go shown without a hover.
+ * - loading, error, empty: none — a page draws no shelf for nothing.
  */
 
 import { useCallback, useEffect, useId, useRef, useState, type KeyboardEventHandler, type ReactNode, type Ref } from 'react'

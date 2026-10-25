@@ -13,7 +13,7 @@ import { useMutation } from '@tanstack/react-query'
 import { useState, type ReactNode } from 'react'
 import { Link } from 'react-router'
 
-import { Button, Chip, Glyph, Label, Panel, PanelHead, Provenance, Spinner } from './ui'
+import { Button, Chip, EmptyState, Glyph, Label, Panel, PanelHead, Provenance, Spinner } from './ui'
 import { ApiError, api } from '../lib/api'
 import { cn } from '../lib/cn'
 import * as fmt from '../lib/format'
@@ -296,7 +296,7 @@ export function SourcesPanel({
 
       {failed ? (
         <div className="px-5 py-4">
-          <p role="alert" className="flex items-start gap-2 text-sm text-vermillion">
+          <p role="alert" className="flex items-start gap-2 text-sm text-status-error">
             <Glyph name="alert" className="mt-0.5 size-4 shrink-0" />
             {s.loadFailed}
           </p>
@@ -311,7 +311,7 @@ export function SourcesPanel({
         </p>
       ) : isManual ? (
         // Entered by hand: no source is asked about it, identifiers or not.
-        <p className="px-5 py-4 text-sm text-bone-faint">{t.admin.editor.handEntered}</p>
+        <EmptyState size="line" title={t.admin.editor.handEntered} />
       ) : (
         <>
           <ul className="divide-y divide-rule">
@@ -369,7 +369,7 @@ export function SourcesPanel({
 
             <div role="status" aria-live="polite">
               {sync.isSuccess ? (
-                <p className="mt-3 flex items-start gap-2 text-sm text-moss">
+                <p className="mt-3 flex items-start gap-2 text-sm text-status-ok">
                   <Glyph name="check" className="mt-0.5 size-4 shrink-0" />
                   <span>
                     {s.done(names(sync.data.answered, locale))}
@@ -383,7 +383,7 @@ export function SourcesPanel({
               ) : null}
             </div>
             {sync.isError ? (
-              <p role="alert" className="mt-3 flex items-start gap-2 text-sm text-vermillion">
+              <p role="alert" className="mt-3 flex items-start gap-2 text-sm text-status-error">
                 <Glyph name="alert" className="mt-0.5 size-4 shrink-0" />
                 {sync.error instanceof ApiError && sync.error.status === 409
                   ? s.changed
@@ -452,7 +452,7 @@ function SourceRow({
         <button
           type="button"
           onClick={onRaw}
-          className="hit mt-1.5 min-h-8 min-w-11 shrink-0 cursor-pointer rounded-card px-2 font-mono text-[0.6875rem] text-slate transition-colors duration-150 hover:bg-ink-high hover:text-bone"
+          className="hit mt-1.5 min-h-8 min-w-11 shrink-0 cursor-pointer rounded-card px-2 font-mono text-label text-slate transition-colors duration-150 hover:bg-ink-high hover:text-bone"
           aria-label={t.admin.editor.rawOf(name)}
         >
           {'{ }'}

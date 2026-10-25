@@ -178,8 +178,8 @@ Each task shows when it runs, how it last went, and when it runs next. Any of th
 by hand — *Run now*, or *Run again* once it has run — and a run somebody started says whose it
 was. *Log* opens what the run under way, or the last one, did: each work it took, and how that
 went. A task that works through many works or files — refreshing everything, storing the media,
-seeding from Sonarr and Radarr, a batch, the import rules — can be cancelled, and stops after
-the work in hand.
+seeding from Sonarr and Radarr, a batch, the import rules, reading IMDb's titles or episodes — can
+be cancelled, and stops after the work in hand.
 
 | Task | Id | What it does |
 |---|---|---|
@@ -187,6 +187,8 @@ the work in hand.
 | Refresh everything | `refresh.all` | Every work that has an identifier elsewhere, one after the other; can be stopped |
 | Anime identifier list | `import.anime` | The list that ties AniList and MyAnimeList to TheTVDB and TMDB, downloaded whole |
 | IMDb ratings | `import.imdb` | IMDb's ratings file, downloaded whole and kept for the works held here |
+| IMDb titles by region | `imdb.akas` | IMDb's titles file read through weekly once switched on, the titles of the works held kept; can be stopped. See [IMDb's titles and episodes](sources.md#imdbs-titles-by-region-and-its-episodes) |
+| IMDb episodes | `imdb.episodes` | IMDb's episodes file read through weekly once switched on, the episodes of the series held kept; can be stopped |
 | Import a batch | `import.batch` | The works of a batch started on the *Import* page, one after the other; see [Importing many works at once](editing.md#importing-many-works-at-once) |
 | Import rules | `import.rules` | What the import rules bring in, each on its own schedule; see [Import rules](exports.md#filled-on-its-own-import-rules) |
 | NFO export | `export.nfo` | A `.nfo` document for every work; see [Exports](exports.md#nfo-documents-and-their-artwork) |

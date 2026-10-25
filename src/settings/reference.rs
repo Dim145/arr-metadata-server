@@ -210,6 +210,30 @@ const GROUPS: &[Group] = &[
                  also the one Sonarr is given, as Skyhook does. For personal, non-commercial use \
                  only.",
             ),
+            set(
+                "imdb.akas",
+                "IMDb's titles by region (`title.akas`), read through weekly — half a gigabyte, \
+                 of which only the works held here are kept — so that Radarr is given a film's \
+                 titles in the regions of `imdb.regions` among its alternative titles. Nothing \
+                 else is given them: to Sonarr, each would be one more search. For personal, \
+                 non-commercial use only.",
+            ),
+            set(
+                "imdb.episodes",
+                "IMDb's episodes (`title.episode`), read through weekly — fifty megabytes, of \
+                 which only the series held here are kept — so that an episode IMDb numbers as \
+                 the official order does carries IMDb's id in its `.nfo` document and on its \
+                 page, with IMDb's rating of it there while `imdb.enabled` is on. Matched by \
+                 its numbers, the page says the match is the less sure for it.",
+            ),
+            set(
+                "imdb.regions",
+                "The regions whose titles Radarr is given while `imdb.akas` is on: two-letter \
+                 codes, `FR, BE, CA`, or IMDb's own — `XWW` is the world, in English. Set for \
+                 a key or an address rule, it is that Radarr's own. Unset, the country of the \
+                 language a Radarr is answered in: `fr-FR` gives it the French titles, and a \
+                 language that names no country the United States'.",
+            ),
             seeded(
                 "fankai.enabled",
                 &["AMS_FANKAI_ENABLED"],
@@ -413,6 +437,14 @@ const GROUPS: &[Group] = &[
                 "The native API, `/api/v1/…`, called with a key. The interface's own session is \
                  never turned away, whatever this says: switching it off cannot lock out the \
                  person who did.",
+            ),
+            set(
+                "mcp.enabled",
+                "The MCP server, `/mcp`, which agents such as Claude Code and Open WebUI call: \
+                 tools that read the catalogue and change nothing. Off, it answers `503` with \
+                 the code `mcp_disabled`. It takes a key with the `mcp` scope, in a header; \
+                 switched on **Keys & network**, and under **Settings › Everything else**. See \
+                 [The API](api.md#connecting-claude-code-or-open-webui).",
             ),
             set(
                 "api.tmdbMembers",

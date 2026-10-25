@@ -135,6 +135,12 @@ pub struct ListQuery {
     pub limit: Option<i64>,
     #[serde(default, deserialize_with = "crate::api::extract::empty_as_none")]
     pub offset: Option<i64>,
+    /// Where the page starts: the `nextCursor` the page before was answered
+    /// with, under the same filters and order. It goes on from the last work
+    /// read, so a work added or removed meanwhile neither repeats one nor
+    /// skips one, as an offset would. Given instead of `offset`, never with
+    /// one.
+    pub cursor: Option<String>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -146,6 +152,104 @@ pub struct ListQuery {
 pub struct ListResponse {
     pub items: Vec<MediaItem>,
     pub total: i64,
+    /// Where the next page begins: give it back as `cursor`. Absent after
+    /// the last page.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+}
+
+/// Where the next page of the list begins, as its cursor holds it: for the
+/// order it was made in alone.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ListCursor {
+    /// The order, as the store takes it, and which way it ran.
+    sort: String,
+    descending: Option<bool>,
+    /// Past this work, in a list in a column's order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    after: Option<repo::item::Place>,
+    /// Or this many works in, in a search ranked by how well each answers
+    /// it: an order worked out anew at each look, where a place is a count.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    read: Option<i64>,
+}
+
+/// Where a page of the list starts.
+enum Start {
+    /// From `offset`, or the first work.
+    Offset,
+    /// Past a work.
+    After(repo::item::Place),
+    /// So many works into a ranked search.
+    Read(i64),
+}
+
+/// Whether a list is a search ranked by how well each work answers it.
+fn ranked(q: &repo::item::Query) -> bool {
+    q.sort == repo::item::Sort::Relevance && q.term.as_deref().is_some_and(|t| !t.trim().is_empty())
+}
+
+/// The order a cursor is written for: the sort, as the store names it.
+fn order_name(q: &repo::item::Query) -> String {
+    format!("{:?}", q.sort)
+}
+
+/// Where a cursor says the page starts, or why it says nothing of this list.
+fn start_at(cursor: Option<&str>, q: &repo::item::Query) -> AppResult<Start> {
+    let Some(cursor) = cursor else {
+        return Ok(Start::Offset);
+    };
+    let place: ListCursor = crate::api::cursor::decode(cursor)?;
+    if place.sort != order_name(q) || place.descending != q.descending {
+        return Err(crate::api::cursor::not_ours());
+    }
+    match (place.after, place.read) {
+        (Some(after), None) if !ranked(q) && repo::item::fits(q, &after) => Ok(Start::After(after)),
+        (None, Some(read)) if ranked(q) && read >= 0 => Ok(Start::Read(read)),
+        _ => Err(crate::api::cursor::not_ours()),
+    }
+}
+
+/// A page of the list, how many works it holds in all, and where the next
+/// page begins: past the last work read, or — for a ranked search — that
+/// many works in.
+async fn page(
+    db: &crate::db::Db,
+    q: &repo::item::Query,
+    start: Start,
+) -> anyhow::Result<(Vec<MediaItem>, i64, Option<String>)> {
+    let cursor = |after: Option<repo::item::Place>, read: Option<i64>| {
+        crate::api::cursor::encode(&ListCursor {
+            sort: order_name(q),
+            descending: q.descending,
+            after,
+            read,
+        })
+    };
+
+    if ranked(q) {
+        let mut q = q.clone();
+        if let Start::Read(read) = start {
+            q.offset = read;
+        }
+        let (items, total) = repo::item::search_counted(db, &q).await?;
+        let read = q.offset.max(0) + items.len() as i64;
+        let next = (!items.is_empty() && read < total).then(|| cursor(None, Some(read)));
+        return Ok((items, total, next));
+    }
+
+    // The term settled once — the works a misspelt one is taken for — so
+    // that the page and its count are of the same works.
+    let mut q = q.clone();
+    repo::item::tolerate(db, &mut q).await?;
+    let after = match start {
+        Start::After(after) => Some(after),
+        Start::Offset | Start::Read(_) => None,
+    };
+    let (items, next) = repo::item::listed_page(db, &q, after.as_ref()).await?;
+    let total = repo::item::count_matching(db, &q).await?;
+    Ok((items, total, next.map(|after| cursor(Some(after), None))))
 }
 
 /// The list's filters as the store takes them, checked.
@@ -351,12 +455,16 @@ fn country_code(raw: Option<&str>, what: &str) -> AppResult<Option<String>> {
 /// that does, before one that holds it — the better known first among those
 /// that answer alike; a term misspelt finds what it resembles when its
 /// letters find little. `sort` still orders a search when it is given.
+///
+/// A page is read from `offset`, or from a `cursor`: the `nextCursor` the
+/// page before was answered with, which goes on past the last work it held.
 #[utoipa::path(
     get, path = "/items", tag = TAG,
     operation_id = "items_list",
     params(ListQuery),
     responses(
         (status = 200, description = "Matching works, newest first", body = ListResponse),
+        (status = 400, description = "A filter is not one the list takes, or a cursor is not one it gave, or was given beside an offset"),
         (status = 401, description = "No valid credential was presented"),
     ),
 )]
@@ -366,20 +474,25 @@ async fn list(
     Query(query): Query<ListQuery>,
 ) -> AppResult<Response> {
     let language = crate::api::extract::language(query.language.as_deref())?;
+    let cursor =
+        crate::api::cursor::given(query.cursor.as_deref(), query.offset)?.map(str::to_string);
     let query_for_count = to_query(&state, &identity, query)?;
+    let start = start_at(cursor.as_deref(), &query_for_count)?;
 
     // The same page asked again — reloaded, paged back to — is answered as
     // it was: under the stamp every write and every settings change moves
     // on, and by reader, since what a visitor may see is not what an editor
-    // may. The filters are part of the key, checked and complete; the
-    // language as it is filed, so `fr` and `fr-FR` are one page.
+    // may. The filters are part of the key, checked and complete, and the
+    // place the page starts; the language as it is filed, so `fr` and
+    // `fr-FR` are one page.
     let cache_key = {
         use sha2::{Digest as _, Sha256};
         let shelf = language.as_deref().map(service::language::normalize);
-        let filters: String = Sha256::digest(format!("{shelf:?}:{query_for_count:?}").as_bytes())
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect();
+        let filters: String =
+            Sha256::digest(format!("{shelf:?}:{query_for_count:?}:{cursor:?}").as_bytes())
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect();
         format!(
             "list:{}:{}:{filters}",
             state.caches.stamp(),
@@ -404,7 +517,7 @@ async fn list(
 
     // The page and the count from one look in the search index: a misspelt
     // term is taken for the same works by both.
-    let (mut items, total) = repo::item::search_counted(&state.db, &query_for_count).await?;
+    let (mut items, total, next_cursor) = page(&state.db, &query_for_count, start).await?;
 
     // Without this the list would show provider values while the detail view
     // showed edited ones, and a lock would look like it had not taken.
@@ -433,7 +546,11 @@ async fn list(
     }
     service::redact_for_reader(&identity, &mut items);
 
-    let response = ListResponse { items, total };
+    let response = ListResponse {
+        items,
+        total,
+        next_cursor,
+    };
     if cacheable && let Ok(encoded) = serde_json::to_string(&response) {
         state.caches.searches.insert(cache_key, encoded).await;
     }
@@ -1959,5 +2076,232 @@ mod tests {
                 "{refused} was let through"
             );
         }
+    }
+
+    /// A page of the list as JSON, as `asked`.
+    async fn page_of(state: &AppState, asked: &str) -> AppResult<Value> {
+        let uri: Uri = format!("/items?{asked}").parse().expect("an address");
+        let Query(query) = Query::<ListQuery>::try_from_uri(&uri).expect("a query");
+        let response = list(State(state.clone()), admin(), Query(query)).await?;
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("a body");
+        Ok(serde_json::from_slice(&body).expect("JSON"))
+    }
+
+    /// The ids of a page, in its order.
+    fn ids(page: &Value) -> Vec<String> {
+        page["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .map(|item| item["id"].as_str().expect("an id").to_string())
+            .collect()
+    }
+
+    /// Every work of a list, read `limit` at a time by cursor from the first
+    /// page on: in order, and how many pages it took.
+    async fn by_cursor(state: &AppState, asked: &str, limit: usize) -> (Vec<String>, usize) {
+        let mut read = Vec::new();
+        let mut cursor: Option<String> = None;
+        let mut pages = 0;
+        loop {
+            let at = cursor
+                .as_deref()
+                .map(|c| format!("&cursor={}", urlencoding::encode(c)))
+                .unwrap_or_default();
+            let page = page_of(state, &format!("limit={limit}&{asked}{at}"))
+                .await
+                .expect("a page");
+            pages += 1;
+            assert!(pages < 50, "{asked}: the pages never end");
+            read.extend(ids(&page));
+            match page["nextCursor"].as_str() {
+                Some(next) => cursor = Some(next.to_string()),
+                None => break,
+            }
+        }
+        (read, pages)
+    }
+
+    #[tokio::test]
+    async fn the_list_pages_by_cursor_in_every_order_as_it_does_by_offset() {
+        let state = crate::api::native::testing::server().await;
+        // Ties and gaps in every column a list is ordered by: two works of
+        // one title, works with no score, no runtime, no date.
+        type Shape = (&'static str, Option<f64>, Option<i32>, Option<&'static str>);
+        let shapes: [Shape; 9] = [
+            ("Alpha", Some(50.0), Some(90), Some("2001-01-01")),
+            ("Bravo", Some(50.0), None, Some("2001-01-01")),
+            ("Bravo", Some(50.0), Some(90), None),
+            ("Charlie", None, Some(120), Some("1999-05-05")),
+            ("Delta", Some(10.5), Some(45), None),
+            ("Echo", None, None, None),
+            ("Foxtrot", Some(99.25), Some(90), Some("2020-02-02")),
+            ("Golf", Some(10.5), Some(200), Some("2020-02-02")),
+            ("Hotel", Some(0.0), Some(1), Some("1950-01-01")),
+        ];
+        for (n, (title, popularity, runtime, released)) in shapes.into_iter().enumerate() {
+            stored(&state, n as i64, title, |w| {
+                w.popularity = popularity;
+                w.runtime = runtime;
+                w.in_cinemas = released.map(str::to_string);
+                // A second work of one title is another kind: the slug, a
+                // title's, is one per kind.
+                if n == 2 {
+                    w.kind = MediaKind::Series;
+                }
+                if title == "Golf" {
+                    w.kind = MediaKind::Series;
+                    w.episodes = (1..=3)
+                        .map(|number| crate::domain::Episode {
+                            id: String::new(),
+                            season_number: 1,
+                            episode_number: number,
+                            absolute_episode_number: None,
+                            aired_after_season_number: None,
+                            aired_before_season_number: None,
+                            aired_before_episode_number: None,
+                            title: format!("Part {number}"),
+                            overview: None,
+                            air_date: Some(format!("2020-02-0{number}")),
+                            air_date_utc: None,
+                            runtime: None,
+                            finale_type: None,
+                            image: None,
+                            tvdb_id: None,
+                            tmdb_id: None,
+                            rating: None,
+                            is_manual: false,
+                        })
+                        .collect();
+                }
+            })
+            .await;
+        }
+
+        for sort in [
+            "popularity",
+            "rating",
+            "release",
+            "title",
+            "added",
+            "refreshed",
+            "runtime",
+            "lastAired",
+            "episodes",
+        ] {
+            for order in ["", "&order=asc", "&order=desc"] {
+                let asked = format!("sort={sort}{order}");
+                let whole = page_of(&state, &format!("limit=100&{asked}"))
+                    .await
+                    .expect("the list");
+                assert!(whole.get("nextCursor").is_none(), "{asked}: {whole}");
+                let (read, pages) = by_cursor(&state, &asked, 2).await;
+                assert_eq!(read, ids(&whole), "{asked}");
+                assert_eq!(pages, 5, "{asked}");
+                // The same, from an offset's page: it says where the next
+                // begins too.
+                let third = page_of(&state, &format!("limit=2&offset=4&{asked}"))
+                    .await
+                    .expect("a page");
+                assert_eq!(ids(&third), read[4..6], "{asked}");
+                let after = third["nextCursor"].as_str().expect("more");
+                let fourth = page_of(
+                    &state,
+                    &format!("limit=2&{asked}&cursor={}", urlencoding::encode(after)),
+                )
+                .await
+                .expect("a page");
+                assert_eq!(ids(&fourth), read[6..8], "{asked}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_cursor_goes_on_past_what_was_added_meanwhile() {
+        let state = crate::api::native::testing::server().await;
+        for (n, title) in ["A", "B", "C", "D", "E"].into_iter().enumerate() {
+            stored(&state, n as i64, title, |w| {
+                w.popularity = Some(100.0 - n as f64)
+            })
+            .await;
+        }
+        let first = page_of(&state, "limit=2").await.expect("a page");
+        let titles = |page: &Value| -> Vec<String> {
+            page["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|item| item["title"].as_str().unwrap().to_string())
+                .collect()
+        };
+        assert_eq!(titles(&first), ["A", "B"]);
+        assert_eq!(first["total"], 5);
+        let cursor = first["nextCursor"].as_str().expect("more").to_string();
+
+        // Two works ahead of the page read, while the reader reads it.
+        stored(&state, 10, "Newer", |w| w.popularity = Some(500.0)).await;
+        stored(&state, 11, "Newest", |w| w.popularity = Some(600.0)).await;
+
+        let next = page_of(
+            &state,
+            &format!("limit=2&cursor={}", urlencoding::encode(&cursor)),
+        )
+        .await
+        .expect("a page");
+        assert_eq!(titles(&next), ["C", "D"]);
+        assert_eq!(next["total"], 7);
+        // An offset would have shown B again, and A.
+        let shifted = page_of(&state, "limit=2&offset=2").await.expect("a page");
+        assert_eq!(titles(&shifted), ["A", "B"]);
+    }
+
+    #[tokio::test]
+    async fn a_cursor_is_for_the_list_and_the_order_it_came_from() {
+        let state = crate::api::native::testing::server().await;
+        for (n, title) in ["Breaking Bad", "Breaking", "The Breaking Point", "Other"]
+            .into_iter()
+            .enumerate()
+        {
+            stored(&state, n as i64, title, |w| w.popularity = Some(n as f64)).await;
+        }
+        let first = page_of(&state, "limit=1&sort=popularity")
+            .await
+            .expect("a page");
+        let cursor = urlencoding::encode(first["nextCursor"].as_str().expect("more")).into_owned();
+
+        for refused in [
+            // Another order, or the same order the other way.
+            format!("sort=title&cursor={cursor}"),
+            format!("sort=popularity&order=asc&cursor={cursor}"),
+            // Beside an offset, or written by hand.
+            format!("sort=popularity&offset=2&cursor={cursor}"),
+            "cursor=nonsense".to_string(),
+            // The order alone, and no place in it.
+            format!(
+                "cursor={}",
+                crate::api::cursor::encode(&json!({"sort": "Popularity"}))
+            ),
+        ] {
+            assert!(
+                matches!(
+                    page_of(&state, &refused).await,
+                    Err(AppError::BadRequest(_))
+                ),
+                "{refused} was let through"
+            );
+        }
+
+        // A search ranked by relevance pages by cursor too: a count in.
+        let (read, pages) = by_cursor(&state, "term=breaking", 1).await;
+        let (whole, total) = in_order(&state, "term=breaking").await.expect("listed");
+        assert_eq!(total, 3);
+        assert_eq!(pages, 3);
+        let titles = page_of(&state, "limit=100&term=breaking")
+            .await
+            .expect("a page");
+        assert_eq!(read, ids(&titles));
+        assert_eq!(whole, ["Breaking", "Breaking Bad", "The Breaking Point"]);
     }
 }

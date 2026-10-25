@@ -104,7 +104,7 @@ export function ListenersPanel({ delay }: { delay: number }) {
         {listeners.isPending ? <Skeleton className="h-24 w-full" /> : null}
 
         {listeners.isError ? (
-          <p role="alert" className="flex items-center gap-2 text-sm text-vermillion">
+          <p role="alert" className="flex items-center gap-2 text-sm text-status-error">
             <Glyph name="alert" className="size-4" />
             {listeners.error.message}
           </p>
@@ -141,7 +141,7 @@ export function ListenersPanel({ delay }: { delay: number }) {
                         {l.due}
                       </Chip>
                     ) : null}
-                    <span className="mt-1 block font-mono text-[0.6875rem] break-all text-bone-faint">
+                    <span className="mt-1 block font-mono text-label break-all text-bone-faint">
                       {l.fingerprint} {clients.certificate.fingerprint}
                     </span>
                   </dd>
@@ -155,7 +155,7 @@ export function ListenersPanel({ delay }: { delay: number }) {
                     <span>
                       {clients.authority.subject.replace(/^CN=/, '')} · {l.validUntil(date(clients.authority.notAfter))}
                     </span>
-                    <span className="mt-1 block font-mono text-[0.6875rem] break-all text-bone-faint">
+                    <span className="mt-1 block font-mono text-label break-all text-bone-faint">
                       {l.fingerprint} {clients.authority.fingerprint}
                     </span>
                     <span className="mt-1 block text-xs leading-relaxed text-bone-faint">{l.authorityHint}</span>
@@ -187,11 +187,11 @@ export function ListenersPanel({ delay }: { delay: number }) {
                 >
                   {clients.renewing ? l.renewing : l.renew}
                 </Button>
-                <span role="status" className="text-xs text-moss">
+                <span role="status" className="text-xs text-status-ok">
                   {renewed ? l.renewed : ''}
                 </span>
                 {renew.isError ? (
-                  <span role="alert" className="text-xs text-vermillion">
+                  <span role="alert" className="text-xs text-status-error">
                     {renew.error.message}
                   </span>
                 ) : null}
@@ -211,7 +211,7 @@ export function ListenersPanel({ delay }: { delay: number }) {
                   tabIndex={0}
                   role="region"
                   aria-label={l.howTitle}
-                  className="overflow-x-auto px-4 py-3 font-mono text-[0.75rem] leading-relaxed text-bone-dim"
+                  className="overflow-x-auto px-4 py-3 font-mono text-caption leading-relaxed text-bone-dim"
                 >
                   {COMPOSE}
                 </pre>

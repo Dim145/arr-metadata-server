@@ -212,7 +212,7 @@ export function ServerSettings({
 
   if (registry.isError || values.isError) {
     return (
-      <p role="alert" className="flex items-center gap-2 text-sm text-vermillion">
+      <p role="alert" className="flex items-center gap-2 text-sm text-status-error">
         <Glyph name="alert" className="size-4" />
         {t.settings.loadFailed}
       </p>
@@ -277,6 +277,8 @@ function SourcesAtWork({ values }: { values: EffectiveSetting[] }) {
   const on = (key: string) => values.find((value) => value.key === key)?.value === 'true'
   const wantsAnime = on('anilist.enabled') || on('mal.enabled')
   const wantsImdb = on('imdb.enabled')
+  const wantsTitles = on('imdb.akas')
+  const wantsEpisodes = on('imdb.episodes')
 
   const summary = useQuery({
     queryKey: ['settings'],
@@ -285,7 +287,10 @@ function SourcesAtWork({ values }: { values: EffectiveSetting[] }) {
     refetchInterval: (query) => {
       const further = query.state.data?.furtherSources
       const waiting =
-        (wantsAnime && !further?.animeList) || (wantsImdb && !further?.imdbRatings)
+        (wantsAnime && !further?.animeList) ||
+        (wantsImdb && !further?.imdbRatings) ||
+        (wantsTitles && !further?.imdbTitles) ||
+        (wantsEpisodes && !further?.imdbEpisodes)
       return waiting ? 5_000 : false
     },
   })
@@ -306,6 +311,18 @@ function SourcesAtWork({ values }: { values: EffectiveSetting[] }) {
           <span className="inline-flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
             <Imported list={further.imdbRatings} rows={t.admin.config.imdbWorks} />
             {wantsImdb ? <ImportNow name="imdb-ratings" /> : null}
+          </span>
+        </Field>
+        <Field label={t.admin.config.imdbTitles}>
+          <span className="inline-flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
+            <Imported list={further.imdbTitles} rows={t.admin.config.imdbTitleRows} />
+            {wantsTitles ? <ImportNow name="imdb-akas" /> : null}
+          </span>
+        </Field>
+        <Field label={t.admin.config.imdbEpisodes}>
+          <span className="inline-flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
+            <Imported list={further.imdbEpisodes} rows={t.admin.config.imdbEpisodeRows} />
+            {wantsEpisodes ? <ImportNow name="imdb-episodes" /> : null}
           </span>
         </Field>
         <Field label={t.admin.config.malVia}>
@@ -337,7 +354,7 @@ function SourcesAtWork({ values }: { values: EffectiveSetting[] }) {
  * Download a list now rather than when the schedule next says — after
  * switching a source on, or to check a list is not stale.
  */
-function ImportNow({ name }: { name: 'anime-lists' | 'imdb-ratings' }) {
+function ImportNow({ name }: { name: 'anime-lists' | 'imdb-ratings' | 'imdb-akas' | 'imdb-episodes' }) {
   const { t } = useI18n()
   const queryClient = useQueryClient()
 
@@ -365,11 +382,11 @@ function ImportNow({ name }: { name: 'anime-lists' | 'imdb-ratings' }) {
       </Button>
       {/* Always there, so what appears in it is read out: a live region
           inserted together with its text often is not. */}
-      <span role="status" className={cn('text-xs', run.data?.summary ? 'text-moss' : 'text-bone-dim')}>
+      <span role="status" className={cn('text-xs', run.data?.summary ? 'text-status-ok' : 'text-bone-dim')}>
         {run.isSuccess ? (run.data.summary ?? t.admin.config.importRunning) : ''}
       </span>
       {run.isError ? (
-        <span role="alert" className="text-xs text-vermillion">
+        <span role="alert" className="text-xs text-status-error">
           {refusal ?? t.admin.config.importFailed}
         </span>
       ) : null}
@@ -386,7 +403,7 @@ function Imported({ list, rows }: { list: ListImport | null; rows: (n: string) =
   }
 
   return (
-    <span className="font-mono text-[0.8125rem] tabular-nums" title={fmt.dateTime(list.importedAt, locale)}>
+    <span className="font-mono text-body-sm tabular-nums" title={fmt.dateTime(list.importedAt, locale)}>
       {rows(fmt.count(list.rows, locale))} · {fmt.relative(list.importedAt, locale)}
     </span>
   )
@@ -442,7 +459,7 @@ function ScopeSettings({ at }: { at: Scope }) {
 
   if (registry.isError || values.isError) {
     return (
-      <p role="alert" className="flex items-center gap-2 text-sm text-vermillion">
+      <p role="alert" className="flex items-center gap-2 text-sm text-status-error">
         <Glyph name="alert" className="size-4" />
         {t.settings.loadFailed}
       </p>
@@ -552,7 +569,7 @@ function SettingRow({
             {name ?? def.key}
           </label>
           {name ? (
-            <p className="mt-0.5 font-mono text-[0.6875rem] text-bone-faint">{def.key}</p>
+            <p className="mt-0.5 font-mono text-label text-bone-faint">{def.key}</p>
           ) : null}
           {hint ? (
             <p className="mt-1.5 max-w-prose text-xs leading-relaxed text-bone-faint">{hint}</p>
@@ -562,7 +579,7 @@ function SettingRow({
         <div className="flex shrink-0 items-center gap-2">
           {save.isPending ? <Spinner className="size-3.5 text-bone-faint" /> : null}
           {save.isSuccess ? (
-            <span className="flex items-center gap-1 text-xs text-moss">
+            <span className="flex items-center gap-1 text-xs text-status-ok">
               <Glyph name="check" className="size-3.5" />
               {t.settings.saved}
             </span>
@@ -633,7 +650,7 @@ function SettingRow({
       ) : null}
 
       {error ? (
-        <p role="alert" className="mt-2 flex items-start gap-1.5 text-xs text-vermillion">
+        <p role="alert" className="mt-2 flex items-start gap-1.5 text-xs text-status-error">
           <Glyph name="alert" className="mt-0.5 size-3.5 shrink-0" />
           {error}
         </p>

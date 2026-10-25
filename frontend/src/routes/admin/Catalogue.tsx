@@ -765,7 +765,7 @@ export function Catalogue() {
       </div>
 
       {rowError ? (
-        <p role="alert" className="mb-3 text-sm text-vermillion">
+        <p role="alert" className="mb-3 text-sm text-status-error">
           {rowError}
         </p>
       ) : null}
@@ -786,7 +786,7 @@ export function Catalogue() {
             ))}
           </div>
         ) : list.isError ? (
-          <p role="alert" className="flex items-center gap-2 px-4 py-6 text-sm text-vermillion">
+          <p role="alert" className="flex items-center gap-2 px-4 py-6 text-sm text-status-error">
             <Glyph name="alert" className="size-4" />
             {list.error instanceof ApiError && list.error.status === 400 ? list.error.message : w.loadFailed}
           </p>
@@ -1383,7 +1383,7 @@ function Row({
       {/* From 1280 px only: on one line, the identifiers took the title's
           room beside the sidebar at 1024 px. They are in the editor. */}
       <Td column="ids">
-        <span className="flex gap-x-3 font-mono text-[0.6875rem] whitespace-nowrap text-bone-faint tabular-nums">
+        <span className="flex gap-x-3 font-mono text-label whitespace-nowrap text-bone-faint tabular-nums">
           {ids.tvdb ? <span>tvdb:{ids.tvdb}</span> : null}
           {ids.tmdb ? <span>tmdb:{ids.tmdb}</span> : null}
           {ids.imdb ? <span>{ids.imdb}</span> : null}
@@ -1713,7 +1713,7 @@ function RowMenu({
 }
 
 const MENU_ITEM =
-  'flex min-h-11 w-full cursor-pointer items-center gap-2.5 rounded-[6px] px-3 text-left text-sm transition-colors duration-150 ' +
+  'flex min-h-11 w-full cursor-pointer items-center gap-2.5 rounded-md px-3 text-left text-sm transition-colors duration-150 ' +
   'disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent'
 
 function MenuButton({
@@ -1998,7 +1998,7 @@ function Reask({
       {rules.isPending ? (
         <Spinner className="size-4" />
       ) : rules.isError ? (
-        <p role="alert" className="text-sm text-vermillion">
+        <p role="alert" className="text-sm text-status-error">
           {t.admin.sourcesPage.loadFailed}
         </p>
       ) : on.length ? (
@@ -2272,7 +2272,7 @@ function Composer({ onDone }: { onDone: () => void }) {
         <p className="text-xs leading-relaxed text-bone-faint sm:col-span-2">{c.note}</p>
 
         {create.isError ? (
-          <p role="alert" className="flex items-center gap-2 text-sm text-vermillion sm:col-span-2">
+          <p role="alert" className="flex items-center gap-2 text-sm text-status-error sm:col-span-2">
             <Glyph name="alert" className="size-4 shrink-0" />
             {create.error.message}
           </p>

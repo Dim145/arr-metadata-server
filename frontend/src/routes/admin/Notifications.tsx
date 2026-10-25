@@ -172,7 +172,7 @@ export function Notifications() {
             ))}
           </div>
         ) : destinations.isError ? (
-          <p role="alert" className="flex items-center gap-2 px-5 py-6 text-sm text-vermillion">
+          <p role="alert" className="flex items-center gap-2 px-5 py-6 text-sm text-status-error">
             <Glyph name="alert" className="size-4" />
             {n.loadFailed}
           </p>
@@ -195,13 +195,13 @@ export function Notifications() {
           </ul>
         )}
         {known.isError ? (
-          <p role="alert" className="flex items-center gap-2 border-t border-rule px-5 py-3 text-xs text-vermillion">
+          <p role="alert" className="flex items-center gap-2 border-t border-rule px-5 py-3 text-xs text-status-error">
             <Glyph name="alert" className="size-3.5" />
             {n.eventsFailed}
           </p>
         ) : null}
         {switching.isError ? (
-          <p role="alert" className="flex items-center gap-2 border-t border-rule px-5 py-3 text-xs text-vermillion">
+          <p role="alert" className="flex items-center gap-2 border-t border-rule px-5 py-3 text-xs text-status-error">
             <Glyph name="alert" className="size-3.5" />
             {switching.error.message}
           </p>
@@ -240,7 +240,7 @@ export function Notifications() {
       >
         {removing ? n.removeBody(removing.name) : null}
         {remove.isError ? (
-          <p role="alert" className="mt-3 text-xs text-vermillion">
+          <p role="alert" className="mt-3 text-xs text-status-error">
             {remove.error.message}
           </p>
         ) : null}
@@ -364,14 +364,14 @@ function DestinationRow({
         {n.testHint}
       </p>
       {/* Always there, so what appears in it is read out. */}
-      <p role="status" className={cn('mt-2 text-xs', outcome?.fine ? 'text-moss' : 'text-vermillion')}>
+      <p role="status" className={cn('mt-2 text-xs', outcome?.fine ? 'text-status-ok' : 'text-status-error')}>
         {outcome ? outcome.text : ''}
         {test.data?.error ? (
           <span className="mt-0.5 block font-mono break-words text-bone-faint">{test.data.error}</span>
         ) : null}
       </p>
       {test.isError ? (
-        <p role="alert" className="mt-1 text-xs text-vermillion">
+        <p role="alert" className="mt-1 text-xs text-status-error">
           {test.error.message}
         </p>
       ) : null}
@@ -599,7 +599,7 @@ function Editor({
                     </Button>
                   </div>
                   {rotate.isError ? (
-                    <p role="alert" className="text-xs text-vermillion">
+                    <p role="alert" className="text-xs text-status-error">
                       {rotate.error.message}
                     </p>
                   ) : null}
@@ -642,7 +642,7 @@ function Editor({
         <EventPicker value={events} known={known} onChange={setEvents} disabled={save.isPending} />
 
         {message ? (
-          <p role="alert" className="flex items-start gap-1.5 text-xs text-vermillion">
+          <p role="alert" className="flex items-start gap-1.5 text-xs text-status-error">
             <Glyph name="alert" className="mt-0.5 size-3.5 shrink-0" />
             {message}
           </p>
@@ -708,7 +708,7 @@ function IssuedSecret({
           <Button onClick={onDismiss}>{s.dismiss}</Button>
         </div>
         {copied === 'failed' ? (
-          <p role="alert" className="mt-2 text-xs text-vermillion">
+          <p role="alert" className="mt-2 text-xs text-status-error">
             {s.copyFailed}
           </p>
         ) : null}
@@ -796,7 +796,7 @@ function DeliveryLog({ destination, onClose }: { destination: WebhookDestination
           ))}
         </div>
       ) : log.isError ? (
-        <p role="alert" className="flex items-center gap-2 px-5 py-6 text-sm text-vermillion">
+        <p role="alert" className="flex items-center gap-2 px-5 py-6 text-sm text-status-error">
           <Glyph name="alert" className="size-4" />
           {l.loadFailed}
         </p>
@@ -829,7 +829,7 @@ function DeliveryLog({ destination, onClose }: { destination: WebhookDestination
       )}
 
       {replay.isError ? (
-        <p role="alert" className="flex items-center gap-2 border-t border-rule px-5 py-3 text-xs text-vermillion">
+        <p role="alert" className="flex items-center gap-2 border-t border-rule px-5 py-3 text-xs text-status-error">
           <Glyph name="alert" className="size-3.5" />
           {replay.error instanceof ApiError ? replay.error.message : l.replayFailed}
         </p>
@@ -895,11 +895,11 @@ function DeliveryRow({
         >
           {fmt.relative(delivery.createdAt, locale)}
         </span>
-        {delivery.replayOf ? <span className="block text-[0.6875rem] text-bone-faint">{l.replayed}</span> : null}
+        {delivery.replayOf ? <span className="block text-label text-bone-faint">{l.replayed}</span> : null}
       </Td>
       <Td column="event" className="w-full max-w-0">
         <span className="block truncate text-sm text-bone">{named}</span>
-        <span className="block font-mono text-[0.6875rem] text-bone-faint">{delivery.event}</span>
+        <span className="block font-mono text-label text-bone-faint">{delivery.event}</span>
         {what ? (
           <span className="block truncate text-xs text-bone-dim" title={what}>
             {what}
@@ -909,11 +909,11 @@ function DeliveryRow({
       <Td column="outcome" className="whitespace-nowrap">
         <Lamp tone={LAMPS[delivery.status]}>{l.status[delivery.status] ?? delivery.status}</Lamp>
         {answered ? (
-          <span className="block font-mono text-[0.6875rem] text-bone-faint tabular-nums">{answered}</span>
+          <span className="block font-mono text-label text-bone-faint tabular-nums">{answered}</span>
         ) : null}
         {delivery.lastError ? (
           <span
-            className="block max-w-56 truncate font-mono text-[0.6875rem] text-vermillion"
+            className="block max-w-56 truncate font-mono text-label text-vermillion"
             title={delivery.lastError}
           >
             {delivery.lastError}
@@ -922,7 +922,7 @@ function DeliveryRow({
       </Td>
       <Td column="tries" className="whitespace-nowrap">
         <span className="block font-mono text-xs text-bone-dim tabular-nums">{tries}</span>
-        {next ? <span className="block text-[0.6875rem] text-bone-faint">{next}</span> : null}
+        {next ? <span className="block text-label text-bone-faint">{next}</span> : null}
       </Td>
       <Td column="replay">
         <IconButton

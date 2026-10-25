@@ -225,7 +225,7 @@ export function Discover() {
             </div>
             <p className="mt-1 text-xs text-bone-faint">{t.admin.intake.termHint}</p>
             {fankaiPage ? (
-              <p role="alert" className="mt-2 flex items-start gap-2 text-xs leading-relaxed text-vermillion">
+              <p role="alert" className="mt-2 flex items-start gap-2 text-xs leading-relaxed text-status-error">
                 <Glyph name="alert" className="mt-0.5 size-3.5 shrink-0" />
                 {t.admin.intake.fankaiPage}
               </p>
@@ -325,7 +325,7 @@ export function Discover() {
             {t.admin.intake.searching}
           </p>
         ) : results.isError ? (
-          <p role="alert" className="flex items-center gap-2 px-5 py-6 text-sm text-vermillion">
+          <p role="alert" className="flex items-center gap-2 px-5 py-6 text-sm text-status-error">
             <Glyph name="alert" className="size-4" />
             {t.admin.intake.failed}
           </p>
@@ -431,7 +431,7 @@ function Result({
         </div>
 
         {ids.length ? (
-          <p className="mt-1 flex flex-wrap gap-x-3 font-mono text-[0.6875rem] text-bone-faint tabular-nums">
+          <p className="mt-1 flex flex-wrap gap-x-3 font-mono text-label text-bone-faint tabular-nums">
             {ids.map((one) => (
               <span key={one}>{one}</span>
             ))}
@@ -483,7 +483,7 @@ function Result({
         </div>
 
         {error ? (
-          <p role="alert" className="mt-2 flex items-start gap-1.5 text-xs text-vermillion">
+          <p role="alert" className="mt-2 flex items-start gap-1.5 text-xs text-status-error">
             <Glyph name="alert" className="mt-0.5 size-3.5 shrink-0" />
             {t.admin.intake.importFailed} {error}
           </p>

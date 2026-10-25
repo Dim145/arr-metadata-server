@@ -73,6 +73,8 @@ const TASKS: TaskId[] = [
   'refresh.all',
   'import.anime',
   'import.imdb',
+  'imdb.akas',
+  'imdb.episodes',
   'import.batch',
   'import.rules',
   'export.nfo',
@@ -145,6 +147,17 @@ export function describeDetail(detail: string | null | undefined, t: Dict, local
     return s.backedUp(m[1] ?? '', fmt.bytes(n(m[2]), locale), n(m[3]))
   if ((m = detail.match(/^(\d+) rows, (\d+) media put back(?:; undone by restoring (\S+))?$/)))
     return s.restored(n(m[1]), n(m[2]), m[3])
+  // IMDb's lists: the ratings, and the titles and the episodes as they are
+  // read — the megabytes read of the whole where its size is known — what
+  // they kept, and how far one stopped got.
+  if ((m = detail.match(/^(\d+) of (\d+) works rated(?:, (\d+) of (\d+) episodes)?$/)))
+    return s.rated(n(m[1]), n(m[2]), m[3] === undefined ? undefined : n(m[3]), m[4] === undefined ? undefined : n(m[4]))
+  if ((m = detail.match(/^(\d+)(?: of (\d+))?:? megabytes read, (\d+) (titles|episodes) kept$/)))
+    return s.reading(m[4] === 'titles' ? 'titles' : 'episodes', n(m[1]), n(m[3]), m[2] === undefined ? undefined : n(m[2]))
+  if ((m = detail.match(/^(\d+) titles for (\d+) of (\d+) works$/))) return s.titles(n(m[1]), n(m[2]), n(m[3]))
+  if ((m = detail.match(/^stopped: (\d+) titles for (\d+) works$/))) return s.titlesStopped(n(m[1]), n(m[2]))
+  if ((m = detail.match(/^(\d+) episodes of (\d+) of (\d+) series$/))) return s.episodes(n(m[1]), n(m[2]), n(m[3]))
+  if ((m = detail.match(/^stopped: (\d+) episodes for (\d+) series$/))) return s.episodesStopped(n(m[1]), n(m[2]))
   return t.admin.runs.notes[detail] ?? detail
 }
 
@@ -202,7 +215,7 @@ export function Jobs() {
             ))}
           </div>
         ) : tasks.isError ? (
-          <p role="alert" className="flex items-center gap-2 text-sm text-vermillion">
+          <p role="alert" className="flex items-center gap-2 text-sm text-status-error">
             <Glyph name="alert" className="size-4" />
             {tasks.error.message}
           </p>
@@ -412,7 +425,7 @@ function TaskCard({ task, delay }: { task: Task; delay: number }) {
         ) : null}
         {stopAsked ? <span className="text-xs text-bone-faint">{k.stopAsked}</span> : null}
         {run.isError ? (
-          <span role="alert" className="text-xs text-vermillion">
+          <span role="alert" className="text-xs text-status-error">
             {run.error instanceof ApiError ? run.error.message : t.common.error}
           </span>
         ) : null}
@@ -488,7 +501,7 @@ function RunProgress({ task, name }: { task: Task; name: string }) {
       {/* The run's own line, below, says how many of how many: here, only
           what it comes to, or how many so far when nobody knows of how many. */}
       {progress ? (
-        <p className="text-right font-mono text-[0.6875rem] text-bone-faint tabular-nums">
+        <p className="text-right font-mono text-label text-bone-faint tabular-nums">
           {share !== undefined
             ? new Intl.NumberFormat(locale, { style: 'percent', maximumFractionDigits: 0 }).format(share)
             : k.progressSoFar(fmt.count(done, locale))}
@@ -631,7 +644,7 @@ function ScheduleDialog({ task, name, open, onClose }: { task: Task; name: strin
           <div aria-live="polite">
             <p className="label mb-1.5">{k.next}</p>
             {preview.isError ? (
-              <p role="alert" className="flex items-start gap-2 text-sm text-vermillion">
+              <p role="alert" className="flex items-start gap-2 text-sm text-status-error">
                 <Glyph name="alert" className="mt-0.5 size-4 shrink-0" />
                 {preview.error instanceof ApiError ? preview.error.message : t.common.error}
               </p>
@@ -650,7 +663,7 @@ function ScheduleDialog({ task, name, open, onClose }: { task: Task; name: strin
         ) : null}
 
         {save.isError ? (
-          <p role="alert" className="text-sm text-vermillion">
+          <p role="alert" className="text-sm text-status-error">
             {save.error instanceof ApiError ? save.error.message : t.common.actionFailed}
           </p>
         ) : null}
@@ -792,7 +805,7 @@ function History({ polling, live, ruleNames }: { polling: boolean; live: boolean
           ))}
         </div>
       ) : jobs.isError ? (
-        <p role="alert" className="flex items-center gap-2 px-4 py-6 text-sm text-vermillion">
+        <p role="alert" className="flex items-center gap-2 px-4 py-6 text-sm text-status-error">
           <Glyph name="alert" className="size-4" />
           {t.admin.runs.loadFailed}
         </p>
@@ -950,7 +963,7 @@ export function JobTable({
   return (
     <>
       {again.isError ? (
-        <p role="alert" className="flex items-center gap-2 border-b border-rule px-5 py-3 text-sm text-vermillion">
+        <p role="alert" className="flex items-center gap-2 border-b border-rule px-5 py-3 text-sm text-status-error">
           <Glyph name="alert" className="size-4 shrink-0" />
           {again.error instanceof ApiError ? again.error.message : t.common.error}
         </p>
@@ -1100,7 +1113,7 @@ export function JobDetailPanel({ job }: { job: Job }) {
   if (detail.isPending) return <Skeleton className="h-16 w-full" />
   if (detail.isError) {
     return (
-      <p role="alert" className="flex items-center gap-2 text-sm text-vermillion">
+      <p role="alert" className="flex items-center gap-2 text-sm text-status-error">
         <Glyph name="alert" className="size-4 shrink-0" />
         {t.admin.runs.loadFailed}
       </p>

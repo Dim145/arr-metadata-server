@@ -200,7 +200,7 @@ export function Lists() {
             ))}
           </div>
         ) : lists.isError ? (
-          <p role="alert" className="flex items-center gap-2 px-4 py-6 text-sm text-vermillion">
+          <p role="alert" className="flex items-center gap-2 px-4 py-6 text-sm text-status-error">
             <Glyph name="alert" className="size-4" />
             {t.admin.curated.loadFailed}
           </p>
@@ -230,7 +230,7 @@ export function Lists() {
                       </button>
                       {list.isPublic ? null : <Chip tone="accent">{t.admin.curated.private}</Chip>}
                     </span>
-                    <span className="mt-0.5 block truncate font-mono text-[0.6875rem] text-bone-faint">
+                    <span className="mt-0.5 block truncate font-mono text-label text-bone-faint">
                       /lists/{list.slug}
                     </span>
                   </Td>
@@ -291,7 +291,7 @@ export function Lists() {
       >
         {asking ? t.admin.curated.deleteBody(asking.name) : null}
         {remove.isError ? (
-          <p role="alert" className="mt-3 text-sm text-vermillion">
+          <p role="alert" className="mt-3 text-sm text-status-error">
             {remove.error.message}
           </p>
         ) : null}
@@ -464,7 +464,7 @@ function Editor({ id, onClose, onSaved }: { id: string; onClose: () => void; onS
 
   if (detail.isError) {
     return (
-      <p role="alert" className="flex items-center gap-2 text-sm text-vermillion">
+      <p role="alert" className="flex items-center gap-2 text-sm text-status-error">
         <Glyph name="alert" className="size-4" />
         {t.admin.curated.loadFailed}
       </p>
@@ -569,7 +569,7 @@ function Editor({ id, onClose, onSaved }: { id: string; onClose: () => void; onS
             </div>
             <p className="mt-2 max-w-prose text-xs leading-relaxed text-bone-faint">{t.admin.curated.coverHint}</p>
             {setCover.isError ? (
-              <p role="alert" className="mt-2 text-xs text-vermillion">
+              <p role="alert" className="mt-2 text-xs text-status-error">
                 {setCover.error.message}
               </p>
             ) : null}
@@ -766,12 +766,12 @@ function Editor({ id, onClose, onSaved }: { id: string; onClose: () => void; onS
             {t.admin.curated.save}
           </Button>
           {saved ? (
-            <span role="status" className="text-sm text-moss">
+            <span role="status" className="text-sm text-status-ok">
               {t.admin.curated.saved}
             </span>
           ) : null}
           {save.isError ? (
-            <span role="alert" className="text-sm text-vermillion">
+            <span role="alert" className="text-sm text-status-error">
               {t.admin.curated.saveFailed} {save.error.message}
             </span>
           ) : null}

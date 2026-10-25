@@ -120,7 +120,7 @@ export function KometaExport() {
           role={outcome.tone === 'bad' ? 'alert' : 'status'}
           className={cn(
             'mt-3 text-xs',
-            outcome.tone === 'bad' ? 'text-vermillion' : outcome.tone === 'fine' ? 'text-moss' : 'text-bone-dim',
+            outcome.tone === 'bad' ? 'text-status-error' : outcome.tone === 'fine' ? 'text-status-ok' : 'text-bone-dim',
           )}
         >
           {outcome.text}
@@ -166,7 +166,7 @@ export function SelectionNfo({ listId }: { listId: string }) {
           </p>
         ) : null}
         {run.isError ? (
-          <p role="alert" className="mt-2 text-xs text-vermillion">
+          <p role="alert" className="mt-2 text-xs text-status-error">
             {missingPath ? e.nfoNoPath : run.error.message}
           </p>
         ) : null}

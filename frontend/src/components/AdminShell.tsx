@@ -278,7 +278,7 @@ function Sidebar({ me }: { me: Me }) {
           <span className="mt-1.5 flex items-center gap-2">
             <span className="label text-vermillion">{t.admin.title}</span>
             {settings.data ? (
-              <span className="inline-flex items-center gap-1.5 font-mono text-[0.6875rem] text-bone-faint tabular-nums">
+              <span className="inline-flex items-center gap-1.5 font-mono text-label text-bone-faint tabular-nums">
                 v{settings.data.version}
                 {update ? (
                   <span
@@ -385,7 +385,7 @@ function NavRow({ entry, badge }: { entry: Entry; badge?: number }) {
           <Glyph name={entry.glyph} className="size-4" />
           {entry.label(t)}
           {badge ? (
-            <span className="ml-auto rounded-full border border-brass/60 px-2 py-0.5 font-mono text-[0.6875rem] text-brass tabular-nums">
+            <span className="ml-auto rounded-full border border-brass/60 px-2 py-0.5 font-mono text-label text-brass tabular-nums">
               <span className="sr-only">{t.admin.people.pending}: </span>
               {badge}
             </span>
@@ -465,7 +465,7 @@ function TabBar({ me }: { me: Me }) {
           }
         >
           <Glyph name={entry.glyph} className="size-5" />
-          <span className="line-clamp-2 w-full text-center text-[0.6875rem] leading-tight font-medium">
+          <span className="line-clamp-2 w-full text-center text-label leading-tight font-medium">
             {entry.label(t)}
           </span>
         </NavLink>

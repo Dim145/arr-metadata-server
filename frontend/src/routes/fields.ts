@@ -16,7 +16,7 @@
 import { useEffect, useState, type RefObject } from 'react'
 
 /** The edge a field wears once it says it is wrong — by the browser's account or the page's. */
-export const WRONG = 'user-invalid:border-vermillion aria-invalid:border-vermillion'
+export const WRONG = 'user-invalid:border-status-error aria-invalid:border-status-error'
 
 export function useDone<K extends string>(keys: readonly K[]) {
   const [typed, setTyped] = useState<ReadonlySet<K>>(() => new Set())

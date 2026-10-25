@@ -468,7 +468,7 @@ function Editor({ id }: { id: string }) {
 
   if (failedToLoad) {
     return (
-      <p role="alert" className="flex items-center gap-2 text-sm text-vermillion">
+      <p role="alert" className="flex items-center gap-2 text-sm text-status-error">
         <Glyph name="alert" className="size-4" />
         {t.admin.editor.loadFailed}
       </p>
@@ -664,7 +664,7 @@ function Editor({ id }: { id: string }) {
                 ]}
               />
 
-              <p className="mt-2.5 flex items-start gap-2 text-[0.8125rem] text-bone-dim">
+              <p className="mt-2.5 flex items-start gap-2 text-body-sm text-bone-dim">
                 {work.isManual ? (
                   <>
                     <Glyph name="lock" className="mt-0.5 size-3.5 shrink-0 text-brass" />
@@ -680,7 +680,7 @@ function Editor({ id }: { id: string }) {
                   </>
                 ) : (
                   <>
-                    <span aria-hidden className="mt-1.5 size-2 shrink-0 rounded-full bg-moss shadow-[0_0_0_3px_color-mix(in_oklab,var(--color-moss)_18%,transparent)]" />
+                    <span aria-hidden className="mt-1.5 size-2 shrink-0 rounded-full bg-status-ok shadow-[0_0_0_3px_color-mix(in_oklab,var(--color-status-ok)_18%,transparent)]" />
                     <span>
                       {work.refreshedAt ? e.mast.refreshedWhen(fmt.relative(work.refreshedAt, locale) ?? '') : e.mast.never}
                       {work.refreshAfter ? ` · ${e.mast.nextWhen(fmt.relative(work.refreshAfter, locale) ?? '')}` : ''}
@@ -689,7 +689,7 @@ function Editor({ id }: { id: string }) {
                 )}
               </p>
               {refresh.isError ? (
-                <p role="alert" className="mt-2 flex items-center gap-2 text-sm text-vermillion">
+                <p role="alert" className="mt-2 flex items-center gap-2 text-sm text-status-error">
                   <Glyph name="alert" className="size-4 shrink-0" />
                   {refresh.error.message}
                 </p>
@@ -1074,7 +1074,7 @@ function MergedBanner({ id, onChanged }: { id: string; onChanged: () => void }) 
         </p>
       ) : null}
       {undo.isError ? (
-        <p role="alert" className="flex items-center gap-2 px-1 text-sm text-vermillion">
+        <p role="alert" className="flex items-center gap-2 px-1 text-sm text-status-error">
           <Glyph name="alert" className="size-4 shrink-0" />
           {undo.error.message || b.failed}
         </p>

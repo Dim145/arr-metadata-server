@@ -18,8 +18,11 @@ import { defineConfig, devices } from '@playwright/test'
  */
 const baseURL = process.env.AMS_E2E_URL ?? 'http://127.0.0.1:8479'
 
-/** The specs that change server-wide settings: see the last project. */
+/** The specs that change server-wide settings: see the `server-wide` project. */
 const SERVER_WIDE = /.*\.serial\.spec\.ts/
+
+/** The pictures the interface is held to, and the styleguide they are drawn from: see the `visual` project. */
+const VISUAL = /(visual|styleguide)\.spec\.ts/
 
 export default defineConfig({
   testDir: './e2e',
@@ -41,7 +44,7 @@ export default defineConfig({
   projects: [
     {
       name: 'desktop',
-      testIgnore: SERVER_WIDE,
+      testIgnore: [SERVER_WIDE, VISUAL],
       use: { ...devices['Desktop Chrome'], channel: 'chromium', viewport: { width: 1440, height: 900 } },
     },
     {
@@ -58,7 +61,7 @@ export default defineConfig({
         isMobile: true,
         hasTouch: true,
       },
-      testIgnore: SERVER_WIDE,
+      testIgnore: [SERVER_WIDE, VISUAL],
     },
     {
       // What changes how the whole server answers — a private site, an API
@@ -73,6 +76,49 @@ export default defineConfig({
       // switched off by another would otherwise meet.
       workers: 1,
       use: { ...devices['Desktop Chrome'], channel: 'chromium', viewport: { width: 1440, height: 900 } },
+    },
+    {
+      // The interface as pictures, held to the ones in e2e/__screenshots__ —
+      // which are drawn in one place only: the official Playwright image of
+      // the version in package-lock.json, on x86-64 (CONTRIBUTING.md). Type is
+      // drawn differently by every system's fonts and rasteriser, so a
+      // picture taken on a Mac would differ from CI's in every glyph; on
+      // anything but Linux the spec stands aside.
+      //
+      // Everything that could move between two runs is held still: one
+      // browser and one worker, the window's size and density fixed, the
+      // page's clock frozen (in the spec), motion off and animations
+      // finished, the caret hidden, text rasterised without hinting or
+      // subpixel colour, and what still varies masked by the spec. What
+      // remains is a rendering difference too small to be a change: a fifth
+      // of a percent of the picture's pixels.
+      //
+      // Run apart, and only by name (`--project visual`): it wants a build
+      // with the styleguide (`vite build --mode styleguide`) and a server on
+      // an empty database, which none of the other projects do. The
+      // styleguide's own spec (styleguide.spec.ts) runs here too, on any
+      // system: it scans the galleries rather than drawing them.
+      name: 'visual',
+      testMatch: VISUAL,
+      fullyParallel: false,
+      workers: 1,
+      retries: 0,
+      // No `{platform}` in the path: there is one set of pictures, Linux's.
+      snapshotPathTemplate: '{testDir}/__screenshots__/{testFilePath}/{arg}{ext}',
+      expect: {
+        toHaveScreenshot: { maxDiffPixelRatio: 0.002, animations: 'disabled', caret: 'hide', scale: 'css' },
+      },
+      use: {
+        ...devices['Desktop Chrome'],
+        channel: 'chromium',
+        viewport: { width: 1600, height: 1000 },
+        deviceScaleFactor: 1,
+        colorScheme: 'dark',
+        reducedMotion: 'reduce',
+        locale: 'en-GB',
+        timezoneId: 'UTC',
+        launchOptions: { args: ['--disable-lcd-text', '--font-render-hinting=none'] },
+      },
     },
   ],
 })

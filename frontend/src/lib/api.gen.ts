@@ -675,7 +675,8 @@ export interface paths {
         };
         /**
          * What was told to a destination, the newest first: kept thirty days, the
-         *     newest thousand of it.
+         *     newest thousand of it. A page is read from `offset`, or from a `cursor`:
+         *     the `nextCursor` the page before was answered with.
          */
         get: operations["webhooks_log"];
         put?: never;
@@ -899,7 +900,9 @@ export interface paths {
         /**
          * Read the audit trail, newest first.
          * @description Administrative: it names who did what, so it requires an administrator or a
-         *     key carrying the `admin` scope. With `format`, every entry the filters
+         *     key carrying the `admin` scope. A page is read from `offset`, or from a
+         *     `cursor`: the `nextCursor` the page before was answered with, which goes
+         *     on past the last entry it held. With `format`, every entry the filters
          *     match is handed over as a file: a CSV for a spreadsheet — a column for
          *     the instant, who, the action, the target, the work it names, the note and
          *     the address — or a JSON array of the entries.
@@ -1264,10 +1267,11 @@ export interface paths {
         put?: never;
         /**
          * Download one of the lists the further sources work from, now.
-         * @description `anime-lists` or `imdb-ratings`. Refused while the source that needs the
-         *     list is off, and while another import is running. An import that takes
-         *     longer than a request is given carries on after the answer, 202, and is
-         *     followed under Jobs like any other.
+         * @description `anime-lists`, `imdb-ratings`, `imdb-akas` (IMDb's titles by region) or
+         *     `imdb-episodes`. Refused while the switch that needs the list is off, and
+         *     while another import is running. An import that takes longer than a
+         *     request is given carries on after the answer, 202, and is followed under
+         *     Jobs like any other: IMDb's titles, half a gigabyte, usually do.
          */
         post: operations["meta_import_dataset"];
         delete?: never;
@@ -1723,6 +1727,9 @@ export interface paths {
          *     that does, before one that holds it — the better known first among those
          *     that answer alike; a term misspelt finds what it resembles when its
          *     letters find little. `sort` still orders a search when it is given.
+         *
+         *     A page is read from `offset`, or from a `cursor`: the `nextCursor` the
+         *     page before was answered with, which goes on past the last work it held.
          */
         get: operations["items_list"];
         put?: never;
@@ -2048,6 +2055,30 @@ export interface paths {
          *     chosen to lead with is shown whatever is hidden.
          */
         patch: operations["children_edit_image"];
+        trace?: never;
+    };
+    "/api/v1/items/{id}/imdb/episodes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Which of IMDb's episodes each of a work's is, with IMDb's rating of it.
+         * @description Matched by the season and the number the episode has in the official
+         *     order, against the ones IMDb gives its own — which IMDb may count
+         *     otherwise: the page says the match is the less sure for it. Read from
+         *     IMDb's episodes list (`imdb.episodes`) and its ratings (`imdb.enabled`),
+         *     both downloaded here, never asked of IMDb as the page is read.
+         */
+        get: operations["datasets_imdb_episodes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/items/{id}/lists": {
@@ -3323,6 +3354,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sources/datasets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The lists the further sources work from: whether each is on, when it
+         *     last landed and how much of it was kept, how its last run went, and
+         *     when it is downloaded next. For whoever keeps the catalogue, as the
+         *     sources' rules are; a run's error, which can name hosts, is on the Jobs
+         *     page, for an administrator.
+         */
+        get: operations["datasets_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sources/rules": {
         parameters: {
             query?: never;
@@ -4424,6 +4478,11 @@ export interface components {
             total: number;
             /** @description Every action name, so a UI can offer them as filters without hard-coding. */
             actions: string[];
+            /**
+             * @description Where the next page begins: give it back as `cursor`. Absent after
+             *     the last page.
+             */
+            nextCursor?: string | null;
         };
         AuthOptions: {
             /**
@@ -5237,6 +5296,29 @@ export interface components {
         CuratedLists: {
             lists: components["schemas"]["CuratedList"][];
         };
+        /** @description A list downloaded whole, as the Sources page says of it. */
+        Dataset: {
+            /**
+             * @description `imdb-ratings`, `imdb-akas` — IMDb's titles by region —,
+             *     `imdb-episodes` or `anime-lists`.
+             */
+            id: string;
+            /** @description The task that downloads it, on the Jobs page. */
+            task: components["schemas"]["TaskId"];
+            /** @description Whether a switch that needs it is on. */
+            on: boolean;
+            /**
+             * Format: int64
+             * @description Seconds between two downloads, by its own cadence.
+             */
+            everySeconds: number;
+            imported: components["schemas"]["ListImport"] | null;
+            lastStatus?: components["schemas"]["JobStatus"] | null;
+            /** @description When its last run ended, or began while it runs. */
+            lastRunAt?: string | null;
+            /** @description When the schedule downloads it next, while it is on. */
+            nextAt?: string | null;
+        };
         Definition: {
             key: string;
             kind: components["schemas"]["SettingKind"];
@@ -5826,6 +5908,8 @@ export interface components {
             malVia: components["schemas"]["MalVia"];
             animeList: components["schemas"]["ListImport"] | null;
             imdbRatings: components["schemas"]["ListImport"] | null;
+            imdbTitles: components["schemas"]["ListImport"] | null;
+            imdbEpisodes: components["schemas"]["ListImport"] | null;
         };
         /**
          * @description How many works the register lists under each of its gaps: what each of
@@ -5951,6 +6035,45 @@ export interface components {
             CoverType: string;
             Url: string;
         };
+        /** @description One episode of a work, and the one of IMDb's it is matched to. */
+        ImdbEpisode: {
+            /** @description The episode's id in the catalogue. */
+            episodeId: string;
+            /** Format: int32 */
+            seasonNumber: number;
+            /** Format: int32 */
+            episodeNumber: number;
+            /** @description IMDb's id of the episode: `tt0959621`. */
+            imdbId: string;
+            /**
+             * Format: double
+             * @description IMDb's rating of it, out of ten, while IMDb's ratings are read
+             *     (`imdb.enabled`) and it has one.
+             */
+            rating?: number | null;
+            /**
+             * Format: int64
+             * @description How many votes the rating is of.
+             */
+            votes?: number | null;
+            /** @description How it was matched to IMDb's. */
+            matchedBy: components["schemas"]["ImdbMatch"];
+        };
+        /** @description What IMDb's episodes say of a work's. */
+        ImdbEpisodes: {
+            /**
+             * @description Whether IMDb's episodes are read (`imdb.episodes`): while they are
+             *     not, the list is empty.
+             */
+            on: boolean;
+            /** @description Each episode IMDb numbers as the work does, in their order. */
+            episodes: components["schemas"]["ImdbEpisode"][];
+        };
+        /**
+         * @description How an episode was matched to one of IMDb's.
+         * @enum {string}
+         */
+        ImdbMatch: "numbers";
         /** @description A line of the source, as somebody gave it. */
         ImportLine: {
             /**
@@ -6208,6 +6331,11 @@ export interface components {
             items: components["schemas"]["MediaItem"][];
             /** Format: int64 */
             total: number;
+            /**
+             * @description Where the next page begins: give it back as `cursor`. Absent after
+             *     the last page.
+             */
+            nextCursor?: string | null;
         };
         Job: {
             id: string;
@@ -8766,7 +8894,7 @@ export interface components {
          * @description A task, sent under the name the history files its runs by.
          * @enum {string}
          */
-        TaskId: "refresh.sweep" | "refresh.all" | "import.anime" | "import.imdb" | "import.batch" | "import.rules" | "export.nfo" | "media.store" | "media.sweep" | "media.variants" | "media.avif" | "tls.renew" | "update.check" | "arr.seed" | "backup.run" | "search.rebuild" | "listing.relist";
+        TaskId: "refresh.sweep" | "refresh.all" | "import.anime" | "import.imdb" | "imdb.akas" | "imdb.episodes" | "import.batch" | "import.rules" | "export.nfo" | "media.store" | "media.sweep" | "media.variants" | "media.avif" | "tls.renew" | "update.check" | "arr.seed" | "backup.run" | "search.rebuild" | "listing.relist";
         /** @enum {string} */
         TaskMode: "scheduled" | "manual" | "off";
         /**
@@ -9091,6 +9219,11 @@ export interface components {
              * @description How many the log holds: thirty days of it, the newest thousand.
              */
             total: number;
+            /**
+             * @description Where the next page begins: give it back as `cursor`. Absent after
+             *     the last page.
+             */
+            nextCursor?: string | null;
         };
         /** @description One event owed to a destination, and how its tries went. */
         WebhookDelivery: {
@@ -10799,6 +10932,13 @@ export interface operations {
                 /** @description How many, fifty unless said: two hundred at the most. */
                 limit?: number;
                 offset?: number;
+                /**
+                 * @description Where the page starts: the `nextCursor` the page before was answered
+                 *     with. It goes on past the last delivery read, so what is told
+                 *     meanwhile neither repeats one nor skips one, as an offset would.
+                 *     Given instead of `offset`, never with one.
+                 */
+                cursor?: string;
             };
             header?: never;
             path: {
@@ -10816,6 +10956,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["WebhookDeliveries"];
                 };
+            };
+            /** @description A cursor is not one the log gave, or was given beside an offset */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description The caller is not an administrator */
             403: {
@@ -11219,9 +11366,16 @@ export interface operations {
                 limit?: number;
                 offset?: number;
                 /**
+                 * @description Where the page starts: the `nextCursor` the page before was answered
+                 *     with, under the same filters. It goes on past the last entry read, so
+                 *     what is recorded meanwhile neither repeats an entry nor skips one, as
+                 *     an offset would. Given instead of `offset`, never with one.
+                 */
+                cursor?: string;
+                /**
                  * @description `csv` or `json`: every entry the filters match, newest first, as a
-                 *     file to download — the page asked for, `limit` and `offset`, set
-                 *     aside.
+                 *     file to download — the page asked for, `limit`, `offset` and
+                 *     `cursor`, set aside.
                  */
                 format?: "csv" | "json";
             };
@@ -11240,6 +11394,13 @@ export interface operations {
                     "application/json": components["schemas"]["AuditListResponse"];
                     "text/csv": string;
                 };
+            };
+            /** @description A cursor is not one the trail gave, or was given beside an offset */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description The caller is not an administrator */
             403: {
@@ -11919,7 +12080,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description `anime-lists` or `imdb-ratings` */
+                /** @description `anime-lists`, `imdb-ratings`, `imdb-akas` or `imdb-episodes` */
                 name: string;
             };
             cookie?: never;
@@ -12162,12 +12323,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
+            /** @description The note, or `null` where nothing is written about it: no note is no failure, and a page asking for one says nothing in a reader's console */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["EditorialNote"];
+                    "application/json": components["schemas"]["EditorialNote"] | null;
                 };
             };
             /** @description Not a scope, a key or a language */
@@ -12177,7 +12339,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Nothing is written about it, or the reader may not see it */
+            /** @description No such work or selection, or the reader may not see it */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -12488,6 +12650,14 @@ export interface operations {
                 order?: string;
                 limit?: number;
                 offset?: number;
+                /**
+                 * @description Where the page starts: the `nextCursor` the page before was answered
+                 *     with, under the same filters and order. It goes on from the last work
+                 *     read, so a work added or removed meanwhile neither repeats one nor
+                 *     skips one, as an offset would. Given instead of `offset`, never with
+                 *     one.
+                 */
+                cursor?: string;
             };
             header?: never;
             path?: never;
@@ -13071,6 +13241,14 @@ export interface operations {
                 order?: string;
                 limit?: number;
                 offset?: number;
+                /**
+                 * @description Where the page starts: the `nextCursor` the page before was answered
+                 *     with, under the same filters and order. It goes on from the last work
+                 *     read, so a work added or removed meanwhile neither repeats one nor
+                 *     skips one, as an offset would. Given instead of `offset`, never with
+                 *     one.
+                 */
+                cursor?: string;
             };
             header?: never;
             path?: never;
@@ -13086,6 +13264,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ItemListResponse"];
                 };
+            };
+            /** @description A filter is not one the list takes, or a cursor is not one it gave, or was given beside an offset */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description No valid credential was presented */
             401: {
@@ -13982,6 +14167,38 @@ export interface operations {
                 content?: never;
             };
             /** @description No such work or image */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    datasets_imdb_episodes: {
+        parameters: {
+            query?: {
+                /** @description One season's episodes alone. */
+                season?: number;
+            };
+            header?: never;
+            path: {
+                /** @description The work's identifier */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImdbEpisodes"];
+                };
+            };
+            /** @description No such work, or none this caller may see */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -15314,7 +15531,8 @@ export interface operations {
             query?: {
                 /**
                  * @description A task's name: `refresh.sweep`, `refresh.item`, `refresh.all`,
-                 *     `import.anime`, `import.imdb`, `export.nfo`.
+                 *     `import.anime`, `import.imdb`, `imdb.akas`, `imdb.episodes`,
+                 *     `export.nfo`.
                  */
                 kind?: string;
                 /** @description `running`, `succeeded` or `failed`. */
@@ -16842,6 +17060,32 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["Sources"];
                 };
+            };
+        };
+    };
+    datasets_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Dataset"][];
+                };
+            };
+            /** @description The caller may not write */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

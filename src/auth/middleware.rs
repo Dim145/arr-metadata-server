@@ -336,6 +336,14 @@ async fn identify(
     {
         return Err(AppError::Forbidden);
     }
+    // An agent's key opens `/mcp`, which no surface here guards, and nothing
+    // else: it was given the `mcp` scope alone.
+    if identity.only_mcp() {
+        return Err(AppError::Refused {
+            code: "mcp_key",
+            message: "this key is an agent's: it opens /mcp and nothing else".into(),
+        });
+    }
 
     // A change carried by something the browser sends on its own — the
     // session cookie, or, on the native surface, the address it calls from

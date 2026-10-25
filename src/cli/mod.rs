@@ -192,7 +192,8 @@ pub enum KeysCommand {
     Create {
         /// What it is called on Keys & network: what calls with it.
         name: String,
-        /// What it may do: read, write, admin or metrics. Given once a scope.
+        /// What it may do: read, write, admin, metrics or mcp. Given once a
+        /// scope.
         #[arg(long = "scope", value_name = "SCOPE", required = true)]
         scopes: Vec<String>,
         /// When it stops working: a date, or an RFC 3339 instant.

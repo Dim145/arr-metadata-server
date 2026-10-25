@@ -16,6 +16,20 @@ function stepOf(key: string): number {
   return key === 'ArrowRight' || key === 'ArrowDown' ? 1 : key === 'ArrowLeft' || key === 'ArrowUp' ? -1 : 0
 }
 
+/**
+ * One of a few, in a row of pills.
+ *
+ * States:
+ * - rest: the row on the page's ink inside a rule; the chosen one on the
+ *   top ink with a bright inset rule and bone words, the others dim.
+ * - hover: an option's words turn bone.
+ * - focus: the accent's outline round the option whose radio the keyboard
+ *   is on — the radios themselves are hidden, so the label wears it.
+ * - active: as hover.
+ * - disabled: the row at half strength, with the not-allowed cursor.
+ * - loading, error, empty: none of its own. A choice acted on the moment it
+ *   is made (`deliberate`) says what came of it beside it.
+ */
 export function Segmented<T extends string>({
   label,
   value,
@@ -106,7 +120,13 @@ export function Segmented<T extends string>({
   )
 }
 
-type LampTone = 'moss' | 'brass' | 'faint' | 'vermillion'
+/**
+ * A lamp's tone, named for the colour it had before the states had names of
+ * their own: `moss` is well (`status-ok`), `brass` wants a look
+ * (`status-warn`), `vermillion` has failed (`status-error`), `faint` is off
+ * or not known.
+ */
+export type LampTone = 'moss' | 'brass' | 'faint' | 'vermillion'
 
 // A lamp is a state, so it reads the states' colours (styles.css): well,
 // wanting a look, failing — and the faint one, for a state not known.
@@ -118,6 +138,14 @@ const LAMP: Record<LampTone, string> = {
     'bg-status-error shadow-[0_0_0_3px_color-mix(in_oklab,var(--color-status-error)_18%,transparent)]',
 }
 
+/**
+ * A state in a word, with a lit dot before it.
+ *
+ * States: it is read, not pressed, so its states are its tones — the dot in
+ * the state's colour with a soft ring of it, the word in bone. Under forced
+ * colours the dot keeps a ring of the button colour and loses its tone,
+ * which is why the word says the state.
+ */
 export function Lamp({ tone, children }: { tone: LampTone; children: ReactNode }) {
   return (
     <span className="inline-flex items-center gap-2 text-body-sm text-bone">

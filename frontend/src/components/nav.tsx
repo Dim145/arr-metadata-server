@@ -299,7 +299,7 @@ function GenreColumn({
                     style={{ backgroundColor: `var(--color-stock-${stockOf(genre.value)})` }}
                   />
                   <span className="min-w-0 flex-1 truncate">{genreLabel(genre.value, lang)}</span>
-                  <span className="font-mono text-[0.6875rem] text-bone-faint tabular-nums">
+                  <span className="font-mono text-label text-bone-faint tabular-nums">
                     {genre.count.toLocaleString(locale)}
                   </span>
                 </Link>
@@ -363,7 +363,7 @@ const SHEET_PATHS = ['/collections', '/people', '/lists', '/stats', '/account']
 const CELL =
   'relative flex min-h-14 min-w-0 flex-col items-center justify-center gap-1 px-0.5 transition-colors duration-150'
 const CAPTION =
-  'text-center text-[0.6875rem] leading-tight font-medium tracking-tight whitespace-nowrap min-[360px]:text-xs'
+  'text-center text-label leading-tight font-medium tracking-tight whitespace-nowrap min-[360px]:text-xs'
 
 /** The rule along the top of the tab the reader is in: a shape, not a colour alone. */
 function Mark({ on }: { on: boolean }) {

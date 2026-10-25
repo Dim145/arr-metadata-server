@@ -108,7 +108,7 @@ export function Cache() {
   // a refetch that failed is a line under them, not their replacement.
   if (!report.data) {
     return (
-      <p role="alert" className="flex items-center gap-2 text-sm text-vermillion">
+      <p role="alert" className="flex items-center gap-2 text-sm text-status-error">
         <Glyph name="alert" className="size-4" />
         {report.error?.message ?? t.common.actionFailed}
       </p>
@@ -162,7 +162,7 @@ export function Cache() {
       </header>
 
       {report.isError ? (
-        <p role="alert" className="rise mb-6 flex items-center gap-2 text-sm text-vermillion">
+        <p role="alert" className="rise mb-6 flex items-center gap-2 text-sm text-status-error">
           <Glyph name="alert" className="size-4" />
           {report.error.message}
         </p>
@@ -247,7 +247,7 @@ export function Cache() {
                 {instances.all.map((one) => (
                   <li key={one.id} className="flex flex-wrap items-center gap-x-4 gap-y-1 py-2.5 text-sm">
                     <span className="flex min-w-0 items-center gap-2">
-                      <span aria-hidden className={cn('size-1.5 shrink-0 rounded-full', one.leads ? 'bg-moss' : 'bg-bone-faint')} />
+                      <span aria-hidden className={cn('size-1.5 shrink-0 rounded-full', one.leads ? 'bg-status-ok' : 'bg-bone-faint')} />
                       <span className="truncate font-medium text-bone">{one.name}</span>
                     </span>
                     {one.leads ? <Lamp tone="moss">{p.instanceLeads}</Lamp> : null}
@@ -421,7 +421,7 @@ export function Cache() {
               <p className="text-xs leading-relaxed text-bone-faint">{p.flushHint}</p>
               <h2 className="font-display text-lg font-medium text-bone">{p.metrics}</h2>
               <p className="text-xs leading-relaxed text-bone-faint">{p.metricsHint}</p>
-              <p className="font-mono text-[0.6875rem] text-bone-faint">
+              <p className="font-mono text-label text-bone-faint">
                 {p.stamp(data.generation, data.epoch)}
               </p>
             </div>
@@ -445,7 +445,7 @@ export function Cache() {
       >
         {p.confirmBody(server.attached ? (server.keys ?? null) : null, server.attached)}
         {flushAll.isError ? (
-          <p role="alert" className="mt-3 text-sm text-vermillion">
+          <p role="alert" className="mt-3 text-sm text-status-error">
             {flushAll.error instanceof ApiError ? flushAll.error.message : t.common.actionFailed}
           </p>
         ) : null}
@@ -493,7 +493,7 @@ function Ratio({ value, dim, locale }: { value: number | null; dim?: boolean; lo
   return (
     <span className="inline-flex items-center gap-2">
       <span aria-hidden className="h-1.5 w-12 overflow-hidden rounded-full bg-ink-top">
-        <span className={cn('block h-full', value < 50 ? 'bg-brass' : 'bg-moss')} style={{ width: `${value}%` }} />
+        <span className={cn('block h-full', value < 50 ? 'bg-status-warn' : 'bg-status-ok')} style={{ width: `${value}%` }} />
       </span>
       <span className={cn('font-mono text-xs tabular-nums', dim ? 'text-bone-faint' : 'text-bone')}>{percent(value, locale)}</span>
     </span>

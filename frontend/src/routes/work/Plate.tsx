@@ -261,7 +261,7 @@ export function Plate({ item, region, onTrailer }: { item: MediaItem; region: st
                   to={`/compare?a=${encodeURIComponent(item.id)}`}
                   className="inline-flex min-h-11 items-center gap-1.5 rounded-full px-3 text-sm text-bone-dim transition-colors duration-150 hover:bg-ink-high hover:text-bone"
                 >
-                  <Glyph name="grid" className="size-4" />
+                  <Glyph name="compare" className="size-4" />
                   {t.compare.withAnother}
                 </Link>
                 {me.data?.canWrite ? (

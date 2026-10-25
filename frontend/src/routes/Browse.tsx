@@ -461,7 +461,7 @@ export function Browse({ pinned, lead }: { pinned?: Pinned; lead?: ReactNode } =
             <span className="hidden sm:inline">{drawing ? t.browse.drawing : t.browse.random}</span>
           </Button>
           {drawFailed ? (
-            <span role="alert" className="self-center text-sm text-vermillion">
+            <span role="alert" className="self-center text-sm text-status-error">
               {t.common.actionFailed}
             </span>
           ) : null}

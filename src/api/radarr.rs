@@ -17,10 +17,11 @@ use crate::{
     auth::Identity,
     domain::MediaItem,
     error::{AppError, AppResult},
-    service::{language, movie},
+    service::{imdb, language, movie},
     state::AppState,
     wire::radarr::{
-        Beside, CollectionResource, MovieResource, collection_images, from_item, from_item_beside,
+        Beside, CollectionResource, MovieResource, add_regional_titles, collection_images,
+        from_item, from_item_beside,
     },
 };
 
@@ -60,6 +61,9 @@ fn served(state: &AppState, identity: &Identity, items: Vec<MediaItem>) -> Vec<M
 /// refreshes its library through; what goes beside is read from what is held
 /// and never fetched — see [`movie::beside`]. A search stays without: its
 /// results are shallow, and Radarr asks for the film again once it is added.
+///
+/// With IMDb's titles read (`imdb.akas`), each film is also sent those IMDb
+/// gives it in the caller's regions, among its alternative titles.
 async fn served_beside(
     state: &AppState,
     identity: &Identity,
@@ -67,8 +71,14 @@ async fn served_beside(
 ) -> Vec<MovieResource> {
     let language = state.language(identity.client_id(), identity.peer_id());
     let beside = movie::beside(state, &items, &language).await;
+    let regions = imdb::regions(state, identity.client_id(), identity.peer_id());
+    let regional = imdb::regional_titles(state, &items, &regions).await;
 
-    served_with(state, identity, items, &beside)
+    let mut served = served_with(state, identity, items, &beside);
+    for (resource, titles) in served.iter_mut().zip(&regional) {
+        add_regional_titles(resource, titles);
+    }
+    served
 }
 
 fn served_with(

@@ -272,12 +272,12 @@ export function SeasonsTab({
                       : 'border-rule bg-ink-raised text-bone-dim hover:bg-ink-high hover:text-bone lg:bg-transparent',
                   )}
                 >
-                  <span className="aspect-2/3 w-7 shrink-0 overflow-hidden rounded-[4px] border border-rule bg-ink-high">
+                  <span className="aspect-2/3 w-7 shrink-0 overflow-hidden rounded-sm border border-rule bg-ink-high">
                     {art ? <Artwork url={art} role="thumb" alt="" className="size-full object-cover" /> : null}
                   </span>
                   <span className="min-w-0 lg:flex-1">
                     <span className="block truncate text-sm font-medium whitespace-nowrap">{seasonName(own?.title, n, t.work.season)}</span>
-                    <span className="block font-mono text-[0.6875rem] text-bone-faint tabular-nums whitespace-nowrap">
+                    <span className="block font-mono text-label text-bone-faint tabular-nums whitespace-nowrap">
                       S{String(n).padStart(2, '0')} · {t.work.episodeCount(eps.length)}
                       {year ? ` · ${fmt.year(year)}` : ''}
                     </span>
@@ -361,7 +361,7 @@ export function SeasonsTab({
               <div className="mt-4 flex flex-wrap items-center gap-2">
                 <Link
                   to={`/work/${work.id}/season/${season}`}
-                  className="inline-flex min-h-11 items-center gap-1.5 rounded-full border border-rule-bright px-4 text-[0.8125rem] font-medium text-bone transition-colors duration-200 hover:border-bone-faint hover:bg-ink-high"
+                  className="inline-flex min-h-11 items-center gap-1.5 rounded-full border border-rule-bright px-4 text-body-sm font-medium text-bone transition-colors duration-200 hover:border-bone-faint hover:bg-ink-high"
                 >
                   <Glyph name="reel" className="size-4" />
                   {s.seasonPage}
@@ -623,7 +623,7 @@ function SeasonPictures({
               >
                 <span
                   className={cn(
-                    'shrink-0 overflow-hidden rounded-[4px] border border-rule bg-ink-high',
+                    'shrink-0 overflow-hidden rounded-sm border border-rule bg-ink-high',
                     wide ? 'aspect-video w-14' : 'aspect-2/3 w-9',
                     hidden && 'opacity-40 grayscale',
                   )}
@@ -634,7 +634,7 @@ function SeasonPictures({
                     read and shown again, and reads as what it is. */}
                 <span className={cn('min-w-0 flex-1', hidden && 'opacity-60')}>
                   <span className={cn('block truncate text-sm text-bone', hidden && 'line-through decoration-bone-faint')}>{name}</span>
-                  <span className="block truncate font-mono text-[0.6875rem] text-bone-faint" title={image.url}>
+                  <span className="block truncate font-mono text-label text-bone-faint" title={image.url}>
                     {[from, hostOf(image.url)].filter(Boolean).join(' · ')}
                   </span>
                 </span>
@@ -670,7 +670,7 @@ function SeasonPictures({
         </ul>
       )}
       {hide.isError ? (
-        <p role="alert" className="border-t border-rule px-5 py-3 text-xs text-vermillion">
+        <p role="alert" className="border-t border-rule px-5 py-3 text-xs text-status-error">
           {hide.error.message || t.common.actionFailed}
         </p>
       ) : null}
@@ -949,7 +949,7 @@ function EpisodeRow({
         )}
       >
         <span className="font-mono text-xs tracking-wider text-bone-faint tabular-nums">{episodeCode(episode)}</span>
-        <span className="hidden aspect-video overflow-hidden rounded-[6px] bg-ink-high sm:block">
+        <span className="hidden aspect-video overflow-hidden rounded-md bg-ink-high sm:block">
           {episode.image ? <Artwork url={episode.image} role="still" alt="" className="size-full object-cover" /> : null}
         </span>
         <span className="min-w-0">
@@ -963,7 +963,7 @@ function EpisodeRow({
               </Chip>
             ) : null}
           </span>
-          <span className="mt-0.5 block truncate font-mono text-[0.6875rem] text-bone-faint tabular-nums">{meta || t.episode.noDate}</span>
+          <span className="mt-0.5 block truncate font-mono text-label text-bone-faint tabular-nums">{meta || t.episode.noDate}</span>
         </span>
         <span className="flex items-center gap-2 text-bone-faint">
           <LockBadge n={locks} />

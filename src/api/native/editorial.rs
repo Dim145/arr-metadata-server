@@ -126,9 +126,9 @@ pub struct ReadQuery {
         ReadQuery,
     ),
     responses(
-        (status = 200, body = Note),
+        (status = 200, body = Option<Note>, description = "The note, or `null` where nothing is written about it: no note is no failure, and a page asking for one says nothing in a reader's console"),
         (status = 400, description = "Not a scope, a key or a language"),
-        (status = 404, description = "Nothing is written about it, or the reader may not see it"),
+        (status = 404, description = "No such work or selection, or the reader may not see it"),
     ),
 )]
 async fn read(
@@ -136,17 +136,16 @@ async fn read(
     Extension(identity): Extension<Identity>,
     Path((scope, key)): Path<(String, String)>,
     Query(query): Query<ReadQuery>,
-) -> AppResult<Json<Note>> {
+) -> AppResult<Json<Option<Note>>> {
     let scope = scope_of(&scope)?;
     let key = key_of(&state, &identity, scope, &key).await?;
     let language = match query.language.as_deref().map(str::trim) {
         Some(raw) if !raw.is_empty() => language_of(raw)?,
         _ => "en".to_string(),
     };
-    repo::editorial::read(&state.db, scope, &key, &language)
-        .await?
-        .map(Json)
-        .ok_or(AppError::NotFound)
+    Ok(Json(
+        repo::editorial::read(&state.db, scope, &key, &language).await?,
+    ))
 }
 
 #[derive(Deserialize, IntoParams)]
@@ -365,7 +364,7 @@ mod tests {
         scope: &str,
         key: &str,
         language: &str,
-    ) -> AppResult<Json<Note>> {
+    ) -> AppResult<Json<Option<Note>>> {
         read(
             State(state.clone()),
             Extension(identity.clone()),
@@ -399,7 +398,8 @@ mod tests {
         let french = read_in(&state, &Identity::Visitor, "genre", "Drama", "fr")
             .await
             .expect("read")
-            .0;
+            .0
+            .expect("a note");
         assert_eq!(french.key, "drama");
         assert_eq!(french.language, "fr");
         assert_eq!(
@@ -411,7 +411,8 @@ mod tests {
         let german = read_in(&state, &Identity::Visitor, "genre", "drama", "de")
             .await
             .expect("read")
-            .0;
+            .0
+            .expect("a note");
         assert_eq!(german.body, "A **drama**.");
 
         // Recorded in the journal.
@@ -450,7 +451,8 @@ mod tests {
         let french = read_in(&state, &Identity::Visitor, "genre", "drama", "fr")
             .await
             .expect("read")
-            .0;
+            .0
+            .expect("a note");
         assert_eq!(french.language, "en");
     }
 
@@ -485,6 +487,14 @@ mod tests {
             .await,
             Err(AppError::NotFound)
         ));
+        // Nothing written about it: no note, and no failure either.
+        assert!(
+            read_in(&state, &Identity::Visitor, "year", "1931", "en")
+                .await
+                .expect("read")
+                .0
+                .is_none()
+        );
         // A decade by any of its years.
         written(&state, &editor, ("decade", "1994", "en"), "The nineties.")
             .await
@@ -492,7 +502,8 @@ mod tests {
         let note = read_in(&state, &Identity::Visitor, "decade", "1990", "en")
             .await
             .expect("read")
-            .0;
+            .0
+            .expect("a note");
         assert_eq!(
             (note.key.as_str(), note.body.as_str()),
             ("1990", "The nineties.")
@@ -527,6 +538,7 @@ mod tests {
                 .await
                 .expect("read")
                 .0
+                .expect("a note")
                 .body,
             "Today's pick."
         );

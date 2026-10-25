@@ -145,7 +145,7 @@ None needs a key.
 | **TVmaze** | the moment each episode aired | two calls per series fetch |
 | **AniList** | its score, the romaji, native and English titles and synonyms, the main studio, an adult flag — for anime | one call per anime fetch |
 | **MyAnimeList** | its score and titles — for anime; through its own API when `AMS_MAL_CLIENT_ID` is set, through [Tenrai](https://api.tenrai.org/documentation) otherwise, a mirror written to Jikan's schema (`AMS_TENRAI_UPSTREAM`), and through a Jikan of your own (`AMS_JIKAN_UPSTREAM`) when neither answers (`mal.fallback`, on) — Jikan's public API closed on 1 October 2026 | one call per anime fetch |
-| **IMDb** | IMDb's rating, for every work with an IMDb id | one download a day |
+| **IMDb** | IMDb's rating, for every work with an IMDb id; with its titles read (`imdb.akas`), the titles a film goes by in each region, which Radarr is given; with its episodes read (`imdb.episodes`), each episode's IMDb id, in its `.nfo` document, and its IMDb rating, on its page | one download a day for the ratings; one a week each for the titles and the episodes |
 | **Fankai** | the Fan-Kai productions — anime recut into films, each as a series with its sagas as seasons — from Fankai's own metadata service | one call per saga, and three more per production fetch |
 | **Wiki Fankai** | for each Fan-Kai, the anime it was cut from and the Fan-Kai that follows it — only while Fankai is on | one call per Fan-Kai fetch |
 
@@ -188,6 +188,62 @@ IMDb's, republished — and otherwise the rating with the most votes behind it.
 The daily list keeps that figure current and supplies it when Skyhook and
 Radarr's service are off. Only the ratings of works stored here are kept, and
 the list is fetched again within the hour when works are added.
+
+### IMDb's titles by region, and its episodes
+
+Two more of IMDb's lists, each off until switched on under **Settings ›
+Further sources** — `imdb.akas` and `imdb.episodes` — and each downloaded
+weekly, as the tasks *IMDb titles by region* and *IMDb episodes*: run on their
+own once switched on, run by hand from the Jobs page, given a window or a cron
+expression there like the other lists. The titles are half a gigabyte, three
+gigabytes and sixty million lines unpacked; the episodes fifty-five megabytes,
+ten million lines. Neither is ever held whole, in memory or on disk: the
+download is read as it arrives, a line at a time, and only the lines of the
+works held here are kept, written a batch of works at a time so that nothing
+else waits on the database meanwhile. A run says how far it has got on the
+Jobs page, and can be stopped there: the works it reached keep what it wrote,
+the others what they had, and the schedule leaves the list alone for an hour
+at least — until its weekly turn, once it has landed before.
+
+- **The titles by region** (`title.akas`): of each work held, the titles IMDb
+  displays in each region (`imdbDisplay`), the title it was first released
+  under (`original`), and the ones it lists as alternatives — not its working,
+  festival, video or DVD titles, nor the literal translations. Radarr is given
+  a film's titles in the regions `imdb.regions` names — `FR, BE, CA`, or IMDb's
+  own `XWW`, the world in English — among its alternative titles, after
+  TMDB's, and each title once: Radarr matches a release's name against every
+  one of them. Unset, `imdb.regions` is the country of the language a Radarr
+  is answered in, `fr-FR` giving it the French titles; it can be set for the
+  server, for a key or for an address rule. Nothing else is given them: not
+  Sonarr, where each alias would cost every search one more query; not the
+  search, the feeds, the exports or the site.
+- **The episodes** (`title.episode`): of each series held, the episodes IMDb
+  numbers. An episode of the catalogue is matched to IMDb's of the same season
+  and the same number in the official order — the order the series is stored
+  in, TheTVDB's aired order as a rule. Neither TMDB's answers nor TheTVDB's,
+  as this server reads them, give an episode an IMDb id of its own (TMDB keeps
+  one per episode behind a request per episode), so the numbers are the only
+  way to tell, and the match is said to be the less sure for it. Where the
+  numbers are known to part, nothing is taken, since a wrong id in a media
+  library is worse than none: a number IMDb gives two of its episodes, the
+  specials, and a season — other than the series' last, which IMDb is often
+  a few episodes behind on — in which IMDb numbers fewer episodes than are
+  held here, as where TheTVDB splits an hour-long episode in two and IMDb
+  does not (The Office's fourth season: nineteen here, fourteen on IMDb, and
+  every number past the first such episode another episode there). Measured
+  on a catalogue of twenty series: every episode of The Simpsons, Lost, Game
+  of Thrones and Breaking Bad matched; an anime IMDb numbers straight through
+  matched in its first season alone. A matched episode's `.nfo` document
+  carries `<uniqueid type="imdb">`, after TheTVDB's and TMDB's; its page shows
+  IMDb's rating of it — the ratings' daily list keeps the episodes' too while
+  the episodes are read, and catches up within the hour after they are — with
+  *by number* beside it, and a link to IMDb's page of the episode.
+
+The lists downloaded whole — the anime identifiers and IMDb's three — are on
+**Administration › Sources** too, under *Lists downloaded whole*: what each
+brings, whether it is on, when it last landed and how many rows it kept, how
+its last run went and when the next one is due (`GET
+/api/v1/sources/datasets`, for whoever may edit the catalogue).
 
 **Fankai lists the Fan-Kai productions**: anime recut into films by the
 [Fankai](https://fankai.fr) team, which neither TheTVDB nor TMDB carries. Each
@@ -270,14 +326,26 @@ terms with a link to them.
   names it while it serves.
 - **Fanart.tv** asks for a project key and credit where its pictures are shown.
 - **IMDb**'s datasets are for personal, non-commercial use, with the sentence
-  IMDb asks for on every page.
+  IMDb asks for on every page, and are not to be "republished … to create any
+  kind of online/offline database of movie information" beyond one person's
+  own use. So the server keeps of them only what concerns the works it holds,
+  and gives each part only where its operator's own clients ask about one
+  work: Sonarr a series' rating, Radarr a film's titles in its regions, a
+  media library an episode's IMDb id in its `.nfo` document, the site an
+  episode's rating. What came of the titles and the episodes is kept out of
+  everything the server hands out in bulk or for other servers to follow —
+  the search index, `ids.txt` and the Atom feeds, the Kometa file, the
+  relays: the regional titles live apart from the alternative titles for that
+  reason. The lists are downloaded from IMDb's own server, as the terms ask,
+  and never scraped from its site.
 - **Fankai** publishes its metadata for its own productions, and is asked about
   one at a time; the Fankai wiki's content is CC BY-SA.
 
 Each source has its own switch, and a source switched off is asked nothing and
 credited nowhere; what it gave while on stays as it is. The further sources are
 settings — `tvmaze.enabled`, `anilist.enabled`, `mal.enabled`, `imdb.enabled`,
-`fankai.enabled` and `fankai.wiki`, under **Settings › Further sources** — as
+`imdb.akas`, `imdb.episodes`, `fankai.enabled` and `fankai.wiki`, under
+**Settings › Further sources** — as
 are Skyhook's and Radarr's services (`skyhook.enrich`, `skyhook.fallback`,
 `radarr.enrich`, `radarr.fallback`). TheTVDB and Fanart.tv are on while they
 have a key and `AMS_TVDB_ENABLED` or `AMS_FANART_ENABLED` is not `false`; TMDB

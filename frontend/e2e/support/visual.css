@@ -1,0 +1,11 @@
+/* Painted out of the pictures of whole pages (e2e/visual.spec.ts, which
+   adopts this sheet): the film grain and the washes of colour behind them. Neither moves with a change to a page, and both are drawn as noise —
+   the grain is noise, and the browser dithers a wide gradient so that it does
+   not band — which a PNG cannot compress: they made each page's picture a
+   megabyte, and every change to one another megabyte in the history. Their
+   colours are the tokens the colours gallery shows. */
+.grain::before,
+.ambience::after,
+.ambience-quiet::after {
+  content: none !important;
+}

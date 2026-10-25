@@ -81,7 +81,7 @@ export function Dashboard() {
           ))}
         </div>
       ) : stats.isError ? (
-        <p role="alert" className="flex items-center gap-2 text-sm text-vermillion">
+        <p role="alert" className="flex items-center gap-2 text-sm text-status-error">
           <Glyph name="alert" className="size-4" />
           {t.admin.overview.statsFailed}
         </p>
@@ -315,7 +315,7 @@ function ToDo() {
         <p className="px-5 py-4 text-sm text-bone-faint">{k.todoLoadFailed}</p>
       ) : lines.length === 0 ? (
         <p className="flex items-center gap-2 px-5 py-4 text-sm text-bone-dim">
-          <Glyph name="check" className="size-4 shrink-0 text-moss" />
+          <Glyph name="check" className="size-4 shrink-0 text-status-ok" />
           {k.todoNothing}
         </p>
       ) : (
@@ -375,7 +375,7 @@ function RecentRuns() {
           ))}
         </div>
       ) : jobs.isError ? (
-        <p role="alert" className="px-5 py-4 text-sm text-vermillion">
+        <p role="alert" className="px-5 py-4 text-sm text-status-error">
           {t.admin.runs.loadFailed}
         </p>
       ) : jobs.data.jobs.length === 0 ? (
@@ -525,7 +525,7 @@ function Surfaces({ settings }: { settings?: Settings }) {
         {rows.map(([path, who, policy]) => (
           <li key={path} className="flex items-center justify-between gap-4 px-5 py-2.5">
             <div className="min-w-0">
-              <p className="truncate font-mono text-[0.8125rem] text-bone">{path}</p>
+              <p className="truncate font-mono text-body-sm text-bone">{path}</p>
               <p className="mt-0.5 text-xs text-bone-faint">{who}</p>
             </div>
             {policy ? <PolicyChip policy={policy} /> : null}
@@ -723,7 +723,7 @@ function LocksFile() {
         {outcome ? (
           <ul
             role="status"
-            className={cn('mt-4 space-y-1 text-sm', outcome.tone === 'bad' ? 'text-vermillion' : 'text-moss')}
+            className={cn('mt-4 space-y-1 text-sm', outcome.tone === 'bad' ? 'text-status-error' : 'text-status-ok')}
           >
             {outcome.lines.map((line, index) => (
               <li key={`${index}-${line}`}>{line}</li>
@@ -762,7 +762,7 @@ function HealthPanel() {
         {health.isPending ? (
           <Skeleton className="mt-4 h-20 w-full" />
         ) : health.isError ? (
-          <p role="alert" className="mt-4 text-sm text-vermillion">
+          <p role="alert" className="mt-4 text-sm text-status-error">
             {t.admin.overview.healthFailed}
           </p>
         ) : (
@@ -786,7 +786,7 @@ function HealthPanel() {
             ).map(([label, value]) => (
               <div key={label}>
                 <dt className="label">{label}</dt>
-                <dd className="mt-0.5 font-mono text-[0.8125rem] text-bone tabular-nums">{value}</dd>
+                <dd className="mt-0.5 font-mono text-body-sm text-bone tabular-nums">{value}</dd>
               </div>
             ))}
           </dl>

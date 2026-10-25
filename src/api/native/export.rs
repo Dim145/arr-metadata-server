@@ -193,9 +193,15 @@ async fn episode_nfo(
         .iter()
         .find(|e| e.season_number == season && e.episode_number == number)
         .ok_or(AppError::NotFound)?;
+    let imdb = service::imdb::episode_ids(&state, &item.id).await;
 
     Ok(xml(
-        nfo::for_episode(&item, episode, &orders),
+        nfo::for_episode(
+            &item,
+            episode,
+            &orders,
+            imdb.get(&episode.id).map(String::as_str),
+        ),
         &format!("S{season:02}E{number:02}.nfo"),
     ))
 }
@@ -633,9 +639,17 @@ async fn write_everything(
             }
         }
 
+        // Which of IMDb's episodes each is, where IMDb's episodes are read.
+        let imdb = service::imdb::episode_ids(state, &item.id).await;
         for episode in &named.episodes {
             let path = nfo::episode_relative_path(&named, episode);
-            match write_one(root, &path, &nfo::for_episode(&named, episode, &orders)).await {
+            let document = nfo::for_episode(
+                &named,
+                episode,
+                &orders,
+                imdb.get(&episode.id).map(String::as_str),
+            );
+            match write_one(root, &path, &document).await {
                 Ok(()) => summary.episodes += 1,
                 Err(e) => {
                     tracing::warn!(id = %item.id, %path, error = %e, "could not write an episode nfo");
