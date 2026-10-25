@@ -469,15 +469,22 @@ function Strip({
           const n = openings.get(week.monday) ?? 0
           const holdsToday = today >= week.first && today <= week.last
           const month = index === 0 || week.first.slice(5, 7) !== weeks[index - 1]!.first.slice(5, 7)
-          const label = [t.seasons.frame(day(week.first, { day: 'numeric', month: 'long' }), n), holdsToday ? t.seasons.today : '']
+          // The month as the axis writes it, so that a week's name holds the
+          // words its column shows (WCAG 2.5.3).
+          const label = [t.seasons.frame(day(week.first, { day: 'numeric', month: 'short' }), n), holdsToday ? t.seasons.today : '']
             .filter(Boolean)
             .join(' · ')
 
           const inner = (
             <>
-              <span className={cn('font-mono text-label tabular-nums', n ? 'text-bone' : 'text-transparent')} aria-hidden>
-                {n}
-              </span>
+              {/* The count is drawn from its attribute rather than written:
+                  the week's name says it, and the column's written words are
+                  then its date alone, which the name holds as shown. */}
+              <span
+                aria-hidden
+                data-count={n}
+                className={cn('font-mono text-label tabular-nums before:content-[attr(data-count)]', n ? 'text-bone' : 'text-transparent')}
+              />
               <span
                 aria-hidden
                 className={cn('w-full max-w-6 rounded-t-xs', n ? 'bg-vermillion/75' : 'bg-rule')}
@@ -485,6 +492,7 @@ function Strip({
               />
               <span aria-hidden className="mt-1 flex flex-col items-center font-mono text-[0.625rem] leading-tight text-bone-faint tabular-nums">
                 {day(week.first, { day: 'numeric' })}
+                {/* Two words, as the name has them; the column lays no space. */}{' '}
                 <span className={cn('uppercase', month ? 'text-bone-dim' : 'invisible')}>
                   {day(week.first, { month: 'short' })}
                 </span>

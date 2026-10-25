@@ -147,7 +147,7 @@ test.describe('the editor, edited in place', () => {
       await page.goto('/admin/catalogue?sort=title')
       await page.getByLabel(/search titles|chercher un titre/i).fill(stamp)
       await expect(page.locator('tr[data-work]')).toHaveCount(2)
-      await page.getByRole('link', { name: pattern(`^(open|ouvrir) ${escaped(`${stamp} A`)}$`, 'i') }).click()
+      await page.getByRole('link', { name: pattern(`^(open|ouvrir) ${escaped(`${stamp} A`)}\\b`, 'i') }).click()
       await expect(page.getByRole('heading', { level: 1 })).toContainText(`${stamp} A`)
 
       const row = page.locator('li[data-field="overview"]')

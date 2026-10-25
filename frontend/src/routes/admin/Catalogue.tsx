@@ -1356,7 +1356,10 @@ function Row({
             the editor while the link stays a link for the keyboard. */}
         <Link
           to={`/admin/catalogue/${item.id}`}
-          aria-label={w.open(item.title)}
+          // The year and the kind with the title, as the row shows them — the
+          // kind is its glyph's title: whoever speaks to the page says what
+          // they see (WCAG 2.5.3).
+          aria-label={[w.open(item.title), item.year, item.kind === 'series' ? t.nav.series : t.nav.films].filter(Boolean).join(' ')}
           className="flex items-center gap-3 after:absolute after:inset-0 after:content-['']"
         >
           {/* To know the row by: the title beside it says what it is, so the
@@ -1368,9 +1371,10 @@ function Row({
             <span className="truncate text-sm font-medium text-bone transition-colors duration-150 group-hover:text-vermillion">
               {item.title}
             </span>
+            {/* Words apart, as the name has them; the row lays no space. */}{' '}
             {item.year ? (
               <span className="shrink-0 font-mono text-xs text-bone-faint tabular-nums">{item.year}</span>
-            ) : null}
+            ) : null}{' '}
             <Glyph
               name={item.kind === 'series' ? 'tv' : 'film'}
               className="size-3.5 shrink-0 text-bone-faint"

@@ -274,7 +274,9 @@ function Line({ entry, onTrace }: { entry: LogEntry; onTrace: (trace: string) =>
             <button
               type="button"
               onClick={() => onTrace(trace)}
-              aria-label={t.admin.log.onlyThisTrace(trace)}
+              // Named with the id as far as it is shown, so that the words on
+              // the button are in its name (WCAG 2.5.3); the title has it whole.
+              aria-label={t.admin.log.onlyThisTrace(trace.slice(0, 12))}
               title={t.admin.log.onlyThisTrace(trace)}
               className="inline-flex items-center gap-1 rounded-sm text-bone-dim underline decoration-rule-bright underline-offset-2 transition-colors duration-150 hover:text-bone focus-visible:outline-2 focus-visible:outline-vermillion"
             >

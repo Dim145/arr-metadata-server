@@ -251,14 +251,14 @@ export function FieldRow({
           ) : byPencil ? (
             <Shown def={def} value={shownValue} locked={locked || Boolean(draft)} />
           ) : (
-            // The value itself is the way in: a button to every reader, its
-            // name what pressing it does, the value said after it.
+            // The value itself is the way in: a button to every reader, named
+            // by what pressing it does and then by the value it shows, so
+            // that whoever speaks to the page can say what they see (WCAG
+            // 2.5.3).
             <div
               role="button"
               tabIndex={0}
               data-edit=""
-              aria-label={e.inPlace.edit(label)}
-              aria-describedby={valueId}
               onClick={(event) => open(event.currentTarget)}
               onKeyDown={(event) => {
                 if (event.key !== 'Enter' && event.key !== ' ') return
@@ -270,6 +270,7 @@ export function FieldRow({
                 'hover:bg-ink-top focus-visible:bg-ink-top',
               )}
             >
+              <span className="sr-only">{`${e.inPlace.edit(label)} `}</span>
               <div id={valueId} className="min-w-0 flex-1">
                 <Shown def={def} value={shownValue} locked={locked || Boolean(draft)} />
               </div>

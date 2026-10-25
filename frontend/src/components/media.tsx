@@ -384,9 +384,10 @@ export function PosterCard({
   return (
     <Link
       to={to}
-      // The note says what the card is for — the season it leads to — so it
-      // is read too.
-      aria-label={note ? `${t.a11y.openWork(item.title)} · ${note}` : t.a11y.openWork(item.title)}
+      // Named by what it shows — the poster's description, then the
+      // rating, the title, the year or the note saying what the card is for
+      // — so that whoever speaks to the page can say what they see (WCAG
+      // 2.5.3).
       className="group block focus-visible:outline-offset-4"
       onPointerEnter={(event) => {
         if (event.pointerType === 'mouse') prefetch()

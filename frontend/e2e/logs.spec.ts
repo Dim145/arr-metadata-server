@@ -157,7 +157,7 @@ test.describe('the server log', () => {
 
     await items(page)
       .first()
-      .getByRole('button', { name: pattern(`only the lines of trace ${escaped(TRACE)}`, 'i') })
+      .getByRole('button', { name: pattern(`only the lines of trace ${escaped(TRACE.slice(0, 12))}`, 'i') })
       .click()
     await expect(page.getByLabel(/^find$/i)).toHaveValue(TRACE)
     await expect(items(page)).toHaveCount(2)

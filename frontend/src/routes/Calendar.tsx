@@ -301,20 +301,24 @@ function Week() {
             )
             const inner = (
               <>
-                <span aria-hidden className="text-caption tracking-wider uppercase">
+                <span className="text-caption tracking-wider uppercase">
                   {new Intl.DateTimeFormat(locale, { weekday: 'short' }).format(day).replace('.', '')}
                 </span>
-                <span aria-hidden className="font-display text-base leading-none">
-                  {day.getDate()}
-                </span>
+                <span className="font-display text-base leading-none">{day.getDate()}</span>
                 <span aria-hidden className={cn('mt-0.5 size-1.5 rounded-full', n ? 'bg-vermillion' : 'bg-transparent')} />
               </>
             )
             return (
               <li key={key} className="flex">
                 {n ? (
-                  <a href={`#day-${key}`} aria-label={label} aria-current={isToday ? 'date' : undefined} className={cn(cell, 'flex-1')}>
+                  // Named by what it shows, the day and its date, then the
+                  // month and what is on: whoever speaks to the page says
+                  // what they see (WCAG 2.5.3).
+                  <a href={`#day-${key}`} aria-current={isToday ? 'date' : undefined} className={cn(cell, 'flex-1')}>
                     {inner}
+                    <span className="sr-only">
+                      {` ${new Intl.DateTimeFormat(locale, { month: 'long' }).format(day)} · ${counted(listed, t.calendar.count)}`}
+                    </span>
                   </a>
                 ) : (
                   <span role="img" aria-label={label} aria-current={isToday ? 'date' : undefined} className={cn(cell, 'flex-1')}>

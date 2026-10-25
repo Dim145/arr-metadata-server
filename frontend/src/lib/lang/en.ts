@@ -198,7 +198,7 @@ export const en = {
   // The menu beside the search: the two languages, and how posters are shown.
   reader: {
     title: 'Language and reading',
-    menu: (code: string) => `Language and reading (${code})`,
+    menu: (code: string) => `Language and reading: ${code}`,
     interface: 'Interface',
     texts: 'Read texts in…',
     textsHint: 'Titles and synopses, wherever a translation is held. The interface keeps its own language.',
@@ -3088,7 +3088,7 @@ export const en = {
         see: 'See',
         seeNamed: (name: string) => `See ${name}`,
         copy: 'Make an order of it',
-        copyNamed: (name: string) => `Make an order of ${name}`,
+        copyNamed: (name: string) => `Make an order of it: ${name}`,
         edit: 'Edit',
         editNamed: (name: string) => `Edit ${name}`,
         remove: 'Delete',
@@ -4297,7 +4297,6 @@ export const en = {
     still: (title: string) => `Still from ${title}`,
     ratingOf: (value: string) => `Rated ${value} out of 10`,
     ratingOn: (value: string, source: string) => `${source} rating: ${value} out of 10`,
-    openWork: (title: string) => `Open ${title}`,
     shelfBack: 'Scroll back',
     shelfOn: 'Scroll forward',
     toResults: 'Skip to the results',

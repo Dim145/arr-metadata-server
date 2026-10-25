@@ -117,9 +117,9 @@ test.describe('the films in the schedule', () => {
       await expect(row.getByText(/^(cinema release|sortie en salles)$/i)).toBeVisible()
       await expect(row.getByText(/^(digital release|sortie numérique)$/i)).toBeVisible()
       // Counted apart from the episodes, in the heading and on the day's mark.
-      await expect(page.getByText(/ · \d+ (releases?|sorties?)$/)).toBeVisible()
+      await expect(page.getByText(/^\d.* · \d+ (releases?|sorties?)$/)).toBeVisible()
       const days = page.getByRole('list', { name: /days of the week|jours de la semaine/i })
-      await expect(days.locator(`a[href="#day-${today}"]`)).toHaveAttribute('aria-label', /\d+ (releases?|sorties?)$/)
+      await expect(days.locator(`a[href="#day-${today}"]`)).toHaveAccessibleName(/\d+ (releases?|sorties?)$/)
       await scan(page, 'the week, with a film in it')
 
       // The month: in today's cell after its episodes — three at most before

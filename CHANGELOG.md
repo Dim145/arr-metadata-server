@@ -753,6 +753,16 @@ may change what the API or the configuration means, and says so here.
 
 ### Fixed
 
+- Every control is named with the words it shows (WCAG 2.5.3, Label in
+  Name), as axe-core 4.14 now checks: a work's card is named by its poster,
+  rating, title and year rather than "Open …"; the language button says its
+  code without brackets; a day of the schedule's week is named by its short
+  weekday and date before the month and what is on; the season chart writes
+  a week's month as its axis does, and draws the count its name already
+  says; in the administration, a row of the catalogue is named with its
+  year, a field of the editor by what pressing it does and then by the value
+  it shows, an order's copy by the words on its button, and a log line's
+  trace by the id as far as it shows it.
 - Sonarr is never told that a series does not exist when a source could not
   be asked. A series the catalogue holds is answered from it, as before; an
   id nobody holds is a `404` only when every source that could resolve it —
