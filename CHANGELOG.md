@@ -819,7 +819,7 @@ may change what the API or the configuration means, and says so here.
 - `rustls-webpki` 0.103.16, `webpki-roots` and `webpki-root-certs` 1.0.11,
   `ctutils` 0.4.5 and `tokio` 1.54.1, past their advisories
   (RUSTSEC-2026-0381, -0382, -0383, -0385, -0386); the interface's `zod`
-  and the documentation site's `vite` and `zod` likewise. The advisory on
+  and the documentation site's `vite`, `zod` and `undici` likewise. The advisory on
   `crypto-bigint` 0.5 (RUSTSEC-2026-0387) is set aside with its reason:
   `p256` only verifies public signatures and age encrypts with a
   passphrase here, and the fix waits for `openidconnect` and `age`.
