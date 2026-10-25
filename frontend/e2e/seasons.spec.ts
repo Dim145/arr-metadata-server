@@ -1,4 +1,5 @@
-import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
+import { expect, test, type APIRequestContext } from '@playwright/test'
+import { scrollsSideways } from './support/layout'
 import { escaped, pattern } from './support/regex'
 
 /**
@@ -65,15 +66,6 @@ function cardHref(entry: Entry) {
   return entry.seasonNumber !== undefined && (entry.kind === 'newSeason' || entry.kind === 'continuing')
     ? `/work/${entry.workId}/season/${entry.seasonNumber}`
     : `/work/${entry.workId}`
-}
-
-async function scrollsSideways(page: Page) {
-  return page.evaluate(() => {
-    window.scrollTo(600, 0)
-    const moved = window.scrollX > 0
-    window.scrollTo(0, 0)
-    return moved
-  })
 }
 
 test.describe('the season chart', () => {

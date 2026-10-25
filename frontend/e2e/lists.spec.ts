@@ -106,10 +106,14 @@ test.describe('curated lists', () => {
     }
     if (lists.length === 0) {
       // As the server stands now: another test may have composed a list
-      // meanwhile, and the bar is right to show it then.
-      await page.reload()
-      const { lists: now } = (await (await page.request.get('/api/v1/lists')).json()) as { lists: unknown[] }
-      await expect(tab()).toHaveCount(now.length ? 1 : 0)
+      // meanwhile, and the bar is right to show it then — or taken one away
+      // between the page's load and the count read here, so the two are
+      // read again together until they agree.
+      await expect(async () => {
+        await page.reload()
+        const { lists: now } = (await (await page.request.get('/api/v1/lists')).json()) as { lists: unknown[] }
+        await expect(tab()).toHaveCount(now.length ? 1 : 0, { timeout: 2_000 })
+      }).toPass({ timeout: 20_000 })
     }
   })
 
