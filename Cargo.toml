@@ -213,6 +213,9 @@ rmcp = { version = "~3.7", default-features = false, features = ["client", "tran
 
 [profile.release]
 opt-level = 3
+# One optimisation over the whole program: the smallest and fastest binary,
+# for some 4 GB at its last step. A local build short of memory asks for thin
+# LTO instead (CONTRIBUTING.md); CI and the published image keep this one.
 lto = "fat"
 codegen-units = 1
 # Unwind, not abort: a panic in one handler is a 500 for that request — what

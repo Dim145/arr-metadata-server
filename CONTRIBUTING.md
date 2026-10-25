@@ -31,6 +31,16 @@ database engines, builds the container image and starts it. If you touched
 storage, run `scripts/smoke.sh` yourself against SQLite and PostgreSQL, as the
 README's *Development* section shows.
 
+A release build optimises the whole program at once (`lto = "fat"`), and its
+last step wants some 4 GB: more than a Docker VM shared with other containers
+may have. On your machine, ask for thin LTO, a little larger and as fast in
+practice; CI and the published image keep the whole-program one:
+
+```bash
+CARGO_PROFILE_RELEASE_LTO=thin cargo build --release --features avif-asm
+docker build --build-arg CARGO_PROFILE_RELEASE_LTO=thin -t arr-metadata-server:local .
+```
+
 The tests under `frontend/e2e/` run Playwright against the **debug binary**, not
 the Vite dev server: that binary is what ships, serving the interface and the
 API from one origin. Build both, start the binary on port 8479 against a

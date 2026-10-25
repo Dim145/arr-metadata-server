@@ -52,6 +52,8 @@ cargo run --release
 ```
 
 The server listens on `0.0.0.0:8080` and creates `data/ams.db` on first start.
+The build's last step optimises the whole program and wants some 4 GB of memory;
+on a smaller machine, run it as `CARGO_PROFILE_RELEASE_LTO=thin cargo run --release`.
 
 ### PostgreSQL instead of SQLite
 

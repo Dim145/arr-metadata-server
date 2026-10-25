@@ -7,6 +7,14 @@ may change what the API or the configuration means, and says so here.
 
 ## [Unreleased]
 
+### Added
+
+- The image builds with `--build-arg CARGO_PROFILE_RELEASE_LTO=thin` on a
+  machine short of memory: the whole-program optimisation the published image
+  is made with wants some 4 GB at its last step, more than a Docker VM shared
+  with other containers may have. A build from source takes the same
+  variable; CI and the published image are unchanged.
+
 ## [0.10.0] — 2026-10-25
 
 ### Added

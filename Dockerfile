@@ -42,6 +42,13 @@ RUN apt-get update \
  && apt-get install --yes --no-install-recommends nasm \
  && rm -rf /var/lib/apt/lists/*
 
+# The release profile optimises the whole program at once (`lto = "fat"`),
+# which wants some 4 GB for its last step: CI's runners have it, and the
+# published image is built so. A machine short of memory — a Docker VM
+# shared with other containers — asks for thin LTO instead, which cargo takes
+# from this variable: `docker build --build-arg CARGO_PROFILE_RELEASE_LTO=thin .`
+ARG CARGO_PROFILE_RELEASE_LTO=fat
+
 # Compile the dependency tree against a stub so it caches independently of the
 # application sources, which change far more often.
 #
