@@ -100,6 +100,13 @@ Sonarr's metadata service — and does what both did, from one catalogue.
   /api/v1/admin/locks`), each lock finding its work of the same kind by the
   TMDB, TheTVDB or IMDb id it shares; a request takes two thousand locks at
   most, and the dashboard sends a longer file in parts.
+- **The catalogue for agents.** An MCP server at `/mcp`, off until switched
+  on, lets Claude Code, Open WebUI or any agent that speaks the Model Context
+  Protocol search the catalogue, read a work and its episodes, the week's
+  schedule, the lists, where a value came from, the server's health and its
+  errands — eight tools that only read, each call in the audit trail — with a
+  key of the `mcp` scope that opens nothing else. See
+  [The API](api.md#connecting-claude-code-or-open-webui).
 - **Languages of the interface.** English and French ship complete; a
   third language is one file and a registry entry, may start partial — what
   it lacks is shown in English — and the build refuses a key English does

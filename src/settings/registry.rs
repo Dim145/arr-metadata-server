@@ -240,6 +240,27 @@ pub const REGISTRY: &[Definition] = &[
         scopes: SERVER_ONLY,
     },
     Definition {
+        // IMDb's titles by region, read weekly; Radarr is given those of
+        // `imdb.regions`.
+        key: "imdb.akas",
+        kind: Kind::Bool,
+        scopes: SERVER_ONLY,
+    },
+    Definition {
+        // IMDb's episodes, read weekly: an episode's IMDb id and rating.
+        key: "imdb.episodes",
+        kind: Kind::Bool,
+        scopes: SERVER_ONLY,
+    },
+    Definition {
+        // The regions whose titles a Radarr is given — per key and per
+        // address too, as a household's languages differ. Unset, the
+        // country of the language it is answered in.
+        key: "imdb.regions",
+        kind: Kind::Text,
+        scopes: ALL,
+    },
+    Definition {
         key: "fankai.enabled",
         kind: Kind::Bool,
         scopes: SERVER_ONLY,
@@ -412,6 +433,12 @@ pub const REGISTRY: &[Definition] = &[
         // whatever this says, or switching it off would lock the door on the
         // person who did.
         key: "api.native",
+        kind: Kind::Bool,
+        scopes: SERVER_ONLY,
+    },
+    Definition {
+        // The MCP server, `/mcp`: off until an administrator turns it on.
+        key: crate::mcp::SETTING,
         kind: Kind::Bool,
         scopes: SERVER_ONLY,
     },
@@ -681,6 +708,10 @@ pub fn validate(def: &Definition, value: &str) -> Result<(), String> {
                 // Providers the merge knows, each once: a name it does not
                 // know would be passed over without a word.
                 crate::merge::rules::parse_priority(value).map(|_| ())
+            } else if def.key == "imdb.regions" {
+                // Read as Radarr is answered: a region misspelt would match
+                // no title, and say nothing of it.
+                crate::service::imdb::parse_regions(value).map(|_| ())
             } else {
                 Ok(())
             }
@@ -837,6 +868,18 @@ mod tests {
         assert!(validate(def("sentry.sampleRate"), "101").is_err());
         assert!(validate(def("sentry.environment"), "staging").is_ok());
         assert!(validate(def("sentry.environment"), "").is_err());
+    }
+
+    #[test]
+    fn imdbs_titles_and_episodes_are_the_server_s_and_its_regions_anyone_s() {
+        for key in ["imdb.akas", "imdb.episodes"] {
+            assert_eq!(def(key).scopes, SERVER_ONLY, "{key}");
+            assert!(validate(def(key), "true").is_ok(), "{key}");
+        }
+        assert_eq!(def("imdb.regions").scopes, ALL);
+        assert!(validate(def("imdb.regions"), "FR, BE, XWW").is_ok());
+        assert!(validate(def("imdb.regions"), "France").is_err());
+        assert!(validate(def("imdb.regions"), "").is_err());
     }
 
     #[test]

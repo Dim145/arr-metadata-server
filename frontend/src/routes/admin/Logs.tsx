@@ -151,7 +151,7 @@ export function Logs() {
             ))}
           </div>
         ) : log.isError ? (
-          <p role="alert" className="flex items-center gap-2 px-4 py-6 text-sm text-vermillion">
+          <p role="alert" className="flex items-center gap-2 px-4 py-6 text-sm text-status-error">
             <Glyph name="alert" className="size-4" />
             {t.admin.log.loadFailed}
           </p>

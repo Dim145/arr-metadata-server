@@ -221,8 +221,14 @@ pub fn for_item_in(
 /// catalogue keeps for the series, a special one of them places among the
 /// regular seasons is displayed there by Kodi — `displayseason`, and
 /// `displayepisode`, the episode it comes before — where TheTVDB's own hint
-/// of where it aired says nothing.
-pub fn for_episode(item: &MediaItem, episode: &Episode, orders: &[EpisodeOrder]) -> String {
+/// of where it aired says nothing. `imdb` is the IMDb episode it is matched
+/// to, where IMDb's episodes are read (see [`crate::service::imdb`]).
+pub fn for_episode(
+    item: &MediaItem,
+    episode: &Episode,
+    orders: &[EpisodeOrder],
+    imdb: Option<&str>,
+) -> String {
     let mut out = String::with_capacity(1024);
     out.push_str(HEADER);
     out.push_str("<episodedetails>\n");
@@ -259,12 +265,18 @@ pub fn for_episode(item: &MediaItem, episode: &Episode, orders: &[EpisodeOrder])
         let _ = writeln!(out, "  <thumb>{}</thumb>", escape(url));
     }
 
-    // The episode's own ids, TheTVDB's first: one of them, and only one, is
-    // the default — an episode known by TMDB alone is known by it.
-    let ids = [("tvdb", episode.tvdb_id), ("tmdb", episode.tmdb_id)];
+    // The episode's own ids, TheTVDB's first, IMDb's last: one of them, and
+    // only one, is the default — an episode known by TMDB alone is known by
+    // it. IMDb's is matched by the episode's numbers, which makes it the
+    // least sure of the three.
+    let ids = [
+        ("tvdb", episode.tvdb_id.map(|id| id.to_string())),
+        ("tmdb", episode.tmdb_id.map(|id| id.to_string())),
+        ("imdb", imdb.map(escape)),
+    ];
     for (index, (kind, id)) in ids
         .iter()
-        .filter_map(|(kind, id)| Some((*kind, (*id)?)))
+        .filter_map(|(kind, id)| Some((*kind, id.as_deref()?)))
         .enumerate()
     {
         let default = if index == 0 { " default=\"true\"" } else { "" };
@@ -835,7 +847,7 @@ mod tests {
             votes: 260,
         });
 
-        let nfo = for_episode(&item, &episode, &[]);
+        let nfo = for_episode(&item, &episode, &[], None);
 
         assert!(nfo.contains("<episodedetails>"));
         assert!(nfo.contains("<title>Pilot</title>"));
@@ -931,7 +943,7 @@ mod tests {
             .map(|(id, number)| crate::domain::PlacedEpisode::of_tvdb(id, 1, number))
             .collect();
 
-        let nfo = for_episode(&item, &special, std::slice::from_ref(&dvd));
+        let nfo = for_episode(&item, &special, std::slice::from_ref(&dvd), None);
         assert!(nfo.contains("<displayseason>1</displayseason>"), "{nfo}");
         assert!(nfo.contains("<displayepisode>2</displayepisode>"), "{nfo}");
 
@@ -940,7 +952,7 @@ mod tests {
             .into_iter()
             .map(|(id, number)| crate::domain::PlacedEpisode::of_tvdb(id, 1, number))
             .collect();
-        let nfo = for_episode(&item, &special, std::slice::from_ref(&dvd));
+        let nfo = for_episode(&item, &special, std::slice::from_ref(&dvd), None);
         assert!(nfo.contains("<displayseason>1</displayseason>"), "{nfo}");
         assert!(!nfo.contains("displayepisode"), "{nfo}");
 
@@ -948,9 +960,9 @@ mod tests {
         // nothing said.
         let mut hinted = special.clone();
         hinted.aired_before_season_number = Some(2);
-        let nfo = for_episode(&item, &hinted, std::slice::from_ref(&dvd));
+        let nfo = for_episode(&item, &hinted, std::slice::from_ref(&dvd), None);
         assert!(nfo.contains("<displayseason>2</displayseason>"), "{nfo}");
-        let nfo = for_episode(&item, &special, &[]);
+        let nfo = for_episode(&item, &special, &[], None);
         assert!(!nfo.contains("displayseason"), "{nfo}");
     }
 
@@ -1055,7 +1067,7 @@ mod tests {
             let mut episode = crate::db::repo::child::blank_episode(1, 1);
             episode.tvdb_id = tvdb;
             episode.tmdb_id = tmdb;
-            identifiers(&for_episode(&item, &episode, &[]), "episodedetails")
+            identifiers(&for_episode(&item, &episode, &[], None), "episodedetails")
         };
 
         assert_eq!(
@@ -1066,6 +1078,33 @@ mod tests {
         assert_eq!(episode_ids(None, Some(6)), [("tmdb=6".to_string(), true)]);
         assert_eq!(episode_ids(Some(5), None), [("tvdb=5".to_string(), true)]);
         assert!(episode_ids(None, None).is_empty());
+    }
+
+    #[test]
+    fn an_episode_matched_to_one_of_imdbs_carries_its_id_last() {
+        let item = series();
+        let mut episode = crate::db::repo::child::blank_episode(1, 1);
+        episode.tvdb_id = Some(349_232);
+
+        assert_eq!(
+            identifiers(
+                &for_episode(&item, &episode, &[], Some("tt0959621")),
+                "episodedetails"
+            ),
+            [
+                ("tvdb=349232".to_string(), true),
+                ("imdb=tt0959621".to_string(), false)
+            ]
+        );
+        // Known by IMDb's id alone, it is known by that.
+        let bare = crate::db::repo::child::blank_episode(1, 2);
+        assert_eq!(
+            identifiers(
+                &for_episode(&item, &bare, &[], Some("tt0959621")),
+                "episodedetails"
+            ),
+            [("imdb=tt0959621".to_string(), true)]
+        );
     }
 
     #[test]
@@ -1262,7 +1301,7 @@ mod tests {
 
         let mut episode = crate::db::repo::child::blank_episode(1, 2);
         episode.title = "<Pilot> & \"more\"".into();
-        let elements = xml::read(&for_episode(&item, &episode, &[]));
+        let elements = xml::read(&for_episode(&item, &episode, &[], None));
         assert_eq!(
             xml::texts(&elements, "episodedetails/title"),
             ["<Pilot> & \"more\""]

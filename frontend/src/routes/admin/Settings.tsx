@@ -92,7 +92,7 @@ export function Settings() {
 
   if (settings.isError) {
     return (
-      <p role="alert" className="flex items-center gap-2 text-sm text-vermillion">
+      <p role="alert" className="flex items-center gap-2 text-sm text-status-error">
         <Glyph name="alert" className="size-4" />
         {t.admin.config.loadFailed}
       </p>
@@ -306,13 +306,13 @@ export function Settings() {
             <PanelHead title={t.admin.config.runtime} />
             <dl className="divide-y divide-rule">
               <Field label={t.admin.config.version}>
-                <span className="font-mono text-[0.8125rem] tabular-nums">{config.version}</span>
+                <span className="font-mono text-body-sm tabular-nums">{config.version}</span>
               </Field>
               <Field label={t.admin.config.database}>
-                <span className="font-mono text-[0.8125rem]">{config.database}</span>
+                <span className="font-mono text-body-sm">{config.database}</span>
               </Field>
               <Field label={t.admin.config.publicUrl}>
-                <span className="font-mono text-[0.8125rem] break-all">
+                <span className="font-mono text-body-sm break-all">
                   {config.publicUrl ?? '—'}
                 </span>
               </Field>
@@ -348,7 +348,7 @@ export function Settings() {
                 ] as const
               ).map(([path, policy]) => (
                 <div key={path} className="flex items-center justify-between gap-4 px-5 py-2.5">
-                  <dt className="font-mono text-[0.8125rem] text-bone">{path}</dt>
+                  <dt className="font-mono text-body-sm text-bone">{path}</dt>
                   <dd>
                     <PolicyChip policy={policy} />
                   </dd>
@@ -450,7 +450,7 @@ function NfoExport() {
               'mt-2 font-mono text-xs',
               // Green says "this worked". A run that wrote nothing and failed on
               // every work did not, whatever status code carried the summary.
-              counts.works === 0 && counts.failed > 0 ? 'text-vermillion' : 'text-moss',
+              counts.works === 0 && counts.failed > 0 ? 'text-status-error' : 'text-status-ok',
             )}
           >
             {t.admin.config.exportDone(counts.works, counts.episodes)}
@@ -460,13 +460,13 @@ function NfoExport() {
             ) : null}
           </p>
         ) : mine?.status === 'failed' ? (
-          <p role="alert" className="mt-2 text-xs text-vermillion">
+          <p role="alert" className="mt-2 text-xs text-status-error">
             {mine.error}
           </p>
         ) : null}
 
         {run.isError ? (
-          <p role="alert" className="mt-2 text-xs text-vermillion">
+          <p role="alert" className="mt-2 text-xs text-status-error">
             {missingPath ? t.admin.config.exportNoPath : run.error.message}
           </p>
         ) : null}
@@ -495,7 +495,7 @@ function ClearCache() {
         {/* Without this the button simply goes back to saying "Clear", which
             reads as "done" — the one thing it must not say when it is not. */}
         {clear.isError ? (
-          <p role="alert" className="mt-2 text-xs text-vermillion">
+          <p role="alert" className="mt-2 text-xs text-status-error">
             {clear.error.message}
           </p>
         ) : null}

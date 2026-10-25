@@ -180,6 +180,13 @@ age = { version = "0.12.1", default-features = false }
 # written and read by the synchronous tar, zstd and age, off the runtime.
 tokio-util = { version = "0.7.19", features = ["io", "io-util"] }
 
+# ── MCP ──────────────────────────────────────────────────────────────────────
+# The Model Context Protocol, for agents (src/mcp): the official SDK, its
+# server and its Streamable HTTP transport alone. Pinned to a minor — it
+# breaks every few months — and to 3.7 at least: 3.0 to 3.5 kept a cache an
+# unauthenticated caller could grow without end (GHSA-4432-vg92-fqh6).
+rmcp = { version = "~3.7", default-features = false, features = ["server", "transport-streamable-http-server"] }
+
 [features]
 # rav1e's assembly: an AVIF copy in less than half the time (see
 # docs/media.md). On x86_64 it is NASM's to assemble, which a build then
@@ -200,6 +207,9 @@ quick-xml = "0.41"
 # optional, a handler's operation id (src/api/mod.rs). The version utoipa's
 # derive already brings.
 syn = { version = "3.0.6", default-features = false, features = ["full", "parsing", "visit"] }
+# The SDK's own client, which the MCP endpoint's tests talk to it with: over
+# the reqwest already here, in plain HTTP.
+rmcp = { version = "~3.7", default-features = false, features = ["client", "transport-streamable-http-client-reqwest"] }
 
 [profile.release]
 opt-level = 3

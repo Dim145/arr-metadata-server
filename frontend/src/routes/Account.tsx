@@ -120,7 +120,7 @@ function Provider({ me }: { me: User }) {
       <div className="space-y-4 p-5">
         {me.oidcLinked ? (
           <p className="flex items-center gap-2 text-sm text-bone">
-            <Glyph name="link" className="size-4 text-moss" />
+            <Glyph name="link" className="size-4 text-status-ok" />
             {t.account.providerTied}
           </p>
         ) : (
@@ -223,7 +223,7 @@ function Profile({ me }: { me: User }) {
             {save.isPending ? t.account.saving : t.account.save}
           </Button>
           {save.isSuccess && !changed ? (
-            <span role="status" className="text-sm text-moss">
+            <span role="status" className="text-sm text-status-ok">
               {t.account.saved}
             </span>
           ) : null}
@@ -280,7 +280,7 @@ function Sessions() {
               </p>
             </div>
             {session.current ? (
-              <Chip className="border-moss/50 text-moss">{t.account.thisOne}</Chip>
+              <Chip className="border-status-ok/50 text-status-ok">{t.account.thisOne}</Chip>
             ) : (
               <Button
                 size="sm"
@@ -428,7 +428,7 @@ function SingleKey({
           {t.account.makeYourKey}
         </Button>
         {make.isError ? (
-          <p role="alert" className="mt-2 text-xs text-vermillion">
+          <p role="alert" className="mt-2 text-xs text-status-error">
             {make.error.message}
           </p>
         ) : null}
@@ -655,7 +655,7 @@ function KeyList({
         {confirm?.what === 'rotate' ? t.account.regenerateBody : t.account.revokeBody}
       </Dialog>
       {rotate.isError || revoke.isError ? (
-        <p role="alert" className="text-xs text-vermillion">
+        <p role="alert" className="text-xs text-status-error">
           {(rotate.error ?? revoke.error) instanceof ApiError ? (rotate.error ?? revoke.error)?.message : null}
         </p>
       ) : null}

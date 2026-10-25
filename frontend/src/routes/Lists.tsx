@@ -38,7 +38,7 @@ export function Lists() {
           ))}
         </div>
       ) : lists.isError ? (
-        <p role="alert" className="flex items-center gap-2 text-sm text-vermillion">
+        <p role="alert" className="flex items-center gap-2 text-sm text-status-error">
           <Glyph name="alert" className="size-4" />
           {t.lists.loadFailed}
         </p>
@@ -112,7 +112,7 @@ export function CollectionIndex() {
           ))}
         </div>
       ) : collections.isError ? (
-        <p role="alert" className="flex items-center gap-2 text-sm text-vermillion">
+        <p role="alert" className="flex items-center gap-2 text-sm text-status-error">
           <Glyph name="alert" className="size-4" />
           {t.collections.loadFailed}
         </p>

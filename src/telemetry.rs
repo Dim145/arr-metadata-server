@@ -39,7 +39,9 @@ use tracing_subscriber::{
 };
 
 /// What the log writes when `AMS_LOG` and `RUST_LOG` say nothing it can read.
-const DEFAULT_FILTER: &str = "info,arr_metadata_server=info,tower_http=info";
+/// The MCP SDK's warnings and no more: it says three things of every request
+/// `/mcp` answers, each served on its own, and the request's line says it.
+const DEFAULT_FILTER: &str = "info,arr_metadata_server=info,tower_http=info,rmcp=warn";
 
 /// The target the request span is written under: this module's.
 const REQUEST_TARGET: &str = module_path!();

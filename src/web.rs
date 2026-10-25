@@ -109,6 +109,13 @@ pub async fn serve(state: AppState) -> Result<()> {
             .fallback_service(normalized),
     );
 
+    // The MCP server, beside the rest rather than inside it: an agent's
+    // answer may be a stream, which neither the timeout nor the compression
+    // suits, and its own guard, trace and count are in `mcp::router`.
+    // Stopped with the server: what it is answering ends with the doors.
+    let mcp_stop = tokio_util::sync::CancellationToken::new();
+    let router = crate::mcp::mounted(router, &state, mcp_stop.clone());
+
     // The clients' door, when there is one: bound first, so a port that is
     // taken stops the start rather than being found out later.
     let clients_door = match &state.tls.clients {
@@ -192,6 +199,8 @@ pub async fn serve(state: AppState) -> Result<()> {
             shutdown_signal().await;
             // What ends from here on is the stop's doing: not started again.
             tasks.stop();
+            // An agent's call in hand is answered or ended, and no other taken.
+            mcp_stop.cancel();
             for door in doors {
                 door.graceful_shutdown(Some(DRAIN));
             }
@@ -397,6 +406,35 @@ fn build_router(state: AppState) -> Router {
         // it can trust anything.
         .route("/ca.crt", get(crate::tls::ca_certificate))
         .route("/trust-ca.sh", get(crate::tls::trust_script))
+        // Where an MCP client looks for OAuth — or OpenID's metadata, in its
+        // stead — before it gives up on it: the MCP server takes keys, and
+        // says so with a 404 rather than with the interface's page, which a
+        // client would take for broken metadata. This server is no identity
+        // provider: it signs people in through one, elsewhere.
+        .route(
+            "/.well-known/oauth-protected-resource",
+            get(crate::mcp::no_oauth),
+        )
+        .route(
+            "/.well-known/oauth-protected-resource/{*rest}",
+            get(crate::mcp::no_oauth),
+        )
+        .route(
+            "/.well-known/oauth-authorization-server",
+            get(crate::mcp::no_oauth),
+        )
+        .route(
+            "/.well-known/oauth-authorization-server/{*rest}",
+            get(crate::mcp::no_oauth),
+        )
+        .route(
+            "/.well-known/openid-configuration",
+            get(crate::mcp::no_oauth),
+        )
+        .route(
+            "/.well-known/openid-configuration/{*rest}",
+            get(crate::mcp::no_oauth),
+        )
         // Every API answer carries a validator, so a client that holds one is
         // told "unchanged" rather than sent it again. Inside the compression,
         // which would otherwise vary the bytes the tag is taken from.
@@ -931,5 +969,42 @@ mod policy_tests {
             assert!(ANY_NAME.contains(&path), "{path}");
         }
         assert!(!ANY_NAME.contains(&"/api/v1/items"));
+    }
+}
+
+#[cfg(test)]
+mod well_known_tests {
+    use axum::{body::Body, http::Request};
+    use tower::ServiceExt as _;
+
+    use super::*;
+
+    /// An MCP client looking for OAuth, or OpenID's metadata in its stead,
+    /// is told there is none, not handed the interface's page.
+    #[tokio::test]
+    async fn no_oauth_metadata_is_offered() {
+        let state = crate::api::native::testing::server().await;
+        let router = build_router(state);
+        let ask = |path: &str| {
+            let router = router.clone();
+            let request = Request::get(path).body(Body::empty()).unwrap();
+            async move { router.oneshot(request).await.unwrap() }
+        };
+        for path in [
+            "/.well-known/oauth-protected-resource",
+            "/.well-known/oauth-protected-resource/mcp",
+            "/.well-known/oauth-authorization-server",
+            "/.well-known/oauth-authorization-server/mcp",
+            "/.well-known/openid-configuration",
+            "/.well-known/openid-configuration/mcp",
+        ] {
+            let answer = ask(path).await;
+            assert_eq!(answer.status(), StatusCode::NOT_FOUND, "{path}");
+            assert_eq!(
+                answer.headers()[header::CONTENT_TYPE],
+                "application/json",
+                "{path}"
+            );
+        }
     }
 }

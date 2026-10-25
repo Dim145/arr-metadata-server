@@ -776,7 +776,7 @@ mod tests {
             ]
         );
         for episode in &item.episodes {
-            let document = crate::export::nfo::for_episode(&item, episode, &[]);
+            let document = crate::export::nfo::for_episode(&item, episode, &[], None);
             assert_eq!(document.matches("<episodedetails>").count(), 1);
         }
     }

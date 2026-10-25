@@ -96,6 +96,9 @@ const TABLES: &[&str] = &[
     "search_cache",
     "anime_mapping",
     "imdb_rating",
+    // IMDb's titles by region and its episodes, for the works held here.
+    "imdb_title",
+    "imdb_episode",
     "data_import",
     "curated_list",
     "curated_list_item",

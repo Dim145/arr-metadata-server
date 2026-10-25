@@ -190,7 +190,7 @@ export function ArtworkTab({ work, onChanged }: { work: MediaItem; onChanged: ()
         <span>{c.primaryHint}</span>
       </p>
       {forget.isError || choose.isError || hide.isError ? (
-        <p role="alert" className="mt-3 text-xs text-vermillion">
+        <p role="alert" className="mt-3 text-xs text-status-error">
           {(forget.error ?? choose.error ?? hide.error)?.message || t.common.actionFailed}
         </p>
       ) : null}
@@ -413,7 +413,7 @@ function ArtCard({
         </div>
       </div>
       <div className="flex items-center justify-between gap-1 border-t border-rule py-0.5 pr-0.5 pl-3">
-        <span className="min-w-0 truncate font-mono text-[0.6875rem] text-bone-faint" title={kept?.origin ?? image.url}>
+        <span className="min-w-0 truncate font-mono text-label text-bone-faint" title={kept?.origin ?? image.url}>
           {caption}
         </span>
         <span className="flex shrink-0 items-center">
@@ -482,7 +482,7 @@ function UploadTheme({ item, onDone }: { item: MediaItem; onDone: () => void }) 
           {c.uploadTheme}
         </Button>
         {upload.isSuccess ? (
-          <span role="status" className="text-xs text-moss">
+          <span role="status" className="text-xs text-status-ok">
             {c.uploaded}
           </span>
         ) : null}
@@ -516,7 +516,7 @@ function UploadTheme({ item, onDone }: { item: MediaItem; onDone: () => void }) 
         />
       </FormField>
       {upload.isError ? (
-        <p role="alert" className="mt-3 text-xs text-vermillion">
+        <p role="alert" className="mt-3 text-xs text-status-error">
           {upload.error.message || t.common.actionFailed}
         </p>
       ) : null}

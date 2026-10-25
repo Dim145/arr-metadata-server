@@ -1,6 +1,13 @@
 /**
  * Buttons of every weight, the link that must look like one, and the spinner
  * they show while waiting.
+ *
+ * Every component in `ui/` says what it looks like in each state a control
+ * can be in — at rest, under the pointer (hover), reached by the keyboard
+ * (focus), pressed (active), disabled, waiting (loading), failed (error) and
+ * with nothing to show (empty) — and the styleguide draws each one
+ * (`/__styleguide`, in a development build). A state a component does not
+ * have says so, and says whose it is instead.
  */
 
 import { cn } from '../../lib/cn'
@@ -42,6 +49,30 @@ const BUTTON_SIZE: Record<NonNullable<ButtonProps['size']>, string> = {
   md: 'min-h-11 px-5 text-sm',
 }
 
+/**
+ * An action, in one of four weights: `primary`, the one thing a screen is
+ * for; `ghost`, the rest; `quiet`, what sits in a row of others; `danger`,
+ * what cannot be taken back. Danger is still an action, so it wears the
+ * accent, not the colour of a failure: an error is something that went
+ * wrong, a danger something about to be done.
+ *
+ * States:
+ * - rest: primary, the accent shading into brass, ink words and the lifted
+ *   shadow; ghost, a bright rule's edge and bone words; quiet, no edge and
+ *   dim words; danger, the deep accent's edge and the accent's words.
+ * - hover: primary 10% brighter; ghost and quiet on the high ink, the
+ *   ghost's edge lighter, the quiet words bone; danger filled with the
+ *   accent, its words ink.
+ * - focus: the ring every control has (styles.css, `:focus-visible`), the
+ *   accent two pixels out, for the keyboard alone.
+ * - active: as hover. Nothing moves or shrinks under a press.
+ * - disabled: at 45%, with the not-allowed cursor and no hover; under forced
+ *   colours, the system's grey.
+ * - loading: the caller's — `disabled`, a `Spinner` before words that say
+ *   what is under way ("Saving…").
+ * - error, empty: none of its own; the form's `FormField`, or an alert line
+ *   beside the button, says what failed.
+ */
 export function Button({ variant = 'ghost', size = 'md', className, ...props }: ButtonProps) {
   return (
     <button
@@ -59,6 +90,10 @@ export function Button({ variant = 'ghost', size = 'md', className, ...props }: 
  * `<button>` that navigates lies to everyone who reads the page with anything
  * other than their eyes. Downloads and the documentation are navigations, so
  * they are anchors, dressed from the same three tables above.
+ *
+ * States: as `Button`'s, but for two. A link cannot be disabled, so it has
+ * no such state: a way that is not open is not drawn. And it does not wait —
+ * the browser shows a navigation under way.
  */
 export function ButtonLink({
   variant = 'ghost',
@@ -94,6 +129,17 @@ export function ButtonLink({
  * name. Here the name is compulsory: it reaches the screen reader through
  * `aria-label`, and the mouse and the keyboard through the tooltip (see
  * `useTooltip`), and the target stays 44px whatever the glyph measures.
+ *
+ * States:
+ * - rest: the glyph in faint bone on nothing; `pressed`, in brass on a brass
+ *   wash — a toggle a person turned on.
+ * - hover: the high ink behind it, the glyph bone — or the accent, for a
+ *   `danger` one. Its name shows above it after a rest (`useTooltip`).
+ * - focus: the ring, and its name at once.
+ * - active: as hover.
+ * - disabled: at 45%, with the not-allowed cursor and no hover.
+ * - loading (`busy`): a `Spinner` in the glyph's place, and disabled.
+ * - error, empty: none of its own; whatever it acted on says it.
  */
 export function IconButton({
   glyph,
@@ -150,6 +196,10 @@ export function IconButton({
  * Exists because the administration side waits on the network in places too
  * small for a skeleton — inside a button, beside a panel head. Always
  * decorative: whatever it sits next to says in words what is happening.
+ *
+ * States: it is itself the loading state of whatever holds it — a ring at
+ * half the text's colour, turning. For a reader who asked for less motion it
+ * stands still, and the words beside it carry the meaning.
  */
 export function Spinner({ className }: { className?: string }) {
   return (

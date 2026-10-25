@@ -73,7 +73,7 @@ export function Access() {
 
   if (report.isError) {
     return (
-      <p role="alert" className="flex items-center gap-2 text-sm text-vermillion">
+      <p role="alert" className="flex items-center gap-2 text-sm text-status-error">
         <Glyph name="alert" className="size-4" />
         {report.error.message}
       </p>
@@ -338,7 +338,7 @@ export function Access() {
         </Panel>
 
         {write.isError ? (
-          <p role="alert" className="flex items-center gap-2 text-sm text-vermillion">
+          <p role="alert" className="flex items-center gap-2 text-sm text-status-error">
             <Glyph name="alert" className="size-4" />
             {write.error.message}
           </p>

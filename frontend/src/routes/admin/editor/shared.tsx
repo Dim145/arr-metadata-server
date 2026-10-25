@@ -69,7 +69,7 @@ export function LockBadge({ n, className }: { n: number; className?: string }) {
   const { t } = useI18n()
   if (!n) return null
   return (
-    <span className={cn('inline-flex items-center gap-1 font-mono text-[0.6875rem] font-medium text-brass tabular-nums', className)}>
+    <span className={cn('inline-flex items-center gap-1 font-mono text-label font-medium text-brass tabular-nums', className)}>
       <Glyph name="lock" className="size-3" />
       {n}
       <span className="sr-only"> {t.admin.editor.lockCount(n)}</span>
@@ -89,7 +89,7 @@ export function Facts({ items, className }: { items: (ReactNode | undefined | nu
   const shown = items.filter(Boolean)
   if (!shown.length) return null
   return (
-    <p className={cn('font-mono text-[0.6875rem] leading-relaxed tracking-[0.1em] text-bone-faint uppercase tabular-nums', className)}>
+    <p className={cn('font-mono text-label leading-relaxed tracking-[0.1em] text-bone-faint uppercase tabular-nums', className)}>
       {shown.map((item, index) => (
         <span key={index}>
           {/* One mark between facts, tied to the fact before it with a
@@ -178,7 +178,7 @@ export function AddForm({
       {children}
 
       {error ? (
-        <p role="alert" className="flex items-center gap-1.5 text-xs text-vermillion">
+        <p role="alert" className="flex items-center gap-1.5 text-xs text-status-error">
           <Glyph name="alert" className="size-3.5 shrink-0" />
           {error.message || t.common.actionFailed}
         </p>
@@ -233,10 +233,10 @@ export function useRemove(item: MediaItem, onChanged: () => void) {
         </>
       }
     >
-      <p className="mb-2 font-mono text-[0.8125rem] text-bone">{removing?.label}</p>
+      <p className="mb-2 font-mono text-body-sm text-bone">{removing?.label}</p>
       {t.admin.editor.children.removeBody}
       {remove.isError ? (
-        <p role="alert" className="mt-3 text-sm text-vermillion">
+        <p role="alert" className="mt-3 text-sm text-status-error">
           {remove.error.message || t.common.actionFailed}
         </p>
       ) : null}
@@ -251,7 +251,7 @@ export function Yours({ onRemove }: { onRemove?: () => void }) {
   const { t } = useI18n()
   return (
     <span className="flex shrink-0 items-center gap-1">
-      <span className="inline-flex items-center gap-1.5 rounded-full border border-brass-deep px-2.5 py-1 font-mono text-[0.6875rem] font-medium tracking-[0.12em] text-brass uppercase">
+      <span className="inline-flex items-center gap-1.5 rounded-full border border-brass-deep px-2.5 py-1 font-mono text-label font-medium tracking-[0.12em] text-brass uppercase">
         <Glyph name="lock" className="size-3" />
         {t.admin.editor.children.yours}
       </span>

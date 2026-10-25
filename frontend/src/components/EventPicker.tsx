@@ -68,7 +68,7 @@ export function EventPicker({
         />
         <span className="min-w-0">
           <span className="block text-sm text-bone">{label}</span>
-          <span className="block font-mono text-[0.6875rem] text-bone-faint">{name}</span>
+          <span className="block font-mono text-label text-bone-faint">{name}</span>
           {hint ? <span className="mt-0.5 block text-xs leading-relaxed text-bone-faint">{hint}</span> : null}
         </span>
       </label>
@@ -88,7 +88,7 @@ export function EventPicker({
           onChange={(event) => toggleEvery(event.target.checked)}
         />
         <span className="text-sm text-bone">{e.every}</span>
-        <span className="font-mono text-[0.6875rem] text-bone-faint">{EVERY}</span>
+        <span className="font-mono text-label text-bone-faint">{EVERY}</span>
       </label>
 
       <fieldset className="mt-3 min-w-0">

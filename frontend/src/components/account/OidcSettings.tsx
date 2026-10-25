@@ -75,7 +75,7 @@ export function OidcSettings({ number, delay }: { number: number; delay: number 
   // for, and was a skeleton that shimmered for as long as the page was open.
   if (config.isError) {
     return (
-      <p role="alert" className="text-sm text-vermillion">
+      <p role="alert" className="text-sm text-status-error">
         {config.error.message}
       </p>
     )
@@ -159,16 +159,16 @@ export function OidcSettings({ number, delay }: { number: number; delay: number 
                 {test.isPending ? o.testing : o.test}
               </Button>
               {test.data?.ok && test.data.discovery ? (
-                <span role="status" className="flex items-center gap-1.5 text-xs text-moss">
+                <span role="status" className="flex items-center gap-1.5 text-xs text-status-ok">
                   <Glyph name="check" className="size-3.5" />
                   {o.found(test.data.discovery.keys, test.data.discovery.signingAlgorithms.join(', '))}
                 </span>
               ) : test.data && !test.data.ok ? (
-                <span role="alert" className="text-xs break-words text-vermillion">
+                <span role="alert" className="text-xs break-words text-status-error">
                   {o.testFailed} {test.data.error}
                 </span>
               ) : test.isError ? (
-                <span role="alert" className="text-xs text-vermillion">
+                <span role="alert" className="text-xs text-status-error">
                   {o.testFailed} {test.error.message}
                 </span>
               ) : null}
@@ -179,7 +179,7 @@ export function OidcSettings({ number, delay }: { number: number; delay: number 
             <span className="label block">{o.redirect}</span>
             {current.redirectUri ? (
               <div className="flex flex-wrap items-center gap-2">
-                <code className="min-w-0 flex-1 rounded-card border border-rule bg-ink px-3 py-2.5 font-mono text-[0.8125rem] break-all text-bone">
+                <code className="min-w-0 flex-1 rounded-card border border-rule bg-ink px-3 py-2.5 font-mono text-body-sm break-all text-bone">
                   {current.redirectUri}
                 </code>
                 <Button size="sm" onClick={() => void copy()}>
@@ -282,13 +282,13 @@ export function OidcSettings({ number, delay }: { number: number; delay: number 
             {save.isPending ? o.saving : o.save}
           </Button>
           {save.isSuccess ? (
-            <span role="status" className="flex items-center gap-1.5 text-sm text-moss">
+            <span role="status" className="flex items-center gap-1.5 text-sm text-status-ok">
               <Glyph name="check" className="size-4" />
               {o.saved}
             </span>
           ) : null}
           {save.isError ? (
-            <span role="alert" className="text-sm text-vermillion">
+            <span role="alert" className="text-sm text-status-error">
               {save.error.message}
             </span>
           ) : null}

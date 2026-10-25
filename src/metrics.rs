@@ -24,9 +24,10 @@ use axum::{extract::Request, middleware::Next, response::Response};
 /// The surfaces a request lands on, in the order they are counted. The
 /// liveness probes are a surface of their own, so a monitor does not count
 /// as readers; so are the media kept, and the authority's files a client
-/// fetches to trust this server.
-pub const SURFACES: [&str; 11] = [
-    "sonarr", "radarr", "plex", "tmdb", "tvdb", "anilist", "native", "media", "ca", "probe", "ui",
+/// fetches to trust this server; and the MCP server an agent calls.
+pub const SURFACES: [&str; 12] = [
+    "sonarr", "radarr", "plex", "tmdb", "tvdb", "anilist", "native", "media", "ca", "probe", "mcp",
+    "ui",
 ];
 
 /// The providers asked upstream, in the order they are counted.
@@ -187,6 +188,8 @@ pub fn surface_of(path: &str) -> usize {
         "ca"
     } else if path == "/health" || path == "/ready" {
         "probe"
+    } else if path == "/mcp" || path.starts_with("/mcp/") {
+        "mcp"
     } else {
         "ui"
     };
@@ -623,6 +626,9 @@ mod tests {
         assert_eq!(SURFACES[surface_of("/media/abc.jpg")], "media");
         assert_eq!(SURFACES[surface_of("/ca.crt")], "ca");
         assert_eq!(SURFACES[surface_of("/trust-ca.sh")], "ca");
+        assert_eq!(SURFACES[surface_of("/mcp")], "mcp");
+        assert_eq!(SURFACES[surface_of("/mcp/")], "mcp");
+        assert_eq!(SURFACES[surface_of("/mcpx")], "ui");
     }
 
     #[test]

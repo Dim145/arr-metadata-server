@@ -84,7 +84,7 @@ function ShareCell({ item }: { item: MediaItem }) {
           'pointer-events-none absolute right-2 bottom-full mb-2 rounded-full border bg-ink-raised px-3 py-1 text-caption whitespace-nowrap',
           'transition-opacity duration-150',
           said ? 'opacity-100' : 'opacity-0',
-          said === 'failed' ? 'border-vermillion-deep text-vermillion' : 'border-rule text-moss',
+          said === 'failed' ? 'border-vermillion-deep text-status-error' : 'border-rule text-status-ok',
         )}
       >
         {words}

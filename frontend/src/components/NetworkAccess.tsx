@@ -341,7 +341,7 @@ export function NetworkAccess() {
             ))}
           </div>
         ) : callers.isError ? (
-          <p role="alert" className="flex items-center gap-2 px-5 py-6 text-sm text-vermillion">
+          <p role="alert" className="flex items-center gap-2 px-5 py-6 text-sm text-status-error">
             <Glyph name="alert" className="size-4" />
             {t.admin.network.callersFailed}
           </p>
@@ -434,7 +434,7 @@ function CallerRow({
         {/* The user agent names the application where the hostname names the
             machine; between them an operator can tell two Sonarrs apart. */}
         <span className="text-sm text-bone-dim">{caller.userAgent ?? '—'}</span>
-        <span className="mt-0.5 block font-mono text-[0.6875rem] tracking-wide text-bone-faint uppercase">
+        <span className="mt-0.5 block font-mono text-label tracking-wide text-bone-faint uppercase">
           {caller.lastSurface}
         </span>
       </Td>

@@ -167,7 +167,7 @@ export function Audit() {
             ))}
           </div>
         ) : log.isError ? (
-          <p role="alert" className="flex items-center gap-2 px-4 py-6 text-sm text-vermillion">
+          <p role="alert" className="flex items-center gap-2 px-4 py-6 text-sm text-status-error">
             <Glyph name="alert" className="size-4" />
             {t.admin.trail.loadFailed}
           </p>
@@ -256,7 +256,7 @@ function Row({ entry, locale }: { entry: AuditEntry; locale: string }) {
           {entry.actor ?? t.admin.trail.anonymous}
         </span>
         {entry.ip ? (
-          <span className="block font-mono text-[0.6875rem] text-bone-faint tabular-nums">
+          <span className="block font-mono text-label text-bone-faint tabular-nums">
             {entry.ip}
           </span>
         ) : null}

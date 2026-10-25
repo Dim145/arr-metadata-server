@@ -192,7 +192,7 @@ export function MergeDialog({
           {m.flag}
         </p>
       ) : preview.isError ? (
-        <p role="alert" className="flex items-start gap-2 text-sm text-vermillion">
+        <p role="alert" className="flex items-start gap-2 text-sm text-status-error">
           <Glyph name="alert" className="mt-0.5 size-4 shrink-0" />
           {preview.error instanceof ApiError ? preview.error.message : m.loadFailed}
         </p>
@@ -258,7 +258,7 @@ export function MergeDialog({
           </p>
 
           {merge.isError || dismiss.isError ? (
-            <p role="alert" className="flex items-start gap-2 text-sm text-vermillion">
+            <p role="alert" className="flex items-start gap-2 text-sm text-status-error">
               <Glyph name="alert" className="mt-0.5 size-4 shrink-0" />
               {(merge.error ?? dismiss.error) instanceof ApiError
                 ? (merge.error ?? dismiss.error)?.message
@@ -313,7 +313,7 @@ function Side({
           {card.title}
           {card.year ? <span className="ml-1.5 font-mono text-xs text-bone-faint tabular-nums">{card.year}</span> : null}
         </h3>
-        <p className="mt-1 flex flex-wrap gap-x-2 font-mono text-[0.6875rem] text-bone-faint tabular-nums">
+        <p className="mt-1 flex flex-wrap gap-x-2 font-mono text-label text-bone-faint tabular-nums">
           {ids.tvdb ? <span>tvdb:{ids.tvdb}</span> : null}
           {ids.tmdb ? <span>tmdb:{ids.tmdb}</span> : null}
           {ids.imdb ? <span>{ids.imdb}</span> : null}
@@ -358,7 +358,7 @@ function Choice({
   const option = (which: MergeSide, value: unknown, locked: boolean, disabled: boolean) => (
     <label
       className={cn(
-        'flex min-h-11 min-w-0 cursor-pointer items-start gap-2.5 rounded-[6px] px-2 py-2 text-sm',
+        'flex min-h-11 min-w-0 cursor-pointer items-start gap-2.5 rounded-md px-2 py-2 text-sm',
         'has-[:checked]:bg-ink-high has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-50',
       )}
     >
@@ -448,7 +448,7 @@ function Picker({ work, onPick }: { work: MergeOpening; onPick: (id: string) => 
                   {item.title}
                   {item.year ? <span className="ml-1.5 font-mono text-xs text-bone-faint tabular-nums">{item.year}</span> : null}
                 </span>
-                <span className="shrink-0 font-mono text-[0.6875rem] text-bone-faint tabular-nums">
+                <span className="shrink-0 font-mono text-label text-bone-faint tabular-nums">
                   {item.externalIds.tvdb ? `tvdb:${item.externalIds.tvdb} ` : ''}
                   {item.externalIds.tmdb ? `tmdb:${item.externalIds.tmdb}` : ''}
                 </span>

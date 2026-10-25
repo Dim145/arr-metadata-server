@@ -2,7 +2,9 @@
 //!
 //! Every action that changes what this server serves is recorded here: who did
 //! it, to what, and when. Reads are not recorded — they would bury the entries
-//! that matter under one row per metadata request.
+//! that matter under one row per metadata request — but for the tools an agent
+//! calls through MCP, each of them: an agent's reading is what its operator
+//! wants to look back on.
 //!
 //! Failed sign-ins *are* recorded, because a run of them is the one thing in
 //! this log worth an alert.
@@ -111,6 +113,9 @@ actions! {
     DatasetImported => "dataset.imported",
     BackupDeleted => "backup.deleted",
     BackupRestored => "backup.restored",
+    // A read, unlike the rest: what an agent asked through `/mcp` is the
+    // operator's to see, each call, as nothing else an agent does is.
+    McpCalled => "mcp.called",
 }
 
 impl std::fmt::Display for Action {

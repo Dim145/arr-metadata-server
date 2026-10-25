@@ -125,7 +125,7 @@ export function Arr() {
       {config.isPending ? (
         <Skeleton className="h-96 w-full" />
       ) : config.isError ? (
-        <p role="alert" className="flex items-center gap-2 text-sm text-vermillion">
+        <p role="alert" className="flex items-center gap-2 text-sm text-status-error">
           <Glyph name="alert" className="size-4" />
           {p.loadFailed}
         </p>
@@ -206,13 +206,13 @@ function Connections({ config }: { config: ArrConfiguration }) {
           {save.isPending ? p.saving : p.save}
         </Button>
         {save.isSuccess ? (
-          <span role="status" className="flex items-center gap-1.5 text-sm text-moss">
+          <span role="status" className="flex items-center gap-1.5 text-sm text-status-ok">
             <Glyph name="check" className="size-4" />
             {p.saved}
           </span>
         ) : null}
         {save.isError ? (
-          <span role="alert" className="text-sm break-words text-vermillion">
+          <span role="alert" className="text-sm break-words text-status-error">
             {save.error instanceof ApiError ? save.error.message : t.common.error}
           </span>
         ) : null}
@@ -344,16 +344,16 @@ function ConnectionPanel({
             {test.isPending ? p.testing : p.test}
           </Button>
           {test.data?.ok && test.data.status ? (
-            <span role="status" className="flex items-center gap-1.5 text-xs text-moss">
+            <span role="status" className="flex items-center gap-1.5 text-xs text-status-ok">
               <Glyph name="check" className="size-3.5" />
               {p.testOk(test.data.status.appName, test.data.status.version, test.data.status.instanceName)}
             </span>
           ) : test.data && !test.data.ok ? (
-            <span role="alert" className="text-xs break-words text-vermillion">
+            <span role="alert" className="text-xs break-words text-status-error">
               {p.testFailed} {test.data.error}
             </span>
           ) : test.isError ? (
-            <span role="alert" className="text-xs break-words text-vermillion">
+            <span role="alert" className="text-xs break-words text-status-error">
               {p.testFailed} {test.error instanceof ApiError ? test.error.message : t.common.error}
             </span>
           ) : null}
@@ -395,7 +395,7 @@ function Push({ config }: { config: ArrConfiguration }) {
             </p>
           ) : null}
           {set.isError ? (
-            <p role="alert" className="text-xs text-vermillion">
+            <p role="alert" className="text-xs text-status-error">
               {set.error instanceof ApiError ? set.error.message : t.common.error}
             </p>
           ) : null}
@@ -501,12 +501,12 @@ function Seed({ connected }: { connected: boolean }) {
             <span className="text-xs text-bone-faint">{t.admin.tasks.blocked[blocked] ?? blocked}</span>
           ) : null}
           {run.isSuccess ? (
-            <span role="status" className="text-xs text-moss">
+            <span role="status" className="text-xs text-status-ok">
               {p.seedStarted}
             </span>
           ) : null}
           {run.isError ? (
-            <span role="alert" className="text-xs text-vermillion">
+            <span role="alert" className="text-xs text-status-error">
               {run.error instanceof ApiError ? run.error.message : t.common.error}
             </span>
           ) : null}

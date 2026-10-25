@@ -29,7 +29,7 @@ export function LanguageToggle() {
           lang={code}
           className={cn(
             'flex min-h-11 min-w-11 cursor-pointer items-center justify-center px-2.5',
-            'font-mono text-[0.6875rem] font-medium tracking-wider uppercase',
+            'font-mono text-label font-medium tracking-wider uppercase',
             'transition-colors duration-150',
             lang === code ? 'bg-bone text-ink' : 'text-bone-faint hover:text-bone',
           )}

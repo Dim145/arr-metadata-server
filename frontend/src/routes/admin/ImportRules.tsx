@@ -206,11 +206,11 @@ export function ImportRules() {
         }
       />
       <p className="px-5 pt-3 text-sm leading-relaxed text-bone-dim">{r.lead}</p>
-      <p role="status" className="px-5 pt-2 text-sm text-moss">
+      <p role="status" className="px-5 pt-2 text-sm text-status-ok">
         {notice ?? ''}
       </p>
       {run.isError ? (
-        <p role="alert" className="px-5 pt-2 text-sm text-vermillion">
+        <p role="alert" className="px-5 pt-2 text-sm text-status-error">
           {run.error instanceof ApiError ? run.error.message : t.common.actionFailed}
         </p>
       ) : null}
@@ -221,7 +221,7 @@ export function ImportRules() {
           <Skeleton className="h-12 w-full" />
         </div>
       ) : rules.isError ? (
-        <p role="alert" className="flex items-center gap-2 px-5 py-6 text-sm text-vermillion">
+        <p role="alert" className="flex items-center gap-2 px-5 py-6 text-sm text-status-error">
           <Glyph name="alert" className="size-4" />
           {r.loadFailed}
         </p>
@@ -315,7 +315,7 @@ export function ImportRules() {
       >
         {asking ? r.deleteBody(asking.name) : null}
         {remove.isError ? (
-          <p role="alert" className="mt-3 text-sm text-vermillion">
+          <p role="alert" className="mt-3 text-sm text-status-error">
             {remove.error.message}
           </p>
         ) : null}
@@ -518,7 +518,7 @@ function RuleForm({ rule, onClose, onSaved }: { rule: ImportRule | null; onClose
           </div>
           <div aria-live="polite" className="text-sm">
             {moments.isError ? (
-              <p role="alert" className="text-vermillion">
+              <p role="alert" className="text-status-error">
                 {moments.error instanceof ApiError ? moments.error.message : t.common.error}
               </p>
             ) : moments.data ? (
@@ -567,7 +567,7 @@ function RuleForm({ rule, onClose, onSaved }: { rule: ImportRule | null; onClose
             {look.isPending ? r.previewing : r.previewNow}
           </Button>
           {look.isError ? (
-            <p role="alert" className="text-sm text-vermillion">
+            <p role="alert" className="text-sm text-status-error">
               {look.error instanceof ApiError ? look.error.message : t.common.error}
             </p>
           ) : null}
@@ -594,7 +594,7 @@ function RuleForm({ rule, onClose, onSaved }: { rule: ImportRule | null; onClose
         </div>
 
         {save.isError ? (
-          <p role="alert" className="text-sm text-vermillion">
+          <p role="alert" className="text-sm text-status-error">
             {save.error instanceof ApiError ? save.error.message : t.common.actionFailed}
           </p>
         ) : null}

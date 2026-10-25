@@ -145,7 +145,7 @@ export function GenreFilter({
               <label
                 key={value}
                 className={cn(
-                  'hit relative grid min-h-9 cursor-pointer place-items-center rounded-full px-2 text-[0.8125rem]',
+                  'hit relative grid min-h-9 cursor-pointer place-items-center rounded-full px-2 text-body-sm',
                   'transition-colors duration-150 has-focus-visible:outline-2 has-focus-visible:outline-vermillion',
                   mode === value ? 'bg-ink-top text-bone' : 'text-bone-dim hover:text-bone',
                 )}

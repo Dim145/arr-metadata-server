@@ -177,6 +177,19 @@ async fn run(
             jobs::datasets::import_in_background(&state, jobs::datasets::IMDB, &identity, ip)
                 .await?
         }
+        tasks::IMDB_AKAS => {
+            jobs::datasets::import_in_background(&state, jobs::datasets::IMDB_AKAS, &identity, ip)
+                .await?
+        }
+        tasks::IMDB_EPISODES => {
+            jobs::datasets::import_in_background(
+                &state,
+                jobs::datasets::IMDB_EPISODES,
+                &identity,
+                ip,
+            )
+            .await?
+        }
         tasks::IMPORT_BATCH => {
             return Err(AppError::BadRequest(
                 "a batch is started from the import page, with the lines it imports".into(),

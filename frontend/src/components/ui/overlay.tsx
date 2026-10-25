@@ -47,6 +47,21 @@ function showing(element: HTMLElement): boolean {
  * Escape and a press elsewhere close it, and the focus goes back to its
  * button. `children` may be a function, handed the way to close the panel
  * once one of its actions is done.
+ *
+ * States:
+ * - closed: its button alone, drawn by the caller (`buttonClassName`, told
+ *   whether the panel is open), with its name shown after a rest.
+ * - hover, focus, active, disabled: the button's — the caller's classes, the
+ *   ring, and `disabled`, which keeps the panel shut.
+ * - open: the panel on the overlay surface, a bright rule round it, the
+ *   card's corner and the lifted shadow, dropping a hair from its button
+ *   (150ms), on the side with the room.
+ * - leaving: lifting away (150ms) where the engine keeps it in the top
+ *   layer until it has gone.
+ * - loading, error, empty: what it holds says them.
+ *
+ * Its rows (`MENU_ITEM`): at rest dim words; under the pointer the high ink
+ * and bone; reached by the keyboard, the ring; disabled at 45%.
  */
 export function Menu({
   label,
@@ -195,7 +210,7 @@ export function Menu({
  * its words. A plain button — the panel is not a menu (see `Menu`).
  */
 export const MENU_ITEM =
-  'flex min-h-11 w-full cursor-pointer items-center gap-2.5 rounded-[6px] px-3 text-left text-sm transition-colors duration-150 ' +
+  'flex min-h-11 w-full cursor-pointer items-center gap-2.5 rounded-md px-3 text-left text-sm transition-colors duration-150 ' +
   'text-bone-dim hover:bg-ink-high hover:text-bone ' +
   'disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent ' +
   'forced-colors:hover:bg-[color:Highlight] forced-colors:hover:text-[color:HighlightText]'
@@ -219,6 +234,10 @@ const TIP_DELAY = 400
  *
  * A hook rather than a wrapper, so the control keeps its place in whatever
  * row it stands in: spread `trigger` on it and put `tip` inside it.
+ *
+ * States: hidden; shown — the name in caption size on the top ink, inside
+ * a bright rule at the item's corner, above its control or under it where
+ * the screen ends first, after 400ms of rest or at once for the keyboard.
  */
 export function useTooltip(
   text: string,
@@ -324,7 +343,7 @@ export function useTooltip(
         // As wide as its words: the area above a button is the button's
         // width, which would otherwise wrap a name a word to a line.
         className={cn(
-          'popover-in m-0 w-max max-w-64 rounded-[6px] border border-rule-bright bg-ink-top px-2 py-1',
+          'popover-in m-0 w-max max-w-64 rounded-md border border-rule-bright bg-ink-top px-2 py-1',
           'text-left text-caption font-medium text-bone shadow-[var(--shadow-lift)] before:content-[attr(data-tip)]',
           ANCHORED ? 'inset-auto mb-1.5 [position-area:block-start] [position-try-fallbacks:flip-block]' : 'inset-auto',
         )}

@@ -146,7 +146,7 @@ export function UserDetail() {
               </div>
               {mine ? <p className="text-xs text-brass">{t.admin.people.selfNote}</p> : null}
               {change.isError ? (
-                <p role="alert" className="flex items-center gap-1.5 text-xs text-vermillion">
+                <p role="alert" className="flex items-center gap-1.5 text-xs text-status-error">
                   <Glyph name="alert" className="size-3.5" />
                   {change.error.message}
                 </p>
@@ -193,7 +193,7 @@ export function UserDetail() {
       >
         {t.admin.people.deleteBody}
         {remove.isError ? (
-          <p role="alert" className="mt-2 text-vermillion">
+          <p role="alert" className="mt-2 text-status-error">
             {remove.error.message}
           </p>
         ) : null}
@@ -381,7 +381,7 @@ function SessionsPanel({
           ))}
         </ul>
       ) : (
-        <p className="px-5 py-4 text-sm text-bone-faint">{t.admin.people.noSessions}</p>
+        <EmptyState size="line" title={t.admin.people.noSessions} />
       )}
     </Panel>
   )
@@ -429,7 +429,7 @@ function KeysPanel({ keys, onChanged }: { keys: Detail['keys']; onChanged: () =>
           ))}
         </ul>
       ) : (
-        <p className="px-5 py-4 text-sm text-bone-faint">{t.admin.people.noKeys}</p>
+        <EmptyState size="line" title={t.admin.people.noKeys} />
       )}
 
       <Dialog

@@ -43,8 +43,8 @@ export function SecretReveal({
   }
 
   return (
-    <div role="status" className="rise rounded-panel border border-moss/50 bg-moss/[0.07] p-4">
-      <label htmlFor={id} className="label flex items-center gap-2 text-moss">
+    <div role="status" className="rise rounded-panel border border-status-ok/50 bg-status-ok/[0.07] p-4">
+      <label htmlFor={id} className="label flex items-center gap-2 text-status-ok">
         <Glyph name="key" className="size-3.5" />
         {title}
       </label>
@@ -58,8 +58,8 @@ export function SecretReveal({
           value={secret}
           onFocus={(event) => event.currentTarget.select()}
           className={cn(
-            'mt-2 w-full resize-none rounded-card border border-moss/40 bg-ink px-3 py-2.5 break-all',
-            'font-mono text-[0.8125rem] leading-relaxed text-bone selection:bg-moss selection:text-ink',
+            'mt-2 w-full resize-none rounded-card border border-status-ok/40 bg-ink px-3 py-2.5 break-all',
+            'font-mono text-body-sm leading-relaxed text-bone selection:bg-status-ok selection:text-ink',
           )}
         />
       ) : (
@@ -69,8 +69,8 @@ export function SecretReveal({
           value={secret}
           onFocus={(event) => event.currentTarget.select()}
           className={cn(
-            'mt-2 min-h-11 w-full rounded-card border border-moss/40 bg-ink px-3',
-            'font-mono text-[0.8125rem] text-bone selection:bg-moss selection:text-ink',
+            'mt-2 min-h-11 w-full rounded-card border border-status-ok/40 bg-ink px-3',
+            'font-mono text-body-sm text-bone selection:bg-status-ok selection:text-ink',
           )}
         />
       )}
@@ -83,7 +83,7 @@ export function SecretReveal({
       </div>
       <p className="mt-2 text-xs text-bone-faint">{note ?? t.account.secretOnce}</p>
       {copied === 'failed' ? (
-        <p role="alert" className="mt-1 text-xs text-vermillion">
+        <p role="alert" className="mt-1 text-xs text-status-error">
           {t.account.copyFailed}
         </p>
       ) : null}

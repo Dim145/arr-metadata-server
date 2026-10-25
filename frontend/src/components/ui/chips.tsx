@@ -20,6 +20,15 @@ const CHIP_TONE: Record<ChipTone, string> = {
   accent: 'border-vermillion-deep text-vermillion',
 }
 
+/**
+ * A state or a source, in a word, in a pill: `neutral`; `manual`, brass, a
+ * person's hand; `provider`, slate, a machine's answer; `accent`, what
+ * should not pass unseen.
+ *
+ * States: it is read, not pressed, so it has one — at rest, in its tone's
+ * words on its tone's deep edge. Under forced colours the edge is the
+ * button colour. Whatever it says of a failure or a wait, it says in words.
+ */
 export function Chip({
   children,
   tone = 'neutral',
@@ -54,6 +63,10 @@ export function Chip({
  * every page and in every language of the interface — and a crime thriller does
  * not look like a comedy. It carries no meaning beyond identity, which is why
  * the name is always written out rather than the colour standing for it.
+ *
+ * States: at rest, its stock's words on a tenth of its stock, edged with a
+ * third. As a link: hover, the edge in the words' colour; focus, the ring;
+ * active, as hover. It has no disabled, waiting, failed or empty state.
  */
 export function Genre({
   name,
@@ -109,6 +122,8 @@ export function stockOf(name: string): number {
  * Carries a glyph and a word as well as its colour: someone who cannot tell
  * brass from slate still has to be able to tell a person's edit from a
  * provider's answer, since that distinction is the point of this server.
+ *
+ * States: a `Chip`'s, in two tones — a lock in brass, a cloud in slate.
  */
 export function Provenance({ manual, label }: { manual: boolean; label: string }) {
   return (
@@ -126,6 +141,10 @@ export function Provenance({ manual, label }: { manual: boolean; label: string }
  *
  * `open` is the one worth the accent: it means anyone who can reach the port is
  * served, which on a machine with a port forward is the whole internet.
+ *
+ * States: a `Chip`'s — `open` in the accent with the alert glyph; the
+ * allowlist with the globe, `disabled` with the power glyph, a key with the
+ * key, all neutral.
  */
 export function PolicyChip({ policy }: { policy: string }) {
   const { t } = useI18n()

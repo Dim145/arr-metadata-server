@@ -66,6 +66,15 @@ const Settings = named(() => import('./routes/admin/Settings'), 'Settings')
 const Arr = named(() => import('./routes/admin/Arr'), 'Arr')
 const Editorial = named(() => import('./routes/admin/Editorial'), 'Editorial')
 
+// The styleguide, which no reader is sent: in a development build, and in a
+// build asked for it (`vite build --mode styleguide`), which the visual tests
+// read. Anywhere else the condition is false when the bundle is built, and
+// the page is left out of it altogether.
+const Styleguide =
+  import.meta.env.DEV || import.meta.env.MODE === 'styleguide'
+    ? named(() => import('./routes/Styleguide'), 'Styleguide')
+    : null
+
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
@@ -152,6 +161,7 @@ function Router() {
 
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
+        {Styleguide ? <Route path="/__styleguide/:gallery?" element={<Styleguide />} /> : null}
 
         {/* The shell is the guard: it asks who is signed in once, and sends
             anyone who may not write to the door before a screen mounts. */}

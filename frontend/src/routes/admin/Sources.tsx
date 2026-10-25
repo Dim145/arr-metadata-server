@@ -12,19 +12,24 @@
  * The order is a setting, `sources.priority`, put in order here by an
  * administrator: a source moves a rank with its arrows, or is dragged. Every
  * merge reads it, so a work takes a new order at its next refresh.
+ *
+ * Below, the lists downloaded whole — IMDb's ratings, titles and episodes,
+ * the anime identifier list: what each brings, whether it is on, when it
+ * last landed and how its last run went, and when it comes next.
  */
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Link } from 'react-router'
 
-import { Button, Glyph, Label, Panel, PanelHead, Skeleton } from '../../components/ui'
+import { Button, Glyph, Label, Lamp, Panel, PanelHead, Skeleton } from '../../components/ui'
 import { api } from '../../lib/api'
 import { cn } from '../../lib/cn'
+import * as fmt from '../../lib/format'
 import { useMe } from '../../lib/hooks'
 import { useI18n, type Dict } from '../../lib/i18n'
 import { providerName } from '../../lib/labels'
-import type { MalReach, SourceRule, SourceRules } from '../../lib/types'
+import type { Dataset, MalReach, SourceRule, SourceRules } from '../../lib/types'
 
 const GROUPS = ['identity', 'release', 'classification', 'people', 'episodes'] as const
 
@@ -104,13 +109,13 @@ function MarkGlyph({ mark }: { mark: Mark }) {
   switch (mark.kind) {
     case 'first':
       return (
-        <span className="inline-grid size-6 place-items-center rounded-full bg-slate font-mono text-[0.6875rem] font-semibold text-ink">
+        <span className="inline-grid size-6 place-items-center rounded-full bg-slate font-mono text-label font-semibold text-ink">
           1
         </span>
       )
     case 'rank':
       return (
-        <span className="inline-grid size-6 place-items-center rounded-full border border-slate-deep font-mono text-[0.6875rem] text-bone-dim">
+        <span className="inline-grid size-6 place-items-center rounded-full border border-slate-deep font-mono text-label text-bone-dim">
           {mark.rank}
         </span>
       )
@@ -147,7 +152,7 @@ export function Sources() {
       {rules.isPending ? (
         <Skeleton className="h-[40rem] w-full" />
       ) : rules.isError ? (
-        <p role="alert" className="flex items-center gap-2 text-sm text-vermillion">
+        <p role="alert" className="flex items-center gap-2 text-sm text-status-error">
           <Glyph name="alert" className="size-4" />
           {p.loadFailed}
         </p>
@@ -181,8 +186,91 @@ export function Sources() {
         ))}
       </div>
 
+      <Datasets />
+
       <Terms />
     </div>
+  )
+}
+
+/**
+ * The lists downloaded whole, a row each: what it brings, whether it is on,
+ * when it last landed and how much of it was kept, how its last run went and
+ * when it comes next — and, for an administrator, the way to its task, where
+ * it is run now, stopped, or given a schedule. Asked again every minute: a
+ * run that lands moves it while the page is open.
+ */
+function Datasets() {
+  const { t, locale } = useI18n()
+  const p = t.admin.sourcesPage.datasets
+  const me = useMe()
+  const admin = Boolean(me.data?.isAdmin)
+
+  const datasets = useQuery({
+    queryKey: ['sources', 'datasets'],
+    queryFn: () => api.get<Dataset[]>('/sources/datasets'),
+    refetchInterval: 60_000,
+  })
+
+  const when = (iso: string | null | undefined) => fmt.relative(iso, locale) ?? ''
+
+  return (
+    <Panel id="datasets" label={p.title} className="rise mt-6" style={{ animationDelay: '280ms' }}>
+      <PanelHead
+        title={
+          <span className="inline-flex items-center gap-2">
+            <Glyph name="download" className="size-3.5" />
+            {p.title}
+          </span>
+        }
+      />
+      <p className="max-w-prose px-5 pt-4 pb-2 text-sm leading-relaxed text-bone-dim">{p.lead}</p>
+      {datasets.isPending ? (
+        <Skeleton className="mx-5 mb-4 h-40" />
+      ) : datasets.isError ? (
+        <p role="alert" className="flex items-center gap-2 px-5 pb-4 text-sm text-status-error">
+          <Glyph name="alert" className="size-4" />
+          {p.loadFailed}
+        </p>
+      ) : (
+        <ul className="divide-y divide-rule border-t border-rule">
+          {datasets.data.map((set) => {
+            const name = p.names[set.id] ?? set.id
+            const status = set.lastStatus ? p.status[set.lastStatus] : undefined
+            return (
+              <li key={set.id} data-dataset={set.id} className="px-5 py-4">
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                  <h3 className="text-sm font-medium text-bone">{name}</h3>
+                  <Lamp tone={set.on ? 'moss' : 'faint'}>{set.on ? p.on : p.off}</Lamp>
+                  <span className="label">{t.admin.tasks.every(set.everySeconds)}</span>
+                </div>
+                <p className="mt-1.5 max-w-prose text-sm leading-relaxed text-bone-dim">{p.brings[set.id]}</p>
+                <p className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-caption text-bone-faint tabular-nums">
+                  <span>
+                    {set.imported ? p.kept(fmt.count(set.imported.rows, locale), when(set.imported.importedAt)) : p.never}
+                  </span>
+                  {status && set.lastRunAt ? (
+                    <span className={cn(set.lastStatus === 'failed' && 'text-status-error')}>
+                      {status(when(set.lastRunAt))}
+                    </span>
+                  ) : null}
+                  {set.on && set.nextAt ? <span>{p.next(when(set.nextAt))}</span> : null}
+                  {/* The task's card, on a page only an administrator opens. */}
+                  {admin ? (
+                    <Link
+                      to={`/admin/jobs#task-${set.task}`}
+                      className="text-vermillion underline-offset-4 hover:underline"
+                    >
+                      {p.task(t.admin.tasks.names[set.task] ?? set.task)}
+                    </Link>
+                  ) : null}
+                </p>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+    </Panel>
   )
 }
 
@@ -430,8 +518,8 @@ function Order({ rules }: { rules: SourceRules }) {
                 </button>
               ) : null}
               <span className={cn('flex items-center gap-2 text-sm', admin ? 'px-1' : 'min-h-11 px-4')}>
-                <span className="font-mono text-[0.6875rem] text-bone-faint tabular-nums">{index + 1}</span>
-                <span aria-hidden className={cn('block size-1.5 rounded-full', provider?.on ? 'bg-moss' : 'bg-bone-faint')} />
+                <span className="font-mono text-label text-bone-faint tabular-nums">{index + 1}</span>
+                <span aria-hidden className={cn('block size-1.5 rounded-full', provider?.on ? 'bg-status-ok' : 'bg-bone-faint')} />
                 <span className={provider?.on ? 'text-bone' : 'text-bone-dim'}>{name}</span>
                 <span className="sr-only">
                   {`, ${o.rank(index + 1, order.length)}, ${provider?.on ? p.on : p.off}`}
@@ -568,7 +656,7 @@ function Matrix({ rules }: { rules: SourceRules }) {
                       aria-hidden
                       className={cn(
                         'mx-auto mb-2 block size-2 rounded-full',
-                        provider.on ? 'bg-moss' : 'bg-bone-faint',
+                        provider.on ? 'bg-status-ok' : 'bg-bone-faint',
                       )}
                     />
                     <span className={cn('label block', provider.on ? '' : 'opacity-60')}>{providerName(provider.id)}</span>

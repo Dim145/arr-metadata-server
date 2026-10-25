@@ -227,6 +227,48 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
   return <Context value={value}>{children}</Context>
 }
 
+/**
+ * A part of a page in another language than the rest: the styleguide's
+ * columns, which draw each component in every language side by side. Its
+ * words are fetched as any language's are, and nothing inside it is drawn
+ * until they have come — or at all, if they cannot be. It says its language
+ * (`lang`), so that a screen reader reads it in that language; a language
+ * chosen inside it is chosen for the page.
+ */
+export function LanguageScope({ lang, children }: { lang: Lang; children: React.ReactNode }) {
+  const outer = useI18n()
+  const [words, setWords] = useState<{ lang: Lang; t: Dict } | null>(() =>
+    outer.lang === lang ? { lang, t: outer.t } : null,
+  )
+
+  useEffect(() => {
+    let live = true
+    dictionary(lang).then(
+      (t) => {
+        if (live) setWords({ lang, t })
+      },
+      () => {},
+    )
+    return () => {
+      live = false
+    }
+  }, [lang])
+
+  const value = useMemo<Value | null>(
+    () =>
+      words?.lang === lang ? { lang, t: words.t, setLang: outer.setLang, locale: LANGUAGES[lang].locale } : null,
+    [words, lang, outer.setLang],
+  )
+
+  return value ? (
+    <Context value={value}>
+      <div lang={lang} className="contents">
+        {children}
+      </div>
+    </Context>
+  ) : null
+}
+
 export function useI18n(): Value {
   const value = use(Context)
 

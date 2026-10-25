@@ -140,7 +140,7 @@ export function ImportWizard({ picked, onClearPicked }: { picked: ImportLine[]; 
                 aria-hidden
                 className={cn(
                   'grid size-6 place-items-center rounded-full border font-mono text-xs tabular-nums',
-                  one === step ? 'border-vermillion text-vermillion' : index < at ? 'border-moss text-moss' : 'border-rule',
+                  one === step ? 'border-vermillion text-vermillion' : index < at ? 'border-status-ok text-status-ok' : 'border-rule',
                 )}
               >
                 {index < at ? <Glyph name="check" className="size-3" /> : index + 1}
@@ -295,7 +295,7 @@ function Source({
         <p className="text-xs text-bone-faint">{w.dropHint}</p>
         <div role="status" className="text-sm">
           {file ? (
-            <p className="flex flex-wrap items-center gap-2 text-moss">
+            <p className="flex flex-wrap items-center gap-2 text-status-ok">
               <Glyph name="check" className="size-4" />
               {w.read(file.lines.length, file.name)}
               <Button size="sm" variant="quiet" onClick={() => setFile(null)}>
@@ -336,12 +336,12 @@ function Source({
         <span className="font-mono text-xs text-bone-faint tabular-nums">{w.lines(count, fmt.count(count, locale))}</span>
         {checking ? <p className="max-w-prose text-xs leading-relaxed text-bone-faint">{w.checkingHint}</p> : null}
         {tooMany ? (
-          <p role="alert" className="text-sm text-vermillion">
+          <p role="alert" className="text-sm text-status-error">
             {w.tooMany(fmt.count(MOST_LINES, locale))}
           </p>
         ) : null}
         {error ? (
-          <p role="alert" className="text-sm text-vermillion">
+          <p role="alert" className="text-sm text-status-error">
             {error}
           </p>
         ) : null}
@@ -376,7 +376,7 @@ function PreviewStep({ preview, onBack, onNext }: { preview: ImportPreview; onBa
             <dd
               className={cn(
                 'mt-1 font-display text-2xl tabular-nums',
-                status === 'candidate' ? 'text-bone' : status === 'held' ? 'text-moss' : counts[camel(status)] ? 'text-vermillion' : 'text-bone-faint',
+                status === 'candidate' ? 'text-bone' : status === 'held' ? 'text-status-ok' : counts[camel(status)] ? 'text-status-error' : 'text-bone-faint',
               )}
             >
               {fmt.count(counts[camel(status)], locale)}
@@ -433,7 +433,7 @@ function PreviewRow({ line }: { line: ImportPreviewLine }) {
 
   return (
     <li className="grid grid-cols-[3rem_minmax(0,1fr)] gap-x-3 gap-y-1 px-4 py-2.5 sm:grid-cols-[3rem_minmax(0,14rem)_minmax(0,1fr)_auto]">
-      <span className="font-mono text-[0.6875rem] text-bone-faint tabular-nums">{line.line + 1}</span>
+      <span className="font-mono text-label text-bone-faint tabular-nums">{line.line + 1}</span>
       <span className="truncate font-mono text-xs text-bone-dim" title={line.text}>
         {line.text}
       </span>
@@ -561,7 +561,7 @@ function Options({
         </Button>
         <p className="text-sm text-bone-dim">{w.summary(preview.counts.candidate, preview.counts.held)}</p>
         {error ? (
-          <p role="alert" className="w-full text-sm text-vermillion">
+          <p role="alert" className="w-full text-sm text-status-error">
             {error}
           </p>
         ) : null}

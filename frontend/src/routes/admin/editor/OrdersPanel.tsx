@@ -140,7 +140,7 @@ export function OrdersPanel({ work, onChanged }: { work: MediaItem; onChanged: (
             <span className="min-w-0 flex-1">
               <span className="flex flex-wrap items-center gap-2">
                 <span className="text-sm font-medium text-bone">{o.aired}</span>
-                <span className="font-mono text-[0.6875rem] text-bone-faint">official</span>
+                <span className="font-mono text-label text-bone-faint">official</span>
               </span>
               <Facts
                 className="mt-0.5"
@@ -166,7 +166,7 @@ export function OrdersPanel({ work, onChanged }: { work: MediaItem; onChanged: (
                   <span className="min-w-0 flex-1">
                     <span className="flex flex-wrap items-center gap-2">
                       <span className="text-sm font-medium text-bone">{name(order)}</span>
-                      <span className="font-mono text-[0.6875rem] break-all text-bone-faint">{order.key}</span>
+                      <span className="font-mono text-label break-all text-bone-faint">{order.key}</span>
                       <Chip tone={local ? 'manual' : 'provider'}>{o.source[order.source] ?? order.source}</Chip>
                       {order.isFrozen ? (
                         <Chip tone="manual">
@@ -282,7 +282,7 @@ export function OrdersPanel({ work, onChanged }: { work: MediaItem; onChanged: (
           {o.made}
         </Button>
         {create.error ? (
-          <p role="alert" className="flex items-center gap-1.5 text-xs text-vermillion sm:col-span-3">
+          <p role="alert" className="flex items-center gap-1.5 text-xs text-status-error sm:col-span-3">
             <Glyph name="alert" className="size-3.5 shrink-0" />
             {create.error.message || t.common.actionFailed}
           </p>
@@ -331,7 +331,7 @@ export function OrdersPanel({ work, onChanged }: { work: MediaItem; onChanged: (
           <p>{o.removeWhat}</p>
         )}
         {act.error ? (
-          <p role="alert" className="mt-3 flex items-center gap-1.5 text-xs text-vermillion">
+          <p role="alert" className="mt-3 flex items-center gap-1.5 text-xs text-status-error">
             <Glyph name="alert" className="size-3.5 shrink-0" />
             {act.error.message || t.common.actionFailed}
           </p>
@@ -556,7 +556,7 @@ function OrderEditor({
                   <span className="mt-0.5 flex flex-wrap items-center gap-2">
                     {own ? <Chip tone="manual">{o.own}</Chip> : null}
                     {episode && !own ? (
-                      <span className="font-mono text-[0.6875rem] text-bone-faint tabular-nums">{o.airedAs(episodeCode(episode))}</span>
+                      <span className="font-mono text-label text-bone-faint tabular-nums">{o.airedAs(episodeCode(episode))}</span>
                     ) : null}
                   </span>
                 </span>
@@ -641,17 +641,17 @@ function OrderEditor({
           {o.close}
         </Button>
         {twice ? (
-          <p role="alert" className="flex items-center gap-1.5 text-xs text-vermillion">
+          <p role="alert" className="flex items-center gap-1.5 text-xs text-status-error">
             <Glyph name="alert" className="size-3.5 shrink-0" />
             {o.twice(twice)}
           </p>
         ) : save.error ? (
-          <p role="alert" className="flex items-center gap-1.5 text-xs text-vermillion">
+          <p role="alert" className="flex items-center gap-1.5 text-xs text-status-error">
             <Glyph name="alert" className="size-3.5 shrink-0" />
             {save.error.message || t.common.actionFailed}
           </p>
         ) : saidSaved ? (
-          <p role="status" className="text-xs text-moss">
+          <p role="status" className="text-xs text-status-ok">
             {o.saved}
           </p>
         ) : null}

@@ -13,6 +13,7 @@ pub mod browse;
 pub mod cache;
 pub mod children;
 pub mod clients;
+pub mod datasets;
 pub mod discover;
 pub mod editorial;
 pub mod export;
@@ -117,6 +118,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(tasks::router())
         .merge(todo::router())
         .merge(rules::router())
+        .merge(datasets::router())
         .merge(media::router())
         .merge(webhooks::router())
         .merge(backup::router())

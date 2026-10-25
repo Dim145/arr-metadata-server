@@ -21,8 +21,10 @@ use crate::{
 };
 
 /// Scopes a key may carry. `read` is implied by existing at all; `metrics`
-/// alone makes a scraper's key, which reads the figures and nothing else.
-const KNOWN_SCOPES: &[&str] = &["read", "write", "admin", "metrics"];
+/// alone makes a scraper's key, which reads the figures and nothing else;
+/// `mcp` opens the MCP server, `/mcp`, and alone makes an agent's key, which
+/// opens nothing else.
+const KNOWN_SCOPES: &[&str] = &["read", "write", "admin", "metrics", crate::mcp::SCOPE];
 
 /// The tag every route here is filed under in the documentation.
 pub const TAG: &str = "Clients";

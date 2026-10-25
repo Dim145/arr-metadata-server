@@ -154,7 +154,7 @@ function IdentifiersEditor({ work, lock, onChanged }: { work: MediaItem; lock?: 
             </FormField>
           ))}
           {save.isError ? (
-            <p role="alert" className="text-sm text-vermillion">
+            <p role="alert" className="text-sm text-status-error">
               {save.error instanceof ApiError ? save.error.message : t.common.actionFailed}
             </p>
           ) : null}
@@ -176,7 +176,7 @@ function IdentifiersEditor({ work, lock, onChanged }: { work: MediaItem; lock?: 
                 const values = Array.isArray(value) ? value : [value]
                 return (
                   <Field key={source} label={providerName(source)}>
-                    <span className="inline-flex flex-wrap items-baseline justify-end gap-x-2 gap-y-1 font-mono text-[0.8125rem] tabular-nums">
+                    <span className="inline-flex flex-wrap items-baseline justify-end gap-x-2 gap-y-1 font-mono text-body-sm tabular-nums">
                       {values.map((one) => {
                         const href = identifierLink(source, one, work.kind)
                         return href ? (
@@ -195,7 +195,7 @@ function IdentifiersEditor({ work, lock, onChanged }: { work: MediaItem; lock?: 
               <p className="px-5 py-3 text-sm text-bone-faint">{e.identifiersNone}</p>
             )}
             <Field label="slug">
-              <span className="font-mono text-[0.8125rem] break-all text-bone-dim">{work.slug}</span>
+              <span className="font-mono text-body-sm break-all text-bone-dim">{work.slug}</span>
             </Field>
           </dl>
           <div className="p-5 pt-3">
@@ -220,7 +220,7 @@ function IdentifiersEditor({ work, lock, onChanged }: { work: MediaItem; lock?: 
               ) : null}
             </div>
             {unlock.isError ? (
-              <p role="alert" className="mt-2 text-sm text-vermillion">
+              <p role="alert" className="mt-2 text-sm text-status-error">
                 {unlock.error instanceof ApiError ? unlock.error.message : t.common.actionFailed}
               </p>
             ) : null}
@@ -266,7 +266,7 @@ function Ratings({ work }: { work: MediaItem }) {
                   <div className="h-full rounded-full bg-gradient-to-r from-vermillion to-brass" style={{ width: `${value * 10}%` }} />
                 </div>
                 {rating.votes ? (
-                  <p className="mt-1.5 font-mono text-[0.6875rem] text-bone-faint tabular-nums">{t.work.votes(fmt.count(rating.votes, locale), rating.votes)}</p>
+                  <p className="mt-1.5 font-mono text-label text-bone-faint tabular-nums">{t.work.votes(fmt.count(rating.votes, locale), rating.votes)}</p>
                 ) : null}
               </li>
             )
@@ -296,7 +296,7 @@ function Related({ work }: { work: MediaItem }) {
             const format = relation.format ? (t.work.format[relation.format] ?? relation.format) : undefined
             const caption = [kind, relation.year, format, relation.workId ? undefined : t.work.onSite(providerName(relation.source))].filter(Boolean).join(' · ')
             const face = (
-              <span className="aspect-2/3 w-9 shrink-0 overflow-hidden rounded-[4px] border border-rule bg-ink-high">
+              <span className="aspect-2/3 w-9 shrink-0 overflow-hidden rounded-sm border border-rule bg-ink-high">
                 {relation.image ? <Artwork url={relation.image} role="thumb" alt="" className="size-full object-cover" /> : null}
               </span>
             )
@@ -360,7 +360,7 @@ function Orders({ work }: { work: MediaItem }) {
                     {orderName(order, t.season.order)}
                     {order.isFrozen ? <Glyph name="lock" className="ml-1.5 inline size-3 text-brass" aria-label={o.frozen} /> : null}
                   </span>
-                  <span className="block font-mono text-[0.6875rem] text-bone-faint tabular-nums">
+                  <span className="block font-mono text-label text-bone-faint tabular-nums">
                     {[
                       o.source[order.source] ?? order.source,
                       order.episodes.length
@@ -440,7 +440,7 @@ function Suggestions({ work }: { work: MediaItem }) {
         {suggestions.isPending ? (
           <Skeleton className="mt-4 h-24 w-full" />
         ) : suggestions.isError ? (
-          <p role="alert" className="mt-4 text-sm text-vermillion">
+          <p role="alert" className="mt-4 text-sm text-status-error">
             {t.admin.editor.suggestionsFailed}
           </p>
         ) : list.length === 0 ? (
@@ -479,7 +479,7 @@ function Suggestions({ work }: { work: MediaItem }) {
           </ul>
         )}
         {take.isError ? (
-          <p role="alert" className="mt-3 text-sm text-vermillion">
+          <p role="alert" className="mt-3 text-sm text-status-error">
             {take.error.message}
           </p>
         ) : null}

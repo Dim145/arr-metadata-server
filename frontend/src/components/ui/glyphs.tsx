@@ -239,10 +239,47 @@ const PATHS = {
       <circle cx="12.5" cy="8" r="0.8" />
     </>
   ),
+
+  /* Five the interface had been drawing with the nearest it had: two works
+     side by side (it borrowed the grid), a work kept for later, the keys, a
+     narrowing (it borrowed the sliders) and what happened before. */
+  // Two posters side by side, the second a step lower: this work and another.
+  compare: (
+    <>
+      <rect x="1.6" y="2.2" width="5" height="8.6" rx="1.1" />
+      <rect x="9.4" y="5.2" width="5" height="8.6" rx="1.1" />
+    </>
+  ),
+  bookmark: <path d="M4.5 2.5h7v11L8 10.5l-3.5 3Z" />,
+  keyboard: (
+    <>
+      <rect x="1.5" y="4" width="13" height="8" rx="1.5" />
+      <path d="M4.2 6.6h.01M6.7 6.6h.01M9.3 6.6h.01M11.8 6.6h.01M5 9.4h6" />
+    </>
+  ),
+  filter: <path d="M2.5 3h11L9.2 8.3v4.4l-2.4-1.2V8.3Z" />,
+  // A clock whose hand has been turned back.
+  history: (
+    <>
+      <path d="M2.4 8a5.6 5.6 0 1 0 1.7-4L2.4 5.6" />
+      <path d="M2.4 2.6v3h3" />
+      <path d="M8 5v3l2.4 1.4" />
+    </>
+  ),
 } as const
 
 export type GlyphName = keyof typeof PATHS
 
+/** Every glyph's name, in the order above: the styleguide draws them all. */
+export const GLYPHS = Object.keys(PATHS) as GlyphName[]
+
+/**
+ * A stroke drawing in the colour of the text around it.
+ *
+ * States: none of its own — it is drawn in whatever colour the control or
+ * the line holding it is in. Decorative unless given a `title`, which makes
+ * it an image of that name.
+ */
 export function Glyph({
   name,
   className,

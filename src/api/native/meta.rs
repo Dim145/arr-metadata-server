@@ -226,6 +226,14 @@ pub struct FurtherSources {
     /// IMDb's ratings; absent until they have been downloaded once.
     #[schema(required)]
     pub imdb_ratings: Option<ListImport>,
+    /// The titles IMDb gives each work by region; absent until they have
+    /// been read once.
+    #[schema(required)]
+    pub imdb_titles: Option<ListImport>,
+    /// The episodes IMDb lists of each series; absent until they have been
+    /// read once.
+    #[schema(required)]
+    pub imdb_episodes: Option<ListImport>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -286,6 +294,12 @@ async fn settings(
         },
         anime_list: imported(repo::import::get(&state.db, crate::jobs::datasets::ANIME).await?),
         imdb_ratings: imported(repo::import::get(&state.db, crate::jobs::datasets::IMDB).await?),
+        imdb_titles: imported(
+            repo::import::get(&state.db, crate::jobs::datasets::IMDB_AKAS).await?,
+        ),
+        imdb_episodes: imported(
+            repo::import::get(&state.db, crate::jobs::datasets::IMDB_EPISODES).await?,
+        ),
     };
 
     Ok(Json(Settings {
@@ -318,7 +332,8 @@ async fn settings(
 #[serde(rename_all = "camelCase")]
 pub struct JobQuery {
     /// A task's name: `refresh.sweep`, `refresh.item`, `refresh.all`,
-    /// `import.anime`, `import.imdb`, `export.nfo`.
+    /// `import.anime`, `import.imdb`, `imdb.akas`, `imdb.episodes`,
+    /// `export.nfo`.
     pub kind: Option<String>,
     /// `running`, `succeeded` or `failed`.
     pub status: Option<String>,
@@ -433,14 +448,15 @@ pub struct Imported {
 
 /// Download one of the lists the further sources work from, now.
 ///
-/// `anime-lists` or `imdb-ratings`. Refused while the source that needs the
-/// list is off, and while another import is running. An import that takes
-/// longer than a request is given carries on after the answer, 202, and is
-/// followed under Jobs like any other.
+/// `anime-lists`, `imdb-ratings`, `imdb-akas` (IMDb's titles by region) or
+/// `imdb-episodes`. Refused while the switch that needs the list is off, and
+/// while another import is running. An import that takes longer than a
+/// request is given carries on after the answer, 202, and is followed under
+/// Jobs like any other: IMDb's titles, half a gigabyte, usually do.
 #[utoipa::path(
     post, path = "/datasets/{name}/import", tag = TAG,
     operation_id = "meta_import_dataset",
-    params(("name" = String, Path, description = "`anime-lists` or `imdb-ratings`")),
+    params(("name" = String, Path, description = "`anime-lists`, `imdb-ratings`, `imdb-akas` or `imdb-episodes`")),
     responses(
         (status = 200, body = Imported),
         (status = 202, description = "Still downloading; it carries on, and its result is under Jobs", body = Imported),
@@ -501,7 +517,9 @@ async fn import_dataset(
     };
 
     match asked {
-        Asked::Imported(summary) => Ok((
+        // Stopped from the Jobs page while this waited: what it wrote stays,
+        // and the summary says how far it got.
+        Asked::Imported(summary) | Asked::Stopped(summary) => Ok((
             StatusCode::OK,
             Json(Imported {
                 summary: Some(summary),

@@ -87,6 +87,10 @@ pub mod kinds {
     pub const IMPORT_ANIME: &str = "import.anime";
     /// IMDb's ratings, downloaded whole.
     pub const IMPORT_IMDB: &str = "import.imdb";
+    /// The titles IMDb gives each work by region, read through whole.
+    pub const IMDB_AKAS: &str = "imdb.akas";
+    /// The episodes IMDb lists of each series, read through whole.
+    pub const IMDB_EPISODES: &str = "imdb.episodes";
     /// Every work with an identifier elsewhere, refreshed at once, by hand.
     pub const REFRESH_ALL: &str = "refresh.all";
     /// The `.nfo` documents, written for the whole library.

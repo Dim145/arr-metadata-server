@@ -39,10 +39,11 @@ import {
   type Column,
 } from '../../components/ui'
 import { NetworkAccess } from '../../components/NetworkAccess'
-import { ScopeSettingsDialog } from '../../components/ScopeSettings'
+import { ScopeSettingsDialog, useServerValues } from '../../components/ScopeSettings'
 import { api } from '../../lib/api'
 import { cn } from '../../lib/cn'
 import * as fmt from '../../lib/format'
+import { MCP_SETTING, claudeCommand, freeAgentName, mcpAddress } from '../../lib/mcp'
 import { useI18n } from '../../lib/i18n'
 import type { AccessReport, ApiClient, Settings } from '../../lib/types'
 
@@ -96,6 +97,7 @@ export function Clients() {
     ['write', t.admin.keys.write],
     ['admin', t.admin.keys.administer],
     ['metrics', t.admin.keys.metrics],
+    ['mcp', t.admin.keys.mcp],
   ] as const
 
   // A key is known by its name. Its prefix only tells two keys of one name
@@ -189,6 +191,9 @@ export function Clients() {
             {scopes.includes('metrics') ? (
               <p className="mt-1.5 text-xs text-bone-dim">{t.admin.keys.metricsHint}</p>
             ) : null}
+            {scopes.includes('mcp') ? (
+              <p className="mt-1.5 text-xs text-bone-dim">{t.admin.keys.mcpHint}</p>
+            ) : null}
           </fieldset>
 
           <Button
@@ -216,7 +221,7 @@ export function Clients() {
             ))}
           </div>
         ) : clients.isError ? (
-          <p role="alert" className="flex items-center gap-2 px-4 py-6 text-sm text-vermillion">
+          <p role="alert" className="flex items-center gap-2 px-4 py-6 text-sm text-status-error">
             <Glyph name="alert" className="size-4" />
             {t.admin.keys.loadFailed}
           </p>
@@ -303,6 +308,10 @@ export function Clients() {
       {/* Plex is let in by its address too, so the panel that tells how to
           give Plex this server sits right above the list it leads to. */}
       <PlexPanel />
+
+      {/* An agent is let in by a key alone, made for it: beside Plex, the
+          other client given an address to call. */}
+      <McpPanel />
 
       {/* The address list belongs on this page, not a page of its own: a key
           and an allowed address are the same decision said two ways, and
@@ -498,7 +507,7 @@ function PlexPanel() {
             </p>
           ) : null}
           {makeKey.isError ? (
-            <p role="alert" className="mt-2 flex items-center gap-2 text-xs text-vermillion">
+            <p role="alert" className="mt-2 flex items-center gap-2 text-xs text-status-error">
               <Glyph name="alert" className="size-3.5" />
               {makeKey.error.message}
             </p>
@@ -528,7 +537,7 @@ function PlexPanel() {
           />
         </div>
         {write.isError ? (
-          <p role="alert" className="flex items-center gap-2 text-xs text-vermillion">
+          <p role="alert" className="flex items-center gap-2 text-xs text-status-error">
             <Glyph name="alert" className="size-3.5" />
             {write.error.message}
           </p>
@@ -550,6 +559,183 @@ function PlexPanel() {
           </span>
         </p>
         <p className="max-w-prose text-xs leading-relaxed text-bone-faint">{keyed ? p.keyTravels : p.localOnly}</p>
+      </div>
+    </Panel>
+  )
+}
+
+/**
+ * The MCP server, for agents: the address to give one, the switch that
+ * answers it, a key made for it, and the line that connects Claude Code.
+ *
+ * The address is the public one when the deployment names it, else the one
+ * this page was opened at: an agent is refused under a name the server was
+ * not told it has, and this one it was. A key made here carries the `mcp`
+ * scope alone, and is shown once, in the command it goes in.
+ */
+function McpPanel() {
+  const { t } = useI18n()
+  const m = t.admin.mcp
+  const queryClient = useQueryClient()
+  // The key just made for an agent, for as long as this page is open.
+  const [made, setMade] = useState<string | null>(null)
+  // Which of the two lines was last copied: done, or left selected for the
+  // reader to copy where the clipboard is out of reach.
+  const [copied, setCopied] = useState<{ what: 'address' | 'command'; how: 'done' | 'manual' } | null>(null)
+  const addressField = useRef<HTMLInputElement>(null)
+  const commandField = useRef<HTMLTextAreaElement>(null)
+
+  const settings = useQuery({
+    queryKey: ['settings'],
+    queryFn: () => api.get<Settings>('/settings'),
+    staleTime: 5 * 60_000,
+  })
+  const values = useServerValues()
+  const clients = useQuery({ queryKey: ['clients'], queryFn: () => api.get<ApiClient[]>('/clients') })
+
+  const write = useMutation({
+    mutationFn: (on: boolean) => api.put('/settings/server/-', { key: MCP_SETTING, value: String(on) }),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['settings'] }),
+  })
+
+  const makeKey = useMutation({
+    mutationFn: () =>
+      api.post<ApiClient & { key: string }>('/clients', {
+        name: freeAgentName(
+          m.keyName,
+          (clients.data ?? []).filter((client) => !client.ownerId).map((client) => client.name),
+        ),
+        scopes: ['mcp'],
+      }),
+    onSuccess: (result) => {
+      setMade(result.key)
+      void queryClient.invalidateQueries({ queryKey: ['clients'] })
+      void queryClient.invalidateQueries({ queryKey: ['stats'] })
+    },
+  })
+
+  useEffect(() => {
+    if (copied?.how !== 'done') return
+    const timer = setTimeout(() => setCopied(null), 2_000)
+    return () => clearTimeout(timer)
+  }, [copied])
+
+  const state = values.data?.find((value) => value.key === MCP_SETTING)
+  const on = state?.value === 'true'
+  const address = mcpAddress(settings.data?.publicUrl ?? window.location.origin)
+  const command = claudeCommand(address, made)
+
+  const copy = async (what: 'address' | 'command') => {
+    try {
+      if (!navigator.clipboard) throw new Error('no clipboard')
+      await navigator.clipboard.writeText(what === 'address' ? address : command)
+      setCopied({ what, how: 'done' })
+    } catch {
+      const field = what === 'address' ? addressField.current : commandField.current
+      field?.focus()
+      field?.select()
+      setCopied({ what, how: 'manual' })
+    }
+  }
+
+  return (
+    <Panel label={m.title} className="rise mt-6" style={{ animationDelay: '140ms' }}>
+      <PanelHead
+        title={m.title}
+        action={state ? <Lamp tone={on ? 'moss' : 'faint'}>{on ? m.on : m.off}</Lamp> : undefined}
+      />
+      <div className="space-y-4 p-5">
+        <p className="max-w-prose text-sm leading-relaxed text-bone-dim">{m.lead}</p>
+
+        <div className="flex items-center justify-between gap-4 rounded-card border border-rule bg-ink px-4 py-1.5">
+          <div className="min-w-0">
+            <span className="block text-sm text-bone">{m.toggle}</span>
+            <span className="block text-xs leading-relaxed text-bone-faint">{on ? m.onHint : m.offHint}</span>
+          </div>
+          <Toggle
+            id="mcp-switch"
+            checked={on}
+            label={m.toggle}
+            onChange={(next) => write.mutate(next)}
+            disabled={!state || write.isPending}
+          />
+        </div>
+        {write.isError ? (
+          <p role="alert" className="flex items-center gap-2 text-xs text-status-error">
+            <Glyph name="alert" className="size-3.5" />
+            {write.error.message}
+          </p>
+        ) : null}
+
+        <div>
+          <label htmlFor="mcp-address" className="label mb-1.5 block">
+            {m.address}
+          </label>
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              id="mcp-address"
+              ref={addressField}
+              readOnly
+              value={address}
+              onFocus={(event) => event.currentTarget.select()}
+              className="min-h-11 min-w-0 flex-1 rounded-card border border-rule bg-ink px-3 font-mono text-sm text-bone"
+            />
+            <Button onClick={() => void copy('address')}>
+              <Glyph name={copied?.what === 'address' && copied.how === 'done' ? 'check' : 'copy'} className="size-4" />
+              {copied?.what === 'address' && copied.how === 'done' ? m.copied : m.copy}
+            </Button>
+          </div>
+        </div>
+
+        <div>
+          <label htmlFor="mcp-command" className="label mb-1.5 block">
+            {m.claude}
+          </label>
+          <textarea
+            id="mcp-command"
+            ref={commandField}
+            readOnly
+            rows={3}
+            value={command}
+            aria-describedby="mcp-key-note"
+            onFocus={(event) => event.currentTarget.select()}
+            className="block min-h-20 w-full resize-none rounded-card border border-rule bg-ink px-3 py-2 font-mono text-sm leading-relaxed text-bone field-sizing-content"
+          />
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            {made ? null : (
+              <Button variant="primary" onClick={() => makeKey.mutate()} disabled={makeKey.isPending}>
+                {makeKey.isPending ? <Spinner className="size-4" /> : <Glyph name="key" className="size-4" />}
+                {m.makeKey}
+              </Button>
+            )}
+            <Button onClick={() => void copy('command')}>
+              <Glyph name={copied?.what === 'command' && copied.how === 'done' ? 'check' : 'copy'} className="size-4" />
+              {copied?.what === 'command' && copied.how === 'done' ? m.copied : m.copyCommand}
+            </Button>
+          </div>
+          <p id="mcp-key-note" className="mt-2 max-w-prose text-xs leading-relaxed text-bone-dim">
+            {made ? m.keyOnce : m.keyHint}
+          </p>
+          {makeKey.isError ? (
+            <p role="alert" className="mt-2 flex items-center gap-2 text-xs text-status-error">
+              <Glyph name="alert" className="size-3.5" />
+              {makeKey.error.message}
+            </p>
+          ) : null}
+          {copied?.how === 'manual' ? (
+            <p role="status" className="mt-2 text-xs text-bone-dim">
+              {m.copyManual}
+            </p>
+          ) : null}
+        </div>
+
+        <p className="max-w-prose text-sm leading-relaxed text-bone-dim">{m.openWebUi}</p>
+
+        <p className="flex items-start gap-2 text-sm leading-relaxed text-bone">
+          <Glyph name="shield" className="mt-0.5 size-4 shrink-0 text-brass" />
+          <span>{m.reads}</span>
+        </p>
+        <p className="max-w-prose text-xs leading-relaxed text-bone-faint">{m.names}</p>
       </div>
     </Panel>
   )
@@ -616,7 +802,7 @@ function IssuedKey({
         </div>
 
         {copied === 'failed' ? (
-          <p role="alert" className="mt-2 text-xs text-vermillion">
+          <p role="alert" className="mt-2 text-xs text-status-error">
             {t.admin.keys.copyFailed}
           </p>
         ) : null}

@@ -15,6 +15,7 @@
 pub mod anime;
 pub mod gather;
 pub mod ids;
+pub mod imdb;
 pub mod language;
 pub mod listing;
 pub mod merge;

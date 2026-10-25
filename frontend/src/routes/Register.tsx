@@ -220,7 +220,7 @@ export function Register() {
         }}
       />
       {codeState === 'valid' && offer.data ? (
-        <p className="flex items-center gap-1.5 text-xs text-moss" role="status">
+        <p className="flex items-center gap-1.5 text-xs text-status-ok" role="status">
           <Glyph name="check" className="size-3.5 shrink-0" />
           {t.register.valid(t.labels.roles[offer.data.role], longDate(offer.data.expiresAt, locale))}
         </p>
@@ -327,7 +327,7 @@ export function Register() {
         {required ? null : codeField}
 
         {refusalText ? (
-          <p role="alert" className="flex items-start gap-2 text-sm text-vermillion">
+          <p role="alert" className="flex items-start gap-2 text-sm text-status-error">
             <Glyph name="alert" className="mt-0.5 size-4 shrink-0" />
             {refusalText}
           </p>

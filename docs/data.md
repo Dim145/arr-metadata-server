@@ -213,3 +213,52 @@ The **format** AniList gives an entry — `TV`, `TV_SHORT`, `MOVIE`, `SPECIAL`, 
 and shown on the page as a chip where it says more than *series* or *film*: an OVA is filed as one or the
 other, and the chip says what it is. AniList's **tags** stay beside TMDB's keywords: keywords are gathered
 from every source, each once whatever its case, where the first source with any gave the whole list.
+
+## IMDb's titles by region, and its episodes
+
+With IMDb's titles read (`imdb.akas`, a weekly list — see [IMDb's titles by region, and its
+episodes](sources.md#imdbs-titles-by-region-and-its-episodes)), each work held keeps the titles IMDb gives
+it: one row a title, with its **region** as IMDb writes it — ISO 3166-1 (`FR`), or a code of IMDb's own
+(`XWW`, the world in English), none for the original title — its language where IMDb names one, and which of
+`imdbDisplay`, `original` and `alternative` it is. They are not the work's alternative titles, and nothing
+shows them but what Radarr is sent:
+
+- **Radarr** is sent, after a film's own `AlternativeTitles`, the titles IMDb gives it in the regions of the
+  setting `imdb.regions` as it stands for that Radarr — on the server, on its key or on the rule of its
+  address — or, unset, in the country of the language it is answered in. Each is sent once, a title Radarr
+  is sent already (its title, its original title, a translation's or an alternative title) left out whatever
+  its case, spacing and punctuation; fifty at most a film. `Type` is `Tmdb`, as from `api.radarr.video`: Radarr
+  files every alternative title under TMDB whatever it is told, and reads no language for one.
+
+| Setting | Default | What it does |
+|---|---|---|
+| `imdb.akas` | `false` | Read IMDb's titles weekly |
+| `imdb.regions` | unset: the country of the Radarr's language | The regions whose titles Radarr is given, `FR, BE, CA`; per key and per address too |
+
+With IMDb's episodes read (`imdb.episodes`, weekly too), each series held keeps the episodes IMDb numbers —
+the episode's IMDb id, the series', the season and the number. An episode of the catalogue is the one of IMDb's
+with the same season and number in the official order — never a special — save where the numbers are known to
+part: numbers IMDb gives two of its own episodes match neither, and a season IMDb numbers fewer episodes of than
+are held here, other than the series' last, matches nothing. Such a match is the less sure for resting on
+numbers, and is said to be:
+
+- **An episode's `.nfo` document** carries `<uniqueid type="imdb">tt0959621</uniqueid>` after TheTVDB's and
+  TMDB's — the default only when it has neither — in the export of the whole library and in
+  `GET /api/v1/items/{id}/nfo/{season}/{episode}`.
+- **An episode's page** shows IMDb's rating of it beside its own, named *IMDb* and marked *by number*, with a
+  link to its page at IMDb and, in its record, what the match rests on.
+- **The native API** gives them by work, a season at a time or all at once:
+  `GET /api/v1/items/{id}/imdb/episodes?season=1`, answered whoever may see the work.
+
+| Field | Meaning |
+|---|---|
+| `on` | whether IMDb's episodes are read (`imdb.episodes`); while they are not, `episodes` is empty |
+| `episodes[].episodeId` | the episode's id in the catalogue |
+| `episodes[].seasonNumber`, `episodeNumber` | its numbers, the official order's |
+| `episodes[].imdbId` | IMDb's id of the episode, `tt0959621` |
+| `episodes[].rating`, `votes` | IMDb's rating of it out of ten, and its votes — while IMDb's ratings are on (`imdb.enabled`) and it has one |
+| `episodes[].matchedBy` | `numbers`: matched by its season and number |
+
+The ratings come from IMDb's daily ratings list, which keeps the rating of every episode IMDb lists of a series
+held while the episodes are read, beside the works' — and is read again within the hour after the episodes are.
+Sonarr is given none of it: IMDb's episodes stay on the page, in the `.nfo` documents and in this API.

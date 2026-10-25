@@ -390,7 +390,7 @@ function Header({ at, total, from, to }: { at: SeasonRef; total?: number; from?:
                   to={toward({ year: at.year, season })}
                   aria-current={current ? 'page' : undefined}
                   className={cn(
-                    'hit inline-flex min-h-9 flex-1 items-center justify-center rounded-full px-3.5 text-[0.8125rem] transition-colors duration-150',
+                    'hit inline-flex min-h-9 flex-1 items-center justify-center rounded-full px-3.5 text-body-sm transition-colors duration-150',
                     current ? 'bg-ink-top text-bone' : 'text-bone-dim hover:text-bone',
                   )}
                 >
@@ -475,12 +475,12 @@ function Strip({
 
           const inner = (
             <>
-              <span className={cn('font-mono text-[0.6875rem] tabular-nums', n ? 'text-bone' : 'text-transparent')} aria-hidden>
+              <span className={cn('font-mono text-label tabular-nums', n ? 'text-bone' : 'text-transparent')} aria-hidden>
                 {n}
               </span>
               <span
                 aria-hidden
-                className={cn('w-full max-w-6 rounded-t-[2px]', n ? 'bg-vermillion/75' : 'bg-rule')}
+                className={cn('w-full max-w-6 rounded-t-xs', n ? 'bg-vermillion/75' : 'bg-rule')}
                 style={{ height: n ? `${Math.max(12, (n / most) * 52)}%` : '2px' }}
               />
               <span aria-hidden className="mt-1 flex flex-col items-center font-mono text-[0.625rem] leading-tight text-bone-faint tabular-nums">
@@ -611,7 +611,7 @@ function Controls({
               <label
                 key={value}
                 className={cn(
-                  'hit relative inline-flex min-h-9 cursor-pointer items-center rounded-full px-3 text-[0.8125rem]',
+                  'hit relative inline-flex min-h-9 cursor-pointer items-center rounded-full px-3 text-body-sm',
                   'transition-colors duration-150 has-focus-visible:outline-2 has-focus-visible:outline-vermillion',
                   f.trailer === value ? 'bg-ink-top text-bone' : 'text-bone-dim hover:text-bone',
                 )}
@@ -1082,7 +1082,7 @@ function CandidateCard({
         <p className="truncate text-sm font-medium text-bone" title={c.title}>
           {c.title}
         </p>
-        <p className="mt-0.5 truncate font-mono text-[0.6875rem] text-bone-faint">
+        <p className="mt-0.5 truncate font-mono text-label text-bone-faint">
           {[
             c.premiere
               ? new Intl.DateTimeFormat(locale, { day: 'numeric', month: 'short', timeZone: 'UTC' }).format(
@@ -1099,7 +1099,7 @@ function CandidateCard({
           {imported ? (
             <Link
               to={`/work/${imported}`}
-              className="hit inline-flex min-h-9 items-center gap-1.5 text-sm text-moss transition-colors duration-150 hover:text-bone"
+              className="hit inline-flex min-h-9 items-center gap-1.5 text-sm text-status-ok transition-colors duration-150 hover:text-bone"
             >
               <Glyph name="check" className="size-3.5" />
               {t.seasons.candidates.imported} · {t.seasons.candidates.open}
@@ -1118,7 +1118,7 @@ function CandidateCard({
             TMDB
           </ExternalLink>
           {failed ? (
-            <span role="alert" className="basis-full text-xs text-vermillion">
+            <span role="alert" className="basis-full text-xs text-status-error">
               {t.seasons.candidates.failed}
             </span>
           ) : null}

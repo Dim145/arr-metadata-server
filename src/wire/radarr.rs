@@ -157,6 +157,72 @@ fn tmdb_source() -> String {
     "Tmdb".to_string()
 }
 
+/// A title IMDb gives a film in one of the regions a caller is set to, as
+/// `title.akas` lists it: what Radarr is given beside TMDB's alternative
+/// titles — see [`crate::service::imdb::regional_titles`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct RegionalTitle {
+    pub title: String,
+    /// IMDb's code for its language, where it gives one: most often none.
+    pub language: Option<String>,
+}
+
+/// How many of IMDb's titles a film is sent at most, whatever the regions.
+pub const MAX_REGIONAL: usize = 50;
+
+/// Add IMDb's titles of a film to its alternative titles: those it is not
+/// sent under already — as its title, its original title, a translation's
+/// title or an alternative title — compared without regard to case,
+/// spacing or punctuation.
+///
+/// Radarr reads every title it is sent as one more name a release of the
+/// film may go by. It writes each down as TMDB's whatever `Type` says
+/// (`SkyHookProxy.MapAlternativeTitle`), and `Tmdb` is all the real service
+/// sends; it reads no language for one, which is sent only where IMDb names
+/// one as two letters, as the real service writes them.
+pub fn add_regional_titles(resource: &mut MovieResource, titles: &[RegionalTitle]) {
+    let mut known: std::collections::HashSet<String> = std::iter::once(resource.title.as_str())
+        .chain(resource.original_title.as_deref())
+        .chain(resource.alternative_titles.iter().map(|t| t.title.as_str()))
+        .chain(resource.translations.iter().map(|t| t.title.as_str()))
+        .map(plain)
+        .collect();
+
+    let mut added = 0;
+    for regional in titles {
+        if added == MAX_REGIONAL {
+            break;
+        }
+        let title = regional.title.trim();
+        let key = plain(title);
+        if key.is_empty() || !known.insert(key) {
+            continue;
+        }
+        resource.alternative_titles.push(AlternativeTitleResource {
+            title: title.to_string(),
+            title_type: tmdb_source(),
+            language: regional
+                .language
+                .as_deref()
+                .filter(|language| {
+                    language.len() == 2 && language.bytes().all(|b| b.is_ascii_alphabetic())
+                })
+                .map(str::to_ascii_lowercase),
+        });
+        added += 1;
+    }
+}
+
+/// A title as it is compared with the others: its letters and digits, in
+/// lower case.
+fn plain(title: &str) -> String {
+    title
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "PascalCase")]
 pub struct TranslationResource {

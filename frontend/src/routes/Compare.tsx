@@ -74,7 +74,7 @@ export function Compare() {
       </div>
 
       {a && b && a === b ? (
-        <p role="alert" className="mt-6 text-sm text-vermillion">
+        <p role="alert" className="mt-6 text-sm text-status-error">
           {t.compare.same}
         </p>
       ) : null}

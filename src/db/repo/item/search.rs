@@ -641,32 +641,190 @@ pub(super) fn from_clause(_db: &Db, _q: &Query) -> &'static str {
 /// is not presented as the oldest, nor a film among the series that ran
 /// longest.
 fn order_clause(q: &Query) -> String {
-    let (expression, descending) = match q.sort {
-        Sort::Popularity | Sort::Relevance if searches_text(q) => ("(popularity + 0)", true),
-        Sort::Popularity | Sort::Relevance => ("popularity", true),
-        Sort::Rating => ("listed_score", true),
-        Sort::Release => ("listed_release", true),
-        Sort::Title => ("listed_title", false),
-        Sort::Added => ("created_at", true),
-        Sort::Refreshed => ("refreshed_at", true),
-        Sort::Runtime => ("runtime", true),
-        Sort::LastAired => ("last_aired", true),
+    let (expression, _) = sort_key(q);
+    let direction = if descends(q) { "DESC" } else { "ASC" };
+    format!("{expression} {direction} NULLS LAST, title ASC")
+}
+
+/// What a list is ordered by — the expression, and the kind of value it
+/// gives — before the title that settles a tie.
+fn sort_key(q: &Query) -> (&'static str, ValueKind) {
+    match q.sort {
+        Sort::Popularity | Sort::Relevance if searches_text(q) => {
+            ("(popularity + 0)", ValueKind::Number)
+        }
+        Sort::Popularity | Sort::Relevance => ("popularity", ValueKind::Number),
+        Sort::Rating => ("listed_score", ValueKind::Number),
+        Sort::Release => ("listed_release", ValueKind::Text),
+        Sort::Title => ("listed_title", ValueKind::Text),
+        Sort::Added => ("created_at", ValueKind::Text),
+        Sort::Refreshed => ("refreshed_at", ValueKind::Text),
+        Sort::Runtime => ("runtime", ValueKind::Integer),
+        Sort::LastAired => ("last_aired", ValueKind::Text),
         // Counted off `ix_episode_media`, one work at a time: the specials
         // are not what "how many episodes" asks about.
         Sort::Episodes => (
             "(SELECT COUNT(*) FROM media_episode e
                WHERE e.media_id = media_item.id AND e.season_number > 0)",
-            true,
+            ValueKind::Integer,
         ),
+    }
+}
+
+/// Whether a list runs from the highest value down: its sort's own way —
+/// A to Z for titles, the highest, newest or most popular first for the
+/// rest — unless the query asks for the other.
+fn descends(q: &Query) -> bool {
+    q.descending.unwrap_or(q.sort != Sort::Title)
+}
+
+/// The kind of value a list is ordered by, as a cursor carries it and as it
+/// is bound back: a text, a whole number, or a number with a fraction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ValueKind {
+    Integer,
+    Number,
+    Text,
+}
+
+/// The value a list is ordered by, as one work holds it.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(untagged)]
+pub enum SortValue {
+    Integer(i64),
+    Number(f64),
+    Text(String),
+}
+
+impl SortValue {
+    fn kind(&self) -> ValueKind {
+        match self {
+            Self::Integer(_) => ValueKind::Integer,
+            Self::Number(_) => ValueKind::Number,
+            Self::Text(_) => ValueKind::Text,
+        }
+    }
+}
+
+/// Where a page read after another begins: just past this work, in the
+/// list's order — the value the list is ordered by as the work held it, none
+/// when it held none, then its title and its id, which settle a tie.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Place {
+    pub value: Option<SortValue>,
+    pub title: String,
+    pub id: String,
+}
+
+/// Whether a place can be one in a query's list: its value of the kind the
+/// list is ordered by. One that is not was made for a list in another order,
+/// and would be compared with nothing it can be compared with.
+pub fn fits(q: &Query, after: &Place) -> bool {
+    after
+        .value
+        .as_ref()
+        .is_none_or(|value| value.kind() == sort_key(q).1)
+}
+
+/// A page of the works a query lists, in the order it asks for: past `after`
+/// when it is given, else `q.offset` works from the start — and where the
+/// next page begins, when there is one.
+///
+/// The order is the list's own with each work's id last, so that no two
+/// works tie and a page begins exactly where the one before ended, whatever
+/// was added or taken away meanwhile. A text search ranked by relevance is
+/// not read here: its order is worked out anew each time, and a place in it
+/// is a count (see [`search`]).
+pub async fn listed_page(
+    db: &Db,
+    q: &Query,
+    after: Option<&Place>,
+) -> Result<(Vec<MediaItem>, Option<Place>)> {
+    let (expression, kind) = sort_key(q);
+    let limit = q.limit.clamp(1, MAX_PAGE);
+    // The value read back as the kind it is bound as: a count is a big
+    // integer on PostgreSQL, a runtime a small one.
+    let shown = match kind {
+        ValueKind::Integer => format!("CAST({expression} AS BIGINT)"),
+        ValueKind::Number | ValueKind::Text => expression.to_string(),
+    };
+    let mut sql = format!(
+        "SELECT {ITEM_COLUMNS}, {shown} AS listed_key FROM {} WHERE 1 = 1",
+        from_clause(db, q)
+    );
+    let mut args = AnyArguments::default();
+    narrow(db.dialect(), q, &mut sql, &mut args)?;
+
+    if let Some(after) = after {
+        if !fits(q, after) {
+            anyhow::bail!("a place in a list in another order");
+        }
+        let bind = |args: &mut AnyArguments, value: &SortValue| -> Result<()> {
+            match value {
+                SortValue::Integer(n) => args.add(*n),
+                SortValue::Number(n) => args.add(*n),
+                SortValue::Text(t) => args.add(t.clone()),
+            }
+            .map_err(|e| anyhow::anyhow!("{e}"))
+        };
+        // Past the work in its tie: a later title, or the same title and a
+        // later id.
+        let tie = "(title > ? OR (title = ? AND id > ?))";
+        match &after.value {
+            // Further along the values, or among those with none, which come
+            // last whichever way the list runs; or the same value, later in
+            // its tie.
+            Some(value) => {
+                let further = if descends(q) { "<" } else { ">" };
+                sql.push_str(&format!(
+                    " AND ({expression} {further} ? OR {expression} IS NULL
+                           OR ({expression} = ? AND {tie}))"
+                ));
+                bind(&mut args, value)?;
+                bind(&mut args, value)?;
+            }
+            // Already among the works with no value: later in that tie.
+            None => sql.push_str(&format!(" AND ({expression} IS NULL AND {tie})")),
+        }
+        for value in [&after.title, &after.title, &after.id] {
+            args.add(value.clone())
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+        }
+    }
+
+    sql.push_str(" ORDER BY ");
+    sql.push_str(&order_clause(q));
+    sql.push_str(", id ASC LIMIT ? OFFSET ?");
+    // One more than the page, to know whether there is another.
+    args.add(limit + 1).map_err(|e| anyhow::anyhow!("{e}"))?;
+    args.add(if after.is_some() { 0 } else { q.offset.max(0) })
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    let rows = sqlx::query_with(db.sql(&sql), args)
+        .fetch_all(db.pool())
+        .await?;
+
+    let more = rows.len() as i64 > limit;
+    let kept = &rows[..rows.len().min(limit as usize)];
+    let mut items = Vec::with_capacity(kept.len());
+    for row in kept {
+        items.push(map_item(row)?);
+    }
+    let next = match (more, kept.last()) {
+        (true, Some(last)) => Some(Place {
+            value: match kind {
+                ValueKind::Integer => last.opt_big("listed_key")?.map(SortValue::Integer),
+                ValueKind::Number => last.opt_real("listed_key")?.map(SortValue::Number),
+                ValueKind::Text => last.opt_text("listed_key")?.map(SortValue::Text),
+            },
+            title: last.text("title")?,
+            id: last.text("id")?,
+        }),
+        _ => None,
     };
 
-    let direction = if q.descending.unwrap_or(descending) {
-        "DESC"
-    } else {
-        "ASC"
-    };
-
-    format!("{expression} {direction} NULLS LAST, title ASC")
+    attach_external_ids(db, &mut items).await?;
+    Ok((items, next))
 }
 
 /// `value` as one element of a JSON array of strings reads in the column that

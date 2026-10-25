@@ -87,7 +87,7 @@ export function ShareButton({ item }: { item: Shared }) {
         <Glyph name="share" className="size-4" />
         {t.share.button}
       </Button>
-      <span role="status" aria-live="polite" className={cn('text-sm', said === 'failed' ? 'text-vermillion' : 'text-moss')}>
+      <span role="status" aria-live="polite" className={cn('text-sm', said === 'failed' ? 'text-status-error' : 'text-status-ok')}>
         {words}
       </span>
     </span>

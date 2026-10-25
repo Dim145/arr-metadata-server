@@ -112,8 +112,8 @@ left.
 and `--revoke` makes it a member; the last active administrator cannot be revoked.
 
 `keys create` issues a key of the server's own, as **Keys & network** does: `--scope` once for
-each of `read`, `write`, `admin` and `metrics`, `--expires` with a date or an RFC 3339 instant,
-`--note`. The key is written to standard output, alone, and shown this once: only its hash is
+each of `read`, `write`, `admin`, `metrics` and `mcp` — an agent's, for the MCP server — `--expires`
+with a date or an RFC 3339 instant, `--note`. The key is written to standard output, alone, and shown this once: only its hash is
 kept.
 
 ```bash
