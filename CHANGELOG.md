@@ -7,6 +7,8 @@ may change what the API or the configuration means, and says so here.
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-10-25
+
 ### Added
 
 - The tagline in every language TMDB describes a work in. `media_translation`
@@ -2431,7 +2433,8 @@ and arm64.
 - End-to-end checks against a real Sonarr, against two instances, and a
   Playwright suite over the whole interface.
 
-[Unreleased]: https://github.com/Dim145/arr-metadata-server/compare/v0.8.3...HEAD
+[Unreleased]: https://github.com/Dim145/arr-metadata-server/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/Dim145/arr-metadata-server/compare/v0.8.3...v0.10.0
 [0.8.3]: https://github.com/Dim145/arr-metadata-server/compare/v0.8.2...v0.8.3
 [0.8.2]: https://github.com/Dim145/arr-metadata-server/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/Dim145/arr-metadata-server/compare/v0.8.0...v0.8.1

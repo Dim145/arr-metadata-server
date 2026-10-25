@@ -14,7 +14,7 @@ body:
     attributes:
       label: Version
       description: What `arr-metadata-server --version` prints, or the tag of the image you run (`docker run --rm ghcr.io/dim145/arr-metadata-server --version` asks the image).
-      placeholder: 0.8.3
+      placeholder: 0.10.0
     validations:
       required: true
 

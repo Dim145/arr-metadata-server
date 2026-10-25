@@ -253,7 +253,7 @@ dependencies = [
 
 [[package]]
 name = "arr-metadata-server"
-version = "0.8.3"
+version = "0.10.0"
 dependencies = [
  "age",
  "anyhow",
