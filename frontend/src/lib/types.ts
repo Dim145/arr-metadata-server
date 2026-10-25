@@ -173,6 +173,13 @@ export type AuditEntry = Schema<'AuditEntry'>
 
 export type AuditResponse = Schema<'AuditListResponse'>
 
+/** A line of the application log, and the log as the administration reads it. */
+export type LogEntry = Schema<'LogEntry'>
+
+export type LogLevel = Schema<'LogLevel'>
+
+export type LogResponse = Schema<'LogResponse'>
+
 export type Job = Schema<'Job'>
 
 /** The background tasks, by the name the history files their runs by. */
@@ -180,6 +187,33 @@ export type TaskId = Schema<'TaskId'>
 
 /** A background task as it stands: when it runs, how it last went. */
 export type Task = Schema<'TaskState'>
+
+/** Every task and the newest run, as the tasks' stream sends them. */
+export type TaskBoard = Schema<'TaskBoard'>
+
+/** When a periodic task runs, where somebody said: a window of the day, or a cron expression, in UTC. */
+export type TaskSchedule = Schema<'TaskSchedule'>
+
+/** The next moments a schedule being written names. */
+export type ScheduleMoments = Schema<'ScheduleMoments'>
+
+/** A line of a batch to import, and the batch set beside the catalogue. */
+export type ImportLine = Schema<'ImportLine'>
+
+export type ImportPreview = Schema<'ImportPreview'>
+
+export type ImportPreviewLine = Schema<'ImportPreviewLine'>
+
+/** What a batch started as: its run, and how many works it takes. */
+export type BatchStarted = Schema<'BatchStarted'>
+
+/** What is imported on a schedule, and into which selection. */
+export type ImportRule = Schema<'ImportRule'>
+
+export type ImportRuleRequest = Schema<'ImportRuleRequest'>
+
+/** The works by what their media come to. */
+export type MediaByWork = Schema<'MediaByWork'>
 
 /** Every event a destination can be told of, besides `*`. */
 export type WebhookEvents = Schema<'WebhookEvents'>
@@ -362,6 +396,22 @@ export type Facets = Schema<'Facets'>
 /** The list's facets, and the countries and ratings its further filters choose among. */
 export type CatalogueFacets = Schema<'CatalogueFacets'>
 
+/** A genre's, a network's, a year's or a decade's page: its name, its count, its five best, its note. */
+export type FacetPage = Schema<'FacetPage'>
+
+/** The programmer's note on one thing, in one language. */
+export type EditorialNote = Schema<'EditorialNote'>
+
+/** What a programmer's note is about: a work, a list, a genre, a network, a year, a decade. */
+export type EditorialScope = Schema<'EditorialScope'>
+
+export type EditorialNotes = Schema<'EditorialNotes'>
+
+/** Two works side by side, and the people they share. */
+export type Comparison = Schema<'Comparison'>
+
+export type SharedPerson = Schema<'SharedPerson'>
+
 /** What a search across the catalogue found: its works, people and episodes, each ranked. */
 export type SearchHits = Schema<'SearchHits'>
 
@@ -492,3 +542,9 @@ export type MergeOutcome = Schema<'MergeOutcome'>
 
 /** The merges into a work that can still be undone, and the names it answers for. */
 export type MergeList = Schema<'MergeList'>
+
+/** How many works the register lists under each of its gaps (`?missing=`). */
+export type Gaps = Schema<'Gaps'>
+
+/** What a person keeps of their own way of working, by name, with their account. */
+export type Preferences = Schema<'Preferences'>

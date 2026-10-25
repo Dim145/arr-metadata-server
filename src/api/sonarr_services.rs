@@ -146,7 +146,7 @@ async fn relayed(state: &AppState, request: Request) -> Response {
     }
 
     let started = Instant::now();
-    let answer = outbound.send().await;
+    let answer = crate::outbound::send("sonarr_services", outbound).await;
     crate::metrics::upstream(
         "sonarr_services",
         started,

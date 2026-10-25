@@ -78,8 +78,9 @@ pub const DEFAULT_KEEP: i64 = 4;
 /// server that keeps restarting not to make an archive each time.
 const FIRST_AFTER: Duration = Duration::from_secs(10 * 60);
 
-/// How often it looks again: a schedule changed is followed within this.
-const TICK: Duration = Duration::from_secs(10 * 60);
+/// How often it looks again: a schedule changed is followed within this,
+/// and a window or a cron expression set on the tasks page to the minute.
+const TICK: Duration = Duration::from_secs(60);
 
 /// How long after the schedule's archive failed it is tried again: soon
 /// enough for a disk that was full for a while, not so often that every
@@ -131,13 +132,26 @@ pub async fn last_at(state: &AppState) -> Result<Option<DateTime<Utc>>> {
 
 /// When the schedule makes the next one: an interval after the newest, or
 /// now when there is none — an hour after the last run, when that one
-/// failed. Nothing while it is off.
+/// failed; inside the window, or at the moment the expression names, when
+/// one is set on the tasks page. Nothing while it is off.
 pub async fn next_at(state: &AppState) -> Result<Option<DateTime<Utc>>> {
+    let Some(clock) = clock(state).await? else {
+        return Ok(None);
+    };
+    let now = Utc::now();
+    let read = crate::jobs::schedule::of(state, KIND).await?;
+    Ok(crate::jobs::schedule::next_of(read.as_ref(), clock, now).map(|at| at.max(now)))
+}
+
+/// What the schedule's own cadence says, before a window or an expression
+/// set on the tasks page: see [`next_at`]. Nothing while it is off.
+pub async fn clock(state: &AppState) -> Result<Option<crate::jobs::schedule::Clock>> {
     let Some(every) = interval(state) else {
         return Ok(None);
     };
     let now = Utc::now();
-    let due = match last_at(state).await? {
+    let last = last_at(state).await?;
+    let due = match last {
         Some(last) => last + delta(every),
         None => now,
     };
@@ -150,7 +164,11 @@ pub async fn next_at(state: &AppState) -> Result<Option<DateTime<Utc>>> {
                 .and_then(crate::db::parse_rfc3339)
         })
         .map(|failed| failed + delta(RETRY_AFTER));
-    Ok(Some(due.max(retry.unwrap_or(due)).max(now)))
+    Ok(Some(crate::jobs::schedule::Clock {
+        natural: due,
+        last_done: last,
+        not_before: retry,
+    }))
 }
 
 /// Whether the newest archive is old enough to be worth saying so: older
@@ -166,8 +184,8 @@ pub async fn overdue(state: &AppState) -> Result<bool> {
     })
 }
 
-/// The schedule: ten minutes after the start, then every ten minutes, an
-/// archive when the newest is an interval old. The leader's to keep.
+/// The schedule: ten minutes after the start, then every minute, an archive
+/// when [`next_at`] says one is due. The leader's to keep.
 pub async fn run(state: AppState) {
     tokio::time::sleep(FIRST_AFTER).await;
     loop {

@@ -16,7 +16,7 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 
 import * as fmt from '../lib/format'
 import { api } from '../lib/api'
@@ -25,6 +25,7 @@ import type { NetworkCaller, NetworkRule } from '../lib/types'
 import {
   Button,
   Chip,
+  DataTable,
   Dialog,
   EmptyState,
   FormField,
@@ -35,15 +36,20 @@ import {
   Panel,
   PanelHead,
   Skeleton,
+  TableOptions,
+  TBody,
   Td,
   Th,
+  THead,
   Tr,
-  TableScroll,
+  sortRows,
+  useDataTable,
+  type Column,
 } from './ui'
 import { ScopeSettingsDialog, type Scope } from './ScopeSettings'
 
 export function NetworkAccess() {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   const queryClient = useQueryClient()
 
   const [cidr, setCidr] = useState('')
@@ -96,6 +102,32 @@ export function NetworkAccess() {
     },
   })
 
+  // A caller is known by its address. They come the most recently seen
+  // first, until a head is pressed.
+  const columns: Column[] = useMemo(
+    () => [
+      { id: 'address', label: t.admin.network.colAddress, kind: 'primary', always: true, sort: 'asc' },
+      { id: 'client', label: t.admin.network.colClient, sort: 'asc' },
+      { id: 'activity', label: t.admin.network.colActivity, sort: 'desc' },
+      { id: 'seen', label: t.admin.network.colSeen, align: 'right', sort: 'desc' },
+      { id: 'allow', label: t.admin.network.allow, kind: 'actions', always: true, align: 'right' },
+    ],
+    [t],
+  )
+  const table = useDataTable({ id: 'network-callers', columns })
+  const rows = sortRows(
+    callers.data ?? [],
+    table.sort,
+    {
+      // In the reader's alphabet with its figures by their value, so that
+      // 172.31.0.7 comes before 172.31.0.10.
+      address: (caller) => caller.ip,
+      client: (caller) => caller.userAgent,
+      activity: (caller) => caller.hits,
+      seen: (caller) => Date.parse(caller.lastSeen),
+    },
+    locale,
+  )
 
   return (
     <>
@@ -293,7 +325,10 @@ export function NetworkAccess() {
       </Panel>
 
       <Panel label={t.admin.network.callers} className="rise" style={{ animationDelay: '180ms' }}>
-        <PanelHead title={t.admin.network.callers} />
+        <PanelHead
+          title={t.admin.network.callers}
+          action={callers.data?.length ? <TableOptions table={table} /> : undefined}
+        />
 
         <p className="max-w-prose px-5 pt-4 pb-1 text-sm leading-relaxed text-bone-dim">
           {t.admin.network.callersLead}
@@ -313,37 +348,35 @@ export function NetworkAccess() {
         ) : callers.data.length === 0 ? (
           <EmptyState title={t.admin.network.noCallers} hint={t.admin.network.noCallersHint} />
         ) : (
-          <TableScroll label={t.admin.network.callers}>
-            <table className="w-full min-w-[34rem] border-collapse text-left">
-              <thead>
-                <tr>
-                  <Th>{t.admin.network.colAddress}</Th>
-                  <Th>{t.admin.network.colClient}</Th>
-                  <Th>{t.admin.network.colActivity}</Th>
-                  <Th align="right">{t.admin.network.colSeen}</Th>
-                  <Th align="right" />
-                </tr>
-              </thead>
-              <tbody>
-                {(callers.data ?? []).map((caller) => (
-                  <CallerRow
-                    key={caller.ip}
-                    caller={caller}
-                    // The server's answer, not a string comparison here: it
-                    // holds the rules and already does the address arithmetic
-                    // that decides whether 172.31.0.7 is inside 172.31.0.0/24.
-                    allowed={caller.covered}
-                    onAllow={() =>
-                      allow.mutate({
-                        cidr: caller.ip,
-                        note: caller.hostname ?? caller.userAgent ?? undefined,
-                      })
-                    }
-                  />
-                ))}
-              </tbody>
-            </table>
-          </TableScroll>
+          <DataTable table={table} label={t.admin.network.callers}>
+            <THead>
+              <Th column="address" />
+              <Th column="client" />
+              <Th column="activity" />
+              <Th column="seen" />
+              <Th column="allow">
+                <span className="sr-only">{t.admin.network.allow}</span>
+              </Th>
+            </THead>
+            <TBody>
+              {rows.map((caller) => (
+                <CallerRow
+                  key={caller.ip}
+                  caller={caller}
+                  // The server's answer, not a string comparison here: it
+                  // holds the rules and already does the address arithmetic
+                  // that decides whether 172.31.0.7 is inside 172.31.0.0/24.
+                  allowed={caller.covered}
+                  onAllow={() =>
+                    allow.mutate({
+                      cidr: caller.ip,
+                      note: caller.hostname ?? caller.userAgent ?? undefined,
+                    })
+                  }
+                />
+              ))}
+            </TBody>
+          </DataTable>
         )}
       </Panel>
 
@@ -389,15 +422,15 @@ function CallerRow({
   const { t, locale } = useI18n()
 
   return (
-    <Tr>
-      <Td>
+    <Tr row={caller.ip}>
+      <Td column="address">
         <span className="font-mono text-sm text-bone tabular-nums">{caller.ip}</span>
         <span className="mt-0.5 block text-xs text-bone-faint">
           {caller.hostname ?? t.admin.network.unnamed}
         </span>
       </Td>
 
-      <Td>
+      <Td column="client">
         {/* The user agent names the application where the hostname names the
             machine; between them an operator can tell two Sonarrs apart. */}
         <span className="text-sm text-bone-dim">{caller.userAgent ?? '—'}</span>
@@ -406,7 +439,7 @@ function CallerRow({
         </span>
       </Td>
 
-      <Td>
+      <Td column="activity">
         <div className="flex flex-wrap items-center gap-2">
           <Chip tone={caller.lastAllowed ? 'provider' : 'accent'}>
             <Glyph name={caller.lastAllowed ? 'check' : 'alert'} className="size-3" />
@@ -419,11 +452,11 @@ function CallerRow({
         </div>
       </Td>
 
-      <Td align="right">
+      <Td column="seen">
         <span className="text-xs text-bone-faint">{fmt.relative(caller.lastSeen, locale)}</span>
       </Td>
 
-      <Td align="right">
+      <Td column="allow">
         {allowed ? (
           <Label>{t.admin.network.alreadyAllowed}</Label>
         ) : (

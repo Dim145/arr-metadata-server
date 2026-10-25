@@ -374,6 +374,8 @@ async fn metrics(
             Vec::new()
         }
     };
+    // The pool, the queues, the failed refreshes, the certificates.
+    gauges.extend(crate::metrics::server(&state).await);
     let c = &state.caches;
     let caches: [(&str, u64, u64, crate::cache::Tally, crate::cache::Tally); 4] = [
         (

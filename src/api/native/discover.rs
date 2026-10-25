@@ -12,6 +12,7 @@
 use axum::{
     Extension, Json,
     extract::{Query, State},
+    http::StatusCode,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
@@ -26,6 +27,7 @@ use crate::{
     db::repo::audit::Action,
     domain::{MediaItem, MediaKind},
     error::{AppError, AppResult},
+    jobs::import::{self, Line, Preview, Unread},
     providers::names,
     service,
     state::AppState,
@@ -37,6 +39,8 @@ pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(search))
         .routes(routes!(import))
+        .routes(routes!(preview_batch))
+        .routes(routes!(import_batch))
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
@@ -109,7 +113,7 @@ async fn search(
 
     // A page pasted whole is the lookup it stands for, and says which kind it
     // is when its address does.
-    let (term, kind_of_link) = match from_link(&query.term) {
+    let (term, kind_of_link) = match crate::jobs::import::from_link(&query.term) {
         Some((lookup, kind)) => (lookup, kind),
         None => (query.term.trim().to_string(), None),
     };
@@ -340,136 +344,501 @@ fn is_lookup(term: &str) -> bool {
     )
 }
 
-/// The lookup a provider's page stands for: its address pasted whole, as the
-/// `prefix:id` term the search already understands, and the kind of work
-/// when the address says.
-fn from_link(term: &str) -> Option<(String, Option<MediaKind>)> {
-    let url = url::Url::parse(term.trim()).ok()?;
-    if !matches!(url.scheme(), "http" | "https") {
-        return None;
-    }
+// ─── a batch ─────────────────────────────────────────────────────────────────
 
-    let host = url.host_str()?.to_ascii_lowercase();
-    let host = host
-        .strip_prefix("www.")
-        .or_else(|| host.strip_prefix("m."))
-        .unwrap_or(&host);
-    let parts: Vec<&str> = url
-        .path_segments()
-        .map(|segments| segments.filter(|s| !s.is_empty()).collect())
-        .unwrap_or_default();
-
-    // `1396-breaking-bad`, `21`: the number a slug starts with.
-    let number = |segment: &str| -> Option<i64> {
-        let digits: String = segment.chars().take_while(char::is_ascii_digit).collect();
-        digits.parse().ok()
-    };
-
-    match (host, parts.as_slice()) {
-        ("themoviedb.org", ["tv", id, ..]) => {
-            Some((format!("tmdb:{}", number(id)?), Some(MediaKind::Series)))
-        }
-        ("themoviedb.org", ["movie", id, ..]) => {
-            Some((format!("tmdb:{}", number(id)?), Some(MediaKind::Movie)))
-        }
-        // In the reader's language too: `/fr/title/tt…`.
-        ("imdb.com", ["title", id, ..]) | ("imdb.com", [_, "title", id, ..]) if is_tconst(id) => {
-            Some((format!("imdb:{id}"), None))
-        }
-        ("anilist.co", ["anime", id, ..]) => {
-            Some((format!("anilist:{}", number(id)?), Some(MediaKind::Series)))
-        }
-        ("myanimelist.net", ["anime", id, ..]) => {
-            Some((format!("mal:{}", number(id)?), Some(MediaKind::Series)))
-        }
-        // TheTVDB's pages are named by slug; only its older addresses, and the
-        // ones it redirects through, carry the number.
-        ("thetvdb.com", ["dereferrer", "series", id, ..]) | ("thetvdb.com", ["series", id, ..]) => {
-            number(id)
-                .filter(|_| id.bytes().all(|b| b.is_ascii_digit()))
-                .map(|id| (format!("tvdb:{id}"), Some(MediaKind::Series)))
-        }
-        ("thetvdb.com", _) => url
-            .query_pairs()
-            .find(|(key, _)| key == "id" || key == "seriesid")
-            .and_then(|(_, value)| value.parse::<i64>().ok())
-            .map(|id| (format!("tvdb:{id}"), Some(MediaKind::Series))),
-        _ => None,
-    }
+/// Lines to set beside the catalogue.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchPreviewRequest {
+    /// A work a line: an id, or its page at a provider. Two thousand at the
+    /// most.
+    pub lines: Vec<Line>,
+    /// What a TMDB id stands for where its line does not say: `movie` or
+    /// `series`.
+    #[serde(default)]
+    pub kind: Option<MediaKind>,
 }
 
-/// `tt0903747`: an IMDb title's id, and nothing else.
-fn is_tconst(id: &str) -> bool {
-    id.len() > 2 && id.starts_with("tt") && id[2..].bytes().all(|b| b.is_ascii_digit())
+/// Set a batch's lines beside the catalogue before anything is imported:
+/// what each names, whether it is held already, and — for the first dozen
+/// seconds' worth — whether a provider has it, by its title. Nothing is
+/// fetched to say so, and nothing is kept.
+#[utoipa::path(
+    post, path = "/items/import/preview", tag = TAG,
+    operation_id = "discover_preview_batch",
+    request_body = BatchPreviewRequest,
+    responses(
+        (status = 200, body = Preview),
+        (status = 400, description = "More than two thousand lines"),
+        (status = 403, description = "The caller may not write"),
+    ),
+)]
+async fn preview_batch(
+    State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
+    Json(request): Json<BatchPreviewRequest>,
+) -> AppResult<Json<Preview>> {
+    identity.require_write()?;
+    too_many(&request.lines)?;
+    Ok(Json(
+        import::preview(&state, &request.lines, request.kind).await?,
+    ))
+}
+
+/// A batch to import.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchRequest {
+    /// A work a line, as the preview reads them. Two thousand at the most.
+    pub lines: Vec<Line>,
+    /// What a TMDB id stands for where its line does not say.
+    #[serde(default)]
+    pub kind: Option<MediaKind>,
+    /// A language the episode texts of each series imported are fetched in
+    /// at once, besides the catalogue's own: `fr`, `pt-BR`.
+    #[serde(default)]
+    pub language: Option<String>,
+    /// The hand-made selections the works go into, held already or
+    /// imported, by id or slug.
+    #[serde(default)]
+    pub lists: Vec<String>,
+    /// Whether the works imported are switched on; those held already keep
+    /// what they are. On when absent.
+    #[serde(default)]
+    pub enabled: Option<bool>,
+}
+
+/// What a batch started as.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchStarted {
+    /// The run, as the tasks page follows it.
+    pub job_id: String,
+    /// How many works it takes, each once.
+    pub works: usize,
+    /// How many lines named none: not an id, or a TMDB id of no kind.
+    pub passed_over: usize,
+}
+
+/// Import a batch: each line's work, in order, as a run of the task
+/// `import.batch` that the tasks page follows — what is held passed over,
+/// what is not fetched and stored, each written down. One batch at a time.
+#[utoipa::path(
+    post, path = "/items/import/batch", tag = TAG,
+    operation_id = "discover_import_batch",
+    request_body = BatchRequest,
+    responses(
+        (status = 202, body = BatchStarted),
+        (status = 400, description = "No line names a work, more than two thousand lines, a language that is none, or a selection that is not a hand-made one"),
+        (status = 403, description = "The caller is not an administrator"),
+        (status = 409, description = "A batch is being imported already, or a backup is being restored"),
+    ),
+)]
+async fn import_batch(
+    State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
+    ip: ClientIp,
+    Json(request): Json<BatchRequest>,
+) -> AppResult<(StatusCode, Json<BatchStarted>)> {
+    // What it starts is followed on the tasks page, which is theirs.
+    identity.require_admin()?;
+    too_many(&request.lines)?;
+
+    let language = match request.language.as_deref().map(str::trim) {
+        None | Some("") => None,
+        Some(raw) => Some(service::language::tag(raw).ok_or_else(|| {
+            AppError::BadRequest(format!("{raw} is not a language: write it fr, de or pt-BR"))
+        })?),
+    };
+    let mut lists = Vec::with_capacity(request.lists.len());
+    for key in &request.lists {
+        lists.push(hand_made(&state, key).await?);
+    }
+
+    let mut wanted = Vec::new();
+    let mut passed_over = 0;
+    for line in &request.lines {
+        match import::read_line(line, request.kind) {
+            Ok(one) => wanted.push(one),
+            Err(Unread::Nothing) => {}
+            Err(Unread::Unreadable | Unread::NeedsKind) => passed_over += 1,
+        }
+    }
+    let mut seen = std::collections::HashSet::new();
+    wanted.retain(|one| seen.insert(one.clone()));
+    let works = wanted.len();
+
+    let job_id = import::start(
+        &state,
+        wanted,
+        import::Options {
+            language,
+            lists,
+            enabled: request.enabled.unwrap_or(true),
+        },
+        &identity.label(),
+    )
+    .await?;
+
+    audit::record(
+        &state,
+        Event {
+            identity: Some(&identity),
+            ip: &ip,
+            action: Action::TaskStarted,
+            target: Some(import::KIND),
+            detail: Some(&format!("{works} works asked; run {job_id}")),
+        },
+    )
+    .await;
+
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(BatchStarted {
+            job_id,
+            works,
+            passed_over,
+        }),
+    ))
+}
+
+fn too_many(lines: &[Line]) -> AppResult<()> {
+    if lines.len() > import::MOST_LINES {
+        return Err(AppError::BadRequest(format!(
+            "a batch takes {} lines at the most; this one has {}",
+            import::MOST_LINES,
+            lines.len()
+        )));
+    }
+    Ok(())
+}
+
+/// A hand-made selection, by id or slug: its id.
+pub(crate) async fn hand_made(state: &AppState, key: &str) -> AppResult<String> {
+    let list = match crate::db::repo::list::get(&state.db, key).await? {
+        Some(list) => Some(list),
+        None => crate::db::repo::list::by_slug(&state.db, key).await?,
+    }
+    .ok_or_else(|| AppError::BadRequest(format!("there is no selection {key}")))?;
+    if list.mode != crate::db::repo::list::ListMode::Manual {
+        return Err(AppError::BadRequest(format!(
+            "{} is composed by a filter, and holds no works of its own",
+            list.name
+        )));
+    }
+    Ok(list.id)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::native::testing::server;
 
-    #[test]
-    fn a_pasted_page_is_the_lookup_it_stands_for() {
-        let cases = [
-            (
-                "https://www.themoviedb.org/tv/1396-breaking-bad?language=fr",
-                "tmdb:1396",
-                Some(MediaKind::Series),
-            ),
-            (
-                "https://www.themoviedb.org/movie/603-the-matrix",
-                "tmdb:603",
-                Some(MediaKind::Movie),
-            ),
-            (
-                "https://m.imdb.com/title/tt0903747/",
-                "imdb:tt0903747",
-                None,
-            ),
-            (
-                "https://www.imdb.com/fr/title/tt0903747/?ref_=nv_sr",
-                "imdb:tt0903747",
-                None,
-            ),
-            (
-                "https://anilist.co/anime/21/ONE-PIECE/",
-                "anilist:21",
-                Some(MediaKind::Series),
-            ),
-            (
-                "https://myanimelist.net/anime/21/One_Piece",
-                "mal:21",
-                Some(MediaKind::Series),
-            ),
-            (
-                "https://thetvdb.com/dereferrer/series/81189",
-                "tvdb:81189",
-                Some(MediaKind::Series),
-            ),
-            (
-                "https://thetvdb.com/?tab=series&id=81189",
-                "tvdb:81189",
-                Some(MediaKind::Series),
-            ),
-        ];
-        for (link, lookup, kind) in cases {
-            assert_eq!(from_link(link), Some((lookup.to_string(), kind)), "{link}");
-        }
+    fn lines(texts: &[&str]) -> Vec<Line> {
+        texts
+            .iter()
+            .map(|text| Line {
+                text: (*text).to_string(),
+                ..Line::default()
+            })
+            .collect()
     }
 
-    #[test]
-    fn anything_else_is_searched_as_typed() {
-        for term in [
-            "Breaking Bad",
-            "tvdb:81189",
-            "https://thetvdb.com/series/breaking-bad",
-            // Fankai's website numbers its productions otherwise than the
-            // metadata service its ids here come from.
-            "https://fankai.fr/productions/101",
-            "https://www.imdb.com/title/nm0000123/",
-            "https://example.com/tv/1396",
-            "ftp://themoviedb.org/tv/1396",
-        ] {
-            assert_eq!(from_link(term), None, "{term}");
+    /// A film held here, by its TMDB id.
+    async fn held_film(state: &AppState, tmdb: i64, title: &str) -> MediaItem {
+        let mut item = MediaItem::empty(MediaKind::Movie);
+        item.id = crate::db::new_id();
+        item.title = title.into();
+        item.external_ids.tmdb = Some(tmdb);
+        item.created_at = crate::db::now();
+        item.updated_at = crate::db::now();
+        item.slug = crate::domain::make_slug(&item.title, None);
+        crate::db::repo::item::upsert(
+            &state.db,
+            crate::db::repo::item::ItemWrite {
+                item: &item,
+                replace_children: true,
+            },
+        )
+        .await
+        .unwrap();
+        item
+    }
+
+    #[tokio::test]
+    async fn a_batch_is_set_beside_the_catalogue_before_it_is_imported() {
+        let state = server().await;
+        let heat = held_film(&state, 949, "Heat").await;
+
+        let Json(preview) = preview_batch(
+            State(state.clone()),
+            Extension(Identity::Anonymous),
+            Json(BatchPreviewRequest {
+                lines: lines(&[
+                    "tmdb:949  # Heat (1995)",
+                    "https://www.themoviedb.org/movie/949-heat",
+                    "tmdb:603",
+                    "# a comment",
+                    "The Matrix",
+                    "tvdb:81189",
+                ]),
+                kind: Some(MediaKind::Movie),
+            }),
+        )
+        .await
+        .expect("a preview");
+
+        let statuses: Vec<import::Status> = preview.lines.iter().map(|l| l.status).collect();
+        assert_eq!(
+            statuses,
+            [
+                import::Status::Held,
+                import::Status::Repeated,
+                import::Status::Candidate,
+                import::Status::Unreadable,
+                import::Status::Candidate,
+            ],
+            "the comment is passed over without a word"
+        );
+        assert_eq!(
+            preview.lines[0].work.as_ref().map(|w| w.id.as_str()),
+            Some(heat.id.as_str())
+        );
+        assert_eq!(
+            preview.lines[0].work.as_ref().map(|w| w.title.as_str()),
+            Some("Heat")
+        );
+        assert_eq!(preview.counts.held, 1);
+        assert_eq!(preview.counts.candidate, 2);
+        // No provider to ask, here: the candidates are looked up on import.
+        assert!(!preview.lines[2].checked);
+
+        // A TMDB id of no kind is said so.
+        let Json(unsure) = preview_batch(
+            State(state.clone()),
+            Extension(Identity::Anonymous),
+            Json(BatchPreviewRequest {
+                lines: lines(&["tmdb:603"]),
+                kind: None,
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(unsure.lines[0].status, import::Status::NeedsKind);
+
+        // Too many lines.
+        let long: Vec<String> = (0..=import::MOST_LINES)
+            .map(|n| format!("tmdb:{n}"))
+            .collect();
+        let long: Vec<&str> = long.iter().map(String::as_str).collect();
+        assert!(matches!(
+            preview_batch(
+                State(state.clone()),
+                Extension(Identity::Anonymous),
+                Json(BatchPreviewRequest {
+                    lines: lines(&long),
+                    kind: Some(MediaKind::Movie),
+                }),
+            )
+            .await,
+            Err(AppError::BadRequest(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_batch_of_held_works_runs_through_and_fills_a_selection() {
+        let state = server().await;
+        let heat = held_film(&state, 949, "Heat").await;
+        let ronin = held_film(&state, 8195, "Ronin").await;
+        let list = crate::db::repo::list::create(
+            &state.db,
+            crate::db::repo::list::ListFields {
+                slug: "mann",
+                name: "Mann",
+                description: None,
+                kind: crate::db::repo::list::ListKind::Movie,
+                mode: crate::db::repo::list::ListMode::Manual,
+                filter: None,
+                is_public: true,
+                cover: None,
+            },
+            None,
+        )
+        .await
+        .unwrap();
+
+        let started = |lines: Vec<Line>, lists: Vec<String>, language: Option<String>| {
+            import_batch(
+                State(state.clone()),
+                Extension(Identity::Anonymous),
+                ClientIp::NONE,
+                Json(BatchRequest {
+                    lines,
+                    kind: Some(MediaKind::Movie),
+                    language,
+                    lists,
+                    enabled: None,
+                }),
+            )
+        };
+
+        // Nothing to import; a language that is none; a selection that is
+        // none.
+        assert!(matches!(
+            started(lines(&["nothing"]), vec![], None).await,
+            Err(AppError::BadRequest(_))
+        ));
+        assert!(matches!(
+            started(lines(&["tmdb:949"]), vec![], Some("not a language".into())).await,
+            Err(AppError::BadRequest(_))
+        ));
+        assert!(matches!(
+            started(lines(&["tmdb:949"]), vec!["nowhere".into()], None).await,
+            Err(AppError::BadRequest(_))
+        ));
+
+        let (status, Json(run)) = started(
+            lines(&["tmdb:949", "tmdb:8195", "tmdb:949", "not an id"]),
+            vec!["mann".into()],
+            None,
+        )
+        .await
+        .expect("started");
+        assert_eq!(status, StatusCode::ACCEPTED);
+        assert_eq!(run.works, 2, "each work once");
+        assert_eq!(run.passed_over, 1);
+
+        // Followed until it ends.
+        let finished = async {
+            loop {
+                let job = crate::db::repo::job::get(&state.db, &run.job_id)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                if job.status != crate::db::repo::job::Status::Running {
+                    return job;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        };
+        let job = tokio::time::timeout(std::time::Duration::from_secs(20), finished)
+            .await
+            .expect("the run ends");
+        assert_eq!(
+            job.status,
+            crate::db::repo::job::Status::Succeeded,
+            "{job:?}"
+        );
+        assert_eq!(
+            job.detail.as_deref(),
+            Some("2 already here, 0 imported, 0 not found, 0 failed, of 2")
+        );
+        let entries = crate::db::repo::job::entries(&state.db, &run.job_id, 10)
+            .await
+            .unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].title.as_deref(), Some("Heat"));
+        // The selection holds them, in the batch's order.
+        assert_eq!(
+            crate::db::repo::list::member_ids(&state.db, &list.id)
+                .await
+                .unwrap(),
+            vec![heat.id, ronin.id]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_file_of_five_hundred_ids_is_one_run_to_its_end() {
+        let state = server().await;
+        // Five hundred films held here, and a file naming each: set beside
+        // the catalogue whole, then one run with an entry a work, which
+        // fills a selection to the most it holds.
+        let mut texts = Vec::new();
+        for n in 1..=500 {
+            held_film(&state, 10_000 + n, &format!("Film {n}")).await;
+            texts.push(format!("tmdb:{}", 10_000 + n));
         }
+        let texts: Vec<&str> = texts.iter().map(String::as_str).collect();
+        let list = crate::db::repo::list::create(
+            &state.db,
+            crate::db::repo::list::ListFields {
+                slug: "five-hundred",
+                name: "Five hundred",
+                description: None,
+                kind: crate::db::repo::list::ListKind::Movie,
+                mode: crate::db::repo::list::ListMode::Manual,
+                filter: None,
+                is_public: true,
+                cover: None,
+            },
+            None,
+        )
+        .await
+        .unwrap();
+
+        let Json(preview) = preview_batch(
+            State(state.clone()),
+            Extension(Identity::Anonymous),
+            Json(BatchPreviewRequest {
+                lines: lines(&texts),
+                kind: Some(MediaKind::Movie),
+            }),
+        )
+        .await
+        .expect("a preview");
+        assert_eq!(preview.lines.len(), 500);
+        assert_eq!(preview.counts.held, 500);
+
+        let (status, Json(run)) = import_batch(
+            State(state.clone()),
+            Extension(Identity::Anonymous),
+            ClientIp::NONE,
+            Json(BatchRequest {
+                lines: lines(&texts),
+                kind: Some(MediaKind::Movie),
+                language: None,
+                lists: vec!["five-hundred".into()],
+                enabled: None,
+            }),
+        )
+        .await
+        .expect("started");
+        assert_eq!(status, StatusCode::ACCEPTED);
+        assert_eq!(run.works, 500);
+
+        let finished = async {
+            loop {
+                let job = crate::db::repo::job::get(&state.db, &run.job_id)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                if job.status != crate::db::repo::job::Status::Running {
+                    return job;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        };
+        let job = tokio::time::timeout(std::time::Duration::from_secs(120), finished)
+            .await
+            .expect("the run ends");
+        assert_eq!(
+            job.detail.as_deref(),
+            Some("500 already here, 0 imported, 0 not found, 0 failed, of 500"),
+            "{job:?}"
+        );
+        assert_eq!(
+            crate::db::repo::job::entries(&state.db, &run.job_id, 1_000)
+                .await
+                .unwrap()
+                .len(),
+            500
+        );
+        assert_eq!(
+            crate::db::repo::list::member_ids(&state.db, &list.id)
+                .await
+                .unwrap()
+                .len(),
+            500
+        );
     }
 }

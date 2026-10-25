@@ -26,7 +26,9 @@ use crate::{
 /// 2: a series' combined genres are listed as the film genres they stand for.
 /// 3: a lock on `isAdult` is written to the row the lists filter on; listed
 /// again, a work locked so before its row followed is kept from the lists.
-pub const VERSION: i64 = 3;
+/// 4: genres are listed by their slugs, the same in every language, and
+/// filed as genres of their own (`repo::genre`) as they are.
+pub const VERSION: i64 = 4;
 
 /// How many works are read and written at a time.
 const BATCH: usize = 200;
@@ -102,6 +104,7 @@ async fn relist_batch(db: &Db, imdb: bool, chunk: &[String]) -> Result<u64> {
     };
 
     let mut listed = Vec::with_capacity(items.len());
+    let mut genres = Vec::new();
     for mut item in items {
         let Some(change) = changes.get(&item.id).copied() else {
             continue;
@@ -128,6 +131,7 @@ async fn relist_batch(db: &Db, imdb: bool, chunk: &[String]) -> Result<u64> {
             super::take_newer_imdb(&mut item.ratings, rating);
         }
 
+        genres.extend(repo::genre::of_names(&item.genres));
         listed.push(repo::item::Relisted {
             id: item.id.clone(),
             change,
@@ -140,6 +144,16 @@ async fn relist_batch(db: &Db, imdb: bool, chunk: &[String]) -> Result<u64> {
         });
     }
 
+    // The genres the works are listed under, filed with their names: what a
+    // genre's page and a count call one the server does not know. Not worth
+    // holding the listing back for: one not filed now is with the next work
+    // listed under it.
+    if let Err(e) = repo::genre::learn(db, &genres).await {
+        tracing::warn!(
+            error = format_args!("{e:#}"),
+            "could not file the genres of the works listed"
+        );
+    }
     repo::item::write_listed(db, &listed, imdb, VERSION).await
 }
 
@@ -467,7 +481,7 @@ mod tests {
 
         let listed = repo::item::Listed::of(&item);
         assert_eq!(listed.network.as_deref(), Some("AB"));
-        assert_eq!(listed.genres, ["Drama"]);
+        assert_eq!(listed.genres, ["drama"]);
         assert!(!listed.title.contains('\0'));
     }
 

@@ -242,6 +242,34 @@ pub async fn latest(db: &Db, kind: &str) -> Result<(Option<Job>, Option<String>)
     ))
 }
 
+/// The newest run of any kind: what tells a page following the history that
+/// it moved.
+pub async fn newest_id(db: &Db) -> Result<Option<String>> {
+    let row =
+        sqlx::query(db.sql("SELECT id FROM job_run ORDER BY created_at DESC, id DESC LIMIT 1"))
+            .fetch_optional(db.pool())
+            .await?;
+    Ok(row.map(|row| row.text("id")).transpose()?)
+}
+
+/// The runs in progress, each with what it last said of itself, and the
+/// newest run of all, as one text: what changes whenever a run starts, says
+/// how far it got, or ends. Cheap enough to ask every second.
+pub async fn pulse(db: &Db) -> Result<String> {
+    let rows =
+        sqlx::query(db.sql("SELECT id, detail FROM job_run WHERE status = 'running' ORDER BY id"))
+            .fetch_all(db.pool())
+            .await?;
+    let mut text = newest_id(db).await?.unwrap_or_default();
+    for row in &rows {
+        text.push('|');
+        text.push_str(&row.text("id")?);
+        text.push('=');
+        text.push_str(&row.opt_text("detail")?.unwrap_or_default());
+    }
+    Ok(text)
+}
+
 /// Close a job row. `error` decides whether it succeeded.
 pub async fn finish(db: &Db, id: &str, detail: Option<&str>, error: Option<&str>) -> Result<()> {
     let status = if error.is_some() {

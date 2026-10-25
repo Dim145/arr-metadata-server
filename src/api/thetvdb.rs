@@ -634,7 +634,7 @@ async fn send(
         }
 
         let started = Instant::now();
-        let response = outbound.send().await;
+        let response = crate::outbound::send("tvdb", outbound).await;
         crate::metrics::upstream("tvdb", started, response.as_ref().ok().map(|r| r.status()));
         let response = response.map_err(|e| {
             AppError::UpstreamUnavailable(anyhow::anyhow!(

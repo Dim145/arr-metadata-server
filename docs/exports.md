@@ -177,6 +177,36 @@ later save. `?language=` asks for the titles in another language. An entry's ide
 names the selection as well as the work, so that a work in two selections is two
 entries.
 
+### Filled on its own: import rules
+
+The *Import rules* at the foot of *Lists* — an administrator's — bring works into the catalogue
+on a schedule, and into a selection. A rule names its source:
+
+- **TMDB's most popular** films or series first released in the last week, month, three months,
+  six months or year: twenty, or as many as five hundred, made in one language or in any.
+- **Another server's list**, followed: a text file of ids — this page's `ids.txt`, or Kometa's —
+  or an Atom or RSS feed whose entries link to a work's page at TMDB, IMDb or TheTVDB, or carry
+  TMDB's ids as Letterboxd's feeds do. Another arr-metadata-server's selection is read by its
+  `ids.txt`, once for each kind, whichever of its two addresses is given, since its Atom feed
+  names the works by its own pages. A private one is followed with its key in the address
+  (`?apikey=…`), kept, and shown as `hidden`. The address is fetched as the media are: never
+  from this machine, nor from any address only this server can reach (see [Media](media.md)).
+
+The works go into a hand-made selection **in place of its works**, in the source's order — a
+selection that always holds this quarter's most popular — or **beside them**, up to the five
+hundred a selection holds; or into the catalogue alone. A rule runs at the moments its cron
+expression names, in UTC — *Mondays at 05:00* is `0 5 * * 1`; see
+[When it runs](interface.md#when-it-runs) for the expressions — and at once with *Run now*; one
+switched off waits. *See what it would bring in now* sets the source's works beside the
+catalogue before the rule is kept. Each run is a run of the task `import.rules` on the Jobs
+page, naming the rule, and imports as a batch does: what is held is passed over, what is not is
+fetched, each work written down, the works imported switched on or not as the rule says. A rule
+goes with the selection it fills.
+
+Through the API: `GET`/`POST /api/v1/import/rules`, `PUT`/`DELETE /api/v1/import/rules/{id}`,
+`POST /api/v1/import/rules/{id}/run`, and `POST /api/v1/import/rules/preview` (`?rule={id}` for
+a rule being changed, whose key is then kept).
+
 ### A cover
 
 A selection has a **cover**, chosen in the administration — *Lists*, a list,

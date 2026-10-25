@@ -799,6 +799,177 @@ pub async fn counts(db: &Db) -> Result<Counts> {
     Ok(counts)
 }
 
+// ─── by work ─────────────────────────────────────────────────────────────────
+
+/// Every address a work points at, once per work: its pictures and its
+/// seasons', its episodes' stills, its cast's portraits, its relations'
+/// covers, its theme — what the work's own media list shows. A picture
+/// shared by two works is each one's.
+const WORK_ADDRESSES: &str = "
+    SELECT media_id, url AS origin FROM media_image
+    UNION SELECT media_id, image FROM media_episode WHERE image IS NOT NULL
+    UNION SELECT media_id, image FROM media_credit WHERE image IS NOT NULL
+    UNION SELECT media_id, image FROM media_relation WHERE image IS NOT NULL
+    UNION SELECT id, theme_music FROM media_item WHERE theme_music IS NOT NULL";
+
+/// What one work's media come to.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+#[schema(as = WorkMediaTotals)]
+pub struct WorkTotals {
+    /// The media kept for it.
+    pub stored: i64,
+    /// Waiting to be fetched, or tried again.
+    pub pending: i64,
+    /// Given up on.
+    pub failed: i64,
+    /// What the media kept weigh, in bytes.
+    pub bytes: i64,
+    /// What the copies made of its pictures weigh: the sizes the pages are
+    /// given, the night's AVIF.
+    pub copies_bytes: i64,
+}
+
+/// How works are ranked by their media.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WorkOrder {
+    /// The heaviest first, copies included.
+    Space,
+    /// The most media kept first.
+    Count,
+    /// The most media given up on first.
+    Failed,
+}
+
+/// A work, and what its media come to.
+#[derive(Clone, Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+#[schema(as = WorkMediaLine)]
+pub struct WorkLine {
+    pub id: String,
+    pub title: String,
+    pub kind: crate::domain::MediaKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub year: Option<i32>,
+    #[serde(flatten)]
+    pub totals: WorkTotals,
+}
+
+/// The totals of each work that points at any medium, as one statement:
+/// `{select}` from it, the rest of the statement after.
+fn by_work_sql(tail: &str) -> String {
+    format!(
+        "WITH refs AS ({WORK_ADDRESSES}),
+              copies AS (SELECT stem, SUM(bytes) AS bytes FROM media_variant GROUP BY stem),
+              totals AS (
+                SELECT r.media_id AS id,
+                       SUM(CASE WHEN a.status = 'stored' THEN 1 ELSE 0 END) AS stored,
+                       SUM(CASE WHEN a.status = 'pending' THEN 1 ELSE 0 END) AS pending,
+                       SUM(CASE WHEN a.status = 'failed' THEN 1 ELSE 0 END) AS failed,
+                       CAST(COALESCE(SUM(CASE WHEN a.status = 'stored' THEN a.bytes ELSE 0 END), 0) AS BIGINT) AS bytes,
+                       CAST(COALESCE(SUM(CASE WHEN a.status = 'stored' THEN c.bytes ELSE 0 END), 0) AS BIGINT) AS copies
+                  FROM refs r
+                  JOIN media_asset a ON a.origin = r.origin
+                  LEFT JOIN copies c ON c.stem = a.sha256
+                 GROUP BY r.media_id)
+         {tail}"
+    )
+}
+
+fn totals_of(row: &sqlx::any::AnyRow) -> Result<WorkTotals> {
+    Ok(WorkTotals {
+        stored: row.big("stored")?,
+        pending: row.big("pending")?,
+        failed: row.big("failed")?,
+        bytes: row.big("bytes")?,
+        copies_bytes: row.big("copies")?,
+    })
+}
+
+/// The works whose media weigh most — or that keep the most, or failed the
+/// most — a page at a time, and how many works point at any medium. A work
+/// merged into another is left out: its pictures are the survivor's.
+pub async fn by_work(
+    db: &Db,
+    order: WorkOrder,
+    limit: i64,
+    offset: i64,
+) -> Result<(Vec<WorkLine>, i64)> {
+    let ordered = match order {
+        WorkOrder::Space => "t.bytes + t.copies DESC, t.stored DESC",
+        WorkOrder::Count => "t.stored DESC, t.bytes + t.copies DESC",
+        WorkOrder::Failed => "t.failed DESC, t.pending DESC",
+    };
+    let rows = sqlx::query(db.sql(&by_work_sql(&format!(
+        "SELECT t.id, t.stored, t.pending, t.failed, t.bytes, t.copies,
+                m.title, m.kind, m.year
+           FROM totals t
+           JOIN media_item m ON m.id = t.id
+          WHERE m.merged_into IS NULL
+          ORDER BY {ordered}, m.title, t.id
+          LIMIT ? OFFSET ?"
+    ))))
+    .bind(limit.clamp(1, 200))
+    .bind(offset.max(0))
+    .fetch_all(db.pool())
+    .await?;
+    let mut works = Vec::with_capacity(rows.len());
+    for row in &rows {
+        works.push(WorkLine {
+            id: row.text("id")?,
+            title: row.text("title")?,
+            // Only ever written from a work's kind.
+            kind: row
+                .text("kind")?
+                .parse()
+                .unwrap_or(crate::domain::MediaKind::Movie),
+            year: row.opt_int("year")?,
+            totals: totals_of(row)?,
+        });
+    }
+    let total = sqlx::query(db.sql(&by_work_sql(
+        "SELECT COUNT(*) AS n FROM totals t
+           JOIN media_item m ON m.id = t.id
+          WHERE m.merged_into IS NULL",
+    )))
+    .fetch_one(db.pool())
+    .await?
+    .big("n")?;
+    Ok((works, total))
+}
+
+/// What one work's media come to; nought of each for a work that points at
+/// none.
+pub async fn work_totals(db: &Db, id: &str) -> Result<WorkTotals> {
+    // Its own rows only, each table by the work's index; each picture's
+    // copies by the picture's hash.
+    let row = sqlx::query(db.sql(
+        "WITH refs AS (
+            SELECT url AS origin FROM media_image WHERE media_id = ?
+            UNION SELECT image FROM media_episode WHERE media_id = ? AND image IS NOT NULL
+            UNION SELECT image FROM media_credit WHERE media_id = ? AND image IS NOT NULL
+            UNION SELECT image FROM media_relation WHERE media_id = ? AND image IS NOT NULL
+            UNION SELECT theme_music FROM media_item WHERE id = ? AND theme_music IS NOT NULL)
+         SELECT COALESCE(SUM(CASE WHEN x.status = 'stored' THEN 1 ELSE 0 END), 0) AS stored,
+                COALESCE(SUM(CASE WHEN x.status = 'pending' THEN 1 ELSE 0 END), 0) AS pending,
+                COALESCE(SUM(CASE WHEN x.status = 'failed' THEN 1 ELSE 0 END), 0) AS failed,
+                CAST(COALESCE(SUM(CASE WHEN x.status = 'stored' THEN x.bytes ELSE 0 END), 0) AS BIGINT) AS bytes,
+                CAST(COALESCE(SUM(CASE WHEN x.status = 'stored' THEN x.copies ELSE 0 END), 0) AS BIGINT) AS copies
+           FROM (SELECT a.status, a.bytes,
+                        (SELECT COALESCE(SUM(v.bytes), 0) FROM media_variant v WHERE v.stem = a.sha256) AS copies
+                   FROM refs r
+                   JOIN media_asset a ON a.origin = r.origin) x",
+    ))
+    .bind(id)
+    .bind(id)
+    .bind(id)
+    .bind(id)
+    .bind(id)
+    .fetch_one(db.pool())
+    .await?;
+    totals_of(&row)
+}
+
 /// Those given up on, and those put off after a failure or a fetch cut
 /// short, newest failure first: what the media page lists to be looked at.
 /// Not one being fetched for the first time, though its try is counted.

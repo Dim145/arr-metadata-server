@@ -50,6 +50,17 @@ const ownSeries = (project: string) => (project === 'mobile' ? 1 : 0)
 const code = (episode: Pick<Episode, 'seasonNumber' | 'episodeNumber'>) =>
   `S${String(episode.seasonNumber).padStart(2, '0')}E${String(episode.episodeNumber).padStart(2, '0')}`
 
+/**
+ * Save what the editor holds unsaved, from the bar along the foot of the page,
+ * and wait until the bar says it is saved — or that it could not be.
+ */
+async function saveAndStay(page: Page) {
+  await page.getByRole('button', { name: /^(save and stay|enregistrer et rester)$/i }).click()
+  await expect(
+    page.getByText(/(is saved|are saved|could not be saved|est enregistrée|sont enregistrées|pas pu être enregistrée)/i).first(),
+  ).toBeVisible()
+}
+
 /** Whether the page is wider than the screen — which a phone pans, and nobody wants. */
 async function scrollsSideways(page: Page) {
   return page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1)
@@ -317,19 +328,24 @@ test.describe('the work editor', () => {
 
     try {
       await page.goto(`/admin/catalogue/${id}`)
+      // The keywords hold a button of their own: they are opened from the
+      // pencil beside them, in place.
       const row = page.locator('li[data-field="keywords"]')
       await row.getByRole('button', { name: /^(edit|modifier)$/i }).click()
       // An entry with a comma of its own is typed in quotes, and stays whole.
       await row.getByRole('textbox').fill('"Hello, World", plain')
-      await row.getByRole('button', { name: /save and lock|enregistrer et verrouiller/i }).click()
+      await saveAndStay(page)
       await expect.poll(keywords).toEqual(['Hello, World', 'plain'])
 
-      // Opened again, the box says it the same way, and saved as it is it
-      // does not become three: split on every comma it did.
+      // Opened again, the box says it the same way, and kept as it is it is
+      // no change at all — nothing to save — rather than three entries:
+      // split on every comma, it was.
       await row.getByRole('button', { name: /^(edit|modifier)$/i }).click()
       await expect(row.getByRole('textbox')).toHaveValue('"Hello, World", plain')
-      await row.getByRole('button', { name: /save and lock|enregistrer et verrouiller/i }).click()
+      await row.getByRole('textbox').press('Enter')
       await expect(row.getByRole('textbox')).toHaveCount(0)
+      await expect(row).not.toHaveAttribute('data-changed', '')
+      await expect(page.getByRole('button', { name: /^(save and stay|enregistrer et rester)$/i })).toHaveCount(0)
       expect(await keywords()).toEqual(['Hello, World', 'plain'])
     } finally {
       await page.request.delete(`/api/v1/items/${id}`)
@@ -638,12 +654,12 @@ test.describe('a season’s air dates, moved together', () => {
       await page.goto(`/admin/catalogue/${series!.id}`)
       await page.locator('#editor-language').selectOption('fr')
       const row = page.locator('li[data-field="title"]')
-      await row.getByRole('button', { name: /^(edit|modifier)$/i }).click()
+      await row.getByRole('button', { name: /^(edit|modifier)\b/i }).click()
       await row.getByRole('textbox').fill(title)
       // Asked for which languages the edit holds: this one alone, by default.
       const reach = row.getByRole('radiogroup', { name: /the edit holds for|la modification vaut pour/i })
       await expect(reach.getByRole('radio', { name: /this language only|cette langue seulement/i })).toBeChecked()
-      await row.getByRole('button', { name: /save and lock|enregistrer et verrouiller/i }).click()
+      await saveAndStay(page)
 
       // The lock says its language, and the work is served so in French alone.
       await expect(row.getByText(/locked in french|verrouillé en français/i)).toBeVisible()
@@ -659,8 +675,9 @@ test.describe('a season’s air dates, moved together', () => {
 
       // Unlocked from the same row: French is given its translation again.
       await row.getByRole('button', { name: /^(unlock|déverrouiller)$/i }).click()
-      await expect(row.getByRole('button', { name: /^(edit|modifier)$/i })).toBeVisible()
-      expect(await titleIn('fr')).not.toBe(title)
+      await expect(row.getByText(/locked in french|verrouillé en français/i)).toHaveCount(0)
+      await expect(row.getByRole('button', { name: /^(edit|modifier)\b/i })).toBeVisible()
+      await expect.poll(() => titleIn('fr')).not.toBe(title)
     } finally {
       await page.request.delete(`/api/v1/items/${series!.id}/overrides/item/title?language=fra`)
     }

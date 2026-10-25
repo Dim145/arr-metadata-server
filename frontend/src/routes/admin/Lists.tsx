@@ -5,12 +5,13 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router'
 
 import {
   Button,
   Chip,
+  DataTable,
   Dialog,
   EmptyState,
   FormField,
@@ -23,18 +24,23 @@ import {
   Select,
   Skeleton,
   Spinner,
-  TableScroll,
+  TableOptions,
+  TBody,
   Td,
   Textarea,
   Th,
+  THead,
   Toggle,
   Tr,
+  sortRows,
+  useDataTable,
+  type Column,
 } from '../../components/ui'
 import { SelectionNfo } from '../../components/Exports'
 import { Artwork } from '../../components/media'
 import { api, query } from '../../lib/api'
 import { useSettled } from '../../lib/debounce'
-import { useTitle } from '../../lib/hooks'
+import { useMe, useTitle } from '../../lib/hooks'
 import { useI18n } from '../../lib/i18n'
 import type {
   CuratedList,
@@ -49,14 +55,17 @@ import type {
 } from '../../lib/types'
 import { ImportAddresses } from '../Lists'
 import { ImagePicker, type Candidate } from './editor/ImagePicker'
+import { ImportRules } from './ImportRules'
 
 const KINDS: ListKind[] = ['mixed', 'series', 'movie']
 const SORTS = ['popularity', 'rating', 'release', 'title', 'added'] as const
 
 export function Lists() {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   useTitle(t.admin.lists)
   const queryClient = useQueryClient()
+  // The import rules are an administrator's: they fetch on their own.
+  const me = useMe()
 
   const lists = useQuery({
     queryKey: ['admin-lists'],
@@ -100,6 +109,32 @@ export function Lists() {
       invalidate()
     },
   })
+
+  // A list is known by its name. A list kept by a filter has no count of
+  // its own: it is whatever the filter finds when it is read.
+  const columns: Column[] = useMemo(
+    () => [
+      { id: 'name', label: t.admin.curated.colName, kind: 'primary', always: true, sort: 'asc' },
+      { id: 'kind', label: t.admin.curated.colKind, sort: 'asc' },
+      { id: 'mode', label: t.admin.curated.colMode, sort: 'asc', from: 'md' },
+      { id: 'count', label: t.admin.curated.colCount, align: 'right', sort: 'desc' },
+      { id: 'actions', label: t.admin.curated.colActions, kind: 'actions', always: true, align: 'right' },
+    ],
+    [t],
+  )
+  const table = useDataTable({ id: 'lists', columns })
+  const modeOf = (list: CuratedList) => (list.mode === 'filter' ? t.admin.curated.modeFilter : t.admin.curated.modeManual)
+  const rows = sortRows(
+    lists.data?.lists ?? [],
+    table.sort,
+    {
+      name: (list) => list.name,
+      kind: (list) => t.lists.kind[list.kind],
+      mode: modeOf,
+      count: (list) => (list.mode === 'filter' ? null : list.itemCount),
+    },
+    locale,
+  )
 
   return (
     <div className="mx-auto max-w-5xl">
@@ -153,8 +188,11 @@ export function Lists() {
         </form>
       </Panel>
 
-      <Panel className="rise mb-6 overflow-hidden" style={{ animationDelay: '100ms' }}>
-        <PanelHead title={t.admin.lists} />
+      <Panel className="rise mb-6 overflow-clip" style={{ animationDelay: '100ms' }}>
+        <PanelHead
+          title={t.admin.lists}
+          action={lists.data?.lists.length ? <TableOptions table={table} /> : undefined}
+        />
         {lists.isPending ? (
           <div className="space-y-2 p-4">
             {Array.from({ length: 3 }, (_, index) => (
@@ -169,78 +207,73 @@ export function Lists() {
         ) : lists.data.lists.length === 0 ? (
           <EmptyState title={t.admin.curated.empty} hint={t.admin.curated.emptyHint} />
         ) : (
-          <TableScroll label={t.admin.lists}>
-            <table className="w-full min-w-[20rem] border-collapse text-left">
-              <thead>
-                <tr>
-                  <Th>{t.admin.curated.colName}</Th>
-                  <Th className="hidden sm:table-cell">{t.admin.curated.colKind}</Th>
-                  <Th className="hidden md:table-cell">{t.admin.curated.colMode}</Th>
-                  <Th align="right" className="hidden sm:table-cell">
-                    {t.admin.curated.colCount}
-                  </Th>
-                  <Th align="right">{t.admin.curated.colActions}</Th>
-                </tr>
-              </thead>
-              <tbody>
-                {lists.data.lists.map((list) => (
-                  <Tr key={list.id} className={editing === list.id ? 'bg-ink-high' : ''}>
-                    <Td className="w-full max-w-0">
-                      <span className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => setEditing(list.id)}
-                          className="truncate text-left text-sm font-medium text-bone underline-offset-4 hover:underline"
-                        >
-                          {list.name}
-                        </button>
-                        {list.isPublic ? null : <Chip tone="accent">{t.admin.curated.private}</Chip>}
-                      </span>
-                      <span className="mt-0.5 block truncate font-mono text-[0.6875rem] text-bone-faint">
-                        /lists/{list.slug}
-                      </span>
-                    </Td>
-                    <Td className="hidden sm:table-cell">{t.lists.kind[list.kind]}</Td>
-                    <Td className="hidden md:table-cell">
-                      {list.mode === 'filter' ? t.admin.curated.modeFilter : t.admin.curated.modeManual}
-                    </Td>
-                    <Td align="right" className="hidden font-mono tabular-nums sm:table-cell">
-                      {list.mode === 'filter' ? '—' : list.itemCount}
-                    </Td>
-                    <Td align="right">
-                      <span className="flex items-center justify-end gap-1">
-                        <IconButton
-                          glyph="pencil"
-                          label={`${t.admin.curated.edit}: ${list.name}`}
-                          onClick={() => setEditing(list.id)}
-                        />
-                        <Link
-                          to={`/lists/${list.slug}`}
-                          aria-label={t.admin.curated.open}
-                          title={t.admin.curated.open}
-                          className="inline-flex size-11 items-center justify-center rounded-full text-bone-dim transition-colors duration-150 hover:bg-ink-high hover:text-bone"
-                        >
-                          <Glyph name="link" className="size-4" />
-                        </Link>
-                        <IconButton
-                          glyph="trash"
-                          label={`${t.admin.curated.delete}: ${list.name}`}
-                          tone="danger"
-                          onClick={() => setAsking(list)}
-                        />
-                      </span>
-                    </Td>
-                  </Tr>
-                ))}
-              </tbody>
-            </table>
-          </TableScroll>
+          // Enter on a row opens the list in the editor below, as its name does.
+          <DataTable table={table} label={t.admin.lists} onOpen={setEditing}>
+            <THead>
+              <Th column="name" />
+              <Th column="kind" />
+              <Th column="mode" />
+              <Th column="count" />
+              <Th column="actions" />
+            </THead>
+            <TBody>
+              {rows.map((list) => (
+                <Tr key={list.id} row={list.id} className={editing === list.id ? 'bg-ink-high' : ''}>
+                  <Td column="name" className="w-full max-w-0">
+                    <span className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setEditing(list.id)}
+                        className="truncate text-left text-sm font-medium text-bone underline-offset-4 hover:underline"
+                      >
+                        {list.name}
+                      </button>
+                      {list.isPublic ? null : <Chip tone="accent">{t.admin.curated.private}</Chip>}
+                    </span>
+                    <span className="mt-0.5 block truncate font-mono text-[0.6875rem] text-bone-faint">
+                      /lists/{list.slug}
+                    </span>
+                  </Td>
+                  <Td column="kind">{t.lists.kind[list.kind]}</Td>
+                  <Td column="mode">{modeOf(list)}</Td>
+                  <Td column="count" className="font-mono tabular-nums">
+                    {list.mode === 'filter' ? '—' : list.itemCount}
+                  </Td>
+                  <Td column="actions">
+                    <span className="flex items-center justify-end gap-1">
+                      <IconButton
+                        glyph="pencil"
+                        label={`${t.admin.curated.edit}: ${list.name}`}
+                        onClick={() => setEditing(list.id)}
+                      />
+                      <Link
+                        to={`/lists/${list.slug}`}
+                        aria-label={t.admin.curated.open}
+                        title={t.admin.curated.open}
+                        className="inline-flex size-11 items-center justify-center rounded-full text-bone-dim transition-colors duration-150 hover:bg-ink-high hover:text-bone"
+                      >
+                        <Glyph name="link" className="size-4" />
+                      </Link>
+                      <IconButton
+                        glyph="trash"
+                        label={`${t.admin.curated.delete}: ${list.name}`}
+                        tone="danger"
+                        onClick={() => setAsking(list)}
+                      />
+                    </span>
+                  </Td>
+                </Tr>
+              ))}
+            </TBody>
+          </DataTable>
         )}
       </Panel>
 
       {editing ? (
         <Editor key={editing} id={editing} onClose={() => setEditing(null)} onSaved={invalidate} />
       ) : null}
+
+      {me.data?.isAdmin ? <ImportRules /> : null}
 
       <Dialog
         open={asking !== null}

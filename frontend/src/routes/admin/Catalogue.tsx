@@ -7,24 +7,34 @@
  * a row is the width of a thumbnail, there to know the row by at a glance;
  * the public side is where the posters belong.
  *
- * What a record lacks — a poster, an overview, an IMDb id, a first refresh —
- * is four marks on its row and four filters above the table, kept in the
+ * What a record lacks — a poster, an overview, an IMDb id, a first refresh, a
+ * picture the media store gave up on — is a mark on its row and a filter
+ * above the table, each with how many works it would leave, kept in the
  * address so that the dashboard's to-do list links to one: `?missing=poster`.
  * A work that looks like another — the duplicates the server proposes — is
  * a filter of the same row, `?missing=duplicates`, and a mark on its row that
  * opens the two side by side, to be merged or said not to be one work.
+ *
+ * The search, the filters and the order are all in the address, so a view
+ * of the register is its address: a few are offered above it, and the
+ * person keeps their own under a name, with their account. The table is
+ * the dense one (`ui/tables.tsx`): its columns ordered by their heads,
+ * hidden and shown, its rows walked with the arrow keys — and what is done
+ * to the rows chosen, or the one the focus is on, is in the palette too.
  * A row's actions are behind one button, which fits a phone as well as a
  * desk; the row itself opens the editor.
  */
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Link, useSearchParams } from 'react-router'
+import { Link, useNavigate, useSearchParams } from 'react-router'
 
+import { useCommands, type Command } from '../../components/CommandPalette'
 import { Artwork } from '../../components/media'
 import {
   Button,
   Chip,
+  DataTable,
   Dialog,
   EmptyState,
   FormField,
@@ -32,16 +42,22 @@ import {
   type GlyphName,
   Input,
   Label,
+  Menu,
   Panel,
   Segmented,
   Select,
   Skeleton,
   Spinner,
-  TableScroll,
+  TableOptions,
+  TBody,
   Td,
   Textarea,
   Th,
+  THead,
   Tr,
+  useDataTable,
+  type Column,
+  type Sort,
 } from '../../components/ui'
 import { ApiError, api, query, segment } from '../../lib/api'
 import { cn } from '../../lib/cn'
@@ -49,13 +65,15 @@ import * as fmt from '../../lib/format'
 import { useSettled } from '../../lib/debounce'
 import { useI18n } from '../../lib/i18n'
 import { providerName, statusLabel } from '../../lib/labels'
-import { hasSources, poster } from '../../lib/media'
+import { hasSources, isLocked, poster } from '../../lib/media'
+import { usePreference } from '../../lib/preferences'
 import type {
   CuratedListPage,
   CuratedLists,
   DuplicateList,
   DuplicatePair,
   Facets,
+  Gaps,
   ItemPage,
   MediaItem,
   MediaKind,
@@ -63,14 +81,24 @@ import type {
   SourceRules,
 } from '../../lib/types'
 
+import { keepRun } from './editor/walk'
 import { MergeDialog, type MergeOpening } from './MergeDialog'
+import {
+  BUILT_IN,
+  COLUMN_SORTS,
+  GAPS,
+  readViews,
+  refusal,
+  VIEW_NAME,
+  VIEWS_MOST,
+  viewOf,
+  type ColumnSort,
+  type Gap,
+  type SavedView,
+} from './views'
 
 /** What an operator is being asked to confirm, and about which entry. */
 type Asking = { item: MediaItem; what: 'delete' | 'disable' }
-
-/** What a record can lack, as the server's `missing` filter names it, in the order the filters are drawn. */
-const GAPS = ['poster', 'overview', 'imdb', 'refresh', 'divergingLock', 'duplicates'] as const
-type Gap = (typeof GAPS)[number]
 
 const GAP_GLYPH: Record<Gap, GlyphName> = {
   poster: 'image',
@@ -79,7 +107,11 @@ const GAP_GLYPH: Record<Gap, GlyphName> = {
   refresh: 'refresh',
   divergingLock: 'lock',
   duplicates: 'copy',
+  mediaFailed: 'download',
 }
+
+/** The marks a row carries, of the gaps: those a work's card can say. */
+type Mark = 'poster' | 'overview' | 'imdb' | 'refresh'
 
 /** What the merge dialog is opened on: a work, and the other one when a pair says which. */
 type Merging = { work: MergeOpening; other?: string; proposed?: boolean; flagged?: boolean }
@@ -102,33 +134,48 @@ type FieldChange = { field: FieldName; action: FieldAction; value: string }
 /** The longest a value given to many works at once may be: what the server's filters take. */
 const VALUE_MOST = 200
 
+/** How many works the register shows: one page, the editor walks past it. */
+const PAGE = 60
+
 export function Catalogue() {
   const { t, locale } = useI18n()
   const w = t.admin.works
   const b = w.bulk
+  const c = t.palette.command
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
 
+  // The view is the address: the search, the filters, the order. Read from
+  // it only, or a filter switched off came back on at the next reload.
   const [params, setParams] = useSearchParams()
-  const [term, setTerm] = useState('')
-  const [kind, setKind] = useState<'' | MediaKind>('')
-  const [manualOnly, setManualOnly] = useState(false)
-  // In the address, where the dashboard links: read from it only, or a filter
-  // switched off came back on at the next reload.
-  const failedOnly = params.get('refreshFailed') === '1'
   const asked = params.get('missing') ?? ''
   const missing = useMemo(() => {
     const named = asked.split(',').map((gap) => gap.trim())
     return GAPS.filter((gap) => named.includes(gap))
   }, [asked])
-  const address = (change: (next: URLSearchParams) => void) => {
-    const next = new URLSearchParams(window.location.search)
-    change(next)
-    setParams(next, { replace: true })
-  }
-  const setFailedOnly = (on: boolean) =>
+  const kindParam = params.get('kind')
+  const kind: '' | MediaKind = kindParam === 'series' || kindParam === 'movie' ? kindParam : ''
+  const manualOnly = params.get('manual') === '1'
+  const failedOnly = params.get('refreshFailed') === '1'
+  const sortParam = params.get('sort')
+  const sort: 'popularity' | ColumnSort = sortParam && sortParam in COLUMN_SORTS ? (sortParam as ColumnSort) : 'popularity'
+  const orderParam = params.get('order')
+  const order = orderParam === 'asc' || orderParam === 'desc' ? orderParam : undefined
+  const searched = params.get('term') ?? ''
+  const view = viewOf(params)
+
+  const address = useCallback(
+    (change: (next: URLSearchParams) => void) => {
+      const next = new URLSearchParams(window.location.search)
+      change(next)
+      setParams(next, { replace: true })
+    },
+    [setParams],
+  )
+  const flag = (name: string, on: boolean) =>
     address((next) => {
-      if (on) next.set('refreshFailed', '1')
-      else next.delete('refreshFailed')
+      if (on) next.set(name, '1')
+      else next.delete(name)
     })
   const toggleGap = (gap: Gap) => {
     const kept = missing.includes(gap) ? missing.filter((g) => g !== gap) : [...missing, gap]
@@ -139,7 +186,24 @@ export function Catalogue() {
       else next.delete('missing')
     })
   }
-  const [sort, setSort] = useState<'popularity' | 'title' | 'added' | 'refreshed'>('popularity')
+  const chooseView = (query: string) => setParams(new URLSearchParams(query), { replace: true })
+
+  // The search is typed here and settles into the address, which the list
+  // reads; a view chosen, or the back button, puts the address's back.
+  const [term, setTerm] = useState(searched)
+  const settled = useSettled(term)
+  useEffect(() => {
+    if ((new URLSearchParams(window.location.search).get('term') ?? '') === settled.trim()) return
+    address((next) => {
+      if (settled.trim()) next.set('term', settled)
+      else next.delete('term')
+    })
+    // Only when what was typed settles: the address answers to the field.
+  }, [settled]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    setTerm((typed) => (typed.trim() === searched.trim() ? typed : searched))
+  }, [searched])
+
   const [composing, setComposing] = useState(false)
   const [asking, setAsking] = useState<Asking | null>(null)
   const [merging, setMerging] = useState<Merging | null>(null)
@@ -154,8 +218,6 @@ export function Catalogue() {
     setMergeSaid(null)
     setMerging(opening)
   }
-
-  const settled = useSettled(term)
 
   // The pairs the server proposes, looked for again as they are read: asked
   // while the register is narrowed to them, before the list — which reads
@@ -179,27 +241,49 @@ export function Catalogue() {
     return by
   }, [pairs.data])
 
+  // How many works each gap would leave, beside its filter.
+  const gaps = useQuery({
+    queryKey: ['gaps'],
+    queryFn: () => api.get<Gaps>('/admin/gaps'),
+    staleTime: 60_000,
+  })
+
+  // The list's question, without its page: what the editor asks again to
+  // walk past the page shown.
+  const listQuery = query({
+    term: searched,
+    kind,
+    manualOnly,
+    refreshFailed: failedOnly,
+    missing: missing.join(','),
+    sort,
+    order,
+    includeDisabled: true,
+  }).replace(/^\?/, '')
   const list = useQuery({
     enabled: !lookingForDuplicates || !pairs.isPending,
-    queryKey: ['items', settled, kind, manualOnly, failedOnly, missing.join(','), sort],
-    queryFn: () =>
-      api.get<ItemPage>(
-        `/items${query({
-          term: settled,
-          kind,
-          manualOnly,
-          refreshFailed: failedOnly,
-          missing: missing.join(','),
-          sort,
-          limit: 60,
-          includeDisabled: true,
-        })}`,
-      ),
+    queryKey: ['items', searched, kind, manualOnly, failedOnly, missing.join(','), sort, order],
+    queryFn: () => api.get<ItemPage>(`/items?${listQuery}&limit=${PAGE}`),
+    // The rows shown stay while the next order or filter is asked: the
+    // table is not drawn anew, and the focus stays on the head pressed.
+    placeholderData: (previous) => previous,
   })
+
+  // The list as it is shown, for the editor's "next".
+  useEffect(() => {
+    if (!list.data) return
+    keepRun({
+      query: listQuery,
+      ids: list.data.items.map((item) => item.id),
+      titles: Object.fromEntries(list.data.items.map((item) => [item.id, item.title])),
+      total: list.data.total,
+    })
+  }, [list.data, listQuery])
 
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ['items'] })
     void queryClient.invalidateQueries({ queryKey: ['stats'] })
+    void queryClient.invalidateQueries({ queryKey: ['gaps'] })
   }
 
   // The mutations live here rather than in the row so that the dialogs can too:
@@ -276,19 +360,27 @@ export function Catalogue() {
     if (allBox.current) allBox.current.indeterminate = selected.size > 0 && !allShown
   }, [selected, allShown])
 
+  // The row the focus is on, or rested on last: what the palette offers to
+  // act on when nothing is selected.
+  const [current, setCurrent] = useState<string | null>(null)
+  const currentWork = shown?.find((item) => item.id === current)
+
   // A field changed over the selection, which can be undone a moment; see
   // `undo` below.
   const [undoable, setUndoable] = useState<{ field: FieldName; works: MediaItem[] } | null>(null)
   const [heeded, setHeeded] = useState(false)
 
   /**
-   * One action over the selection: each work its own request, four at a time,
-   * so one that fails does not take the rest with it — and each its own line in
-   * the audit trail. Counted as it goes, and summed up at the end, with what
-   * failed and why. The works it was done for are handed back, for an undo.
+   * One action over some works — the selection, unless others are named:
+   * each work its own request, four at a time, so one that fails does not
+   * take the rest with it — and each its own line in the audit trail.
+   * Counted as it goes, and summed up at the end, with what failed and why.
+   * The works it was done for are handed back, for an undo.
    */
-  const runBulk = async (act: (item: MediaItem) => Promise<Outcome | void>): Promise<MediaItem[]> => {
-    const works = (shown ?? []).filter((item) => selected.has(item.id))
+  const runBulk = async (
+    act: (item: MediaItem) => Promise<Outcome | void>,
+    works: MediaItem[] = (shown ?? []).filter((item) => selected.has(item.id)),
+  ): Promise<MediaItem[]> => {
     if (!works.length) return []
     setReport(null)
     setUndoable(null)
@@ -356,29 +448,38 @@ export function Catalogue() {
     invalidate()
   }
 
-  const refreshEach = () =>
+  const refreshEach = (works?: MediaItem[]) =>
     runBulk(async (item) => {
       // A work entered by hand has nothing to be refreshed from: passed over,
       // not failed.
       if (item.isManual) return 'skipped'
       await api.post(`/items/${item.id}/refresh`)
-    })
-  const enableEach = (enabled: boolean) =>
+    }, works)
+  const enableEach = (enabled: boolean, works?: MediaItem[]) =>
     runBulk(async (item) => {
       if (item.isEnabled === enabled) return 'unchanged'
       await api.patch(`/items/${item.id}`, { isEnabled: enabled })
-    })
+    }, works)
+  // The overview kept as it is, from the next refresh on: locked to what is
+  // served now, as an edit of it is. A work entered by hand has nothing to
+  // keep it from, and one with no overview nothing to keep.
+  const lockOverviews = (works?: MediaItem[]) =>
+    runBulk(async (item) => {
+      if (!hasSources(item) || !item.overview?.trim()) return 'skipped'
+      if (isLocked(item, 'item/overview')) return 'unchanged'
+      await api.put(`/items/${segment(item.id)}/overrides`, { scope: 'item', field: 'overview', value: item.overview })
+    }, works)
 
-  const addToList = async (listId: string) => {
+  const addToList = async (listId: string, ids: string[] = [...selected]) => {
     const list = curated.data?.lists.find((l) => l.id === listId)
-    if (!list) return
+    if (!list || !ids.length) return
     setProgress({ at: 0, total: 1 })
     setReport(null)
     try {
       const page = await api.get<CuratedListPage>(`/lists/${listId}`)
-      const members = [...new Set([...page.items.map((item) => item.id), ...selected])]
+      const members = [...new Set([...page.items.map((item) => item.id), ...ids])]
       await api.put(`/lists/${listId}/items`, { items: members })
-      setReport({ text: b.added(selected.size, list.name), failures: [] })
+      setReport({ text: b.added(ids.length, list.name), failures: [] })
       setSelected(new Set())
       void queryClient.invalidateQueries({ queryKey: ['admin-lists'] })
       void queryClient.invalidateQueries({ queryKey: ['lists'] })
@@ -389,11 +490,140 @@ export function Catalogue() {
     }
   }
 
-  const filtered = Boolean(term || kind || manualOnly || failedOnly || missing.length)
+  const filtered = Boolean(searched || kind || manualOnly || failedOnly || missing.length)
   // Narrowed to what records lack and nothing else: an empty list is good news.
-  const onlyGaps = missing.length > 0 && !term && !kind && !manualOnly && !failedOnly
+  const onlyGaps = missing.length > 0 && !searched && !kind && !manualOnly && !failedOnly
   // Nothing proposed is not something lacking, and is said in its own words.
   const onlyDuplicates = onlyGaps && missing.length === 1 && missing[0] === 'duplicates'
+
+  // ── The table ──────────────────────────────────────────────────────────
+  const columns: Column[] = useMemo(
+    () => [
+      { id: 'select', label: w.colSelect, kind: 'select', always: true, className: 'w-8 pr-0' },
+      { id: 'title', label: w.colTitle, kind: 'primary', always: true, sort: 'asc' },
+      { id: 'ids', label: w.colIds, from: 'xl', card: false },
+      { id: 'marks', label: w.marks.label },
+      { id: 'state', label: w.colState },
+      { id: 'updated', label: w.colUpdated, align: 'right', from: 'lg', card: false },
+      { id: 'refreshed', label: w.colRefreshed, align: 'right', sort: 'desc', hidden: true },
+      { id: 'added', label: w.colAdded, align: 'right', sort: 'desc', hidden: true },
+      { id: 'actions', label: w.colActions, kind: 'actions', always: true, align: 'right', className: 'w-12 pl-0' },
+    ],
+    [w],
+  )
+  const tableSort: Sort | undefined = sort === 'popularity' ? undefined : { column: sort, direction: order ?? COLUMN_SORTS[sort] }
+  const table = useDataTable({
+    id: 'catalogue',
+    columns,
+    sort: tableSort,
+    onSort: (next) =>
+      address((params) => {
+        params.set('sort', next.column)
+        if (next.direction === COLUMN_SORTS[next.column as ColumnSort]) params.delete('order')
+        else params.set('order', next.direction)
+      }),
+  })
+
+  // ── The palette ────────────────────────────────────────────────────────
+  const [savedViews] = usePreference<SavedView[]>('catalogue.views', [], readViews)
+  const manualLists = (curated.data?.lists ?? []).filter((one) => one.mode === 'manual')
+  const chosen = (shown ?? []).filter((item) => selected.has(item.id))
+  const one = chosen.length ? undefined : currentWork
+  const subjects = chosen.length ? chosen : one ? [one] : []
+  const commands: Command[] = [
+    ...(one
+      ? [
+          { id: 'open', label: c.editor, glyph: 'pencil' as const, note: one.title, run: () => navigate(`/admin/catalogue/${one.id}`) },
+          { id: 'public', label: c.publicPage, glyph: 'external' as const, run: () => navigate(`/work/${one.id}`) },
+        ]
+      : []),
+    ...(subjects.length
+      ? [
+          {
+            id: 'refresh',
+            label: c.refreshNow,
+            glyph: 'refresh' as const,
+            keys: 'r',
+            disabled: busy || subjects.every((item) => item.isManual),
+            hint: subjects.every((item) => item.isManual) ? w.marks.refresh.manual : undefined,
+            run: () => (one ? refresh.mutate(one.id) : void refreshEach(subjects)),
+          },
+          {
+            id: 'lock-overview',
+            label: c.lockOverview,
+            glyph: 'lock' as const,
+            disabled: busy,
+            run: () => void lockOverviews(subjects),
+          },
+          {
+            id: 'enable',
+            label: c.enable,
+            glyph: 'power' as const,
+            disabled: busy || subjects.every((item) => item.isEnabled),
+            run: () => (one ? setEnabled.mutate({ id: one.id, enabled: true }) : void enableEach(true, subjects)),
+          },
+          {
+            id: 'disable',
+            label: c.disable,
+            glyph: 'power' as const,
+            disabled: busy || subjects.every((item) => !item.isEnabled),
+            run: () => (one ? setAsking({ item: one, what: 'disable' }) : void enableEach(false, subjects)),
+          },
+          {
+            id: 'add-to-list',
+            label: c.addToList,
+            glyph: 'list' as const,
+            disabled: busy,
+            choose: {
+              title: t.palette.listsTitle,
+              load: () =>
+                manualLists.length
+                  ? manualLists.map((list) => ({
+                      id: list.id,
+                      label: list.name,
+                      run: () => void addToList(list.id, subjects.map((item) => item.id)),
+                    }))
+                  : [{ id: 'none', label: t.palette.noLists, disabled: true }],
+            },
+          },
+        ]
+      : []),
+    ...(chosen.length
+      ? [
+          {
+            id: 'clear',
+            label: c.clearSelection,
+            glyph: 'close' as const,
+            run: () => {
+              setSelected(new Set())
+              setReport(null)
+            },
+          },
+        ]
+      : []),
+    { id: 'search', label: c.search, glyph: 'search', keys: '/', run: () => document.getElementById('works-search')?.focus() },
+    { id: 'new', label: c.newEntry, glyph: 'plus', keys: 'n', run: () => setComposing(true) },
+    ...(shown?.length && !allShown
+      ? [{ id: 'select-all', label: c.selectAll, glyph: 'check' as const, run: () => setSelected(new Set(shown.map((item) => item.id))) }]
+      : []),
+    ...BUILT_IN.map((offered) => ({
+      id: `view-${offered.id}`,
+      label: c.view(w.views.builtIn[offered.id]),
+      glyph: 'list' as const,
+      run: () => chooseView(offered.query),
+    })),
+    ...savedViews.map((saved) => ({
+      id: `saved-${saved.name}`,
+      label: c.view(saved.name),
+      glyph: 'list' as const,
+      run: () => chooseView(saved.query),
+    })),
+  ]
+  useCommands({
+    id: 'catalogue',
+    heading: chosen.length ? b.selected(chosen.length) : one ? t.palette.heading.row : t.palette.heading.catalogue,
+    commands,
+  })
 
   return (
     <div className="mx-auto max-w-6xl">
@@ -417,7 +647,9 @@ export function Catalogue() {
       {composing ? <Composer onDone={() => setComposing(false)} /> : null}
 
       <div className="rise mb-6 border-y border-rule py-4">
-        <div className="flex flex-wrap items-end gap-3">
+        <Views current={view} onChoose={chooseView} />
+
+        <div className="mt-4 flex flex-wrap items-end gap-3">
           <div className="min-w-44 flex-1">
             <label htmlFor="works-search" className="label mb-1.5 block">
               {w.search}
@@ -441,27 +673,28 @@ export function Catalogue() {
             <label htmlFor="works-kind" className="label mb-1.5 block">
               {w.kind}
             </label>
-            <Select id="works-kind" value={kind} onChange={(event) => setKind(event.target.value as '' | MediaKind)}>
+            <Select
+              id="works-kind"
+              value={kind}
+              onChange={(event) =>
+                address((next) => {
+                  if (event.target.value) next.set('kind', event.target.value)
+                  else next.delete('kind')
+                })
+              }
+            >
               <option value="">{w.allKinds}</option>
               <option value="series">{t.nav.series}</option>
               <option value="movie">{t.nav.films}</option>
             </Select>
           </div>
 
-          <Button
-            variant={manualOnly ? 'primary' : 'ghost'}
-            aria-pressed={manualOnly}
-            onClick={() => setManualOnly((was) => !was)}
-          >
+          <Button variant={manualOnly ? 'primary' : 'ghost'} aria-pressed={manualOnly} onClick={() => flag('manual', !manualOnly)}>
             <Glyph name="lock" className="size-4" />
             {w.manualOnly}
           </Button>
 
-          <Button
-            variant={failedOnly ? 'danger' : 'ghost'}
-            aria-pressed={failedOnly}
-            onClick={() => setFailedOnly(!failedOnly)}
-          >
+          <Button variant={failedOnly ? 'danger' : 'ghost'} aria-pressed={failedOnly} onClick={() => flag('refreshFailed', !failedOnly)}>
             <Glyph name="alert" className="size-4" />
             {w.failedOnly}
           </Button>
@@ -470,9 +703,24 @@ export function Catalogue() {
             <label htmlFor="works-sort" className="label mb-1.5 block">
               {t.browse.sort}
             </label>
-            <Select id="works-sort" value={sort} onChange={(event) => setSort(event.target.value as typeof sort)}>
+            <Select
+              id="works-sort"
+              // The title's two ways are two choices; the head of its column
+              // turns the others round.
+              value={sort === 'title' && order === 'desc' ? 'title-desc' : sort}
+              onChange={(event) =>
+                address((next) => {
+                  const chosen = event.target.value
+                  if (chosen === 'popularity') next.delete('sort')
+                  else next.set('sort', chosen === 'title-desc' ? 'title' : chosen)
+                  if (chosen === 'title-desc') next.set('order', 'desc')
+                  else next.delete('order')
+                })
+              }
+            >
               <option value="popularity">{t.browse.orders.popular}</option>
               <option value="title">{t.browse.orders.title}</option>
+              <option value="title-desc">{t.browse.orders.titleDesc}</option>
               <option value="added">{t.browse.orders.added}</option>
               <option value="refreshed">{w.sortRefreshed}</option>
             </Select>
@@ -485,21 +733,31 @@ export function Catalogue() {
                 {w.showing(list.data.items.length, list.data.total)}
               </span>
             ) : null}
+            <TableOptions table={table} />
           </span>
         </div>
 
-        {/* What records lack, each a filter of its own: pressed together they
-            narrow, to the works lacking every one. */}
+        {/* What records lack, each a filter of its own with how many works it
+            leaves: pressed together they narrow, to the works lacking every one. */}
         <div role="group" aria-labelledby="works-missing" className="mt-3 flex flex-wrap items-center gap-2">
           <span id="works-missing" className="label mr-1">
             {w.missing.label}
           </span>
           {GAPS.map((gap) => {
             const on = missing.includes(gap)
+            const n = gaps.data?.[gap]
             return (
               <Button key={gap} size="sm" variant={on ? 'primary' : 'ghost'} aria-pressed={on} onClick={() => toggleGap(gap)}>
                 <Glyph name={GAP_GLYPH[gap]} className="size-3.5" />
                 {w.missing[gap]}
+                {n === undefined ? null : (
+                  <>
+                    <span aria-hidden className={cn('font-mono text-xs tabular-nums', on ? '' : 'text-bone-faint')}>
+                      {n}
+                    </span>
+                    <span className="sr-only">, {w.missing.count(n)}</span>
+                  </>
+                )}
               </Button>
             )
           })}
@@ -518,7 +776,9 @@ export function Catalogue() {
         </p>
       ) : null}
 
-      <Panel className="rise overflow-hidden" style={{ animationDelay: '60ms' }}>
+      {/* Clipped rather than hidden: a box that hides what overflows is one the
+          table's head would stick to, and it never scrolls. */}
+      <Panel className="rise overflow-clip" style={{ animationDelay: '60ms' }}>
         {list.isPending ? (
           <div className="space-y-2 p-4">
             {Array.from({ length: 8 }, (_, index) => (
@@ -574,7 +834,7 @@ export function Catalogue() {
                     <Button size="sm" disabled={busy} onClick={() => void enableEach(false)}>
                       {b.disable}
                     </Button>
-                    {curated.data?.lists.some((list) => list.mode === 'manual') ? (
+                    {manualLists.length ? (
                       <Select
                         aria-label={b.addTo}
                         value=""
@@ -585,13 +845,11 @@ export function Catalogue() {
                         className="min-h-11 w-auto py-0 text-xs"
                       >
                         <option value="">{b.addTo}</option>
-                        {curated.data.lists
-                          .filter((list) => list.mode === 'manual')
-                          .map((list) => (
-                            <option key={list.id} value={list.id}>
-                              {list.name}
-                            </option>
-                          ))}
+                        {manualLists.map((list) => (
+                          <option key={list.id} value={list.id}>
+                            {list.name}
+                          </option>
+                        ))}
                       </Select>
                     ) : null}
                     <Button size="sm" variant="danger" disabled={busy} onClick={() => setBulkAsk('delete')}>
@@ -633,65 +891,64 @@ export function Catalogue() {
                 ) : null}
               </div>
             ) : null}
-            <TableScroll label={t.admin.catalogue}>
-              <table className="w-full min-w-[20rem] border-collapse text-left">
-                <thead>
-                  <tr>
-                    <Th className="w-8 pr-0">
-                      <input
-                        ref={allBox}
-                        type="checkbox"
-                        aria-label={b.selectAll}
-                        className="size-4 accent-vermillion"
-                        checked={allShown}
-                        onChange={(event) =>
-                          setSelected(event.target.checked ? new Set(list.data.items.map((item) => item.id)) : new Set())
-                        }
-                      />
-                    </Th>
-                    <Th>{w.colTitle}</Th>
-                    <Th className="hidden xl:table-cell">{w.colIds}</Th>
-                    <Th className="hidden sm:table-cell">{w.marks.label}</Th>
-                    <Th className="hidden sm:table-cell">{w.colState}</Th>
-                    {/* Not beside the sidebar between 1024 and 1280 pixels, where
-                        the title needs the room; the editor says when. */}
-                    <Th align="right" className="hidden md:table-cell lg:hidden xl:table-cell">
-                      {w.colUpdated}
-                    </Th>
-                    <Th align="right" className="w-12 pl-0">
-                      <span className="sr-only">{w.colActions}</span>
-                    </Th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {list.data.items.map((item) => (
-                    <Row
-                      key={item.id}
-                      item={item}
-                      locale={locale}
-                      busy={
-                        (refresh.isPending && refresh.variables === item.id) ||
-                        (setEnabled.isPending && setEnabled.variables.id === item.id)
-                      }
-                      onRefresh={() => refresh.mutate(item.id)}
-                      onEnable={() => setEnabled.mutate({ id: item.id, enabled: true })}
-                      onAsk={(what) => setAsking({ item, what })}
-                      partners={partners.get(item.id) ?? []}
-                      onMerge={(partner) =>
-                        mergeOn({
-                          work: { id: item.id, title: item.title, kind: item.kind },
-                          other: partner?.other.id,
-                          proposed: Boolean(partner),
-                          flagged: partner?.pair.confidence === 'flag',
-                        })
-                      }
-                      selected={selected.has(item.id)}
-                      onSelect={(on) => toggle(item.id, on)}
-                    />
-                  ))}
-                </tbody>
-              </table>
-            </TableScroll>
+            <DataTable
+              table={table}
+              label={t.admin.catalogue}
+              onOpen={(id) => navigate(`/admin/catalogue/${id}`)}
+              onActive={setCurrent}
+            >
+              <THead>
+                <Th column="select">
+                  <input
+                    ref={allBox}
+                    type="checkbox"
+                    aria-label={b.selectAll}
+                    className="size-4 accent-vermillion"
+                    checked={allShown}
+                    onChange={(event) =>
+                      setSelected(event.target.checked ? new Set(list.data.items.map((item) => item.id)) : new Set())
+                    }
+                  />
+                </Th>
+                <Th column="title" />
+                <Th column="ids" />
+                <Th column="marks" />
+                <Th column="state" />
+                <Th column="updated" />
+                <Th column="refreshed" />
+                <Th column="added" />
+                <Th column="actions">
+                  <span className="sr-only">{w.colActions}</span>
+                </Th>
+              </THead>
+              <TBody>
+                {list.data.items.map((item) => (
+                  <Row
+                    key={item.id}
+                    item={item}
+                    locale={locale}
+                    busy={
+                      (refresh.isPending && refresh.variables === item.id) ||
+                      (setEnabled.isPending && setEnabled.variables.id === item.id)
+                    }
+                    onRefresh={() => refresh.mutate(item.id)}
+                    onEnable={() => setEnabled.mutate({ id: item.id, enabled: true })}
+                    onAsk={(what) => setAsking({ item, what })}
+                    partners={partners.get(item.id) ?? []}
+                    onMerge={(partner) =>
+                      mergeOn({
+                        work: { id: item.id, title: item.title, kind: item.kind },
+                        other: partner?.other.id,
+                        proposed: Boolean(partner),
+                        flagged: partner?.pair.confidence === 'flag',
+                      })
+                    }
+                    selected={selected.has(item.id)}
+                    onSelect={(on) => toggle(item.id, on)}
+                  />
+                ))}
+              </TBody>
+            </DataTable>
           </>
         )}
       </Panel>
@@ -818,6 +1075,159 @@ export function Catalogue() {
   )
 }
 
+/**
+ * The views of the register, a chip each: those it offers, then the
+ * person's own, kept with their account — and the way to keep the one shown.
+ * The chip of the view shown is pressed; a view saved by a person carries
+ * the brass of what people decided.
+ */
+function Views({ current, onChoose }: { current: string; onChoose: (query: string) => void }) {
+  const { t } = useI18n()
+  const v = t.admin.works.views
+  const [saved, setSaved] = usePreference<SavedView[]>('catalogue.views', [], readViews)
+
+  return (
+    <div role="group" aria-labelledby="works-views" className="flex flex-wrap items-center gap-2">
+      <span id="works-views" className="label mr-1">
+        {v.label}
+      </span>
+      {BUILT_IN.map((offered) => (
+        <ViewChip key={offered.id} pressed={current === offered.query} onClick={() => onChoose(offered.query)}>
+          {v.builtIn[offered.id]}
+        </ViewChip>
+      ))}
+      {saved.map((view) => (
+        <span key={view.name} className="inline-flex items-center">
+          <ViewChip pressed={current === view.query} saved onClick={() => onChoose(view.query)}>
+            {view.name}
+          </ViewChip>
+          <button
+            type="button"
+            aria-label={v.forget(view.name)}
+            title={v.forget(view.name)}
+            onClick={() => setSaved(saved.filter((one) => one !== view))}
+            className="-ml-1 grid size-11 shrink-0 cursor-pointer place-items-center rounded-full text-bone-faint transition-colors duration-150 hover:text-vermillion"
+          >
+            <Glyph name="close" className="size-3" />
+          </button>
+        </span>
+      ))}
+      <SaveView current={current} saved={saved} onSave={(view) => setSaved([...saved, view])} />
+    </div>
+  )
+}
+
+function ViewChip({
+  pressed,
+  saved,
+  onClick,
+  children,
+}: {
+  pressed: boolean
+  saved?: boolean
+  onClick: () => void
+  children: ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={pressed}
+      onClick={onClick}
+      className={cn(
+        'inline-flex min-h-11 cursor-pointer items-center gap-1.5 rounded-full border px-3.5 text-body-sm transition-colors duration-150',
+        pressed
+          ? 'border-vermillion bg-vermillion/[0.08] text-bone'
+          : 'border-rule-bright text-bone-dim hover:border-bone-faint hover:text-bone',
+        'forced-colors:border-[color:ButtonText]',
+        pressed && 'forced-colors:bg-[color:Highlight] forced-colors:text-[color:HighlightText]',
+      )}
+    >
+      {saved ? <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-brass" /> : null}
+      {children}
+    </button>
+  )
+}
+
+/** The view shown, kept under a name the person gives it: checked as it is typed, said beside the field. */
+function SaveView({
+  current,
+  saved,
+  onSave,
+}: {
+  current: string
+  saved: SavedView[]
+  onSave: (view: SavedView) => void
+}) {
+  const { t } = useI18n()
+  const v = t.admin.works.views
+  const [name, setName] = useState('')
+  const [tried, setTried] = useState(false)
+  const problem = refusal(name, current, saved)
+  const said = !problem
+    ? undefined
+    : problem.why === 'same'
+      ? v.invalid.same(problem.saved ?? (problem.builtIn ? v.builtIn[problem.builtIn] : ''))
+      : problem.why === 'long'
+        ? v.invalid.long(VIEW_NAME)
+        : problem.why === 'many'
+          ? v.invalid.many(VIEWS_MOST)
+          : v.invalid[problem.why]
+
+  return (
+    <Menu
+      label={v.saveTitle}
+      title={v.saveTitle}
+      align="start"
+      button={
+        <>
+          <Glyph name="plus" className="size-3.5" />
+          {v.save}
+        </>
+      }
+      buttonClassName={(open) =>
+        cn(
+          'inline-flex min-h-11 cursor-pointer items-center gap-1.5 rounded-full border border-dashed border-rule-bright px-3.5 text-body-sm text-bone-dim',
+          'transition-colors duration-150 hover:border-bone-faint hover:text-bone',
+          open && 'border-bone-faint text-bone',
+        )
+      }
+      className="w-80 p-4"
+    >
+      {(close) => (
+        <form
+          noValidate
+          className="space-y-3"
+          onSubmit={(event) => {
+            event.preventDefault()
+            setTried(true)
+            if (problem) return
+            onSave({ name: name.trim(), query: current })
+            setName('')
+            setTried(false)
+            close()
+          }}
+        >
+          <FormField label={v.name} htmlFor="view-name" hint={v.nameHint} error={tried || problem?.why === 'same' ? said : undefined}>
+            <Input
+              id="view-name"
+              autoFocus
+              autoComplete="off"
+              maxLength={VIEW_NAME + 10}
+              value={name}
+              aria-invalid={tried && problem ? true : undefined}
+              onChange={(event) => setName(event.target.value)}
+            />
+          </FormField>
+          <p className="text-xs leading-relaxed text-bone-faint">{v.kept}</p>
+          <Button type="submit" size="sm" variant="primary" disabled={problem?.why === 'same'}>
+            {v.submit}
+          </Button>
+        </form>
+      )}
+    </Menu>
+  )
+}
+
 /** How far an action over the selection has gone: a bar, and the count beside it. */
 function Progress({ at, total }: { at: number; total: number }) {
   const { t } = useI18n()
@@ -929,9 +1339,9 @@ function Row({
   const art = poster(item)
 
   return (
-    <Tr data-work={item.id} className={cn('group', item.isEnabled ? '' : 'opacity-60', selected && 'bg-ink-high')}>
+    <Tr row={item.id} data-work={item.id} className={cn('group', item.isEnabled ? '' : 'opacity-60', selected && 'bg-ink-high')}>
       {/* Above the stretched link, or the box would open the editor. */}
-      <Td className="w-8 pr-0">
+      <Td column="select" className="w-8 pr-0">
         <input
           type="checkbox"
           aria-label={w.bulk.select(item.title)}
@@ -940,7 +1350,7 @@ function Row({
           onChange={(event) => onSelect(event.target.checked)}
         />
       </Td>
-      <Td className="w-full max-w-0 min-w-40 py-1.5">
+      <Td column="title" className="w-full max-w-0 min-w-40 py-1.5">
         {/* The cell is the target: the pseudo-element grows the link to the
             height of the row, so a thumb landing anywhere in the column opens
             the editor while the link stays a link for the keyboard. */}
@@ -968,26 +1378,11 @@ function Row({
             />
           </span>
         </Link>
-
-        {/* The narrow layout has neither the state nor the completeness
-            column, and neither is a thing to discover only after opening the
-            entry. */}
-        <span className="mt-1 ml-9 flex flex-wrap items-center gap-1.5 sm:hidden">
-          <Twins partners={partners} onMerge={onMerge} />
-          {item.isEnabled ? null : <Chip tone="accent">{w.disabled}</Chip>}
-          {locks > 0 ? (
-            <Chip tone="manual">
-              <Glyph name="lock" className="size-3" />
-              {locks}
-            </Chip>
-          ) : null}
-          <Marks item={item} locale={locale} />
-        </span>
       </Td>
 
       {/* From 1280 px only: on one line, the identifiers took the title's
           room beside the sidebar at 1024 px. They are in the editor. */}
-      <Td className="hidden xl:table-cell">
+      <Td column="ids">
         <span className="flex gap-x-3 font-mono text-[0.6875rem] whitespace-nowrap text-bone-faint tabular-nums">
           {ids.tvdb ? <span>tvdb:{ids.tvdb}</span> : null}
           {ids.tmdb ? <span>tmdb:{ids.tmdb}</span> : null}
@@ -995,11 +1390,11 @@ function Row({
         </span>
       </Td>
 
-      <Td className="hidden sm:table-cell">
+      <Td column="marks">
         <Marks item={item} locale={locale} />
       </Td>
 
-      <Td className="hidden sm:table-cell">
+      <Td column="state">
         <span className="flex flex-wrap items-center gap-1.5">
           <Twins partners={partners} onMerge={onMerge} />
           {item.isEnabled ? null : <Chip tone="accent">{w.disabled}</Chip>}
@@ -1026,13 +1421,25 @@ function Row({
         </span>
       </Td>
 
-      <Td align="right" className="hidden whitespace-nowrap md:table-cell lg:hidden xl:table-cell">
+      <Td column="updated" align="right" className="whitespace-nowrap">
         <span className="font-mono text-xs text-bone-faint tabular-nums" title={fmt.dateTime(item.updatedAt, locale)}>
           {fmt.relative(item.updatedAt, locale)}
         </span>
       </Td>
 
-      <Td align="right" className="w-12 py-0 pl-0">
+      <Td column="refreshed" align="right" className="whitespace-nowrap">
+        <span className="font-mono text-xs text-bone-faint tabular-nums" title={fmt.dateTime(item.refreshedAt, locale)}>
+          {fmt.relative(item.refreshedAt, locale) ?? '—'}
+        </span>
+      </Td>
+
+      <Td column="added" align="right" className="whitespace-nowrap">
+        <span className="font-mono text-xs text-bone-faint tabular-nums" title={fmt.dateTime(item.createdAt, locale)}>
+          {fmt.relative(item.createdAt, locale)}
+        </span>
+      </Td>
+
+      <Td column="actions" align="right" className="w-12 py-0 pl-0">
         <RowMenu id={`row-actions-${item.id}`} label={w.menu.open(item.title)} busy={busy}>
           {(close) => (
             <>
@@ -1138,7 +1545,7 @@ function Marks({ item, locale }: { item: MediaItem; locale: string }) {
       : hasSources(item)
         ? { state: 'lacks' as const, says: m.refresh.lacks }
         : { state: 'none' as const, says: m.refresh.none }
-  const marks: { gap: Gap; state: 'has' | 'lacks' | 'none'; says: string }[] = [
+  const marks: { gap: Mark; state: 'has' | 'lacks' | 'none'; says: string }[] = [
     poster(item) ? { gap: 'poster', state: 'has', says: m.poster.has } : { gap: 'poster', state: 'lacks', says: m.poster.lacks },
     item.overview?.trim()
       ? { gap: 'overview', state: 'has', says: m.overview.has }

@@ -46,7 +46,10 @@ pub enum Rule {
     /// The first, in priority order, that has one gives it.
     First,
     /// A list taken whole from the first that has one: nothing tells the same
-    /// actor or genre apart across providers well enough to blend them.
+    /// actor apart across providers well enough to blend the casts, and each
+    /// provider's genres are a classification of its own — however each
+    /// genre is then known by every name it goes by, in every language
+    /// (`repo::genre`).
     Whole,
     /// Every provider adds its own.
     Union,

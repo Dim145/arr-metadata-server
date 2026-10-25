@@ -20,7 +20,7 @@
  *   reading it, and it changes in place.
  */
 
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 
 import { cn } from '../../lib/cn'
 import { useI18n } from '../../lib/i18n'
@@ -67,6 +67,8 @@ export function Dialog({
   size?: 'md' | 'lg'
 }) {
   const ref = useRef<HTMLDialogElement>(null)
+  // Named by its title, as a screen reader announces it on opening.
+  const titleId = useId()
   const said = useRef({ title, children, footer })
   if (open) said.current = { title, children, footer }
 
@@ -114,6 +116,7 @@ export function Dialog({
   return (
     <dialog
       ref={ref}
+      aria-labelledby={drawn ? titleId : undefined}
       onClose={() => {
         setLeaving(true)
         onClose()
@@ -127,7 +130,9 @@ export function Dialog({
       {drawn ? (
         <div key={instance} className="flex max-h-[calc(100dvh-2rem)] flex-col">
           <header className="shrink-0 border-b border-rule px-5 py-4">
-            <h2 className="font-display text-lg font-medium text-bone">{said.current.title}</h2>
+            <h2 id={titleId} className="font-display text-lg font-medium text-bone">
+              {said.current.title}
+            </h2>
           </header>
           <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4 text-sm leading-relaxed text-bone-dim">
             {said.current.children}

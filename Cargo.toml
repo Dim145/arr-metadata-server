@@ -50,6 +50,30 @@ serde_with = "3"
 # ── Observability ────────────────────────────────────────────────────────────
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "json"] }
+# Traces sent to an OpenTelemetry collector, Tempo or Jaeger over OTLP, when
+# OTEL_EXPORTER_OTLP_ENDPOINT or OTEL_EXPORTER_OTLP_TRACES_ENDPOINT says where:
+# nothing is built otherwise. Traces only, over HTTP and protobuf, sent by
+# the blocking reqwest client the exporter's own thread runs; `internal-logs`
+# is what says in this server's log that a batch could not be sent. The four
+# move together: tracing-opentelemetry runs one minor ahead of the others,
+# and Dependabot keeps them in one group (.github/dependabot.yml).
+opentelemetry = { version = "0.33.1", default-features = false, features = ["trace"] }
+opentelemetry_sdk = { version = "0.33.1", default-features = false, features = ["trace"] }
+opentelemetry-otlp = { version = "0.33.1", default-features = false, features = [
+    "trace", "http-proto", "reqwest-blocking-client", "reqwest-rustls", "internal-logs",
+] }
+tracing-opentelemetry = { version = "0.34.0", default-features = false }
+# Errors reported to a Sentry or a GlitchTip, when the settings name one: the
+# client and its transport alone, over the reqwest already here. The error
+# lines are handed to it by a layer of this server's own (src/telemetry/
+# report.rs), so that a DSN changed in the settings takes effect at once;
+# and no panic integration, which brings a backtrace symboliser for a binary
+# whose symbols are stripped: a panic reaches the report as the error line
+# the server's panic hook writes.
+sentry = { version = "0.49.3", default-features = false, features = ["reqwest", "rustls"] }
+# The level sqlx's pool says how long a connection took to come at, which
+# the metrics read (src/metrics.rs); the version already in the tree.
+log = "0.4.34"
 
 # ── Errors ───────────────────────────────────────────────────────────────────
 anyhow = "1.0.104"

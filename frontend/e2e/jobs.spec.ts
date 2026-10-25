@@ -116,6 +116,39 @@ test.describe('the history of the runs', () => {
     await expect(more).toHaveCount(0)
   })
 
+  test('is walked a run at a time, past the days, and Enter opens what one did', async ({ page }) => {
+    const runs = history()
+    await standIn(page, runs)
+    // What a run did, answered by the stand-in too: nothing written down.
+    await page.route(/\/api\/v1\/jobs\/run-\d+$/, async (route) => {
+      const id = new URL(route.request().url()).pathname.split('/').pop()
+      const job = runs.find((one) => one.id === id)
+      await route.fulfill(job ? { json: { job, entries: [], entriesTotal: 0 } } : { status: 404, json: {} })
+    })
+    await page.goto('/admin/jobs')
+    await expect(shown(page)).toHaveCount(50)
+
+    // One row in the Tab order; the arrows go from run to run, and the last
+    // of today's leads to the first of yesterday's, over its day's heading.
+    await shown(page).nth(19).focus()
+    await page.keyboard.press('ArrowDown')
+    await expect(shown(page).nth(20)).toBeFocused()
+    await page.keyboard.press('End')
+    await expect(shown(page).last()).toBeFocused()
+    await page.keyboard.press('Home')
+    const first = shown(page).first()
+    await expect(first).toBeFocused()
+
+    // Enter opens what the run did, under it, and closes it again.
+    const opener = first.getByRole('button', { name: /^(show|hide) what/i })
+    await page.keyboard.press('Enter')
+    await expect(opener).toHaveAttribute('aria-expanded', 'true')
+    await expect(page.locator(`#${await opener.getAttribute('aria-controls')}`)).toBeVisible()
+    await page.keyboard.press('Enter')
+    await expect(opener).toHaveAttribute('aria-expanded', 'false')
+    await expect(page.locator('#job-run-000-detail')).toHaveCount(0)
+  })
+
   test('is read under the day each run was started on, today and yesterday said in words', async ({ page }) => {
     await standIn(page, history())
     await page.goto('/admin/jobs')
@@ -167,7 +200,8 @@ test.describe('the history of the runs', () => {
 
     // Nobody started any: a filter that finds nothing, which is not the same.
     await chip.click()
-    await region(page).getByLabel(/^(started by|lancée par)$/i).selectOption('person')
+    // The filter, not the box that shows the column of the same name.
+    await region(page).getByRole('combobox', { name: /^(started by|lancée par)$/i }).selectOption('person')
     await expect.poll(() => asked.at(-1)!.get('by')).toBe('person')
     await expect(region(page).getByText(/no run matches these filters/i)).toBeVisible()
   })

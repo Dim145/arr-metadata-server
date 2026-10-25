@@ -138,43 +138,77 @@ async fn last_import(state: &AppState, name: &str) -> Option<Option<Import>> {
     }
 }
 
-/// Whether the anime list has never been imported, or not for a week.
+/// Whether the anime list is due, by its schedule and its own cadence.
 async fn anime_due(state: &AppState) -> bool {
-    last_import(state, ANIME)
-        .await
-        .is_some_and(|last| due(last.as_ref(), ANIME_EVERY))
-}
-
-/// Whether a list has never been imported, or not for `every`.
-fn due(last: Option<&Import>, every: chrono::Duration) -> bool {
-    last.and_then(|l| parse_rfc3339(&l.imported_at))
-        .is_none_or(|at| chrono::Utc::now() - at >= every)
-}
-
-/// Whether IMDb's ratings are due: once a day, and sooner — though not more
-/// than hourly — when works have been added since they were last read.
-async fn imdb_due(state: &AppState) -> bool {
-    let Some(last) = last_import(state, IMDB).await else {
-        return false;
-    };
-    let Some(last) = last else {
-        return true;
-    };
-
-    if due(Some(&last), IMDB_EVERY) {
-        return true;
+    match clock(state, ANIME).await {
+        Some(clock) => crate::jobs::schedule::due(state, job::kinds::IMPORT_ANIME, clock).await,
+        None => false,
     }
+}
 
-    due(Some(&last), IMDB_CATCH_UP)
-        && repo::imdb::added_since(&state.db, &last.imported_at)
-            .await
-            .unwrap_or_else(|e| {
-                tracing::warn!(
-                    error = format_args!("{e:#}"),
-                    "could not tell whether works were added"
-                );
-                false
-            })
+/// Whether IMDb's ratings are due, by their schedule and their own cadence.
+async fn imdb_due(state: &AppState) -> bool {
+    match clock(state, IMDB).await {
+        Some(clock) => crate::jobs::schedule::due(state, job::kinds::IMPORT_IMDB, clock).await,
+        None => false,
+    }
+}
+
+/// What a list's own cadence says: never imported, at once; else a week
+/// after — the anime list — or a day after — IMDb's ratings, and sooner,
+/// though not more than hourly, when works have been added since they were
+/// last read; an hour after a failed import at the soonest. `None` when the
+/// database could not say, which is never a reason to download.
+///
+/// A schedule set for the task goes by this: a window waits for its
+/// opening; a cron expression counts its next moment from the last import.
+pub async fn clock(state: &AppState, list: &str) -> Option<crate::jobs::schedule::Clock> {
+    let last = last_import(state, list).await?;
+    let imported = last.as_ref().and_then(|l| parse_rfc3339(&l.imported_at));
+    let now = chrono::Utc::now();
+    let natural = match (list, imported, last.as_ref()) {
+        (_, None, _) => now,
+        (IMDB, Some(at), Some(last)) => {
+            let daily = at + IMDB_EVERY;
+            let added = repo::imdb::added_since(&state.db, &last.imported_at)
+                .await
+                .unwrap_or_else(|e| {
+                    tracing::warn!(
+                        error = format_args!("{e:#}"),
+                        "could not tell whether works were added"
+                    );
+                    false
+                });
+            if added {
+                daily.min(at + IMDB_CATCH_UP)
+            } else {
+                daily
+            }
+        }
+        (_, Some(at), _) => at + ANIME_EVERY,
+    };
+    let kind = if list == IMDB {
+        job::kinds::IMPORT_IMDB
+    } else {
+        job::kinds::IMPORT_ANIME
+    };
+    let not_before = match job::latest(&state.db, kind).await {
+        Ok((Some(run), _)) if run.status == job::Status::Failed => run
+            .finished_at
+            .as_deref()
+            .and_then(parse_rfc3339)
+            .and_then(|at| {
+                chrono::Duration::from_std(RETRY_AFTER)
+                    .ok()
+                    .map(|wait| at + wait)
+            }),
+        _ => None,
+    };
+    Some(crate::jobs::schedule::Clock {
+        natural,
+        last_done: imported,
+        not_before,
+    })
 }
 
 /// One import at a time, whether the scheduler or an operator asked for it:

@@ -9,11 +9,15 @@
  * nothing here happens on a keystroke: you say what you want, the screen says
  * it is asking, and it waits. A search that fired as you typed would open four
  * conversations with two providers to answer none of them.
+ *
+ * An administrator can also import many works at once (`?many=1`): ids
+ * pasted, a file of them dropped, or works picked here from the search, set
+ * beside the catalogue and imported as a run (see `ImportWizard`).
  */
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
-import { Link } from 'react-router'
+import { Link, useSearchParams } from 'react-router'
 
 import {
   Button,
@@ -24,14 +28,17 @@ import {
   Label,
   Panel,
   PanelHead,
+  Segmented,
   Select,
   Spinner,
 } from '../../components/ui'
 import { Artwork } from '../../components/media'
 import { api, query } from '../../lib/api'
+import { useMe } from '../../lib/hooks'
 import { useI18n } from '../../lib/i18n'
 import { providerName } from '../../lib/labels'
-import type { Found, MediaItem, MediaKind, SourceRules } from '../../lib/types'
+import type { Found, ImportLine, MediaItem, MediaKind, SourceRules } from '../../lib/types'
+import { ImportWizard } from './ImportWizard'
 
 /**
  * A term the server looks up rather than searches — `tvdb:81189`, or a page's
@@ -65,9 +72,37 @@ function fetchable(found: Found) {
     : Boolean(found.tmdbId || found.imdbId)
 }
 
+/** A hit, as a line of a batch: the id it is imported by first, as the import route takes them. */
+function lineOfFound(found: Found): ImportLine | undefined {
+  const text =
+    found.kind === 'series'
+      ? found.fankaiId
+        ? `fankai:${found.fankaiId}`
+        : found.tvdbId
+          ? `tvdb:${found.tvdbId}`
+          : found.tmdbId
+            ? `tmdb:${found.tmdbId}`
+            : (found.imdbId ?? undefined)
+      : found.tmdbId
+        ? `tmdb:${found.tmdbId}`
+        : (found.imdbId ?? undefined)
+  return text ? { text, kind: found.kind, title: found.title } : undefined
+}
+
 export function Discover() {
   const { t } = useI18n()
   const queryClient = useQueryClient()
+  const me = useMe()
+  const admin = me.data?.isAdmin ?? false
+  const [params, setParams] = useSearchParams()
+  const many = admin && params.get('many') === '1'
+  // What was picked from the search for the batch, kept while the page is.
+  const [picked, setPicked] = useState<ImportLine[]>([])
+  const pick = (found: Found) => {
+    const line = lineOfFound(found)
+    if (!line) return
+    setPicked((now) => (now.some((one) => one.text === line.text) ? now.filter((one) => one.text !== line.text) : [...now, line]))
+  }
 
   const [term, setTerm] = useState('')
   const [kind, setKind] = useState<'' | MediaKind>('')
@@ -129,9 +164,37 @@ export function Discover() {
           {t.admin.discover}
         </h1>
         <p className="mt-3 max-w-prose text-sm leading-relaxed text-bone-dim">
-          {t.admin.intake.lead}
+          {many ? t.admin.wizard.intro : t.admin.intake.lead}
         </p>
+        {admin ? (
+          <Segmented<'one' | 'many'>
+            className="mt-4"
+            label={t.admin.wizard.view}
+            value={many ? 'many' : 'one'}
+            onChange={(next) =>
+              setParams(
+                (now) => {
+                  const after = new URLSearchParams(now)
+                  if (next === 'many') after.set('many', '1')
+                  else after.delete('many')
+                  return after
+                },
+                { replace: true },
+              )
+            }
+            options={[
+              { value: 'one', label: t.admin.wizard.tabOne },
+              {
+                value: 'many',
+                label: picked.length ? t.admin.wizard.tabManyPicked(picked.length) : t.admin.wizard.tabMany,
+              },
+            ]}
+          />
+        ) : null}
       </header>
+
+      {many ? <ImportWizard picked={picked} onClearPicked={() => setPicked([])} /> : (
+      <>
 
       <Panel label={t.admin.discover} className="rise mb-6" style={{ animationDelay: '60ms' }}>
         <form
@@ -285,12 +348,16 @@ export function Discover() {
                       : undefined
                   }
                   onImport={() => take.mutate(found)}
+                  picked={admin ? picked.some((line) => line.text === lineOfFound(found)?.text) : undefined}
+                  onPick={admin ? () => pick(found) : undefined}
                 />
               )
             })}
           </ul>
         )}
       </Panel>
+      </>
+      )}
     </div>
   )
 }
@@ -307,6 +374,8 @@ function Result({
   busy,
   error,
   onImport,
+  picked,
+  onPick,
 }: {
   found: Found
   /** The id it was imported under during this visit, if it was. */
@@ -314,6 +383,9 @@ function Result({
   busy: boolean
   error: string | undefined
   onImport: () => void
+  /** Whether it is in the batch, for an administrator who can import one. */
+  picked?: boolean
+  onPick?: () => void
 }) {
   const { t } = useI18n()
 
@@ -393,10 +465,18 @@ function Result({
               </Link>
             </>
           ) : fetchable(found) ? (
-            <Button size="sm" variant="primary" disabled={busy} onClick={onImport}>
-              {busy ? <Spinner className="size-3.5" /> : <Glyph name="download" className="size-3.5" />}
-              {busy ? t.admin.intake.importing : t.admin.intake.import}
-            </Button>
+            <>
+              <Button size="sm" variant="primary" disabled={busy} onClick={onImport}>
+                {busy ? <Spinner className="size-3.5" /> : <Glyph name="download" className="size-3.5" />}
+                {busy ? t.admin.intake.importing : t.admin.intake.import}
+              </Button>
+              {onPick ? (
+                <Button size="sm" variant="quiet" aria-pressed={picked} onClick={onPick}>
+                  <Glyph name={picked ? 'check' : 'plus'} className="size-3.5" />
+                  {picked ? t.admin.wizard.picked : t.admin.wizard.pick}
+                </Button>
+              ) : null}
+            </>
           ) : (
             <p className="text-xs text-bone-faint">{t.admin.intake.noIdentifier}</p>
           )}

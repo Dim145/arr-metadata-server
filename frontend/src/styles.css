@@ -1032,3 +1032,192 @@
     }
   }
 }
+
+/* ── The dense table (components/ui/tables.tsx) ───────────────────────────
+   Outside the layers on purpose: as a card, a row's height, a cell's width
+   and whether a cell is shown at all are this block's to say, over whatever
+   the page's own classes said of them as a table.
+
+   The frame is a container (`dense`): what the table is drawn as depends on
+   its own width, not the screen's — the same register is a table beside the
+   sidebar and a column of cards in a narrow panel. */
+.dense {
+  container: dense / inline-size;
+  /* Where the head stays as the rows scroll under it: under the
+     administration's bar on a small screen, at the top of the page beside
+     the sidebar, and at the top of its own frame when the frame scrolls. */
+  --sticky-top: 3.5rem;
+}
+@media (width >= 64rem) {
+  .dense {
+    --sticky-top: 0px;
+  }
+}
+.dense[data-scrolls] {
+  --sticky-top: 0px;
+  max-height: calc(100dvh - 6rem);
+}
+.dense > table {
+  min-width: var(--table-min, 0);
+}
+.dense .dense-head {
+  position: sticky;
+  top: var(--sticky-top);
+  z-index: 2;
+  background: var(--color-ink-raised);
+  /* A collapsed border stays with the table, not with a head that sticks. */
+  border-bottom-color: transparent;
+  box-shadow: inset 0 -1px 0 var(--color-rule);
+}
+
+/* How tight the rows are set, said once as `--density` on the frame and read
+   by every row inside it. The attribute says it again for an engine that
+   cannot yet ask a container's style. As a table only: a card is as tall as
+   what it holds. */
+.dense[data-density="compact"] {
+  --density: compact;
+}
+@container dense (width >= 600px) {
+  @container style(--density: compact) {
+    .dense-row {
+      height: 2.25rem;
+    }
+    .dense-row > td {
+      padding-block: 0.25rem;
+    }
+    /* Its buttons are as tall as a row may be already. */
+    .dense-row > td[data-cell="actions"] {
+      padding-block: 0;
+    }
+  }
+  .dense[data-density="compact"] .dense-row {
+    height: 2.25rem;
+  }
+  .dense[data-density="compact"] .dense-row > td {
+    padding-block: 0.25rem;
+  }
+  .dense[data-density="compact"] .dense-row > td[data-cell="actions"] {
+    padding-block: 0;
+  }
+}
+
+/* The columns that wait for room, as a table: from 40, 52 or 64rem of it. */
+@container dense (width >= 600px) and (width < 40rem) {
+  .dense [data-from] {
+    display: none;
+  }
+}
+@container dense (width >= 40rem) and (width < 52rem) {
+  .dense [data-from="lg"],
+  .dense [data-from="xl"] {
+    display: none;
+  }
+}
+@container dense (width >= 52rem) and (width < 64rem) {
+  .dense [data-from="xl"] {
+    display: none;
+  }
+}
+
+/* Under 600 pixels of its own width, a row is a card: its box and its name
+   on the first line, its actions at the end of it, and each value after the
+   name of its column. The heads leave the eye, not the screen reader, and
+   the box that chooses every row stays, with its name beside it. */
+@container dense (width < 600px) {
+  .dense > table {
+    min-width: 0;
+  }
+  .dense > table,
+  .dense > table > thead,
+  .dense > table > tbody {
+    display: block;
+  }
+  .dense > table > thead > tr {
+    display: flex;
+    align-items: center;
+    height: auto;
+  }
+  .dense > table > thead > tr > th:not([data-cell="select"]) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
+  }
+  .dense > table > thead > tr > th[data-cell="select"] {
+    display: flex;
+    flex: 1;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.5rem 1rem;
+  }
+  .dense > table > thead > tr > th[data-cell="select"]::after {
+    /* Said by the box's own name already: shown, and not read twice where
+       the engine can be told so. */
+    content: attr(data-label);
+    content: attr(data-label) / "";
+    font-family: var(--font-sans);
+    font-size: 0.8125rem;
+    letter-spacing: 0;
+    text-transform: none;
+    color: var(--color-bone-dim);
+  }
+  .dense > table > tbody > tr {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: start;
+    row-gap: 0.375rem;
+    height: auto;
+    padding: 0.75rem 1rem;
+  }
+  .dense > table > tbody > tr > td {
+    display: block;
+    width: auto;
+    min-width: 0;
+    max-width: none;
+    padding: 0;
+    text-align: left;
+  }
+  .dense > table > tbody > tr > td[data-cell="select"] {
+    grid-column: 1;
+    grid-row: 1;
+    margin-right: 0.75rem;
+    padding-top: 0.125rem;
+  }
+  .dense > table > tbody > tr > td[data-cell="primary"] {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .dense > table > tbody > tr > td[data-cell="actions"] {
+    grid-column: 3;
+    grid-row: 1;
+    margin: -0.625rem -0.625rem 0 0.5rem;
+  }
+  .dense > table > tbody > tr > td[data-cell="line"] {
+    grid-column: 2 / -1;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.125rem 0.75rem;
+  }
+  .dense > table > tbody > tr > td[data-cell="line"]::before {
+    /* The column's head says it to a screen reader already. */
+    content: attr(data-label);
+    content: attr(data-label) / "";
+    flex: 0 0 6.5rem;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--color-bone-faint);
+  }
+  /* What a phone can do without stays off the cards: last, so that it
+     outweighs the line it would otherwise be drawn as. */
+  .dense > table > tbody > tr > td[data-card="false"] {
+    display: none;
+  }
+}

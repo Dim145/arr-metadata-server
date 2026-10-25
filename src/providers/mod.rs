@@ -294,7 +294,7 @@ impl Gate {
                 .map_err(|_| anyhow::anyhow!("{} is shut", self.label))?;
 
             let started = std::time::Instant::now();
-            let sent = request().send().await;
+            let sent = crate::outbound::send(self.metric, request()).await;
             crate::metrics::upstream(self.metric, started, sent.as_ref().ok().map(|r| r.status()));
             let response = sent.map_err(|e| {
                 let said = describe_request_error(&e);

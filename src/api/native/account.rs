@@ -1,8 +1,10 @@
 //! A person's own account: what they are called, where they are signed in,
-//! and their API keys.
+//! their API keys, and what they keep of their own way of working.
 //!
 //! Only a session reaches these — a key cannot manage the account it acts
 //! for, or it could mint keys that outlive its own revocation.
+
+use std::collections::BTreeMap;
 
 use axum::{
     Extension, Json,
@@ -10,6 +12,7 @@ use axum::{
     http::StatusCode,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use utoipa::ToSchema;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
@@ -43,6 +46,8 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(keys, create_key))
         .routes(routes!(update_key, delete_key))
         .routes(routes!(rotate_key))
+        .routes(routes!(preferences))
+        .routes(routes!(keep_preference, forget_preference))
 }
 
 // ─── profile ─────────────────────────────────────────────────────────────────
@@ -593,6 +598,153 @@ async fn delete_key(
     Ok(StatusCode::NO_CONTENT)
 }
 
+// ─── preferences ─────────────────────────────────────────────────────────────
+
+/// The most preferences one account keeps: the catalogue's saved views are
+/// one, each table's columns another.
+const PREFERENCES_MOST: i64 = 64;
+
+/// The most a preference may weigh, written as JSON: a few dozen saved views
+/// of the catalogue, with room to spare.
+const PREFERENCE_BYTES: usize = 16 * 1024;
+
+/// The longest a preference's name may be.
+const PREFERENCE_NAME: usize = 64;
+
+/// What you keep of your own way of working.
+#[derive(Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Preferences {
+    /// Each preference by its name — `catalogue.views`, `table.users` — and
+    /// its value as the interface wrote it.
+    pub values: BTreeMap<String, Value>,
+}
+
+#[derive(Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PreferenceWrite {
+    /// What is kept under the name, in place of what was: any JSON value
+    /// but `null`. A preference is forgotten with `DELETE`.
+    pub value: Value,
+}
+
+/// A preference's name: words of letters, digits and dashes joined by dots,
+/// the first starting with a small letter — `catalogue.views`, `table.audit`.
+fn clean_preference_key(raw: &str) -> AppResult<&str> {
+    let well_formed = raw.len() <= PREFERENCE_NAME
+        && raw.as_bytes().first().is_some_and(u8::is_ascii_lowercase)
+        && raw.split('.').all(|word| {
+            !word.is_empty() && word.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        });
+    if well_formed {
+        Ok(raw)
+    } else {
+        Err(AppError::BadRequest(format!(
+            "a preference's name is words of letters, digits and dashes joined by dots, \
+             starting with a small letter, {PREFERENCE_NAME} characters at most"
+        )))
+    }
+}
+
+/// What you keep of your own way of working: the views of the catalogue you
+/// saved, the columns each table shows you and how tightly it is set. It
+/// follows you from one browser to the next.
+#[utoipa::path(
+    get, path = "/account/preferences", tag = TAG,
+    operation_id = "account_preferences",
+    responses(
+        (status = 200, body = Preferences),
+        (status = 403, description = "A key cannot manage an account"),
+    ),
+)]
+async fn preferences(
+    State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
+) -> AppResult<Json<Preferences>> {
+    let me = identity.require_user()?;
+
+    Ok(Json(Preferences {
+        values: repo::preference::all(&state.db, &me.id).await?,
+    }))
+}
+
+/// Keep a preference, in place of whatever was kept under its name.
+#[utoipa::path(
+    put, path = "/account/preferences/{key}", tag = TAG,
+    operation_id = "account_keep_preference",
+    params(("key" = String, Path, description = "Its name: `catalogue.views`, `table.users`")),
+    request_body = PreferenceWrite,
+    responses(
+        (status = 204, description = "Kept"),
+        (status = 400, description = "The name or the value was rejected"),
+        (status = 403, description = "A key cannot manage an account, or the account keeps as many as it may"),
+    ),
+)]
+async fn keep_preference(
+    State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
+    Path(key): Path<String>,
+    Json(write): Json<PreferenceWrite>,
+) -> AppResult<StatusCode> {
+    let me = identity.require_user()?;
+    let key = clean_preference_key(&key)?;
+
+    if write.value.is_null() {
+        return Err(AppError::BadRequest(
+            "a preference is forgotten with DELETE, not kept as null".into(),
+        ));
+    }
+    let weight = serde_json::to_string(&write.value)
+        .map(|json| json.len())
+        .unwrap_or(usize::MAX);
+    if weight > PREFERENCE_BYTES {
+        return Err(AppError::BadRequest(format!(
+            "a preference is at most {} KiB of JSON",
+            PREFERENCE_BYTES / 1024
+        )));
+    }
+
+    // Two names new to the account sent at the same instant could both find
+    // room for one more: a preference over the limit is harmless, and not
+    // worth holding every account for.
+    if !repo::preference::has(&state.db, &me.id, key).await?
+        && repo::preference::count(&state.db, &me.id).await? >= PREFERENCES_MOST
+    {
+        return Err(AppError::Refused {
+            code: "preference_limit",
+            message: format!(
+                "an account keeps {PREFERENCES_MOST} preferences at most; forget one first"
+            ),
+        });
+    }
+
+    repo::preference::put(&state.db, &me.id, key, &write.value).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Forget a preference: the interface goes back to its own way there.
+#[utoipa::path(
+    delete, path = "/account/preferences/{key}", tag = TAG,
+    operation_id = "account_forget_preference",
+    params(("key" = String, Path, description = "Its name")),
+    responses(
+        (status = 204, description = "Forgotten, or never kept"),
+        (status = 400, description = "The name was rejected"),
+        (status = 403, description = "A key cannot manage an account"),
+    ),
+)]
+async fn forget_preference(
+    State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
+    Path(key): Path<String>,
+) -> AppResult<StatusCode> {
+    let me = identity.require_user()?;
+    let key = clean_preference_key(&key)?;
+
+    repo::preference::delete(&state.db, &me.id, key).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -642,5 +794,122 @@ mod tests {
         );
         assert!(clean_key_name("   ").is_err());
         assert!(clean_key_name(&"k".repeat(61)).is_err());
+    }
+
+    #[test]
+    fn a_preference_is_named_in_words_joined_by_dots() {
+        for named in [
+            "catalogue.views",
+            "table.users",
+            "table.audit-trail",
+            "editor.preview2",
+        ] {
+            assert_eq!(clean_preference_key(named).unwrap(), named);
+        }
+        for refused in [
+            "",
+            ".views",
+            "catalogue.",
+            "catalogue..views",
+            "Catalogue.views",
+            "9tables",
+            "table/users",
+            "table users",
+            "tablé.users",
+            &format!("t.{}", "x".repeat(63)),
+        ] {
+            assert!(
+                clean_preference_key(refused).is_err(),
+                "{refused:?} was let through"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_person_keeps_their_preferences_and_no_key_can() {
+        let state = crate::api::native::testing::server().await;
+        let me = repo::user::create(
+            &state.db,
+            repo::user::NewUser {
+                username: "prefers",
+                password_hash: repo::user::NO_PASSWORD,
+                role: Role::Editor,
+                status: Status::Active,
+                display_name: None,
+                email: None,
+                invited_by: None,
+                oidc: None,
+            },
+        )
+        .await
+        .expect("an account");
+        let as_me = || Extension(Identity::User(Box::new(me.clone())));
+        let keep = |key: &str, value: Value| {
+            keep_preference(
+                State(state.clone()),
+                as_me(),
+                Path(key.to_string()),
+                Json(PreferenceWrite { value }),
+            )
+        };
+
+        let views = serde_json::json!([{"name": "À revoir", "query": "missing=poster"}]);
+        assert_eq!(
+            keep("catalogue.views", views.clone()).await.expect("kept"),
+            StatusCode::NO_CONTENT
+        );
+        let Json(kept) = preferences(State(state.clone()), as_me())
+            .await
+            .expect("read");
+        assert_eq!(kept.values["catalogue.views"], views);
+
+        // Not null, not a name of any shape, not a book.
+        assert!(matches!(
+            keep("catalogue.views", Value::Null).await,
+            Err(AppError::BadRequest(_))
+        ));
+        assert!(matches!(
+            keep("../settings", serde_json::json!(1)).await,
+            Err(AppError::BadRequest(_))
+        ));
+        assert!(matches!(
+            keep(
+                "table.users",
+                serde_json::json!("x".repeat(PREFERENCE_BYTES))
+            )
+            .await,
+            Err(AppError::BadRequest(_))
+        ));
+
+        // As many as an account may keep, and not one more — but what it
+        // keeps already may still be changed.
+        for n in 1..PREFERENCES_MOST {
+            keep(&format!("table.t{n}"), serde_json::json!({"hidden": []}))
+                .await
+                .expect("kept");
+        }
+        assert!(matches!(
+            keep("table.one-more", serde_json::json!({})).await,
+            Err(AppError::Refused {
+                code: "preference_limit",
+                ..
+            })
+        ));
+        keep("catalogue.views", serde_json::json!([]))
+            .await
+            .expect("changed in place");
+
+        forget_preference(State(state.clone()), as_me(), Path("table.t1".into()))
+            .await
+            .expect("forgotten");
+        keep("table.one-more", serde_json::json!({}))
+            .await
+            .expect("room again");
+
+        // A key cannot read or write the account it acts for.
+        assert!(matches!(
+            preferences(State(state.clone()), Extension(Identity::Anonymous)).await,
+            Err(AppError::Forbidden)
+        ));
     }
 }

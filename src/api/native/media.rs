@@ -49,6 +49,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(retry_all))
         .routes(routes!(reset))
         .routes(routes!(work_media))
+        .routes(routes!(by_work))
         .routes(routes!(forget))
         .merge(
             OpenApiRouter::new()
@@ -274,6 +275,9 @@ pub struct WorkMedia {
     /// and nothing is fetched.
     pub store: bool,
     pub media: Vec<WorkMedium>,
+    /// What they come to: how many are kept, waiting, given up on, and what
+    /// those kept weigh with their copies.
+    pub totals: repo::asset::WorkTotals,
 }
 
 /// What is kept of one address a work points at: where its asset stands,
@@ -404,7 +408,68 @@ async fn work_media(
     Ok(Json(WorkMedia {
         store: state.media.is_on(),
         media,
+        totals: repo::asset::work_totals(&state.db, &id).await?,
     }))
+}
+
+#[derive(Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct ByWorkQuery {
+    /// `space` (the default): the heaviest first, copies included. `count`:
+    /// the most media kept first. `failed`: the most given up on first.
+    pub sort: Option<String>,
+    /// How many works, fifty when absent, two hundred at the most.
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+}
+
+/// The works, by what their media come to.
+#[derive(Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaByWork {
+    pub works: Vec<repo::asset::WorkLine>,
+    /// How many works point at any medium.
+    pub total: i64,
+}
+
+/// The works by what their media come to: how many each keeps, how many
+/// wait or were given up on, and what those kept weigh with their copies —
+/// the heaviest first, or the most kept, or the most failed. A picture two
+/// works share is counted for each.
+#[utoipa::path(
+    get, path = "/media/works", tag = TAG,
+    operation_id = "media_by_work",
+    params(ByWorkQuery),
+    responses(
+        (status = 200, body = MediaByWork),
+        (status = 400, description = "An order that is none"),
+        (status = 403, description = "The caller is not an administrator"),
+    ),
+)]
+async fn by_work(
+    State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
+    Query(query): Query<ByWorkQuery>,
+) -> AppResult<Json<MediaByWork>> {
+    identity.require_admin()?;
+    let order = match query.sort.as_deref().map(str::trim) {
+        None | Some("" | "space") => repo::asset::WorkOrder::Space,
+        Some("count") => repo::asset::WorkOrder::Count,
+        Some("failed") => repo::asset::WorkOrder::Failed,
+        Some(other) => {
+            return Err(AppError::BadRequest(format!(
+                "{other} is no order: space, count or failed"
+            )));
+        }
+    };
+    let (works, total) = repo::asset::by_work(
+        &state.db,
+        order,
+        query.limit.unwrap_or(50),
+        query.offset.unwrap_or(0),
+    )
+    .await?;
+    Ok(Json(MediaByWork { works, total }))
 }
 
 /// Delete the uploads among these addresses, once the row or the lock that
@@ -1076,5 +1141,230 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod by_work_tests {
+    use super::*;
+    use crate::{
+        db::repo::asset::{Stored, Thumb, Variant, Wanted, WorkOrder, WorkTotals},
+        domain::{Image, MediaKind},
+    };
+
+    /// A film held here, pointing at these pictures.
+    async fn film(state: &AppState, title: &str, urls: &[&str]) -> String {
+        let mut item = MediaItem::empty(MediaKind::Movie);
+        item.id = crate::db::new_id();
+        item.title = title.into();
+        item.created_at = crate::db::now();
+        item.updated_at = crate::db::now();
+        item.slug = crate::domain::make_slug(title, None);
+        item.images = urls
+            .iter()
+            .enumerate()
+            .map(|(at, url)| Image {
+                id: crate::db::new_id(),
+                season_number: None,
+                cover_type: if at == 0 {
+                    CoverType::Poster
+                } else {
+                    CoverType::Fanart
+                },
+                url: (*url).to_string(),
+                language: None,
+                sort_order: at as i32,
+                source: None,
+                is_manual: false,
+            })
+            .collect();
+        repo::item::upsert(
+            &state.db,
+            repo::item::ItemWrite {
+                item: &item,
+                replace_children: true,
+            },
+        )
+        .await
+        .unwrap();
+        item.id
+    }
+
+    /// An address kept, of this weight and hash.
+    async fn kept(state: &AppState, origin: &str, bytes: i64, sha: &str) {
+        repo::asset::enqueue(
+            &state.db,
+            &[Wanted {
+                origin,
+                kind: Kind::Image,
+                wanted_by: None,
+            }],
+        )
+        .await
+        .unwrap();
+        let asset = repo::asset::by_origin(&state.db, origin)
+            .await
+            .unwrap()
+            .unwrap();
+        let key = format!("{sha}.jpg");
+        repo::asset::mark_stored(
+            &state.db,
+            &asset.id,
+            &Stored {
+                key: &key,
+                content_type: "image/jpeg",
+                bytes,
+                sha256: sha,
+                width: Some(2),
+                height: Some(3),
+                thumb: Thumb::Jpeg,
+                color: None,
+                thumbhash: None,
+                prepared: 1,
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_works_are_ranked_by_what_their_media_weigh() {
+        let state = crate::api::native::testing::server().await;
+        let heat = film(
+            &state,
+            "Heat",
+            &[
+                "https://p/heat.jpg",
+                "https://p/heat-bg.jpg",
+                "https://p/shared.jpg",
+            ],
+        )
+        .await;
+        let ronin = film(
+            &state,
+            "Ronin",
+            &["https://p/ronin.jpg", "https://p/shared.jpg"],
+        )
+        .await;
+        // Nothing kept of this one: not listed.
+        film(&state, "Nothing", &["https://p/nothing.jpg"]).await;
+
+        kept(&state, "https://p/heat.jpg", 100, "aa").await;
+        kept(&state, "https://p/ronin.jpg", 1_000, "bb").await;
+        kept(&state, "https://p/shared.jpg", 10, "cc").await;
+        repo::asset::add_variant(
+            &state.db,
+            &Variant {
+                key: "aa-480.webp".into(),
+                stem: "aa".into(),
+                width: 480,
+                height: 720,
+                format: "webp".into(),
+                bytes: 50,
+            },
+        )
+        .await
+        .unwrap();
+        // Heat's background could not be fetched.
+        repo::asset::enqueue(
+            &state.db,
+            &[Wanted {
+                origin: "https://p/heat-bg.jpg",
+                kind: Kind::Image,
+                wanted_by: None,
+            }],
+        )
+        .await
+        .unwrap();
+        let background = repo::asset::by_origin(&state.db, "https://p/heat-bg.jpg")
+            .await
+            .unwrap()
+            .unwrap();
+        repo::asset::mark_failed(&state.db, &background.id, "404", None, true)
+            .await
+            .unwrap();
+
+        let Json(by_space) = by_work(
+            State(state.clone()),
+            Extension(Identity::Anonymous),
+            Query(ByWorkQuery {
+                sort: None,
+                limit: None,
+                offset: None,
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(by_space.total, 2);
+        assert_eq!(by_space.works[0].id, ronin);
+        assert_eq!(
+            by_space.works[0].totals,
+            WorkTotals {
+                stored: 2,
+                pending: 0,
+                failed: 0,
+                bytes: 1_010,
+                copies_bytes: 0,
+            }
+        );
+        assert_eq!(by_space.works[1].title, "Heat");
+        assert_eq!(
+            by_space.works[1].totals,
+            WorkTotals {
+                stored: 2,
+                pending: 0,
+                failed: 1,
+                bytes: 110,
+                copies_bytes: 50,
+            }
+        );
+
+        let (by_failed, _) = repo::asset::by_work(&state.db, WorkOrder::Failed, 10, 0)
+            .await
+            .unwrap();
+        assert_eq!(by_failed[0].id, heat);
+        let (second_page, total) = repo::asset::by_work(&state.db, WorkOrder::Space, 1, 1)
+            .await
+            .unwrap();
+        assert_eq!((second_page.len(), total), (1, 2));
+        assert_eq!(second_page[0].id, heat);
+
+        // One work's own, as its media list gives it.
+        assert_eq!(
+            repo::asset::work_totals(&state.db, &heat).await.unwrap(),
+            by_space.works[1].totals
+        );
+        assert_eq!(
+            repo::asset::work_totals(&state.db, "nobody").await.unwrap(),
+            WorkTotals::default()
+        );
+
+        // An order that is none; not for a visitor.
+        assert!(
+            by_work(
+                State(state.clone()),
+                Extension(Identity::Anonymous),
+                Query(ByWorkQuery {
+                    sort: Some("weight".into()),
+                    limit: None,
+                    offset: None,
+                }),
+            )
+            .await
+            .is_err()
+        );
+        assert!(
+            by_work(
+                State(state.clone()),
+                Extension(Identity::Visitor),
+                Query(ByWorkQuery {
+                    sort: None,
+                    limit: None,
+                    offset: None,
+                }),
+            )
+            .await
+            .is_err()
+        );
     }
 }

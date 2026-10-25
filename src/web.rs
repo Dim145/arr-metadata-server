@@ -169,6 +169,15 @@ pub async fn serve(state: AppState) -> Result<()> {
         Some(_) => tracing::info!(%bind, "listening (TLS)"),
         None => tracing::info!(%bind, "listening"),
     }
+    // When the certificates loaded from files end, for the metrics: the
+    // interface's, and the clients' when the operator brought it. Those the
+    // authority issues are read off it.
+    if let Some(own) = &state.config.server.tls {
+        crate::metrics::note_certificate("interface", &own.cert);
+    }
+    if let Some(own) = state.config.clients.as_ref().and_then(|c| c.tls.as_ref()) {
+        crate::metrics::note_certificate("clients", &own.cert);
+    }
 
     // One signal stops every door at once — the clients' too, which used to
     // go on accepting until the interface's had drained — and each is given
@@ -218,6 +227,9 @@ pub async fn serve(state: AppState) -> Result<()> {
     if tokio::time::timeout(DRAIN, state.db.close()).await.is_err() {
         tracing::warn!("the database's connections were not all handed back in time");
     }
+
+    // The last traces and error reports, sent before the process goes.
+    crate::telemetry::shutdown().await;
     Ok(())
 }
 
@@ -301,12 +313,16 @@ fn protect(state: &AppState, router: Router) -> Router {
         }))
         .layer(header_layer(header::REFERRER_POLICY, "no-referrer"))
         .layer(header_layer(header::X_CONTENT_TYPE_OPTIONS, "nosniff"))
+        .layer(header_layer(header::X_FRAME_OPTIONS, "SAMEORIGIN"))
         .layer(header_layer(PERMISSIONS_POLICY, PERMISSIONS))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             transport_headers,
         ))
-        .layer(TraceLayer::new_for_http().make_span_with(crate::telemetry::RequestSpan));
+        .layer(TraceLayer::new_for_http().make_span_with(crate::telemetry::RequestSpan))
+        // With traces on, the request is served in a span of the trace,
+        // which the request span is made under: just outside it.
+        .layer(axum::middleware::from_fn(crate::telemetry::trace::serve));
     // Outside the trace, whose span is where the id is read into.
     crate::telemetry::with_request_id(router, state.config.server.trusted_proxies.clone())
         // Counted last of all, so what is counted is what was answered.
@@ -396,6 +412,11 @@ fn build_router(state: AppState) -> Router {
         )
         // The UI's fallback must be last: it answers every path the API did not.
         .merge(crate::ui::router())
+        // The route a request took, given to its trace once the router has
+        // found it: every route above, none of the fallback's.
+        .route_layer(axum::middleware::from_fn(
+            crate::telemetry::trace::name_route,
+        ))
         .with_state(state)
 }
 
@@ -421,6 +442,9 @@ fn build_clients_router(state: AppState) -> Router {
         .merge(
             api::build_clients(state.clone()).layer(axum::middleware::from_fn(etag::conditional)),
         )
+        .route_layer(axum::middleware::from_fn(
+            crate::telemetry::trace::name_route,
+        ))
         // A router's layers wrap its default fallback too: without a fallback
         // of its own, this door would answer an unknown path with a surface's
         // refusal rather than "nothing here". Asked of services.sonarr.tv, a
@@ -462,7 +486,8 @@ fn build_clients_router(state: AppState) -> Router {
             "default-src 'none'; frame-ancestors 'none'; sandbox",
         ))
         .layer(header_layer(header::REFERRER_POLICY, "no-referrer"))
-        .layer(TraceLayer::new_for_http().make_span_with(crate::telemetry::RequestSpan));
+        .layer(TraceLayer::new_for_http().make_span_with(crate::telemetry::RequestSpan))
+        .layer(axum::middleware::from_fn(crate::telemetry::trace::serve));
     crate::telemetry::with_request_id(router, trusted)
         .layer(axum::middleware::from_fn(crate::metrics::observe_door))
 }
@@ -559,9 +584,10 @@ fn strip_port(host: &str) -> &str {
 ///   the file an editor has just picked, previewed before it is uploaded;
 /// * **media** from the same hosts, for a work's theme music, fetched only
 ///   once somebody presses play;
-/// * **one frame**: a work's trailer, played from YouTube's no-cookie domain —
+/// * **two frames**: a work's trailer, played from YouTube's no-cookie domain —
 ///   and only once somebody presses play, so the page itself sends nobody to
-///   YouTube.
+///   YouTube — and this origin's own pages, which the work editor shows
+///   beside itself as a preview of the public page.
 ///
 /// Styles are `'self'` alone. The interface's are one stylesheet the build
 /// writes, loaded by a `<link>`, and the per-card delays and accent colours
@@ -570,22 +596,25 @@ fn strip_port(host: &str) -> &str {
 /// markup do, and neither is written anywhere here. Swagger UI's are its own
 /// stylesheets, loaded the same way.
 ///
-/// `frame-ancestors 'none'` is the one that earns its place on a server on a
+/// `frame-ancestors 'self'` is the one that earns its place on a server on a
 /// home network: it is what stops a page elsewhere framing this one and
-/// borrowing an administrator's clicks. `base-uri` and `form-action` close the
-/// two ways a stray tag could redirect a relative URL or a form off-origin.
+/// borrowing an administrator's clicks, while the editor's preview may frame
+/// the public page from this same origin (`X-Frame-Options: SAMEORIGIN` says
+/// the same to an engine older than the directive). `base-uri` and
+/// `form-action` close the two ways a stray tag could redirect a relative URL
+/// or a form off-origin.
 const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; \
      img-src 'self' data: blob: https:; \
      media-src 'self' https:; \
      style-src 'self'; \
      script-src 'self'; \
      connect-src 'self'; \
-     frame-src https://www.youtube-nocookie.com; \
+     frame-src 'self' https://www.youtube-nocookie.com; \
      font-src 'self' data:; \
      object-src 'none'; \
      base-uri 'self'; \
      form-action 'self'; \
-     frame-ancestors 'none'";
+     frame-ancestors 'self'";
 
 /// The policy, with the bucket a reader is redirected to when the policy
 /// does not allow it already: `https:` covers Amazon's own and any bucket
@@ -848,7 +877,7 @@ mod policy_tests {
     }
 
     /// The rest of the policy is what it was: scripts from this origin only,
-    /// nothing framing this one, no plugin, no base or form elsewhere.
+    /// nothing framing this one but itself, no plugin, no base or form elsewhere.
     #[test]
     fn the_policy_keeps_its_closed_doors() {
         for directive in [
@@ -858,7 +887,9 @@ mod policy_tests {
             "object-src 'none'",
             "base-uri 'self'",
             "form-action 'self'",
-            "frame-ancestors 'none'",
+            // Framed by this origin alone: the editor's preview of a page.
+            "frame-ancestors 'self'",
+            "frame-src 'self' https://www.youtube-nocookie.com;",
         ] {
             assert!(CONTENT_SECURITY_POLICY.contains(directive), "{directive}");
         }

@@ -23,6 +23,10 @@
  * button that asks for it stays, for whoever reaches it first. A link at the
  * head of the rail goes past the filters to the results, and one before the
  * first card comes back.
+ *
+ * A genre's, a network's or a year's own page lists its works with this same
+ * list, its subject pinned: always asked for, never offered as a choice nor
+ * as a chip to take off, and the page's own heading in place of this one.
  */
 
 import { useQuery } from '@tanstack/react-query'
@@ -164,6 +168,12 @@ function read(params: URLSearchParams) {
 
 type Filters = ReturnType<typeof read>
 
+/**
+ * What a page pins the list to, in the address's words: a genre's slug, a
+ * network's name, a range of years. Asked for with whatever else is chosen.
+ */
+export type Pinned = Partial<Record<'genre' | 'network' | 'yearFrom' | 'yearTo', string>>
+
 /** The filters the "More filters" sheet holds, by their names in the address. */
 const MORE = ['person', 'keyword', 'runtimeMin', 'runtimeMax', 'country', 'certification', 'collection'] as const
 
@@ -176,7 +186,7 @@ const SKIP_LINK =
   'sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-50 focus:rounded-card ' +
   'focus:bg-vermillion focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-ink'
 
-export function Browse() {
+export function Browse({ pinned, lead }: { pinned?: Pinned; lead?: ReactNode } = {}) {
   const { t, lang, locale } = useI18n()
   const [params, setParams] = useSearchParams()
   const [sheet, setSheet] = useState(false)
@@ -190,18 +200,21 @@ export function Browse() {
   const f = read(params)
   const { sort, order } = ORDERS[f.order]
 
+  // A pinned genre is asked for with every one chosen beside it, all of
+  // them: "any" of them would reach past the page's own.
+  const genres = pinned?.genre ? [pinned.genre, ...f.genres.filter((g) => g !== pinned.genre)] : f.genres
   const narrowing = {
     kind: f.kind,
     term: f.term,
-    genre: f.genres.join(','),
-    genreMode: f.genreMode === 'any' ? 'any' : '',
+    genre: genres.join(','),
+    genreMode: f.genreMode === 'any' && !pinned?.genre ? 'any' : '',
     keyword: f.keyword,
-    yearFrom: f.yearFrom,
-    yearTo: f.yearTo,
+    yearFrom: pinned?.yearFrom ?? f.yearFrom,
+    yearTo: pinned?.yearTo ?? f.yearTo,
     minRating: f.minRating,
     status: f.status,
     originalLanguage: f.language,
-    network: f.network,
+    network: pinned?.network ?? f.network,
     person: f.person,
     runtimeMin: f.runtimeMin,
     runtimeMax: f.runtimeMax,
@@ -211,7 +224,10 @@ export function Browse() {
     manualOnly: f.manualOnly,
   }
 
-  useTitle(f.term ? t.browse.quoted(f.term) : f.kind === 'series' ? t.nav.series : f.kind === 'movie' ? t.nav.films : t.nav.browse)
+  // A page that leads the list with its own heading names the tab too.
+  useTitle(
+    lead ? undefined : f.term ? t.browse.quoted(f.term) : f.kind === 'series' ? t.nav.series : f.kind === 'movie' ? t.nav.films : t.nav.browse,
+  )
 
   // Counted under the other filters, so asked again as they change; the last
   // counts stay up meanwhile rather than the rail emptying on every tap.
@@ -223,7 +239,7 @@ export function Browse() {
   })
 
   const results = useQuery({
-    queryKey: ['browse', f, lang],
+    queryKey: ['browse', f, pinned, lang],
     queryFn: () =>
       api.get<ItemPage>(`/items${query({ ...narrowing, sort, order, limit: f.shown, language: lang })}`),
     placeholderData: (previous) => previous,
@@ -398,11 +414,15 @@ export function Browse() {
   const defaultOrder: OrderKey = f.term ? 'relevant' : 'popular'
 
   return (
-    <div className="pt-10 pb-12">
+    <div className={lead ? 'pb-12' : 'pt-10 pb-12'}>
       <header className="mb-6 flex flex-wrap items-end justify-between gap-4">
         <div>
-          <Label>{t.browse.title}</Label>
-          <h1 className="mt-2 font-display text-3xl font-medium text-bone sm:text-4xl">{heading}</h1>
+          {lead ?? (
+            <>
+              <Label>{t.browse.title}</Label>
+              <h1 className="mt-2 font-display text-3xl font-medium text-bone sm:text-4xl">{heading}</h1>
+            </>
+          )}
           {/* Laid out before the count is known: a line that appeared with
               it pushed the whole page down by its height, a layout shift on
               every arrival. */}
@@ -510,6 +530,7 @@ export function Browse() {
               filters={f}
               facets={facets.data}
               change={change}
+              pinned={pinned}
               idPrefix="rail"
               onMore={() => setMore(true)}
               moreOn={moreOn}
@@ -678,6 +699,7 @@ export function Browse() {
           filters={f}
           facets={facets.data}
           change={change}
+          pinned={pinned}
           idPrefix="sheet"
           onMore={() => setMore(true)}
           moreOn={moreOn}
@@ -923,6 +945,7 @@ function FilterPanel({
   filters: f,
   facets,
   change,
+  pinned,
   idPrefix,
   onMore,
   moreOn,
@@ -930,6 +953,8 @@ function FilterPanel({
   filters: Filters
   facets?: CatalogueFacets
   change: (changes: Record<string, string>) => void
+  /** What the page pins the list to: not offered as a choice. */
+  pinned?: Pinned
   idPrefix: string
   /** Open the sheet of the rarer filters. */
   onMore: () => void
@@ -982,7 +1007,8 @@ function FilterPanel({
 
       {facets?.genres.length || f.genres.length ? (
         <GenreFilter
-          genres={facets?.genres ?? []}
+          // The page's own genre is every work's here, and no choice.
+          genres={(facets?.genres ?? []).filter((genre) => !pinned?.genre || genre.slug !== pinned.genre)}
           selected={f.genres}
           mode={f.genreMode}
           onToggle={toggleGenre}
@@ -991,10 +1017,12 @@ function FilterPanel({
         />
       ) : null}
 
-      <fieldset>
-        <legend className="label mb-2">{t.browse.years}</legend>
-        <YearRange filters={f} facets={facets} update={update} id={id} />
-      </fieldset>
+      {pinned?.yearFrom || pinned?.yearTo ? null : (
+        <fieldset>
+          <legend className="label mb-2">{t.browse.years}</legend>
+          <YearRange filters={f} facets={facets} update={update} id={id} />
+        </fieldset>
+      )}
 
       <div>
         <label htmlFor={id('score')} className="label mb-1.5 block">
@@ -1044,7 +1072,7 @@ function FilterPanel({
         </div>
       ) : null}
 
-      {facets?.networks.length || f.network ? (
+      {!pinned?.network && (facets?.networks.length || f.network) ? (
         <div>
           <label htmlFor={id('network')} className="label mb-1.5 block">
             {t.browse.network}

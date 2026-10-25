@@ -13,11 +13,12 @@ import { ShareButton } from '../../components/Share'
 import { Button, Chip, Genre, Glyph, Provenance } from '../../components/ui'
 import { api } from '../../lib/api'
 import { cn } from '../../lib/cn'
+import { genrePath, networkPath, yearPath } from '../../lib/facets'
 import { feeds, webcal } from '../../lib/feeds'
 import * as fmt from '../../lib/format'
 import { useMe } from '../../lib/hooks'
 import { useI18n } from '../../lib/i18n'
-import { providerName } from '../../lib/labels'
+import { listedGenres, providerName } from '../../lib/labels'
 import { airTime, airsWhen, backdrop, episodeCode, episodesOf, hasAired, headlineRating, nextEpisode, poster, seasonName } from '../../lib/media'
 import { releaseDay, releasedNotAired } from '../../lib/platforms'
 import { countryName } from '../../lib/releases'
@@ -153,7 +154,7 @@ export function Plate({ item, region, onTrailer }: { item: MediaItem; region: st
               <span className="font-medium">{item.title}</span>
               {item.year ? (
                 <Link
-                  to={`/browse?yearFrom=${item.year}&yearTo=${item.year}`}
+                  to={yearPath(item.year)}
                   className="ml-3 font-normal text-bone-dim opacity-80 transition-opacity duration-150 hover:opacity-100"
                   aria-label={t.work.sameYear(item.year)}
                 >
@@ -203,15 +204,19 @@ export function Plate({ item, region, onTrailer }: { item: MediaItem; region: st
                 ) : null}
                 {maker ? (
                   <Link
-                    to={`/browse?network=${encodeURIComponent(maker)}`}
+                    to={networkPath(maker)}
                     className="underline decoration-rule-bright underline-offset-4 transition-colors duration-150 hover:text-bone hover:decoration-bone-faint"
                   >
                     {maker}
                   </Link>
                 ) : null}
-                {item.genres.slice(0, 4).map((genre) => (
-                  <Genre key={genre} name={genre} to={`/browse?genre=${encodeURIComponent(genre)}`} />
-                ))}
+                {/* Each to its own page: a series' "Action & Adventure" is the
+                    two genres it stands for, as the catalogue files them. */}
+                {listedGenres(item.genres)
+                  .slice(0, 4)
+                  .map((genre) => (
+                    <Genre key={genre} name={genre} to={genrePath(genre)} />
+                  ))}
               </div>
             </div>
 
@@ -250,6 +255,15 @@ export function Plate({ item, region, onTrailer }: { item: MediaItem; region: st
                     {t.feeds.work}
                   </a>
                 ) : null}
+                {/* Another work beside this one: the scores, the seasons, the
+                    people they share. */}
+                <Link
+                  to={`/compare?a=${encodeURIComponent(item.id)}`}
+                  className="inline-flex min-h-11 items-center gap-1.5 rounded-full px-3 text-sm text-bone-dim transition-colors duration-150 hover:bg-ink-high hover:text-bone"
+                >
+                  <Glyph name="grid" className="size-4" />
+                  {t.compare.withAnother}
+                </Link>
                 {me.data?.canWrite ? (
                   <Link
                     to={`/admin/catalogue/${item.id}`}

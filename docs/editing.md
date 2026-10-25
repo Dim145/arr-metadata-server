@@ -13,6 +13,38 @@ Locks are made in the work's editor (`/admin/catalogue`, then a work), or throug
 native API, which asks for the right to write: an editor's or an administrator's session,
 or a key with the `write` scope.
 
+## Editing in place
+
+A field is edited where it is shown. Its value is the way in: pressed, or reached with Tab
+and opened with Enter, it becomes a box in its place, a long text growing with what it holds.
+Enter — ⌘↵ or Ctrl ↵ in a long text — keeps the change and closes the box, as *Keep* or a
+press elsewhere does; Escape or *Put back* brings back what was there. A value that holds a
+link or a button of its own (a homepage, a trailer, the keywords) is opened from the
+*Edit* pencil beside it, and a picture from its picker.
+
+A change kept is not saved yet: the field is marked *changed* in brass, with the way to put
+it back, its tab carries a brass dot, and a bar along the foot of the page counts what is not
+saved. From that bar:
+
+- **Save and stay** (⌘S or Ctrl S) sends every change, each its own lock — on a work entered
+  by hand, which nothing refreshes, its own record — and its own line in the journal. A
+  change the server refuses stays, its field saying why; the others are saved all the same.
+- **Save and open the next** (⇧⌘↵ or Ctrl ⇧ ↵), behind the bar's arrow, saves and then opens
+  the work after this one in the catalogue's list, as the catalogue last showed it — its
+  search, its filters, its order. The arrows beside *Catalogue*, at the top of the editor, walk
+  the same list; past the page the catalogue showed, the next page is asked for.
+- **Discard**, asked once more in place, drops every change.
+
+Nothing typed is lost by leaving without a word. A link pressed, the palette, a key that goes
+elsewhere, and the back button where the browser lets a page ask, first ask whether to stay,
+leave without saving, or save then leave; closing or reloading the tab is asked about by the
+browser itself.
+
+**Preview** shows the work's public page, as a visitor sees it and as it is saved: beside the
+editor from 1280 pixels of screen (kept open or closed with the account), over the whole
+screen below that. It reloads after each save, back where it was read. The server lets its own
+pages be framed by itself alone (`frame-ancestors 'self'`, `X-Frame-Options: SAMEORIGIN`).
+
 ## Locking a text for one language
 
 A title or an overview — of a work, a season or an episode — and a work's tagline can
@@ -231,7 +263,18 @@ width of a thumbnail, then its title, year and kind; its identifiers elsewhere; 
 for what its record has; its state (disabled, entered by hand, locked fields); and when it
 last changed. The row opens the editor. Its **⋯** button holds the rest — open the editor
 or the public page, refresh, enable or disable, delete — as plain buttons and links, reached
-with Tab and shut by Escape, which fits a phone.
+with Tab and shut by Escape, which fits a phone. The table is the administration's dense one:
+ordered by its *Title*, *Refreshed* and *Added* heads, its columns hidden and shown again, its
+rows walked with the arrow keys — see [the administration's tables](interface.md#the-administrations-tables).
+
+### Views
+
+The search, the filters and the order are all in the address, so a view of the register is
+its address. Above the filters, *Views* offers a few — everything, the series, the films, the
+works added lately, those refreshed lately — and **Save this view…** keeps the one shown under
+a name, as a chip of its own, with the account: it follows its person from one browser to the
+next. A view saved already is said so rather than kept twice, and the **×** beside a saved
+chip forgets it. The palette opens any of them (`View: …`).
 
 ### What a record lacks
 
@@ -239,9 +282,10 @@ The four marks are a poster, an overview, an IMDb id and a first refresh. Each s
 means to the pointer that rests on it and to a screen reader; a missing one is struck
 through, and the refresh mark is faded on a work entered by hand, which is never refreshed.
 
-Four filters above the table — *No poster*, *No overview*, *No IMDb id*, *Never refreshed* —
-narrow the list to the works lacking that, all of them when several are pressed. They are
-kept in the address, so that a view can be sent as a link:
+The filters above the table — *No poster*, *No overview*, *No IMDb id*, *Never refreshed*,
+*Lock to look at again*, *Duplicates*, *Media failed* — narrow the list to the works lacking
+that, all of them when several are pressed, each with how many works it leaves beside it.
+They are kept in the address, so that a view can be sent as a link:
 
 ```
 /admin/catalogue?missing=poster
@@ -261,6 +305,12 @@ sent, and a value the server does not know is refused with a `400`. Exactly:
 | `imdb` | has no IMDb identifier |
 | `refresh` | was never refreshed although it has an identifier to be refreshed by. A work entered by hand is never refreshed, and is not counted |
 | `duplicates` | is one of a pair proposed as one work, not said to be two, the other still a work of its own: see [Duplicates](#duplicates) |
+| `mediaFailed` | has a picture, a photograph or a theme — its own, a season's, an episode's, its cast's, a related work's — that the media store gave up fetching, as the Media page lists them: so that another can be chosen |
+
+The figure beside each filter is `GET /api/v1/admin/gaps`, which counts what each `missing`
+value lists, through the same definition and over the same works — disabled ones included,
+adult titles as the reader's policy has them — so that a figure and the list it leads to
+agree. It is for whoever may edit the catalogue.
 
 ### Doing one thing to many works
 
@@ -341,6 +391,42 @@ The catalogue otherwise fills itself — a client asks for a work, this server
 fetches it. **Import** searches the providers directly and pulls in the one you
 meant, down the same path a client's request takes, so an imported work is
 indistinguishable from one that arrived on its own.
+
+### Importing many works at once
+
+*Import many*, on the same page (`/admin/discover?many=1`, for administrators), brings a list
+of works in at once, in four steps.
+
+1. **What to import.** Ids pasted a line each — `tmdb:603`, `tt0133093` or `imdb:tt0133093`,
+   `tvdb:81189`, `anilist:21`, `mal:21`, `fankai:12`, or a work's page at TMDB, IMDb, TheTVDB,
+   AniList or MyAnimeList, what follows a `#` left out — a file dropped, or works picked from
+   the search with *Add to the batch*. A CSV is read by the columns its header names — a TMDB,
+   IMDb or TheTVDB id, the kind, the title, as Radarr's, Sonarr's, IMDb's and Trakt's exports
+   write them — or else by the id in each row; JSON is a list of ids, or of works with their
+   ids, flat or under `ids` as Trakt nests them. The file is read in the browser. TMDB numbers
+   its films and its series apart: a TMDB id is a film's or a series' as its line, its page or
+   its file says, or as the page is told for all.
+2. **Where each stands.** Each line set beside the catalogue: *already here*, *to import*, *not
+   found*, *not an id*, *film or series?*, or *repeated* — a work an earlier line names, taken
+   once. For a dozen seconds at the most, the works to import are asked of TMDB, which says their
+   titles and which ones it has never heard of; the rest are looked up as they are imported.
+   Nothing is fetched to say so.
+3. **How.** A language each series' episodes are fetched in at once, besides the catalogue's own,
+   so a client asking in it waits for nothing; the hand-made selections the works go into, those
+   already here too; and whether the works imported come in switched on.
+4. **The run.** One work after the other, a pause after each that had to be fetched, followed on
+   the page and on the [Jobs page](interface.md#the-jobs-page) as the task `import.batch`. The
+   lines TMDB said it has never heard of are left out of it: asked again, they would only be not
+   found again. Each work is written down — `imported`, `skipped` when it was here already,
+   `failed` when no provider had it — and the run can be stopped between two works.
+
+A batch takes two thousand lines at the most, and one runs at a time. Through the API: `POST
+/api/v1/items/import/preview` with `{"lines": [{"text": "tmdb:603"}], "kind": "movie"}` sets
+the lines beside the catalogue, for whoever may edit; `POST /api/v1/items/import/batch` with the
+same and `language`, `lists` and `enabled` starts the run, for an administrator — a `202` with
+its `jobId`, how many `works` it takes and how many lines it `passedOver`, a `409` while another
+batch is being imported. To fill a selection on a schedule instead, see
+[Import rules](exports.md#filled-on-its-own-import-rules).
 
 ### Entering a work by hand
 
@@ -433,6 +519,32 @@ another work has taken since stays with it, which the undo says. The record put 
 refresh, which asks its sources again — unless it was entered by hand. The two are not proposed
 as one work again. The journal writes the way back as a `revert`, and the audit trail
 `item.unmerged`. The routes are in [Two records of one work](api.md#two-records-of-one-work).
+
+## The programmer's note
+
+A few lines in the catalogue's own voice, set apart from what the sources say: on the work the front
+page features, under its plate on the day it is featured; on each selection; and on each genre's,
+network's, year's and decade's page. A note is written in one language at a time, and a reader is
+shown theirs, else the English one, else the one written last.
+
+Whoever may edit the catalogue writes it where it is read. Signed in, a page with no note offers
+*Write a programmer's note*, and one with a note *Edit the note*: the field opens in place, in the
+language of the interface, with what it will look like beneath it; Escape puts it back.
+*Administration › Catalogue › Programmer's notes* (`/admin/editorial`) lists every note, by what it is
+about and in which language, writes one again or takes it away, and writes a new one for anything with
+a page, in either language.
+
+A note is a restricted Markdown, read by the same rules on the server and in the interface:
+
+- an empty line starts a new paragraph, and the lines of one paragraph run together;
+- `*emphasis*` and `**strong emphasis**`;
+- `[a link](/genre/drama)` to a page of this site, written as its path — `/work/…`, `/genre/drama`,
+  `/browse?genre=drama`.
+
+Nothing else is read. HTML is refused, and so is a link to another site; a note is at most 3,000
+characters, and a backslash makes a marker a plain character (`\*`). Saving an empty note takes it
+away. Every note written or taken away is in the audit trail as `editorial.updated`, its target
+`scope:key@language` — `genre:drama@fr`.
 
 ## The order of the sources
 

@@ -14,6 +14,7 @@ pub mod cache;
 pub mod children;
 pub mod clients;
 pub mod discover;
+pub mod editorial;
 pub mod export;
 pub mod feeds;
 pub mod figures;
@@ -22,6 +23,7 @@ pub mod invitations;
 pub mod items;
 pub mod lists;
 pub mod locks;
+pub mod logs;
 pub mod media;
 pub mod merge;
 pub mod meta;
@@ -83,6 +85,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(items::router())
         .merge(merge::router())
         .merge(browse::router())
+        .merge(editorial::router())
         .merge(people::router())
         .merge(search::router())
         .merge(feeds::router())
@@ -90,6 +93,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(watch::router())
         .merge(recommend::router())
         .merge(figures::router())
+        .merge(logs::router())
         .merge(orders::router())
         .merge(locks::router())
         .merge(seasons::router())

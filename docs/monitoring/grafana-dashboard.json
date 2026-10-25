@@ -1,11 +1,11 @@
 {
   "title": "arr-metadata-server",
   "uid": "arr-metadata-server",
-  "description": "Requests, latency, providers, caches and the cache server, as the server counts them at /api/v1/admin/metrics.",
+  "description": "Requests and their statuses, latency, providers, caches, the cache server, the database's pool, the queues, the failed refreshes, the archives and the certificates, as the server counts them at /api/v1/admin/metrics.",
   "tags": ["arr-metadata-server"],
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
   "editable": true,
   "refresh": "30s",
   "time": { "from": "now-6h", "to": "now" },
@@ -164,6 +164,88 @@
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
       "targets": [{ "refId": "A", "expr": "ams_redis_connected_clients{instance=~\"$instance\"}" }]
+    },
+    { "type": "row", "title": "Answers, by status", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 48 }, "id": 36, "collapsed": false },
+    {
+      "type": "timeseries", "id": 37, "title": "Answers a second, by status",
+      "description": "Every status the server answered with, the probes included.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 49 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [{ "refId": "A", "expr": "sum by (status) (rate(ams_http_responses_total{instance=~\"$instance\"}[5m]))", "legendFormat": "{{status}}" }]
+    },
+    {
+      "type": "timeseries", "id": 38, "title": "Server errors a second, by surface and status",
+      "description": "What the 5xx alert counts. The server log, errors only, says which requests failed and why.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 49 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [{ "refId": "A", "expr": "sum by (surface, status) (rate(ams_http_responses_total{instance=~\"$instance\",status=~\"5..\"}[5m]))", "legendFormat": "{{surface}} {{status}}" }]
+    },
+    { "type": "row", "title": "Database and queues", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 57 }, "id": 39, "collapsed": false },
+    {
+      "type": "timeseries", "id": 40, "title": "Connections of the pool",
+      "description": "Open, idle, and the most the pool opens: none idle at the most, for long, is a pool run dry.",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 58 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "ams_db_pool_size{instance=~\"$instance\"}", "legendFormat": "open {{instance}}" },
+        { "refId": "B", "expr": "ams_db_pool_idle{instance=~\"$instance\"}", "legendFormat": "idle {{instance}}" },
+        { "refId": "C", "expr": "ams_db_pool_max{instance=~\"$instance\"}", "legendFormat": "most {{instance}}" }
+      ]
+    },
+    {
+      "type": "timeseries", "id": 41, "title": "Wait for a connection, p95",
+      "description": "How long one request in twenty waited for one of the pool's connections.",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 58 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [{ "refId": "A", "expr": "histogram_quantile(0.95, sum by (le, instance) (rate(ams_db_pool_wait_seconds_bucket{instance=~\"$instance\"}[5m])))", "legendFormat": "{{instance}}" }]
+    },
+    {
+      "type": "timeseries", "id": 42, "title": "Waiting in the queues",
+      "description": "Works due for a refresh, media to fetch, webhook deliveries to send.",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 58 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [{ "refId": "A", "expr": "max by (kind) (ams_queue_depth{instance=~\"$instance\"})", "legendFormat": "{{kind}}" }]
+    },
+    { "type": "row", "title": "Kept up to date", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 66 }, "id": 43, "collapsed": false },
+    {
+      "type": "stat", "id": 44, "title": "Works whose last refresh failed",
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 67 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "orange", "value": 1 }, { "color": "red", "value": 50 }] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [{ "refId": "A", "expr": "max(ams_refresh_failed{instance=~\"$instance\"})" }]
+    },
+    {
+      "type": "stat", "id": 45, "title": "Newest archive",
+      "description": "How long ago the newest archive of the database was made; nothing while the schedule is off.",
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 67 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "unit": "s", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "orange", "value": 604800 }, { "color": "red", "value": 691200 }] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [{ "refId": "A", "expr": "max(ams_backup_age_seconds{instance=~\"$instance\"})" }]
+    },
+    {
+      "type": "stat", "id": 46, "title": "Certificates end in",
+      "description": "The interface's, the clients' and their authority's, where the server has them.",
+      "gridPos": { "h": 5, "w": 8, "x": 12, "y": 67 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "unit": "s", "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "orange", "value": 1209600 }, { "color": "green", "value": 2592000 }] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [{ "refId": "A", "expr": "min by (certificate) (ams_tls_expiry_seconds{instance=~\"$instance\"})", "legendFormat": "{{certificate}}" }]
+    },
+    {
+      "type": "stat", "id": 47, "title": "Instances leading",
+      "description": "One is right; none or two is an alert.",
+      "gridPos": { "h": 5, "w": 4, "x": 20, "y": 67 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }, { "color": "red", "value": 2 }] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [{ "refId": "A", "expr": "sum(ams_leader)" }]
     }
   ]
 }

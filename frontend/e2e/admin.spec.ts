@@ -40,6 +40,18 @@ async function signIn(page: Page) {
   await page.waitForURL('**/admin')
 }
 
+/**
+ * Save what the work editor holds unsaved, from the bar along the foot of the
+ * page, and wait until the bar says it is saved — or that it could not be,
+ * the field saying why.
+ */
+async function saveAndStay(page: Page) {
+  await page.getByRole('button', { name: /^(save and stay|enregistrer et rester)$/i }).click()
+  await expect(
+    page.getByText(/(is saved|are saved|could not be saved|est enregistrée|sont enregistrées|pas pu être enregistrée)/i).first(),
+  ).toBeVisible()
+}
+
 async function scrollsSideways(page: Page) {
   return page.evaluate(() => {
     window.scrollTo(600, 0)
@@ -197,9 +209,11 @@ test.describe('a locked field', () => {
       await expect(locked).toHaveCount(0)
     }
 
-    await row.getByRole('button', { name: /^(edit|modifier)$/i }).click()
+    // The value is the way in: pressed, it is a box in its place, and the
+    // change is saved, and locked, from the bar along the foot of the page.
+    await row.getByRole('button', { name: /^(edit|modifier)\b/i }).click()
     await page.getByLabel(/^sort title$/i).fill('Zzz e2e lock probe')
-    await page.getByRole('button', { name: /save and lock|enregistrer et verrouiller/i }).click()
+    await saveAndStay(page)
 
     await expect(locked).toBeVisible()
 
@@ -709,9 +723,9 @@ test.describe('an episode’s field', () => {
       const row = page.locator(`#episode-fields-${found!.season}x${number} li[data-field="title"]`)
       await expect(row).toBeVisible()
 
-      await row.getByRole('button', { name: /^(edit|modifier)$/i }).click()
+      await row.getByRole('button', { name: /^(edit|modifier)\b/i }).click()
       await row.getByRole('textbox').fill(probe)
-      await row.getByRole('button', { name: /save and lock|enregistrer et verrouiller/i }).click()
+      await saveAndStay(page)
       await expect(row.getByText(/^(locked|verrouillé)\b/i)).toBeVisible()
 
       await page.goto(publicPage)
@@ -754,9 +768,9 @@ test.describe('an episode’s air time', () => {
 
       // The field says what it holds, and the hint how to type it.
       await expect(row.getByText(/date and time|date et heure/i).first()).toBeVisible()
-      await row.getByRole('button', { name: /^(edit|modifier)$/i }).click()
+      await row.getByRole('button', { name: /^(edit|modifier)\b/i }).click()
       await row.getByRole('textbox').fill('2009-03-22T21:00')
-      await row.getByRole('button', { name: /save and lock|enregistrer et verrouiller/i }).click()
+      await saveAndStay(page)
       await expect(row.getByText(/^(locked|verrouillé)\b/i)).toBeVisible()
       // The value's own line, not the type's example, which reads the same.
       await expect(row.locator('p', { hasText: /^2009-03-22T21:00:00Z$/ })).toBeVisible()
@@ -768,12 +782,13 @@ test.describe('an episode’s air time', () => {
       )
       expect(stored?.value).toBe('2009-03-22T21:00:00Z')
 
-      // A day alone is not an instant, and the server says so where it was typed.
+      // A day alone is not an instant, and the server says so on the field:
+      // the change stays, not saved, to be put right.
       await row.getByRole('button', { name: /^(unlock|déverrouiller)$/i }).click()
       await expect(row.getByText(/^(locked|verrouillé)\b/i)).toHaveCount(0)
-      await row.getByRole('button', { name: /^(edit|modifier)$/i }).click()
+      await row.getByRole('button', { name: /^(edit|modifier)\b/i }).click()
       await row.getByRole('textbox').fill('2009-03-22')
-      await row.getByRole('button', { name: /save and lock|enregistrer et verrouiller/i }).click()
+      await saveAndStay(page)
       await expect(row.getByText(/expects a date-time/i)).toBeVisible()
     } finally {
       await unlock()
@@ -841,9 +856,9 @@ test.describe('a locked genre', () => {
 
       await page.goto(`/admin/catalogue/${work!.id}`)
       const row = page.locator('li[data-field="genres"]').first()
-      await row.getByRole('button', { name: /^(edit|modifier)$/i }).click()
+      await row.getByRole('button', { name: /^(edit|modifier)\b/i }).click()
       await row.getByRole('textbox').fill(genre)
-      await row.getByRole('button', { name: /save and lock|enregistrer et verrouiller/i }).click()
+      await saveAndStay(page)
       await expect(row.getByText(/^(locked|verrouillé)\b/i)).toBeVisible()
 
       // Filtered by the genre it is shown with now, not the one its
@@ -853,7 +868,8 @@ test.describe('a locked genre', () => {
       await expect(page.locator('a[href^="/work/"]')).toHaveCount(1)
 
       const facets = await (await page.request.get(`/api/v1/facets?genre=${encodeURIComponent(genre)}`)).json()
-      expect(facets.genres).toContainEqual({ value: genre, count: 1 })
+      // Its slug beside it, which its own page is addressed by.
+      expect(facets.genres).toContainEqual(expect.objectContaining({ value: genre, count: 1 }))
     } finally {
       await unlock()
     }

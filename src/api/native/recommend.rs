@@ -126,7 +126,8 @@ async fn similar(
     Ok(Json(Similar { items }))
 }
 
-/// How much two works have in common, in points: a shared genre two, a
+/// How much two works have in common, in points: a shared genre two — one
+/// genre whatever language it is named in, "Drama" and "Drame" alike — a
 /// shared keyword three, the same network or studio two, the same original
 /// language one, the same decade one.
 fn affinity(work: &MediaItem, other: &MediaItem) -> i32 {
@@ -135,8 +136,14 @@ fn affinity(work: &MediaItem, other: &MediaItem) -> i32 {
             .filter(|x| b.iter().any(|y| y.eq_ignore_ascii_case(x)))
             .count() as i32
     };
+    let genres = |w: &MediaItem| {
+        w.genres
+            .iter()
+            .filter_map(|g| crate::db::repo::genre::slug_of(g))
+            .collect::<Vec<_>>()
+    };
     let mut score =
-        2 * shared(&work.genres, &other.genres) + 3 * shared(&work.keywords, &other.keywords);
+        2 * shared(&genres(work), &genres(other)) + 3 * shared(&work.keywords, &other.keywords);
     let same = |a: &Option<String>, b: &Option<String>| matches!((a, b), (Some(a), Some(b)) if !a.is_empty() && a.eq_ignore_ascii_case(b));
     if same(&work.network, &other.network) || same(&work.studio, &other.studio) {
         score += 2;
@@ -597,6 +604,9 @@ mod tests {
         assert_eq!(affinity(&dark, &alike), 8);
         let unlike = work(MediaKind::Series, &["Comedy"], &[]);
         assert_eq!(affinity(&dark, &unlike), 0);
+        // A genre named in French is the same genre.
+        let french = work(MediaKind::Movie, &["Drame"], &[]);
+        assert_eq!(affinity(&dark, &french), 2);
     }
 
     #[test]

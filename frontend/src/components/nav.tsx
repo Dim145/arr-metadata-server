@@ -23,6 +23,7 @@ import { Link, NavLink, useLocation } from 'react-router'
 
 import { api, query } from '../lib/api'
 import { cn } from '../lib/cn'
+import { genrePath } from '../lib/facets'
 import { useHasLists } from '../lib/hooks'
 import { useI18n, type Dict } from '../lib/i18n'
 import { genreLabel } from '../lib/labels'
@@ -286,8 +287,9 @@ function GenreColumn({
         {genres
           ? genres.map((genre) => (
               <li key={genre.value}>
+                {/* The genre's own page, narrowed to the column's kind. */}
                 <Link
-                  to={`/browse?kind=${kind}&genre=${encodeURIComponent(genre.value)}`}
+                  to={`${genre.slug ? `/genre/${genre.slug}` : genrePath(genre.value)}?kind=${kind}`}
                   className="flex min-h-11 items-center gap-2 rounded-card px-2 text-sm text-bone-dim transition-colors duration-150 hover:bg-ink-high hover:text-bone"
                 >
                   {/* The genre's own tint, as its chip wears it. */}

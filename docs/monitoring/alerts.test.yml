@@ -1,0 +1,162 @@
+# What the alerts in alerts.yml do with figures shaped as the server writes
+# them: `promtool test rules alerts.test.yml`, beside alerts.yml.
+rule_files:
+  - alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  # Server errors: three in a hundred answers fire, one in a hundred does not;
+  # the probes are not counted.
+  - interval: 1m
+    input_series:
+      - series: 'ams_http_responses_total{instance="metadata",surface="sonarr",status="200"}'
+        values: '0+97x40'
+      - series: 'ams_http_responses_total{instance="metadata",surface="sonarr",status="502"}'
+        values: '0+3x40'
+      - series: 'ams_http_responses_total{instance="metadata",surface="probe",status="503"}'
+        values: '0+50x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: ArrMetadataServerErrors
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "3% of answers are server errors"
+              description: "More than two in a hundred answers were 5xx for ten minutes. The server log (Administration › Server log, errors only) says which requests failed and why; each line's trace_id finds the request in the traces."
+
+  - interval: 1m
+    input_series:
+      - series: 'ams_http_responses_total{instance="metadata",surface="radarr",status="200"}'
+        values: '0+99x40'
+      - series: 'ams_http_responses_total{instance="metadata",surface="radarr",status="500"}'
+        values: '0+1x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: ArrMetadataServerErrors
+        exp_alerts: []
+
+  # One leader is right; none, or two, is not.
+  - interval: 1m
+    input_series:
+      - series: 'ams_leader{instance="a",ams_instance="a"}'
+        values: '1x10 0x10'
+      - series: 'ams_leader{instance="b",ams_instance="b"}'
+        values: '0x10 0x5 1x5'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: ArrMetadataNoLeader
+        exp_alerts: []
+      - eval_time: 14m
+        alertname: ArrMetadataNoLeader
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "No instance runs the schedules"
+              description: "Among several instances none holds the lead: refreshes, imports, backups and certificate renewals have stopped. The lead is kept in the database; look at the instances' logs for why none can take it."
+
+  - interval: 1m
+    input_series:
+      - series: 'ams_leader{instance="a",ams_instance="a"}'
+        values: '1x10'
+      - series: 'ams_leader{instance="b",ams_instance="b"}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: ArrMetadataTwoLeaders
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "2 instances say they run the schedules"
+              description: "More than one instance believes it leads, so each runs the schedules: refreshes are done twice and archives may be written by two. Usually clocks that disagree, or a database each instance reads differently."
+
+  # A provider that fails most of what it is asked, and one that answers.
+  - interval: 1m
+    input_series:
+      - series: 'ams_upstream_requests_total{instance="metadata",provider="tvdb",outcome="ok"}'
+        values: '0+1x40'
+      - series: 'ams_upstream_requests_total{instance="metadata",provider="tvdb",outcome="unreachable"}'
+        values: '0+4x40'
+      - series: 'ams_upstream_requests_total{instance="metadata",provider="tmdb",outcome="ok"}'
+        values: '0+10x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: ArrMetadataSourceFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              provider: tvdb
+            exp_annotations:
+              summary: "tvdb fails 80% of what it is asked"
+              description: "Most calls to tvdb were refused, failed or did not reach it for fifteen minutes. Works it gives values to keep what they held; a refusal that lasts is usually a key, a failure the provider's own outage."
+
+  # The cache server, gone for two minutes.
+  - interval: 1m
+    input_series:
+      - series: 'ams_redis_up{instance="metadata"}'
+        values: '1x5 0x5'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: ArrMetadataValkeyUnreachable
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              instance: metadata
+            exp_annotations:
+              summary: "metadata cannot reach its cache server"
+              description: "The Valkey or Redis named by AMS_REDIS_URL does not answer. Alone, the server goes on from its own memory; among several instances, they no longer hear each other's changes and the lead cannot move."
+
+  # A certificate with ten days left, and one with a year, scraped each
+  # minute for two days and a bit.
+  - interval: 1m
+    input_series:
+      - series: 'ams_tls_expiry_seconds{instance="metadata",certificate="clients"}'
+        values: '864000x3100'
+      - series: 'ams_tls_expiry_seconds{instance="metadata",certificate="authority"}'
+        values: '31536000x3100'
+    alert_rule_test:
+      - eval_time: 50h
+        alertname: ArrMetadataCertificateExpiring
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              instance: metadata
+              certificate: clients
+            exp_annotations:
+              summary: "The clients certificate ends in 10d 0h 0m 0s"
+              description: "Less than thirty days are left. The clients' certificate is the server's own, renewed once under thirty days, so one this close means the renewal failed (Administration › Tasks, certificate renewal). The authority lasts ten years and is replaced with AMS_TLS_REPLACE_AUTHORITY; the interface's certificate, and a clients' one brought by hand, by whoever made them."
+
+  # The newest archive, nine days old and ageing, scraped each minute.
+  - interval: 1m
+    input_series:
+      - series: 'ams_backup_age_seconds{instance="metadata"}'
+        values: '777600+60x200'
+    alert_rule_test:
+      - eval_time: 2h
+        alertname: ArrMetadataBackupStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "The newest archive of the database is 9d 2h 0m 0s old"
+              description: "No archive was made for more than eight days. The backups' runs (Administration › Backups) and the webhook's backup.failed say why one failed."
+
+  # Nobody answering the scrape.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="arr-metadata-server",instance="metadata"}'
+        values: '1x5 0x10'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: ArrMetadataDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: arr-metadata-server
+              instance: metadata
+            exp_annotations:
+              summary: "metadata has not answered its scrape for five minutes"
+              description: "Prometheus cannot read the server's figures: the server is down, unreachable from Prometheus, or refusing the scraper's key (a 403 is a failed scrape too)."

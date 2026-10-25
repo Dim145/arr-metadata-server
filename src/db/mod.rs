@@ -203,6 +203,9 @@ impl Db {
                 Dialect::Postgres => cfg.max_connections,
             })
             .acquire_timeout(cfg.acquire_timeout)
+            // Each wait for a connection said at `trace`, where the metrics
+            // read it (`ams_db_pool_wait_seconds`) and the log does not.
+            .acquire_time_level(log::LevelFilter::Trace)
             .after_connect(move |conn, _meta| {
                 Box::pin(async move {
                     if dialect == Dialect::Sqlite {

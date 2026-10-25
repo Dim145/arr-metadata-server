@@ -27,8 +27,8 @@ test.describe('the browse tab and its panel', () => {
     const panel = page.getByRole('group', { name: /^(browse|parcourir)$/i })
     await expect(panel).toBeVisible()
 
-    // The commonest genres of each kind, each a filter on that kind.
-    const genre = panel.locator('a[href^="/browse?kind=series&genre="]').first()
+    // The commonest genres of each kind, each its page narrowed to that kind.
+    const genre = panel.locator('a[href^="/genre/"][href$="?kind=series"]').first()
     await expect(genre).toBeVisible()
     const href = await genre.getAttribute('href')
     await genre.click()
@@ -88,7 +88,7 @@ test.describe('the browse tab and its panel', () => {
     await page.goto('/')
     await page.getByRole('button', { name: /browse: the menu|parcourir : le menu/i }).click()
     const panel = page.getByRole('group', { name: /^(browse|parcourir)$/i })
-    await expect(panel.locator('a[href^="/browse?kind=movie&genre="]').first()).toBeVisible()
+    await expect(panel.locator('a[href^="/genre/"][href$="?kind=movie"]').first()).toBeVisible()
     // The front page's plate is driven by the scroll, and runs for as long as
     // the page is there: only what time drives is waited for.
     await page.waitForFunction(() =>

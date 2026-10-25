@@ -9,11 +9,12 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { type MouseEvent as ReactMouseEvent, useEffect, useRef, useState } from 'react'
+import { type MouseEvent as ReactMouseEvent, useEffect, useMemo, useRef, useState } from 'react'
 
 import {
   Button,
   Chip,
+  DataTable,
   Dialog,
   EmptyState,
   FormField,
@@ -26,11 +27,16 @@ import {
   PanelHead,
   Skeleton,
   Spinner,
-  TableScroll,
+  TableOptions,
+  TBody,
   Td,
   Th,
+  THead,
   Toggle,
   Tr,
+  sortRows,
+  useDataTable,
+  type Column,
 } from '../../components/ui'
 import { NetworkAccess } from '../../components/NetworkAccess'
 import { ScopeSettingsDialog } from '../../components/ScopeSettings'
@@ -91,6 +97,29 @@ export function Clients() {
     ['admin', t.admin.keys.administer],
     ['metrics', t.admin.keys.metrics],
   ] as const
+
+  // A key is known by its name. Its prefix only tells two keys of one name
+  // apart, which a phone can do without.
+  const columns: Column[] = useMemo(
+    () => [
+      { id: 'name', label: t.admin.keys.colName, kind: 'primary', always: true, sort: 'asc' },
+      { id: 'scopes', label: t.admin.keys.colScopes },
+      { id: 'prefix', label: t.admin.keys.colPrefix, from: 'lg', card: false },
+      { id: 'lastUsed', label: t.admin.keys.colLastUsed, align: 'right', sort: 'desc', from: 'md' },
+      { id: 'actions', label: t.admin.keys.colActions, kind: 'actions', always: true, align: 'right' },
+    ],
+    [t],
+  )
+  const table = useDataTable({ id: 'clients', columns })
+  const rows = sortRows(
+    clients.data ?? [],
+    table.sort,
+    {
+      name: (client) => client.name,
+      lastUsed: (client) => (client.lastUsedAt ? Date.parse(client.lastUsedAt) : null),
+    },
+    locale,
+  )
 
   return (
     <div className="mx-auto max-w-5xl">
@@ -174,8 +203,11 @@ export function Clients() {
         </form>
       </Panel>
 
-      <Panel className="rise overflow-hidden" style={{ animationDelay: '100ms' }}>
-        <PanelHead title={t.admin.keys.issued} />
+      <Panel className="rise overflow-clip" style={{ animationDelay: '100ms' }}>
+        <PanelHead
+          title={t.admin.keys.issued}
+          action={clients.data?.length ? <TableOptions table={table} /> : undefined}
+        />
 
         {clients.isPending ? (
           <div className="space-y-2 p-4">
@@ -191,89 +223,80 @@ export function Clients() {
         ) : clients.data.length === 0 ? (
           <EmptyState title={t.admin.keys.empty} hint={t.admin.keys.emptyHint} />
         ) : (
-          <TableScroll label={t.admin.keys.issued}>
-            <table className="w-full min-w-[20rem] border-collapse text-left">
-              <thead>
-                <tr>
-                  <Th>{t.admin.keys.colName}</Th>
-                  <Th className="hidden sm:table-cell">{t.admin.keys.colScopes}</Th>
-                  <Th className="hidden lg:table-cell">{t.admin.keys.colPrefix}</Th>
-                  <Th align="right" className="hidden md:table-cell">
-                    {t.admin.keys.colLastUsed}
-                  </Th>
-                  <Th align="right">{t.admin.keys.colActions}</Th>
-                </tr>
-              </thead>
-              <tbody>
-                {clients.data.map((client) => (
-                  <Tr key={client.id} className={client.isEnabled ? '' : 'opacity-60'}>
-                    <Td className="w-full max-w-0">
-                      <span className="flex items-center gap-2">
-                        <span className="truncate text-sm font-medium text-bone">
-                          {client.name}
-                        </span>
-                        {client.isEnabled ? null : (
-                          <Chip tone="accent">{t.admin.works.disabled}</Chip>
-                        )}
+          <DataTable table={table} label={t.admin.keys.issued}>
+            <THead>
+              <Th column="name" />
+              <Th column="scopes" />
+              <Th column="prefix" />
+              <Th column="lastUsed" />
+              <Th column="actions" />
+            </THead>
+            <TBody>
+              {rows.map((client) => (
+                <Tr key={client.id} row={client.id} className={client.isEnabled ? '' : 'opacity-60'}>
+                  <Td column="name" className="w-full max-w-0">
+                    <span className="flex items-center gap-2">
+                      <span className="truncate text-sm font-medium text-bone">
+                        {client.name}
                       </span>
-                      <span className="mt-0.5 flex gap-2 font-mono text-[0.6875rem] text-bone-faint sm:hidden">
-                        {client.scopes.join(' · ')}
-                      </span>
-                    </Td>
+                      {client.isEnabled ? null : (
+                        <Chip tone="accent">{t.admin.works.disabled}</Chip>
+                      )}
+                    </span>
+                  </Td>
 
-                    <Td className="hidden sm:table-cell">
-                      <span className="flex flex-wrap gap-1.5">
-                        {client.scopes.map((scope) => (
-                          <Chip key={scope} tone={scope === 'admin' ? 'manual' : 'neutral'}>
-                            {scope}
-                          </Chip>
-                        ))}
-                      </span>
-                    </Td>
+                  <Td column="scopes">
+                    <span className="flex flex-wrap gap-1.5">
+                      {client.scopes.map((scope) => (
+                        <Chip key={scope} tone={scope === 'admin' ? 'manual' : 'neutral'}>
+                          {scope}
+                        </Chip>
+                      ))}
+                    </span>
+                  </Td>
 
-                    <Td className="hidden lg:table-cell">
-                      <span className="font-mono text-xs text-bone-faint">{client.keyPrefix}…</span>
-                    </Td>
+                  <Td column="prefix">
+                    <span className="font-mono text-xs text-bone-faint">{client.keyPrefix}…</span>
+                  </Td>
 
-                    <Td align="right" className="hidden whitespace-nowrap md:table-cell">
-                      <span
-                        className="font-mono text-xs text-bone-faint tabular-nums"
-                        title={fmt.dateTime(client.lastUsedAt, locale)}
-                      >
-                        {fmt.relative(client.lastUsedAt, locale) ?? t.admin.keys.neverUsed}
-                      </span>
-                    </Td>
+                  <Td column="lastUsed" className="whitespace-nowrap">
+                    <span
+                      className="font-mono text-xs text-bone-faint tabular-nums"
+                      title={fmt.dateTime(client.lastUsedAt, locale)}
+                    >
+                      {fmt.relative(client.lastUsedAt, locale) ?? t.admin.keys.neverUsed}
+                    </span>
+                  </Td>
 
-                    <Td align="right">
-                      <span className="flex items-center justify-end gap-0.5">
-                        <IconButton
-                          glyph="settings"
-                          label={t.settings.openFor(client.name)}
-                          onClick={() => setTuning(client)}
-                        />
-                        <IconButton
-                          glyph="power"
-                          label={client.isEnabled ? t.admin.works.disable : t.admin.works.enable}
-                          busy={setEnabled.isPending && setEnabled.variables.id === client.id}
-                          onClick={() =>
-                            client.isEnabled
-                              ? setAsking({ client, what: 'disable' })
-                              : setEnabled.mutate({ id: client.id, enabled: true })
-                          }
-                        />
-                        <IconButton
-                          glyph="trash"
-                          tone="danger"
-                          label={t.admin.keys.revoke}
-                          onClick={() => setAsking({ client, what: 'revoke' })}
-                        />
-                      </span>
-                    </Td>
-                  </Tr>
-                ))}
-              </tbody>
-            </table>
-          </TableScroll>
+                  <Td column="actions">
+                    <span className="flex items-center justify-end gap-0.5">
+                      <IconButton
+                        glyph="settings"
+                        label={t.settings.openFor(client.name)}
+                        onClick={() => setTuning(client)}
+                      />
+                      <IconButton
+                        glyph="power"
+                        label={client.isEnabled ? t.admin.works.disable : t.admin.works.enable}
+                        busy={setEnabled.isPending && setEnabled.variables.id === client.id}
+                        onClick={() =>
+                          client.isEnabled
+                            ? setAsking({ client, what: 'disable' })
+                            : setEnabled.mutate({ id: client.id, enabled: true })
+                        }
+                      />
+                      <IconButton
+                        glyph="trash"
+                        tone="danger"
+                        label={t.admin.keys.revoke}
+                        onClick={() => setAsking({ client, what: 'revoke' })}
+                      />
+                    </span>
+                  </Td>
+                </Tr>
+              ))}
+            </TBody>
+          </DataTable>
         )}
       </Panel>
 

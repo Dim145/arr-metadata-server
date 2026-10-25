@@ -69,6 +69,8 @@ const TABLES: &[&str] = &[
     "admin_user",
     "admin_session",
     "api_client",
+    // What each person keeps of their own way of working, after them.
+    "account_preference",
     // After the accounts, whose administrators made them.
     "user_invitation",
     "job_run",
@@ -97,6 +99,14 @@ const TABLES: &[&str] = &[
     "data_import",
     "curated_list",
     "curated_list_item",
+    // The genres, their names after them; the programmer's notes.
+    "genre",
+    "genre_name",
+    "editorial",
+    // When the tasks run, where somebody said; what is imported on a
+    // schedule, after the selections it fills.
+    "task_schedule",
+    "import_rule",
     // The archives made of the database: carried to another engine like the
     // rest, and kept as they are by a restore (see `backup::restore`).
     "backup",

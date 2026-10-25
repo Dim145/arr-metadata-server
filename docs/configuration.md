@@ -75,8 +75,23 @@ naming the variable. Flags take `true`, `false`, `1`, `0`, `yes`, `no`, `on` and
 | `AMS_REQUEST_TIMEOUT` | `60` | Seconds a request may take before it is answered `504`; 1 to 86400. |
 | `AMS_MAX_CONNECTIONS` | `1024` | Connections each door holds at once; past it, a new one waits to be accepted. |
 | `AMS_HEADER_READ_TIMEOUT` | `30` | Seconds a connection has to send a request's head, and may sit idle between two requests; 1 to 600. |
-| `AMS_LOG` (`RUST_LOG`) | `info` | What is logged, as a `tracing` filter: `debug`, `info,arr_metadata_server=debug`. |
-| `AMS_LOG_FORMAT` | unset | `json` writes one JSON object per line, for a log shipper. |
+| `AMS_LOG` (`RUST_LOG`) | `info` | What is logged, as a `tracing` filter: `debug`, `info,arr_metadata_server=debug`. The administration's **Server log** keeps the same lines. |
+| `AMS_LOG_FORMAT` | unset | `json` writes one JSON object per line, for a log shipper, each with the `trace_id` of the request it was written in. |
+
+### Traces
+
+Off unless a collector is named: then the spans of each request — the request itself, and each
+call it made to a provider — are sent over OTLP, with HTTP and protobuf, to Tempo, Jaeger or an
+OpenTelemetry collector. These are OpenTelemetry's own variables; see
+[Watching the server](monitoring/README.md#traces).
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | unset, no traces | The collector, `http://tempo:4318`, to which `/v1/traces` is added. Unset, with the variable below unset too, no trace is made or sent. |
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | unset | The whole address the traces are posted to, `/v1/traces` and all; wins over the one above. |
+| `OTEL_EXPORTER_OTLP_HEADERS` | unset | Headers each export carries, `name=value` separated by commas: a collector's token. |
+| `OTEL_SERVICE_NAME` | `arr-metadata-server` | The name the traces are filed under. `OTEL_RESOURCE_ATTRIBUTES` adds attributes of your own: `deployment.environment=home`. |
+| `OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG` | every trace | Which traces are kept: `parentbased_traceidratio` and `0.1` keep one in ten, and keep a proxy's choice for a request it traced. |
 
 ### The clients' door
 

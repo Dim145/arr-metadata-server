@@ -31,6 +31,12 @@ const Seasons = named(() => import('./routes/Seasons'), 'Seasons')
 const Lists = named(() => import('./routes/Lists'), 'Lists')
 const Figures = named(() => import('./routes/Figures'), 'Figures')
 const ListDetail = named(() => import('./routes/Lists'), 'ListDetail')
+// The catalogue by a genre, a network, a year or a decade, and two works side by side.
+const GenrePage = named(() => import('./routes/Facet'), 'GenrePage')
+const NetworkPage = named(() => import('./routes/Facet'), 'NetworkPage')
+const YearPage = named(() => import('./routes/Facet'), 'YearPage')
+const DecadePage = named(() => import('./routes/Facet'), 'DecadePage')
+const Compare = named(() => import('./routes/Compare'), 'Compare')
 const CollectionIndex = named(() => import('./routes/Lists'), 'CollectionIndex')
 const CollectionDetail = named(() => import('./routes/Lists'), 'CollectionDetail')
 
@@ -54,9 +60,11 @@ const Media = named(() => import('./routes/admin/Media'), 'Media')
 const Cache = named(() => import('./routes/admin/Cache'), 'Cache')
 const Backups = named(() => import('./routes/admin/Backups'), 'Backups')
 const Audit = named(() => import('./routes/admin/Audit'), 'Audit')
+const Logs = named(() => import('./routes/admin/Logs'), 'Logs')
 const Notifications = named(() => import('./routes/admin/Notifications'), 'Notifications')
 const Settings = named(() => import('./routes/admin/Settings'), 'Settings')
 const Arr = named(() => import('./routes/admin/Arr'), 'Arr')
+const Editorial = named(() => import('./routes/admin/Editorial'), 'Editorial')
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -132,6 +140,11 @@ function Router() {
           <Route path="/collections/:id" element={<CollectionDetail />} />
           <Route path="/seasons" element={<Seasons />} />
           <Route path="/seasons/:year/:season" element={<Seasons />} />
+          <Route path="/genre/:slug" element={<GenrePage />} />
+          <Route path="/network/:slug" element={<NetworkPage />} />
+          <Route path="/year/:slug" element={<YearPage />} />
+          <Route path="/decade/:slug" element={<DecadePage />} />
+          <Route path="/compare" element={<Compare />} />
           <Route path="/account" element={<Account />} />
           {/* Said, not redirected: see `NotFound`. */}
           <Route path="*" element={<NotFound />} />
@@ -160,9 +173,11 @@ function Router() {
           <Route path="cache" element={<Cache />} />
           <Route path="backups" element={<Backups />} />
           <Route path="audit" element={<Audit />} />
+          <Route path="logs" element={<Logs />} />
           <Route path="notifications" element={<Notifications />} />
           <Route path="settings" element={<Settings />} />
           <Route path="arr" element={<Arr />} />
+          <Route path="editorial" element={<Editorial />} />
           <Route path="*" element={<NotFound admin />} />
         </Route>
       </Routes>

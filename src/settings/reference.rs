@@ -600,6 +600,35 @@ const GROUPS: &[Group] = &[
         )],
     },
     Group {
+        title: "Error reports",
+        lead: "On **Settings › Error reports**: each error the server writes, sent to a Sentry or \
+               a GlitchTip as it happens. Off until a DSN is set, and taken at once, on every \
+               instance, when one is. See \
+               [Watching the server](monitoring/README.md#error-reports).",
+        entries: &[
+            set(
+                "sentry.dsn",
+                "The DSN of the Sentry or GlitchTip project the reports go to, \
+                 `https://<key>@<host>/<project>`, as the project's settings give it. A secret: \
+                 written, and never shown again. What is sent is the error line alone — its \
+                 message, its fields, the module that wrote it, the request it was written in \
+                 and the `trace_id` that finds it in the log and the traces — each text masked \
+                 as the log masks a secret; no line before it, no address of the caller. \
+                 Cleared, nothing is sent.",
+            ),
+            set(
+                "sentry.environment",
+                "The environment the reports are filed under, as Sentry sorts them: `staging`, \
+                 `home`.",
+            ),
+            set(
+                "sentry.sampleRate",
+                "The share of the errors sent, in percent: `100` sends every one, `0` none \
+                 while the DSN is kept.",
+            ),
+        ],
+    },
+    Group {
         title: "Backups",
         lead: "On **Administration › Backups**, which lists the archives and makes, downloads, \
                deletes and restores them, and under **Settings › Backups**. See \
@@ -844,9 +873,10 @@ fn render(defaults: &HashMap<String, String>) -> String {
 
 /// What reads the environment: the configuration, and the three modules
 /// that read a variable of their own.
-const READERS: [&str; 4] = [
+const READERS: [&str; 5] = [
     include_str!("../config.rs"),
     include_str!("../telemetry.rs"),
+    include_str!("../telemetry/trace.rs"),
     include_str!("../outbound.rs"),
     include_str!("../backup/mod.rs"),
 ];
@@ -1004,7 +1034,8 @@ fn the_configuration_page_names_only_variables_the_server_reads() {
     assert!(
         unread.is_empty(),
         "docs/configuration.md names {unread:?}, which the server does not read: \
-         src/config.rs, src/telemetry.rs and src/outbound.rs are where it reads its variables"
+         src/config.rs, src/telemetry.rs, src/telemetry/trace.rs and src/outbound.rs are where \
+         it reads its variables"
     );
 }
 

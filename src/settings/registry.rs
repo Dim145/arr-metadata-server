@@ -605,6 +605,26 @@ pub const REGISTRY: &[Definition] = &[
         kind: Kind::Bool,
         scopes: SERVER_ONLY,
     },
+    // ── Error reports ────────────────────────────────────────────────────────
+    // Each error the server writes, sent to a Sentry or a GlitchTip: off until
+    // a DSN is set, and taken at once when one is (`telemetry::report`).
+    Definition {
+        key: "sentry.dsn",
+        kind: Kind::Secret,
+        scopes: SERVER_ONLY,
+    },
+    Definition {
+        // What the reports are filed under: `production` to begin with.
+        key: "sentry.environment",
+        kind: Kind::Text,
+        scopes: SERVER_ONLY,
+    },
+    Definition {
+        // The share of the errors sent, in percent: all of them to begin with.
+        key: "sentry.sampleRate",
+        kind: Kind::Int { min: 0, max: 100 },
+        scopes: SERVER_ONLY,
+    },
     // ── Adult titles ─────────────────────────────────────────────────────────
     Definition {
         key: "adult.mode",
@@ -679,6 +699,9 @@ pub fn validate(def: &Definition, value: &str) -> Result<(), String> {
                 Err("must not be empty; clear it instead".to_string())
             } else if value.len() > 1000 {
                 Err("is too long".to_string())
+            } else if def.key == "sentry.dsn" {
+                // Refused here rather than found unreadable once reports fail.
+                crate::telemetry::report::check_dsn(value)
             } else {
                 Ok(())
             }
@@ -798,6 +821,22 @@ mod tests {
         assert!(validate(def("merge.undoDays"), "14").is_ok());
         assert!(validate(def("merge.undoDays"), "366").is_err());
         assert!(validate(def("merge.undoDays"), "-1").is_err());
+    }
+
+    #[test]
+    fn the_error_reports_are_the_server_s_and_their_dsn_a_secret_that_reads() {
+        for key in ["sentry.dsn", "sentry.environment", "sentry.sampleRate"] {
+            assert_eq!(def(key).scopes, SERVER_ONLY, "{key}");
+        }
+        assert!(def("sentry.dsn").kind.is_secret());
+        assert!(validate(def("sentry.dsn"), "https://public@sentry.example.com/42").is_ok());
+        assert!(validate(def("sentry.dsn"), "sentry.example.com").is_err());
+        assert!(validate(def("sentry.dsn"), MASK).is_err());
+        assert!(validate(def("sentry.sampleRate"), "0").is_ok());
+        assert!(validate(def("sentry.sampleRate"), "100").is_ok());
+        assert!(validate(def("sentry.sampleRate"), "101").is_err());
+        assert!(validate(def("sentry.environment"), "staging").is_ok());
+        assert!(validate(def("sentry.environment"), "").is_err());
     }
 
     #[test]

@@ -142,7 +142,28 @@ pub enum Missing {
     /// Not a gap of the record, but the same register narrows to it, and
     /// the same to-do list counts it.
     Duplicates,
+    /// A picture, a photograph or a theme of the work's — its own, its
+    /// seasons', its episodes', its cast's, a related work's — that the
+    /// media store gave up fetching: what the media page lists as failed,
+    /// found from the works' side, so a poster can be chosen again.
+    MediaFailed,
 }
+
+/// The works one of whose addresses names a media row given up on: each
+/// column a work's rows hold an address in, as the media sweep reads them
+/// (`repo::asset::unknown_origins`). From the failed rows, which are few,
+/// to the works, through the index each column has on its address.
+const MEDIA_FAILED: &str = r"media_item.id IN (
+                 SELECT i.media_id FROM media_image i
+                   JOIN media_asset a ON a.origin = i.url WHERE a.status = 'failed'
+                 UNION SELECT e.media_id FROM media_episode e
+                   JOIN media_asset a ON a.origin = e.image WHERE a.status = 'failed'
+                 UNION SELECT c.media_id FROM media_credit c
+                   JOIN media_asset a ON a.origin = c.image WHERE a.status = 'failed'
+                 UNION SELECT r.media_id FROM media_relation r
+                   JOIN media_asset a ON a.origin = r.image WHERE a.status = 'failed'
+                 UNION SELECT m.id FROM media_item m
+                   JOIN media_asset a ON a.origin = m.theme_music WHERE a.status = 'failed')";
 
 /// A work in a pair of duplicates proposed, whose other work the reader may
 /// be shown — of its own still, and not for adults when adult works are
@@ -162,13 +183,14 @@ const DUPLICATED_NOT_ADULT: &str = r"EXISTS (SELECT 1 FROM media_duplicate d
                           AND o.is_adult = 0)";
 
 impl Missing {
-    pub const ALL: [Missing; 6] = [
+    pub const ALL: [Missing; 7] = [
         Self::Poster,
         Self::Overview,
         Self::Imdb,
         Self::Refresh,
         Self::DivergingLock,
         Self::Duplicates,
+        Self::MediaFailed,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -179,6 +201,7 @@ impl Missing {
             Self::Refresh => "refresh",
             Self::DivergingLock => "divergingLock",
             Self::Duplicates => "duplicates",
+            Self::MediaFailed => "mediaFailed",
         }
     }
 
@@ -241,6 +264,7 @@ impl Missing {
             Self::DivergingLock => crate::db::repo::change::DIVERGING_LOCK,
             Self::Duplicates if include_adult => DUPLICATED,
             Self::Duplicates => DUPLICATED_NOT_ADULT,
+            Self::MediaFailed => MEDIA_FAILED,
         };
         (words, 0)
     }
@@ -255,8 +279,8 @@ impl std::str::FromStr for Missing {
             .find(|gap| gap.as_str() == s)
             .ok_or_else(|| {
                 format!(
-                    "unknown gap {s:?}: expected poster, overview, imdb, refresh, divergingLock \
-                     or duplicates"
+                    "unknown gap {s:?}: expected poster, overview, imdb, refresh, divergingLock, \
+                     duplicates or mediaFailed"
                 )
             })
     }
@@ -807,7 +831,11 @@ pub async fn country_facets(db: &Db, q: &Query) -> Result<Vec<super::Facet>> {
     }
     let mut facets: Vec<super::Facet> = counts
         .into_iter()
-        .map(|(value, count)| super::Facet { value, count })
+        .map(|(value, count)| super::Facet {
+            value,
+            count,
+            slug: None,
+        })
         .collect();
     facets.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.value.cmp(&b.value)));
     Ok(facets)
@@ -868,6 +896,7 @@ pub async fn certification_facets(db: &Db, q: &Query) -> Result<Vec<super::Facet
         .map(|(value, works)| super::Facet {
             value,
             count: works.len() as i64,
+            slug: None,
         })
         .collect();
     let ages = facets.iter().all(|f| age(&f.value).is_some());
@@ -1134,24 +1163,54 @@ fn narrowed(
         sql.push_str(" AND is_manual = 1");
     }
 
-    // A combined genre asked for — from a series' own page — is its parts,
-    // as the works are listed by them: "Action & Adventure" is a work that is
-    // both. Or the combined name itself, as a work not yet listed again since
-    // the change still holds it. Each part once, however often it is asked.
+    // A genre asked for by any name it goes by, or by its slug, is the slug
+    // the works are listed under: "Drama", "Drame" and `drama` are one (see
+    // `repo::genre`). A combined one — from a series' own page — is its
+    // parts, as the works are listed by them: "Action & Adventure" is a work
+    // that is both. A work not listed again since its genres were names still
+    // holds names: the genre's known names and the name asked are looked for
+    // too, and a combined one's own name. Each part once, however often it is
+    // asked.
     let mut asked = std::collections::HashSet::new();
     let mut clauses: Vec<String> = Vec::new();
     for genre in q.genres.iter().map(|g| g.trim()).filter(|g| !g.is_empty()) {
-        let parts: Vec<String> = crate::domain::genre_parts(genre)
+        let parts: Vec<(String, String)> = crate::domain::genre_parts(genre)
             .into_iter()
+            .filter_map(|part| Some((crate::db::repo::genre::slug_of(&part)?, part)))
             // All of them: a part asked twice is asked once. Any of them:
             // each genre stands on its own, parts shared or not.
-            .filter(|p| q.genre_any || asked.insert(p.clone()))
+            .filter(|(slug, _)| q.genre_any || asked.insert(slug.clone()))
             .collect();
         if parts.is_empty() {
             continue;
         }
-        let each =
-            vec!["REPLACE(listed_genres, ?, '') <> listed_genres"; parts.len()].join(" AND ");
+        let held: Vec<Vec<String>> = parts
+            .iter()
+            .map(|(slug, part)| {
+                let mut values = vec![slug.clone()];
+                for name in crate::db::repo::genre::known_names(slug)
+                    .into_iter()
+                    .map(str::to_string)
+                    .chain([part.clone()])
+                {
+                    if !values.contains(&name) {
+                        values.push(name);
+                    }
+                }
+                values
+            })
+            .collect();
+        let each = held
+            .iter()
+            .map(|values| {
+                format!(
+                    "({})",
+                    vec!["REPLACE(listed_genres, ?, '') <> listed_genres"; values.len()]
+                        .join(" OR ")
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" AND ");
         if parts.len() > 1 {
             clauses.push(format!(
                 "(REPLACE(listed_genres, ?, '') <> listed_genres OR ({each}))"
@@ -1161,8 +1220,8 @@ fn narrowed(
         } else {
             clauses.push(each);
         }
-        for part in &parts {
-            args.add(json_element(part))
+        for value in held.iter().flatten() {
+            args.add(json_element(value))
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
         }
     }
@@ -1685,20 +1744,20 @@ mod tests {
             "a genre is matched whole, not as part of another"
         );
 
-        // As PostgreSQL has always answered: SQLite's LIKE folded the case and
-        // found both, so the two engines disagreed about the same link.
-        assert!(
-            titles(
+        // By its slug, in another case, in another language: the same genre,
+        // on both engines alike, since the works are listed by its slug.
+        for asked in ["drama", "DRAMA", "Drame"] {
+            let mut found = titles(
                 &db,
                 Query {
-                    genres: vec!["drama".into()],
+                    genres: vec![asked.into()],
                     ..Default::default()
                 },
             )
-            .await
-            .is_empty(),
-            "a genre is matched as the list offers it, case and all"
-        );
+            .await;
+            found.sort();
+            assert_eq!(found, ["Both", "Drama only"], "{asked}");
+        }
 
         let both = titles(
             &db,
@@ -2147,6 +2206,92 @@ mod tests {
                 .expect("counted"),
             "the register and the dashboard count the same works"
         );
+    }
+
+    #[tokio::test]
+    async fn a_work_whose_media_was_given_up_on_is_a_gap_the_register_lists() {
+        let db = db().await;
+        // Each its own addresses: an address is what ties a media row to the
+        // works that hold it, and the sample's are every work's.
+        stored(&db, |i| {
+            i.title = "Poster lost".into();
+            i.images[0].url = "https://img.example/lost.jpg".into();
+            i.theme_music = None;
+        })
+        .await;
+        stored(&db, |i| {
+            i.title = "Theme lost".into();
+            i.images[0].url = "https://img.example/kept.jpg".into();
+            i.theme_music = Some("https://img.example/lost.mp3".into());
+        })
+        .await;
+        stored(&db, |i| {
+            i.title = "Still trying".into();
+            i.images[0].url = "https://img.example/later.jpg".into();
+            i.theme_music = None;
+        })
+        .await;
+        stored(&db, |i| {
+            i.title = "Whole".into();
+            i.images[0].url = "https://img.example/whole.jpg".into();
+            i.theme_music = None;
+        })
+        .await;
+        for (origin, kind, status, error) in [
+            (
+                "https://img.example/lost.jpg",
+                "image",
+                "failed",
+                Some("404"),
+            ),
+            (
+                "https://img.example/lost.mp3",
+                "audio",
+                "failed",
+                Some("404"),
+            ),
+            // Put off after a failure, and tried again later: not given up on.
+            (
+                "https://img.example/later.jpg",
+                "image",
+                "pending",
+                Some("timeout"),
+            ),
+            ("https://img.example/kept.jpg", "image", "stored", None),
+            ("https://img.example/whole.jpg", "image", "stored", None),
+        ] {
+            sqlx::query(db.sql(
+                "INSERT INTO media_asset (id, origin, kind, status, attempts, error, created_at)
+                 VALUES (?, ?, ?, ?, 3, ?, '2026-10-25T00:00:00.000Z')",
+            ))
+            .bind(crate::db::new_id())
+            .bind(origin)
+            .bind(kind)
+            .bind(status)
+            .bind(error)
+            .execute(db.pool())
+            .await
+            .expect("a media row");
+        }
+
+        let query = Query {
+            missing: vec!["mediaFailed".parse().expect("a gap")],
+            include_disabled: true,
+            include_adult: true,
+            ..Default::default()
+        };
+        let mut found = titles(&db, query.clone()).await;
+        found.sort();
+        assert_eq!(found, ["Poster lost", "Theme lost"]);
+        assert_eq!(count_matching(&db, &query).await.expect("counted"), 2);
+
+        // With another gap, the two narrow together.
+        let both = Query {
+            missing: vec![Missing::MediaFailed, Missing::Imdb],
+            ..query
+        };
+        assert_eq!(count_matching(&db, &both).await.expect("counted"), 2);
+        assert_eq!(Missing::MediaFailed.as_str(), "mediaFailed");
     }
 
     #[tokio::test]

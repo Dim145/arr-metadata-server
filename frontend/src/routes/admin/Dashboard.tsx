@@ -34,6 +34,8 @@ import { providerName } from '../../lib/labels'
 import type {
   Errands,
   JobsResponse,
+  MediaByWork,
+  MediaStatus,
   Settings,
   Stats,
   Health,
@@ -108,6 +110,9 @@ export function Dashboard() {
 
       <div className="mt-6 grid items-start gap-6 lg:grid-cols-2">
         <RecentRuns />
+        {/* What the media kept weigh, and which works weigh most: the
+            administrator's, as the media page is. */}
+        {me.data?.isAdmin ? <MediaTile /> : null}
         <Surfaces settings={settings.data} />
         <Locking />
         <LocksFile />
@@ -393,6 +398,96 @@ function RecentRuns() {
             </li>
           ))}
         </ul>
+      )}
+    </Panel>
+  )
+}
+
+/**
+ * The media kept, in a few figures: how many, what they and their copies
+ * weigh, how many were given up on — and the works that weigh most, each the
+ * way into its editor. Nothing while no store is configured.
+ */
+function MediaTile() {
+  const { t, locale } = useI18n()
+  const m = t.admin.overview.media
+  const status = useQuery({
+    queryKey: ['media', 'status'],
+    queryFn: () => api.get<MediaStatus>('/media/status'),
+    staleTime: 60_000,
+  })
+  const on = status.data !== undefined && status.data.backend !== 'off'
+  const heaviest = useQuery({
+    queryKey: ['media', 'works', 'space', 'top'],
+    queryFn: () => api.get<MediaByWork>(`/media/works${query({ sort: 'space', limit: 3 })}`),
+    enabled: on,
+    staleTime: 5 * 60_000,
+  })
+  if (!on || !status.data) return null
+  const { counts, variants } = status.data
+  const copies = variants.webpBytes + variants.avifBytes + variants.jpegBytes
+
+  return (
+    <Panel id="media-tile" className="rise" style={{ animationDelay: '100ms' }}>
+      <PanelHead
+        title={m.title}
+        action={
+          <Link
+            to="/admin/media"
+            className="label -my-2 inline-flex min-h-11 items-center transition-colors duration-150 hover:text-vermillion"
+          >
+            {m.open}
+          </Link>
+        }
+      />
+      <dl className="grid grid-cols-3 gap-px border-b border-rule bg-rule">
+        {(
+          [
+            [m.kept, fmt.count(counts.stored, locale), false],
+            [m.size, fmt.bytes(counts.bytes + copies, locale), false],
+            [m.failed, fmt.count(counts.failed, locale), counts.failed > 0],
+          ] as const
+        ).map(([label, value, bad]) => (
+          <div key={label} className="bg-ink-raised px-5 py-3">
+            <dt className="label">{label}</dt>
+            <dd className={cn('mt-1 font-display text-2xl tabular-nums', bad ? 'text-vermillion' : 'text-bone')}>{value}</dd>
+          </div>
+        ))}
+      </dl>
+      {counts.failed > 0 ? (
+        // Which works the pictures given up on were for: the catalogue,
+        // narrowed to them.
+        <p className="px-5 pt-3 text-xs">
+          <Link
+            to="/admin/catalogue?missing=mediaFailed"
+            className="inline-flex min-h-6 items-center text-vermillion underline decoration-vermillion/40 underline-offset-4 transition-colors duration-150 hover:decoration-vermillion"
+          >
+            {m.failedWorks}
+          </Link>
+        </p>
+      ) : null}
+      <p className="px-5 pt-3 text-xs text-bone-faint">{m.copies(fmt.bytes(copies, locale))}</p>
+      {heaviest.data?.works.length ? (
+        <>
+          <p className="label px-5 pt-3">{m.heaviest}</p>
+          <ul className="divide-y divide-rule">
+            {heaviest.data.works.map((work) => (
+              <li key={work.id}>
+                <Link
+                  to={`/admin/catalogue/${work.id}`}
+                  className="flex min-h-11 items-center gap-3 px-5 py-2 text-sm transition-colors duration-150 hover:bg-ink-high"
+                >
+                  <span className="min-w-0 flex-1 truncate text-bone">{work.title}</span>
+                  <span className="shrink-0 font-mono text-xs text-bone-dim tabular-nums">
+                    {m.workLine(fmt.count(work.stored, locale), fmt.bytes(work.bytes + work.copiesBytes, locale))}
+                  </span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : (
+        <div className="h-3" />
       )}
     </Panel>
   )

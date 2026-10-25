@@ -675,6 +675,36 @@ the dashboard can say when a newer one is out. What is sent is one anonymous `GE
 `api.github.com`, with the name and version every request of this server carries — nothing
 about this instance or what it holds. Unset, it is off.
 
+## Error reports
+
+On **Settings › Error reports**: each error the server writes, sent to a Sentry or a
+GlitchTip as it happens. Off until a DSN is set, and taken at once, on every instance, when
+one is. See [Watching the server](monitoring/README.md#error-reports).
+
+| Setting | Holds | Default | Set at |
+| --- | --- | --- | --- |
+| [`sentry.dsn`](#sentrydsn) | a secret, never read back | unset | server |
+| [`sentry.environment`](#sentryenvironment) | text | `production` | server |
+| [`sentry.sampleRate`](#sentrysamplerate) | a whole number, `0` to `100` | `100` | server |
+
+### `sentry.dsn`
+
+The DSN of the Sentry or GlitchTip project the reports go to,
+`https://<key>@<host>/<project>`, as the project's settings give it. A secret: written, and
+never shown again. What is sent is the error line alone — its message, its fields, the
+module that wrote it, the request it was written in and the `trace_id` that finds it in the
+log and the traces — each text masked as the log masks a secret; no line before it, no
+address of the caller. Cleared, nothing is sent.
+
+### `sentry.environment`
+
+The environment the reports are filed under, as Sentry sorts them: `staging`, `home`.
+
+### `sentry.sampleRate`
+
+The share of the errors sent, in percent: `100` sends every one, `0` none while the DSN is
+kept.
+
 ## Backups
 
 On **Administration › Backups**, which lists the archives and makes, downloads, deletes and
