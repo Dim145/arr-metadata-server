@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
+import { scrollsSideways } from './support/layout'
 import { escaped, pattern } from './support/regex'
 
 /**
@@ -34,22 +35,6 @@ async function backToResults(page: Page) {
     await sheet.getByRole('button', { name: /^(show|voir) /i }).click()
     await expect(sheet).toBeHidden()
   }
-}
-
-/**
- * Whether the page can be dragged sideways.
- *
- * Asserted on every page because it is the failure that hides: a child that
- * scrolls horizontally on purpose will, without containment, make the whole
- * document scroll, and nothing about the layout looks wrong until you try.
- */
-async function scrollsSideways(page: Page) {
-  return page.evaluate(() => {
-    window.scrollTo(600, 0)
-    const moved = window.scrollX > 0
-    window.scrollTo(0, 0)
-    return moved
-  })
 }
 
 test.describe('the catalogue', () => {
