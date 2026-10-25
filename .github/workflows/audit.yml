@@ -38,6 +38,9 @@ concurrency:
 jobs:
   audit:
     name: Advisories
+    # Not on a pull request Dependabot opens or rebases: the lockfile it
+    # writes is read here once its updates reach main, and every Monday.
+    if: github.event_name != 'pull_request' || github.triggering_actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
 
     steps:

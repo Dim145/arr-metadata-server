@@ -4,6 +4,11 @@ name: CI
 on:
   push:
     branches: [main]
+  # Not the pull requests Dependabot opens or rebases, though: every job that
+  # starts the run says so below. Its updates are taken onto main in batches,
+  # where the run that follows checks them once, rather than half an hour of
+  # it for each of its pull requests and again at each rebase. Whoever re-runs
+  # one by hand, or pushes to its branch, gets the whole run.
   pull_request:
 
 # Least privilege: nothing here writes to the repository, opens a pull request
@@ -26,6 +31,7 @@ concurrency:
 jobs:
   backend:
     name: Backend
+    if: github.event_name != 'pull_request' || github.triggering_actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
 
     services:
@@ -93,6 +99,7 @@ jobs:
   # the list when it is written.
   test-postgres:
     name: Tests on PostgreSQL
+    if: github.event_name != 'pull_request' || github.triggering_actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
 
     services:
@@ -144,6 +151,7 @@ jobs:
   # editor or `genhtml` to read. On SQLite, as the backend job's tests are.
   coverage:
     name: Coverage (informative)
+    if: github.event_name != 'pull_request' || github.triggering_actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     continue-on-error: true
 
@@ -177,6 +185,7 @@ jobs:
 
   frontend:
     name: Web UI
+    if: github.event_name != 'pull_request' || github.triggering_actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
 
     steps:
@@ -241,6 +250,7 @@ jobs:
   # given to the server and to the suite alike, and kept out of the log.
   e2e:
     name: End-to-end tests
+    if: github.event_name != 'pull_request' || github.triggering_actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
@@ -443,6 +453,7 @@ jobs:
   # request with the ones that moved.
   visual:
     name: Visual regression
+    if: github.event_name != 'pull_request' || github.triggering_actor != 'dependabot[bot]'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
 
@@ -556,6 +567,7 @@ jobs:
   # Cargo.toml, so when the promise moves, this moves with it.
   msrv:
     name: Minimum Rust version
+    if: github.event_name != 'pull_request' || github.triggering_actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
 
     steps:
@@ -586,6 +598,7 @@ jobs:
   # — when Cargo.lock changes, and every week — that fails on one.
   deny:
     name: Dependencies (${{ matrix.checks }})
+    if: github.event_name != 'pull_request' || github.triggering_actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
