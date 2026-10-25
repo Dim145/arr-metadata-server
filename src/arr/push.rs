@@ -503,6 +503,10 @@ mod tests {
     };
 
     const SERIES: &str = "0192aa52-8f62-7cc3-a1f1-6a1b2c3d4e5f";
+
+    /// The queue is the process's own, and these tests fill it with the same
+    /// works: they take turns, or one's pass sends what another put there.
+    static TURN: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
     const FILM: &str = "0192aa52-8f62-7cc3-a1f1-6a1b2c3d4e60";
 
     #[test]
@@ -728,6 +732,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_series_is_found_and_told_and_the_film_said_absent() {
+        let _turn = TURN.lock().await;
         let (state, seen) = setting_up().await;
 
         send(
@@ -870,6 +875,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_sonarr_nobody_answers_is_asked_once_and_the_rest_wait_for_the_next_pass() {
+        let _turn = TURN.lock().await;
         let (state, _) = setting_up().await;
         // An address nothing listens at: a port that was free a moment ago.
         let closed = {
@@ -920,6 +926,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_sonarr_that_answers_no_is_asked_for_each_work_and_none_is_put_back() {
+        let _turn = TURN.lock().await;
         let (state, _) = setting_up().await;
         let (refusing, asked) = stand_in(Arc::new(|_: &Seen| (401, String::new()))).await;
         state
