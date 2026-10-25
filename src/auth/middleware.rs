@@ -651,6 +651,34 @@ fn browsable(method: &axum::http::Method, path: &str) -> bool {
         {
             true
         }
+        // Two works side by side, and the catalogue by a genre, a network,
+        // a year or a decade: its pages.
+        "/api/v1/compare" => true,
+        rest if [
+            "/api/v1/genres/",
+            "/api/v1/networks/",
+            "/api/v1/years/",
+            "/api/v1/decades/",
+        ]
+        .iter()
+        .any(|prefix| {
+            rest.strip_prefix(prefix)
+                .is_some_and(|key| !key.is_empty() && !key.contains('/'))
+        }) =>
+        {
+            true
+        }
+        // The programmer's note on one thing; the list of them all is for
+        // whoever writes them.
+        rest if rest.strip_prefix("/api/v1/editorial/").is_some_and(|tail| {
+            matches!(
+                tail.split('/').collect::<Vec<_>>().as_slice(),
+                [scope, key] if !scope.is_empty() && !key.is_empty()
+            )
+        }) =>
+        {
+            true
+        }
         // A season's chart. What else premieres in it, one segment further,
         // is TMDB's list for whoever maintains the catalogue, and is not.
         rest if rest.strip_prefix("/api/v1/seasons/").is_some_and(|tail| {
@@ -938,6 +966,19 @@ mod browse_tests {
         ));
         assert!(allowed("/api/v1/seasons/2026/autumn"));
         assert!(!allowed("/api/v1/seasons/2026/autumn/candidates"));
+        // A genre's, a network's, a year's and a decade's pages, two works
+        // side by side, and the note on one thing — not the list of notes.
+        assert!(allowed("/api/v1/genres/drama"));
+        assert!(allowed("/api/v1/networks/hbo"));
+        assert!(allowed("/api/v1/years/1999"));
+        assert!(allowed("/api/v1/decades/1990"));
+        assert!(!allowed("/api/v1/genres/drama/x"));
+        assert!(!allowed("/api/v1/genres/"));
+        assert!(allowed("/api/v1/compare"));
+        assert!(allowed("/api/v1/editorial/genre/drama"));
+        assert!(!allowed("/api/v1/editorial"));
+        assert!(!allowed("/api/v1/editorial/genre"));
+        assert!(!allowed("/api/v1/editorial/genre/drama/fr"));
         assert!(!allowed("/api/v1/seasons/2026"));
         assert!(!allowed("/api/v1/seasons//autumn"));
     }

@@ -10,6 +10,7 @@ import { useState } from 'react'
 import { Link, useParams } from 'react-router'
 
 import { Artwork, PosterCard, PosterGrid } from '../components/media'
+import { ProgrammersNote } from '../components/ProgrammersNote'
 import { Button, Chip, EmptyState, Glyph, Label, SectionTitle, Skeleton } from '../components/ui'
 import { ApiError, api, query, segment } from '../lib/api'
 import { useCuratedLists, useTitle } from '../lib/hooks'
@@ -388,6 +389,8 @@ export function ListDetail() {
           {list.mode === 'filter' ? t.lists.byFilter : t.lists.byHand}
           {list.isPublic ? '' : ` · ${t.lists.private}`}
         </p>
+        {/* What whoever keeps the catalogue says of the selection, in their own voice. */}
+        <ProgrammersNote scope="list" id={list.id} className="mt-6" />
       </header>
 
       {items.length === 0 ? (

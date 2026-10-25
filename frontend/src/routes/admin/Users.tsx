@@ -10,7 +10,7 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useDeferredValue, useEffect, useState } from 'react'
+import { useDeferredValue, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 
 import { Invitations } from '../../components/account/Invitations'
@@ -19,6 +19,7 @@ import { SecretReveal } from '../../components/account/SecretReveal'
 import {
   Button,
   Chip,
+  DataTable,
   Dialog,
   EmptyState,
   FormField,
@@ -30,10 +31,15 @@ import {
   Select,
   Skeleton,
   Spinner,
-  TableScroll,
+  TableOptions,
+  TBody,
   Td,
   Th,
+  THead,
   Tr,
+  sortRows,
+  useDataTable,
+  type Column,
 } from '../../components/ui'
 import { api, query } from '../../lib/api'
 import { dateTime } from '../../lib/format'
@@ -44,6 +50,9 @@ type RoleFilter = 'all' | AccountRole
 type StatusFilter = 'all' | AccountStatus
 
 const ROLES: AccountRole[] = ['member', 'editor', 'admin']
+
+/** The statuses in the order an administrator deals with them: whoever waits first. */
+const STATUSES: AccountStatus[] = ['pending', 'active', 'disabled']
 
 export function Users() {
   const { t, locale } = useI18n()
@@ -101,6 +110,37 @@ export function Users() {
   const toggle = (id: string) =>
     setSelected((was) => (was.includes(id) ? was.filter((x) => x !== id) : [...was, id]))
   const nameOf = (id: string) => users.find((u) => u.id === id)?.username ?? id
+
+  // The columns, described once for the heads, the cells and the cards. The
+  // accounts come in the server's order, those waiting for approval first,
+  // until a head is pressed. What a phone can do without — how an account
+  // signs in, how many keys it holds — is on the member's own page.
+  const columns: Column[] = useMemo(
+    () => [
+      { id: 'select', label: t.admin.people.selectAll, kind: 'select', always: true, className: 'w-10' },
+      { id: 'person', label: t.admin.people.person, kind: 'primary', always: true, sort: 'asc' },
+      { id: 'role', label: t.admin.people.role, sort: 'desc' },
+      { id: 'status', label: t.admin.people.status, sort: 'asc' },
+      { id: 'signsIn', label: t.admin.people.signsIn, from: 'lg', card: false },
+      { id: 'lastSeen', label: t.admin.people.lastSeen, sort: 'desc', from: 'md' },
+      { id: 'keys', label: t.admin.people.keys, align: 'right', sort: 'desc', from: 'md', card: false },
+    ],
+    [t],
+  )
+  const table = useDataTable({ id: 'users', columns })
+  const rows = sortRows(
+    users,
+    table.sort,
+    {
+      person: (user) => user.displayName || user.username,
+      // By rank, not by name: the administrators first, then the editors.
+      role: (user) => ROLES.indexOf(user.role),
+      status: (user) => STATUSES.indexOf(user.status),
+      lastSeen: (user) => (user.lastLoginAt ? Date.parse(user.lastLoginAt) : null),
+      keys: (user) => user.keys,
+    },
+    locale,
+  )
 
   return (
     <div className="mx-auto max-w-6xl">
@@ -162,6 +202,11 @@ export function Users() {
             { value: 'disabled', label: t.labels.statuses.disabled },
           ]}
         />
+        {users.length ? (
+          <span className="ml-auto">
+            <TableOptions table={table} />
+          </span>
+        ) : null}
       </div>
 
       {selected.length ? (
@@ -229,42 +274,39 @@ export function Users() {
         ) : users.length === 0 ? (
           <EmptyState title={t.admin.people.empty} hint={t.admin.people.emptyHint} />
         ) : (
-          <TableScroll label={t.admin.users}>
-            <table className="w-full min-w-[46rem] border-collapse text-left">
-              <thead>
-                <tr>
-                  <Th className="w-10">
-                    <input
-                      type="checkbox"
-                      aria-label={t.admin.people.selectAll}
-                      checked={allShown}
-                      onChange={() => setSelected(allShown ? [] : users.map((u) => u.id))}
-                      className="size-4 cursor-pointer accent-vermillion"
-                    />
-                  </Th>
-                  <Th>{t.admin.people.person}</Th>
-                  <Th>{t.admin.people.role}</Th>
-                  <Th>{t.admin.people.status}</Th>
-                  <Th>{t.admin.people.signsIn}</Th>
-                  <Th>{t.admin.people.lastSeen}</Th>
-                  <Th align="right">{t.admin.people.keys}</Th>
-                </tr>
-              </thead>
-              <tbody>
-                {users.map((user) => (
-                  <Row
-                    key={user.id}
-                    user={user}
-                    you={me.data?.user?.id === user.id}
-                    selected={selected.includes(user.id)}
-                    onToggle={() => toggle(user.id)}
-                    onOpen={() => navigate(`/admin/users/${user.id}`)}
-                    locale={locale}
-                  />
-                ))}
-              </tbody>
-            </table>
-          </TableScroll>
+          // Enter on a row opens the member's page, as the name does.
+          <DataTable table={table} label={t.admin.users} onOpen={(id) => navigate(`/admin/users/${id}`)}>
+            <THead>
+              <Th column="select">
+                <input
+                  type="checkbox"
+                  aria-label={t.admin.people.selectAll}
+                  checked={allShown}
+                  onChange={() => setSelected(allShown ? [] : users.map((u) => u.id))}
+                  className="size-4 cursor-pointer accent-vermillion"
+                />
+              </Th>
+              <Th column="person" />
+              <Th column="role" />
+              <Th column="status" />
+              <Th column="signsIn" />
+              <Th column="lastSeen" />
+              <Th column="keys" />
+            </THead>
+            <TBody>
+              {rows.map((user) => (
+                <Row
+                  key={user.id}
+                  user={user}
+                  you={me.data?.user?.id === user.id}
+                  selected={selected.includes(user.id)}
+                  onToggle={() => toggle(user.id)}
+                  onOpen={() => navigate(`/admin/users/${user.id}`)}
+                  locale={locale}
+                />
+              ))}
+            </TBody>
+          </DataTable>
         )}
       </Panel>
 
@@ -377,8 +419,8 @@ function Row({
   const name = user.displayName || user.username
 
   return (
-    <Tr className={selected ? 'bg-vermillion/[0.05]' : undefined}>
-      <Td>
+    <Tr row={user.id} className={selected ? 'bg-vermillion/[0.05]' : undefined}>
+      <Td column="select">
         <input
           type="checkbox"
           aria-label={t.admin.people.select(name)}
@@ -387,7 +429,7 @@ function Row({
           className="size-4 cursor-pointer accent-vermillion"
         />
       </Td>
-      <Td>
+      <Td column="person">
         <div className="flex items-center gap-3">
           <Initial name={name} />
           <div className="min-w-0">
@@ -408,21 +450,23 @@ function Row({
           </div>
         </div>
       </Td>
-      <Td>
+      <Td column="role">
         <RoleChip role={user.role} />
       </Td>
-      <Td>
+      <Td column="status">
         <StatusLamp status={user.status} />
       </Td>
-      <Td>
+      <Td column="signsIn">
         <Chip tone={user.oidcLinked ? 'provider' : 'neutral'}>
           {user.oidcLinked ? t.admin.people.withOidc : t.admin.people.withPassword}
         </Chip>
       </Td>
-      <Td className="font-mono text-xs text-bone-dim">
+      <Td column="lastSeen" className="font-mono text-xs text-bone-dim">
         {user.lastLoginAt ? dateTime(user.lastLoginAt, locale) : t.admin.people.never}
       </Td>
-      <Td className="text-right font-mono text-sm tabular-nums">{user.keys}</Td>
+      <Td column="keys" className="font-mono text-sm tabular-nums">
+        {user.keys}
+      </Td>
     </Tr>
   )
 }

@@ -4,36 +4,44 @@
  *
  * Numbers first, since they say whether the thing works at all; then the
  * switches, each with what it costs; then the two tasks; then the failures,
- * each with its reason and a way to try again. When nothing is configured
- * the page says what to set, and nothing else — the switches would only
- * pretend.
+ * each with its reason and a way to try again; then the works by what their
+ * media come to, the heaviest first. When nothing is configured the page
+ * says what to set, and nothing else — the switches would only pretend.
  */
 
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
-import { Link } from 'react-router'
+import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMemo, useState } from 'react'
+import { Link, useNavigate } from 'react-router'
 
 import {
   Button,
   Chip,
+  DataTable,
   Dialog,
   Glyph,
   Label,
   Lamp,
   Panel,
   PanelHead,
+  Segmented,
   Select,
   Skeleton,
   Spinner,
-  TableScroll,
+  TableOptions,
+  TBody,
   Td,
   Th,
+  THead,
   Toggle,
+  Tr,
+  sortRows,
+  useDataTable,
+  type Column,
 } from '../../components/ui'
 import { ApiError, api, query } from '../../lib/api'
 import * as fmt from '../../lib/format'
 import { useI18n } from '../../lib/i18n'
-import type { MediaAsset, MediaStatus, TaskId } from '../../lib/types'
+import type { MediaAsset, MediaByWork, MediaStatus, TaskId } from '../../lib/types'
 
 /** An address as a row shows it: its host, and the end of its path. */
 function shortAddress(origin: string): string {
@@ -98,6 +106,25 @@ export function Media() {
     mutationFn: () => api.post<{ retried: number }>('/media/retry'),
     onSuccess: invalidate,
   })
+  // The failures, as a dense table: their columns, ordered in the page.
+  const troubledColumns: Column[] = useMemo(
+    () => [
+      { id: 'address', label: p.colAddress, kind: 'primary', always: true },
+      { id: 'kind', label: p.colKind, sort: 'asc' },
+      { id: 'attempts', label: p.colAttempts, align: 'right', sort: 'desc' },
+      { id: 'error', label: p.colError },
+      { id: 'retry', label: p.retry, kind: 'actions', always: true, align: 'right' },
+    ],
+    [p],
+  )
+  const troubledTable = useDataTable({ id: 'media-troubled', columns: troubledColumns })
+  const troubledRows = sortRows(
+    troubled.data ?? [],
+    troubledTable.sort,
+    { kind: (asset) => p.kinds[asset.kind] ?? asset.kind, attempts: (asset) => asset.attempts },
+    locale,
+  )
+
   const reset = useMutation({
     mutationFn: () => api.post<{ forgotten: number }>('/media/reset'),
     onSuccess: (data) => {
@@ -327,10 +354,13 @@ export function Media() {
                   title={p.troubled}
                   action={
                     troubled.data?.length ? (
-                      <Button size="sm" disabled={retryAll.isPending} onClick={() => retryAll.mutate()}>
-                        <Glyph name="refresh" className="size-4" />
-                        {p.retryAll}
-                      </Button>
+                      <span className="flex flex-wrap items-center gap-2">
+                        <TableOptions table={troubledTable} />
+                        <Button size="sm" disabled={retryAll.isPending} onClick={() => retryAll.mutate()}>
+                          <Glyph name="refresh" className="size-4" />
+                          {p.retryAll}
+                        </Button>
+                      </span>
                     ) : undefined
                   }
                 />
@@ -343,69 +373,23 @@ export function Media() {
                 ) : !troubled.data?.length ? (
                   <p className="px-5 py-4 text-sm text-bone-faint">{p.none}</p>
                 ) : (
-                  <>
-                    <div className="hidden md:block">
-                      <TableScroll label={p.troubled}>
-                        <table className="w-full border-collapse text-left text-sm">
-                        <thead>
-                          <tr>
-                            <Th>{p.colAddress}</Th>
-                            <Th>{p.colKind}</Th>
-                            <Th align="right">{p.colAttempts}</Th>
-                            <Th>{p.colError}</Th>
-                            <Th>
-                              <span className="sr-only">{p.retry}</span>
-                            </Th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {troubled.data.map((asset) => (
-                            <tr key={asset.id} className="border-t border-rule">
-                              <Td>
-                                <span className="block max-w-xs truncate font-mono text-xs" title={asset.origin}>
-                                  {shortAddress(asset.origin)}
-                                </span>
-                                {asset.wantedBy ? (
-                                  <Link
-                                    to={`/admin/catalogue/${asset.wantedBy}`}
-                                    className="text-xs text-vermillion underline-offset-4 hover:underline"
-                                  >
-                                    {p.openWork}
-                                  </Link>
-                                ) : null}
-                              </Td>
-                              <Td>{p.kinds[asset.kind] ?? asset.kind}</Td>
-                              <Td align="right">
-                                <span className="font-mono text-xs tabular-nums">{asset.attempts}</span>
-                              </Td>
-                              <Td>
-                                <span className="block max-w-md text-xs break-words text-bone-dim">{asset.error ?? '—'}</span>
-                              </Td>
-                              <Td align="right">
-                                <Button size="sm" disabled={retry.isPending} onClick={() => retry.mutate(asset.id)}>
-                                  {p.retry}
-                                </Button>
-                              </Td>
-                            </tr>
-                          ))}
-                        </tbody>
-                        </table>
-                      </TableScroll>
-                    </div>
-                    <ul className="divide-y divide-rule md:hidden">
-                      {troubled.data.map((asset) => (
-                        <li key={asset.id} className="px-5 py-3">
-                          <p className="truncate font-mono text-xs text-bone" title={asset.origin}>
-                            {shortAddress(asset.origin)}
-                          </p>
-                          <p className="mt-1 text-xs text-bone-dim">
-                            {p.kinds[asset.kind] ?? asset.kind} · {p.colAttempts} {asset.attempts}
-                          </p>
-                          {asset.error ? <p className="mt-1 text-xs break-words text-bone-faint">{asset.error}</p> : null}
-                          <div className="mt-2 flex flex-wrap items-center gap-3">
-                            <Button size="sm" disabled={retry.isPending} onClick={() => retry.mutate(asset.id)}>
-                              {p.retry}
-                            </Button>
+                  <DataTable table={troubledTable} label={p.troubled}>
+                    <THead>
+                      <Th column="address" />
+                      <Th column="kind" />
+                      <Th column="attempts" />
+                      <Th column="error" />
+                      <Th column="retry">
+                        <span className="sr-only">{p.retry}</span>
+                      </Th>
+                    </THead>
+                    <TBody>
+                      {troubledRows.map((asset) => (
+                        <Tr key={asset.id} row={asset.id}>
+                          <Td column="address" className="w-full max-w-0">
+                            <span className="block truncate font-mono text-xs text-bone" title={asset.origin}>
+                              {shortAddress(asset.origin)}
+                            </span>
                             {asset.wantedBy ? (
                               <Link
                                 to={`/admin/catalogue/${asset.wantedBy}`}
@@ -414,17 +398,189 @@ export function Media() {
                                 {p.openWork}
                               </Link>
                             ) : null}
-                          </div>
-                        </li>
+                          </Td>
+                          <Td column="kind">{p.kinds[asset.kind] ?? asset.kind}</Td>
+                          <Td column="attempts">
+                            <span className="font-mono text-xs tabular-nums">{asset.attempts}</span>
+                          </Td>
+                          <Td column="error">
+                            <span className="block max-w-md text-xs break-words text-bone-dim">{asset.error ?? '—'}</span>
+                          </Td>
+                          <Td column="retry">
+                            <Button size="sm" disabled={retry.isPending} onClick={() => retry.mutate(asset.id)}>
+                              {p.retry}
+                            </Button>
+                          </Td>
+                        </Tr>
                       ))}
-                    </ul>
-                  </>
+                    </TBody>
+                  </DataTable>
                 )}
               </Panel>
+
+              <ByWork />
             </>
           ) : null}
         </div>
       )}
     </div>
+  )
+}
+
+/** How the works are ranked by their media. */
+type Order = 'space' | 'count' | 'failed'
+
+/** The column that ranks the works each way, and the way each column ranks them. */
+const ORDER_COLUMN: Record<Order, string> = { space: 'bytes', count: 'stored', failed: 'failed' }
+const COLUMN_ORDER: Record<string, Order> = { bytes: 'space', stored: 'count', failed: 'failed' }
+
+/** How many works a page of the ranking holds. */
+const PAGE = 50
+
+/**
+ * The works by what their media come to: how many each keeps, how many wait
+ * or were given up on, and what those kept weigh with the copies made of
+ * them — the heaviest first, or the most kept, or the most given up on. A
+ * picture two works share counts for each, as each one's media list shows it.
+ *
+ * Ranked by the server, a page at a time: by the switch above the table, or
+ * by its column heads where the table is wide enough to show them — always
+ * the most first, which is what the ranking is for. Enter on a row opens the
+ * work in the editor.
+ */
+function ByWork() {
+  const { t, locale } = useI18n()
+  const w = t.admin.mediaPage.works
+  const navigate = useNavigate()
+  const [order, setOrder] = useState<Order>('space')
+
+  const columns: Column[] = useMemo(
+    () => [
+      { id: 'work', label: w.colWork, kind: 'primary', always: true },
+      { id: 'stored', label: w.colKept, align: 'right', sort: 'desc' },
+      { id: 'pending', label: w.colWaiting, align: 'right' },
+      { id: 'failed', label: w.colFailed, align: 'right', sort: 'desc' },
+      { id: 'bytes', label: w.colSize, align: 'right', sort: 'desc' },
+      { id: 'copies', label: w.colCopies, align: 'right', from: 'md' },
+    ],
+    [w],
+  )
+  const table = useDataTable({
+    id: 'media-works',
+    columns,
+    sort: { column: ORDER_COLUMN[order], direction: 'desc' },
+    onSort: (next) => setOrder(COLUMN_ORDER[next.column] ?? 'space'),
+  })
+
+  const works = useInfiniteQuery({
+    queryKey: ['media', 'works', order],
+    queryFn: ({ pageParam }) => api.get<MediaByWork>(`/media/works${query({ sort: order, limit: PAGE, offset: pageParam })}`),
+    initialPageParam: 0,
+    getNextPageParam: (last, pages) => {
+      const loaded = pages.reduce((sum, page) => sum + page.works.length, 0)
+      return loaded < last.total ? loaded : undefined
+    },
+    placeholderData: keepPreviousData,
+    staleTime: 60_000,
+  })
+  const rows = works.data?.pages.flatMap((page) => page.works) ?? []
+  const total = works.data?.pages.at(-1)?.total ?? 0
+
+  return (
+    <Panel id="media-by-work" label={w.title} className="rise overflow-clip" style={{ animationDelay: '220ms' }}>
+      <PanelHead
+        title={w.title}
+        action={
+          <span className="flex items-center gap-3">
+            {rows.length ? <TableOptions table={table} /> : null}
+            <span className="font-mono text-xs text-bone-faint tabular-nums">{fmt.count(total, locale)}</span>
+          </span>
+        }
+      />
+      <div className="space-y-3 px-5 py-3">
+        <p className="max-w-prose text-xs leading-relaxed text-bone-faint">{w.lead}</p>
+        <Segmented<Order>
+          label={w.order}
+          value={order}
+          onChange={setOrder}
+          options={[
+            { value: 'space', label: w.orders.space },
+            { value: 'count', label: w.orders.count },
+            { value: 'failed', label: w.orders.failed },
+          ]}
+        />
+      </div>
+      {works.isPending ? (
+        <Skeleton className="m-5 h-24" />
+      ) : works.isError ? (
+        <p role="alert" className="px-5 py-4 text-sm text-vermillion">
+          {w.loadFailed}
+        </p>
+      ) : rows.length === 0 ? (
+        <p className="px-5 py-4 text-sm text-bone-faint">{w.none}</p>
+      ) : (
+        <>
+          <DataTable table={table} label={w.title} onOpen={(id) => void navigate(`/admin/catalogue/${id}`)}>
+            <THead>
+              <Th column="work" />
+              <Th column="stored" />
+              <Th column="pending" />
+              <Th column="failed" />
+              <Th column="bytes" />
+              <Th column="copies" />
+            </THead>
+            <TBody>
+              {rows.map((work) => (
+                <Tr key={work.id} row={work.id} data-work={work.id}>
+                  <Td column="work" className="w-full max-w-0">
+                    {/* Stretched over the row, so a tap anywhere on it opens the work. */}
+                    <Link
+                      to={`/admin/catalogue/${work.id}`}
+                      className="group flex items-center gap-2 truncate text-bone transition-colors duration-150 after:absolute after:inset-0 after:content-[''] hover:text-vermillion"
+                    >
+                      <Glyph name={work.kind === 'series' ? 'tv' : 'film'} className="size-3.5 shrink-0 text-bone-faint" />
+                      <span className="truncate underline decoration-rule-bright underline-offset-2 group-hover:decoration-vermillion">
+                        {work.title}
+                      </span>
+                      {work.year ? <span className="font-mono text-xs text-bone-faint">{work.year}</span> : null}
+                    </Link>
+                  </Td>
+                  <Td column="stored">
+                    <span className="font-mono text-xs tabular-nums">{fmt.count(work.stored, locale)}</span>
+                  </Td>
+                  <Td column="pending">
+                    <span className="font-mono text-xs text-bone-dim tabular-nums">{work.pending ? fmt.count(work.pending, locale) : '—'}</span>
+                  </Td>
+                  <Td column="failed">
+                    <span className={work.failed ? 'font-mono text-xs text-vermillion tabular-nums' : 'font-mono text-xs text-bone-faint tabular-nums'}>
+                      {work.failed ? fmt.count(work.failed, locale) : '—'}
+                    </span>
+                  </Td>
+                  <Td column="bytes">
+                    <span className="font-mono text-xs whitespace-nowrap tabular-nums">{fmt.bytes(work.bytes, locale)}</span>
+                  </Td>
+                  <Td column="copies">
+                    <span className="font-mono text-xs whitespace-nowrap text-bone-dim tabular-nums">
+                      {work.copiesBytes ? fmt.bytes(work.copiesBytes, locale) : '—'}
+                    </span>
+                  </Td>
+                </Tr>
+              ))}
+            </TBody>
+          </DataTable>
+          {works.hasNextPage ? (
+            <div className="flex flex-col items-center gap-2 border-t border-rule px-5 py-5">
+              <Button onClick={() => void works.fetchNextPage()} disabled={works.isFetchingNextPage}>
+                {works.isFetchingNextPage ? <Spinner className="size-4" /> : null}
+                {w.more}
+              </Button>
+              <span className="font-mono text-xs text-bone-faint tabular-nums">
+                {fmt.count(rows.length, locale)} {t.common.of} {fmt.count(total, locale)}
+              </span>
+            </div>
+          ) : null}
+        </>
+      )}
+    </Panel>
   )
 }

@@ -327,6 +327,99 @@
         }
       }
     },
+    "/api/v1/account/preferences": {
+      "get": {
+        "tags": [
+          "Account"
+        ],
+        "summary": "What you keep of your own way of working: the views of the catalogue you\nsaved, the columns each table shows you and how tightly it is set. It\nfollows you from one browser to the next.",
+        "operationId": "account_preferences",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Preferences"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A key cannot manage an account"
+          }
+        }
+      }
+    },
+    "/api/v1/account/preferences/{key}": {
+      "put": {
+        "tags": [
+          "Account"
+        ],
+        "summary": "Keep a preference, in place of whatever was kept under its name.",
+        "operationId": "account_keep_preference",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "description": "Its name: `catalogue.views`, `table.users`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreferenceWrite"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Kept"
+          },
+          "400": {
+            "description": "The name or the value was rejected"
+          },
+          "403": {
+            "description": "A key cannot manage an account, or the account keeps as many as it may"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Account"
+        ],
+        "summary": "Forget a preference: the interface goes back to its own way there.",
+        "operationId": "account_forget_preference",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "description": "Its name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Forgotten, or never kept"
+          },
+          "400": {
+            "description": "The name was rejected"
+          },
+          "403": {
+            "description": "A key cannot manage an account"
+          }
+        }
+      }
+    },
     "/api/v1/account/sessions": {
       "get": {
         "tags": [
@@ -840,6 +933,30 @@
         }
       }
     },
+    "/api/v1/admin/gaps": {
+      "get": {
+        "tags": [
+          "Catalogue"
+        ],
+        "summary": "How many works each of the register's gaps holds.",
+        "description": "Counted through each filter's own definition, over the works the\nregister shows — those switched off among them, adult titles as this\ncaller's policy has them — so that a figure and the list it leads to\nagree. The duplicates are looked for again first, as the register does\nbefore it lists them.",
+        "operationId": "items_gaps",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Gaps"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller may not edit the catalogue"
+          }
+        }
+      }
+    },
     "/api/v1/admin/health": {
       "get": {
         "tags": [
@@ -913,6 +1030,103 @@
           },
           "400": {
             "description": "Not a document this server reads, or too long for one request"
+          },
+          "403": {
+            "description": "The caller is not an administrator"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/logs": {
+      "get": {
+        "tags": [
+          "Server"
+        ],
+        "summary": "The application log: the last lines the server wrote to its standard\noutput — as many as `capacity` says, those `AMS_LOG` lets through — each\nwith its level, its module, its message, its fields and the ids of the\nrequest it was written in, every secret in them masked. With `format`,\nevery line the filters match, as a file. For an administrator.",
+        "operationId": "logs_list",
+        "parameters": [
+          {
+            "name": "level",
+            "in": "query",
+            "description": "This level and every graver one: `warn` is the warnings and the\nerrors. Every level when left out.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "How grave a line is. In this order: a filter asks for a level and every\ngraver one.",
+              "enum": [
+                "error",
+                "warn",
+                "info",
+                "debug",
+                "trace"
+              ]
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Words every line must hold, in its message, its fields, its module or\nits ids — a trace's id finds the lines of one request.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "description": "Only the lines written after this one, by its `seq`: what a page that\nfollows the log asks for.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "At most this many, the newest: 500 unless said, and never more than\nthe journal keeps.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "description": "`text` or `json`: every line the filters match, oldest first, as a\nfile to download, `limit` set aside.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "The forms the log is downloaded in.",
+              "enum": [
+                "text",
+                "json"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The lines that answer, newest first; with `format`, as a file, oldest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "application/x-ndjson": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "description": "The caller is not an administrator"
@@ -1349,6 +1563,30 @@
           },
           "400": {
             "description": "No issuer to try"
+          },
+          "403": {
+            "description": "The caller is not an administrator"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/tasks/stream": {
+      "get": {
+        "tags": [
+          "Server"
+        ],
+        "summary": "The tasks, followed: an event `tasks` carrying the whole board — every\ntask as `GET /tasks` gives it, and the newest run — at once, then each\ntime it changes, whichever instance made the change: it is read from the\nhistory every instance writes and the holds they share, never from this\nprocess's memory alone. A comment keeps a quiet stream open through a\nproxy; the stream ends after five minutes and the page opens another,\nwhich asks for the credential again.",
+        "operationId": "tasks_stream",
+        "responses": {
+          "200": {
+            "description": "Server-sent events, each named `tasks`, whose data is the board as JSON",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskBoard"
+                }
+              }
+            }
           },
           "403": {
             "description": "The caller is not an administrator"
@@ -2230,6 +2468,61 @@
         }
       }
     },
+    "/api/v1/compare": {
+      "get": {
+        "tags": [
+          "Catalogue"
+        ],
+        "summary": "Two works side by side: their scores, their running times, their seasons,\nand the people they share.",
+        "operationId": "browse_compare",
+        "parameters": [
+          {
+            "name": "a",
+            "in": "query",
+            "description": "The first work's id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "b",
+            "in": "query",
+            "description": "The second's.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "language",
+            "in": "query",
+            "description": "Titles in this language: `fr`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Comparison"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The two are one work, or the language is not one"
+          },
+          "404": {
+            "description": "One of them is not a work this reader may see"
+          }
+        }
+      }
+    },
     "/api/v1/datasets/{name}/import": {
       "post": {
         "tags": [
@@ -2280,6 +2573,52 @@
           },
           "502": {
             "description": "The list could not be downloaded or read"
+          }
+        }
+      }
+    },
+    "/api/v1/decades/{year}": {
+      "get": {
+        "tags": [
+          "Catalogue"
+        ],
+        "summary": "A decade's page, by its first year — `1990` — or by any of its years,\nwhich is answered under the first.",
+        "operationId": "browse_decade",
+        "parameters": [
+          {
+            "name": "year",
+            "in": "path",
+            "description": "Its first year, or any of its years",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "language",
+            "in": "query",
+            "description": "The reader's language: `fr`. The titles, the genre's name and the note\nare read in it where they are written in it.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FacetPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The language is not one"
+          },
+          "404": {
+            "description": "Not a year"
           }
         }
       }
@@ -2385,6 +2724,239 @@
           },
           "404": {
             "description": "No provider had it"
+          }
+        }
+      }
+    },
+    "/api/v1/editorial": {
+      "get": {
+        "tags": [
+          "Catalogue"
+        ],
+        "summary": "Every note, for whoever maintains the catalogue: the one written last\nfirst, at most five hundred.",
+        "operationId": "editorial_list",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "query",
+            "description": "Only the notes on works, lists, genres, networks, years or decades.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "key",
+            "in": "query",
+            "description": "Only those on this one, with `scope`: every language it is written in.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "language",
+            "in": "query",
+            "description": "Only those written in this language: `fr`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EditorialNotes"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a scope or a language, or a key without its scope"
+          },
+          "403": {
+            "description": "The caller may not edit the catalogue"
+          }
+        }
+      }
+    },
+    "/api/v1/editorial/{scope}/{key}": {
+      "get": {
+        "tags": [
+          "Catalogue"
+        ],
+        "summary": "The note on one thing, for a reader.",
+        "description": "In the reader's language where there is one, else in English, else in\nwhichever language one was written in last: `language` in the answer says\nwhich it is. A work's note is read by whoever may see the work, a\nselection's by whoever may read the selection.",
+        "operationId": "editorial_read",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "path",
+            "description": "work, list, genre, network, year or decade",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "description": "A work's or a selection's id, a genre's or a network's slug, a year, a decade's first year",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "language",
+            "in": "query",
+            "description": "The reader's language: `fr`. The note in it, else in English, else the\none written last. Absent, English.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EditorialNote"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a scope, a key or a language"
+          },
+          "404": {
+            "description": "Nothing is written about it, or the reader may not see it"
+          }
+        }
+      }
+    },
+    "/api/v1/editorial/{scope}/{key}/{language}": {
+      "put": {
+        "tags": [
+          "Catalogue"
+        ],
+        "summary": "Write the note on one thing in one language, in place of the one there was.",
+        "description": "Its text is kept tidy — its line ends made one, its control characters\ntaken out, one empty line at most between two paragraphs — and refused\nwhen it holds HTML or a link to anywhere but a page of this site. An empty\ntext takes the note away. Recorded in the journal as `editorial.updated`.",
+        "operationId": "editorial_write",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "path",
+            "description": "work, list, genre, network, year or decade",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "description": "A work's or a selection's id, a genre's or a network's slug, a year, a decade's first year",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "language",
+            "in": "path",
+            "description": "The language it is written in: en, fr",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EditorialNoteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EditorialNote"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "The text was empty: the note in this language is taken away"
+          },
+          "400": {
+            "description": "Not a scope, a key or a language, or a text with HTML, a link elsewhere or too many characters"
+          },
+          "403": {
+            "description": "The caller may not edit the catalogue"
+          },
+          "404": {
+            "description": "No such work or selection"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Catalogue"
+        ],
+        "summary": "Take the note on one thing in one language away.",
+        "operationId": "editorial_remove",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "path",
+            "description": "work, list, genre, network, year or decade",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "description": "A work's or a selection's id, a genre's or a network's slug, a year, a decade's first year",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "language",
+            "in": "path",
+            "description": "The language it is written in: en, fr",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Taken away"
+          },
+          "400": {
+            "description": "Not a scope, a key or a language"
+          },
+          "403": {
+            "description": "The caller may not edit the catalogue"
+          },
+          "404": {
+            "description": "Nothing was written about it in that language"
           }
         }
       }
@@ -2705,7 +3277,7 @@
           {
             "name": "missing",
             "in": "query",
-            "description": "Only works lacking these, comma-separated: `poster` — no poster of\ntheir own, nor one chosen by hand — `overview` — no overview in the\nlanguage they are stored in — `imdb` — no IMDb identifier — and\n`refresh` — never refreshed, though they have an identifier to be\nrefreshed by — `divergingLock` — a lock a source moved under since\nit was set, and which says something else now — and `duplicates` —\nin a pair proposed as one work, and not dismissed. Several narrow\ntogether: `poster,overview` lists the works lacking both. For those who\nmay edit the catalogue, as `refreshFailed`.",
+            "description": "Only works lacking these, comma-separated: `poster` — no poster of\ntheir own, nor one chosen by hand — `overview` — no overview in the\nlanguage they are stored in — `imdb` — no IMDb identifier — and\n`refresh` — never refreshed, though they have an identifier to be\nrefreshed by — `divergingLock` — a lock a source moved under since\nit was set, and which says something else now — `duplicates` — in a\npair proposed as one work, and not dismissed — and `mediaFailed` — a\npicture, a photograph or a theme of theirs that the media store gave\nup fetching, so another can be chosen. Several narrow together:\n`poster,overview` lists the works lacking both. For those who may edit\nthe catalogue, as `refreshFailed`; `GET /admin/gaps` counts each.",
             "required": false,
             "schema": {
               "type": "string"
@@ -2851,6 +3423,281 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/api/v1/genres/{slug}": {
+      "get": {
+        "tags": [
+          "Catalogue"
+        ],
+        "summary": "A genre's page: by its slug — `drama` — or by any name it goes by, in any\nlanguage: \"Drame\" is the same page.",
+        "operationId": "browse_genre",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "The genre's slug, or any name it goes by",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "language",
+            "in": "query",
+            "description": "The reader's language: `fr`. The titles, the genre's name and the note\nare read in it where they are written in it.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FacetPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The language is not one"
+          },
+          "404": {
+            "description": "No genre goes by that name"
+          }
+        }
+      }
+    },
+    "/api/v1/import/rules": {
+      "get": {
+        "tags": [
+          "Lists"
+        ],
+        "summary": "Every import rule, by name.",
+        "operationId": "import_rules_list",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ImportRule"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller is not an administrator"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Lists"
+        ],
+        "summary": "Write an import rule. It runs at its expression's next moment, and can be\nrun at once.",
+        "operationId": "import_rules_create",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportRuleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportRule"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A name, an expression, a source's parameters, an address, a selection or a language that is none — said which and why"
+          },
+          "403": {
+            "description": "The caller is not an administrator"
+          }
+        }
+      }
+    },
+    "/api/v1/import/rules/preview": {
+      "post": {
+        "tags": [
+          "Lists"
+        ],
+        "summary": "What a rule being written would bring in now: the first two hundred of\nits source's works, set beside the catalogue as a batch's lines are.\nNothing is imported, and nothing kept.",
+        "operationId": "import_rules_preview",
+        "parameters": [
+          {
+            "name": "rule",
+            "in": "query",
+            "description": "The rule being changed, whose followed address keeps its key when it\nis sent back as it was shown.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportRuleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportPreview"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The rule is not one this server reads, or its source could not be read — said why"
+          },
+          "403": {
+            "description": "The caller is not an administrator"
+          }
+        }
+      }
+    },
+    "/api/v1/import/rules/{id}": {
+      "put": {
+        "tags": [
+          "Lists"
+        ],
+        "summary": "Change an import rule: every field says what it is to be.",
+        "operationId": "import_rules_update",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The rule's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportRuleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportRule"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A name, an expression, a source's parameters, an address, a selection or a language that is none — said which and why"
+          },
+          "403": {
+            "description": "The caller is not an administrator"
+          },
+          "404": {
+            "description": "No such rule"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Lists"
+        ],
+        "summary": "Delete an import rule. What it brought in stays.",
+        "operationId": "import_rules_delete",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The rule's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "403": {
+            "description": "The caller is not an administrator"
+          },
+          "404": {
+            "description": "No such rule"
+          }
+        }
+      }
+    },
+    "/api/v1/import/rules/{id}/run": {
+      "post": {
+        "tags": [
+          "Lists"
+        ],
+        "summary": "Run an import rule now, whatever its schedule says.",
+        "operationId": "import_rules_run",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The rule's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuleStarted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A rule this version cannot read"
+          },
+          "403": {
+            "description": "The caller is not an administrator"
+          },
+          "404": {
+            "description": "No such rule"
+          },
+          "409": {
+            "description": "A rule is running already, or a backup is being restored"
           }
         }
       }
@@ -3167,7 +4014,7 @@
           {
             "name": "missing",
             "in": "query",
-            "description": "Only works lacking these, comma-separated: `poster` — no poster of\ntheir own, nor one chosen by hand — `overview` — no overview in the\nlanguage they are stored in — `imdb` — no IMDb identifier — and\n`refresh` — never refreshed, though they have an identifier to be\nrefreshed by — `divergingLock` — a lock a source moved under since\nit was set, and which says something else now — and `duplicates` —\nin a pair proposed as one work, and not dismissed. Several narrow\ntogether: `poster,overview` lists the works lacking both. For those who\nmay edit the catalogue, as `refreshFailed`.",
+            "description": "Only works lacking these, comma-separated: `poster` — no poster of\ntheir own, nor one chosen by hand — `overview` — no overview in the\nlanguage they are stored in — `imdb` — no IMDb identifier — and\n`refresh` — never refreshed, though they have an identifier to be\nrefreshed by — `divergingLock` — a lock a source moved under since\nit was set, and which says something else now — `duplicates` — in a\npair proposed as one work, and not dismissed — and `mediaFailed` — a\npicture, a photograph or a theme of theirs that the media store gave\nup fetching, so another can be chosen. Several narrow together:\n`poster,overview` lists the works lacking both. For those who may edit\nthe catalogue, as `refreshFailed`; `GET /admin/gaps` counts each.",
             "required": false,
             "schema": {
               "type": "string"
@@ -3262,6 +4109,81 @@
           },
           "409": {
             "description": "Another entry already claims one of the external ids"
+          }
+        }
+      }
+    },
+    "/api/v1/items/import/batch": {
+      "post": {
+        "tags": [
+          "Discover"
+        ],
+        "summary": "Import a batch: each line's work, in order, as a run of the task\n`import.batch` that the tasks page follows — what is held passed over,\nwhat is not fetched and stored, each written down. One batch at a time.",
+        "operationId": "discover_import_batch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BatchStarted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No line names a work, more than two thousand lines, a language that is none, or a selection that is not a hand-made one"
+          },
+          "403": {
+            "description": "The caller is not an administrator"
+          },
+          "409": {
+            "description": "A batch is being imported already, or a backup is being restored"
+          }
+        }
+      }
+    },
+    "/api/v1/items/import/preview": {
+      "post": {
+        "tags": [
+          "Discover"
+        ],
+        "summary": "Set a batch's lines beside the catalogue before anything is imported:\nwhat each names, whether it is held already, and — for the first dozen\nseconds' worth — whether a provider has it, by its title. Nothing is\nfetched to say so, and nothing is kept.",
+        "operationId": "discover_preview_batch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchPreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportPreview"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "More than two thousand lines"
+          },
+          "403": {
+            "description": "The caller may not write"
           }
         }
       }
@@ -6176,6 +7098,62 @@
         }
       }
     },
+    "/api/v1/media/works": {
+      "get": {
+        "tags": [
+          "Catalogue"
+        ],
+        "summary": "The works by what their media come to: how many each keeps, how many\nwait or were given up on, and what those kept weigh with their copies —\nthe heaviest first, or the most kept, or the most failed. A picture two\nworks share is counted for each.",
+        "operationId": "media_by_work",
+        "parameters": [
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "`space` (the default): the heaviest first, copies included. `count`:\nthe most media kept first. `failed`: the most given up on first.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "How many works, fifty when absent, two hundred at the most.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MediaByWork"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "An order that is none"
+          },
+          "403": {
+            "description": "The caller is not an administrator"
+          }
+        }
+      }
+    },
     "/api/v1/network/callers": {
       "get": {
         "tags": [
@@ -6351,6 +7329,52 @@
           },
           "404": {
             "description": "No such rule"
+          }
+        }
+      }
+    },
+    "/api/v1/networks/{slug}": {
+      "get": {
+        "tags": [
+          "Catalogue"
+        ],
+        "summary": "A network's or a studio's page, by the slug of its name — `hbo`, `a24` —\nas the works name it most often. Several spellings that make one slug are\none page, under the most common.",
+        "operationId": "browse_network",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "The slug of the network's or the studio's name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "language",
+            "in": "query",
+            "description": "The reader's language: `fr`. The titles, the genre's name and the note\nare read in it where they are written in it.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FacetPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The language is not one"
+          },
+          "404": {
+            "description": "No work this reader may see names that network or studio"
           }
         }
       }
@@ -7243,6 +8267,42 @@
         }
       }
     },
+    "/api/v1/tasks/schedules/preview": {
+      "post": {
+        "tags": [
+          "Server"
+        ],
+        "summary": "What a schedule being written comes to: its next moments, or why it is\nnone. Nothing is kept.",
+        "operationId": "tasks_preview_schedule",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskSchedule"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleMoments"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a window or an expression this server reads, and why"
+          },
+          "403": {
+            "description": "The caller is not an administrator"
+          }
+        }
+      }
+    },
     "/api/v1/tasks/{id}/run": {
       "post": {
         "tags": [
@@ -7271,6 +8331,9 @@
               }
             }
           },
+          "400": {
+            "description": "A batch of works, which is started from the import page with its lines"
+          },
           "403": {
             "description": "The caller is not an administrator"
           },
@@ -7281,7 +8344,95 @@
             "description": "It is running already, or a backup is being restored"
           },
           "503": {
-            "description": "Its source or its switch is off: no media store, no export path, no certificate of the server's own, the check for a newer version off, neither Sonarr nor Radarr connected, the AVIF copies off"
+            "description": "Its source or its switch is off: no media store, no export path, no certificate of the server's own, the check for a newer version off, neither Sonarr nor Radarr connected, the AVIF copies off, no import rule switched on"
+          }
+        }
+      }
+    },
+    "/api/v1/tasks/{id}/schedule": {
+      "put": {
+        "tags": [
+          "Server"
+        ],
+        "summary": "Set when a periodic task runs: its own cadence kept to a window of the\nday, or the moments a cron expression names instead — in UTC. The sweep,\nthe two lists downloaded whole and the archive take one; the rest keep\ntheir own cadence.",
+        "operationId": "tasks_set_schedule",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The task",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TaskId"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskSchedule"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskState"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a window or an expression this server reads — said why — or a task that keeps its own cadence"
+          },
+          "403": {
+            "description": "The caller is not an administrator"
+          },
+          "404": {
+            "description": "No such task"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Server"
+        ],
+        "summary": "Leave a periodic task to its own cadence again.",
+        "operationId": "tasks_clear_schedule",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The task",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TaskId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskState"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A task that keeps its own cadence"
+          },
+          "403": {
+            "description": "The caller is not an administrator"
+          },
+          "404": {
+            "description": "No such task"
           }
         }
       }
@@ -7636,6 +8787,52 @@
             "description": "The caller is not an administrator"
           },
           "404": {}
+        }
+      }
+    },
+    "/api/v1/years/{year}": {
+      "get": {
+        "tags": [
+          "Catalogue"
+        ],
+        "summary": "A year's page: the works that came out in it, as their pages date them.",
+        "operationId": "browse_year",
+        "parameters": [
+          {
+            "name": "year",
+            "in": "path",
+            "description": "Four digits, from 1800 to 2200",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "language",
+            "in": "query",
+            "description": "The reader's language: `fr`. The titles, the genre's name and the note\nare read in it where they are written in it.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FacetPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The language is not one"
+          },
+          "404": {
+            "description": "Not a year"
+          }
         }
       }
     },
@@ -10332,6 +11529,106 @@
           }
         }
       },
+      "BatchPreviewRequest": {
+        "type": "object",
+        "description": "Lines to set beside the catalogue.",
+        "required": [
+          "lines"
+        ],
+        "properties": {
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImportLine"
+            },
+            "description": "A work a line: an id, or its page at a provider. Two thousand at the\nmost."
+          },
+          "kind": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MediaKind",
+                "description": "What a TMDB id stands for where its line does not say: `movie` or\n`series`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "BatchRequest": {
+        "type": "object",
+        "description": "A batch to import.",
+        "required": [
+          "lines"
+        ],
+        "properties": {
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImportLine"
+            },
+            "description": "A work a line, as the preview reads them. Two thousand at the most."
+          },
+          "kind": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MediaKind",
+                "description": "What a TMDB id stands for where its line does not say."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "language": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A language the episode texts of each series imported are fetched in\nat once, besides the catalogue's own: `fr`, `pt-BR`."
+          },
+          "lists": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The hand-made selections the works go into, held already or\nimported, by id or slug."
+          },
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether the works imported are switched on; those held already keep\nwhat they are. On when absent."
+          }
+        }
+      },
+      "BatchStarted": {
+        "type": "object",
+        "description": "What a batch started as.",
+        "required": [
+          "jobId",
+          "works",
+          "passedOver"
+        ],
+        "properties": {
+          "jobId": {
+            "type": "string",
+            "description": "The run, as the tasks page follows it."
+          },
+          "works": {
+            "type": "integer",
+            "description": "How many works it takes, each once.",
+            "minimum": 0
+          },
+          "passedOver": {
+            "type": "integer",
+            "description": "How many lines named none: not an id, or a TMDB id of no kind.",
+            "minimum": 0
+          }
+        }
+      },
       "BulkOutcome": {
         "type": "object",
         "required": [
@@ -11104,6 +12401,58 @@
             "items": {
               "$ref": "#/components/schemas/CollectionCard"
             }
+          }
+        }
+      },
+      "Compared": {
+        "type": "object",
+        "description": "One work of the two, as the comparison draws it.",
+        "required": [
+          "work"
+        ],
+        "properties": {
+          "work": {
+            "$ref": "#/components/schemas/MediaItem",
+            "description": "The work as a card draws it — its pictures, its scores, its running\ntime, its genres — without its seasons, episodes or credits."
+          },
+          "seasons": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "A series' seasons, its specials aside."
+          },
+          "episodes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "A series' episodes, its specials aside."
+          }
+        }
+      },
+      "Comparison": {
+        "type": "object",
+        "required": [
+          "first",
+          "second",
+          "shared"
+        ],
+        "properties": {
+          "first": {
+            "$ref": "#/components/schemas/Compared"
+          },
+          "second": {
+            "$ref": "#/components/schemas/Compared"
+          },
+          "shared": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SharedPerson"
+            },
+            "description": "The people both credit, as the works' own credits file them — their\ncasts and crews, not single episodes' — those who made them first,\nthen by their billing."
           }
         }
       },
@@ -12009,6 +13358,84 @@
           }
         }
       },
+      "EditorialNote": {
+        "type": "object",
+        "description": "One note, in one language.",
+        "required": [
+          "scope",
+          "key",
+          "language",
+          "body",
+          "updatedBy",
+          "updatedAt"
+        ],
+        "properties": {
+          "scope": {
+            "$ref": "#/components/schemas/EditorialScope"
+          },
+          "key": {
+            "type": "string",
+            "description": "Which one it is about: a work's or a selection's id, a genre's or a\nnetwork's slug, a year, the first year of a decade."
+          },
+          "language": {
+            "type": "string",
+            "description": "The language it is written in: `en`, `fr`."
+          },
+          "body": {
+            "type": "string",
+            "description": "What it says, in the restricted Markdown."
+          },
+          "updatedBy": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who wrote it last, as the journal names people: `editor:alice`."
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        }
+      },
+      "EditorialNoteRequest": {
+        "type": "object",
+        "required": [
+          "body"
+        ],
+        "properties": {
+          "body": {
+            "type": "string",
+            "description": "What it says: paragraphs, `*emphasis*`, `**strong emphasis**` and\n`[links](/genre/drama)` to pages of this site, at most three thousand\ncharacters. Empty, the note in this language is taken away."
+          }
+        }
+      },
+      "EditorialNotes": {
+        "type": "object",
+        "required": [
+          "notes"
+        ],
+        "properties": {
+          "notes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EditorialNote"
+            },
+            "description": "The one written last first."
+          }
+        }
+      },
+      "EditorialScope": {
+        "type": "string",
+        "description": "What a note is about.",
+        "enum": [
+          "work",
+          "list",
+          "genre",
+          "network",
+          "year",
+          "decade"
+        ]
+      },
       "Effective": {
         "type": "object",
         "description": "One setting as the interface shows it: what it is, and where the answer\ncurrently comes from.",
@@ -12739,6 +14166,91 @@
           "count": {
             "type": "integer",
             "format": "int64"
+          },
+          "slug": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A genre's slug, the same in every language: what its own page is\naddressed by, `/genre/drama`. Only on the genres."
+          }
+        }
+      },
+      "FacetKind": {
+        "type": "string",
+        "description": "What a page of the catalogue is of.",
+        "enum": [
+          "genre",
+          "network",
+          "year",
+          "decade"
+        ]
+      },
+      "FacetPage": {
+        "type": "object",
+        "description": "A page of the catalogue: a genre's, a network's or a studio's, a year's,\na decade's — what it is called, how many works it holds, the five rated\nhighest, how to list the rest, and what the programmer wrote about it.",
+        "required": [
+          "kind",
+          "slug",
+          "name",
+          "count",
+          "best",
+          "filter"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/FacetKind"
+          },
+          "slug": {
+            "type": "string",
+            "description": "What its address names it by: `drama`, `hbo`, `1999`, `1990`. A genre\nasked for by another of its names, or a decade by another of its\nyears, is answered under this one, which the page's address becomes."
+          },
+          "name": {
+            "type": "string",
+            "description": "What it is called: a genre in the reader's language where one is\nknown, a network as the works most often name it, a year and a decade\nas their first year, which the interface words."
+          },
+          "names": {
+            "type": "object",
+            "description": "A genre's names in every language known: `en`, `fr`, and `und` for\nthe one a source gave it by.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many works it holds that the reader may see."
+          },
+          "best": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MediaItem"
+            },
+            "description": "The five of them rated highest, as cards are drawn."
+          },
+          "filter": {
+            "type": "object",
+            "description": "The list's own filters that list them all, for `/items` and\n`/facets`: `{\"genre\": \"drama\"}`, `{\"yearFrom\": \"1990\", \"yearTo\": \"1999\"}`.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "note": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/EditorialNote",
+                "description": "The programmer's note on it: in the reader's language, else in\nEnglish, else the one written last."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
@@ -13138,6 +14650,56 @@
           }
         }
       },
+      "Gaps": {
+        "type": "object",
+        "description": "How many works the register lists under each of its gaps: what each of\nits filters would narrow it to, beside the filter.",
+        "required": [
+          "poster",
+          "overview",
+          "imdb",
+          "refresh",
+          "divergingLock",
+          "duplicates",
+          "mediaFailed"
+        ],
+        "properties": {
+          "poster": {
+            "type": "integer",
+            "format": "int64",
+            "description": "`missing=poster`: no poster of their own, nor one chosen by hand."
+          },
+          "overview": {
+            "type": "integer",
+            "format": "int64",
+            "description": "`missing=overview`: no overview in the language they are stored in."
+          },
+          "imdb": {
+            "type": "integer",
+            "format": "int64",
+            "description": "`missing=imdb`: no IMDb identifier."
+          },
+          "refresh": {
+            "type": "integer",
+            "format": "int64",
+            "description": "`missing=refresh`: never refreshed, though they could be."
+          },
+          "divergingLock": {
+            "type": "integer",
+            "format": "int64",
+            "description": "`missing=divergingLock`: a lock a source moved under since it was set."
+          },
+          "duplicates": {
+            "type": "integer",
+            "format": "int64",
+            "description": "`missing=duplicates`: in a pair proposed as one work."
+          },
+          "mediaFailed": {
+            "type": "integer",
+            "format": "int64",
+            "description": "`missing=mediaFailed`: a picture or a theme the media store gave up on."
+          }
+        }
+      },
       "Group": {
         "type": "string",
         "description": "What a row is about, for grouping.",
@@ -13305,6 +14867,18 @@
           }
         }
       },
+      "IdSource": {
+        "type": "string",
+        "description": "Where an id is from.",
+        "enum": [
+          "tmdb",
+          "imdb",
+          "tvdb",
+          "anilist",
+          "mal",
+          "fankai"
+        ]
+      },
       "Image": {
         "type": "object",
         "required": [
@@ -13367,6 +14941,168 @@
           }
         }
       },
+      "ImportLine": {
+        "type": "object",
+        "description": "A line of the source, as somebody gave it.",
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "`tmdb:603`, `imdb:tt0133093` or `tt0133093`, `tvdb:81189`,\n`anilist:21`, `mal:21`, `fankai:12`, or the work's page at TMDB,\nIMDb, TheTVDB, AniList or MyAnimeList."
+          },
+          "kind": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MediaKind",
+                "description": "`movie` or `series`, where the line says: a TMDB id is one or the\nother."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the line calls the work, said beside one not found."
+          }
+        }
+      },
+      "ImportLineStatus": {
+        "type": "string",
+        "description": "Where a line stands.",
+        "enum": [
+          "held",
+          "candidate",
+          "missing",
+          "unreadable",
+          "needs_kind",
+          "repeated"
+        ]
+      },
+      "ImportPreview": {
+        "type": "object",
+        "required": [
+          "lines",
+          "counts"
+        ],
+        "properties": {
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImportPreviewLine"
+            }
+          },
+          "counts": {
+            "$ref": "#/components/schemas/ImportPreviewCounts"
+          }
+        }
+      },
+      "ImportPreviewCounts": {
+        "type": "object",
+        "description": "How many lines stand where.",
+        "required": [
+          "held",
+          "candidate",
+          "missing",
+          "unreadable",
+          "needsKind",
+          "repeated"
+        ],
+        "properties": {
+          "held": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "candidate": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "missing": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "unreadable": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "needsKind": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "repeated": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "ImportPreviewLine": {
+        "type": "object",
+        "description": "A line, set beside the catalogue.",
+        "required": [
+          "line",
+          "text",
+          "status",
+          "checked"
+        ],
+        "properties": {
+          "line": {
+            "type": "integer",
+            "description": "Its place among the lines given, from 0.",
+            "minimum": 0
+          },
+          "text": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ImportLineStatus"
+          },
+          "wanted": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WantedWork",
+                "description": "The work it names, when it names one."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "work": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WorkRef",
+                "description": "The work held here, for one in the catalogue already."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What a provider calls a candidate, where one was asked — or what the\nline called it."
+          },
+          "year": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "checked": {
+            "type": "boolean",
+            "description": "Whether a provider was asked of a candidate: one not asked is looked\nup as it is imported."
+          }
+        }
+      },
       "ImportRequest": {
         "type": "object",
         "required": [
@@ -13402,6 +15138,242 @@
               "null"
             ],
             "format": "int64"
+          }
+        }
+      },
+      "ImportRule": {
+        "type": "object",
+        "description": "A rule as the pages show it.",
+        "required": [
+          "id",
+          "name",
+          "source",
+          "listMode",
+          "cron",
+          "enableWorks",
+          "isEnabled",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/RuleSource"
+          },
+          "kind": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MediaKind",
+                "description": "TMDB: films or series. A list: what a bare `tmdb:` line stands for."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "days": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "TMDB: how many days back its stretch reaches.",
+            "minimum": 0
+          },
+          "limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "TMDB: how many works, the most popular first.",
+            "minimum": 0
+          },
+          "originalLanguage": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "TMDB: works first made in this language only."
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A list: its address, a key in it shown as `hidden`."
+          },
+          "listId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The selection the works go into."
+          },
+          "listName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "listMode": {
+            "$ref": "#/components/schemas/ListPlacement"
+          },
+          "cron": {
+            "type": "string",
+            "description": "When it runs: five cron fields, UTC."
+          },
+          "language": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A language the episode texts of each series are fetched in."
+          },
+          "enableWorks": {
+            "type": "boolean",
+            "description": "Whether the works it brings in are switched on."
+          },
+          "isEnabled": {
+            "type": "boolean"
+          },
+          "nextAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it runs next, while it is switched on."
+          },
+          "lastRun": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Job",
+                "description": "Its latest run."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "createdBy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        }
+      },
+      "ImportRuleRequest": {
+        "type": "object",
+        "description": "A rule, as it is written. On a change, every field says what the rule is\nto be.",
+        "required": [
+          "name",
+          "source",
+          "cron"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/RuleSource"
+          },
+          "kind": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MediaKind",
+                "description": "TMDB: films or series, films when absent. A list: what a bare\n`tmdb:` line stands for."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "days": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "TMDB: how many days back its stretch reaches, 1 to 3650; ninety when\nabsent — a quarter.",
+            "minimum": 0
+          },
+          "limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "TMDB: how many works, 1 to 500; twenty when absent.",
+            "minimum": 0
+          },
+          "originalLanguage": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "TMDB: works first made in this language only, ISO 639-1: `ja`."
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A list: the address of its text file of ids or its Atom feed. Sent\nback as it was shown, a key `hidden` in it, the key kept is kept."
+          },
+          "listId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A hand-made selection the works go into, by id or slug."
+          },
+          "listMode": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ListPlacement",
+                "description": "`add`: they join it. `replace`: it becomes them. `add` when absent."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cron": {
+            "type": "string",
+            "description": "When it runs: five cron fields, UTC — `0 5 * * 1`, Monday at five."
+          },
+          "language": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A language the episode texts of each series are fetched in at once."
+          },
+          "enableWorks": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether the works it brings in are switched on; on when absent."
+          },
+          "isEnabled": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether it runs; on when absent."
           }
         }
       },
@@ -14170,6 +16142,14 @@
           "filter"
         ]
       },
+      "ListPlacement": {
+        "type": "string",
+        "description": "How the works go into a selection.",
+        "enum": [
+          "add",
+          "replace"
+        ]
+      },
       "Listed": {
         "allOf": [
           {
@@ -14433,6 +16413,137 @@
           }
         }
       },
+      "LogEntry": {
+        "type": "object",
+        "description": "One line of the log.",
+        "required": [
+          "seq",
+          "at",
+          "level",
+          "target",
+          "message",
+          "fields"
+        ],
+        "properties": {
+          "seq": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Its place among the lines written since the start, one more for each:\nwhat `after` asks to be past.",
+            "minimum": 0
+          },
+          "at": {
+            "type": "string",
+            "description": "When it was written, to the millisecond."
+          },
+          "level": {
+            "$ref": "#/components/schemas/LogLevel"
+          },
+          "target": {
+            "type": "string",
+            "description": "The module that wrote it: `arr_metadata_server::jobs::refresh`."
+          },
+          "message": {
+            "type": "string"
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LogField"
+            }
+          },
+          "traceId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The trace of the request it was written in: the request's own id,\nunless a proxy or the traces named another."
+          },
+          "requestId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The id the request was answered with, in `x-request-id`."
+          },
+          "request": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the request asked: its method and its address, masked."
+          }
+        }
+      },
+      "LogField": {
+        "type": "object",
+        "description": "One of a line's fields: its name, and its value as text.",
+        "required": [
+          "name",
+          "value"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "LogLevel": {
+        "type": "string",
+        "description": "How grave a line is. In this order: a filter asks for a level and every\ngraver one.",
+        "enum": [
+          "error",
+          "warn",
+          "info",
+          "debug",
+          "trace"
+        ]
+      },
+      "LogResponse": {
+        "type": "object",
+        "description": "The last lines the server wrote.",
+        "required": [
+          "instance",
+          "capacity",
+          "held",
+          "traces",
+          "reports",
+          "entries"
+        ],
+        "properties": {
+          "instance": {
+            "type": "string",
+            "description": "The instance whose log this is: among several, each keeps its own."
+          },
+          "capacity": {
+            "type": "integer",
+            "description": "How many lines are kept: the oldest goes as each new one comes.",
+            "minimum": 0
+          },
+          "held": {
+            "type": "integer",
+            "description": "How many are kept now.",
+            "minimum": 0
+          },
+          "traces": {
+            "type": "boolean",
+            "description": "Whether the traces are sent to a collector: the environment's\n`OTEL_EXPORTER_OTLP_ENDPOINT` says."
+          },
+          "reports": {
+            "type": "boolean",
+            "description": "Whether the errors are reported to a Sentry: the settings' DSN says."
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LogEntry"
+            },
+            "description": "Those that answer, newest first."
+          }
+        }
+      },
       "LoginRequest": {
         "type": "object",
         "required": [
@@ -14565,6 +16676,27 @@
           "filesystem",
           "s3"
         ]
+      },
+      "MediaByWork": {
+        "type": "object",
+        "description": "The works, by what their media come to.",
+        "required": [
+          "works",
+          "total"
+        ],
+        "properties": {
+          "works": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkMediaLine"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many works point at any medium."
+          }
+        }
       },
       "MediaItem": {
         "type": "object",
@@ -16245,6 +18377,24 @@
           }
         }
       },
+      "Part": {
+        "type": "object",
+        "description": "What somebody did on a work: their job, and the part they played.",
+        "required": [
+          "creditType"
+        ],
+        "properties": {
+          "creditType": {
+            "$ref": "#/components/schemas/CreditType"
+          },
+          "character": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "People": {
         "type": "object",
         "description": "What a work's sources say of the people its credits name, and, read back,\nwhom each credit is filed under.",
@@ -17839,6 +19989,34 @@
           }
         }
       },
+      "PreferenceWrite": {
+        "type": "object",
+        "required": [
+          "value"
+        ],
+        "properties": {
+          "value": {
+            "description": "What is kept under the name, in place of what was: any JSON value\nbut `null`. A preference is forgotten with `DELETE`."
+          }
+        }
+      },
+      "Preferences": {
+        "type": "object",
+        "description": "What you keep of your own way of working.",
+        "required": [
+          "values"
+        ],
+        "properties": {
+          "values": {
+            "type": "object",
+            "description": "Each preference by its name — `catalogue.views`, `table.users` — and\nits value as the interface wrote it.",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "PrimaryImages": {
         "type": "object",
         "description": "The images a person chose, by id among the work's own.",
@@ -18594,6 +20772,51 @@
           "either"
         ]
       },
+      "RuleSource": {
+        "type": "string",
+        "description": "Where a rule's works come from.",
+        "enum": [
+          "tmdb",
+          "feed"
+        ]
+      },
+      "RuleStarted": {
+        "type": "object",
+        "description": "What starting a rule came to.",
+        "required": [
+          "jobId"
+        ],
+        "properties": {
+          "jobId": {
+            "type": "string",
+            "description": "Its run, as the tasks page follows it."
+          }
+        }
+      },
+      "ScheduleKind": {
+        "type": "string",
+        "description": "What a schedule is.",
+        "enum": [
+          "window",
+          "cron"
+        ]
+      },
+      "ScheduleMoments": {
+        "type": "object",
+        "description": "The next moments a schedule names.",
+        "required": [
+          "next"
+        ],
+        "properties": {
+          "next": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The next few, from now: a window's next openings — now, when it is\nopen — or an expression's next moments."
+          }
+        }
+      },
       "Scope": {
         "type": "string",
         "enum": [
@@ -19241,6 +21464,45 @@
           }
         ],
         "description": "The second tier: the server, shared."
+      },
+      "SharedPerson": {
+        "type": "object",
+        "description": "Somebody both works credit.",
+        "required": [
+          "personId",
+          "name",
+          "first",
+          "second"
+        ],
+        "properties": {
+          "personId": {
+            "type": "string",
+            "description": "Their record: `/people/{id}` is their page."
+          },
+          "name": {
+            "type": "string"
+          },
+          "image": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "first": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Part"
+            },
+            "description": "What they did on the first work."
+          },
+          "second": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Part"
+            },
+            "description": "And on the second."
+          }
+        }
       },
       "ShowResource": {
         "type": "object",
@@ -20201,8 +22463,31 @@
           "no_authority",
           "updates_off",
           "arr_off",
-          "avif_off"
+          "avif_off",
+          "no_rules"
         ]
+      },
+      "TaskBoard": {
+        "type": "object",
+        "description": "What a page following the tasks is sent: every task as it stands, and\nthe newest run of all, so that a page can tell its history moved without\nasking for it.",
+        "required": [
+          "tasks"
+        ],
+        "properties": {
+          "tasks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskState"
+            }
+          },
+          "newestRun": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The newest run of any task, a refresh of one work's included."
+          }
+        }
       },
       "TaskId": {
         "type": "string",
@@ -20212,6 +22497,8 @@
           "refresh.all",
           "import.anime",
           "import.imdb",
+          "import.batch",
+          "import.rules",
           "export.nfo",
           "media.store",
           "media.sweep",
@@ -20221,7 +22508,8 @@
           "update.check",
           "arr.seed",
           "backup.run",
-          "search.rebuild"
+          "search.rebuild",
+          "listing.relist"
         ]
       },
       "TaskMode": {
@@ -20232,11 +22520,81 @@
           "off"
         ]
       },
+      "TaskProgress": {
+        "type": "object",
+        "description": "How far a run has got, as its own count says: what a progress bar is\ndrawn from.",
+        "required": [
+          "done"
+        ],
+        "properties": {
+          "done": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many it has done."
+          },
+          "total": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Of how many, when it knows."
+          }
+        }
+      },
+      "TaskSchedule": {
+        "type": "object",
+        "description": "A schedule as it is set and shown: a window's two ends, or an expression,\nin UTC.",
+        "required": [
+          "kind"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/ScheduleKind"
+          },
+          "from": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where a window starts, `HH:MM`."
+          },
+          "to": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where it ends, `HH:MM`: before `from`, it crosses midnight."
+          },
+          "cron": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The five fields, for a cron schedule."
+          },
+          "updatedBy": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who set it, as the journal names them: read, never written."
+          },
+          "updatedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When: read, never written."
+          }
+        }
+      },
       "TaskState": {
         "type": "object",
         "required": [
           "id",
           "mode",
+          "schedulable",
           "cancelable"
         ],
         "properties": {
@@ -20252,7 +22610,22 @@
               "null"
             ],
             "format": "int64",
-            "description": "Seconds between runs, when it is scheduled."
+            "description": "Seconds between runs, when it is scheduled on a cadence of its own."
+          },
+          "schedulable": {
+            "type": "boolean",
+            "description": "Whether a window of the day or a cron expression can be set for it."
+          },
+          "schedule": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TaskSchedule",
+                "description": "The window or the expression somebody set, when one is: its own\ncadence otherwise."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "last": {
             "oneOf": [
@@ -20284,6 +22657,17 @@
               {
                 "$ref": "#/components/schemas/Job",
                 "description": "The run in progress."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "progress": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TaskProgress",
+                "description": "How far the run in progress has got, when it counts."
               },
               {
                 "type": "null"
@@ -20899,6 +23283,34 @@
           "jpegBytes": {
             "type": "integer",
             "format": "int64"
+          }
+        }
+      },
+      "WantedWork": {
+        "type": "object",
+        "description": "One work wanted, by its id at a source.",
+        "required": [
+          "source",
+          "id"
+        ],
+        "properties": {
+          "source": {
+            "$ref": "#/components/schemas/IdSource"
+          },
+          "id": {
+            "type": "string",
+            "description": "The id there: a number, or `tt…` for IMDb."
+          },
+          "kind": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MediaKind",
+                "description": "`movie` or `series`, where it is known."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
@@ -21523,7 +23935,8 @@
         "description": "A work's media, and whether anything is kept at all.",
         "required": [
           "store",
-          "media"
+          "media",
+          "totals"
         ],
         "properties": {
           "store": {
@@ -21535,6 +23948,82 @@
             "items": {
               "$ref": "#/components/schemas/WorkMedium"
             }
+          },
+          "totals": {
+            "$ref": "#/components/schemas/WorkMediaTotals",
+            "description": "What they come to: how many are kept, waiting, given up on, and what\nthose kept weigh with their copies."
+          }
+        }
+      },
+      "WorkMediaLine": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/WorkMediaTotals"
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "title",
+              "kind"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "kind": {
+                "$ref": "#/components/schemas/MediaKind"
+              },
+              "year": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int32"
+              }
+            }
+          }
+        ],
+        "description": "A work, and what its media come to."
+      },
+      "WorkMediaTotals": {
+        "type": "object",
+        "description": "What one work's media come to.",
+        "required": [
+          "stored",
+          "pending",
+          "failed",
+          "bytes",
+          "copiesBytes"
+        ],
+        "properties": {
+          "stored": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The media kept for it."
+          },
+          "pending": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Waiting to be fetched, or tried again."
+          },
+          "failed": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Given up on."
+          },
+          "bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "What the media kept weigh, in bytes."
+          },
+          "copiesBytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "What the copies made of its pictures weigh: the sizes the pages are\ngiven, the night's AVIF."
           }
         }
       },

@@ -158,6 +158,14 @@ impl Recorder {
             tracing::debug!(%id, error = %e, "could not write down what the run did to a work");
         }
     }
+
+    /// Say how far the run has got, for whoever follows it.
+    pub async fn progress(&self, db: &crate::db::Db, detail: &str) {
+        let Some(run) = &self.run else { return };
+        if let Err(e) = job::progress(db, run, detail).await {
+            tracing::debug!(error = %e, "could not say how far the run got");
+        }
+    }
 }
 
 /// Held by whatever is refreshing works in bulk — a sweep, the schedule's or
@@ -360,11 +368,12 @@ pub async fn run(state: AppState) {
     }
 
     // The tick is the shortest the setting allows, and each wake decides
-    // whether enough time has passed — rather than rebuilding the ticker, which
-    // would mean tracking when it last fired anyway.
+    // whether the sweep is due — an interval after the last one began, as the
+    // history says, inside the window or at the moment the schedule names
+    // when one is set. The history rather than this process's memory: a
+    // restart, or another instance taking the lead, keeps the cadence.
     let mut ticker = tokio::time::interval(Duration::from_secs(30));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    let mut swept = tokio::time::Instant::now();
 
     loop {
         ticker.tick().await;
@@ -382,11 +391,10 @@ pub async fn run(state: AppState) {
         // Not while works are being refreshed by hand, here or elsewhere:
         // the next tick asks again.
         if state.flag("refresh.enabled", true)
-            && swept.elapsed() >= interval(&state)
+            && sweep_due(&state).await
             && let Ok(_held) = SWEEPING.try_lock()
             && let Some(_shared) = state.coord.hold(HOLD).await
         {
-            swept = tokio::time::Instant::now();
             run_sweep(&state, batch(&state)).await;
         }
 
@@ -415,6 +423,34 @@ pub fn interval(state: &AppState) -> Duration {
         .and_then(|n| u64::try_from(n).ok())
         .map(Duration::from_secs)
         .unwrap_or(state.config.refresh.interval)
+}
+
+/// What the sweep's own cadence says: an interval after the last one began,
+/// whoever started it — now, when there has been none.
+pub async fn sweep_clock(state: &AppState) -> Result<super::schedule::Clock> {
+    let (last, _) = job::latest(&state.db, job::kinds::REFRESH_SWEEP).await?;
+    let began = last
+        .and_then(|run| run.started_at)
+        .as_deref()
+        .and_then(crate::db::parse_rfc3339);
+    let every = chrono::Duration::from_std(interval(state)).unwrap_or(chrono::Duration::zero());
+    Ok(super::schedule::Clock {
+        natural: began.map_or_else(chrono::Utc::now, |at| at + every),
+        last_done: began,
+        not_before: None,
+    })
+}
+
+/// Whether the schedule's sweep is due now. A history that cannot be read is
+/// no sweep: the next tick asks again.
+async fn sweep_due(state: &AppState) -> bool {
+    match sweep_clock(state).await {
+        Ok(clock) => super::schedule::due(state, job::kinds::REFRESH_SWEEP, clock).await,
+        Err(e) => {
+            tracing::warn!(error = %e, "could not tell whether a sweep is due");
+            false
+        }
+    }
 }
 
 fn batch(state: &AppState) -> i64 {
@@ -482,6 +518,10 @@ async fn sweep(state: &AppState, batch: i64, recorder: &Recorder) -> Result<Stri
     let mut succeeded = 0usize;
     let mut light = 0usize;
     let mut failed = 0usize;
+    // How many works were taken, and of how many: what the run says as it
+    // goes, in the words a refresh of everything uses.
+    let total = due.len() + aged.len();
+    let mut taken = 0usize;
 
     // Each work's branch on the heap, so that the sweep's own future — and
     // the scheduler's task, which holds it — stays small whatever a refresh
@@ -492,6 +532,13 @@ async fn sweep(state: &AppState, batch: i64, recorder: &Recorder) -> Result<Stri
         } else {
             failed += 1;
         }
+        taken += 1;
+        recorder
+            .progress(
+                &state.db,
+                &format!("{taken} of {total}: {succeeded} refreshed, {failed} failed"),
+            )
+            .await;
     }
 
     for (id, _kind) in aged {
@@ -504,6 +551,13 @@ async fn sweep(state: &AppState, batch: i64, recorder: &Recorder) -> Result<Stri
             Light::Passed => {}
             Light::Failed => failed += 1,
         }
+        taken += 1;
+        recorder
+            .progress(
+                &state.db,
+                &format!("{taken} of {total}: {succeeded} refreshed, {failed} failed"),
+            )
+            .await;
     }
 
     tracing::info!(succeeded, light, failed, "refresh sweep finished");

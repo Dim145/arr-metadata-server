@@ -11,19 +11,20 @@
  * far more easily than the top.
  */
 
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { createContext, use, useEffect, useState } from 'react'
-import { Link, NavLink, Navigate, Outlet, useLocation } from 'react-router'
+import { Link, NavLink, Navigate, Outlet, useLocation, useNavigate } from 'react-router'
 
 import { api } from '../lib/api'
 import { useNavigationReset } from '../lib/hooks'
 import { cn } from '../lib/cn'
 import { useI18n, type Dict } from '../lib/i18n'
+import { leaving } from '../lib/leave'
 import { LanguageToggle } from './LanguageToggle'
 import { ThemeToggle } from './ThemeToggle'
 import { describeIdentity } from '../lib/labels'
-import type { Health, Me, Settings, UsersPage } from '../lib/types'
-import { CommandPalette } from './CommandPalette'
+import type { Health, Me, Settings, Task, UsersPage } from '../lib/types'
+import { CommandPalette, CommandsProvider, useCommandKeys, type Command } from './CommandPalette'
 import { PageBoundary } from './PageBoundary'
 import { SignOut } from './SignOut'
 import { Glyph, Spinner, type GlyphName } from './ui'
@@ -51,6 +52,7 @@ const NAV: Entry[] = [
   { to: '/admin/people', glyph: 'user', label: (t) => t.admin.peopleNav, group: 'catalogue' },
   { to: '/admin/discover', glyph: 'discover', label: (t) => t.admin.discover, tab: true, group: 'catalogue' },
   { to: '/admin/lists', glyph: 'list', label: (t) => t.admin.lists, group: 'catalogue' },
+  { to: '/admin/editorial', glyph: 'pencil', label: (t) => t.admin.editorialNav, group: 'catalogue' },
   { to: '/admin/jobs', glyph: 'clock', label: (t) => t.admin.jobs, group: 'system', admin: true },
   { to: '/admin/sources', glyph: 'cloud', label: (t) => t.admin.sourcesNav, group: 'system' },
   { to: '/admin/arr', glyph: 'link', label: (t) => t.admin.arrNav, group: 'system', admin: true },
@@ -58,6 +60,7 @@ const NAV: Entry[] = [
   { to: '/admin/cache', glyph: 'database', label: (t) => t.admin.cacheNav, group: 'system', admin: true },
   { to: '/admin/backups', glyph: 'shield', label: (t) => t.admin.backupsNav, group: 'system', admin: true },
   { to: '/admin/audit', glyph: 'journal', label: (t) => t.admin.audit, group: 'system', admin: true },
+  { to: '/admin/logs', glyph: 'terminal', label: (t) => t.admin.logsNav, group: 'system', admin: true },
   { to: '/admin/notifications', glyph: 'bell', label: (t) => t.admin.notificationsNav, group: 'system', admin: true },
   { to: '/admin/users', glyph: 'user', label: (t) => t.admin.users, group: 'access', admin: true },
   { to: '/admin/access', glyph: 'globe', label: (t) => t.admin.accessPage, group: 'access', admin: true },
@@ -146,12 +149,15 @@ export function AdminShell() {
           className="relative z-10 min-w-0 flex-1 px-4 pt-6 pb-28 outline-none sm:px-6 lg:px-10 lg:pt-10 lg:pb-16"
         >
           <TitleContext value={setOverride}>
-            {/* A page that throws is said so here, with the sidebar still
-                where it was. */}
-            <PageBoundary>
-              <Outlet />
-            </PageBoundary>
-            <CommandPalette canWrite isAdmin={me.data.isAdmin} />
+            {/* What each page offers to do, for the palette and its keys. */}
+            <CommandsProvider>
+              {/* A page that throws is said so here, with the sidebar still
+                  where it was. */}
+              <PageBoundary>
+                <Outlet />
+              </PageBoundary>
+              <AdminCommands isAdmin={me.data.isAdmin} />
+            </CommandsProvider>
           </TitleContext>
         </main>
 
@@ -159,6 +165,67 @@ export function AdminShell() {
       </div>
     </div>
   )
+}
+
+/**
+ * The administration's own commands, on every page of it: `g` then a letter
+ * to go to a place — the palette shows which — and, for an administrator,
+ * a task to run, followed on the Tasks page once it has started.
+ */
+function AdminCommands({ isAdmin }: { isAdmin: boolean }) {
+  const { t } = useI18n()
+  const navigate = useNavigate()
+  const queryClient = useQueryClient()
+
+  const go = (to: string) => () => leaving(() => navigate(to))
+  const places: Command[] = [
+    { id: 'go-dashboard', label: t.admin.dashboard, keys: 'g d', run: go('/admin') },
+    { id: 'go-catalogue', label: t.admin.catalogue, keys: 'g c', run: go('/admin/catalogue') },
+    { id: 'go-people', label: t.admin.peopleNav, keys: 'g p', run: go('/admin/people') },
+    { id: 'go-discover', label: t.admin.discover, keys: 'g i', run: go('/admin/discover') },
+    { id: 'go-lists', label: t.admin.lists, keys: 'g l', run: go('/admin/lists') },
+    ...(isAdmin
+      ? [
+          { id: 'go-jobs', label: t.admin.jobs, keys: 'g t', run: go('/admin/jobs') },
+          { id: 'go-media', label: t.admin.mediaNav, keys: 'g m', run: go('/admin/media') },
+          { id: 'go-backups', label: t.admin.backupsNav, keys: 'g b', run: go('/admin/backups') },
+          { id: 'go-audit', label: t.admin.audit, keys: 'g a', run: go('/admin/audit') },
+          { id: 'go-notifications', label: t.admin.notificationsNav, keys: 'g n', run: go('/admin/notifications') },
+          { id: 'go-users', label: t.admin.users, keys: 'g u', run: go('/admin/users') },
+          { id: 'go-clients', label: t.admin.clients, keys: 'g k', run: go('/admin/clients') },
+          { id: 'go-settings', label: t.admin.settings, keys: 'g s', run: go('/admin/settings') },
+        ]
+      : []),
+  ]
+
+  const runTask: Command = {
+    id: 'run-task',
+    label: t.palette.run,
+    glyph: 'clock',
+    choose: {
+      title: t.palette.runTitle,
+      load: async () => {
+        const tasks = await api.get<Task[]>('/tasks')
+        return tasks.map((task) => ({
+          id: task.id,
+          label: t.admin.tasks.names[task.id] ?? task.id,
+          disabled: Boolean(task.running || task.blocked),
+          hint: task.blocked ? (t.admin.tasks.blocked[task.blocked] ?? t.palette.runBlocked) : task.running ? t.palette.running : undefined,
+          run: async () => {
+            await api.post(`/tasks/${encodeURIComponent(task.id)}/run`)
+            void queryClient.invalidateQueries({ queryKey: ['tasks'] })
+            // Followed where every run is.
+            leaving(() => navigate('/admin/jobs'))
+          },
+        }))
+      },
+    },
+  }
+  const extra = isAdmin ? [runTask] : []
+
+  useCommandKeys(() => [...places, ...extra])
+
+  return <CommandPalette canWrite isAdmin={isAdmin} extra={extra} />
 }
 
 /* ── Wide ─────────────────────────────────────────────────────────────────── */

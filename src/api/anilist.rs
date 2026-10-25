@@ -271,7 +271,7 @@ async fn send(
     }
 
     let started = Instant::now();
-    let response = outbound.send().await;
+    let response = crate::outbound::send("anilist", outbound).await;
     crate::metrics::upstream(
         "anilist",
         started,

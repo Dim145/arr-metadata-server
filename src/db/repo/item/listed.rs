@@ -81,15 +81,12 @@ impl Listed {
         Self {
             title,
             year: item.year,
-            // Each once, in the order the work gives them; see `genre_parts`.
-            genres: {
-                let mut seen = std::collections::HashSet::new();
-                item.genres
-                    .iter()
-                    .flat_map(|g| crate::domain::genre_parts(&clean(g)))
-                    .filter(|g| seen.insert(g.clone()))
-                    .collect()
-            },
+            // By their slugs, each once, in the order the work gives them:
+            // "Drama" and "Drame" are one genre; see `repo::genre`.
+            genres: crate::db::repo::genre::of_names(&each(&item.genres))
+                .into_iter()
+                .map(|(slug, _)| slug)
+                .collect(),
             keywords: each(&item.keywords),
             network: given(&item.network),
             studio: given(&item.studio),
@@ -352,10 +349,12 @@ mod tests {
             "Fantasy".into(),
             "Science Fiction".into(),
             "Drama".into(),
+            // The same genre, in the French a source gave it in.
+            "Drame".into(),
         ];
         assert_eq!(
             Listed::of(&item).genres,
-            ["Science Fiction", "Fantasy", "Drama"]
+            ["science-fiction", "fantasy", "drama"]
         );
     }
 }

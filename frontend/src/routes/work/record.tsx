@@ -10,9 +10,10 @@ import { ExternalLink } from '../../components/elsewhere'
 import { Field, Genre, Glyph, Panel, PanelHead, Select } from '../../components/ui'
 import { ApiError, api, query } from '../../lib/api'
 import { cn } from '../../lib/cn'
+import { genrePath } from '../../lib/facets'
 import * as fmt from '../../lib/format'
 import { useI18n } from '../../lib/i18n'
-import { languageName, providerName, statusLabel } from '../../lib/labels'
+import { languageName, listedGenres, providerName, statusLabel } from '../../lib/labels'
 import { identifierLink } from '../../lib/links'
 import { ratingsOf } from '../../lib/media'
 import {
@@ -76,8 +77,8 @@ export function Record({ item, region }: { item: MediaItem; region: string }) {
 
       {item.genres.length ? (
         <div className="flex flex-wrap gap-1.5 border-t border-rule p-4">
-          {item.genres.map((genre) => (
-            <Genre key={genre} name={genre} to={`/browse?genre=${encodeURIComponent(genre)}`} />
+          {listedGenres(item.genres).map((genre) => (
+            <Genre key={genre} name={genre} to={genrePath(genre)} />
           ))}
         </div>
       ) : null}

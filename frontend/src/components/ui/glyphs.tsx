@@ -103,6 +103,12 @@ const PATHS = {
       <path d="M6 5.5h4M6 8h4M6 10.5h2.5" />
     </>
   ),
+  terminal: (
+    <>
+      <rect x="1.8" y="2.8" width="12.4" height="10.4" rx="1.5" />
+      <path d="M4.5 6.3 6.6 8l-2.1 1.7M8.2 10h3.3" />
+    </>
+  ),
   signOut: <path d="M6.5 14h-3a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1h3M10.5 11.5 14 8l-3.5-3.5M14 8H6" />,
   plus: <path d="M8 3v10M3 8h10" />,
   minus: <path d="M3 8h10" />,

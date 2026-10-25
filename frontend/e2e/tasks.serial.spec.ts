@@ -59,7 +59,8 @@ test.describe('the tasks', () => {
 
     const sweep = page.getByRole('region', { name: /refresh what is due|actualiser ce qui est dû/i })
     const asked = page.waitForResponse((r) => r.url().endsWith('/api/v1/tasks/refresh.sweep/run'))
-    await sweep.getByRole('button', { name: /^(run now|lancer)$/i }).click()
+    // "Run again" once it has run, named after the task.
+    await sweep.getByRole('button', { name: /^(run now|run again|lancer|relancer)\b/i }).click()
     const answer = await asked
     expect(answer.status()).toBe(202)
     const { jobId } = (await answer.json()) as { jobId: string }
@@ -69,7 +70,8 @@ test.describe('the tasks', () => {
     const mine = (run as { jobs: { id: string; triggeredBy?: string }[] }).jobs.find((job) => job.id === jobId)
     const name = USERNAME!.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     expect(mine?.triggeredBy).toMatch(pattern(`:${escaped(name)}$`))
-    await page.getByLabel(/^(started by|lancée par)$/i).selectOption('person')
+    // The filter, not the box that shows the column of the same name.
+    await page.getByRole('combobox', { name: /^(started by|lancée par)$/i }).selectOption('person')
     // The newest run is the first row under the first day's heading.
     await expect(page.locator('tr[data-job]').first()).toContainText(
       /refresh what is due|actualiser ce qui est dû/i,

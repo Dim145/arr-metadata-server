@@ -47,6 +47,10 @@ pub async fn by_ids(db: &Db, ids: &[String]) -> Result<Vec<MediaItem>> {
 pub struct Facet {
     pub value: String,
     pub count: i64,
+    /// A genre's slug, the same in every language: what its own page is
+    /// addressed by, `/genre/drama`. Only on the genres.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slug: Option<String>,
 }
 
 /// What the works on view can be narrowed by.
@@ -130,10 +134,17 @@ pub async fn facets(db: &Db, q: &Query) -> Result<Facets> {
         ..Default::default()
     };
 
+    // By genre, whichever of its names or its slug a work is listed under —
+    // one listed before genres had slugs still holds names — and each once a
+    // work, so that "Drama" and "Drame" are one genre counted once.
     let mut genres: HashMap<String, i64> = HashMap::new();
+    let mut held: HashMap<String, String> = HashMap::new();
     for row in &all {
-        for genre in row.text_list("genres")? {
-            *genres.entry(genre).or_default() += 1;
+        for (slug, name) in crate::db::repo::genre::of_names(&row.text_list("genres")?) {
+            if name != slug {
+                held.entry(slug.clone()).or_insert(name);
+            }
+            *genres.entry(slug).or_default() += 1;
         }
     }
 
@@ -173,13 +184,36 @@ pub async fn facets(db: &Db, q: &Query) -> Result<Facets> {
     let ranked = |counts: HashMap<String, i64>| {
         let mut list: Vec<Facet> = counts
             .into_iter()
-            .map(|(value, count)| Facet { value, count })
+            .map(|(value, count)| Facet {
+                value,
+                count,
+                slug: None,
+            })
             .collect();
         list.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.value.cmp(&b.value)));
         list
     };
 
-    facets.genres = ranked(genres);
+    // Each genre by the name a filter asks for it by and the interface
+    // translates — its English one where the server knows it, else the one a
+    // source gave it by — with its slug beside it.
+    let slugs: Vec<String> = genres.keys().cloned().collect();
+    let named = crate::db::repo::genre::many(db, &slugs).await?;
+    let mut by_genre: Vec<Facet> = genres
+        .into_iter()
+        .map(|(slug, count)| Facet {
+            value: named
+                .get(&slug)
+                .map(|genre| genre.listed_name())
+                .or_else(|| held.get(&slug).cloned())
+                .unwrap_or_else(|| slug.clone()),
+            count,
+            slug: Some(slug),
+        })
+        .collect();
+    by_genre.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.value.cmp(&b.value)));
+
+    facets.genres = by_genre;
     facets.networks = ranked(networks);
     facets.networks.truncate(TOP_NETWORKS);
     facets.languages = ranked(languages);
@@ -212,6 +246,35 @@ async fn rows_without(db: &Db, on: bool, without: Query) -> Result<Option<Vec<sq
     } else {
         Ok(None)
     }
+}
+
+/// The names works are listed under as a network or a studio, and how many
+/// works each names, among the works switched on — for adults only where
+/// `include_adult`. Networks have no record of their own: a network's page,
+/// addressed by the slug of its name, finds it among these.
+pub async fn network_names(db: &Db, include_adult: bool) -> Result<Vec<(String, i64)>> {
+    let adult = if include_adult {
+        ""
+    } else {
+        " AND is_adult = 0"
+    };
+    let sql = format!(
+        "SELECT listed_network AS name, COUNT(*) AS n FROM media_item
+          WHERE is_enabled = 1 AND merged_into IS NULL AND listed_network IS NOT NULL{adult}
+          GROUP BY listed_network
+         UNION ALL
+         SELECT listed_studio AS name, COUNT(*) AS n FROM media_item
+          WHERE is_enabled = 1 AND merged_into IS NULL AND listed_studio IS NOT NULL
+            AND (listed_network IS NULL OR listed_network <> listed_studio){adult}
+          GROUP BY listed_studio"
+    );
+    let rows = sqlx::query(db.sql(&sql)).fetch_all(db.pool()).await?;
+
+    let mut counted: std::collections::BTreeMap<String, i64> = std::collections::BTreeMap::new();
+    for row in &rows {
+        *counted.entry(row.text("name")?).or_default() += row.big("n")?;
+    }
+    Ok(counted.into_iter().collect())
 }
 
 /// A mark that moves whenever the catalogue does: how many works it holds and
@@ -525,12 +588,71 @@ mod tests {
             facets.genres[0],
             Facet {
                 value: "Drama".into(),
-                count: 2
+                count: 2,
+                slug: Some("drama".into()),
             }
         );
         assert!(facets.genres.iter().all(|g| g.value != "Hentai"));
         assert_eq!(facets.networks.len(), 2);
         assert_eq!((facets.year_min, facets.year_max), (Some(2008), Some(2013)));
+    }
+
+    #[tokio::test]
+    async fn a_genre_named_in_two_languages_is_counted_once_by_its_slug() {
+        let db = db().await;
+        // Fetched in English, then in French after the server's language
+        // changed, and once by a source with its own word for it.
+        for (title, genres) in [
+            ("English", vec!["Drama", "Science Fiction"]),
+            ("French", vec!["Drame", "Science-Fiction"]),
+            ("Both", vec!["Drama", "Drame", "Sci-Fi"]),
+            ("Learned", vec!["Komödie"]),
+        ] {
+            stored(&db, |i| {
+                i.title = title.into();
+                i.genres = genres.into_iter().map(String::from).collect();
+            })
+            .await;
+        }
+        crate::service::listing::relist_stale(&db, false, 100)
+            .await
+            .expect("listed");
+
+        let facets = facets(&db, &Query::default()).await.expect("counted");
+        let found: Vec<(&str, i64, Option<&str>)> = facets
+            .genres
+            .iter()
+            .map(|g| (g.value.as_str(), g.count, g.slug.as_deref()))
+            .collect();
+        assert_eq!(
+            found,
+            [
+                ("Drama", 3, Some("drama")),
+                ("Science Fiction", 3, Some("science-fiction")),
+                ("Komödie", 1, Some("komodie")),
+            ]
+        );
+        // Asked for by any of its names, or its slug: the same three works.
+        for asked in ["Drama", "Drame", "drama"] {
+            let narrowed = facets_of(&db, asked).await;
+            assert_eq!(narrowed, 3, "{asked}");
+        }
+        assert_eq!(facets_of(&db, "Komödie").await, 1);
+        assert_eq!(facets_of(&db, "komodie").await, 1);
+    }
+
+    /// How many works a genre asked for by `name` lists.
+    async fn facets_of(db: &Db, name: &str) -> i64 {
+        facets(
+            db,
+            &Query {
+                genres: vec![name.into()],
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("counted")
+        .total
     }
 
     #[tokio::test]

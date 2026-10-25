@@ -5,13 +5,13 @@
 //! with immutable caching; everything else, the page first of all, is asked
 //! about on every load.
 //!
-//! The page is the same for every route but one thing: a link to a work or
-//! to a list carries, in its head, what a link preview shows of it — a title,
-//! a line, a poster — for the readers that never run the app, and only while
-//! a reader with no credential would be let in at all. A work's page carries
-//! what a search engine reads of it too, as schema.org describes a film or a
-//! series — only where the site is public, the one case a search engine is
-//! meant to read it.
+//! The page is the same for every route but one thing: a link to a work, to a
+//! list, or to a genre's, a network's, a year's or a decade's page carries,
+//! in its head, what a link preview shows of it — a title, a line, a poster —
+//! for the readers that never run the app, and only while a reader with no
+//! credential would be let in at all. A work's page carries what a search
+//! engine reads of it too, as schema.org describes a film or a series — only
+//! where the site is public, the one case a search engine is meant to read it.
 
 use axum::{
     Router,
@@ -25,8 +25,8 @@ use rust_embed::RustEmbed;
 
 use crate::{
     config::SurfacePolicy,
-    db::repo::{self, list::CuratedList},
-    domain::{CoverType, CreditType, MediaKind},
+    db::repo::{self, editorial::Scope, list::CuratedList},
+    domain::{CoverType, CreditType, MediaItem, MediaKind},
     service,
     state::AppState,
 };
@@ -251,6 +251,12 @@ async fn preview(state: &AppState, path: &str) -> Option<Preview> {
     match (parts.next()?, parts.next()?) {
         ("work", id) if uuid::Uuid::parse_str(id).is_ok() => work_preview(state, id).await,
         ("lists", key) if is_key(key) && parts.next().is_none() => list_preview(state, key).await,
+        (page @ ("genre" | "network" | "year" | "decade"), key)
+            if !key.is_empty() && key.len() <= 128 && parts.next().is_none() =>
+        {
+            let key = urlencoding::decode(key).ok()?;
+            page_preview(state, page, &key).await
+        }
         _ => None,
     }
 }
@@ -274,25 +280,7 @@ async fn work_preview(state: &AppState, id: &str) -> Option<Preview> {
         Some(year) => format!("{} ({year})", item.title),
         None => item.title.clone(),
     };
-    // The poster every client is given: the chosen one, else one added by
-    // hand, else the best the sources offered.
-    let image = crate::domain::lead_images(
-        item.images.iter().filter(|i| i.season_number.is_none()),
-        &item.primary_images,
-    )
-    .into_iter()
-    .find(|i| i.cover_type == CoverType::Poster)
-    .and_then(|i| {
-        // A copy kept, addressed by a path: under the public URL for a
-        // crawler, which cannot follow the path, or the provider's
-        // address when there is none.
-        if i.url.starts_with(crate::media::ROUTE) {
-            state.media.for_elsewhere(&i.url)
-        } else {
-            Some(i.url.clone())
-        }
-    })
-    .filter(|url| url.starts_with("https://") || url.starts_with("http://"));
+    let image = poster_of(state, &item);
     let description = item.overview.as_deref().and_then(line);
     // For a search engine, and only where the site is public: one let in by
     // the surface's own policy is a home network's, not the web's.
@@ -342,6 +330,141 @@ async fn work_preview(state: &AppState, id: &str) -> Option<Preview> {
         },
         structured,
     })
+}
+
+/// The poster every client is given of a work — the chosen one, else one
+/// added by hand, else the best the sources offered — as an address a
+/// crawler can follow.
+fn poster_of(state: &AppState, item: &MediaItem) -> Option<String> {
+    crate::domain::lead_images(
+        item.images.iter().filter(|i| i.season_number.is_none()),
+        &item.primary_images,
+    )
+    .into_iter()
+    .find(|i| i.cover_type == CoverType::Poster)
+    .and_then(|i| {
+        // A copy kept, addressed by a path: under the public URL for a
+        // crawler, which cannot follow the path, or the provider's
+        // address when there is none.
+        if i.url.starts_with(crate::media::ROUTE) {
+            state.media.for_elsewhere(&i.url)
+        } else {
+            Some(i.url.clone())
+        }
+    })
+    .filter(|url| url.starts_with("https://") || url.starts_with("http://"))
+}
+
+/// The preview of a genre's, a network's, a year's or a decade's page: its
+/// name in the catalogue's own language, its programmer's note — or else how
+/// many works it holds — and the poster of the one rated highest.
+async fn page_preview(state: &AppState, page: &str, key: &str) -> Option<Preview> {
+    // A preview fetcher says no language: the one the catalogue is kept in.
+    let language = repo::genre::language_of(&state.language(None, None));
+    let adult = state.adult_for(None, None, None);
+    let (scope, slug, title, filters) = match page {
+        "genre" => {
+            let genre = repo::genre::find(&state.db, key).await.ok().flatten()?;
+            let title = genre.name(Some(&language));
+            let filters = repo::item::Query {
+                genres: vec![genre.slug.clone()],
+                ..Default::default()
+            };
+            (Scope::Genre, genre.slug, title, filters)
+        }
+        "network" => {
+            let slug = slug::slugify(key);
+            let name = crate::api::native::browse::network_named(state, &slug, adult)
+                .await
+                .ok()
+                .flatten()?;
+            let filters = repo::item::Query {
+                network: Some(name.clone()),
+                ..Default::default()
+            };
+            (Scope::Network, slug, name, filters)
+        }
+        "year" => {
+            let year = crate::api::native::browse::year_of(key)?;
+            let filters = repo::item::Query {
+                year_from: Some(year),
+                year_to: Some(year),
+                ..Default::default()
+            };
+            (Scope::Year, year.to_string(), year.to_string(), filters)
+        }
+        _ => {
+            let year = crate::api::native::browse::year_of(key)?;
+            let first = year - year.rem_euclid(10);
+            let filters = repo::item::Query {
+                year_from: Some(first),
+                year_to: Some(first + 9),
+                ..Default::default()
+            };
+            let title = if language == "fr" {
+                format!("Les années {first}")
+            } else {
+                format!("The {first}s")
+            };
+            (Scope::Decade, first.to_string(), title, filters)
+        }
+    };
+    facet_preview(state, scope, &slug, title, filters, &language, adult).await
+}
+
+/// What [`page_preview`] reads once it knows what the page is of.
+async fn facet_preview(
+    state: &AppState,
+    scope: Scope,
+    slug: &str,
+    title: String,
+    filters: repo::item::Query,
+    language: &str,
+    adult: bool,
+) -> Option<Preview> {
+    let filters = repo::item::Query {
+        include_adult: adult,
+        sort: repo::item::Sort::Rating,
+        limit: 1,
+        offset: 0,
+        ..filters
+    };
+    let (found, count) = repo::item::search_counted(&state.db, &filters).await.ok()?;
+    let image = match found.first() {
+        Some(best) => service::load(state, &best.id)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|work| poster_of(state, &work)),
+        None => None,
+    };
+    let note = repo::editorial::read(&state.db, scope, slug, language)
+        .await
+        .ok()
+        .flatten();
+    let description = note
+        .map(|note| repo::editorial::plain(&note.body))
+        .and_then(|text| line(&text))
+        .or_else(|| Some(counted(count, language)));
+    Some(Preview {
+        title,
+        description,
+        image,
+        kind: "website",
+        structured: None,
+    })
+}
+
+/// How many works a page holds, said in the catalogue's language.
+fn counted(count: i64, language: &str) -> String {
+    match (language, count) {
+        ("fr", 0) => "Aucune œuvre au catalogue pour l’instant.".to_string(),
+        ("fr", 1) => "Une œuvre au catalogue.".to_string(),
+        ("fr", n) => format!("{n} œuvres au catalogue."),
+        (_, 0) => "Nothing in the catalogue yet.".to_string(),
+        (_, 1) => "One work in the catalogue.".to_string(),
+        (_, n) => format!("{n} works in the catalogue."),
+    }
 }
 
 /// A work, as much of it as a search engine is told.
@@ -731,6 +854,73 @@ mod tests {
         assert!(long.ends_with("word…"));
         let one_word = line(&"x".repeat(400)).unwrap();
         assert!(one_word.chars().count() <= 300);
+    }
+
+    #[tokio::test]
+    async fn a_genre_s_page_is_previewed_by_its_note_or_by_how_many_works_it_holds() {
+        let state = crate::api::native::testing::server().await;
+        for (title, genres) in [("One", vec!["Drama"]), ("Two", vec!["Drame", "Crime"])] {
+            let mut work = MediaItem::empty(MediaKind::Movie);
+            work.title = title.into();
+            work.slug = crate::domain::make_slug(title, None);
+            work.genres = genres.into_iter().map(String::from).collect();
+            repo::item::upsert(
+                &state.db,
+                repo::item::ItemWrite {
+                    item: &work,
+                    replace_children: true,
+                },
+            )
+            .await
+            .unwrap();
+        }
+        crate::service::listing::relist_stale(&state.db, false, 100)
+            .await
+            .unwrap();
+
+        // Asked for by its French name: the genre's page all the same.
+        let preview = page_preview(&state, "genre", "Drame")
+            .await
+            .expect("previewed");
+        assert_eq!(preview.title, "Drama");
+        assert_eq!(preview.kind, "website");
+        assert_eq!(
+            preview.description.as_deref(),
+            Some("2 works in the catalogue.")
+        );
+
+        repo::editorial::put(
+            &state.db,
+            Scope::Genre,
+            "drama",
+            "en",
+            "The *quiet* ones, [all of them](/genre/drama).",
+            None,
+        )
+        .await
+        .unwrap();
+        let preview = page_preview(&state, "genre", "drama")
+            .await
+            .expect("previewed");
+        assert_eq!(
+            preview.description.as_deref(),
+            Some("The quiet ones, all of them.")
+        );
+
+        let decade = page_preview(&state, "decade", "1994")
+            .await
+            .expect("previewed");
+        assert_eq!(decade.title, "The 1990s");
+        assert!(page_preview(&state, "year", "nineteen").await.is_none());
+        assert!(page_preview(&state, "network", "nobody").await.is_none());
+        assert!(page_preview(&state, "genre", "isekai").await.is_none());
+    }
+
+    #[test]
+    fn a_count_is_said_in_the_catalogue_s_language() {
+        assert_eq!(counted(0, "en"), "Nothing in the catalogue yet.");
+        assert_eq!(counted(1, "en"), "One work in the catalogue.");
+        assert_eq!(counted(12, "fr"), "12 œuvres au catalogue.");
     }
 
     #[test]

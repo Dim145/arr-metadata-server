@@ -1,9 +1,12 @@
 pub mod backup;
 pub mod cancel;
 pub mod datasets;
+pub mod import;
 pub mod listing;
 pub mod media;
 pub mod refresh;
+pub mod rules;
+pub mod schedule;
 pub mod search;
 pub mod supervise;
 pub mod tasks;

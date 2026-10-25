@@ -19,6 +19,9 @@
 //! the resolver — and at every redirect, whose address arrives after every
 //! other check has passed, and never reaches the resolver when it is written
 //! as an address.
+//!
+//! And how a call to a provider joins the trace of the request that made it,
+//! when traces are on: [`send`].
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
@@ -342,6 +345,32 @@ impl reqwest::dns::Resolve for GuardedResolver {
             Ok(Box::new(found.into_iter()) as reqwest::dns::Addrs)
         })
     }
+}
+
+/// Send a request to a provider, as a span of the trace the caller is in when
+/// traces are on: the call carries the trace in its `traceparent`, so that a
+/// provider that keeps traces too — another instance of this server, a
+/// service behind a proxy that traces — joins it, and the trace says how the
+/// call went. With traces off, or outside a request, it is sent as it is.
+/// `provider` names the provider as the metrics do: `tmdb`, `tvdb`…
+pub async fn send(
+    provider: &str,
+    request: reqwest::RequestBuilder,
+) -> reqwest::Result<reqwest::Response> {
+    use tracing::Instrument as _;
+
+    if !crate::telemetry::trace::is_on() {
+        return request.send().await;
+    }
+    let (client, request) = request.build_split();
+    let mut request = request?;
+    let Some(span) = crate::telemetry::trace::client_span(provider, &request) else {
+        return client.execute(request).await;
+    };
+    crate::telemetry::trace::inject(&span, request.headers_mut());
+    let outcome = client.execute(request).instrument(span.clone()).await;
+    crate::telemetry::trace::ended(&span, &outcome);
+    outcome
 }
 
 /// The client for fetching what somebody else pointed at: resolving through

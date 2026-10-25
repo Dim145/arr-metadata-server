@@ -4,12 +4,18 @@
 //! with fixed labels, added to without a lock and read in one pass, and the
 //! text format is four lines a metric. Requests are counted by the surface
 //! they land on — Sonarr's, Radarr's, Plex's provider, the TMDB relay, the
-//! native API, the interface — and the calls made upstream by the provider asked, each with
-//! how long it took. What the catalogue holds, what the caches keep and what
-//! the jobs did are read off the state when the scrape comes.
+//! native API, the interface — by status class and by status, and the calls
+//! made upstream by the provider asked, each with how long it took; and how
+//! long a request waited for one of the database's connections. What the
+//! catalogue holds, what the caches keep, what waits in each queue, how the
+//! pool of connections stands, when the certificates end and what the jobs
+//! did are read off the state when the scrape comes.
 
 use std::{
-    sync::atomic::{AtomicU64, Ordering::Relaxed},
+    sync::{
+        LazyLock, RwLock,
+        atomic::{AtomicU64, Ordering::Relaxed},
+    },
     time::{Duration, Instant},
 };
 
@@ -52,18 +58,33 @@ const BOUNDS: [f64; 11] = [
     0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
 ];
 
+/// The bounds a wait for a connection is counted under: most take a few
+/// microseconds, and one that takes a second is the pool run dry.
+const WAIT_BOUNDS: [f64; 11] = [
+    0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 2.5, 10.0,
+];
+
+/// The statuses counted one by one: every one HTTP has, 100 to 599.
+const STATUSES: usize = 500;
+
 /// A histogram of durations: how many fell in each bucket, and their sum.
 /// Each observation touches one bucket, and the cumulative counts Prometheus
 /// wants are added up from one reading when the scrape comes — so a reading
 /// never shows a lower bound counted above a higher one.
 pub struct Histogram {
+    bounds: &'static [f64; 11],
     buckets: [AtomicU64; 12],
     sum_micros: AtomicU64,
 }
 
 impl Histogram {
     const fn new() -> Self {
+        Self::with(&BOUNDS)
+    }
+
+    const fn with(bounds: &'static [f64; 11]) -> Self {
         Self {
+            bounds,
             buckets: [const { AtomicU64::new(0) }; 12],
             sum_micros: AtomicU64::new(0),
         }
@@ -71,7 +92,8 @@ impl Histogram {
 
     pub fn observe(&self, elapsed: Duration) {
         let seconds = elapsed.as_secs_f64();
-        let bucket = BOUNDS
+        let bucket = self
+            .bounds
             .iter()
             .position(|bound| seconds <= *bound)
             .unwrap_or(11);
@@ -86,7 +108,7 @@ impl Histogram {
         let comma = if labels.is_empty() { "" } else { "," };
         let counts: [u64; 12] = std::array::from_fn(|i| self.buckets[i].load(Relaxed));
         let mut seen = 0;
-        for (count, bound) in counts.iter().zip(BOUNDS) {
+        for (count, bound) in counts.iter().zip(self.bounds) {
             seen += count;
             out.push_str(&format!(
                 "{name}_bucket{{{labels}{comma}le=\"{bound}\"}} {seen}\n"
@@ -96,28 +118,40 @@ impl Histogram {
         out.push_str(&format!(
             "{name}_bucket{{{labels}{comma}le=\"+Inf\"}} {seen}\n"
         ));
+        // No braces at all where there is no label: `name_sum 0.5`.
+        let braced = if labels.is_empty() {
+            String::new()
+        } else {
+            format!("{{{labels}}}")
+        };
         out.push_str(&format!(
-            "{name}_sum{{{labels}}} {}\n",
+            "{name}_sum{braced} {}\n",
             self.sum_micros.load(Relaxed) as f64 / 1_000_000.0
         ));
-        out.push_str(&format!("{name}_count{{{labels}}} {seen}\n"));
+        out.push_str(&format!("{name}_count{braced} {seen}\n"));
     }
 }
 
 struct Registry {
     /// Requests answered, by surface and status class.
     requests: [[AtomicU64; 5]; SURFACES.len()],
+    /// And by status, 100 to 599: what an alert on 5xx above a share reads.
+    responses: [[AtomicU64; STATUSES]; SURFACES.len()],
     request_time: [Histogram; SURFACES.len()],
     /// Calls made upstream, by provider and outcome.
     upstream: [[AtomicU64; 4]; PROVIDERS.len()],
     upstream_time: [Histogram; PROVIDERS.len()],
+    /// How long each connection of the database's pool was waited for.
+    pool_wait: Histogram,
 }
 
 static REGISTRY: Registry = Registry {
     requests: [const { [const { AtomicU64::new(0) }; 5] }; SURFACES.len()],
+    responses: [const { [const { AtomicU64::new(0) }; STATUSES] }; SURFACES.len()],
     request_time: [const { Histogram::new() }; SURFACES.len()],
     upstream: [const { [const { AtomicU64::new(0) }; 4] }; PROVIDERS.len()],
     upstream_time: [const { Histogram::new() }; PROVIDERS.len()],
+    pool_wait: Histogram::with(&WAIT_BOUNDS),
 };
 
 /// The index of a surface's name in [`SURFACES`].
@@ -187,8 +221,15 @@ pub async fn observe_door(request: Request, next: Next) -> Response {
 async fn count(surface: usize, request: Request, next: Next) -> Response {
     let started = Instant::now();
     let response = next.run(request).await;
-    let class = usize::from(response.status().as_u16() / 100).clamp(1, 5) - 1;
+    let status = response.status().as_u16();
+    let class = usize::from(status / 100).clamp(1, 5) - 1;
     REGISTRY.requests[surface][class].fetch_add(1, Relaxed);
+    if let Some(each) = usize::from(status)
+        .checked_sub(100)
+        .and_then(|at| REGISTRY.responses[surface].get(at))
+    {
+        each.fetch_add(1, Relaxed);
+    }
     REGISTRY.request_time[surface].observe(started.elapsed());
     response
 }
@@ -264,6 +305,22 @@ pub fn render(gauges: &[Metric]) -> String {
     }
 
     out.push_str(
+        "# HELP ams_http_responses_total Requests answered, by surface and status: those seen.\n",
+    );
+    out.push_str("# TYPE ams_http_responses_total counter\n");
+    for (s, surface) in SURFACES.iter().enumerate() {
+        for (at, count) in REGISTRY.responses[s].iter().enumerate() {
+            let count = count.load(Relaxed);
+            if count > 0 {
+                out.push_str(&format!(
+                    "ams_http_responses_total{{surface=\"{surface}\",status=\"{}\"}} {count}\n",
+                    at + 100
+                ));
+            }
+        }
+    }
+
+    out.push_str(
         "# HELP ams_http_request_duration_seconds How long requests took to answer, by surface.\n",
     );
     out.push_str("# TYPE ams_http_request_duration_seconds histogram\n");
@@ -300,6 +357,14 @@ pub fn render(gauges: &[Metric]) -> String {
         );
     }
 
+    out.push_str(
+        "# HELP ams_db_pool_wait_seconds How long a connection of the database's pool was waited for.\n",
+    );
+    out.push_str("# TYPE ams_db_pool_wait_seconds histogram\n");
+    REGISTRY
+        .pool_wait
+        .render(&mut out, "ams_db_pool_wait_seconds", "");
+
     for metric in gauges {
         out.push_str(&format!("# HELP {} {}\n", metric.name, metric.help));
         // What only grows is a counter, and says so by its name.
@@ -319,6 +384,208 @@ pub fn render(gauges: &[Metric]) -> String {
     }
 
     out
+}
+
+// ── The pool's waits ────────────────────────────────────────────────────
+
+/// What sqlx's pool says each time a connection is handed out, at `trace`
+/// (`db::Db::connect` asks it to): how long it was waited for. Counted here,
+/// into `ams_db_pool_wait_seconds`; the log never writes it, its filters
+/// stopping at `info` but for the slow ones sqlx says at `warn`.
+const POOL_ACQUIRE: &str = "sqlx::pool::acquire";
+
+/// The layer that reads those waits off the pool's own lines.
+pub fn pool_wait_layer<S>() -> impl tracing_subscriber::Layer<S>
+where
+    S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+{
+    use tracing_subscriber::Layer as _;
+    PoolWaits.with_filter(
+        tracing_subscriber::filter::Targets::new().with_target(POOL_ACQUIRE, tracing::Level::TRACE),
+    )
+}
+
+struct PoolWaits;
+
+impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for PoolWaits {
+    fn on_event(&self, event: &tracing::Event<'_>, _: tracing_subscriber::layer::Context<'_, S>) {
+        if let Some(seconds) = waited(event) {
+            REGISTRY.pool_wait.observe(Duration::from_secs_f64(seconds));
+        }
+    }
+}
+
+/// The seconds a pool's line says a connection took to come, when it says.
+fn waited(event: &tracing::Event<'_>) -> Option<f64> {
+    struct Seconds(Option<f64>);
+    impl tracing::field::Visit for Seconds {
+        fn record_f64(&mut self, field: &tracing::field::Field, value: f64) {
+            if field.name() == "acquired_after_secs" {
+                self.0 = Some(value);
+            }
+        }
+        fn record_debug(&mut self, _: &tracing::field::Field, _: &dyn std::fmt::Debug) {}
+    }
+    if event.metadata().target() != POOL_ACQUIRE {
+        return None;
+    }
+    let mut seconds = Seconds(None);
+    event.record(&mut seconds);
+    seconds.0.filter(|s| s.is_finite() && *s >= 0.0 && *s < 1e9)
+}
+
+// ── Read when the scrape comes ──────────────────────────────────────────
+
+/// When the certificates the server was started with end, by name, in
+/// seconds since the epoch: the interface's own, and the clients' when the
+/// operator brought it. Those the authority issues are read off it.
+static CERTIFICATES: LazyLock<RwLock<Vec<(&'static str, i64)>>> =
+    LazyLock::new(|| RwLock::new(Vec::new()));
+
+/// Note when the certificate in a PEM file ends, as the server loads it: the
+/// first certificate the file holds, which is the one shown.
+pub fn note_certificate(name: &'static str, pem: &std::path::Path) {
+    let Some(end) = std::fs::read(pem).ok().and_then(|bytes| ends(&bytes)) else {
+        tracing::warn!(
+            path = %pem.display(),
+            "the certificate's end could not be read: ams_tls_expiry_seconds will not say it"
+        );
+        return;
+    };
+    if let Ok(mut known) = CERTIFICATES.write() {
+        known.retain(|(known, _)| *known != name);
+        known.push((name, end));
+    }
+}
+
+/// When the first certificate of a PEM text ends, in seconds since the epoch.
+fn ends(pem: &[u8]) -> Option<i64> {
+    let (_, block) = x509_parser::pem::parse_x509_pem(pem).ok()?;
+    let certificate = block.parse_x509().ok()?;
+    Some(certificate.validity().not_after.timestamp())
+}
+
+/// What is read off the state when the scrape comes, beside the counters:
+/// the pool of connections, what waits in each queue, the works whose last
+/// refresh failed, and when the certificates end. What the database cannot
+/// answer is left out, as the rest of the scrape's figures are.
+pub async fn server(state: &crate::state::AppState) -> Vec<Metric> {
+    let pool = state.db.pool();
+    let mut gauges = vec![
+        Metric {
+            name: "ams_db_pool_size",
+            help: "Connections the database's pool holds open, busy or idle.",
+            samples: vec![(String::new(), f64::from(pool.size()))],
+        },
+        Metric {
+            name: "ams_db_pool_idle",
+            help: "Connections of the pool waiting for work.",
+            samples: vec![(String::new(), pool.num_idle() as f64)],
+        },
+        Metric {
+            name: "ams_db_pool_max",
+            help: "The most connections the pool opens.",
+            samples: vec![(
+                String::new(),
+                f64::from(pool.options().get_max_connections()),
+            )],
+        },
+    ];
+
+    match queue_depths(&state.db).await {
+        Ok(depths) => gauges.push(Metric {
+            name: "ams_queue_depth",
+            help: "What waits in each queue: works due for a refresh, media to fetch, \
+                   webhook deliveries to send.",
+            samples: depths
+                .into_iter()
+                .map(|(kind, n)| (format!("kind=\"{kind}\""), n as f64))
+                .collect(),
+        }),
+        Err(e) => tracing::warn!(error = %e, "the scrape goes without the queues"),
+    }
+
+    let failed = crate::db::repo::item::count_matching(
+        &state.db,
+        &crate::db::repo::item::Query {
+            include_adult: true,
+            include_disabled: true,
+            refresh_failed: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    match failed {
+        Ok(failed) => gauges.push(Metric {
+            name: "ams_refresh_failed",
+            help: "Works whose last refresh failed.",
+            samples: vec![(String::new(), failed as f64)],
+        }),
+        Err(e) => tracing::warn!(error = %e, "the scrape goes without the failed refreshes"),
+    }
+
+    let certificates = certificate_ends(state);
+    if !certificates.is_empty() {
+        let now = chrono::Utc::now().timestamp();
+        gauges.push(Metric {
+            name: "ams_tls_expiry_seconds",
+            help: "Seconds left before each certificate ends; below nought once it has.",
+            samples: certificates
+                .into_iter()
+                .map(|(name, end)| (format!("certificate=\"{name}\""), (end - now) as f64))
+                .collect(),
+        });
+    }
+    gauges
+}
+
+/// What waits in each queue, by kind: `refresh`, the works whose refresh is
+/// due; `media`, the pictures and themes yet to be fetched; `webhooks`, the
+/// deliveries yet to be sent.
+async fn queue_depths(db: &crate::db::Db) -> anyhow::Result<Vec<(&'static str, i64)>> {
+    use crate::db::RowExt as _;
+
+    let refresh = sqlx::query(db.sql(
+        "SELECT COUNT(*) AS n FROM media_item
+         WHERE is_enabled = 1
+           AND refresh_after IS NOT NULL
+           AND refresh_after <= ?
+           AND EXISTS (SELECT 1 FROM media_external_id e WHERE e.media_id = media_item.id)",
+    ))
+    .bind(crate::db::now())
+    .fetch_one(db.pool())
+    .await?
+    .big("n")?;
+    let media = crate::db::repo::asset::pending_count(db).await?;
+    let webhooks =
+        sqlx::query(db.sql("SELECT COUNT(*) AS n FROM webhook_delivery WHERE status = 'pending'"))
+            .fetch_one(db.pool())
+            .await?
+            .big("n")?;
+    Ok(vec![
+        ("refresh", refresh),
+        ("media", media),
+        ("webhooks", webhooks),
+    ])
+}
+
+/// When each certificate ends: those noted at the start, then the clients'
+/// door's, as its authority issued it, and the authority's own.
+fn certificate_ends(state: &crate::state::AppState) -> Vec<(&'static str, i64)> {
+    let mut ends = CERTIFICATES
+        .read()
+        .map(|known| known.clone())
+        .unwrap_or_default();
+    if let Some(door) = &state.tls.clients {
+        if let Some(issued) = door.issued() {
+            ends.retain(|(name, _)| *name != "clients");
+            ends.push(("clients", issued.not_after.unix_timestamp()));
+        }
+        if let Some(authority) = &door.authority {
+            ends.push(("authority", authority.not_after.unix_timestamp()));
+        }
+    }
+    ends
 }
 
 #[cfg(test)]
@@ -459,6 +726,109 @@ mod tests {
         assert!(text.contains("# TYPE ams_update_available gauge\nams_update_available 1\n"));
         let text = render(&[update_available(false)]);
         assert!(text.contains("ams_update_available 0\n"));
+    }
+
+    #[test]
+    fn an_answer_is_counted_by_its_status_too() {
+        let router = axum::Router::new()
+            .route(
+                "/api/v1/status-test-418",
+                axum::routing::get(|| async { axum::http::StatusCode::IM_A_TEAPOT }),
+            )
+            .layer(axum::middleware::from_fn(observe));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            use tower::ServiceExt as _;
+            for _ in 0..2 {
+                router
+                    .clone()
+                    .oneshot(
+                        axum::http::Request::get("/api/v1/status-test-418")
+                            .body(axum::body::Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+            }
+        });
+        let text = render(&[]);
+        assert!(
+            text.contains("# TYPE ams_http_responses_total counter\n"),
+            "{text}"
+        );
+        // No other test answers a 418: both are this test's.
+        assert!(
+            text.contains("ams_http_responses_total{surface=\"native\",status=\"418\"} 2\n"),
+            "{text}"
+        );
+        // A status nobody answered with is not written.
+        assert!(!text.contains("status=\"599\""));
+    }
+
+    #[test]
+    fn a_wait_for_a_connection_is_read_off_the_pool_s_line() {
+        use tracing_subscriber::prelude::*;
+
+        let before = REGISTRY.pool_wait.buckets[3].load(Relaxed);
+        let subscriber = tracing_subscriber::registry().with(pool_wait_layer());
+        tracing::subscriber::with_default(subscriber, || {
+            // As sqlx writes it: between one and five milliseconds.
+            tracing::trace!(
+                target: "sqlx::pool::acquire",
+                acquired_after_secs = 0.002_f64,
+                "acquired connection"
+            );
+            // Another target with the same field is not the pool's.
+            tracing::trace!(acquired_after_secs = 0.002_f64, "elsewhere");
+        });
+        assert_eq!(REGISTRY.pool_wait.buckets[3].load(Relaxed), before + 1);
+
+        let text = render(&[]);
+        assert!(text.contains("# TYPE ams_db_pool_wait_seconds histogram\n"));
+        assert!(text.contains("ams_db_pool_wait_seconds_bucket{le=\"0.005\"} "));
+        assert!(text.contains("\nams_db_pool_wait_seconds_count "), "{text}");
+    }
+
+    /// What the scrape reads off the state, on either engine: the pool, each
+    /// queue, the failed refreshes; no certificate where the server has none.
+    #[tokio::test]
+    async fn the_scrape_reads_the_pool_the_queues_and_the_failed_refreshes() {
+        let state = crate::api::native::testing::server().await;
+        let gauges = server(&state).await;
+        let named = |name: &str| {
+            gauges
+                .iter()
+                .find(|metric| metric.name == name)
+                .unwrap_or_else(|| panic!("{name} is not offered"))
+        };
+        assert!(named("ams_db_pool_max").samples[0].1 >= 1.0);
+        assert!(named("ams_db_pool_size").samples[0].1 >= named("ams_db_pool_idle").samples[0].1);
+        let kinds: Vec<&str> = named("ams_queue_depth")
+            .samples
+            .iter()
+            .map(|(labels, _)| labels.as_str())
+            .collect();
+        assert_eq!(
+            kinds,
+            ["kind=\"refresh\"", "kind=\"media\"", "kind=\"webhooks\""]
+        );
+        assert_eq!(named("ams_refresh_failed").samples[0].1, 0.0);
+        assert!(gauges.iter().all(|m| m.name != "ams_tls_expiry_seconds"));
+    }
+
+    #[test]
+    fn a_certificate_s_end_is_read_from_its_pem() {
+        let key = rcgen::KeyPair::generate().unwrap();
+        let mut params = rcgen::CertificateParams::new(vec!["metadata.test".into()]).unwrap();
+        params.not_after = rcgen::date_time_ymd(2031, 1, 2);
+        let pem = params.self_signed(&key).unwrap().pem();
+        let expected = chrono::NaiveDate::from_ymd_opt(2031, 1, 2)
+            .and_then(|day| day.and_hms_opt(0, 0, 0))
+            .map(|at| at.and_utc().timestamp());
+        assert_eq!(ends(pem.as_bytes()), expected);
+        assert_eq!(ends(b"not a certificate"), None);
     }
 
     #[test]

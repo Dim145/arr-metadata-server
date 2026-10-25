@@ -36,6 +36,7 @@ const FILTER_VALUES: usize = 20;
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list, create))
+        .routes(routes!(gaps))
         .routes(routes!(detail, update, remove))
         .routes(routes!(refresh))
         .routes(routes!(snapshots))
@@ -116,10 +117,12 @@ pub struct ListQuery {
     /// language they are stored in — `imdb` — no IMDb identifier — and
     /// `refresh` — never refreshed, though they have an identifier to be
     /// refreshed by — `divergingLock` — a lock a source moved under since
-    /// it was set, and which says something else now — and `duplicates` —
-    /// in a pair proposed as one work, and not dismissed. Several narrow
-    /// together: `poster,overview` lists the works lacking both. For those who
-    /// may edit the catalogue, as `refreshFailed`.
+    /// it was set, and which says something else now — `duplicates` — in a
+    /// pair proposed as one work, and not dismissed — and `mediaFailed` — a
+    /// picture, a photograph or a theme of theirs that the media store gave
+    /// up fetching, so another can be chosen. Several narrow together:
+    /// `poster,overview` lists the works lacking both. For those who may edit
+    /// the catalogue, as `refreshFailed`; `GET /admin/gaps` counts each.
     pub missing: Option<String>,
     /// `relevance` — how well each work answers `term`, the default when
     /// there is one — `popularity` (the default otherwise), `rating`,
@@ -383,7 +386,14 @@ async fn list(
             reader_class(&identity)
         )
     };
-    if let Some(cached) = state.caches.searches.get(&cache_key).await {
+    // A fetch given up on is no write: it does not move the stamp, and the
+    // works it leaves lacking would be answered as they were before it. A
+    // list narrowed to them is read afresh each time; it is the editors'
+    // alone, and short.
+    let cacheable = !query_for_count
+        .missing
+        .contains(&repo::item::Missing::MediaFailed);
+    if cacheable && let Some(cached) = state.caches.searches.get(&cache_key).await {
         return Ok((
             StatusCode::OK,
             [(header::CONTENT_TYPE, "application/json")],
@@ -424,10 +434,82 @@ async fn list(
     service::redact_for_reader(&identity, &mut items);
 
     let response = ListResponse { items, total };
-    if let Ok(encoded) = serde_json::to_string(&response) {
+    if cacheable && let Ok(encoded) = serde_json::to_string(&response) {
         state.caches.searches.insert(cache_key, encoded).await;
     }
     Ok(Json(response).into_response())
+}
+
+/// How many works the register lists under each of its gaps: what each of
+/// its filters would narrow it to, beside the filter.
+#[derive(Debug, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Gaps {
+    /// `missing=poster`: no poster of their own, nor one chosen by hand.
+    pub poster: i64,
+    /// `missing=overview`: no overview in the language they are stored in.
+    pub overview: i64,
+    /// `missing=imdb`: no IMDb identifier.
+    pub imdb: i64,
+    /// `missing=refresh`: never refreshed, though they could be.
+    pub refresh: i64,
+    /// `missing=divergingLock`: a lock a source moved under since it was set.
+    pub diverging_lock: i64,
+    /// `missing=duplicates`: in a pair proposed as one work.
+    pub duplicates: i64,
+    /// `missing=mediaFailed`: a picture or a theme the media store gave up on.
+    pub media_failed: i64,
+}
+
+/// How many works each of the register's gaps holds.
+///
+/// Counted through each filter's own definition, over the works the
+/// register shows — those switched off among them, adult titles as this
+/// caller's policy has them — so that a figure and the list it leads to
+/// agree. The duplicates are looked for again first, as the register does
+/// before it lists them.
+#[utoipa::path(
+    get, path = "/admin/gaps", tag = TAG,
+    operation_id = "items_gaps",
+    responses(
+        (status = 200, body = Gaps),
+        (status = 403, description = "The caller may not edit the catalogue"),
+    ),
+)]
+async fn gaps(
+    State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
+) -> AppResult<Json<Gaps>> {
+    identity.require_write()?;
+    Ok(Json(counted_gaps(&state, &identity).await?))
+}
+
+async fn counted_gaps(state: &AppState, identity: &Identity) -> anyhow::Result<Gaps> {
+    use repo::item::Missing;
+
+    service::merge::look_again(state).await?;
+    let include_adult = state.adult_for(identity.client_id(), identity.peer_id(), None);
+    let stored = service::language::stored(state);
+    let count = |gap: Missing| {
+        let query = repo::item::Query {
+            missing: vec![gap],
+            stored_language: Some(stored.clone()),
+            include_disabled: true,
+            include_adult,
+            ..Default::default()
+        };
+        async move { repo::item::count_matching(&state.db, &query).await }
+    };
+
+    Ok(Gaps {
+        poster: count(Missing::Poster).await?,
+        overview: count(Missing::Overview).await?,
+        imdb: count(Missing::Imdb).await?,
+        refresh: count(Missing::Refresh).await?,
+        diverging_lock: count(Missing::DivergingLock).await?,
+        duplicates: count(Missing::Duplicates).await?,
+        media_failed: count(Missing::MediaFailed).await?,
+    })
 }
 
 /// Who is reading, as far as a list differs by it: the classes
@@ -1651,6 +1733,16 @@ mod tests {
             w.overview = None;
         })
         .await;
+        // The poster of "No IMDb", which the media store gave up fetching.
+        sqlx::query(state.db.sql(
+            "INSERT INTO media_asset (id, origin, kind, status, attempts, error, created_at)
+             VALUES (?, 'https://example.invalid/8.jpg', 'image', 'failed', 5, '404', ?)",
+        ))
+        .bind(crate::db::new_id())
+        .bind(crate::db::now())
+        .execute(state.db.pool())
+        .await
+        .expect("given up on");
 
         let narrowed = |asked: &'static str| titles(&state, admin(), asked);
         assert_eq!(
@@ -1691,6 +1783,32 @@ mod tests {
                 .await
                 .expect("listed"),
             ["No poster", "Season poster only"]
+        );
+
+        assert_eq!(
+            narrowed("missing=mediaFailed").await.expect("listed"),
+            ["No IMDb"]
+        );
+        // Each gap counted as its filter lists it, for the figure beside it.
+        assert_eq!(
+            counted_gaps(&state, &Identity::Anonymous)
+                .await
+                .expect("counted"),
+            Gaps {
+                poster: 3,
+                overview: 4,
+                imdb: 2,
+                refresh: 1,
+                diverging_lock: 0,
+                duplicates: 0,
+                media_failed: 1,
+            }
+        );
+        assert!(
+            gaps(State(state.clone()), Extension(Identity::Visitor))
+                .await
+                .is_err(),
+            "a visitor is not told what the register lacks"
         );
 
         // A gap the register does not know is refused.

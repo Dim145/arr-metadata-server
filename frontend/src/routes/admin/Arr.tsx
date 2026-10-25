@@ -10,12 +10,13 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router'
 
 import {
   Button,
   Chip,
+  DataTable,
   EmptyState,
   FormField,
   Glyph,
@@ -26,11 +27,15 @@ import {
   PanelHead,
   Skeleton,
   Spinner,
-  TableScroll,
+  TableOptions,
+  TBody,
   Td,
   Th,
+  THead,
   Toggle,
   Tr,
+  useDataTable,
+  type Column,
 } from '../../components/ui'
 import { ApiError, api } from '../../lib/api'
 import * as fmt from '../../lib/format'
@@ -552,70 +557,67 @@ function Sent({ pushes }: { pushes: ArrPush[] }) {
   const p = t.admin.arrPage
   const why = (push: ArrPush) => push.reasons.map((reason) => p.reasons[reason] ?? reason).join(', ')
 
+  // A send is known by the work it told of; on a phone, a card each, as six
+  // columns do not fit. These are the latest sends, newest first, and no
+  // head orders them: put in another order here, they would say nothing of
+  // the sends before them.
+  const columns: Column[] = useMemo(
+    () => [
+      { id: 'when', label: p.colWhen },
+      { id: 'work', label: p.colWork, kind: 'primary', always: true },
+      { id: 'to', label: p.colTo },
+      { id: 'outcome', label: p.colOutcome },
+      { id: 'why', label: p.colWhy },
+      { id: 'detail', label: p.colDetail },
+    ],
+    [p],
+  )
+  const table = useDataTable({ id: 'arr-sent', columns })
+
   return (
-    <Panel label={p.sent} className="rise overflow-hidden" style={{ animationDelay: '160ms' }}>
-      <PanelHead title={p.sent} />
+    <Panel label={p.sent} className="rise overflow-clip" style={{ animationDelay: '160ms' }}>
+      <PanelHead title={p.sent} action={pushes.length ? <TableOptions table={table} /> : undefined} />
       {pushes.length === 0 ? (
         <EmptyState title={p.sentEmpty} hint={p.sentEmptyHint} />
       ) : (
-        <>
-          {/* On a phone, one block per send: six columns do not fit. */}
-          <ul className="divide-y divide-rule md:hidden">
+        <DataTable table={table} label={p.sent} minWidth="48rem">
+          <THead>
+            <Th column="when" />
+            <Th column="work" />
+            <Th column="to" />
+            <Th column="outcome" />
+            <Th column="why" />
+            <Th column="detail" />
+          </THead>
+          <TBody>
             {pushes.map((push) => (
-              <li key={push.id} className="space-y-1.5 px-4 py-3">
-                <div className="flex items-center justify-between gap-3">
+              <Tr key={push.id} row={String(push.id)}>
+                <Td column="when" className="whitespace-nowrap">
+                  <span className="font-mono text-xs text-bone-faint tabular-nums" title={fmt.dateTime(push.at, locale)}>
+                    {fmt.relative(push.at, locale)}
+                  </span>
+                </Td>
+                <Td column="work" className="max-w-[16rem]">
                   <Work push={push} />
+                </Td>
+                <Td column="to" className="whitespace-nowrap text-sm text-bone-dim">
+                  {NAMES[push.app]}
+                </Td>
+                <Td column="outcome">
                   <Outcome outcome={push.outcome} />
-                </div>
-                <p className="text-xs text-bone-dim">
-                  {NAMES[push.app]} · {why(push)}
-                </p>
-                {push.detail ? <p className="text-xs break-words text-bone-faint">{push.detail}</p> : null}
-                <p className="font-mono text-[0.6875rem] text-bone-faint tabular-nums">{fmt.relative(push.at, locale)}</p>
-              </li>
+                </Td>
+                <Td column="why" className="text-xs text-bone-dim">
+                  {why(push)}
+                </Td>
+                <Td column="detail" className="w-full max-w-0">
+                  <span className="block truncate text-xs text-bone-faint" title={push.detail}>
+                    {push.detail ?? '—'}
+                  </span>
+                </Td>
+              </Tr>
             ))}
-          </ul>
-          <div className="hidden md:block">
-            <TableScroll label={p.sent}>
-              <table className="w-full min-w-[48rem] border-collapse text-left">
-                <thead>
-                  <tr>
-                    <Th>{p.colWhen}</Th>
-                    <Th>{p.colWork}</Th>
-                    <Th>{p.colTo}</Th>
-                    <Th>{p.colOutcome}</Th>
-                    <Th>{p.colWhy}</Th>
-                    <Th>{p.colDetail}</Th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {pushes.map((push) => (
-                    <Tr key={push.id}>
-                      <Td className="whitespace-nowrap">
-                        <span className="font-mono text-xs text-bone-faint tabular-nums" title={fmt.dateTime(push.at, locale)}>
-                          {fmt.relative(push.at, locale)}
-                        </span>
-                      </Td>
-                      <Td className="max-w-[16rem]">
-                        <Work push={push} />
-                      </Td>
-                      <Td className="whitespace-nowrap text-sm text-bone-dim">{NAMES[push.app]}</Td>
-                      <Td>
-                        <Outcome outcome={push.outcome} />
-                      </Td>
-                      <Td className="text-xs text-bone-dim">{why(push)}</Td>
-                      <Td className="w-full max-w-0">
-                        <span className="block truncate text-xs text-bone-faint" title={push.detail}>
-                          {push.detail ?? '—'}
-                        </span>
-                      </Td>
-                    </Tr>
-                  ))}
-                </tbody>
-              </table>
-            </TableScroll>
-          </div>
-        </>
+          </TBody>
+        </DataTable>
       )}
     </Panel>
   )

@@ -502,6 +502,16 @@ impl AppState {
                     crate::backup::DEFAULT_KEEP_UPGRADES.to_string(),
                 ),
                 (crate::backup::BEFORE_UPGRADE_SETTING, "true".to_string()),
+                // What the error reports are filed under and their share, for
+                // when a DSN is set: shown as they stand, not as unset.
+                (
+                    "sentry.environment",
+                    crate::telemetry::report::DEFAULT_ENVIRONMENT.to_string(),
+                ),
+                (
+                    "sentry.sampleRate",
+                    crate::telemetry::report::DEFAULT_SAMPLE_PERCENT.to_string(),
+                ),
             ])
             .await?;
 
@@ -573,6 +583,8 @@ impl AppState {
     /// change made here does before it moves the generation on, and all a
     /// change made on another instance asks of this one.
     pub async fn adopt_settings(&self) {
+        // The error reports' DSN, environment and share, applied at once.
+        crate::telemetry::report::adopt(&self.settings, &self.coord.instance.name);
         self.tmdb
             .tune(&self.language(None, None), self.adult_visible());
         self.caches.searches.forget_local();

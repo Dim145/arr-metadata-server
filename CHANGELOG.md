@@ -54,11 +54,13 @@ may change what the API or the configuration means, and says so here.
   figures and no more. Made under **Keys & network** by ticking *Scrape*; a
   person's own key cannot carry the scope. An administrator's key reads them
   as before.
-- Every request is given an id, answered in `x-request-id` and written
-  beside every log line the request produces (`request_id` on the request
-  span, which the JSON format files under `span`). The `x-request-id` a
-  proxy in `AMS_TRUSTED_PROXIES` sends is kept, so its log and the server's
-  name a request alike; anybody else's is replaced.
+- Every request is given an id — sixteen random bytes in hexadecimal, a
+  trace id's shape — answered in `x-request-id` and written beside every
+  log line the request produces, at every `AMS_LOG` level (`request_id` on
+  the request span, which the JSON format files under `span`). The
+  `x-request-id` a proxy in `AMS_TRUSTED_PROXIES` sends is kept, so its log
+  and the server's name a request alike, and its `traceparent` names the
+  request when it sent no id; anybody else's is replaced.
 - CI measures how much of the crate the tests reach (`cargo llvm-cov`),
   informatively: the summary is in the job's log and `lcov.info` is kept a
   week as an artifact. It never fails the run.
@@ -397,6 +399,122 @@ may change what the API or the configuration means, and says so here.
   `.nfo`. Fanart.tv's 4K backgrounds are read too, after its HD ones.
 - Plex is given a `backgroundSquare`: the middle of a work's lead
   background, 1080 pixels a side, where this server keeps the background.
+- A genre, a network or a studio, a year and a decade have pages of their
+  own: `/genre/drama`, `/network/hbo`, `/year/1999`, `/decade/1990`. Each
+  leads with its name — a genre's over a band in the colour its chips
+  wear — how many works it holds, its programmer's note and the five rated
+  highest, then lists every one of them in the catalogue's own list, its
+  filters, orders and views, with the page's subject always applied. A
+  work's genres, network and year lead there, as do the genres of the
+  Browse menu, and a link to one carries a preview of it wherever a reader
+  with no credential may see the catalogue. `GET /api/v1/genres/{slug}`, `/networks/{slug}`,
+  `/years/{year}` and `/decades/{year}` answer them.
+- The programmer's note: a few lines in the catalogue's own voice, set
+  apart in brass, on the work the front page features, on each selection
+  and on each genre's, network's, year's and decade's page — written for
+  each language, the English one standing in for a language with none. A
+  restricted Markdown (paragraphs, emphasis, links to pages of the site),
+  checked as it is saved and never read as HTML. An editor writes it in
+  place on the page, with what it will look like beneath the field, or
+  from *Administration › Catalogue › Programmer's notes*; each change is
+  `editorial.updated` in the audit trail; `/api/v1/editorial` reads and
+  writes them (migration 0043).
+- Two works side by side, `/compare?a=…&b=…`, from a work's *Compare with
+  another work*: their scores source by source, running times, seasons and
+  episodes, networks or studios, genres, and the people both credit with
+  what each did on each. `GET /api/v1/compare`.
+- Traces of each request, sent over OTLP to Tempo, Jaeger or an
+  OpenTelemetry collector when `OTEL_EXPORTER_OTLP_ENDPOINT` names one —
+  off otherwise, and nothing built. A request is a server span named by its
+  route, and each call it makes to a provider a client span under it, which
+  carries the trace on in a W3C `traceparent`. A trace is named by the
+  request's id, and a trusted proxy's `traceparent` is joined. Only the
+  spans leave, every address in them masked; `OTEL_SERVICE_NAME`,
+  `OTEL_TRACES_SAMPLER` and the rest of OpenTelemetry's variables apply.
+  See `docs/monitoring/README.md`.
+- Each JSON log line written in a request begins with its `trace_id`,
+  which leads from a line in Loki to its trace in Tempo.
+- Administration › Server log: the last two thousand lines the server
+  wrote, by level and by words, followed as they come, a request's lines
+  one press away, downloaded as text or JSON lines; every secret in them
+  masked. `GET /api/v1/admin/logs` answers the same, for an administrator.
+- Error reports to a Sentry or a GlitchTip, off until a DSN is set under
+  Settings › Error reports (`sentry.dsn`, written once and never shown,
+  `sentry.environment`, `sentry.sampleRate`), and taken at once on every
+  instance: each error line, masked, with the `trace_id` and `request_id`
+  that find it in the log and the traces.
+- Figures: `ams_http_responses_total{surface,status}`, the database's pool
+  (`ams_db_pool_size`, `_idle`, `_max`, and `ams_db_pool_wait_seconds`),
+  `ams_queue_depth{kind}` for the refreshes due, the media to fetch and
+  the webhook deliveries, `ams_refresh_failed`, and
+  `ams_tls_expiry_seconds{certificate}`.
+- `docs/monitoring/alerts.yml`: eleven alerts — down, no leader or two,
+  server errors, a source failing, failed refreshes rising, Valkey
+  unreachable, the pool exhausted, a certificate ending, a stale backup —
+  checked by `promtool`, with tests; the Grafana dashboard gains the
+  statuses, the pool, the queues, the certificates and the archives.
+- A field of the work editor is edited where it is shown: its value opens a
+  box in its place, and the change is kept, marked in brass on the field
+  and its tab, until the bar along the foot of the page saves it — *Save
+  and stay* (⌘S), or *Save and open the next* work of the catalogue's list
+  (⇧⌘↵). Leaving with a change unsaved asks first.
+- The editor can show the work's public page beside it, from 1280 pixels
+  of screen, or over it below that; it reloads after each save.
+- The administration's tables keep their head in view, are ordered by a
+  column's head, hide and show their columns and set their density — kept
+  with the account, in every browser — become cards on a narrow screen,
+  and are walked a row at a time with the keyboard.
+- The catalogue keeps its search, filters and order in the address; it
+  offers a few views, and saves your own under a name, with your account.
+- The palette does what the page is about: refresh a work or the rows
+  chosen, lock its overview as it is, enable or disable it, add it to a
+  selection, run a task. Each command shows its keys, which work without
+  it; `g` then a letter goes to a place.
+- The catalogue lists the works whose pictures or theme the media store
+  gave up fetching (`?missing=mediaFailed`), and says beside each of its
+  filters how many works it leaves (`GET /api/v1/admin/gaps`).
+- What a person keeps of their own way of working is kept with their
+  account: `GET`, `PUT` and `DELETE /api/v1/account/preferences`
+  (migration 0045).
+- The Jobs page follows the tasks as they run, whichever instance runs
+  them: `GET /api/v1/admin/tasks/stream` sends, as server-sent events named
+  `tasks`, the whole board at once and again whenever a run starts, moves
+  on or ends — read from the history every instance writes and the holds
+  they share — with a comment every fifteen seconds and a new stream every
+  five minutes. A running task's card draws how far it has got, and offers
+  *Cancel*, *Log* and, once it has run, *Run again*. Where the stream
+  cannot be opened the page asks every few seconds instead, and a hidden
+  tab is followed by neither.
+- The sweep, the anime identifier list, IMDb's ratings and the archive can
+  be kept to a window of the day (`01:00` to `06:00`) or run at the
+  moments a cron expression names (`0 4 * * 0`), in UTC: set from their
+  card, which says the next three runs in the reader's own time as the
+  expression is written. `PUT` and `DELETE /api/v1/tasks/{id}/schedule`,
+  `POST /api/v1/tasks/schedules/preview`; kept in `task_schedule`
+  (migration 0044), so every instance obeys the one set on another. The
+  task that keeps the catalogue's order current, `listing.relist`, is
+  listed with the others.
+- *Import many*, on the Import page: ids pasted, a CSV or JSON file dropped
+  — Radarr's, Sonarr's, IMDb's and Trakt's exports read by their columns —
+  or works picked from the search are set beside the catalogue (already
+  here, to import, not found, not an id, film or series?, repeated), then
+  imported as one run of the task `import.batch`: into the hand-made
+  selections chosen, switched on or not, each series' episodes fetched at
+  once in a language chosen. Two thousand lines a batch.
+  `POST /api/v1/items/import/preview`, `POST /api/v1/items/import/batch`.
+- Import rules, at the foot of Lists: TMDB's most popular films or series
+  of the last week to year, or another server's list followed by its
+  `ids.txt` or an Atom or RSS feed, brought on a schedule into a hand-made
+  selection — in place of its works or beside them — each run a run of
+  `import.rules`. `GET` and `POST /api/v1/import/rules`, `PUT` and
+  `DELETE /api/v1/import/rules/{id}`, `POST /api/v1/import/rules/{id}/run`,
+  `POST /api/v1/import/rules/preview`; kept in `import_rule` (migration
+  0044).
+- The media by work: the Media page ranks the works by what their media
+  and copies weigh, by how many they keep or by how many were given up on
+  (`GET /api/v1/media/works`), a work's media list gives its `totals`, and
+  a dashboard tile says what is kept, what it weighs, names the three
+  heaviest works and leads to the works whose pictures were given up on.
 
 ### Changed
 
@@ -535,6 +653,27 @@ may change what the API or the configuration means, and says so here.
 - The Media page counts the copies and what they weigh, and
   `GET /api/v1/media/status` says so (`variants`, `unprepared`, `avif`,
   `preparing`).
+- A genre is one genre whatever language its works were fetched in:
+  TMDB's "Drama" and "Drame", its "Science Fiction" and AniList's "Sci-Fi",
+  TheTVDB's "Children" and TMDB's "Kids" are listed under one slug,
+  offered once and counted once, and a filter by any of their names finds
+  them all. `genre=` takes any name a genre goes by, or its slug, and each
+  genre of the facets carries its `slug`. Every work is listed again once
+  in the background after the upgrade; the genres a work is served with to
+  Sonarr, Radarr, Plex and the NFO files do not change. The similar works
+  count a genre shared whatever language each names it in.
+- A work's page shows a series' combined genre as the two it stands for —
+  "Action & Adventure" is Action and Adventure — each leading to its page,
+  as the catalogue already filed them.
+- A panic is written as an error line, under the request it happened in,
+  before the usual message on standard error.
+- The sweep's cadence is read from its runs in the database, so it holds
+  when another instance becomes the leader or the server restarts; the
+  archive's schedule is looked at every minute.
+- The Jobs page's history and the Media page's tables are drawn as the
+  administration's other tables: the head stays in view, columns hide, a
+  narrow screen gets cards, and the rows are walked with the keyboard —
+  Enter opens what a run did, or a work's editor.
 
 ### Removed
 
@@ -575,6 +714,8 @@ may change what the API or the configuration means, and says so here.
   and 1280 pixels, where they were cut to a few letters: the identifiers
   and the time of the last change show from 1280 pixels, and the title
   column always keeps a width of its own.
+- Every dialog is named by its title, which a screen reader says as it
+  opens: they were announced as a dialog and nothing more.
 
 ### Security
 
@@ -587,6 +728,9 @@ may change what the API or the configuration means, and says so here.
   there as everywhere.
 - A scrape no longer needs an administrator's key: see the `metrics` scope
   above.
+- The server's pages may be framed by the server itself, and still by
+  nobody else (`frame-ancestors 'self'`, `X-Frame-Options: SAMEORIGIN`),
+  for the editor's preview.
 
 ## [0.8.3] — 2026-10-18
 

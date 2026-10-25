@@ -9,16 +9,23 @@
 # is a TMDB episode group's id — twenty-four hexadecimal digits behind `tmdb-`,
 # the key a client asks an order by (`tmdb-5acf93e60e0a26346d0000ce` is
 # Firefly's DVD order, on TMDB's public pages), which the generic-key rule
-# takes for a key wherever a test or a page writes `key: "tmdb-…"`. Neither
-# is a value that could open anything.
+# takes for a key wherever a test or a page writes `key: "tmdb-…"`. Two more
+# lines the generic-key rule misreads: a keyboard shortcut named `keys`
+# (`shift+mod+enter`, the editor's *Save and open the next*), and the fake
+# `api_key=abcdef123456` the log's tests write on purpose, to see it come
+# out masked. None is a value that could open anything.
 
 [extend]
 useDefault = true
 
 [allowlist]
-description = "TMDB episode group ids are public identifiers, not keys"
+description = "TMDB episode group ids, a keyboard shortcut and the log tests' fake key are not keys"
 regexTarget = "line"
-regexes = ['''tmdb[-_][0-9a-f]{24}''']
+regexes = [
+  '''tmdb[-_][0-9a-f]{24}''',
+  '''keys[=:]\s*["']shift\+mod\+enter["']''',
+  '''api_key=abcdef123456''',
+]
 
 [[rules]]
 id = "curl-auth-header"

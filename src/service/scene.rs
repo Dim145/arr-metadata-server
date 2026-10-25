@@ -620,13 +620,12 @@ where
 /// A GET to a list's source, marked as this server's so a loop shows.
 async fn get(state: &AppState, provider: &str, url: &str) -> Result<Vec<u8>> {
     let started = Instant::now();
-    let response = state
+    let request = state
         .http
         .get(url)
         .header(crate::providers::radarr::LOOP_HEADER, &state.instance)
-        .timeout(Duration::from_secs(30))
-        .send()
-        .await;
+        .timeout(Duration::from_secs(30));
+    let response = crate::outbound::send(provider, request).await;
     crate::metrics::upstream(
         provider,
         started,

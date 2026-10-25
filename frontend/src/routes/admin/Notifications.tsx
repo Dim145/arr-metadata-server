@@ -16,12 +16,13 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 
 import { EVERY, EventPicker } from '../../components/EventPicker'
 import {
   Button,
   Chip,
+  DataTable,
   Dialog,
   EmptyState,
   FormField,
@@ -35,11 +36,15 @@ import {
   Select,
   Skeleton,
   Spinner,
-  TableScroll,
+  TableOptions,
+  TBody,
   Td,
   Th,
+  THead,
   Toggle,
   Tr,
+  useDataTable,
+  type Column,
 } from '../../components/ui'
 import { ApiError, api, query, segment } from '../../lib/api'
 import { cn } from '../../lib/cn'
@@ -749,11 +754,27 @@ function DeliveryLog({ destination, onClose }: { destination: WebhookDestination
     },
   })
 
+  // A delivery is known by the event it told. The log is read a page at a
+  // time, newest first, and no head orders it: a page put in another order
+  // here would say nothing of the deliveries on the other pages. One layout
+  // for every destination's log.
+  const columns: Column[] = useMemo(
+    () => [
+      { id: 'when', label: l.colWhen },
+      { id: 'event', label: l.colEvent, kind: 'primary', always: true },
+      { id: 'outcome', label: l.colOutcome },
+      { id: 'tries', label: l.colTries, from: 'md' },
+      { id: 'replay', label: l.replay, kind: 'actions', always: true, align: 'right' },
+    ],
+    [l],
+  )
+  const table = useDataTable({ id: 'notification-log', columns })
+
   return (
     <Panel
       id="notifications-log"
       label={l.title(destination.name)}
-      className="rise mt-6 overflow-hidden"
+      className="rise mt-6 overflow-clip"
       style={{ animationDelay: '40ms' }}
     >
       <PanelHead
@@ -761,6 +782,7 @@ function DeliveryLog({ destination, onClose }: { destination: WebhookDestination
         action={
           <span className="flex items-center gap-2">
             {log.isFetching ? <Spinner className="size-3.5 text-bone-faint" /> : null}
+            {log.data?.deliveries.length ? <TableOptions table={table} /> : null}
             <IconButton glyph="close" label={l.close} onClick={onClose} />
           </span>
         }
@@ -781,33 +803,29 @@ function DeliveryLog({ destination, onClose }: { destination: WebhookDestination
       ) : log.data.deliveries.length === 0 ? (
         <EmptyState title={l.empty} hint={l.emptyHint} />
       ) : (
-        <TableScroll label={l.title(destination.name)}>
-          <table className="w-full min-w-[20rem] border-collapse text-left">
-            <thead>
-              <tr>
-                <Th>{l.colWhen}</Th>
-                <Th>{l.colEvent}</Th>
-                <Th>{l.colOutcome}</Th>
-                <Th className="hidden md:table-cell">{l.colTries}</Th>
-                <Th align="right">
-                  <span className="sr-only">{l.replay}</span>
-                </Th>
-              </tr>
-            </thead>
-            <tbody>
-              {log.data.deliveries.map((delivery) => (
-                <DeliveryRow
-                  key={delivery.id}
-                  delivery={delivery}
-                  locale={locale}
-                  canReplay={destination.enabled && delivery.status !== 'pending'}
-                  replaying={replay.isPending && replay.variables === delivery.id}
-                  onReplay={() => replay.mutate(delivery.id)}
-                />
-              ))}
-            </tbody>
-          </table>
-        </TableScroll>
+        <DataTable table={table} label={l.title(destination.name)}>
+          <THead>
+            <Th column="when" />
+            <Th column="event" />
+            <Th column="outcome" />
+            <Th column="tries" />
+            <Th column="replay">
+              <span className="sr-only">{l.replay}</span>
+            </Th>
+          </THead>
+          <TBody>
+            {log.data.deliveries.map((delivery) => (
+              <DeliveryRow
+                key={delivery.id}
+                delivery={delivery}
+                locale={locale}
+                canReplay={destination.enabled && delivery.status !== 'pending'}
+                replaying={replay.isPending && replay.variables === delivery.id}
+                onReplay={() => replay.mutate(delivery.id)}
+              />
+            ))}
+          </TBody>
+        </DataTable>
       )}
 
       {replay.isError ? (
@@ -869,8 +887,8 @@ function DeliveryRow({
   const next = delivery.nextAttemptAt ? l.next(fmt.relative(delivery.nextAttemptAt, locale) ?? '') : ''
 
   return (
-    <Tr className={delivery.status === 'failed' ? 'bg-vermillion/[0.04]' : ''}>
-      <Td className="whitespace-nowrap">
+    <Tr row={delivery.id} className={delivery.status === 'failed' ? 'bg-vermillion/[0.04]' : ''}>
+      <Td column="when" className="whitespace-nowrap">
         <span
           className="font-mono text-xs text-bone-faint tabular-nums"
           title={fmt.dateTime(delivery.createdAt, locale)}
@@ -879,7 +897,7 @@ function DeliveryRow({
         </span>
         {delivery.replayOf ? <span className="block text-[0.6875rem] text-bone-faint">{l.replayed}</span> : null}
       </Td>
-      <Td className="w-full max-w-0">
+      <Td column="event" className="w-full max-w-0">
         <span className="block truncate text-sm text-bone">{named}</span>
         <span className="block font-mono text-[0.6875rem] text-bone-faint">{delivery.event}</span>
         {what ? (
@@ -888,7 +906,7 @@ function DeliveryRow({
           </span>
         ) : null}
       </Td>
-      <Td className="whitespace-nowrap">
+      <Td column="outcome" className="whitespace-nowrap">
         <Lamp tone={LAMPS[delivery.status]}>{l.status[delivery.status] ?? delivery.status}</Lamp>
         {answered ? (
           <span className="block font-mono text-[0.6875rem] text-bone-faint tabular-nums">{answered}</span>
@@ -901,16 +919,12 @@ function DeliveryRow({
             {delivery.lastError}
           </span>
         ) : null}
-        {/* The tries column is not drawn on a phone: what it says, here. */}
-        <span className="block text-[0.6875rem] text-bone-faint md:hidden">
-          {[tries, next].filter(Boolean).join(' · ')}
-        </span>
       </Td>
-      <Td className="hidden whitespace-nowrap md:table-cell">
+      <Td column="tries" className="whitespace-nowrap">
         <span className="block font-mono text-xs text-bone-dim tabular-nums">{tries}</span>
         {next ? <span className="block text-[0.6875rem] text-bone-faint">{next}</span> : null}
       </Td>
-      <Td align="right">
+      <Td column="replay">
         <IconButton
           glyph="refresh"
           label={l.replayFor(delivery.event)}

@@ -13,13 +13,14 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router'
 
 import {
   Button,
   ButtonLink,
   Chip,
+  DataTable,
   Dialog,
   FormField,
   Glyph,
@@ -31,10 +32,16 @@ import {
   Select,
   Skeleton,
   Spinner,
-  TableScroll,
+  TableOptions,
+  TBody,
   Td,
   Th,
+  THead,
   Toggle,
+  Tr,
+  sortRows,
+  useDataTable,
+  type Column,
 } from '../../components/ui'
 import { ApiError, api, segment } from '../../lib/api'
 import * as fmt from '../../lib/format'
@@ -156,6 +163,31 @@ export function Backups() {
   })
 
   const data = listing.data
+
+  // An archive is known by when it was made. Its actions are a line of
+  // their own on a card, as they were on a phone: three buttons beside the
+  // date would leave the date no room.
+  const columns: Column[] = useMemo(
+    () => [
+      { id: 'made', label: p.colMade, kind: 'primary', always: true, sort: 'desc' },
+      { id: 'why', label: p.colWhy, sort: 'asc' },
+      { id: 'holds', label: p.colHolds },
+      { id: 'size', label: p.colSize, align: 'right', sort: 'desc' },
+      { id: 'actions', label: p.colActions, always: true, align: 'right' },
+    ],
+    [p],
+  )
+  const table = useDataTable({ id: 'backups', columns })
+  const archives = sortRows(
+    data?.archives ?? [],
+    table.sort,
+    {
+      made: (archive) => Date.parse(archive.createdAt),
+      why: (archive) => p.reasons[archive.reason] ?? archive.reason,
+      size: (archive) => archive.sizeBytes,
+    },
+    locale,
+  )
 
   return (
     <div className="mx-auto max-w-6xl">
@@ -297,9 +329,12 @@ export function Backups() {
             <PanelHead
               title={p.archives}
               action={
-                <Link to="/admin/jobs" className="label transition-colors duration-150 hover:text-vermillion">
-                  {t.admin.jobs}
-                </Link>
+                <span className="flex items-center gap-4">
+                  {data.archives.length ? <TableOptions table={table} /> : null}
+                  <Link to="/admin/jobs" className="label transition-colors duration-150 hover:text-vermillion">
+                    {t.admin.jobs}
+                  </Link>
+                </span>
               }
             />
             <div className="flex flex-wrap items-center gap-x-5 gap-y-3 border-b border-rule px-5 py-4">
@@ -333,67 +368,41 @@ export function Backups() {
             {data.archives.length === 0 ? (
               <p className="px-5 py-4 text-sm text-bone-faint">{p.none}</p>
             ) : (
-              <>
-                <div className="hidden md:block">
-                  <TableScroll label={p.archives}>
-                    <table className="w-full border-collapse text-left text-sm">
-                      <thead>
-                        <tr>
-                          <Th>{p.colMade}</Th>
-                          <Th>{p.colWhy}</Th>
-                          <Th>{p.colHolds}</Th>
-                          <Th align="right">{p.colSize}</Th>
-                          <Th>
-                            <span className="sr-only">{p.download}</span>
-                          </Th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {data.archives.map((archive) => (
-                          <tr key={archive.name} className="border-t border-rule align-top">
-                            <Td>
-                              <span className="block text-bone">{fmt.dateTime(archive.createdAt, locale)}</span>
-                              <span className="block font-mono text-xs break-all text-bone-faint">{archive.name}</span>
-                            </Td>
-                            <Td>
-                              <Reason archive={archive} />
-                            </Td>
-                            <Td>
-                              <Holds archive={archive} />
-                            </Td>
-                            <Td align="right">
-                              <span className="font-mono text-xs whitespace-nowrap tabular-nums">
-                                {fmt.bytes(archive.sizeBytes, locale)}
-                              </span>
-                            </Td>
-                            <Td align="right">
-                              <Actions archive={archive} onDelete={setDeleting} onRestore={setRestoring} />
-                            </Td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </TableScroll>
-                </div>
-                <ul className="divide-y divide-rule md:hidden">
-                  {data.archives.map((archive) => (
-                    <li key={archive.name} className="px-5 py-3">
-                      <p className="text-sm text-bone">{fmt.dateTime(archive.createdAt, locale)}</p>
-                      <p className="font-mono text-xs break-all text-bone-faint">{archive.name}</p>
-                      <div className="mt-2 flex flex-wrap items-center gap-2">
+              <DataTable table={table} label={p.archives}>
+                <THead>
+                  <Th column="made" />
+                  <Th column="why" />
+                  <Th column="holds" />
+                  <Th column="size" />
+                  <Th column="actions">
+                    <span className="sr-only">{p.colActions}</span>
+                  </Th>
+                </THead>
+                <TBody>
+                  {archives.map((archive) => (
+                    <Tr key={archive.name} row={archive.name}>
+                      <Td column="made">
+                        <span className="block text-bone">{fmt.dateTime(archive.createdAt, locale)}</span>
+                        <span className="block font-mono text-xs break-all text-bone-faint">{archive.name}</span>
+                      </Td>
+                      <Td column="why">
                         <Reason archive={archive} />
-                        <span className="font-mono text-xs text-bone-dim tabular-nums">{fmt.bytes(archive.sizeBytes, locale)}</span>
-                      </div>
-                      <div className="mt-2">
+                      </Td>
+                      <Td column="holds">
                         <Holds archive={archive} />
-                      </div>
-                      <div className="mt-2">
+                      </Td>
+                      <Td column="size">
+                        <span className="font-mono text-xs whitespace-nowrap tabular-nums">
+                          {fmt.bytes(archive.sizeBytes, locale)}
+                        </span>
+                      </Td>
+                      <Td column="actions">
                         <Actions archive={archive} onDelete={setDeleting} onRestore={setRestoring} />
-                      </div>
-                    </li>
+                      </Td>
+                    </Tr>
                   ))}
-                </ul>
-              </>
+                </TBody>
+              </DataTable>
             )}
           </Panel>
 

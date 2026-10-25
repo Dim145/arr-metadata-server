@@ -8,7 +8,7 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useLocation } from 'react-router'
 
 import { api } from '../../lib/api'
@@ -18,6 +18,7 @@ import { useI18n } from '../../lib/i18n'
 import type { AccountRole, Invitation, Invitations as InvitationsPage, IssuedInvitation } from '../../lib/types'
 import {
   Button,
+  DataTable,
   Dialog,
   FormField,
   Glyph,
@@ -29,10 +30,15 @@ import {
   Segmented,
   Skeleton,
   Spinner,
-  TableScroll,
+  TableOptions,
+  TBody,
   Td,
   Th,
+  THead,
   Tr,
+  sortRows,
+  useDataTable,
+  type Column,
 } from '../ui'
 import { RoleChip } from './people'
 import { SecretReveal } from './SecretReveal'
@@ -115,6 +121,33 @@ export function Invitations() {
   const now = Date.now()
   const link = issued ? (issued.link ?? `${window.location.origin}/register#invite=${issued.code}`) : ''
 
+  // An invitation is known by its code; the first group of it is all the
+  // list ever shows. They come usable first, the newest first, until a head
+  // is pressed.
+  const columns: Column[] = useMemo(
+    () => [
+      { id: 'code', label: inv.code, kind: 'primary', always: true },
+      { id: 'role', label: inv.role },
+      { id: 'uses', label: inv.uses, sort: 'desc' },
+      { id: 'expires', label: inv.expires, sort: 'asc' },
+      { id: 'revoke', label: inv.revoke, kind: 'actions', always: true, align: 'right' },
+    ],
+    [inv],
+  )
+  const table = useDataTable({ id: 'invitations', columns })
+  const invitations = sortRows(
+    list.data?.invitations ?? [],
+    table.sort,
+    {
+      uses: (invitation) => invitation.uses,
+      // The usable ones by the day they lapse, soonest first; the others,
+      // which no longer lapse, after them whichever the way.
+      expires: (invitation) =>
+        stateOf(invitation, now) === 'usable' && invitation.expiresAt ? Date.parse(invitation.expiresAt) : null,
+    },
+    locale,
+  )
+
   return (
     <Panel id="invitations" label={inv.title} className="rise mt-8" style={{ animationDelay: '160ms' }}>
       <div ref={here} className="scroll-mt-28 lg:scroll-mt-16" />
@@ -122,8 +155,11 @@ export function Invitations() {
         title={inv.title}
         action={
           list.data ? (
-            <span className="font-mono text-xs text-bone-faint tabular-nums">
-              {inv.usable(list.data.usable, list.data.places)}
+            <span className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
+              <span className="font-mono text-xs text-bone-faint tabular-nums">
+                {inv.usable(list.data.usable, list.data.places)}
+              </span>
+              {list.data.invitations.length ? <TableOptions table={table} /> : null}
             </span>
           ) : undefined
         }
@@ -159,69 +195,65 @@ export function Invitations() {
               <p className="mt-1 text-sm text-bone-faint">{inv.noneHint}</p>
             </div>
           ) : (
-            <TableScroll label={inv.title}>
-              <table className="w-full text-left text-sm">
-                <thead>
-                  <tr>
-                    <Th>{inv.code}</Th>
-                    <Th>{inv.role}</Th>
-                    <Th>{inv.uses}</Th>
-                    <Th>{inv.expires}</Th>
-                    <Th className="text-right">
-                      <span className="sr-only">{inv.revoke}</span>
-                    </Th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {list.data.invitations.map((invitation) => {
-                    const state = stateOf(invitation, now)
-                    const live = state === 'usable'
-                    return (
-                      <Tr key={invitation.id} className={live ? undefined : 'opacity-60'}>
-                        <Td>
-                          <span className="font-mono text-[0.8125rem] text-bone">{invitation.codePrefix}-…</span>
-                          {invitation.note ? (
-                            <span className="block max-w-48 truncate text-xs text-bone-faint" title={invitation.note}>
-                              {invitation.note}
-                            </span>
-                          ) : null}
-                        </Td>
-                        <Td>
-                          <RoleChip role={invitation.role} />
-                        </Td>
-                        <Td className="font-mono text-xs whitespace-nowrap tabular-nums">
-                          {invitation.uses} / {invitation.maxUses}
-                        </Td>
-                        <Td className="text-xs whitespace-nowrap">
-                          {live ? (
-                            <span className="text-bone-dim" title={shortDate(invitation.expiresAt, locale)}>
-                              {relative(invitation.expiresAt, locale) ?? '—'}
-                            </span>
-                          ) : (
-                            <span title={state === 'void' ? inv.voidHint : undefined}>
-                              <Lamp tone={TONE[state]}>{inv.states[state]}</Lamp>
-                            </span>
-                          )}
-                          {invitation.createdByName ? (
-                            <span className="block text-bone-faint">{inv.by(invitation.createdByName)}</span>
-                          ) : null}
-                        </Td>
-                        <Td className="text-right">
-                          {live ? (
-                            <IconButton
-                              glyph="trash"
-                              tone="danger"
-                              label={`${inv.revoke} ${invitation.codePrefix}`}
-                              onClick={() => setWithdrawing(invitation)}
-                            />
-                          ) : null}
-                        </Td>
-                      </Tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </TableScroll>
+            <DataTable table={table} label={inv.title}>
+              <THead>
+                <Th column="code" />
+                <Th column="role" />
+                <Th column="uses" />
+                <Th column="expires" />
+                <Th column="revoke">
+                  <span className="sr-only">{inv.revoke}</span>
+                </Th>
+              </THead>
+              <TBody>
+                {invitations.map((invitation) => {
+                  const state = stateOf(invitation, now)
+                  const live = state === 'usable'
+                  return (
+                    <Tr key={invitation.id} row={invitation.id} className={live ? undefined : 'opacity-60'}>
+                      <Td column="code">
+                        <span className="font-mono text-[0.8125rem] text-bone">{invitation.codePrefix}-…</span>
+                        {invitation.note ? (
+                          <span className="block max-w-48 truncate text-xs text-bone-faint" title={invitation.note}>
+                            {invitation.note}
+                          </span>
+                        ) : null}
+                      </Td>
+                      <Td column="role">
+                        <RoleChip role={invitation.role} />
+                      </Td>
+                      <Td column="uses" className="font-mono text-xs whitespace-nowrap tabular-nums">
+                        {invitation.uses} / {invitation.maxUses}
+                      </Td>
+                      <Td column="expires" className="text-xs whitespace-nowrap">
+                        {live ? (
+                          <span className="text-bone-dim" title={shortDate(invitation.expiresAt, locale)}>
+                            {relative(invitation.expiresAt, locale) ?? '—'}
+                          </span>
+                        ) : (
+                          <span title={state === 'void' ? inv.voidHint : undefined}>
+                            <Lamp tone={TONE[state]}>{inv.states[state]}</Lamp>
+                          </span>
+                        )}
+                        {invitation.createdByName ? (
+                          <span className="block text-bone-faint">{inv.by(invitation.createdByName)}</span>
+                        ) : null}
+                      </Td>
+                      <Td column="revoke">
+                        {live ? (
+                          <IconButton
+                            glyph="trash"
+                            tone="danger"
+                            label={`${inv.revoke} ${invitation.codePrefix}`}
+                            onClick={() => setWithdrawing(invitation)}
+                          />
+                        ) : null}
+                      </Td>
+                    </Tr>
+                  )
+                })}
+              </TBody>
+            </DataTable>
           )}
         </div>
 

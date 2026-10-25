@@ -2,49 +2,79 @@
  * The tasks: what the server does on its own, and what it did.
  *
  * Above, one card per task — what it is for, when it runs, how its last run
- * went, when the next one comes — with the button to run it now, and to stop
- * the one long task that can stop. Below, the history: one row per run rather
- * than per work, a page at a time and under the day each ran on, filtered by
- * task, outcome, and whether the schedule or a person started it — with the
- * failures one press away at its head, since they are what it is opened for.
- * Both are polled while something runs, and otherwise left alone.
+ * went, when the next one comes — with the button to run it now or again,
+ * to cancel the run under way where it can stop, and to read its log; and,
+ * for the tasks that run on a cadence of their own, when they run: their
+ * own cadence, a window of the day, or a cron expression. Below, the
+ * history: one row per run rather than per work, a page at a time and under
+ * the day each ran on, filtered by task, outcome, and whether the schedule
+ * or a person started it — with the failures one press away at its head,
+ * since they are what it is opened for.
+ *
+ * The cards are followed as they go: the server's stream says each change,
+ * whichever instance made it, and a run's bar moves as it works. Where the
+ * stream cannot be opened the page asks every few seconds instead, and while
+ * the tab is hidden it does neither.
  */
 
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Fragment, useState } from 'react'
+import { createContext, Fragment, useContext, useId, useMemo, useState } from 'react'
 import { Link } from 'react-router'
 
 import {
   Button,
   Chip,
+  DataTable,
   Dialog,
   EmptyState,
+  FormField,
   Glyph,
+  Input,
   Label,
   Lamp,
   Panel,
   PanelHead,
+  Segmented,
   Select,
   Skeleton,
   Spinner,
-  TableScroll,
+  TableOptions,
+  TBody,
   Td,
   Th,
+  THead,
   Tr,
+  useDataTable,
+  type Column,
+  type DataTableState,
 } from '../../components/ui'
 import { ApiError, api, query } from '../../lib/api'
 import { cn } from '../../lib/cn'
+import { useSettled } from '../../lib/debounce'
 import * as fmt from '../../lib/format'
 import { useI18n } from '../../lib/i18n'
 import { describeIdentity, providerName } from '../../lib/labels'
+import { useTaskBoard, type Following } from '../../lib/taskStream'
 import type { Dict } from '../../lib/i18n'
-import type { Job, JobDetail, JobEntry, JobsResponse, Task, TaskId } from '../../lib/types'
+import type {
+  ImportRule,
+  Job,
+  JobDetail,
+  JobEntry,
+  JobsResponse,
+  ScheduleMoments,
+  Task,
+  TaskId,
+  TaskSchedule,
+} from '../../lib/types'
 
 const TASKS: TaskId[] = [
   'refresh.sweep',
   'refresh.all',
   'import.anime',
   'import.imdb',
+  'import.batch',
+  'import.rules',
   'export.nfo',
   'media.store',
   'media.sweep',
@@ -55,7 +85,11 @@ const TASKS: TaskId[] = [
   'arr.seed',
   'backup.run',
   'search.rebuild',
+  'listing.relist',
 ]
+
+/** Whether the page follows the tasks live: the logs then wait to be told, rather than asking. */
+const Live = createContext(false)
 
 /**
  * A run's note in words. The server writes its summaries in one fixed form
@@ -94,10 +128,17 @@ export function describeDetail(detail: string | null | undefined, t: Dict, local
   if ((m = detail.match(/^synced from (.+)$/))) return s.synced(names(m[1]))
   if ((m = detail.match(/^none of (.+) answered$/))) return s.noneAnswered(names(m[1]))
   if ((m = detail.match(/^(\d+\.\d+\.\d+) is out$/))) return s.newer(m[1] ?? '')
-  // The seeding from Sonarr and Radarr: what was there, what came in, what
-  // could not be found or failed, of how many.
+  // The seeding from Sonarr and Radarr, a batch and the import rules: what
+  // was there, what came in, what could not be found or failed, of how many
+  // — as it goes, and once stopped.
   if ((m = detail.match(/^(\d+) already here, (\d+) imported, (\d+) not found, (\d+) failed, of (\d+)$/)))
     return s.seeded(...(m.slice(1, 6).map(Number) as [number, number, number, number, number]))
+  if ((m = detail.match(/^(\d+) of (\d+): (\d+) already here, (\d+) imported, (\d+) not found, (\d+) failed$/)))
+    return s.seededProgress(...(m.slice(1, 7).map(Number) as [number, number, number, number, number, number]))
+  if ((m = detail.match(/^stopped: (\d+) already here, (\d+) imported, (\d+) not found, (\d+) failed, of (\d+)$/)))
+    return s.seededStopped(...(m.slice(1, 6).map(Number) as [number, number, number, number, number]))
+  // The works listed again.
+  if ((m = detail.match(/^(\d+) listed again$/))) return s.listed(n(m[1]))
   // An archive made: its name, what it weighs, and how many of the
   // schedule's oldest went; a restore: what it put back, and what undoes it.
   if ((m = detail.match(/^(ams-\S+), (\d+) bytes, (\d+) removed$/)))
@@ -107,47 +148,87 @@ export function describeDetail(detail: string | null | undefined, t: Dict, local
   return t.admin.runs.notes[detail] ?? detail
 }
 
+/** A moment, as the schedule's next runs are said: the day by its name, and the time where the reader is. */
+function moment(iso: string | undefined, locale: string): string | undefined {
+  if (!iso) return undefined
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return undefined
+  return new Intl.DateTimeFormat(locale, {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date)
+}
+
+/** A time of day in UTC (`HH:MM`), as the reader's own clock says it today. */
+function localTime(hhmm: string, locale: string): string | undefined {
+  const match = /^(\d{2}):(\d{2})$/.exec(hhmm)
+  if (!match) return undefined
+  const date = new Date()
+  date.setUTCHours(Number(match[1]), Number(match[2]), 0, 0)
+  return new Intl.DateTimeFormat(locale, { hour: '2-digit', minute: '2-digit' }).format(date)
+}
+
 export function Jobs() {
   const { t } = useI18n()
-
-  const tasks = useQuery({
-    queryKey: ['tasks'],
-    queryFn: () => api.get<Task[]>('/tasks'),
-    // Every few seconds while something runs, to follow it; otherwise the
-    // next due dates only move by the minute.
-    refetchInterval: (q) => (q.state.data?.some((task) => task.running) ? 3_000 : 30_000),
-  })
+  const { tasks, following } = useTaskBoard()
   const running = tasks.data?.some((task) => task.running) ?? false
+  const live = following === 'live'
+
+  // The rules by their ids, to name a rule's run.
+  const rules = useQuery({
+    queryKey: ['import-rules'],
+    queryFn: () => api.get<ImportRule[]>('/import/rules'),
+    staleTime: 60_000,
+  })
+  const ruleNames = Object.fromEntries((rules.data ?? []).map((rule) => [rule.id, rule.name]))
 
   return (
-    <div className="mx-auto max-w-6xl">
-      <header className="rise mb-8">
-        <Label>{t.admin.title}</Label>
-        <h1 className="mt-2 font-display text-3xl font-medium text-bone sm:text-4xl">{t.admin.jobs}</h1>
-        <p className="mt-3 max-w-prose text-sm leading-relaxed text-bone-dim">{t.admin.tasks.lead}</p>
-      </header>
+    <Live.Provider value={live}>
+      <div className="mx-auto max-w-6xl">
+        <header className="rise mb-8">
+          <Label>{t.admin.title}</Label>
+          <h1 className="mt-2 font-display text-3xl font-medium text-bone sm:text-4xl">{t.admin.jobs}</h1>
+          <p className="mt-3 max-w-prose text-sm leading-relaxed text-bone-dim">{t.admin.tasks.lead}</p>
+          <FollowingLamp following={following} />
+        </header>
 
-      {tasks.isPending ? (
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {TASKS.map((id) => (
-            <Skeleton key={id} className="h-56 w-full" />
-          ))}
-        </div>
-      ) : tasks.isError ? (
-        <p role="alert" className="flex items-center gap-2 text-sm text-vermillion">
-          <Glyph name="alert" className="size-4" />
-          {tasks.error.message}
-        </p>
-      ) : (
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {tasks.data.map((task, index) => (
-            <TaskCard key={task.id} task={task} delay={40 + index * 40} />
-          ))}
-        </div>
-      )}
+        {tasks.isPending ? (
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {TASKS.map((id) => (
+              <Skeleton key={id} className="h-56 w-full" />
+            ))}
+          </div>
+        ) : tasks.isError ? (
+          <p role="alert" className="flex items-center gap-2 text-sm text-vermillion">
+            <Glyph name="alert" className="size-4" />
+            {tasks.error.message}
+          </p>
+        ) : (
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {tasks.data.map((task, index) => (
+              <TaskCard key={task.id} task={task} delay={40 + index * 30} />
+            ))}
+          </div>
+        )}
 
-      <History polling={running} />
-    </div>
+        <History polling={running && !live} live={live} ruleNames={ruleNames} />
+      </div>
+    </Live.Provider>
+  )
+}
+
+/** How the cards are followed, said once and quietly. */
+function FollowingLamp({ following }: { following: Following }) {
+  const { t } = useI18n()
+  return (
+    <p role="status" className="mt-3 flex items-center gap-2 text-xs text-bone-faint">
+      <Lamp tone={following === 'live' ? 'moss' : 'faint'}>
+        <span className="text-xs text-bone-dim">{t.admin.tasks.following[following]}</span>
+      </Lamp>
+    </p>
   )
 }
 
@@ -158,6 +239,9 @@ function TaskCard({ task, delay }: { task: Task; delay: number }) {
   const k = t.admin.tasks
   const queryClient = useQueryClient()
   const [confirming, setConfirming] = useState(false)
+  const [logOpen, setLogOpen] = useState(false)
+  const [scheduling, setScheduling] = useState(false)
+  const name = k.names[task.id] ?? task.id
 
   const refresh = () => {
     void queryClient.invalidateQueries({ queryKey: ['tasks'] })
@@ -179,24 +263,39 @@ function TaskCard({ task, delay }: { task: Task; delay: number }) {
     },
   })
 
-  const schedule =
+  const cadence =
     task.mode === 'scheduled' && task.everySeconds
       ? k.every(task.everySeconds)
       : task.mode === 'manual'
         ? k.manual
-        : k.off
+        : task.mode === 'scheduled'
+          ? k.eachOwn
+          : k.off
   const blocked = task.blocked && task.blocked !== 'running' ? task.blocked : undefined
   const waiting = task.blocked === 'busy'
   const last = task.last && !task.running ? task.last : undefined
+  // The run whose log is read: the one under way, or the last.
+  const logged = task.running ?? task.last
+  // A batch is started from the import page, with its lines.
+  const fromImport = task.id === 'import.batch'
 
   return (
-    <Panel id={`task-${task.id}`} label={k.names[task.id]} className="rise flex flex-col" style={{ animationDelay: `${delay}ms` }}>
+    <Panel id={`task-${task.id}`} label={name} className="rise flex flex-col" style={{ animationDelay: `${delay}ms` }}>
       <div className="border-b border-rule px-5 py-4">
-        <h2 className="font-display text-xl leading-tight text-bone">{k.names[task.id]}</h2>
-        <Chip tone={task.mode === 'off' ? 'neutral' : 'provider'} className="mt-2">
-          <Glyph name={task.mode === 'manual' ? 'play' : task.mode === 'off' ? 'power' : 'clock'} className="size-3" />
-          {schedule}
-        </Chip>
+        <h2 className="font-display text-xl leading-tight text-bone">{name}</h2>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <Chip tone={task.mode === 'off' ? 'neutral' : 'provider'}>
+            <Glyph name={task.mode === 'manual' ? 'play' : task.mode === 'off' ? 'power' : 'clock'} className="size-3" />
+            {cadence}
+          </Chip>
+          {task.schedule ? (
+            // Set by somebody: in the brass of what people do by hand.
+            <Chip tone="manual">
+              <Glyph name="clock" className="size-3" />
+              {scheduleWords(task.schedule, k)}
+            </Chip>
+          ) : null}
+        </div>
         <p className="mt-2.5 text-xs leading-relaxed text-bone-dim">{k.about[task.id]}</p>
       </div>
 
@@ -204,8 +303,9 @@ function TaskCard({ task, delay }: { task: Task; delay: number }) {
         {task.running ? (
           <div>
             <dt className="label">{k.last}</dt>
-            <dd className="mt-1 space-y-1">
+            <dd className="mt-1 space-y-2">
               <Lamp tone="brass">{t.admin.runs.running}</Lamp>
+              <RunProgress task={task} name={name} />
               {task.running.detail ? (
                 <p className="font-mono text-xs text-bone-dim tabular-nums">{describeDetail(task.running.detail, t, locale)}</p>
               ) : null}
@@ -242,14 +342,17 @@ function TaskCard({ task, delay }: { task: Task; delay: number }) {
           <div>
             <dt className="label">{k.next}</dt>
             <dd className="mt-1 text-bone" title={fmt.dateTime(task.nextAt, locale)}>
-              {fmt.relative(task.nextAt, locale)}
+              {/* Due already — waiting for its window, a lock, the next
+                  look — is said so, not as a moment in the past. */}
+              {Date.parse(task.nextAt) <= Date.now() + 5_000 ? k.dueNow : fmt.relative(task.nextAt, locale)}
+              <span className="block text-xs text-bone-faint">{moment(task.nextAt, locale)}</span>
             </dd>
           </div>
         ) : null}
       </dl>
       {blocked ? (
         <p className="flex items-start gap-2 px-5 pb-4 text-xs text-bone-faint">
-          <Glyph name="power" className="mt-0.5 size-3.5 shrink-0" />
+          <Glyph name="power" className="mt-0.5 size-3 shrink-0" />
           {k.blocked[blocked]}
         </p>
       ) : null}
@@ -260,22 +363,53 @@ function TaskCard({ task, delay }: { task: Task; delay: number }) {
             size="sm"
             variant="danger"
             disabled={stop.isPending || stopAsked}
+            aria-label={`${k.cancel}: ${name}`}
             onClick={() => task.running && stop.mutate(task.running.id)}
           >
             {stop.isPending ? <Spinner className="size-4" /> : <Glyph name="close" className="size-4" />}
-            {k.stop}
+            {k.cancel}
           </Button>
+        ) : fromImport ? (
+          <Link
+            to="/admin/discover?many=1"
+            className="inline-flex min-h-11 items-center gap-1.5 text-sm text-vermillion transition-colors duration-150 hover:text-vermillion-bright"
+          >
+            <Glyph name="download" className="size-4" />
+            {k.openImport}
+          </Link>
         ) : (
           <Button
             size="sm"
             variant="primary"
             disabled={Boolean(task.running) || Boolean(blocked) || waiting || run.isPending}
+            aria-label={`${task.last ? k.runAgain : k.run}: ${name}`}
             onClick={() => (task.id === 'refresh.all' ? setConfirming(true) : run.mutate())}
           >
-            {run.isPending || task.running ? <Spinner className="size-4" /> : <Glyph name="play" className="size-4" />}
-            {k.run}
+            {run.isPending || task.running ? <Spinner className="size-4" /> : <Glyph name={task.last ? 'refresh' : 'play'} className="size-4" />}
+            {task.last ? k.runAgain : k.run}
           </Button>
         )}
+        {logged ? (
+          <Button size="sm" aria-label={`${k.log}: ${name}`} onClick={() => setLogOpen(true)}>
+            <Glyph name="journal" className="size-4" />
+            {k.log}
+          </Button>
+        ) : null}
+        {task.schedulable ? (
+          <Button size="sm" variant="quiet" aria-label={`${k.when.edit}: ${name}`} onClick={() => setScheduling(true)}>
+            <Glyph name="clock" className="size-4" />
+            {k.when.edit}
+          </Button>
+        ) : null}
+        {task.id === 'import.rules' ? (
+          <Link
+            to="/admin/lists#import-rules"
+            className="inline-flex min-h-11 items-center gap-1.5 text-sm text-vermillion transition-colors duration-150 hover:text-vermillion-bright"
+          >
+            {k.openRules}
+            <Glyph name="chevronRight" className="size-3.5" />
+          </Link>
+        ) : null}
         {stopAsked ? <span className="text-xs text-bone-faint">{k.stopAsked}</span> : null}
         {run.isError ? (
           <span role="alert" className="text-xs text-vermillion">
@@ -300,7 +434,228 @@ function TaskCard({ task, delay }: { task: Task; delay: number }) {
       >
         <p className="text-sm leading-relaxed text-bone-dim">{k.confirmAllBody}</p>
       </Dialog>
+
+      <Dialog
+        open={logOpen}
+        size="lg"
+        title={k.logOf(name)}
+        onClose={() => setLogOpen(false)}
+        footer={<Button onClick={() => setLogOpen(false)}>{k.close}</Button>}
+      >
+        {logged ? <JobDetailPanel job={logged} /> : null}
+      </Dialog>
+
+      {task.schedulable ? (
+        <ScheduleDialog task={task} name={name} open={scheduling} onClose={() => setScheduling(false)} />
+      ) : null}
     </Panel>
+  )
+}
+
+/** A schedule in a few words: its window, or its expression, in UTC. */
+function scheduleWords(schedule: TaskSchedule, k: Dict['admin']['tasks']): string {
+  if (schedule.kind === 'window') return k.when.window(schedule.from ?? '', schedule.to ?? '')
+  return k.when.cron(schedule.cron ?? '')
+}
+
+/**
+ * How far a run has got: a bar, and the count beside it. One that does not
+ * know how many there are is a bar that only says it is working.
+ */
+function RunProgress({ task, name }: { task: Task; name: string }) {
+  const { t, locale } = useI18n()
+  const k = t.admin.tasks
+  const progress = task.progress
+  const total = progress?.total ?? undefined
+  const done = progress?.done ?? 0
+  const share = total ? Math.min(1, done / Math.max(total, 1)) : undefined
+
+  return (
+    <div className="space-y-1">
+      <progress
+        aria-label={k.progressOf(name)}
+        value={total ? Math.min(done, total) : undefined}
+        max={total ?? undefined}
+        className={cn(
+          'block h-1.5 w-full appearance-none overflow-hidden rounded-full border-0 bg-ink-high',
+          '[&::-webkit-progress-bar]:bg-ink-high [&::-webkit-progress-value]:bg-brass [&::-moz-progress-bar]:bg-brass',
+          '[&::-webkit-progress-value]:transition-[width] [&::-webkit-progress-value]:duration-500',
+          // Working, how far unknown: it breathes, unless the reader asked
+          // for stillness.
+          '[&:indeterminate]:animate-pulse [&:indeterminate]:bg-brass/40 [&:indeterminate::-webkit-progress-bar]:bg-brass/40 motion-reduce:[&:indeterminate]:animate-none',
+        )}
+      />
+      {/* The run's own line, below, says how many of how many: here, only
+          what it comes to, or how many so far when nobody knows of how many. */}
+      {progress ? (
+        <p className="text-right font-mono text-[0.6875rem] text-bone-faint tabular-nums">
+          {share !== undefined
+            ? new Intl.NumberFormat(locale, { style: 'percent', maximumFractionDigits: 0 }).format(share)
+            : k.progressSoFar(fmt.count(done, locale))}
+        </p>
+      ) : null}
+    </div>
+  )
+}
+
+/** The common schedules, as a cron expression each. */
+const PRESETS: { id: string; cron: string }[] = [
+  { id: 'nightly', cron: '0 3 * * *' },
+  { id: 'sundays', cron: '0 4 * * 0' },
+  { id: 'mondays', cron: '0 5 * * 1' },
+  { id: 'monthly', cron: '0 4 1 * *' },
+]
+
+type ScheduleKind = 'own' | 'window' | 'cron'
+
+/**
+ * When a periodic task runs: its own cadence; inside a window of the day;
+ * or at the moments a cron expression names. What is being written is said
+ * as it is written — its next runs, in the reader's time, or why it is no
+ * schedule — before anything is kept.
+ */
+function ScheduleDialog({ task, name, open, onClose }: { task: Task; name: string; open: boolean; onClose: () => void }) {
+  const { t, locale } = useI18n()
+  const k = t.admin.tasks.when
+  const queryClient = useQueryClient()
+  const ids = useId()
+  const [kind, setKind] = useState<ScheduleKind>(task.schedule?.kind ?? 'own')
+  const [from, setFrom] = useState(task.schedule?.from ?? '01:00')
+  const [to, setTo] = useState(task.schedule?.to ?? '06:00')
+  const [cron, setCron] = useState(task.schedule?.cron ?? '0 4 * * 0')
+
+  const setting: TaskSchedule | null =
+    kind === 'window' ? { kind: 'window', from, to } : kind === 'cron' ? { kind: 'cron', cron } : null
+  const settled = useSettled(setting, 350)
+  const preview = useQuery({
+    queryKey: ['schedule-preview', settled],
+    queryFn: () => api.post<ScheduleMoments>('/tasks/schedules/preview', settled),
+    enabled: open && settled !== null,
+    retry: false,
+    staleTime: 30_000,
+  })
+
+  const save = useMutation({
+    mutationFn: () =>
+      setting
+        ? api.put<Task>(`/tasks/${task.id}/schedule`, setting)
+        : api.delete<Task>(`/tasks/${task.id}/schedule`),
+    onSuccess: (state) => {
+      queryClient.setQueryData<Task[]>(['tasks'], (old) => old?.map((one) => (one.id === state.id ? state : one)))
+      onClose()
+    },
+  })
+
+  const localFrom = localTime(from, locale)
+  const localTo = localTime(to, locale)
+
+  return (
+    <Dialog
+      open={open}
+      size="lg"
+      title={k.editOf(name)}
+      onClose={onClose}
+      footer={
+        <>
+          <Button onClick={onClose}>{t.common.cancel}</Button>
+          <Button variant="primary" disabled={save.isPending || (setting !== null && preview.isError)} onClick={() => save.mutate()}>
+            {save.isPending ? <Spinner className="size-4" /> : <Glyph name="check" className="size-4" />}
+            {setting ? k.save : k.reset}
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-5">
+        <Segmented<ScheduleKind>
+          label={k.heading}
+          value={kind}
+          onChange={setKind}
+          options={[
+            { value: 'own', label: k.own },
+            { value: 'window', label: k.kindWindow },
+            { value: 'cron', label: k.kindCron },
+          ]}
+        />
+        <p className="text-sm leading-relaxed text-bone-dim">
+          {kind === 'own'
+            ? k.ownLead(task.everySeconds ? t.admin.tasks.every(task.everySeconds) : '')
+            : kind === 'window'
+              ? k.windowLead
+              : k.cronLead}
+        </p>
+
+        {kind === 'window' ? (
+          <div className="grid gap-4 sm:grid-cols-2">
+            <FormField label={k.from} htmlFor={`${ids}-from`} hint={k.inUtc}>
+              <Input id={`${ids}-from`} type="time" required value={from} onChange={(event) => setFrom(event.target.value)} />
+            </FormField>
+            <FormField label={k.to} htmlFor={`${ids}-to`}>
+              <Input id={`${ids}-to`} type="time" required value={to} onChange={(event) => setTo(event.target.value)} />
+            </FormField>
+            {localFrom && localTo ? <p className="text-xs text-bone-faint sm:col-span-2">{k.whereYouAre(localFrom, localTo)}</p> : null}
+          </div>
+        ) : null}
+
+        {kind === 'cron' ? (
+          <div className="space-y-3">
+            <FormField label={k.expression} htmlFor={`${ids}-cron`} hint={k.expressionHint}>
+              <Input
+                id={`${ids}-cron`}
+                className="font-mono"
+                spellCheck={false}
+                autoComplete="off"
+                value={cron}
+                onChange={(event) => setCron(event.target.value)}
+              />
+            </FormField>
+            <div>
+              <p className="label mb-2">{k.presets}</p>
+              <div className="flex flex-wrap gap-2">
+                {PRESETS.map((preset) => (
+                  <Button
+                    key={preset.id}
+                    size="sm"
+                    variant="quiet"
+                    aria-pressed={cron === preset.cron}
+                    onClick={() => setCron(preset.cron)}
+                  >
+                    {k.preset[preset.id]}
+                  </Button>
+                ))}
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {setting ? (
+          <div aria-live="polite">
+            <p className="label mb-1.5">{k.next}</p>
+            {preview.isError ? (
+              <p role="alert" className="flex items-start gap-2 text-sm text-vermillion">
+                <Glyph name="alert" className="mt-0.5 size-4 shrink-0" />
+                {preview.error instanceof ApiError ? preview.error.message : t.common.error}
+              </p>
+            ) : preview.data ? (
+              <ul className="space-y-1 text-sm text-bone">
+                {preview.data.next.map((at) => (
+                  <li key={at} title={`${at.slice(0, 16).replace('T', ' ')} UTC`}>
+                    {moment(at, locale)}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-sm text-bone-faint">{k.nextNone}</p>
+            )}
+          </div>
+        ) : null}
+
+        {save.isError ? (
+          <p role="alert" className="text-sm text-vermillion">
+            {save.error instanceof ApiError ? save.error.message : t.common.actionFailed}
+          </p>
+        ) : null}
+      </div>
+    </Dialog>
   )
 }
 
@@ -309,7 +664,7 @@ function TaskCard({ task, delay }: { task: Task; delay: number }) {
 /** How many runs a page of the history holds: the next page is a press away. */
 const PAGE = 50
 
-function History({ polling }: { polling: boolean }) {
+function History({ polling, live, ruleNames }: { polling: boolean; live: boolean; ruleNames: Record<string, string> }) {
   const { t, locale } = useI18n()
   const k = t.admin.tasks
   const [kind, setKind] = useState('')
@@ -331,8 +686,10 @@ function History({ polling }: { polling: boolean }) {
     placeholderData: keepPreviousData,
     // Followed while it is the newest that are on screen. Somebody who has
     // dug into the older pages is reading, not watching — and a poll would
-    // ask for every page they opened.
-    refetchInterval: (state) => ((state.state.data?.pages.length ?? 1) > 1 ? false : polling ? 3_000 : 20_000),
+    // ask for every page they opened. Followed live, the stream says when it
+    // moved, and nothing is asked meanwhile.
+    refetchInterval: (state) =>
+      (state.state.data?.pages.length ?? 1) > 1 || live ? false : polling ? 3_000 : 20_000,
   })
 
   const runs = jobs.data?.pages.flatMap((page) => page.jobs) ?? []
@@ -340,13 +697,33 @@ function History({ polling }: { polling: boolean }) {
   const failedOnly = status === 'failed'
   const filtered = Boolean(kind || status || by)
 
+  // The runs as the administration's other tables: read a page at a time,
+  // newest first, so no head orders them — a page put in another order here
+  // would say nothing of the runs on the other pages.
+  const columns: Column[] = useMemo(
+    () => [
+      { id: 'when', label: t.admin.runs.colWhen },
+      { id: 'status', label: t.admin.runs.colStatus },
+      { id: 'kind', label: t.admin.runs.colKind, kind: 'primary', always: true },
+      { id: 'detail', label: t.admin.runs.colDetail },
+      { id: 'by', label: k.colBy, from: 'lg' },
+      { id: 'took', label: k.colTook, align: 'right', from: 'md' },
+      { id: 'again', label: k.again, kind: 'actions', always: true, align: 'right' },
+    ],
+    [t, k],
+  )
+  const table = useDataTable({ id: 'jobs', columns })
+
   return (
-    <Panel label={k.history} className="rise mt-8 overflow-hidden" style={{ animationDelay: '240ms' }}>
+    // Clipped, not hidden: a hidden overflow would let the table's head
+    // scroll away with its rows.
+    <Panel label={k.history} className="rise mt-8 overflow-clip" style={{ animationDelay: '240ms' }}>
       <PanelHead
         title={k.history}
         action={
           <span className="flex items-center gap-3">
             {jobs.isFetching && !jobs.isFetchingNextPage ? <Spinner className="size-3.5 text-bone-faint" /> : null}
+            {runs.length ? <TableOptions table={table} /> : null}
             <span className="font-mono text-xs text-bone-faint tabular-nums">{fmt.count(total, locale)}</span>
           </span>
         }
@@ -431,7 +808,7 @@ function History({ polling }: { polling: boolean }) {
         )
       ) : (
         <>
-          <JobTable jobs={runs} />
+          <JobTable jobs={runs} ruleNames={ruleNames} table={table} />
           {jobs.hasNextPage ? (
             <div className="flex flex-col items-center gap-2 border-t border-rule px-5 py-6">
               <Button onClick={() => void jobs.fetchNextPage()} disabled={jobs.isFetchingNextPage}>
@@ -496,7 +873,29 @@ function took(job: Job, locale: string): string {
   return `${Math.floor(minutes / 60).toLocaleString(locale)} h ${minutes % 60} min`
 }
 
-export function JobTable({ jobs }: { jobs: Job[] }) {
+/**
+ * The rows of the dense table that are not runs — a day's heading, a run's
+ * detail open under it — keep the table's roles, as its own rows do, for a
+ * table drawn as cards that some engines would stop calling one.
+ */
+const ROW = { role: 'row' } as const
+const CELL = { role: 'cell' } as const
+
+/**
+ * The runs under the day each was started on, as the dense table: a row per
+ * run, its name the button that opens what it did under it — or Enter on the
+ * row — and cards where the table is narrow. The day's heading and the open
+ * detail span the row; in a card they are not padded as a run is.
+ */
+export function JobTable({
+  jobs,
+  ruleNames = {},
+  table,
+}: {
+  jobs: Job[]
+  ruleNames?: Record<string, string>
+  table: DataTableState
+}) {
   const { t, locale } = useI18n()
   const k = t.admin.tasks
   const queryClient = useQueryClient()
@@ -504,6 +903,8 @@ export function JobTable({ jobs }: { jobs: Job[] }) {
   const [open, setOpen] = useState<string | null>(null)
   const toggle = (id: string) => setOpen((current) => (current === id ? null : id))
   const nameOf = (job: Job) => k.names[job.kind] ?? job.kind
+  // What a heading or a detail spans: the columns shown.
+  const span = table.columns.filter((column) => table.shows(column.id)).length
 
   /** The run's name, as the button that opens what it did. */
   const opener = (job: Job, controls: string) => {
@@ -526,11 +927,16 @@ export function JobTable({ jobs }: { jobs: Job[] }) {
     )
   }
 
+  // A rule's run, by the rule it ran.
+  const ruleOf = (job: Job) => (job.kind === 'import.rules' && job.target ? ruleNames[job.target] : undefined)
+
   const again = useMutation({
     mutationFn: (job: Job) =>
       job.kind === 'refresh.item' && job.target
         ? api.post(`/items/${encodeURIComponent(job.target)}/refresh`)
-        : api.post(`/tasks/${encodeURIComponent(job.kind)}/run`),
+        : job.kind === 'import.rules' && job.target
+          ? api.post(`/import/rules/${encodeURIComponent(job.target)}/run`)
+          : api.post(`/tasks/${encodeURIComponent(job.kind)}/run`),
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: ['tasks'] })
       void queryClient.invalidateQueries({ queryKey: ['jobs'] })
@@ -543,150 +949,116 @@ export function JobTable({ jobs }: { jobs: Job[] }) {
 
   return (
     <>
-    {again.isError ? (
-      <p role="alert" className="flex items-center gap-2 border-b border-rule px-5 py-3 text-sm text-vermillion">
-        <Glyph name="alert" className="size-4 shrink-0" />
-        {again.error instanceof ApiError ? again.error.message : t.common.error}
-      </p>
-    ) : null}
-    {/* On a phone, one block per run: seven columns do not fit, and a table
-        that scrolls sideways hides most of what it holds. */}
-    <div className="md:hidden">
-      {groups.map((group) => (
-        <div key={group.day}>
-          <h3 className="flex items-baseline justify-between gap-3 border-y border-rule bg-ink px-4 py-2 first:border-t-0">
-            <DayHeading day={group.day} jobs={group.jobs} />
-          </h3>
-          <ul className="divide-y divide-rule">
-            {group.jobs.map((job) => (
-              <li key={job.id} data-job={job.id} className="skip-offscreen px-4 py-3 [--row:7rem]">
-                <div className="space-y-1.5">
-                  <div className="flex items-center justify-between gap-3">
-                    {opener(job, `job-${job.id}-detail-narrow`)}
-                    <RunStatus status={job.status} />
-                  </div>
-                  {job.work ? (
-                    <Link to={`/admin/catalogue/${job.work.id}`} className="block truncate text-sm text-bone underline decoration-rule-bright underline-offset-2">
-                      {job.work.title}
-                    </Link>
-                  ) : null}
-                  <p className={job.error ? 'text-xs break-words text-vermillion' : 'text-xs text-bone-dim'}>
-                    {describeDetail(job.error ?? job.detail, t, locale)}
-                  </p>
-                  <p className="font-mono text-[0.6875rem] text-bone-faint tabular-nums">
-                    {fmt.relative(job.createdAt, locale)} · {who(job)} · {took(job, locale)}
-                  </p>
-                </div>
-                {open === job.id ? (
-                  <div id={`job-${job.id}-detail-narrow`} className="mt-3 border-t border-rule pt-3">
-                    <JobDetailPanel job={job} />
-                  </div>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-        </div>
-      ))}
-    </div>
-    <div className="hidden md:block">
-    <TableScroll label={t.admin.jobs}>
-      <table className="w-full min-w-[52rem] border-collapse text-left">
-        <thead>
-          <tr>
-            <Th>{t.admin.runs.colWhen}</Th>
-            <Th>{t.admin.runs.colStatus}</Th>
-            <Th>{t.admin.runs.colKind}</Th>
-            <Th>{t.admin.runs.colDetail}</Th>
-            <Th>{k.colBy}</Th>
-            <Th className="text-right">{k.colTook}</Th>
-            <Th>
-              <span className="sr-only">{k.again}</span>
-            </Th>
-          </tr>
-        </thead>
-        {groups.map((group) => (
-          <tbody key={group.day}>
-            <tr>
-              {/* A heading in a cell rather than a header cell: it describes a
-                  stretch of rows, which no cell beside it could be read as
-                  headed by. */}
-              <td colSpan={7} className="border-y border-rule bg-ink p-0">
-                <h3 className="flex items-baseline justify-between gap-3 px-5 py-2">
-                  <DayHeading day={group.day} jobs={group.jobs} />
-                </h3>
-              </td>
-            </tr>
-            {group.jobs.map((job) => {
-              // Anything but a refresh of everything, which asks for a confirmation
-              // of its own, from its card.
-              const rerunnable = job.status !== 'running' && job.kind !== 'refresh.all'
-              const expanded = open === job.id
-              return (
-                <Fragment key={job.id}>
-                <Tr data-job={job.id} className={expanded ? 'bg-ink-high' : undefined}>
-                  <Td className="whitespace-nowrap">
-                    <span className="font-mono text-xs text-bone-faint tabular-nums" title={fmt.dateTime(job.createdAt, locale)}>
-                      {fmt.relative(job.createdAt, locale)}
-                    </span>
-                  </Td>
-                  <Td>
-                    <RunStatus status={job.status} />
-                  </Td>
-                  <Td>{opener(job, `job-${job.id}-detail`)}</Td>
-                  <Td className="w-full max-w-0">
-                    {/* Which work, for a run that had one: "refreshed from a
-                        provider" three times over said nothing of what. */}
-                    {job.work ? (
-                      <Link
-                        to={`/admin/catalogue/${job.work.id}`}
-                        className="block truncate text-sm text-bone underline decoration-rule-bright underline-offset-2 transition-colors duration-150 hover:text-vermillion hover:decoration-vermillion"
-                      >
-                        {job.work.title}
-                      </Link>
+      {again.isError ? (
+        <p role="alert" className="flex items-center gap-2 border-b border-rule px-5 py-3 text-sm text-vermillion">
+          <Glyph name="alert" className="size-4 shrink-0" />
+          {again.error instanceof ApiError ? again.error.message : t.common.error}
+        </p>
+      ) : null}
+      <DataTable table={table} label={t.admin.jobs} onOpen={toggle}>
+        <THead>
+          <Th column="when" />
+          <Th column="status" />
+          <Th column="kind" />
+          <Th column="detail" />
+          <Th column="by" />
+          <Th column="took" />
+          <Th column="again">
+            <span className="sr-only">{k.again}</span>
+          </Th>
+        </THead>
+        <TBody>
+          {groups.map((group) => (
+            <Fragment key={group.day}>
+              <tr {...ROW} data-day={group.day} style={{ padding: 0 }}>
+                {/* A heading in a cell rather than a header cell: it describes a
+                    stretch of rows, which no cell beside it could be read as
+                    headed by. */}
+                <td {...CELL} colSpan={span} className="col-span-full border-y border-rule bg-ink p-0">
+                  <h3 className="flex items-baseline justify-between gap-3 px-5 py-2">
+                    <DayHeading day={group.day} jobs={group.jobs} />
+                  </h3>
+                </td>
+              </tr>
+              {group.jobs.map((job) => {
+                // Anything but a refresh of everything, which asks for a confirmation
+                // of its own, from its card; and a batch, which is started from the
+                // import page with its lines.
+                const rerunnable = job.status !== 'running' && job.kind !== 'refresh.all' && job.kind !== 'import.batch'
+                const expanded = open === job.id
+                return (
+                  <Fragment key={job.id}>
+                    <Tr row={job.id} data-job={job.id} className={expanded ? 'bg-ink-high' : undefined}>
+                      <Td column="when" className="whitespace-nowrap">
+                        <span className="font-mono text-xs text-bone-faint tabular-nums" title={fmt.dateTime(job.createdAt, locale)}>
+                          {fmt.relative(job.createdAt, locale)}
+                        </span>
+                      </Td>
+                      <Td column="status">
+                        <RunStatus status={job.status} />
+                      </Td>
+                      <Td column="kind">{opener(job, `job-${job.id}-detail`)}</Td>
+                      <Td column="detail" className="w-full max-w-0">
+                        {/* Which work, for a run that had one: "refreshed from a
+                            provider" three times over said nothing of what. */}
+                        {job.work ? (
+                          <Link
+                            to={`/admin/catalogue/${job.work.id}`}
+                            className="block truncate text-sm text-bone underline decoration-rule-bright underline-offset-2 transition-colors duration-150 hover:text-vermillion hover:decoration-vermillion"
+                          >
+                            {job.work.title}
+                          </Link>
+                        ) : ruleOf(job) ? (
+                          // A rule's run, by the rule's name.
+                          <span className="block truncate text-sm text-bone">{ruleOf(job)}</span>
+                        ) : null}
+                        <span
+                          className={job.error ? 'block truncate text-vermillion' : 'block truncate text-bone-dim'}
+                          title={job.error ?? job.detail ?? undefined}
+                        >
+                          {job.error ? describeDetail(job.error, t, locale) : job.detail ? describeDetail(job.detail, t, locale) : job.work ? '' : '—'}
+                        </span>
+                      </Td>
+                      <Td column="by" className="whitespace-nowrap">
+                        <span className="text-xs text-bone-dim">{who(job)}</span>
+                      </Td>
+                      <Td column="took" className="font-mono text-xs whitespace-nowrap text-bone-faint tabular-nums">
+                        {took(job, locale)}
+                      </Td>
+                      <Td column="again">
+                        {rerunnable ? (
+                          <Button
+                            size="sm"
+                            variant="quiet"
+                            disabled={again.isPending && again.variables?.id === job.id}
+                            onClick={() => again.mutate(job)}
+                            aria-label={`${k.again}: ${k.names[job.kind] ?? job.kind}`}
+                          >
+                            {again.isPending && again.variables?.id === job.id ? (
+                              <Spinner className="size-4" />
+                            ) : (
+                              <Glyph name="refresh" className="size-4" />
+                            )}
+                          </Button>
+                        ) : null}
+                      </Td>
+                    </Tr>
+                    {expanded ? (
+                      <tr {...ROW} id={`job-${job.id}-detail`} style={{ padding: 0 }}>
+                        <td {...CELL} colSpan={span} className="col-span-full border-b border-rule bg-ink p-0">
+                          <div className="px-5 py-4">
+                            <JobDetailPanel job={job} />
+                          </div>
+                        </td>
+                      </tr>
                     ) : null}
-                    <span className={job.error ? 'block truncate text-vermillion' : 'block truncate text-bone-dim'} title={job.error ?? job.detail ?? undefined}>
-                      {job.error ? describeDetail(job.error, t, locale) : job.detail ? describeDetail(job.detail, t, locale) : job.work ? '' : '—'}
-                    </span>
-                  </Td>
-                  <Td className="whitespace-nowrap">
-                    <span className="text-xs text-bone-dim">{who(job)}</span>
-                  </Td>
-                  <Td className="text-right font-mono text-xs whitespace-nowrap text-bone-faint tabular-nums">
-                    {took(job, locale)}
-                  </Td>
-                  <Td className="text-right">
-                    {rerunnable ? (
-                      <Button
-                        size="sm"
-                        variant="quiet"
-                        disabled={again.isPending && again.variables?.id === job.id}
-                        onClick={() => again.mutate(job)}
-                        aria-label={`${k.again}: ${k.names[job.kind] ?? job.kind}`}
-                      >
-                        {again.isPending && again.variables?.id === job.id ? (
-                          <Spinner className="size-4" />
-                        ) : (
-                          <Glyph name="refresh" className="size-4" />
-                        )}
-                      </Button>
-                    ) : null}
-                  </Td>
-                </Tr>
-                {expanded ? (
-                  <tr id={`job-${job.id}-detail`}>
-                    <td colSpan={7} className="border-b border-rule bg-ink px-5 py-4">
-                      <JobDetailPanel job={job} />
-                    </td>
-                  </tr>
-                ) : null}
-                </Fragment>
-              )
-            })}
-          </tbody>
-        ))}
-      </table>
-    </TableScroll>
-    </div>
+                  </Fragment>
+                )
+              })}
+            </Fragment>
+          ))}
+        </TBody>
+      </DataTable>
     </>
   )
 }
@@ -712,15 +1084,17 @@ function DayHeading({ day, jobs }: { day: string; jobs: Job[] }) {
  * What a run did, under its row: its whole summary where the row cut it
  * short, when it began and ended, and each work it took with how it went.
  */
-function JobDetailPanel({ job }: { job: Job }) {
+export function JobDetailPanel({ job }: { job: Job }) {
   const { t, locale } = useI18n()
   const k = t.admin.tasks
 
+  const live = useContext(Live)
   const detail = useQuery({
     queryKey: ['job', job.id],
     queryFn: () => api.get<JobDetail>(`/jobs/${encodeURIComponent(job.id)}`),
-    // A run under way writes as it goes.
-    refetchInterval: job.status === 'running' ? 3_000 : false,
+    // A run under way writes as it goes: asked again every few seconds, or
+    // told by the stream when the page follows it live.
+    refetchInterval: job.status === 'running' && !live ? 3_000 : false,
   })
 
   if (detail.isPending) return <Skeleton className="h-16 w-full" />

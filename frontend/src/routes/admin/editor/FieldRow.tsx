@@ -7,6 +7,16 @@
  * person decided and which a provider did, because none of it is said in colour
  * alone.
  *
+ * A field is edited where it is shown. Its value is the way in: pressed, or
+ * reached with Tab and opened with Enter, it becomes a box in its place — no
+ * dialog, no form to scroll to — and what is typed there is kept as a draft
+ * of the editor's (`drafts.tsx`), the field marked "changed" in brass, until
+ * the bar along the foot of the page saves it. Enter keeps the change and
+ * closes the box; Escape puts the field back as it was; a press elsewhere
+ * keeps the change too. A value that holds a link or a button of its own —
+ * an address, a trailer, the keywords — is opened from a pencil beside it, and
+ * a picture from its picker.
+ *
  * Saving is what locks. That is the server's model — an override row is written
  * into a table the refresh path never touches — and the interface refuses to
  * invent a friendlier one, because an operator who thinks a field is locked
@@ -30,7 +40,7 @@
  */
 
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { useState, type ReactNode } from 'react'
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 
 import { ExternalLink } from '../../../components/elsewhere'
 import { Artwork } from '../../../components/media'
@@ -40,6 +50,7 @@ import {
   FormField,
   Genre,
   Glyph,
+  IconButton,
   Input,
   Label,
   Provenance,
@@ -56,6 +67,7 @@ import { languageName, providerName, statusLabel, titleOrigin } from '../../../l
 import { trailerPage } from '../../../lib/links'
 import type { FieldDef, Override, ProvenanceReport, ValueSource } from '../../../lib/types'
 
+import { draftKey, useDrafts } from './drafts'
 import { codeOf, lockOf, shelfOf, useEditorLocks } from './locks'
 import { hostOf } from './shared'
 
@@ -71,6 +83,9 @@ function spoken(shelf: string, locale: string): string {
 
 /** The types whose shape is worth saying under the name: what to type. */
 const HINTED = new Set(['date', 'dateTime', 'timeOfDay', 'textList', 'integer', 'float', 'boolean', 'ids'])
+
+/** The fields whose value, as shown, holds a link or a button of its own: opened from a pencil beside it. */
+const LIVELY = new Set(['homepage', 'trailerYoutubeId', 'themeMusic', 'keywords'])
 
 /** Whether a value counts as given, for the "empty" filter and the origin chip. */
 export function hasValue(def: FieldDef, value: unknown): boolean {
@@ -109,13 +124,20 @@ export function FieldRow({
   onChanged: () => void
 }) {
   const { t, locale } = useI18n()
+  const e = t.admin.editor
   const [editing, setEditing] = useState(false)
   const locks = useEditorLocks()
+  const drafts = useDrafts()
   const lock = lockOf(locks, scope, def.name, found)
   const textual = locks?.translated.includes(def.name) ?? false
   // The language an edit of this text may be kept to: the one shown, or —
   // shown as stored — the one its lock is in, the language it is stored in.
   const shelf = textual ? (locks?.language ? shelfOf(locks.language) : (lock?.language ?? '')) : ''
+  const key = draftKey(scope, def.name, shelf)
+  const draft = drafts?.get(key)
+  const valueId = useId()
+  // What the focus comes back to once the box closes: the value, or its pencil.
+  const opener = useRef<HTMLElement | null>(null)
 
   const unlock = useMutation({
     mutationFn: () =>
@@ -139,51 +161,76 @@ export function FieldRow({
       ? report.data?.diverging?.find((one) => one.scope === scope && one.field === def.name)
       : undefined
   const lockLabel = lock?.language
-    ? t.admin.editor.lockedIn(spoken(lock.language, locale))
+    ? e.lockedIn(spoken(lock.language, locale))
     : shelf && locked
-      ? t.admin.editor.lockedEverywhere
+      ? e.lockedEverywhere
       : lock?.updatedAt
-        ? t.admin.editor.lockedOn(fmt.relative(lock.updatedAt, locale) ?? '')
-        : t.admin.editor.locked
+        ? e.lockedOn(fmt.relative(lock.updatedAt, locale) ?? '')
+        : e.locked
+  // What the row shows: the change typed, while there is one.
+  const shownValue = draft ? parse(draft.text, def) : value
   const given = hasValue(def, value)
   const note = traced ? originNote(def.name, origin, { hasValue: given, locked }, t, locale) : null
   // A long text, or a row whose panel names it: the value runs the width,
   // under the name's line rather than beside a column the width of a date.
   const wide = def.fieldType === 'longText' || !labelled
   const hint = HINTED.has(def.fieldType) ? ((t.labels.fieldTypes as Record<string, string>)[def.fieldType] ?? def.fieldType) : null
+  const label = fieldLabel(def, t)
+  // Opened from a pencil rather than from the value itself.
+  const byPencil = Boolean(onEdit) || LIVELY.has(def.name)
+
+  const open = (from: HTMLElement) => {
+    opener.current = from
+    if (onEdit) onEdit()
+    else setEditing(true)
+  }
+  const close = (refocus: boolean) => {
+    setEditing(false)
+    if (refocus) requestAnimationFrame(() => opener.current?.focus())
+  }
 
   return (
     <li
       // Names the row after the field it edits: useful when reading the DOM to
       // work out why a lock did not take, and stable for tests to hold on to.
       data-field={def.name}
+      data-changed={draft ? '' : undefined}
       className={cn(
-        'px-5 py-3 transition-colors duration-150',
+        // Laid out by its own width, not the screen's: beside the sources, a
+        // field's list is a third of a wide screen.
+        '@container px-5 py-3 transition-colors duration-150',
         locked ? 'border-l-2 border-brass bg-brass/[0.05] pl-[calc(1.25rem-2px)]' : '',
-        editing ? '' : 'hover:bg-ink-high',
+        draft && !locked ? 'border-l-2 border-brass-deep pl-[calc(1.25rem-2px)]' : '',
       )}
     >
-      {/* On a phone the buttons sit on the label's line, and the value runs
-          the width under both. A long text does the same at every width: a
-          paragraph in a column the width of a date is a keyhole. */}
+      {/* In a narrow row the buttons sit on the label's line, and the value
+          runs the width under both. A long text does the same at every width:
+          a paragraph in a column the width of a date is a keyhole. */}
       <div
         className={cn(
           'grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-2',
-          wide ? '' : 'sm:grid-cols-[11rem_minmax(0,1fr)_auto] sm:items-start sm:gap-4',
+          wide ? '' : '@xl:grid-cols-[11rem_minmax(0,1fr)_auto] @xl:items-start @xl:gap-4',
         )}
       >
-        <div className={cn('min-w-0 sm:pt-1', !labelled && !locked && 'sr-only', !labelled && locked && !editing && 'col-span-2 sm:col-span-1')}>
-          <span className="flex items-center gap-1.5">
+        <div
+          className={cn(
+            'min-w-0 @xl:pt-1',
+            !labelled && !locked && !draft && 'sr-only',
+            !labelled && (locked || draft) && !editing && 'col-span-2 @xl:col-span-1',
+          )}
+        >
+          <span className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
             {locked ? <Glyph name="lock" className="size-3.5 shrink-0 text-brass" /> : null}
-            <Label className={cn(locked && 'text-brass', !labelled && 'sr-only')}>{fieldLabel(def, t)}</Label>
-            {!labelled && locked ? <span className="label text-brass">{t.admin.editor.locked}</span> : null}
+            <Label className={cn(locked && 'text-brass', !labelled && 'sr-only')}>{label}</Label>
+            {!labelled && locked ? <span className="label text-brass">{e.locked}</span> : null}
+            {draft ? <Changed /> : null}
           </span>
           {hint && !editing && labelled ? (
             <span className="mt-0.5 block font-mono text-[0.6875rem] text-bone-faint">{hint}</span>
           ) : null}
         </div>
 
-        <div className={cn('col-span-2 min-w-0', wide ? '' : 'sm:col-span-1 sm:flex-1', editing && !wide ? 'sm:col-span-2' : '')}>
+        <div className={cn('col-span-2 min-w-0', wide ? '' : '@xl:col-span-1 @xl:flex-1', editing && !wide ? '@xl:col-span-2' : '')}>
           {unlock.isError ? (
             <p role="alert" className="mb-2 text-xs text-vermillion">
               {unlock.error.message || t.common.actionFailed}
@@ -192,90 +239,124 @@ export function FieldRow({
 
           {editing ? (
             <Editor
-              itemId={itemId}
+              draftKey={key}
               scope={scope}
               def={def}
               value={value}
               shelf={shelf}
               // An edit of a lock in every language stays one, unless asked.
               alone={!(locked && !lock?.language)}
-              onDone={() => {
-                setEditing(false)
-                onChanged()
-              }}
-              onCancel={() => setEditing(false)}
+              onClose={close}
             />
+          ) : byPencil ? (
+            <Shown def={def} value={shownValue} locked={locked || Boolean(draft)} />
           ) : (
-            <Shown def={def} value={value} locked={locked} />
+            // The value itself is the way in: a button to every reader, its
+            // name what pressing it does, the value said after it.
+            <div
+              role="button"
+              tabIndex={0}
+              data-edit=""
+              aria-label={e.inPlace.edit(label)}
+              aria-describedby={valueId}
+              onClick={(event) => open(event.currentTarget)}
+              onKeyDown={(event) => {
+                if (event.key !== 'Enter' && event.key !== ' ') return
+                event.preventDefault()
+                open(event.currentTarget)
+              }}
+              className={cn(
+                'group/value -mx-2 -my-1 flex cursor-text items-start gap-2 rounded-card px-2 py-1 transition-colors duration-150',
+                'hover:bg-ink-top focus-visible:bg-ink-top',
+              )}
+            >
+              <div id={valueId} className="min-w-0 flex-1">
+                <Shown def={def} value={shownValue} locked={locked || Boolean(draft)} />
+              </div>
+              <Glyph
+                name="pencil"
+                className="mt-1 size-3.5 shrink-0 text-bone-faint opacity-0 transition-opacity duration-150 group-hover/value:opacity-100 group-focus-visible/value:opacity-100"
+              />
+            </div>
           )}
 
-          {/* Under the value on a phone, where the name's column is too
+          {draft?.error && !editing ? (
+            <p role="alert" className="mt-1.5 flex items-start gap-1.5 text-xs text-vermillion">
+              <Glyph name="alert" className="mt-px size-3.5 shrink-0" />
+              <span>
+                {e.inPlace.failed} {draft.error}
+              </span>
+            </p>
+          ) : null}
+
+          {/* Under the value in a narrow row, where the name's column is too
               narrow to share with a chip. */}
-          {traced && !locked && !editing ? (
-            <div className="mt-2 sm:hidden">
+          {traced && !locked && !editing && !draft ? (
+            <div className="mt-2 @xl:hidden">
               <OriginChip source={origin} hasValue={given} />
             </div>
           ) : null}
-          {note && !editing ? <p className="mt-1.5 text-xs leading-relaxed text-bone-faint">{note}</p> : null}
-          {apart && !editing ? (
+          {note && !editing && !draft ? <p className="mt-1.5 text-xs leading-relaxed text-bone-faint">{note}</p> : null}
+          {apart && !editing && !draft ? (
             <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 border-l-2 border-slate-deep pl-3 text-xs leading-relaxed text-slate">
               <p className="min-w-0 flex-1">
-                {apart.provider
-                  ? t.admin.editor.diverging.sourceSays(providerName(apart.provider))
-                  : t.admin.editor.diverging.sourcesSay}{' '}
+                {apart.provider ? e.diverging.sourceSays(providerName(apart.provider)) : e.diverging.sourcesSay}{' '}
                 <span className="break-words whitespace-pre-line text-bone-dim">
-                  {readable(apart.value, t) || t.admin.editor.diverging.nothing}
+                  {readable(apart.value, t) || e.diverging.nothing}
                 </span>
-                {apart.moved ? <span className="text-slate"> · {t.admin.editor.diverging.sinceLock}</span> : null}
+                {apart.moved ? <span className="text-slate"> · {e.diverging.sinceLock}</span> : null}
               </p>
               <Button size="sm" variant="quiet" onClick={() => unlock.mutate()} disabled={unlock.isPending}>
                 {unlock.isPending ? <Spinner className="size-4" /> : <Glyph name="unlock" className="size-4" />}
-                {t.admin.editor.diverging.take}
+                {e.diverging.take}
               </Button>
             </div>
           ) : null}
         </div>
 
         {editing ? null : (
-          <div className="col-start-2 row-start-1 flex shrink-0 flex-wrap items-center justify-end gap-2 sm:col-start-auto sm:row-start-auto">
+          <div className="col-start-2 row-start-1 flex shrink-0 flex-wrap items-center justify-end gap-2 @xl:col-start-auto @xl:row-start-auto">
+            {draft ? <IconButton glyph="close" label={e.inPlace.revert(label)} onClick={() => drafts?.drop(key)} /> : null}
             {locked ? (
               <>
                 <Provenance manual label={lockLabel} />
-                {/* A text locked in every language is edited from here too:
-                    in the language shown, to lock it there alone. */}
-                {shelf && !lock?.language ? (
-                  <Button size="sm" variant="quiet" onClick={() => (onEdit ? onEdit() : setEditing(true))}>
-                    <Glyph name="pencil" className="size-4" />
-                    {t.common.edit}
-                  </Button>
-                ) : null}
                 <Button
                   size="sm"
                   onClick={() => unlock.mutate()}
                   disabled={unlock.isPending}
-                  title={lock?.updatedBy ? t.admin.editor.lockedBy(lock.updatedBy) : undefined}
+                  title={lock?.updatedBy ? e.lockedBy(lock.updatedBy) : undefined}
                 >
                   {unlock.isPending ? <Spinner className="size-4" /> : <Glyph name="unlock" className="size-4" />}
-                  {t.admin.editor.unlock}
+                  {e.unlock}
                 </Button>
               </>
-            ) : (
-              <>
-                {traced ? (
-                  <span className="hidden sm:contents">
-                    <OriginChip source={origin} hasValue={given} />
-                  </span>
-                ) : null}
-                <Button size="sm" variant="quiet" onClick={() => (onEdit ? onEdit() : setEditing(true))}>
-                  <Glyph name="pencil" className="size-4" />
-                  {t.common.edit}
-                </Button>
-              </>
-            )}
+            ) : traced && !draft ? (
+              <span className="hidden @xl:contents">
+                <OriginChip source={origin} hasValue={given} />
+              </span>
+            ) : null}
+            {byPencil ? (
+              <Button size="sm" variant="quiet" onClick={(event) => open(event.currentTarget)}>
+                <Glyph name="pencil" className="size-4" />
+                {t.common.edit}
+              </Button>
+            ) : null}
           </div>
         )}
       </div>
     </li>
+  )
+}
+
+/** A field changed and not saved yet: brass, as what a person did, and said in words. */
+function Changed() {
+  const { t } = useI18n()
+  return (
+    <span className="inline-flex items-center gap-1.5 font-mono text-[0.6875rem] font-medium tracking-[0.1em] text-brass uppercase">
+      <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-brass" />
+      <span aria-hidden>{t.admin.editor.inPlace.changed}</span>
+      <span className="sr-only">{t.admin.editor.inPlace.changedLong}</span>
+    </span>
   )
 }
 
@@ -462,17 +543,24 @@ function Keywords({ list }: { list: string[] }) {
 
 /* ── The value, edited ────────────────────────────────────────────────────── */
 
+/**
+ * The box a value becomes, in its place. What is typed is kept as a draft at
+ * every key, so nothing is lost however the box closes: Enter — ⌘ ↵ or
+ * Ctrl ↵ in a long text — "Keep", or a press elsewhere keep it; Escape and
+ * "Put back" bring back what was there when the box opened. A long text
+ * grows with what it holds (`field-sizing: content`), up to most of the
+ * screen.
+ */
 function Editor({
-  itemId,
+  draftKey: key,
   scope,
   def,
   value,
   shelf,
   alone,
-  onDone,
-  onCancel,
+  onClose,
 }: {
-  itemId: string
+  draftKey: string
   scope: string
   def: FieldDef
   value: unknown
@@ -480,32 +568,53 @@ function Editor({
   shelf: string
   /** Whether the edit is for that language alone, until the person says otherwise. */
   alone: boolean
-  onDone: () => void
-  onCancel: () => void
+  /** Close the box, the focus back on what opened it or left where it went. */
+  onClose: (refocus: boolean) => void
 }) {
   const { t, locale } = useI18n()
-  const [draft, setDraft] = useState(() => readable(value, t))
-  const [reach, setReach] = useState<'alone' | 'every'>(shelf && alone ? 'alone' : 'every')
+  const e = t.admin.editor
+  const drafts = useDrafts()
+  // The draft as the box found it: what Escape puts back.
+  const [opened] = useState(() => drafts?.get(key))
+  const before = opened?.before ?? readable(value, t)
+  const [text, setText] = useState(opened?.text ?? before)
+  const [reach, setReach] = useState<'alone' | 'every'>(opened?.reach ?? (shelf && alone ? 'alone' : 'every'))
+  const box = useRef<HTMLFormElement>(null)
   const inputId = `field-${scope.replace(/\W/g, '-')}-${def.name}`
 
-  const save = useMutation({
-    mutationFn: (parsed: unknown) =>
-      api.put(`/items/${itemId}/overrides`, {
-        scope,
-        field: def.name,
-        value: parsed,
-        language: shelf && reach === 'alone' ? shelf : undefined,
-      }),
-    onSuccess: onDone,
-  })
+  const keep = (nextText: string, nextReach: 'alone' | 'every' = reach) => {
+    setText(nextText)
+    setReach(nextReach)
+    drafts?.put({ key, scope, field: def.name, def, text: nextText, before, shelf, reach: nextReach })
+  }
+  const putBack = () => {
+    if (opened) drafts?.put(opened)
+    else drafts?.drop(key)
+    onClose(true)
+  }
 
-  const submit = () => save.mutate(parse(draft, def))
+  // A press elsewhere, or the focus gone elsewhere, closes the box: the
+  // change stays, kept for saving.
+  const closing = useRef(onClose)
+  closing.current = onClose
+  useEffect(() => {
+    const away = (event: Event) => {
+      if (event.target instanceof Node && !box.current?.contains(event.target)) closing.current(false)
+    }
+    document.addEventListener('pointerdown', away, true)
+    document.addEventListener('focusin', away)
+    return () => {
+      document.removeEventListener('pointerdown', away, true)
+      document.removeEventListener('focusin', away)
+    }
+  }, [])
+
   const multiline = def.fieldType === 'longText'
   const hint =
     def.fieldType === 'textList'
-      ? t.admin.editor.listHint
+      ? e.listHint
       : def.fieldType === 'dateTime'
-        ? t.admin.editor.dateTimeHint
+        ? e.dateTimeHint
         : def.fieldType === 'date'
           ? t.labels.fieldTypes.date
           : def.fieldType === 'ids'
@@ -514,39 +623,47 @@ function Editor({
 
   // A plain day gets the browser's own calendar; a provider's date-time, or
   // anything else, stays as text so nothing is thrown away by the control.
-  const dayInput = def.fieldType === 'date' && (draft === '' || /^\d{4}-\d{2}-\d{2}$/.test(draft))
+  const dayInput = def.fieldType === 'date' && (text === '' || /^\d{4}-\d{2}-\d{2}$/.test(text))
+  const yes = /^(true|yes|oui|1|on)$/i.test(text.trim())
 
   return (
     <form
+      ref={box}
+      noValidate
       className="flex flex-col gap-3"
+      // Enter in a box of one line: the change kept, the box closed.
       onSubmit={(event) => {
         event.preventDefault()
-        submit()
+        onClose(true)
       }}
       onKeyDown={(event) => {
         if (event.key === 'Escape') {
           event.preventDefault()
-          onCancel()
-        } else if (multiline && event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+          event.stopPropagation()
+          putBack()
+        } else if (multiline && event.key === 'Enter' && (event.metaKey || event.ctrlKey) && !event.shiftKey) {
           event.preventDefault()
-          submit()
+          onClose(true)
         }
       }}
     >
       {/* The row already shows the field's name beside the box; the form's
           own label is kept for the box's accessible name alone. */}
-      <FormField label={<span className="sr-only">{fieldLabel(def, t)}</span>} htmlFor={inputId} hint={hint} error={save.isError ? save.error.message : undefined}>
+      <FormField label={<span className="sr-only">{fieldLabel(def, t)}</span>} htmlFor={inputId} hint={hint}>
         {multiline ? (
-          <Textarea id={inputId} autoFocus rows={5} value={draft} onChange={(event) => setDraft(event.target.value)} />
+          <Textarea
+            id={inputId}
+            autoFocus
+            rows={5}
+            value={text}
+            onChange={(event) => keep(event.target.value)}
+            // As tall as what it holds, from three lines to most of the screen.
+            className="field-sizing-content max-h-[60dvh] min-h-24 resize-y"
+          />
         ) : def.fieldType === 'boolean' ? (
           <div className="flex items-center gap-3">
-            <Toggle
-              id={inputId}
-              checked={/^(true|yes|oui|1|on)$/i.test(draft.trim())}
-              label={fieldLabel(def, t)}
-              onChange={(next) => setDraft(next ? 'yes' : 'no')}
-            />
-            <span className="text-sm text-bone">{/^(true|yes|oui|1|on)$/i.test(draft.trim()) ? t.common.yes : t.common.no}</span>
+            <Toggle id={inputId} checked={yes} label={fieldLabel(def, t)} onChange={(next) => keep(next ? 'yes' : 'no')} />
+            <span className="text-sm text-bone">{yes ? t.common.yes : t.common.no}</span>
           </div>
         ) : (
           <Input
@@ -566,16 +683,16 @@ function Editor({
             step={def.fieldType === 'float' ? 'any' : def.fieldType === 'integer' ? 1 : undefined}
             inputMode={def.fieldType === 'integer' ? 'numeric' : def.fieldType === 'float' ? 'decimal' : undefined}
             placeholder={def.fieldType === 'dateTime' ? '2009-03-22T21:00:00Z' : def.fieldType === 'date' && !dayInput ? 'YYYY-MM-DD' : undefined}
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
+            value={text}
+            onChange={(event) => keep(event.target.value)}
             className={def.fieldType === 'integer' || def.fieldType === 'float' || def.fieldType === 'timeOfDay' || dayInput ? 'sm:max-w-xs' : undefined}
           />
         )}
       </FormField>
 
-      {def.fieldType === 'textList' && draft.trim() ? (
+      {def.fieldType === 'textList' && text.trim() ? (
         <ul aria-hidden className="flex flex-wrap gap-1.5">
-          {unlisted(draft).map((part, index) => (
+          {unlisted(text).map((part, index) => (
             <li key={`${part}-${index}`} className="rounded-full border border-rule-bright px-2.5 py-0.5 text-xs text-bone-dim">
               {part}
             </li>
@@ -588,29 +705,27 @@ function Editor({
       {shelf ? (
         <div className="flex flex-col gap-1.5">
           <Segmented<'alone' | 'every'>
-            label={t.admin.editor.reach}
+            label={e.reach}
             value={reach}
-            onChange={setReach}
+            onChange={(next) => keep(text, next)}
             options={[
-              { value: 'alone', label: t.admin.editor.thisLanguageOnly(spoken(shelf, locale)) },
-              { value: 'every', label: t.admin.editor.everyLanguage },
+              { value: 'alone', label: e.thisLanguageOnly(spoken(shelf, locale)) },
+              { value: 'every', label: e.everyLanguage },
             ]}
           />
-          <p className="text-xs leading-relaxed text-bone-faint">
-            {reach === 'alone' ? t.admin.editor.reachAlone : t.admin.editor.reachEvery}
-          </p>
+          <p className="text-xs leading-relaxed text-bone-faint">{reach === 'alone' ? e.reachAlone : e.reachEvery}</p>
         </div>
       ) : null}
 
-      <div className="flex flex-wrap items-center gap-2">
-        <Button type="submit" variant="primary" size="sm" disabled={save.isPending}>
-          {save.isPending ? <Spinner className="size-4" /> : <Glyph name="lock" className="size-4" />}
-          {t.admin.editor.saveAndLock}
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <Button type="submit" size="sm">
+          <Glyph name="check" className="size-4" />
+          {e.inPlace.keep}
         </Button>
-        <Button type="button" size="sm" onClick={onCancel}>
-          {t.common.cancel}
+        <Button type="button" size="sm" variant="quiet" onClick={putBack}>
+          {e.inPlace.putBack}
         </Button>
-        {multiline ? <span className="font-mono text-[0.6875rem] text-bone-faint">Ctrl/⌘ ↵ · Esc</span> : null}
+        <span className="text-xs text-bone-faint">{multiline ? e.inPlace.keepText : e.inPlace.keepLine}</span>
       </div>
     </form>
   )

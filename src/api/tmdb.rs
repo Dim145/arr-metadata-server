@@ -381,7 +381,7 @@ async fn send(
     // The error would name the address it was sent to, a key in its query —
     // the operator's, or the client's own; it is logged and answered, so
     // what is kept of it is its kind and what lay under it.
-    let response = upstream.send().await.map_err(|e| {
+    let response = crate::outbound::send("tmdb", upstream).await.map_err(|e| {
         anyhow::anyhow!(
             "TMDB request failed: {}",
             crate::providers::describe_request_error(&e)

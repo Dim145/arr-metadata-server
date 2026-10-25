@@ -73,6 +73,8 @@ export const GROUPS = [
   // The schedule, what is kept, and the archives made before an upgrade;
   // the archives themselves are on the Backups page.
   { id: 'backup', prefixes: ['backup'] },
+  // Where the errors are reported: a Sentry's or a GlitchTip's DSN.
+  { id: 'errors', prefixes: ['sentry'] },
   // Kept in a panel of their own on the Settings page: the events are
   // ticked rather than typed, and the address can be tested.
   { id: 'webhooks', prefixes: ['webhooks'] },
@@ -218,7 +220,7 @@ export function ServerSettings({
   }
 
   const here = registry.data.filter((def) => def.scopes.includes('server'))
-  const groups: GroupId[] = ['answering', 'providers', 'sources', 'refresh', 'adult', 'backup', 'other']
+  const groups: GroupId[] = ['answering', 'providers', 'sources', 'refresh', 'adult', 'backup', 'errors', 'other']
 
   return (
     <div className="space-y-6">

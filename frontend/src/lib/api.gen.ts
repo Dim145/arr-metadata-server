@@ -161,6 +161,45 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/account/preferences": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What you keep of your own way of working: the views of the catalogue you
+         *     saved, the columns each table shows you and how tightly it is set. It
+         *     follows you from one browser to the next.
+         */
+        get: operations["account_preferences"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/account/preferences/{key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Keep a preference, in place of whatever was kept under its name. */
+        put: operations["account_keep_preference"];
+        post?: never;
+        /** Forget a preference: the interface goes back to its own way there. */
+        delete: operations["account_forget_preference"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/account/sessions": {
         parameters: {
             query?: never;
@@ -462,6 +501,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/gaps": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * How many works each of the register's gaps holds.
+         * @description Counted through each filter's own definition, over the works the
+         *     register shows — those switched off among them, adult titles as this
+         *     caller's policy has them — so that a figure and the list it leads to
+         *     agree. The duplicates are looked for again first, as the register does
+         *     before it lists them.
+         */
+        get: operations["items_gaps"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/health": {
         parameters: {
             query?: never;
@@ -503,6 +566,29 @@ export interface paths {
          *     in parts.
          */
         post: operations["locks_import"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The application log: the last lines the server wrote to its standard
+         *     output — as many as `capacity` says, those `AMS_LOG` lets through — each
+         *     with its level, its module, its message, its fields and the ids of the
+         *     request it was written in, every secret in them masked. With `format`,
+         *     every line the filters match, as a file. For an administrator.
+         */
+        get: operations["logs_list"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -696,6 +782,31 @@ export interface paths {
          *     on it. Answers what it found, or why it found nothing.
          */
         post: operations["oidc_test"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/tasks/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The tasks, followed: an event `tasks` carrying the whole board — every
+         *     task as `GET /tasks` gives it, and the newest run — at once, then each
+         *     time it changes, whichever instance made the change: it is read from the
+         *     history every instance writes and the holds they share, never from this
+         *     process's memory alone. A comment keeps a quiet stream open through a
+         *     proxy; the stream ends after five minutes and the page opens another,
+         *     which asks for the credential again.
+         */
+        get: operations["tasks_stream"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1122,6 +1233,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/compare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Two works side by side: their scores, their running times, their seasons,
+         *     and the people they share.
+         */
+        get: operations["browse_compare"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/datasets/{name}/import": {
         parameters: {
             query?: never;
@@ -1139,6 +1270,26 @@ export interface paths {
          *     followed under Jobs like any other.
          */
         post: operations["meta_import_dataset"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/decades/{year}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A decade's page, by its first year — `1990` — or by any of its years,
+         *     which is answered under the first.
+         */
+        get: operations["browse_decade"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1184,6 +1335,73 @@ export interface paths {
          */
         post: operations["discover_import"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/editorial": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Every note, for whoever maintains the catalogue: the one written last
+         *     first, at most five hundred.
+         */
+        get: operations["editorial_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/editorial/{scope}/{key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The note on one thing, for a reader.
+         * @description In the reader's language where there is one, else in English, else in
+         *     whichever language one was written in last: `language` in the answer says
+         *     which it is. A work's note is read by whoever may see the work, a
+         *     selection's by whoever may read the selection.
+         */
+        get: operations["editorial_read"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/editorial/{scope}/{key}/{language}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Write the note on one thing in one language, in place of the one there was.
+         * @description Its text is kept tidy — its line ends made one, its control characters
+         *     taken out, one empty line at most between two paragraphs — and refused
+         *     when it holds HTML or a link to anywhere but a page of this site. An empty
+         *     text takes the note away. Recorded in the journal as `editorial.updated`.
+         */
+        put: operations["editorial_write"];
+        post?: never;
+        /** Take the note on one thing in one language away. */
+        delete: operations["editorial_remove"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1357,6 +1575,103 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/genres/{slug}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A genre's page: by its slug — `drama` — or by any name it goes by, in any
+         *     language: "Drame" is the same page.
+         */
+        get: operations["browse_genre"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/import/rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every import rule, by name. */
+        get: operations["import_rules_list"];
+        put?: never;
+        /**
+         * Write an import rule. It runs at its expression's next moment, and can be
+         *     run at once.
+         */
+        post: operations["import_rules_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/import/rules/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * What a rule being written would bring in now: the first two hundred of
+         *     its source's works, set beside the catalogue as a batch's lines are.
+         *     Nothing is imported, and nothing kept.
+         */
+        post: operations["import_rules_preview"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/import/rules/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Change an import rule: every field says what it is to be. */
+        put: operations["import_rules_update"];
+        post?: never;
+        /** Delete an import rule. What it brought in stays. */
+        delete: operations["import_rules_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/import/rules/{id}/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Run an import rule now, whatever its schedule says. */
+        post: operations["import_rules_run"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/invitations": {
         parameters: {
             query?: never;
@@ -1419,6 +1734,49 @@ export interface paths {
          *     links lead to; one another entry already goes by is refused.
          */
         post: operations["items_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/items/import/batch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Import a batch: each line's work, in order, as a run of the task
+         *     `import.batch` that the tasks page follows — what is held passed over,
+         *     what is not fetched and stored, each written down. One batch at a time.
+         */
+        post: operations["discover_import_batch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/items/import/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set a batch's lines beside the catalogue before anything is imported:
+         *     what each names, whether it is held already, and — for the first dozen
+         *     seconds' worth — whether a provider has it, by its title. Nothing is
+         *     fetched to say so, and nothing is kept.
+         */
+        post: operations["discover_preview_batch"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2569,6 +2927,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/media/works": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The works by what their media come to: how many each keeps, how many
+         *     wait or were given up on, and what those kept weigh with their copies —
+         *     the heaviest first, or the most kept, or the most failed. A picture two
+         *     works share is counted for each.
+         */
+        get: operations["media_by_work"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/network/callers": {
         parameters: {
             query?: never;
@@ -2634,6 +3014,27 @@ export interface paths {
          *     from changes whenever its container restarts.
          */
         patch: operations["network_rename"];
+        trace?: never;
+    };
+    "/api/v1/networks/{slug}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A network's or a studio's page, by the slug of its name — `hbo`, `a24` —
+         *     as the works name it most often. Several spellings that make one slug are
+         *     one page, under the most common.
+         */
+        get: operations["browse_network"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/people": {
@@ -2986,6 +3387,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/tasks/schedules/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * What a schedule being written comes to: its next moments, or why it is
+         *     none. Nothing is kept.
+         */
+        post: operations["tasks_preview_schedule"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/tasks/{id}/run": {
         parameters: {
             query?: never;
@@ -2998,6 +3419,29 @@ export interface paths {
         /** Run a task now, in the background. */
         post: operations["tasks_run"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/tasks/{id}/schedule": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set when a periodic task runs: its own cadence kept to a window of the
+         *     day, or the moments a cron expression names instead — in UTC. The sweep,
+         *     the two lists downloaded whole and the archive take one; the rest keep
+         *     their own cadence.
+         */
+        put: operations["tasks_set_schedule"];
+        post?: never;
+        /** Leave a periodic task to its own cadence again. */
+        delete: operations["tasks_clear_schedule"];
         options?: never;
         head?: never;
         patch?: never;
@@ -3117,6 +3561,23 @@ export interface paths {
         post?: never;
         /** Close every session of an account, wherever it is signed in. */
         delete: operations["users_revoke_sessions"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/years/{year}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A year's page: the works that came out in it, as their pages date them. */
+        get: operations["browse_year"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -4226,6 +4687,45 @@ export interface components {
             /** @description When it last failed to answer, while it is passed over for it. */
             failedAt?: string | null;
         };
+        /** @description Lines to set beside the catalogue. */
+        BatchPreviewRequest: {
+            /**
+             * @description A work a line: an id, or its page at a provider. Two thousand at the
+             *     most.
+             */
+            lines: components["schemas"]["ImportLine"][];
+            kind?: components["schemas"]["MediaKind"] | null;
+        };
+        /** @description A batch to import. */
+        BatchRequest: {
+            /** @description A work a line, as the preview reads them. Two thousand at the most. */
+            lines: components["schemas"]["ImportLine"][];
+            kind?: components["schemas"]["MediaKind"] | null;
+            /**
+             * @description A language the episode texts of each series imported are fetched in
+             *     at once, besides the catalogue's own: `fr`, `pt-BR`.
+             */
+            language?: string | null;
+            /**
+             * @description The hand-made selections the works go into, held already or
+             *     imported, by id or slug.
+             */
+            lists?: string[];
+            /**
+             * @description Whether the works imported are switched on; those held already keep
+             *     what they are. On when absent.
+             */
+            enabled?: boolean | null;
+        };
+        /** @description What a batch started as. */
+        BatchStarted: {
+            /** @description The run, as the tasks page follows it. */
+            jobId: string;
+            /** @description How many works it takes, each once. */
+            works: number;
+            /** @description How many lines named none: not an id, or a TMDB id of no kind. */
+            passedOver: number;
+        };
         BulkOutcome: {
             done: string[];
             refused: components["schemas"]["Refusal"][];
@@ -4490,6 +4990,34 @@ export interface components {
         };
         Collections: {
             collections: components["schemas"]["CollectionCard"][];
+        };
+        /** @description One work of the two, as the comparison draws it. */
+        Compared: {
+            /**
+             * @description The work as a card draws it — its pictures, its scores, its running
+             *     time, its genres — without its seasons, episodes or credits.
+             */
+            work: components["schemas"]["MediaItem"];
+            /**
+             * Format: int64
+             * @description A series' seasons, its specials aside.
+             */
+            seasons?: number | null;
+            /**
+             * Format: int64
+             * @description A series' episodes, its specials aside.
+             */
+            episodes?: number | null;
+        };
+        Comparison: {
+            first: components["schemas"]["Compared"];
+            second: components["schemas"]["Compared"];
+            /**
+             * @description The people both credit, as the works' own credits file them — their
+             *     casts and crews, not single episodes' — those who made them first,
+             *     then by their billing.
+             */
+            shared: components["schemas"]["SharedPerson"][];
         };
         Count: {
             name: string;
@@ -4795,6 +5323,39 @@ export interface components {
             survivor: string;
             why: components["schemas"]["SurvivorRule"];
         };
+        /** @description One note, in one language. */
+        EditorialNote: {
+            scope: components["schemas"]["EditorialScope"];
+            /**
+             * @description Which one it is about: a work's or a selection's id, a genre's or a
+             *     network's slug, a year, the first year of a decade.
+             */
+            key: string;
+            /** @description The language it is written in: `en`, `fr`. */
+            language: string;
+            /** @description What it says, in the restricted Markdown. */
+            body: string;
+            /** @description Who wrote it last, as the journal names people: `editor:alice`. */
+            updatedBy: string | null;
+            updatedAt: string;
+        };
+        EditorialNoteRequest: {
+            /**
+             * @description What it says: paragraphs, `*emphasis*`, `**strong emphasis**` and
+             *     `[links](/genre/drama)` to pages of this site, at most three thousand
+             *     characters. Empty, the note in this language is taken away.
+             */
+            body: string;
+        };
+        EditorialNotes: {
+            /** @description The one written last first. */
+            notes: components["schemas"]["EditorialNote"][];
+        };
+        /**
+         * @description What a note is about.
+         * @enum {string}
+         */
+        EditorialScope: "work" | "list" | "genre" | "network" | "year" | "decade";
         /**
          * @description One setting as the interface shows it: what it is, and where the answer
          *     currently comes from.
@@ -5079,6 +5640,58 @@ export interface components {
             value: string;
             /** Format: int64 */
             count: number;
+            /**
+             * @description A genre's slug, the same in every language: what its own page is
+             *     addressed by, `/genre/drama`. Only on the genres.
+             */
+            slug?: string | null;
+        };
+        /**
+         * @description What a page of the catalogue is of.
+         * @enum {string}
+         */
+        FacetKind: "genre" | "network" | "year" | "decade";
+        /**
+         * @description A page of the catalogue: a genre's, a network's or a studio's, a year's,
+         *     a decade's — what it is called, how many works it holds, the five rated
+         *     highest, how to list the rest, and what the programmer wrote about it.
+         */
+        FacetPage: {
+            kind: components["schemas"]["FacetKind"];
+            /**
+             * @description What its address names it by: `drama`, `hbo`, `1999`, `1990`. A genre
+             *     asked for by another of its names, or a decade by another of its
+             *     years, is answered under this one, which the page's address becomes.
+             */
+            slug: string;
+            /**
+             * @description What it is called: a genre in the reader's language where one is
+             *     known, a network as the works most often name it, a year and a decade
+             *     as their first year, which the interface words.
+             */
+            name: string;
+            /**
+             * @description A genre's names in every language known: `en`, `fr`, and `und` for
+             *     the one a source gave it by.
+             */
+            names?: {
+                [key: string]: string;
+            };
+            /**
+             * Format: int64
+             * @description How many works it holds that the reader may see.
+             */
+            count: number;
+            /** @description The five of them rated highest, as cards are drawn. */
+            best: components["schemas"]["MediaItem"][];
+            /**
+             * @description The list's own filters that list them all, for `/items` and
+             *     `/facets`: `{"genre": "drama"}`, `{"yearFrom": "1990", "yearTo": "1999"}`.
+             */
+            filter: {
+                [key: string]: string;
+            };
+            note?: components["schemas"]["EditorialNote"] | null;
         };
         /** @description What the works on view can be narrowed by. */
         Facets: {
@@ -5215,6 +5828,47 @@ export interface components {
             imdbRatings: components["schemas"]["ListImport"] | null;
         };
         /**
+         * @description How many works the register lists under each of its gaps: what each of
+         *     its filters would narrow it to, beside the filter.
+         */
+        Gaps: {
+            /**
+             * Format: int64
+             * @description `missing=poster`: no poster of their own, nor one chosen by hand.
+             */
+            poster: number;
+            /**
+             * Format: int64
+             * @description `missing=overview`: no overview in the language they are stored in.
+             */
+            overview: number;
+            /**
+             * Format: int64
+             * @description `missing=imdb`: no IMDb identifier.
+             */
+            imdb: number;
+            /**
+             * Format: int64
+             * @description `missing=refresh`: never refreshed, though they could be.
+             */
+            refresh: number;
+            /**
+             * Format: int64
+             * @description `missing=divergingLock`: a lock a source moved under since it was set.
+             */
+            divergingLock: number;
+            /**
+             * Format: int64
+             * @description `missing=duplicates`: in a pair proposed as one work.
+             */
+            duplicates: number;
+            /**
+             * Format: int64
+             * @description `missing=mediaFailed`: a picture or a theme the media store gave up on.
+             */
+            mediaFailed: number;
+        };
+        /**
          * @description What a row is about, for grouping.
          * @enum {string}
          */
@@ -5276,6 +5930,11 @@ export interface components {
             /** @description `true` keeps it out of every answer; `false` gives it back. */
             hidden: boolean;
         };
+        /**
+         * @description Where an id is from.
+         * @enum {string}
+         */
+        IdSource: "tmdb" | "imdb" | "tvdb" | "anilist" | "mal" | "fankai";
         Image: {
             id: string;
             /** Format: int32 */
@@ -5292,6 +5951,57 @@ export interface components {
             CoverType: string;
             Url: string;
         };
+        /** @description A line of the source, as somebody gave it. */
+        ImportLine: {
+            /**
+             * @description `tmdb:603`, `imdb:tt0133093` or `tt0133093`, `tvdb:81189`,
+             *     `anilist:21`, `mal:21`, `fankai:12`, or the work's page at TMDB,
+             *     IMDb, TheTVDB, AniList or MyAnimeList.
+             */
+            text: string;
+            kind?: components["schemas"]["MediaKind"] | null;
+            /** @description What the line calls the work, said beside one not found. */
+            title?: string | null;
+        };
+        /**
+         * @description Where a line stands.
+         * @enum {string}
+         */
+        ImportLineStatus: "held" | "candidate" | "missing" | "unreadable" | "needs_kind" | "repeated";
+        ImportPreview: {
+            lines: components["schemas"]["ImportPreviewLine"][];
+            counts: components["schemas"]["ImportPreviewCounts"];
+        };
+        /** @description How many lines stand where. */
+        ImportPreviewCounts: {
+            held: number;
+            candidate: number;
+            missing: number;
+            unreadable: number;
+            needsKind: number;
+            repeated: number;
+        };
+        /** @description A line, set beside the catalogue. */
+        ImportPreviewLine: {
+            /** @description Its place among the lines given, from 0. */
+            line: number;
+            text: string;
+            status: components["schemas"]["ImportLineStatus"];
+            wanted?: components["schemas"]["WantedWork"] | null;
+            work?: components["schemas"]["WorkRef"] | null;
+            /**
+             * @description What a provider calls a candidate, where one was asked — or what the
+             *     line called it.
+             */
+            title?: string | null;
+            /** Format: int32 */
+            year?: number | null;
+            /**
+             * @description Whether a provider was asked of a candidate: one not asked is looked
+             *     up as it is imported.
+             */
+            checked: boolean;
+        };
         ImportRequest: {
             kind: string;
             /** Format: int64 */
@@ -5301,6 +6011,82 @@ export interface components {
             imdbId?: string | null;
             /** Format: int64 */
             fankaiId?: number | null;
+        };
+        /** @description A rule as the pages show it. */
+        ImportRule: {
+            id: string;
+            name: string;
+            source: components["schemas"]["RuleSource"];
+            kind?: components["schemas"]["MediaKind"] | null;
+            /**
+             * Format: int32
+             * @description TMDB: how many days back its stretch reaches.
+             */
+            days?: number | null;
+            /**
+             * Format: int32
+             * @description TMDB: how many works, the most popular first.
+             */
+            limit?: number | null;
+            /** @description TMDB: works first made in this language only. */
+            originalLanguage?: string | null;
+            /** @description A list: its address, a key in it shown as `hidden`. */
+            url?: string | null;
+            /** @description The selection the works go into. */
+            listId?: string | null;
+            listName?: string | null;
+            listMode: components["schemas"]["ListPlacement"];
+            /** @description When it runs: five cron fields, UTC. */
+            cron: string;
+            /** @description A language the episode texts of each series are fetched in. */
+            language?: string | null;
+            /** @description Whether the works it brings in are switched on. */
+            enableWorks: boolean;
+            isEnabled: boolean;
+            /** @description When it runs next, while it is switched on. */
+            nextAt?: string | null;
+            lastRun?: components["schemas"]["Job"] | null;
+            createdBy?: string | null;
+            createdAt: string;
+            updatedAt: string;
+        };
+        /**
+         * @description A rule, as it is written. On a change, every field says what the rule is
+         *     to be.
+         */
+        ImportRuleRequest: {
+            name: string;
+            source: components["schemas"]["RuleSource"];
+            kind?: components["schemas"]["MediaKind"] | null;
+            /**
+             * Format: int32
+             * @description TMDB: how many days back its stretch reaches, 1 to 3650; ninety when
+             *     absent — a quarter.
+             */
+            days?: number | null;
+            /**
+             * Format: int32
+             * @description TMDB: how many works, 1 to 500; twenty when absent.
+             */
+            limit?: number | null;
+            /** @description TMDB: works first made in this language only, ISO 639-1: `ja`. */
+            originalLanguage?: string | null;
+            /**
+             * @description A list: the address of its text file of ids or its Atom feed. Sent
+             *     back as it was shown, a key `hidden` in it, the key kept is kept.
+             */
+            url?: string | null;
+            /** @description A hand-made selection the works go into, by id or slug. */
+            listId?: string | null;
+            listMode?: components["schemas"]["ListPlacement"] | null;
+            /** @description When it runs: five cron fields, UTC — `0 5 * * 1`, Monday at five. */
+            cron: string;
+            /** @description A language the episode texts of each series are fetched in at once. */
+            language?: string | null;
+            /** @description Whether the works it brings in are switched on; on when absent. */
+            enableWorks?: boolean | null;
+            /** @description Whether it runs; on when absent. */
+            isEnabled?: boolean | null;
         };
         Imported: {
             /**
@@ -5595,6 +6381,11 @@ export interface components {
          * @enum {string}
          */
         ListMode: "manual" | "filter";
+        /**
+         * @description How the works go into a selection.
+         * @enum {string}
+         */
+        ListPlacement: "add" | "replace";
         /** @description An account in a list, with what it holds. */
         Listed: components["schemas"]["User"] & {
             /** Format: int64 */
@@ -5708,6 +6499,60 @@ export interface components {
             /** @description The locks refused, each with why. */
             refused: string[];
         };
+        /** @description One line of the log. */
+        LogEntry: {
+            /**
+             * Format: int64
+             * @description Its place among the lines written since the start, one more for each:
+             *     what `after` asks to be past.
+             */
+            seq: number;
+            /** @description When it was written, to the millisecond. */
+            at: string;
+            level: components["schemas"]["LogLevel"];
+            /** @description The module that wrote it: `arr_metadata_server::jobs::refresh`. */
+            target: string;
+            message: string;
+            fields: components["schemas"]["LogField"][];
+            /**
+             * @description The trace of the request it was written in: the request's own id,
+             *     unless a proxy or the traces named another.
+             */
+            traceId?: string | null;
+            /** @description The id the request was answered with, in `x-request-id`. */
+            requestId?: string | null;
+            /** @description What the request asked: its method and its address, masked. */
+            request?: string | null;
+        };
+        /** @description One of a line's fields: its name, and its value as text. */
+        LogField: {
+            name: string;
+            value: string;
+        };
+        /**
+         * @description How grave a line is. In this order: a filter asks for a level and every
+         *     graver one.
+         * @enum {string}
+         */
+        LogLevel: "error" | "warn" | "info" | "debug" | "trace";
+        /** @description The last lines the server wrote. */
+        LogResponse: {
+            /** @description The instance whose log this is: among several, each keeps its own. */
+            instance: string;
+            /** @description How many lines are kept: the oldest goes as each new one comes. */
+            capacity: number;
+            /** @description How many are kept now. */
+            held: number;
+            /**
+             * @description Whether the traces are sent to a collector: the environment's
+             *     `OTEL_EXPORTER_OTLP_ENDPOINT` says.
+             */
+            traces: boolean;
+            /** @description Whether the errors are reported to a Sentry: the settings' DSN says. */
+            reports: boolean;
+            /** @description Those that answer, newest first. */
+            entries: components["schemas"]["LogEntry"][];
+        };
         LoginRequest: {
             username: string;
             password: string;
@@ -5760,6 +6605,15 @@ export interface components {
          * @enum {string}
          */
         MediaBackend: "off" | "filesystem" | "s3";
+        /** @description The works, by what their media come to. */
+        MediaByWork: {
+            works: components["schemas"]["WorkMediaLine"][];
+            /**
+             * Format: int64
+             * @description How many works point at any medium.
+             */
+            total: number;
+        };
         /** @description A work, with whatever children the caller asked to load. */
         MediaItem: {
             id: string;
@@ -6390,6 +7244,11 @@ export interface components {
             updatedAt: string;
             updatedBy?: string | null;
         };
+        /** @description What somebody did on a work: their job, and the part they played. */
+        Part: {
+            creditType: components["schemas"]["CreditType"];
+            character?: string | null;
+        };
         /**
          * @description What a work's sources say of the people its credits name, and, read back,
          *     whom each credit is filed under.
@@ -7006,6 +7865,23 @@ export interface components {
             type: number;
             Scheme: components["schemas"]["PlexScheme"][];
         };
+        PreferenceWrite: {
+            /**
+             * @description What is kept under the name, in place of what was: any JSON value
+             *     but `null`. A preference is forgotten with `DELETE`.
+             */
+            value: unknown;
+        };
+        /** @description What you keep of your own way of working. */
+        Preferences: {
+            /**
+             * @description Each preference by its name — `catalogue.views`, `table.users` — and
+             *     its value as the interface wrote it.
+             */
+            values: {
+                [key: string]: unknown;
+            };
+        };
         /** @description The images a person chose, by id among the work's own. */
         PrimaryImages: {
             poster?: string | null;
@@ -7309,6 +8185,29 @@ export interface components {
          * @enum {string}
          */
         Rule: "first" | "whole" | "union" | "spine" | "either";
+        /**
+         * @description Where a rule's works come from.
+         * @enum {string}
+         */
+        RuleSource: "tmdb" | "feed";
+        /** @description What starting a rule came to. */
+        RuleStarted: {
+            /** @description Its run, as the tasks page follows it. */
+            jobId: string;
+        };
+        /**
+         * @description What a schedule is.
+         * @enum {string}
+         */
+        ScheduleKind: "window" | "cron";
+        /** @description The next moments a schedule names. */
+        ScheduleMoments: {
+            /**
+             * @description The next few, from now: a window's next openings — now, when it is
+             *     open — or an expression's next moments.
+             */
+            next: string[];
+        };
         /** @enum {string} */
         Scope: "server" | "client" | "peer";
         /** @description What a search found, kind by kind, the best of each first. */
@@ -7529,6 +8428,17 @@ export interface components {
              * @description None when the server did not answer.
              */
             keys?: number | null;
+        };
+        /** @description Somebody both works credit. */
+        SharedPerson: {
+            /** @description Their record: `/people/{id}` is their page. */
+            personId: string;
+            name: string;
+            image?: string | null;
+            /** @description What they did on the first work. */
+            first: components["schemas"]["Part"][];
+            /** @description And on the second. */
+            second: components["schemas"]["Part"][];
         };
         /**
          * @description A series as Skyhook describes one, and as this server answers Sonarr.
@@ -7841,28 +8751,75 @@ export interface components {
          * @description Why a task cannot be run now.
          * @enum {string}
          */
-        TaskBlocked: "source_off" | "not_configured" | "running" | "busy" | "media_off" | "no_authority" | "updates_off" | "arr_off" | "avif_off";
+        TaskBlocked: "source_off" | "not_configured" | "running" | "busy" | "media_off" | "no_authority" | "updates_off" | "arr_off" | "avif_off" | "no_rules";
+        /**
+         * @description What a page following the tasks is sent: every task as it stands, and
+         *     the newest run of all, so that a page can tell its history moved without
+         *     asking for it.
+         */
+        TaskBoard: {
+            tasks: components["schemas"]["TaskState"][];
+            /** @description The newest run of any task, a refresh of one work's included. */
+            newestRun?: string | null;
+        };
         /**
          * @description A task, sent under the name the history files its runs by.
          * @enum {string}
          */
-        TaskId: "refresh.sweep" | "refresh.all" | "import.anime" | "import.imdb" | "export.nfo" | "media.store" | "media.sweep" | "media.variants" | "media.avif" | "tls.renew" | "update.check" | "arr.seed" | "backup.run" | "search.rebuild";
+        TaskId: "refresh.sweep" | "refresh.all" | "import.anime" | "import.imdb" | "import.batch" | "import.rules" | "export.nfo" | "media.store" | "media.sweep" | "media.variants" | "media.avif" | "tls.renew" | "update.check" | "arr.seed" | "backup.run" | "search.rebuild" | "listing.relist";
         /** @enum {string} */
         TaskMode: "scheduled" | "manual" | "off";
+        /**
+         * @description How far a run has got, as its own count says: what a progress bar is
+         *     drawn from.
+         */
+        TaskProgress: {
+            /**
+             * Format: int64
+             * @description How many it has done.
+             */
+            done: number;
+            /**
+             * Format: int64
+             * @description Of how many, when it knows.
+             */
+            total?: number | null;
+        };
+        /**
+         * @description A schedule as it is set and shown: a window's two ends, or an expression,
+         *     in UTC.
+         */
+        TaskSchedule: {
+            kind: components["schemas"]["ScheduleKind"];
+            /** @description Where a window starts, `HH:MM`. */
+            from?: string | null;
+            /** @description Where it ends, `HH:MM`: before `from`, it crosses midnight. */
+            to?: string | null;
+            /** @description The five fields, for a cron schedule. */
+            cron?: string | null;
+            /** @description Who set it, as the journal names them: read, never written. */
+            updatedBy?: string | null;
+            /** @description When: read, never written. */
+            updatedAt?: string | null;
+        };
         TaskState: {
             id: components["schemas"]["TaskId"];
             mode: components["schemas"]["TaskMode"];
             /**
              * Format: int64
-             * @description Seconds between runs, when it is scheduled.
+             * @description Seconds between runs, when it is scheduled on a cadence of its own.
              */
             everySeconds?: number | null;
+            /** @description Whether a window of the day or a cron expression can be set for it. */
+            schedulable: boolean;
+            schedule?: components["schemas"]["TaskSchedule"] | null;
             last?: components["schemas"]["Job"] | null;
             /** @description When it last succeeded. */
             lastSuccessAt?: string | null;
             /** @description When the schedule will run it next, as near as can be said. */
             nextAt?: string | null;
             running?: components["schemas"]["Job"] | null;
+            progress?: components["schemas"]["TaskProgress"] | null;
             /** @description Whether a run in progress can be stopped. */
             cancelable: boolean;
             blocked?: components["schemas"]["TaskBlocked"] | null;
@@ -8105,6 +9062,13 @@ export interface components {
             jpeg: number;
             /** Format: int64 */
             jpegBytes: number;
+        };
+        /** @description One work wanted, by its id at a source. */
+        WantedWork: {
+            source: components["schemas"]["IdSource"];
+            /** @description The id there: a number, or `tt…` for IMDb. */
+            id: string;
+            kind?: components["schemas"]["MediaKind"] | null;
         };
         WatchProvider: {
             /** Format: int64 */
@@ -8376,6 +9340,48 @@ export interface components {
              */
             store: boolean;
             media: components["schemas"]["WorkMedium"][];
+            /**
+             * @description What they come to: how many are kept, waiting, given up on, and what
+             *     those kept weigh with their copies.
+             */
+            totals: components["schemas"]["WorkMediaTotals"];
+        };
+        /** @description A work, and what its media come to. */
+        WorkMediaLine: components["schemas"]["WorkMediaTotals"] & {
+            id: string;
+            title: string;
+            kind: components["schemas"]["MediaKind"];
+            /** Format: int32 */
+            year?: number | null;
+        };
+        /** @description What one work's media come to. */
+        WorkMediaTotals: {
+            /**
+             * Format: int64
+             * @description The media kept for it.
+             */
+            stored: number;
+            /**
+             * Format: int64
+             * @description Waiting to be fetched, or tried again.
+             */
+            pending: number;
+            /**
+             * Format: int64
+             * @description Given up on.
+             */
+            failed: number;
+            /**
+             * Format: int64
+             * @description What the media kept weigh, in bytes.
+             */
+            bytes: number;
+            /**
+             * Format: int64
+             * @description What the copies made of its pictures weigh: the sizes the pages are
+             *     given, the night's AVIF.
+             */
+            copiesBytes: number;
         };
         /** @description One address a work points at, and what is kept of it. */
         WorkMedium: {
@@ -8758,6 +9764,106 @@ export interface operations {
             };
             /** @description Not one of your keys */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    account_preferences: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Preferences"];
+                };
+            };
+            /** @description A key cannot manage an account */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    account_keep_preference: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Its name: `catalogue.views`, `table.users` */
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PreferenceWrite"];
+            };
+        };
+        responses: {
+            /** @description Kept */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The name or the value was rejected */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A key cannot manage an account, or the account keeps as many as it may */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    account_forget_preference: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Its name */
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Forgotten, or never kept */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The name was rejected */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A key cannot manage an account */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -9345,6 +10451,32 @@ export interface operations {
             };
         };
     };
+    items_gaps: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Gaps"];
+                };
+            };
+            /** @description The caller may not edit the catalogue */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     figures_health: {
         parameters: {
             query?: never;
@@ -9424,6 +10556,61 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description The caller is not an administrator */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    logs_list: {
+        parameters: {
+            query?: {
+                /**
+                 * @description This level and every graver one: `warn` is the warnings and the
+                 *     errors. Every level when left out.
+                 */
+                level?: "error" | "warn" | "info" | "debug" | "trace";
+                /**
+                 * @description Words every line must hold, in its message, its fields, its module or
+                 *     its ids — a trace's id finds the lines of one request.
+                 */
+                q?: string;
+                /**
+                 * @description Only the lines written after this one, by its `seq`: what a page that
+                 *     follows the log asks for.
+                 */
+                after?: number;
+                /**
+                 * @description At most this many, the newest: 500 unless said, and never more than
+                 *     the journal keeps.
+                 */
+                limit?: number;
+                /**
+                 * @description `text` or `json`: every line the filters match, oldest first, as a
+                 *     file to download, `limit` set aside.
+                 */
+                format?: "text" | "json";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The lines that answer, newest first; with `format`, as a file, oldest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LogResponse"];
+                    "text/plain": string;
+                    "application/x-ndjson": string;
+                };
             };
             /** @description The caller is not an administrator */
             403: {
@@ -9867,6 +11054,33 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description The caller is not an administrator */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    tasks_stream: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Server-sent events, each named `tasks`, whose data is the board as JSON */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": components["schemas"]["TaskBoard"];
+                };
             };
             /** @description The caller is not an administrator */
             403: {
@@ -10660,6 +11874,46 @@ export interface operations {
             };
         };
     };
+    browse_compare: {
+        parameters: {
+            query: {
+                /** @description The first work's id. */
+                a: string;
+                /** @description The second's. */
+                b: string;
+                /** @description Titles in this language: `fr`. */
+                language?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Comparison"];
+                };
+            };
+            /** @description The two are one work, or the language is not one */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description One of them is not a work this reader may see */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     meta_import_dataset: {
         parameters: {
             query?: never;
@@ -10712,6 +11966,48 @@ export interface operations {
             };
             /** @description The list could not be downloaded or read */
             502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    browse_decade: {
+        parameters: {
+            query?: {
+                /**
+                 * @description The reader's language: `fr`. The titles, the genre's name and the note
+                 *     are read in it where they are written in it.
+                 */
+                language?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Its first year, or any of its years */
+                year: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FacetPage"];
+                };
+            };
+            /** @description The language is not one */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not a year */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -10798,6 +12094,194 @@ export interface operations {
                 content?: never;
             };
             /** @description No provider had it */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    editorial_list: {
+        parameters: {
+            query?: {
+                /** @description Only the notes on works, lists, genres, networks, years or decades. */
+                scope?: string;
+                /** @description Only those on this one, with `scope`: every language it is written in. */
+                key?: string;
+                /** @description Only those written in this language: `fr`. */
+                language?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EditorialNotes"];
+                };
+            };
+            /** @description Not a scope or a language, or a key without its scope */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The caller may not edit the catalogue */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    editorial_read: {
+        parameters: {
+            query?: {
+                /**
+                 * @description The reader's language: `fr`. The note in it, else in English, else the
+                 *     one written last. Absent, English.
+                 */
+                language?: string;
+            };
+            header?: never;
+            path: {
+                /** @description work, list, genre, network, year or decade */
+                scope: string;
+                /** @description A work's or a selection's id, a genre's or a network's slug, a year, a decade's first year */
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EditorialNote"];
+                };
+            };
+            /** @description Not a scope, a key or a language */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Nothing is written about it, or the reader may not see it */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    editorial_write: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description work, list, genre, network, year or decade */
+                scope: string;
+                /** @description A work's or a selection's id, a genre's or a network's slug, a year, a decade's first year */
+                key: string;
+                /** @description The language it is written in: en, fr */
+                language: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EditorialNoteRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EditorialNote"];
+                };
+            };
+            /** @description The text was empty: the note in this language is taken away */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not a scope, a key or a language, or a text with HTML, a link elsewhere or too many characters */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The caller may not edit the catalogue */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such work or selection */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    editorial_remove: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description work, list, genre, network, year or decade */
+                scope: string;
+                /** @description A work's or a selection's id, a genre's or a network's slug, a year, a decade's first year */
+                key: string;
+                /** @description The language it is written in: en, fr */
+                language: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Taken away */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not a scope, a key or a language */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The caller may not edit the catalogue */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Nothing was written about it in that language */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -10985,10 +12469,12 @@ export interface operations {
                  *     language they are stored in — `imdb` — no IMDb identifier — and
                  *     `refresh` — never refreshed, though they have an identifier to be
                  *     refreshed by — `divergingLock` — a lock a source moved under since
-                 *     it was set, and which says something else now — and `duplicates` —
-                 *     in a pair proposed as one work, and not dismissed. Several narrow
-                 *     together: `poster,overview` lists the works lacking both. For those who
-                 *     may edit the catalogue, as `refreshFailed`.
+                 *     it was set, and which says something else now — `duplicates` — in a
+                 *     pair proposed as one work, and not dismissed — and `mediaFailed` — a
+                 *     picture, a photograph or a theme of theirs that the media store gave
+                 *     up fetching, so another can be chosen. Several narrow together:
+                 *     `poster,overview` lists the works lacking both. For those who may edit
+                 *     the catalogue, as `refreshFailed`; `GET /admin/gaps` counts each.
                  */
                 missing?: string;
                 /**
@@ -11109,6 +12595,286 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["Figures"];
                 };
+            };
+        };
+    };
+    browse_genre: {
+        parameters: {
+            query?: {
+                /**
+                 * @description The reader's language: `fr`. The titles, the genre's name and the note
+                 *     are read in it where they are written in it.
+                 */
+                language?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The genre's slug, or any name it goes by */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FacetPage"];
+                };
+            };
+            /** @description The language is not one */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No genre goes by that name */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    import_rules_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportRule"][];
+                };
+            };
+            /** @description The caller is not an administrator */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    import_rules_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ImportRuleRequest"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportRule"];
+                };
+            };
+            /** @description A name, an expression, a source's parameters, an address, a selection or a language that is none — said which and why */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The caller is not an administrator */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    import_rules_preview: {
+        parameters: {
+            query?: {
+                /**
+                 * @description The rule being changed, whose followed address keeps its key when it
+                 *     is sent back as it was shown.
+                 */
+                rule?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ImportRuleRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportPreview"];
+                };
+            };
+            /** @description The rule is not one this server reads, or its source could not be read — said why */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The caller is not an administrator */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    import_rules_update: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The rule's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ImportRuleRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportRule"];
+                };
+            };
+            /** @description A name, an expression, a source's parameters, an address, a selection or a language that is none — said which and why */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The caller is not an administrator */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such rule */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    import_rules_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The rule's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The caller is not an administrator */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such rule */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    import_rules_run: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The rule's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuleStarted"];
+                };
+            };
+            /** @description A rule this version cannot read */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The caller is not an administrator */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such rule */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A rule is running already, or a backup is being restored */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -11286,10 +13052,12 @@ export interface operations {
                  *     language they are stored in — `imdb` — no IMDb identifier — and
                  *     `refresh` — never refreshed, though they have an identifier to be
                  *     refreshed by — `divergingLock` — a lock a source moved under since
-                 *     it was set, and which says something else now — and `duplicates` —
-                 *     in a pair proposed as one work, and not dismissed. Several narrow
-                 *     together: `poster,overview` lists the works lacking both. For those who
-                 *     may edit the catalogue, as `refreshFailed`.
+                 *     it was set, and which says something else now — `duplicates` — in a
+                 *     pair proposed as one work, and not dismissed — and `mediaFailed` — a
+                 *     picture, a photograph or a theme of theirs that the media store gave
+                 *     up fetching, so another can be chosen. Several narrow together:
+                 *     `poster,overview` lists the works lacking both. For those who may edit
+                 *     the catalogue, as `refreshFailed`; `GET /admin/gaps` counts each.
                  */
                 missing?: string;
                 /**
@@ -11366,6 +13134,87 @@ export interface operations {
             };
             /** @description Another entry already claims one of the external ids */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    discover_import_batch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BatchRequest"];
+            };
+        };
+        responses: {
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BatchStarted"];
+                };
+            };
+            /** @description No line names a work, more than two thousand lines, a language that is none, or a selection that is not a hand-made one */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The caller is not an administrator */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A batch is being imported already, or a backup is being restored */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    discover_preview_batch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BatchPreviewRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportPreview"];
+                };
+            };
+            /** @description More than two thousand lines */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The caller may not write */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -14079,6 +15928,48 @@ export interface operations {
             };
         };
     };
+    media_by_work: {
+        parameters: {
+            query?: {
+                /**
+                 * @description `space` (the default): the heaviest first, copies included. `count`:
+                 *     the most media kept first. `failed`: the most given up on first.
+                 */
+                sort?: string;
+                /** @description How many works, fifty when absent, two hundred at the most. */
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MediaByWork"];
+                };
+            };
+            /** @description An order that is none */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The caller is not an administrator */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     network_callers: {
         parameters: {
             query?: {
@@ -14244,6 +16135,48 @@ export interface operations {
                 content?: never;
             };
             /** @description No such rule */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    browse_network: {
+        parameters: {
+            query?: {
+                /**
+                 * @description The reader's language: `fr`. The titles, the genre's name and the note
+                 *     are read in it where they are written in it.
+                 */
+                language?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The slug of the network's or the studio's name */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FacetPage"];
+                };
+            };
+            /** @description The language is not one */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No work this reader may see names that network or studio */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -14983,6 +16916,43 @@ export interface operations {
             };
         };
     };
+    tasks_preview_schedule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TaskSchedule"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScheduleMoments"];
+                };
+            };
+            /** @description Not a window or an expression this server reads, and why */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The caller is not an administrator */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     tasks_run: {
         parameters: {
             query?: never;
@@ -15002,6 +16972,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["Started"];
                 };
+            };
+            /** @description A batch of works, which is started from the import page with its lines */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description The caller is not an administrator */
             403: {
@@ -15024,8 +17001,98 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Its source or its switch is off: no media store, no export path, no certificate of the server's own, the check for a newer version off, neither Sonarr nor Radarr connected, the AVIF copies off */
+            /** @description Its source or its switch is off: no media store, no export path, no certificate of the server's own, the check for a newer version off, neither Sonarr nor Radarr connected, the AVIF copies off, no import rule switched on */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    tasks_set_schedule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The task */
+                id: components["schemas"]["TaskId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TaskSchedule"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskState"];
+                };
+            };
+            /** @description Not a window or an expression this server reads — said why — or a task that keeps its own cadence */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The caller is not an administrator */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such task */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    tasks_clear_schedule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The task */
+                id: components["schemas"]["TaskId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskState"];
+                };
+            };
+            /** @description A task that keeps its own cadence */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The caller is not an administrator */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such task */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -15381,6 +17448,48 @@ export interface operations {
                 };
                 content?: never;
             };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    browse_year: {
+        parameters: {
+            query?: {
+                /**
+                 * @description The reader's language: `fr`. The titles, the genre's name and the note
+                 *     are read in it where they are written in it.
+                 */
+                language?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Four digits, from 1800 to 2200 */
+                year: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FacetPage"];
+                };
+            };
+            /** @description The language is not one */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not a year */
             404: {
                 headers: {
                     [name: string]: unknown;

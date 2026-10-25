@@ -131,12 +131,14 @@ test.describe('a visitor with no credential', () => {
 
     // `frame-ancestors` is the one that earns its place on a server sitting on
     // a home network: it is what stops a page elsewhere framing this one and
-    // borrowing an administrator's clicks.
-    expect(csp).toContain("frame-ancestors 'none'")
+    // borrowing an administrator's clicks. This origin alone may: the work
+    // editor shows the public page beside itself.
+    expect(csp).toContain("frame-ancestors 'self'")
+    expect(response.headers()['x-frame-options']).toBe('SAMEORIGIN')
     expect(csp).toContain("default-src 'self'")
     expect(csp).toContain("object-src 'none'")
-    // One exception, for a trailer someone asked to play.
-    expect(csp).toContain('frame-src https://www.youtube-nocookie.com')
+    // Two frames: this origin's own pages, and a trailer someone asked to play.
+    expect(csp).toContain("frame-src 'self' https://www.youtube-nocookie.com")
 
     expect(response.headers()['referrer-policy']).toBe('no-referrer')
     expect(response.headers()['x-content-type-options']).toBe('nosniff')

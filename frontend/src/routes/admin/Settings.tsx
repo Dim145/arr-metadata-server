@@ -49,7 +49,7 @@ import { useI18n } from '../../lib/i18n'
 import type { ExportStarted, JobsResponse, Settings as Config } from '../../lib/types'
 
 /** The groups of settings the page draws, in the order it draws them. */
-const SETTING_GROUPS: GroupId[] = ['answering', 'providers', 'sources', 'refresh', 'adult', 'backup', 'other']
+const SETTING_GROUPS: GroupId[] = ['answering', 'providers', 'sources', 'refresh', 'adult', 'backup', 'errors', 'other']
 
 /**
  * The six months TMDB's terms allow its answers to be kept, in seconds: a

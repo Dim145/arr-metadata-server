@@ -271,6 +271,7 @@ test.describe('the administration side', () => {
       '/admin/media',
       '/admin/cache',
       '/admin/audit',
+      '/admin/logs',
       '/admin/notifications',
       '/admin/settings',
       season,

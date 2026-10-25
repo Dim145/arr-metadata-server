@@ -15,6 +15,7 @@ import { useQueries, useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router'
 
 import { Artwork, Placeholder, PosterCard, PosterShelf, Score, VEILED, Veil, useVeiled } from '../components/media'
+import { ProgrammersNote } from '../components/ProgrammersNote'
 import { EmptyState, Genre, Glyph, Label, SectionTitle, Shelf, Skeleton } from '../components/ui'
 import { useCuratedLists, useMe } from '../lib/hooks'
 import { api, query, segment } from '../lib/api'
@@ -89,6 +90,9 @@ export function Home() {
   return (
     <div className="pb-8">
       {featured ? <Featured item={featured} /> : null}
+      {/* Why it is the work of the day, where somebody said so: under the
+          plate, which has no room to spare on a phone. */}
+      {featured ? <ProgrammersNote scope="work" id={featured.id} className="mt-8" /> : null}
 
       <div className="mt-16 space-y-16">
         <ThisWeek />

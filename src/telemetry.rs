@@ -1,5 +1,18 @@
 //! Tracing setup, the id every request is given, and keeping secrets out of
 //! what is traced.
+//!
+//! Every line goes to standard output, as text or as JSON, and into the
+//! [`journal`] the administration reads. Two more ways out are each off
+//! until asked for: the spans of a request, sent to a collector over OTLP
+//! when the environment names one ([`trace`]), and the error lines, sent to
+//! a Sentry or a GlitchTip when the settings name one ([`report`]). Each has
+//! its own filter, so that `AMS_LOG=warn` quietens the log without starving
+//! the traces or the reports.
+
+mod format;
+pub mod journal;
+pub mod report;
+pub mod trace;
 
 use std::{
     net::SocketAddr,
@@ -9,7 +22,7 @@ use std::{
 use axum::{
     Router,
     extract::{ConnectInfo, Request},
-    http::{HeaderName, HeaderValue},
+    http::{HeaderMap, HeaderName, HeaderValue},
     middleware::Next,
     response::Response,
 };
@@ -17,30 +30,117 @@ use ipnet::IpNet;
 use tower_http::request_id::{
     MakeRequestId, PropagateRequestIdLayer, RequestId, SetRequestIdLayer,
 };
-use tracing_subscriber::{EnvFilter, fmt, prelude::*};
+use tracing::level_filters::LevelFilter;
+use tracing_subscriber::{
+    EnvFilter,
+    filter::{FilterExt as _, filter_fn},
+    fmt,
+    prelude::*,
+};
+
+/// What the log writes when `AMS_LOG` and `RUST_LOG` say nothing it can read.
+const DEFAULT_FILTER: &str = "info,arr_metadata_server=info,tower_http=info";
+
+/// The target the request span is written under: this module's.
+const REQUEST_TARGET: &str = module_path!();
 
 /// Initialise the global subscriber.
 ///
-/// `AMS_LOG` (or `RUST_LOG`) sets the filter. `AMS_LOG_FORMAT=json` switches to
-/// structured output for log shippers.
+/// `AMS_LOG` (or `RUST_LOG`) sets the filter, for standard output and the
+/// journal alike. `AMS_LOG_FORMAT=json` switches to structured output for
+/// log shippers, each line carrying the `trace_id` of the request it was
+/// written in. The traces and the error reports have filters of their own.
 pub fn init() {
-    let filter = EnvFilter::try_from_env("AMS_LOG")
-        .or_else(|_| EnvFilter::try_from_default_env())
-        .unwrap_or_else(|_| EnvFilter::new("info,arr_metadata_server=info,tower_http=info"));
-
     let json = std::env::var("AMS_LOG_FORMAT")
         .map(|v| v.eq_ignore_ascii_case("json"))
         .unwrap_or(false);
 
-    let registry = tracing_subscriber::registry().with(filter);
+    let (traces, notes) = trace::layer();
 
-    if json {
-        registry
-            .with(fmt::layer().json().flatten_event(true))
-            .init();
+    let output = if json {
+        fmt::layer()
+            .json()
+            .flatten_event(true)
+            .map_event_format(format::Correlated)
+            .boxed()
     } else {
-        registry.with(fmt::layer().with_target(true)).init();
+        fmt::layer().with_target(true).boxed()
+    };
+
+    tracing_subscriber::registry()
+        .with(output.with_filter(log_filter().or(request_spans())))
+        .with(journal::layer().with_filter(log_filter().or(request_spans())))
+        .with(report::layer())
+        .with(crate::metrics::pool_wait_layer())
+        .with(traces)
+        .init();
+
+    for note in notes {
+        note.log();
     }
+    panic_hook();
+}
+
+/// What `AMS_LOG`, or `RUST_LOG`, asks to be written. Read anew for each
+/// layer that writes lines, a filter being of one layer only.
+fn log_filter() -> EnvFilter {
+    EnvFilter::try_from_env("AMS_LOG")
+        .or_else(|_| EnvFilter::try_from_default_env())
+        .unwrap_or_else(|_| EnvFilter::new(DEFAULT_FILTER))
+}
+
+/// The request spans, whatever the filter says of their level: the lines a
+/// request's handler writes name its ids through them, and `AMS_LOG=warn`
+/// must not take the ids off the warnings.
+fn request_spans<S>() -> impl tracing_subscriber::layer::Filter<S> {
+    filter_fn(|meta| meta.is_span() && meta.target() == REQUEST_TARGET)
+        .with_max_level_hint(LevelFilter::INFO)
+}
+
+/// Something to say once the subscriber is there to say it with: what the
+/// telemetry made of the environment as it was set up.
+pub(crate) struct Note {
+    pub warning: bool,
+    pub text: String,
+}
+
+impl Note {
+    fn log(self) {
+        if self.warning {
+            tracing::warn!("{}", self.text);
+        } else {
+            tracing::info!("{}", self.text);
+        }
+    }
+}
+
+/// A panic, written as an error line before the default hook writes it to
+/// standard error: in the JSON log a shipper reads, under the request it
+/// happened in, in the journal, and in an error report. A handler's panic is
+/// a 500 for its request, so it would otherwise go by unseen. What it says is
+/// masked as every logged text is.
+fn panic_hook() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let what = info.payload_as_str().unwrap_or("a panic that said nothing");
+        let location = info
+            .location()
+            .map(|at| format!("{}:{}", at.file(), at.line()))
+            .unwrap_or_default();
+        tracing::error!(
+            target: "panic",
+            panic = %redact(what),
+            %location,
+            "a thread panicked"
+        );
+        previous(info);
+    }));
+}
+
+/// Send what is still held to the collector and the error reports, given a
+/// few seconds: the last thing a stopping server does.
+pub async fn shutdown() {
+    tokio::join!(trace::shutdown(), report::shutdown());
 }
 
 /// The request span: what `tower_http`'s own records, but the address without
@@ -48,8 +148,11 @@ pub fn init() {
 /// are how TMDB clients, feeds and the import lists carry theirs, and the
 /// default span wrote every one of them to the log at `AMS_LOG=debug` — and
 /// the request's id, so that every line written while it is served names
-/// it. At `info`, where the default filter stands: a span under the filter's
-/// level is never entered, and what the default makes is at `debug`.
+/// it. At `info`, and written whatever the filter's level (`request_spans`).
+///
+/// With traces on, it is made under the span the trace serves the request in
+/// ([`trace::serve`]). The trace's id is written as `trace_id` when it is not
+/// the request's own id: one a proxy sent, or one the traces made.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RequestSpan;
 
@@ -60,20 +163,34 @@ impl<B> tower_http::trace::MakeSpan<B> for RequestSpan {
             .get::<RequestId>()
             .and_then(|id| id.header_value().to_str().ok())
             .unwrap_or_default();
+        let served = request.extensions().get::<trace::Served>();
         // Shown, not debugged: `request_id=…` in the text log rather than
         // `request_id="…"`, which is what a `&str` field would be written as.
-        tracing::info_span!(
+        let span = tracing::info_span!(
+            target: REQUEST_TARGET,
+            parent: served.and_then(trace::Served::id),
             "request",
             method = %request.method(),
             uri = %redact_uri(request.uri()),
             version = ?request.version(),
             request_id = %request_id,
-        )
+            trace_id = tracing::field::Empty,
+        );
+        if let Some(trace) = trace::trace_id(served, request.headers())
+            && trace != request_id
+        {
+            span.record("trace_id", trace.as_str());
+        }
+        span
     }
 }
 
 /// The header a request's id travels in, in and out.
 pub const REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
+
+/// The headers W3C Trace Context carries a trace in.
+pub const TRACEPARENT: HeaderName = HeaderName::from_static("traceparent");
+pub const TRACESTATE: HeaderName = HeaderName::from_static("tracestate");
 
 /// How long an id this server takes from outside may be.
 const LONGEST_ID: usize = 128;
@@ -82,7 +199,9 @@ const LONGEST_ID: usize = 128;
 /// that every line logged while the request is served names it, and sent
 /// back in `x-request-id`, so that whoever met an error can say which one.
 /// A trusted proxy's own id is kept, so that its log and this one name a
-/// request alike. Anybody else's is dropped and one is made here: a
+/// request alike; and its trace, sent in `traceparent`, is the one the
+/// request joins — named by the request's id when the proxy sent no id of
+/// its own. Anybody else's of either is dropped and an id is made here: a
 /// stranger's would be whatever they chose, as long as a header may be, and
 /// the same on every request they send. Applied outside the trace, which
 /// opens the span the id is read into.
@@ -105,18 +224,72 @@ pub fn with_request_id(router: Router, trusted: Vec<IpNet>) -> Router {
 /// given once, and in a form the log can hold: at most [`LONGEST_ID`] bytes,
 /// of letters, digits and `-._:/`. `SetRequestIdLayer` keeps whatever header
 /// it finds, so what it must not keep is taken away before it looks.
+///
+/// The trace a request belongs to is judged alike: `traceparent` and
+/// `tracestate` are kept when a trusted proxy sent one `traceparent` that
+/// reads as W3C Trace Context writes it, and taken off otherwise — a
+/// stranger's would choose the trace this server writes its spans into, and
+/// whether they are kept. A trusted proxy's trace with no id of its own
+/// names the request: its id is the trace's.
 async fn judge_request_id(trusted: &[IpNet], mut request: Request, next: Next) -> Response {
     let peer = request
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
         .map(|ci| ci.0);
-    let kept = crate::auth::ip::is_trusted_peer(peer, trusted)
-        && request.headers().get_all(REQUEST_ID).iter().count() == 1
-        && request.headers().get(REQUEST_ID).is_some_and(acceptable_id);
+    let trusted = crate::auth::ip::is_trusted_peer(peer, trusted);
+    let headers = request.headers_mut();
+    let kept = trusted
+        && headers.get_all(REQUEST_ID).iter().count() == 1
+        && headers.get(REQUEST_ID).is_some_and(acceptable_id);
     if !kept {
-        request.headers_mut().remove(REQUEST_ID);
+        headers.remove(REQUEST_ID);
+    }
+    let trace = trusted
+        .then(|| traced_by(headers).map(str::to_string))
+        .flatten();
+    match trace {
+        Some(trace) => {
+            if !headers.contains_key(REQUEST_ID)
+                && let Ok(id) = HeaderValue::from_str(&trace)
+            {
+                headers.insert(REQUEST_ID, id);
+            }
+        }
+        None => {
+            headers.remove(TRACEPARENT);
+            headers.remove(TRACESTATE);
+        }
     }
     next.run(request).await
+}
+
+/// The trace a request's `traceparent` names, as W3C Trace Context writes
+/// it — `00-<trace>-<parent>-<flags>`, in lower-case hexadecimal, neither id
+/// all zeroes — when there is one such header: the trace's id.
+pub(crate) fn traced_by(headers: &HeaderMap) -> Option<&str> {
+    let mut values = headers.get_all(TRACEPARENT).iter();
+    let (Some(value), None) = (values.next(), values.next()) else {
+        return None;
+    };
+    let text = value.to_str().ok()?;
+    let hex = |part: &str, len: usize| {
+        part.len() == len && part.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+    };
+    let mut parts = text.splitn(5, '-');
+    let (version, trace, parent, flags) =
+        (parts.next()?, parts.next()?, parts.next()?, parts.next()?);
+    let rest = parts.next();
+    // Version 00 is four parts exactly; a later one may carry more after
+    // them, which a reader of 00 passes over. `ff` is no version.
+    let shaped = hex(version, 2)
+        && version != "ff"
+        && (rest.is_none() || version != "00")
+        && hex(trace, 32)
+        && hex(parent, 16)
+        && hex(flags, 2)
+        && trace.bytes().any(|b| b != b'0')
+        && parent.bytes().any(|b| b != b'0');
+    shaped.then_some(trace)
 }
 
 /// Whether an id from outside is one the log can hold.
@@ -128,17 +301,29 @@ fn acceptable_id(value: &HeaderValue) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b':' | b'/'))
 }
 
-/// An id made here: a UUID of the seventh version, which sorts by the time
-/// it was made, without its hyphens — the form nginx's `$request_id` takes.
+/// An id made here: sixteen random bytes in lower-case hexadecimal — the
+/// form nginx's `$request_id` takes, and a W3C trace id's, so that the trace
+/// a request starts is named by the request's own id. Random to the last
+/// bit, as a trace id must be for a sampler to keep one in ten by it: a
+/// UUID's fixed version and variant bits would have it keep none.
 #[derive(Clone, Copy, Debug, Default)]
 struct MakeId;
 
 impl MakeRequestId for MakeId {
     fn make_request_id<B>(&mut self, _request: &axum::http::Request<B>) -> Option<RequestId> {
-        HeaderValue::from_str(&uuid::Uuid::now_v7().simple().to_string())
-            .ok()
-            .map(RequestId::new)
+        HeaderValue::from_str(&new_id()).ok().map(RequestId::new)
     }
+}
+
+/// Sixteen random bytes, in lower-case hexadecimal, never all zeroes.
+fn new_id() -> String {
+    let mut bytes = [0u8; 16];
+    if getrandom::fill(&mut bytes).is_err() || bytes.iter().all(|b| *b == 0) {
+        // Not a secret, only a name: the clock's bytes do when the random
+        // source does not answer.
+        bytes = uuid::Uuid::now_v7().into_bytes();
+    }
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// A request's path and query, the query's secrets masked.
@@ -678,6 +863,136 @@ mod tests {
         );
         assert!(log.contains("apikey=***"), "{log}");
         assert!(!log.contains("ams_secret"), "{log}");
+    }
+
+    #[test]
+    fn a_traceparent_is_read_as_w3c_trace_context_writes_it() {
+        let read = |values: &[&str]| {
+            let mut headers = HeaderMap::new();
+            for value in values {
+                headers.append(TRACEPARENT, HeaderValue::from_str(value).unwrap());
+            }
+            traced_by(&headers).map(str::to_string)
+        };
+        let trace = "4bf92f3577b34da6a3ce929d0e0e4736";
+        assert_eq!(
+            read(&[&format!("00-{trace}-00f067aa0ba902b7-01")]).as_deref(),
+            Some(trace)
+        );
+        // A later version may carry more after the four parts.
+        assert_eq!(
+            read(&[&format!("01-{trace}-00f067aa0ba902b7-01-later")]).as_deref(),
+            Some(trace)
+        );
+        for wrong in [
+            format!("00-{trace}-00f067aa0ba902b7-01-more"),
+            format!("ff-{trace}-00f067aa0ba902b7-01"),
+            format!("00-{}-00f067aa0ba902b7-01", trace.to_uppercase()),
+            "00-00000000000000000000000000000000-00f067aa0ba902b7-01".to_string(),
+            format!("00-{trace}-0000000000000000-01"),
+            format!("00-{trace}-00f067aa0ba902b7"),
+            "nonsense".to_string(),
+        ] {
+            assert_eq!(read(&[&wrong]), None, "{wrong}");
+        }
+        // Two are none.
+        let one = format!("00-{trace}-00f067aa0ba902b7-01");
+        assert_eq!(read(&[&one, &one]), None);
+    }
+
+    /// A trusted proxy's trace is kept and names the request when the proxy
+    /// sent no id; a stranger's is taken off before anything reads it.
+    #[tokio::test]
+    async fn a_trusted_proxys_trace_names_the_request_and_a_strangers_is_dropped() {
+        let proxy: IpNet = "10.0.0.0/8".parse().unwrap();
+        let seen = |trusted: Vec<IpNet>| {
+            with_request_id(
+                Router::new().route(
+                    "/",
+                    axum::routing::get(|request: Request| async move {
+                        request
+                            .headers()
+                            .get(TRACEPARENT)
+                            .and_then(|value| value.to_str().ok())
+                            .unwrap_or("none")
+                            .to_string()
+                    }),
+                ),
+                trusted,
+            )
+        };
+        let parent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+        let traced = |peer: &str| {
+            let mut request = from(peer, "unused");
+            request.headers_mut().remove(REQUEST_ID);
+            request
+                .headers_mut()
+                .insert(TRACEPARENT, HeaderValue::from_static(parent));
+            request
+        };
+
+        let (answered, kept) = asked(seen(vec![proxy]), traced("10.0.0.2:4000")).await;
+        assert_eq!(answered, "4bf92f3577b34da6a3ce929d0e0e4736");
+        assert_eq!(kept, parent);
+
+        let (answered, kept) = asked(seen(vec![proxy]), traced("203.0.113.5:4000")).await;
+        assert_ne!(answered, "4bf92f3577b34da6a3ce929d0e0e4736");
+        assert_eq!(kept, "none");
+
+        // The proxy's own id, when it sent one, stays the request's.
+        let mut both = traced("10.0.0.2:4000");
+        both.headers_mut()
+            .insert(REQUEST_ID, HeaderValue::from_static("proxy-7"));
+        let (answered, kept) = asked(seen(vec![proxy]), both).await;
+        assert_eq!((answered.as_str(), kept.as_str()), ("proxy-7", parent));
+    }
+
+    #[test]
+    fn an_id_made_here_is_random_to_the_last_bit() {
+        let ids: Vec<String> = (0..64).map(|_| new_id()).collect();
+        for id in &ids {
+            assert_eq!(id.len(), 32, "{id}");
+            assert!(
+                id.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')),
+                "{id}"
+            );
+        }
+        // No digit fixed by a UUID's version or variant: across 64 ids, the
+        // thirteenth and seventeenth take more than one value.
+        for at in [12, 16] {
+            let values: std::collections::HashSet<u8> =
+                ids.iter().map(|id| id.as_bytes()[at]).collect();
+            assert!(values.len() > 1, "digit {at} is always {values:?}");
+        }
+    }
+
+    /// A panic is an error line, masked as any other, before the default
+    /// hook writes it to standard error.
+    #[test]
+    fn a_panic_is_written_as_an_error_line() {
+        static INSTALLED: std::sync::Once = std::sync::Once::new();
+        INSTALLED.call_once(panic_hook);
+
+        let subscriber = tracing_subscriber::registry().with(journal::layer());
+        let caught = tracing::subscriber::with_default(subscriber, || {
+            std::panic::catch_unwind(|| {
+                panic!("panic-hook-marker at https://x.example/?api_key=abcdef123456")
+            })
+        });
+        assert!(caught.is_err());
+
+        let lines = journal::read(&journal::Query {
+            text: Some("panic-hook-marker".into()),
+            ..journal::Query::default()
+        });
+        let line = lines.first().expect("the panic, as a line");
+        assert_eq!(line.level, journal::Level::Error);
+        assert_eq!(line.target, "panic");
+        assert_eq!(line.message, "a thread panicked");
+        let text = line.as_text();
+        assert!(text.contains("api_key=***"), "{text}");
+        assert!(!text.contains("abcdef123456"), "{text}");
+        assert!(text.contains("location=src/telemetry.rs:"), "{text}");
     }
 
     #[test]

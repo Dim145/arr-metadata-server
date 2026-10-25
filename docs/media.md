@@ -47,6 +47,15 @@ default: nothing is kept until it is asked for.
   a work removed, a picture a provider dropped, an upload taken off — is
   forgotten and its file deleted, and a file no row names is removed once it
   has had its hour.
+- **By work.** The Media page ranks the works by what their media come to —
+  the heaviest first, the most kept, or the most given up on, by the switch
+  above the table or its column heads — each with how many it keeps, how many
+  wait or were given up on, and what those kept weigh with their copies; a
+  picture two works share counts for each, as each one's media list shows it.
+  Enter on a row opens the work in the editor. The dashboard names the three
+  heaviest. Through the
+  API: `GET /api/v1/media/works?sort=space` (or `count`, `failed`), and a
+  work's own `totals` in `GET /api/v1/items/{id}/media`.
 - **Moving the store.** The rows say which copies exist, not where: pointed
   at another bucket or directory, they name files that are not there.
   Either copy the files across first, or **Forget every copy** on the Media

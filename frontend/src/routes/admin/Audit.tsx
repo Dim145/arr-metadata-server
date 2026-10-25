@@ -9,13 +9,14 @@
  */
 
 import { useQuery } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Link } from 'react-router'
 
 import {
   Button,
   ButtonLink,
   Chip,
+  DataTable,
   EmptyState,
   Glyph,
   Input,
@@ -24,10 +25,14 @@ import {
   Select,
   Skeleton,
   Spinner,
-  TableScroll,
+  TableOptions,
+  TBody,
   Td,
   Th,
+  THead,
   Tr,
+  useDataTable,
+  type Column,
 } from '../../components/ui'
 import { api, query } from '../../lib/api'
 import { cn } from '../../lib/cn'
@@ -58,6 +63,20 @@ export function Audit() {
   })
 
   const filtered = Boolean(action || actor)
+
+  // An entry is known by what was done. The trail is read a page at a time,
+  // newest first, and no head orders it: a page put in another order here
+  // would say nothing of the entries on the other pages.
+  const columns: Column[] = useMemo(
+    () => [
+      { id: 'when', label: t.admin.trail.colWhen },
+      { id: 'action', label: t.admin.trail.colAction, kind: 'primary', always: true },
+      { id: 'target', label: t.admin.trail.colTarget },
+      { id: 'actor', label: t.admin.trail.colActor, align: 'right', from: 'md' },
+    ],
+    [t],
+  )
+  const table = useDataTable({ id: 'audit', columns })
 
   return (
     <div className="mx-auto max-w-5xl">
@@ -136,10 +155,11 @@ export function Audit() {
               )}
             </span>
           ) : null}
+          {log.data?.entries.length ? <TableOptions table={table} /> : null}
         </span>
       </div>
 
-      <Panel className="rise overflow-hidden" style={{ animationDelay: '60ms' }}>
+      <Panel className="rise overflow-clip" style={{ animationDelay: '60ms' }}>
         {log.isPending ? (
           <div className="space-y-2 p-4">
             {Array.from({ length: 10 }, (_, index) => (
@@ -157,25 +177,19 @@ export function Audit() {
             hint={filtered ? t.admin.trail.emptyFilteredHint : t.admin.trail.emptyHint}
           />
         ) : (
-          <TableScroll label={t.admin.audit}>
-            <table className="w-full min-w-[20rem] border-collapse text-left">
-              <thead>
-                <tr>
-                  <Th>{t.admin.trail.colWhen}</Th>
-                  <Th>{t.admin.trail.colAction}</Th>
-                  <Th className="hidden sm:table-cell">{t.admin.trail.colTarget}</Th>
-                  <Th align="right" className="hidden md:table-cell">
-                    {t.admin.trail.colActor}
-                  </Th>
-                </tr>
-              </thead>
-              <tbody>
-                {log.data.entries.map((entry) => (
-                  <Row key={entry.id} entry={entry} locale={locale} />
-                ))}
-              </tbody>
-            </table>
-          </TableScroll>
+          <DataTable table={table} label={t.admin.audit}>
+            <THead>
+              <Th column="when" />
+              <Th column="action" />
+              <Th column="target" />
+              <Th column="actor" />
+            </THead>
+            <TBody>
+              {log.data.entries.map((entry) => (
+                <Row key={entry.id} entry={entry} locale={locale} />
+              ))}
+            </TBody>
+          </DataTable>
         )}
       </Panel>
 
@@ -203,13 +217,14 @@ function Row({ entry, locale }: { entry: AuditEntry; locale: string }) {
 
   return (
     <Tr
+      row={String(entry.id)}
       className={cn(
         entry.action === 'auth.sign_in_failed' ? 'bg-vermillion/[0.06]' : '',
         // Locking and unlocking carry the brass edge they carry everywhere else.
         entry.action.startsWith('override.') ? 'border-l-2 border-brass' : '',
       )}
     >
-      <Td className="whitespace-nowrap">
+      <Td column="when" className="whitespace-nowrap">
         <span
           className="font-mono text-xs text-bone-faint tabular-nums"
           title={fmt.dateTime(entry.at, locale)}
@@ -218,20 +233,14 @@ function Row({ entry, locale }: { entry: AuditEntry; locale: string }) {
         </span>
       </Td>
 
-      <Td>
+      <Td column="action">
         <span className="block text-sm text-bone">{t.admin.trail.says[entry.action] ?? entry.action}</span>
         <Chip tone={tone(entry.action)} className="mt-1">
           {entry.action}
         </Chip>
-        {/* The target column is not drawn on a phone: what it says, here. */}
-        {entry.target || entry.detail ? (
-          <span className="mt-1 block truncate text-xs text-bone-dim sm:hidden">
-            {entry.target ? <Target entry={entry} /> : (t.admin.runs.notes[entry.detail!] ?? entry.detail)}
-          </span>
-        ) : null}
       </Td>
 
-      <Td className="hidden w-full max-w-0 sm:table-cell">
+      <Td column="target" className="w-full max-w-0">
         <span className="block truncate text-sm text-bone">
           <Target entry={entry} />
         </span>
@@ -242,7 +251,7 @@ function Row({ entry, locale }: { entry: AuditEntry; locale: string }) {
         ) : null}
       </Td>
 
-      <Td align="right" className="hidden whitespace-nowrap md:table-cell">
+      <Td column="actor" className="whitespace-nowrap">
         <span className="block font-mono text-xs text-bone-dim">
           {entry.actor ?? t.admin.trail.anonymous}
         </span>

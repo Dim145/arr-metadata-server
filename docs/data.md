@@ -184,6 +184,26 @@ hidden is neither in the index nor found by the search. Each of these writes is 
 record it was made to: `person.created`, `person.updated`, `person.merged`, `person.split` and
 `person.credited`.
 
+## Genres
+
+A genre is a record of its own, under a slug that is the same in every language — `drama`,
+`science-fiction` — with its name in each language it is known in. The sources name a genre in the
+language they are asked in, and some in their own words whatever they are asked: TMDB says "Drama"
+in English and "Drame" in French, AniList "Sci-Fi" where TMDB says "Science Fiction", TheTVDB
+"Children" where TMDB says "Kids". Each of these leads to one genre: the server knows TMDB's,
+TheTVDB's, AniList's, MyAnimeList's and Fankai's genres by every name they go by in English and in
+French, and a genre it does not know is its name made into a slug — `Sword & Sorcery` is
+`sword-sorcery` — named as a source gave it. A catalogue fetched in English and then in French,
+after the server's language changed, lists one genre where it listed two, and counts each work once
+under it.
+
+A work keeps its genres as its sources gave them — what Sonarr, Radarr, Plex and the NFO files are
+given — and is listed under their slugs, a lock on its genres applied, as its other values are; TMDB's
+combined series genres are their parts, "Action & Adventure" being Action and Adventure. Every work is
+listed again in the background the first time the server starts with this, and a genre is filed as
+soon as a work is listed under it. Each genre has a page of its own (see
+[The site](interface.md#a-genre-a-network-a-year)).
+
 ## Wikidata, AniList's format and tags
 
 TMDB's **Wikidata item** is kept as an identifier — `Q1079`, whether it arrives so or as a Wikidata address —

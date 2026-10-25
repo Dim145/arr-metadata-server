@@ -1,0 +1,178 @@
+# Alerts on the figures arr-metadata-server offers at /api/v1/admin/metrics,
+# scraped by the job in prometheus.yml. Load the file in Prometheus
+# (`rule_files: [alerts.yml]`) and route the alerts where you read them; the
+# thresholds are where a home server's are, and are yours to move.
+#
+# They expect the scrape job to be called `arr-metadata-server`, as
+# prometheus.yml calls it: rename it in the two `up` rules if yours is not.
+# Checked by `promtool check rules alerts.yml`, and the expressions by
+# `promtool test rules alerts.test.yml`.
+groups:
+  - name: arr-metadata-server
+    rules:
+      # ── Reached at all ────────────────────────────────────────────────────
+      - alert: ArrMetadataDown
+        expr: up{job="arr-metadata-server"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.instance }} has not answered its scrape for five minutes"
+          description: >-
+            Prometheus cannot read the server's figures: the server is down,
+            unreachable from Prometheus, or refusing the scraper's key (a 403
+            is a failed scrape too).
+
+      - alert: ArrMetadataNotScraped
+        expr: absent(up{job="arr-metadata-server"})
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "No arr-metadata-server is scraped"
+          description: >-
+            Prometheus has no target of the arr-metadata-server job: the job
+            was removed, renamed, or its service discovery finds nothing.
+
+      # ── Several instances ─────────────────────────────────────────────────
+      - alert: ArrMetadataNoLeader
+        expr: sum(ams_leader) == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "No instance runs the schedules"
+          description: >-
+            Among several instances none holds the lead: refreshes, imports,
+            backups and certificate renewals have stopped. The lead is kept in
+            the database; look at the instances' logs for why none can take it.
+
+      - alert: ArrMetadataTwoLeaders
+        expr: sum(ams_leader) > 1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $value }} instances say they run the schedules"
+          description: >-
+            More than one instance believes it leads, so each runs the
+            schedules: refreshes are done twice and archives may be written by
+            two. Usually clocks that disagree, or a database each instance
+            reads differently.
+
+      # ── Answering ─────────────────────────────────────────────────────────
+      - alert: ArrMetadataServerErrors
+        # Over ten minutes, with some traffic to judge by; the probes are not
+        # readers and are left out.
+        expr: >-
+          (
+            sum(rate(ams_http_responses_total{status=~"5..", surface!="probe"}[10m]))
+            /
+            sum(rate(ams_http_responses_total{surface!="probe"}[10m]))
+          ) > 0.02
+          and
+          sum(rate(ams_http_responses_total{surface!="probe"}[10m])) > 0.01
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $value | humanizePercentage }} of answers are server errors"
+          description: >-
+            More than two in a hundred answers were 5xx for ten minutes. The
+            server log (Administration › Server log, errors only) says which
+            requests failed and why; each line's trace_id finds the request
+            in the traces.
+
+      - alert: ArrMetadataSourceFailing
+        # A provider asked at least once a few minutes, failing more often
+        # than not: refused (a key revoked, a quota spent), failed on its side,
+        # or never reached.
+        expr: >-
+          (
+            sum by (provider) (rate(ams_upstream_requests_total{outcome!="ok"}[15m]))
+            /
+            sum by (provider) (rate(ams_upstream_requests_total[15m]))
+          ) > 0.5
+          and
+          sum by (provider) (rate(ams_upstream_requests_total[15m])) > 0.005
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.provider }} fails {{ $value | humanizePercentage }} of what it is asked"
+          description: >-
+            Most calls to {{ $labels.provider }} were refused, failed or did not
+            reach it for fifteen minutes. Works it gives values to keep what
+            they held; a refusal that lasts is usually a key, a failure the
+            provider's own outage.
+
+      - alert: ArrMetadataRefreshFailuresRising
+        expr: delta(ams_refresh_failed[1h]) > 5
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $value }} more works failed their refresh in the last hour"
+          description: >-
+            The works whose last refresh failed are growing. The catalogue
+            (Administration › Catalogue, refresh failed) lists them, and the
+            task's runs say what each source answered.
+
+      # ── What it stands on ─────────────────────────────────────────────────
+      - alert: ArrMetadataValkeyUnreachable
+        expr: ams_redis_up == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} cannot reach its cache server"
+          description: >-
+            The Valkey or Redis named by AMS_REDIS_URL does not answer. Alone,
+            the server goes on from its own memory; among several instances,
+            they no longer hear each other's changes and the lead cannot move.
+
+      - alert: ArrMetadataDatabasePoolExhausted
+        expr: >-
+          histogram_quantile(0.95, sum by (instance, le) (rate(ams_db_pool_wait_seconds_bucket[5m]))) > 0.5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} waits {{ $value | humanizeDuration }} for a database connection"
+          description: >-
+            One request in twenty waited more than half a second for one of the
+            pool's connections: every connection is busy. Raise
+            AMS_DATABASE_MAX_CONNECTIONS on PostgreSQL, or look for what holds
+            them.
+
+      - alert: ArrMetadataCertificateExpiring
+        # Two days under thirty: the server renews the clients' certificate
+        # once it is under thirty days, looking daily, so a day under is not
+        # yet a renewal that failed.
+        expr: ams_tls_expiry_seconds < 30 * 86400
+        for: 2d
+        labels:
+          severity: warning
+        annotations:
+          summary: "The {{ $labels.certificate }} certificate ends in {{ $value | humanizeDuration }}"
+          description: >-
+            Less than thirty days are left. The clients' certificate is the
+            server's own, renewed once under thirty days, so one this close
+            means the renewal failed (Administration › Tasks, certificate
+            renewal). The authority lasts ten years and is replaced with
+            AMS_TLS_REPLACE_AUTHORITY; the interface's certificate, and a
+            clients' one brought by hand, by whoever made them.
+
+      - alert: ArrMetadataBackupStale
+        # The weekly schedule, and a day's grace. Offered only while the
+        # schedule is on and an archive exists.
+        expr: max(ams_backup_age_seconds) > 8 * 86400
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "The newest archive of the database is {{ $value | humanizeDuration }} old"
+          description: >-
+            No archive was made for more than eight days. The backups' runs
+            (Administration › Backups) and the webhook's backup.failed say why
+            one failed.

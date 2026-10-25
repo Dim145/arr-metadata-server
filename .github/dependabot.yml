@@ -21,6 +21,13 @@ updates:
   # Cargo.toml pins most crates in full, so an update changes the manifest and
   # the lockfile together. Before 1.0 a crate's minor release is its breaking
   # one: it travels in the group below, and can fail it.
+  #
+  # OpenTelemetry's crates move together or not at all: opentelemetry,
+  # opentelemetry_sdk and opentelemetry-otlp share their versions, and
+  # tracing-opentelemetry follows them one minor ahead — four crates that
+  # break every few months, and one of them bumped alone does not build. A
+  # group of their own, whatever the update, listed first since a crate goes
+  # to the first group that names it.
   - package-ecosystem: cargo
     directory: /
     schedule:
@@ -29,6 +36,8 @@ updates:
     cooldown:
       default-days: 7
     groups:
+      opentelemetry:
+        patterns: ["opentelemetry*", "tracing-opentelemetry"]
       cargo-minor-and-patch:
         update-types: [minor, patch]
     labels: [dependencies, rust]

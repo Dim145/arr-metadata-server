@@ -150,6 +150,60 @@ goes by `{id}`'s names and takes the ids it lacks; `{id}` is kept as a pointer t
 `{"credits": […]}` files credits under `{id}`, whomever they were filed under: how a credit typed
 by name is given the person it is of. A refresh leaves a credit where any of these put it.
 
+## Genres, networks, years and notes
+
+`genre=` in the list and the facets takes any name a genre goes by, in any language, or its slug:
+`Drama`, `Drame` and `drama` list the same works, and each of the facets' genres carries its `slug`
+(see [Genres](data.md#genres)). `GET /api/v1/genres/{slug}`, `/networks/{slug}`, `/years/{year}` and
+`/decades/{year}` are the catalogue's pages: what the page is called — a genre in `language` where
+the server knows it, with its `names` in every language — the `slug` it answers under, how many works
+it holds that the caller may see (`count`), the five rated highest as cards (`best`), the list's own
+parameters that list them all (`filter`, for `/items` and `/facets`), and its programmer's note
+(`note`). A genre is found by any name it goes by, a network by the slug of its name, a decade by any
+of its years; a name nothing goes by is a `404`. `GET /api/v1/compare?a=…&b=…` puts two works side
+by side: each as a card, with a series' `seasons` and `episodes`, and `shared`, the people both
+credit and what each did on each.
+
+`GET /api/v1/editorial/{scope}/{key}?language=fr` reads the programmer's note on one thing — a
+`work` or a `list` by its id, a `genre` or a `network` by its slug, a `year`, a `decade` by its first
+year — in that language, else in English, else the one written last; `language` in the answer says
+which. A work's note is read by whoever may see the work, a selection's by whoever may read the
+selection. For whoever may edit the catalogue, `GET /api/v1/editorial` lists every note (`scope`,
+`key` and `language` narrow it), `PUT /api/v1/editorial/{scope}/{key}/{language}` with `{"body": …}`
+writes one in place of the one there was — an empty body takes it away, with a `204` — and `DELETE`
+on the same path takes it away. A body with HTML or a link to another site is a `400` that says why
+(see [The programmer's note](editing.md#the-programmers-note)).
+
+## Tasks followed, batches and import rules
+
+`GET /api/v1/admin/tasks/stream` is the one answer that does not end: server-sent events named
+`tasks`, each the whole board — every task as `GET /api/v1/tasks` gives it, and `newestRun` — at
+once, then whenever it changes, whichever instance made the change. A comment every fifteen
+seconds keeps a quiet stream open; it ends after five minutes, and its `retry` asks the client to
+open another. The periodic tasks' schedules, a batch of works and the import rules are described
+with the pages they are on: [When it runs](interface.md#when-it-runs),
+[Importing many works at once](editing.md#importing-many-works-at-once) and
+[Import rules](exports.md#filled-on-its-own-import-rules).
+
+## What a person keeps of their own way of working
+
+The administration keeps a few things for each person, with their account, so they follow
+them from one browser to the next: the catalogue's saved views (`catalogue.views`), each
+table's columns and density (`table.<name>`), whether the editor shows its preview
+(`editor.preview`). They are the account's own, read and written with a signed-in session
+— a key cannot reach them, as it cannot manage the account it acts for:
+
+```
+GET    /api/v1/account/preferences            → {"values": {"catalogue.views": [...], ...}}
+PUT    /api/v1/account/preferences/{name}     ← {"value": <any JSON but null>}
+DELETE /api/v1/account/preferences/{name}
+```
+
+A name is words of letters, digits and dashes joined by dots, starting with a small letter, 64
+characters at most; a value is at most 16 KiB of JSON, and an account keeps 64 of them at
+most. The server reads nothing inside a value: it is what the interface wrote. They go with
+the account, and with a database carried to another engine or restored from an archive.
+
 ## What stays, and how something goes
 
 What follows is what 1.0 promises. Until then, a minor may still change what the API or the

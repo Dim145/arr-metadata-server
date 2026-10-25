@@ -52,8 +52,11 @@ const FIELD_LIMIT: usize = 200;
 /// has, and no more than a row should be asked to hold for one.
 const COVER_LIMIT: usize = 2048;
 
+mod import_rules;
+
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
+        .merge(import_rules::router())
         .routes(routes!(list, create))
         .routes(routes!(detail, update, delete))
         .routes(routes!(set_items))
