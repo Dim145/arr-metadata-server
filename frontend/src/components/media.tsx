@@ -10,7 +10,7 @@ import { cn } from '../lib/cn'
 import * as fmt from '../lib/format'
 import { workQuery } from '../lib/hooks'
 import { useI18n } from '../lib/i18n'
-import { hasSources, headlineRating, lookOf, poster, sized, type ImageRole, type Picture } from '../lib/media'
+import { hasSources, headlineRating, lookOf, poster, sized, useWebpOffered, type ImageRole, type Picture } from '../lib/media'
 import { forAdults, unveil, useAdultPostersShown, useUnveiled } from '../lib/prefs'
 import { hasAlpha, thumbHashToDataURL } from '../lib/thumbhash'
 import { plainClick, useTransitionNavigate } from '../lib/transitions'
@@ -172,12 +172,15 @@ export function placeholderStyle(picture: Picture | undefined, role: ImageRole):
 /**
  * An image, fetched at the size it is drawn at.
  *
- * A copy this server keeps comes at the widths of its role, as WebP — under
- * a `<picture>` offering AVIF first where the night made those — with its
- * proportions given to the box and, until it arrives, its colour and its
- * sketch under it (see `placeholderStyle`). What the server says of a
- * picture comes with the work it is in, and is found by its address; a
- * caller that holds it may pass it as `picture`.
+ * A picture this server keeps comes at the widths of its role, as WebP
+ * while the server makes those copies, and whole otherwise — either way
+ * under a `<picture>` offering AVIF first where the night made those — with
+ * its proportions given to the box and, until it arrives, its colour and
+ * its sketch under it (see `placeholderStyle`). Whether the WebP copies are
+ * on is the server's to say, and every picture is drawn again when it
+ * changes (see `useWebpOffered`). What the server says of a picture comes
+ * with the work it is in, and is found by its address; a caller that holds
+ * it may pass it as `picture`.
  *
  * Lazy unless told otherwise, because most of these are below the fold. A hero
  * backdrop is the exception and says so with `eager` — with `fetchPriority`
@@ -214,7 +217,8 @@ export function Artwork({
   picture?: Picture
 } & Omit<ImgHTMLAttributes<HTMLImageElement>, 'src' | 'srcSet' | 'sizes' | 'alt'>) {
   const look = picture ?? lookOf(url)
-  const image = sized(url, role, look)
+  const webp = useWebpOffered()
+  const image = sized(url, role, look, webp)
   // Each remembered by address, so a card that moves on to another work
   // starts afresh rather than wearing the last one's failure, or its load.
   const [retried, setRetried] = useState<string>()
@@ -225,7 +229,11 @@ export function Artwork({
     return <>{fallback}</>
   }
 
-  const original = retried === url || image.src === image.original
+  // The original alone: once a copy has failed, and where nothing else is
+  // offered — an address with no copies, or a picture kept whose WebP
+  // copies are off and none of whose AVIF copies reaches as wide.
+  const original = retried === url || (image.src === image.original && !image.avif)
+  const src = original ? image.original : image.src
   const under = loaded === url ? undefined : placeholderStyle(look, role)
   const img = (
     <img
@@ -233,11 +241,13 @@ export function Artwork({
       className={cn(SHAPE[role], className)}
       style={under ? { ...under, ...style } : style}
       alt={alt}
-      src={original ? image.original : image.src}
+      src={src}
       srcSet={original ? undefined : image.srcSet}
       sizes={!original && image.srcSet ? (sizes ?? image.sizes) : undefined}
-      width={original ? undefined : image.width}
-      height={original ? undefined : image.height}
+      // The size is the `src`'s, which an original drawn in a copy's place
+      // need not share.
+      width={src === image.src ? image.width : undefined}
+      height={src === image.src ? image.height : undefined}
       loading={eager ? undefined : 'lazy'}
       decoding="async"
       onLoad={(event) => {

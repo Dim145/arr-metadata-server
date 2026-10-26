@@ -12,6 +12,7 @@ import { NavigationType, useLocation, useNavigationType } from 'react-router'
 
 import { api, query, segment } from './api'
 import { useI18n } from './i18n'
+import { offerWebp } from './media'
 import type { AuthOptions, Collections, CuratedLists, MediaItem, Me, Orders, SearchHits } from './types'
 
 /**
@@ -116,11 +117,20 @@ export function useMe() {
 /**
  * Whether the site is open, and whether one may sign up: readable before
  * anybody signs in, which is when it is needed.
+ *
+ * It says too whether the pages are given WebP copies of the pictures kept,
+ * which every picture is told before the answer is (see `offerWebp`): the
+ * public pages wait for it, and ask for the right files from their first
+ * picture.
  */
 export function useAuthOptions() {
   return useQuery({
     queryKey: ['auth', 'options'],
-    queryFn: () => api.get<AuthOptions>('/auth/options'),
+    queryFn: async () => {
+      const options = await api.get<AuthOptions>('/auth/options')
+      offerWebp(options.webp)
+      return options
+    },
     retry: false,
     staleTime: 5 * 60_000,
   })

@@ -497,6 +497,14 @@ pub const REGISTRY: &[Definition] = &[
         scopes: SERVER_ONLY,
     },
     Definition {
+        // The WebP copies of the pictures, made at the widths the pages ask
+        // for and given to them in the pictures' place: off until somebody
+        // turns them on, the pages being given the pictures themselves.
+        key: "media.webp",
+        kind: Kind::Bool,
+        scopes: SERVER_ONLY,
+    },
+    Definition {
         // The night's AVIF copies of the posters and the backgrounds: off
         // until somebody turns them on, as they cost seconds of a processor
         // each.

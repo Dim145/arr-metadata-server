@@ -287,7 +287,16 @@ async fn store_one(state: &AppState, asset: &Asset) -> Result<(), Trouble> {
             }),
         Kind::Audio => None,
     };
-    let kept = keep(store, key, sha256, fetched.bytes, &fetched.inspected, cover).await?;
+    let kept = keep(
+        store,
+        key,
+        sha256,
+        fetched.bytes,
+        &fetched.inspected,
+        cover,
+        state.flag("media.webp", false),
+    )
+    .await?;
     // Forgotten meanwhile, it is not remembered either: the bytes are the
     // next sweep's to remove.
     if repo::asset::mark_stored(&state.db, &asset.id, &kept.as_row()).await? {
@@ -365,11 +374,12 @@ impl Kept {
 }
 
 /// Put bytes in the store under their key — `file::key_for`'s — and, for a
-/// picture, work out its placeholder and put beside it the copy its kind is
-/// first asked for: a poster's 480, a background's 1280, by `cover`. Put
-/// every time, though the same picture from two providers may be there
-/// already: the same key is the same bytes, and a put is what tells a sweep
-/// that looked a moment ago that they are wanted.
+/// picture, work out its placeholder and, while the WebP copies are on
+/// (`webp`, as `media.webp` says), put beside it the copy its kind is first
+/// asked for: a poster's 480, a background's 1280, by `cover`. Put every
+/// time, though the same picture from two providers may be there already:
+/// the same key is the same bytes, and a put is what tells a sweep that
+/// looked a moment ago that they are wanted.
 ///
 /// A picture the decoders here cannot read — or panic on, which is caught —
 /// is kept all the same, and served whole.
@@ -380,6 +390,7 @@ pub async fn keep(
     bytes: Bytes,
     inspected: &file::Inspected,
     cover: Option<crate::domain::CoverType>,
+    webp: bool,
 ) -> Result<Kept> {
     let size = i64::try_from(bytes.len()).unwrap_or(i64::MAX);
     store
@@ -405,7 +416,7 @@ pub async fn keep(
     }
 
     let prepared =
-        super::variants::off_thread(move || super::variants::prepare(&bytes, cover)).await;
+        super::variants::off_thread(move || super::variants::prepare(&bytes, cover, webp)).await;
     // Done either way: a picture that cannot be read now never will be.
     kept.prepared = super::variants::PREPARED;
     match prepared {

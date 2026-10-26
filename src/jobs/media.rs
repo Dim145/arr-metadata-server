@@ -1,19 +1,24 @@
-//! The two tasks that make copies of the pictures kept.
+//! The two tasks that make copies of the pictures kept, and what deletes
+//! every copy of a format once it is off.
 //!
 //! - `media.variants`, by hand only: every picture stored before this
 //!   version — or before there were copies at all — prepared as one stored
-//!   now is: its placeholder worked out, and the copy its kind is first
-//!   asked for made, a poster's 480 and a background's 1280. A few at a
-//!   time, each picture noted on its row once done, so that a run stopped
-//!   — by hand, or by the server going down — is taken up by the next where
-//!   it stopped. Never at start: a catalogue's worth of pictures is hours
-//!   of decoding on a small machine, and when to spend them is the
-//!   administrator's choice. Until then a page is given what it asks for,
-//!   made as it asks.
+//!   now is: its placeholder worked out, and — only while the WebP copies
+//!   are on, `media.webp` — the copy its kind is first asked for made, a
+//!   poster's 480 and a background's 1280. A few at a time, each picture
+//!   noted on its row once done, so that a run stopped — by hand, or by the
+//!   server going down — is taken up by the next where it stopped. Never at
+//!   start: a catalogue's worth of pictures is hours of decoding on a small
+//!   machine, and when to spend them is the administrator's choice. Until
+//!   then a page is given what it asks for, made as it asks.
 //! - `media.avif`, at night once `media.avif` is on, and by hand: an AVIF
 //!   copy of every poster at 480 and 960, and of every background at 1280
 //!   — a third lighter than the WebP, and seconds to make, one after
 //!   another. A page offers one only where it exists.
+//!
+//! Once `media.webp` or `media.avif` is off, an administrator may delete
+//! every copy of that format, to have the space back: no run of its own in
+//! the history, but the media's status says so while it is under way.
 
 use std::{
     sync::{Arc, LazyLock},
@@ -169,10 +174,11 @@ async fn prepare_all(state: &AppState, record: &str, flag: &cancel::Registered) 
     )))
 }
 
-/// Prepare one picture: its placeholder and its first copy, noted on its
-/// row. A picture the store does not have, or that cannot be read, is noted
-/// all the same — another run would find it no better — and one the store
-/// could not be asked for is left for the next run.
+/// Prepare one picture: its placeholder and — while the WebP copies are
+/// on, as `media.webp` says when the picture is taken — its first copy,
+/// noted on its row. A picture the store does not have, or that cannot be
+/// read, is noted all the same — another run would find it no better — and
+/// one the store could not be asked for is left for the next run.
 async fn prepare_one(state: &AppState, store: &crate::media::store::Store, asset: &Asset) -> Done {
     let failed = |note: String| Done {
         outcome: Outcome::Failed,
@@ -198,7 +204,8 @@ async fn prepare_one(state: &AppState, store: &crate::media::store::Store, asset
     let cover = repo::asset::cover_of(&state.db, &asset.origin)
         .await
         .unwrap_or(None);
-    let prepared = variants::off_thread(move || variants::prepare(&bytes, cover)).await;
+    let webp = state.flag("media.webp", false);
+    let prepared = variants::off_thread(move || variants::prepare(&bytes, cover, webp)).await;
     let prepared = match prepared {
         Ok(prepared) => prepared,
         Err(e) => {
@@ -332,7 +339,8 @@ fn short(origin: &str) -> String {
 
 /// Once a run is over, done or stopped: the works and the pages of cards
 /// kept as they were read are read again, so that the placeholders and the
-/// AVIF copies made are told to the pages — here and on every instance.
+/// AVIF copies made — or deleted — are told to the pages, here and on every
+/// instance.
 async fn drawn_again(state: &AppState) {
     for space in ["items", "searches"] {
         state.caches.flush(space).await;
@@ -579,6 +587,175 @@ pub async fn run_nights(state: AppState) {
     }
 }
 
+// ─── deleting every copy of a format ─────────────────────────────────────────
+
+/// What a deletion of copies is held under among several instances.
+pub const PURGE: &str = "media.purge";
+
+/// How many copies are deleted at a time.
+const PURGE_BATCH: i64 = 500;
+
+static PURGING: LazyLock<Arc<tokio::sync::Mutex<()>>> =
+    LazyLock::new(|| Arc::new(tokio::sync::Mutex::new(())));
+
+/// Whether every copy of a format is being deleted on this instance.
+pub fn is_purging() -> bool {
+    PURGING.try_lock().is_err()
+}
+
+/// The setting that has a format's copies made: none for the square Plex
+/// is given, which is made whatever either says, and never deleted here.
+pub fn setting_of(format: Format) -> Option<&'static str> {
+    match format {
+        Format::Webp => Some("media.webp"),
+        Format::Avif => Some("media.avif"),
+        Format::Jpeg => None,
+    }
+}
+
+/// How many copies of a format there were as their deletion began, and
+/// what they weighed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Tally {
+    pub copies: i64,
+    pub bytes: i64,
+}
+
+/// Delete every copy written as `format` — WebP or AVIF — in the
+/// background, and say what there was. Refused while the setting that
+/// makes them is on, as the pages are given them; for the AVIF copies,
+/// while the night's are being made, here or on another instance — they
+/// would come back behind the deletion — and none is made until it is
+/// over; and while another deletion runs.
+pub async fn purge_now(state: &AppState, format: Format) -> AppResult<Tally> {
+    let Some(setting) = setting_of(format) else {
+        return Err(AppError::BadRequest(
+            "the squares Plex is given are not deleted".into(),
+        ));
+    };
+    if !state.media.is_on() {
+        return Err(media_off());
+    }
+    let name = if format == Format::Avif {
+        "AVIF"
+    } else {
+        "WebP"
+    };
+    if state.flag(setting, false) {
+        return Err(AppError::Conflict(format!(
+            "the {name} copies are still made and given to the pages: turn {setting} off first"
+        )));
+    }
+    let held = PURGING
+        .clone()
+        .try_lock_owned()
+        .map_err(|_| AppError::Conflict("copies are being deleted already".into()))?;
+    let making = if format == Format::Avif {
+        if is_making_avif() {
+            return Err(AppError::Conflict(
+                "the AVIF copies are being made; wait for the run to end, or stop it".into(),
+            ));
+        }
+        Some(
+            state
+                .coord
+                .hold_for(AVIF, "the AVIF copies are being made")
+                .await?,
+        )
+    } else {
+        None
+    };
+    let shared = state
+        .coord
+        .hold_for(PURGE, "copies are being deleted")
+        .await?;
+    let counts = repo::asset::variant_counts(&state.db).await?;
+    let tally = match format {
+        Format::Webp => Tally {
+            copies: counts.webp,
+            bytes: counts.webp_bytes,
+        },
+        Format::Avif => Tally {
+            copies: counts.avif,
+            bytes: counts.avif_bytes,
+        },
+        Format::Jpeg => Tally {
+            copies: counts.jpeg,
+            bytes: counts.jpeg_bytes,
+        },
+    };
+
+    let state = state.clone();
+    tokio::spawn(async move {
+        let _held = held;
+        let _making = making;
+        let _shared = shared;
+        match purge_all(&state, format, setting).await {
+            Ok(summary) => tracing::info!(format = format.as_str(), summary, "copies deleted"),
+            Err(e) => tracing::warn!(
+                format = format.as_str(),
+                error = format_args!("{e:#}"),
+                "the copies could not all be deleted"
+            ),
+        }
+        drawn_again(&state).await;
+    });
+    Ok(tally)
+}
+
+/// The deletion itself, a few hundred copies at a time in the order of
+/// their keys: each file taken from the store — one gone already is gone —
+/// then the rows of those that went, and an AVIF no longer offered to a
+/// page. A file the store would not let go of keeps its row, for the next
+/// deletion to try again. Turned on again meanwhile, the setting stops it
+/// where it is: what is left is the pages' again.
+async fn purge_all(state: &AppState, format: Format, setting: &str) -> Result<String> {
+    let store = state.media.store().context("no media store")?;
+    let (mut deleted, mut troubles) = (0u64, 0u64);
+    let mut after = String::new();
+    loop {
+        if state.flag(setting, false) {
+            return Ok(format!(
+                "stopped, {setting} being on again: {deleted} deleted, {troubles} could not be"
+            ));
+        }
+        let line = repo::asset::variants_by_format(&state.db, format.as_str(), &after, PURGE_BATCH)
+            .await?;
+        let Some(last) = line.last() else {
+            break;
+        };
+        after.clone_from(&last.key);
+        let mut gone = Vec::with_capacity(line.len());
+        for copy in &line {
+            match store.delete(&copy.key).await {
+                Ok(()) => gone.push(copy),
+                Err(e) => {
+                    tracing::warn!(
+                        key = %copy.key,
+                        error = format_args!("{e:#}"),
+                        "could not delete a copy's file"
+                    );
+                    troubles += 1;
+                }
+            }
+        }
+        let keys: Vec<String> = gone.iter().map(|copy| copy.key.clone()).collect();
+        deleted += repo::asset::delete_variants(&state.db, &keys).await?;
+        if format == Format::Avif {
+            for copy in gone {
+                if let Ok(width) = u32::try_from(copy.width) {
+                    state.media.drop_avif(&copy.stem, width);
+                }
+            }
+        }
+    }
+    let mut summary = format!("{deleted} deleted");
+    if troubles > 0 {
+        summary.push_str(&format!(", {troubles} could not be (see the log)"));
+    }
+    Ok(summary)
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
@@ -695,14 +872,29 @@ mod tests {
         origins
     }
 
+    async fn webp_on(state: &AppState) {
+        state
+            .settings
+            .set(
+                crate::settings::Scope::Server,
+                "",
+                "media.webp",
+                "true",
+                None,
+            )
+            .await
+            .expect("the WebP copies on");
+    }
+
     /// The task prepares what no version prepared, a few at a time: a
     /// picture prepared before a run was stopped is not prepared again, the
-    /// copy a poster is first asked for is made and noted, and a page is
-    /// told what the picture looks like.
+    /// copy a poster is first asked for is made and noted — the WebP copies
+    /// being on — and a page is told what the picture looks like.
     #[tokio::test]
     async fn the_pictures_are_prepared_once_and_a_stopped_run_is_taken_up() {
         let dir = crate::testing::scratch_path("variants");
         let state = server(&dir).await;
+        webp_on(&state).await;
         let store = state.media.store().unwrap().clone();
         let origins = kept_as_before(&state, &[600, 620, 640]).await;
         assert_eq!(
@@ -764,6 +956,50 @@ mod tests {
             Pass::Stopped(summary) => assert_eq!(summary, "stopped: 0 prepared, 0 failed, of 0"),
             Pass::Done(summary) => panic!("not stopped: {summary}"),
         }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// While the WebP copies are off, as they are until somebody turns them
+    /// on, a picture is prepared all the same — its placeholder worked out,
+    /// and told to the pages — and no copy is made of it.
+    #[tokio::test]
+    async fn a_picture_is_prepared_without_a_copy_while_the_webp_copies_are_off() {
+        let dir = crate::testing::scratch_path("variants-off");
+        let state = server(&dir).await;
+        let store = state.media.store().unwrap().clone();
+        let origins = kept_as_before(&state, &[660]).await;
+        let asset = repo::asset::unprepared(&state.db, variants::PREPARED, "", 1)
+            .await
+            .unwrap()
+            .remove(0);
+        assert_eq!(
+            prepare_one(&state, &store, &asset).await.outcome,
+            Outcome::Written
+        );
+
+        let asset = repo::asset::by_origin(&state.db, &origins[0])
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(asset.color.is_some() && asset.thumbhash.is_some());
+        assert_eq!(
+            repo::asset::unprepared_count(&state.db, variants::PREPARED)
+                .await
+                .unwrap(),
+            0,
+            "prepared, and not to be prepared again"
+        );
+        let key = asset.key.unwrap();
+        let stem = file::stem_of(&key);
+        assert!(
+            repo::asset::variants_of(&state.db, stem)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(!store.exists(&format!("{stem}-480.webp")).await.unwrap());
+        assert!(state.media.keyed(&key).unwrap().look.thumbhash.is_some());
 
         let _ = std::fs::remove_dir_all(&dir);
     }

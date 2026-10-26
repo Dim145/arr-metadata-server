@@ -5,6 +5,7 @@ import { BrowserRouter, Navigate, Route, Routes, useLocation, type NavigateOptio
 import { PageBoundary } from './components/PageBoundary'
 import { PublicShell } from './components/PublicShell'
 import { Spinner } from './components/ui'
+import { useAdultPostersFromAccount } from './lib/adultPosters'
 import { ApiError, api } from './lib/api'
 import { useAuthOptions } from './lib/hooks'
 import { I18nProvider } from './lib/i18n'
@@ -128,71 +129,85 @@ function Router() {
     options.data?.site === 'private' && me.error instanceof ApiError && me.error.isUnauthorized
 
   return (
-    <Suspense fallback={<Loading />}>
-      <Routes>
-        <Route element={deciding ? <Loading /> : locked ? <ToSignIn /> : <PublicShell me={me.data} />}>
-          <Route path="/" element={<Home />} />
-          <Route path="/browse" element={<Browse />} />
-          <Route path="/work/:id" element={<Work />} />
-          <Route path="/work/:id/season/:season" element={<Season />} />
-          <Route path="/work/:id/season/:season/episode/:episode" element={<Episode />} />
-          {/* One page for a person, by their record or by TMDB's id, as the
-              pages were addressed before there were records. */}
-          <Route path="/person/:tmdbId" element={<Person />} />
-          <Route path="/people" element={<People />} />
-          <Route path="/people/:id" element={<Person />} />
-          <Route path="/calendar" element={<Calendar />} />
-          <Route path="/lists" element={<Lists />} />
-          <Route path="/stats" element={<Figures />} />
-          <Route path="/lists/:slug" element={<ListDetail />} />
-          <Route path="/collections" element={<CollectionIndex />} />
-          <Route path="/collections/:id" element={<CollectionDetail />} />
-          <Route path="/seasons" element={<Seasons />} />
-          <Route path="/seasons/:year/:season" element={<Seasons />} />
-          <Route path="/genre/:slug" element={<GenrePage />} />
-          <Route path="/network/:slug" element={<NetworkPage />} />
-          <Route path="/year/:slug" element={<YearPage />} />
-          <Route path="/decade/:slug" element={<DecadePage />} />
-          <Route path="/compare" element={<Compare />} />
-          <Route path="/account" element={<Account />} />
-          {/* Said, not redirected: see `NotFound`. */}
-          <Route path="*" element={<NotFound />} />
-        </Route>
+    <>
+      <AdultPostersFromAccount />
+      <Suspense fallback={<Loading />}>
+        <Routes>
+          <Route element={deciding ? <Loading /> : locked ? <ToSignIn /> : <PublicShell me={me.data} />}>
+            <Route path="/" element={<Home />} />
+            <Route path="/browse" element={<Browse />} />
+            <Route path="/work/:id" element={<Work />} />
+            <Route path="/work/:id/season/:season" element={<Season />} />
+            <Route path="/work/:id/season/:season/episode/:episode" element={<Episode />} />
+            {/* One page for a person, by their record or by TMDB's id, as the
+                pages were addressed before there were records. */}
+            <Route path="/person/:tmdbId" element={<Person />} />
+            <Route path="/people" element={<People />} />
+            <Route path="/people/:id" element={<Person />} />
+            <Route path="/calendar" element={<Calendar />} />
+            <Route path="/lists" element={<Lists />} />
+            <Route path="/stats" element={<Figures />} />
+            <Route path="/lists/:slug" element={<ListDetail />} />
+            <Route path="/collections" element={<CollectionIndex />} />
+            <Route path="/collections/:id" element={<CollectionDetail />} />
+            <Route path="/seasons" element={<Seasons />} />
+            <Route path="/seasons/:year/:season" element={<Seasons />} />
+            <Route path="/genre/:slug" element={<GenrePage />} />
+            <Route path="/network/:slug" element={<NetworkPage />} />
+            <Route path="/year/:slug" element={<YearPage />} />
+            <Route path="/decade/:slug" element={<DecadePage />} />
+            <Route path="/compare" element={<Compare />} />
+            <Route path="/account" element={<Account />} />
+            {/* Said, not redirected: see `NotFound`. */}
+            <Route path="*" element={<NotFound />} />
+          </Route>
 
-        <Route path="/login" element={<Login />} />
-        <Route path="/register" element={<Register />} />
-        {Styleguide ? <Route path="/__styleguide/:gallery?" element={<Styleguide />} /> : null}
+          <Route path="/login" element={<Login />} />
+          <Route path="/register" element={<Register />} />
+          {Styleguide ? <Route path="/__styleguide/:gallery?" element={<Styleguide />} /> : null}
 
-        {/* The shell is the guard: it asks who is signed in once, and sends
-            anyone who may not write to the door before a screen mounts. */}
-        <Route path="/admin" element={<AdminShell />}>
-          <Route index element={<Dashboard />} />
-          <Route path="catalogue" element={<Catalogue />} />
-          <Route path="catalogue/:id" element={<WorkEditor />} />
-          <Route path="people" element={<AdminPeople />} />
-          <Route path="discover" element={<Discover />} />
-          <Route path="clients" element={<Clients />} />
-          <Route path="users" element={<Users />} />
-          <Route path="users/:id" element={<UserDetail />} />
-          <Route path="access" element={<Access />} />
-          <Route path="account" element={<Account />} />
-          <Route path="lists" element={<AdminLists />} />
-          <Route path="jobs" element={<Jobs />} />
-          <Route path="sources" element={<Sources />} />
-          <Route path="media" element={<Media />} />
-          <Route path="cache" element={<Cache />} />
-          <Route path="backups" element={<Backups />} />
-          <Route path="audit" element={<Audit />} />
-          <Route path="logs" element={<Logs />} />
-          <Route path="notifications" element={<Notifications />} />
-          <Route path="settings" element={<Settings />} />
-          <Route path="arr" element={<Arr />} />
-          <Route path="editorial" element={<Editorial />} />
-          <Route path="*" element={<NotFound admin />} />
-        </Route>
-      </Routes>
-    </Suspense>
+          {/* The shell is the guard: it asks who is signed in once, and sends
+              anyone who may not write to the door before a screen mounts. */}
+          <Route path="/admin" element={<AdminShell />}>
+            <Route index element={<Dashboard />} />
+            <Route path="catalogue" element={<Catalogue />} />
+            <Route path="catalogue/:id" element={<WorkEditor />} />
+            <Route path="people" element={<AdminPeople />} />
+            <Route path="discover" element={<Discover />} />
+            <Route path="clients" element={<Clients />} />
+            <Route path="users" element={<Users />} />
+            <Route path="users/:id" element={<UserDetail />} />
+            <Route path="access" element={<Access />} />
+            <Route path="account" element={<Account />} />
+            <Route path="lists" element={<AdminLists />} />
+            <Route path="jobs" element={<Jobs />} />
+            <Route path="sources" element={<Sources />} />
+            <Route path="media" element={<Media />} />
+            <Route path="cache" element={<Cache />} />
+            <Route path="backups" element={<Backups />} />
+            <Route path="audit" element={<Audit />} />
+            <Route path="logs" element={<Logs />} />
+            <Route path="notifications" element={<Notifications />} />
+            <Route path="settings" element={<Settings />} />
+            <Route path="arr" element={<Arr />} />
+            <Route path="editorial" element={<Editorial />} />
+            <Route path="*" element={<NotFound admin />} />
+          </Route>
+        </Routes>
+      </Suspense>
+    </>
   )
+}
+
+/**
+ * The choice of the account signed in about the posters of works for adults,
+ * put where every card reads it, on either side of the site. A component of
+ * its own, drawing nothing: the router, holding the hook, would draw every
+ * page again each time any preference of the account changed.
+ */
+function AdultPostersFromAccount() {
+  useAdultPostersFromAccount()
+  return null
 }
 
 /** To the sign-in page, and back here once through it. */

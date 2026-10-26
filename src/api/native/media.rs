@@ -48,6 +48,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(retry))
         .routes(routes!(retry_all))
         .routes(routes!(reset))
+        .routes(routes!(delete_variants))
         .routes(routes!(work_media))
         .routes(routes!(by_work))
         .routes(routes!(forget))
@@ -102,6 +103,9 @@ pub struct MediaStatus {
     /// The pictures kept that this version has not prepared — no
     /// placeholder, no first copy — which the task `media.variants` does.
     pub unprepared: i64,
+    /// Whether WebP copies are made and given to the pages (`media.webp`);
+    /// off, the pages are given the pictures themselves.
+    pub webp: bool,
     /// Whether the night's task makes AVIF copies (`media.avif`).
     pub avif: bool,
     /// Whether a fetch or a sweep is under way.
@@ -109,6 +113,8 @@ pub struct MediaStatus {
     pub sweeping: bool,
     /// Whether the pictures are being prepared, or their AVIF copies made.
     pub preparing: bool,
+    /// Whether every copy of a format is being deleted.
+    pub purging: bool,
 }
 
 /// How the media store stands.
@@ -136,10 +142,12 @@ async fn status(
         variants: repo::asset::variant_counts(&state.db).await?,
         unprepared: repo::asset::unprepared_count(&state.db, crate::media::variants::PREPARED)
             .await?,
+        webp: state.flag("media.webp", false),
         avif: state.flag("media.avif", false),
         fetching: crate::media::worker::is_storing(),
         sweeping: crate::media::worker::is_sweeping(),
         preparing: crate::jobs::media::is_busy(),
+        purging: crate::jobs::media::is_purging(),
     }))
 }
 
@@ -265,6 +273,110 @@ async fn reset(
     )
     .await;
     Ok(Json(Forgotten { forgotten }))
+}
+
+/// A format the copies of the pictures are written as, whose copies can be
+/// deleted once they are no longer made.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+// Named explicitly: utoipa keys schemas on the leaf name alone.
+#[schema(as = MediaVariantFormat)]
+pub enum VariantFormat {
+    /// The copies the pages are given while `media.webp` is on.
+    Webp,
+    /// The night's copies, made while `media.avif` is on.
+    Avif,
+}
+
+impl VariantFormat {
+    fn made_as(self) -> crate::media::variants::Format {
+        match self {
+            Self::Webp => crate::media::variants::Format::Webp,
+            Self::Avif => crate::media::variants::Format::Avif,
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Webp => "WebP",
+            Self::Avif => "AVIF",
+        }
+    }
+}
+
+/// What there was of a format's copies as their deletion began.
+#[derive(Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct VariantsDeleted {
+    pub format: VariantFormat,
+    /// How many copies there were.
+    pub copies: i64,
+    /// What they weighed, in bytes.
+    pub bytes: i64,
+}
+
+/// Delete every copy of a format: the WebP copies once `media.webp` is off,
+/// the AVIF copies once `media.avif` is — the space they took, back.
+///
+/// Answered at once, with what there was, and done in the background: each
+/// copy's file taken from the store, then its row; the status says
+/// `purging` until it is over. The pictures themselves are not touched,
+/// nor the squares Plex is given. Turned on again meanwhile, the setting
+/// stops it where it is.
+#[utoipa::path(
+    delete, path = "/media/variants/{format}", tag = TAG,
+    operation_id = "media_delete_variants",
+    params(("format" = VariantFormat, Path, description = "The format whose copies are deleted")),
+    responses(
+        (status = 202, body = VariantsDeleted),
+        (status = 400, description = "Not a format whose copies are deleted: `webp` or `avif`"),
+        (status = 403, description = "The caller is not an administrator"),
+        (status = 409, description = "The format's copies are still made — its setting is on — or the AVIF copies are being made, or copies are being deleted already"),
+        (status = 503, description = "No media store is configured"),
+    ),
+)]
+async fn delete_variants(
+    State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
+    ip: ClientIp,
+    Path(format): Path<String>,
+) -> AppResult<(StatusCode, Json<VariantsDeleted>)> {
+    identity.require_admin()?;
+    // Read here rather than by the extractor, so that another name is
+    // refused in this server's words.
+    let format = match format.as_str() {
+        "webp" => VariantFormat::Webp,
+        "avif" => VariantFormat::Avif,
+        other => {
+            return Err(AppError::BadRequest(format!(
+                "{other} is no format whose copies are deleted: webp or avif"
+            )));
+        }
+    };
+    let there_was = crate::jobs::media::purge_now(&state, format.made_as()).await?;
+    audit::record(
+        &state,
+        Event {
+            identity: Some(&identity),
+            ip: &ip,
+            action: Action::MediaRemoved,
+            target: None,
+            detail: Some(&format!(
+                "every {} copy deleted ({} files)",
+                format.name(),
+                there_was.copies
+            )),
+        },
+    )
+    .await;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(VariantsDeleted {
+            format,
+            copies: there_was.copies,
+            bytes: there_was.bytes,
+        }),
+    ))
 }
 
 /// A work's media, and whether anything is kept at all.
@@ -710,9 +822,17 @@ async fn upload(
         Place::Picture { cover_type, .. } => Some(*cover_type),
         Place::Still { .. } | Place::Theme => None,
     };
-    let kept = crate::media::worker::keep(store, key, sha256, bytes, &inspected, cover)
-        .await
-        .map_err(|e| AppError::Internal(e.context("could not keep the upload")))?;
+    let kept = crate::media::worker::keep(
+        store,
+        key,
+        sha256,
+        bytes,
+        &inspected,
+        cover,
+        state.flag("media.webp", false),
+    )
+    .await
+    .map_err(|e| AppError::Internal(e.context("could not keep the upload")))?;
     let by = identity.label();
     repo::asset::insert_upload(
         &state.db,
@@ -1139,6 +1259,160 @@ mod tests {
                 ),
             ]
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    async fn set(state: &AppState, key: &str, value: &str) {
+        state
+            .settings
+            .set(crate::settings::Scope::Server, "", key, value, None)
+            .await
+            .expect("set");
+    }
+
+    /// Once the copies being deleted in the background are.
+    async fn deleted_at_last() {
+        for _ in 0..3000 {
+            if !crate::jobs::media::is_purging() {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        panic!("the copies are still being deleted");
+    }
+
+    /// Every copy of a format is deleted once its setting is off — each
+    /// file, then the rows — in the background, and nothing else: not the
+    /// other format's, not Plex's square, not the picture. Refused for a
+    /// format that is none, to anybody but an administrator, and while the
+    /// format's copies are still made.
+    #[tokio::test]
+    async fn every_copy_of_a_format_is_deleted_once_it_is_off() {
+        use crate::db::repo::asset::{Thumb, Variant};
+
+        let dir = crate::testing::scratch_path("media-purge");
+        let state = server(&dir).await;
+        let store = state.media.store().unwrap().clone();
+
+        // A picture kept, with copies of every kind beside it — one WebP
+        // noted whose file is gone already.
+        let sha = format!("{}c0ff", "c0ffee".repeat(10));
+        let key = format!("{sha}.png");
+        store
+            .put(&key, Bytes::from_static(b"picture"), "image/png")
+            .await
+            .unwrap();
+        state.media.remember(
+            "https://images.example/kept.png",
+            &key,
+            Thumb::None,
+            "image/png",
+        );
+        for (made, format, on_disk) in [
+            ("240.webp", "webp", true),
+            ("480.webp", "webp", true),
+            ("960.webp", "webp", false),
+            ("480.avif", "avif", true),
+            ("square.jpg", "jpeg", true),
+        ] {
+            let copy = format!("{sha}-{made}");
+            if on_disk {
+                store
+                    .put(&copy, Bytes::from_static(b"copy"), "image/webp")
+                    .await
+                    .unwrap();
+            }
+            repo::asset::add_variant(
+                &state.db,
+                &Variant {
+                    key: copy,
+                    stem: sha.clone(),
+                    width: 480,
+                    height: 720,
+                    format: format.into(),
+                    bytes: 4,
+                },
+            )
+            .await
+            .unwrap();
+        }
+        state.media.add_avif(&sha, 480);
+        let on_disk = |made: &str| {
+            let store = store.clone();
+            let copy = format!("{sha}-{made}");
+            async move { store.exists(&copy).await.unwrap() }
+        };
+        let delete = |format: &str, identity: Identity| {
+            delete_variants(
+                State(state.clone()),
+                Extension(identity),
+                ClientIp::NONE,
+                Path(format.to_string()),
+            )
+        };
+
+        assert!(matches!(
+            delete("jpeg", Identity::Anonymous).await,
+            Err(AppError::BadRequest(_))
+        ));
+        assert!(matches!(
+            delete("png", Identity::Anonymous).await,
+            Err(AppError::BadRequest(_))
+        ));
+        assert!(matches!(
+            delete("webp", Identity::Visitor).await,
+            Err(AppError::Forbidden)
+        ));
+
+        // Still made and given to the pages: refused, and nothing deleted.
+        set(&state, "media.webp", "true").await;
+        assert!(matches!(
+            delete("webp", Identity::Anonymous).await,
+            Err(AppError::Conflict(_))
+        ));
+        assert_eq!(
+            repo::asset::variant_counts(&state.db).await.unwrap().webp,
+            3
+        );
+        assert!(on_disk("240.webp").await);
+
+        set(&state, "media.webp", "false").await;
+        let (answered, Json(deleted)) =
+            delete("webp", Identity::Anonymous).await.expect("accepted");
+        assert_eq!(answered, StatusCode::ACCEPTED);
+        assert_eq!(
+            (deleted.format, deleted.copies, deleted.bytes),
+            (VariantFormat::Webp, 3, 12),
+            "what there was"
+        );
+        deleted_at_last().await;
+        let counts = repo::asset::variant_counts(&state.db).await.unwrap();
+        assert_eq!((counts.webp, counts.avif, counts.jpeg), (0, 1, 1));
+        assert!(!on_disk("240.webp").await && !on_disk("480.webp").await);
+        assert!(on_disk("480.avif").await && on_disk("square.jpg").await);
+        assert!(store.exists(&key).await.unwrap(), "the picture is kept");
+        assert_eq!(state.media.keyed(&key).unwrap().look.avif, [480]);
+
+        // The AVIF copies too, off as they are until somebody sets them:
+        // gone, and no longer offered to a page.
+        let (_, Json(deleted)) = delete("avif", Identity::Anonymous).await.expect("accepted");
+        assert_eq!(
+            (deleted.format, deleted.copies, deleted.bytes),
+            (VariantFormat::Avif, 1, 4)
+        );
+        deleted_at_last().await;
+        let counts = repo::asset::variant_counts(&state.db).await.unwrap();
+        assert_eq!((counts.webp, counts.avif, counts.jpeg), (0, 0, 1));
+        assert!(!on_disk("480.avif").await);
+        assert!(on_disk("square.jpg").await, "Plex's square is kept");
+        assert!(state.media.keyed(&key).unwrap().look.avif.is_empty());
+
+        let Json(now) = status(State(state.clone()), Extension(Identity::Anonymous))
+            .await
+            .expect("the status");
+        assert!(!now.webp && !now.avif && !now.purging);
+        assert_eq!((now.variants.webp, now.variants.avif), (0, 0));
 
         let _ = std::fs::remove_dir_all(&dir);
     }

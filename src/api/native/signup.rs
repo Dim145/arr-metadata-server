@@ -257,6 +257,10 @@ pub struct AuthOptions {
     /// The identity provider's button, when signing in through one is on.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub oidc: Option<OidcButton>,
+    /// Whether the pages are given WebP copies of the pictures this server
+    /// keeps (`media.webp`), rather than the pictures themselves: said here,
+    /// where every page reads it before it draws one.
+    pub webp: bool,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -288,6 +292,7 @@ async fn options(State(state): State<AppState>) -> Json<AuthOptions> {
         oidc: state.oidc_provider().map(|_| OidcButton {
             label: state.oidc_button(),
         }),
+        webp: state.flag("media.webp", false),
     })
 }
 
@@ -639,6 +644,29 @@ mod tests {
         assert!(take_place_in(counts, None, now, 5, 3).is_none());
         drop(places);
         assert!(take_place_in(counts, None, now, 5, 3).is_some());
+    }
+
+    /// The pages are told, before they draw a picture, whether to ask for
+    /// its WebP copies: not until an administrator turns them on.
+    #[tokio::test]
+    async fn the_pages_are_told_whether_they_are_given_webp_copies() {
+        let state = crate::api::native::testing::server().await;
+        let Json(before) = options(State(state.clone())).await;
+        assert!(!before.webp);
+
+        state
+            .settings
+            .set(
+                crate::settings::Scope::Server,
+                "",
+                "media.webp",
+                "true",
+                None,
+            )
+            .await
+            .expect("the WebP copies on");
+        let Json(after) = options(State(state)).await;
+        assert!(after.webp);
     }
 
     #[test]

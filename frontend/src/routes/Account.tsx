@@ -1,6 +1,7 @@
 /**
- * A person's own account: what they are called, how they sign in, where
- * they are signed in, and the keys that act in their name.
+ * A person's own account: what they are called, how the catalogue is shown
+ * to them, how they sign in, where they are signed in, and the keys that act
+ * in their name.
  *
  * The same page in both shells: a member reaches it from the catalogue, an
  * editor or an administrator from the administration's sidebar. What it
@@ -34,7 +35,9 @@ import {
   Segmented,
   Skeleton,
   Spinner,
+  Toggle,
 } from '../components/ui'
+import { useAdultPosters } from '../lib/adultPosters'
 import { describeAgent } from '../lib/agent'
 import { ApiError, api } from '../lib/api'
 import { dateTime } from '../lib/format'
@@ -83,6 +86,7 @@ export function Account() {
       <div className="grid items-start gap-6 lg:grid-cols-2">
         <div className="space-y-6">
           <Profile me={me} />
+          <Reading />
           <Panel label={t.account.password} className="rise" style={{ animationDelay: '80ms' }}>
             <PanelHead title={t.account.password} />
             {me.hasPassword ? (
@@ -229,6 +233,34 @@ function Profile({ me }: { me: User }) {
           ) : null}
         </div>
       </form>
+    </Panel>
+  )
+}
+
+/* ── Reading ──────────────────────────────────────────────────────────────── */
+
+/**
+ * How the catalogue is shown to them: the posters of works for adults, as
+ * they are or veiled. Kept with the account, as the bar's reading menu keeps
+ * it, and taken at once — not by the profile's Save, which waits for what is
+ * typed above it.
+ */
+function Reading() {
+  const { t } = useI18n()
+  const [adult, showAdult] = useAdultPosters()
+
+  return (
+    <Panel label={t.account.reading} className="rise" style={{ animationDelay: '40ms' }}>
+      <PanelHead title={t.account.reading} />
+      <div className="flex items-start gap-4 p-5">
+        <div className="min-w-0 flex-1">
+          <label htmlFor="account-adult-posters" className="block text-sm text-bone">
+            {t.account.adultPosters}
+          </label>
+          <p className="mt-0.5 text-xs leading-relaxed text-bone-faint">{t.account.adultPostersHint}</p>
+        </div>
+        <Toggle id="account-adult-posters" checked={adult} label={t.account.adultPosters} onChange={showAdult} />
+      </div>
     </Panel>
   )
 }

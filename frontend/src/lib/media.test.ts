@@ -11,12 +11,15 @@ import {
   latestEpisode,
   lookOf,
   nextEpisode,
+  offerWebp,
   pick,
   poster,
   ratingsOf,
   seasonName,
   seasonNumbers,
   sized,
+  type ImageRole,
+  type Picture,
 } from './media'
 
 describe('an image in a role', () => {
@@ -44,35 +47,77 @@ describe('an image in a role', () => {
     const kept = `${stem}.png`
     const at = (widths: number[], format = 'webp') => widths.map((w) => `${stem}-${w}.${format} ${w}w`).join(', ')
 
-    it('is offered at its role’s widths, as WebP, the original kept to fall back on', () => {
-      const sourced = sized(kept, 'poster')
-      expect(sourced.src).toBe(`${stem}-480.webp`)
-      expect(sourced.srcSet).toBe(at([240, 480, 960]))
-      expect(sourced.avif).toBeUndefined()
-      expect(sourced.original).toBe(kept)
-      expect(sized(kept, 'backdrop').srcSet).toBe(at([640, 1280, 1920]))
-      expect(sized(kept, 'still').srcSet).toBe(at([320, 640]))
-      expect(sized(kept, 'headshot').srcSet).toBe(at([120, 240]))
+    describe('with the WebP copies on', () => {
+      const webp = (role: ImageRole, look?: Picture) => sized(kept, role, look, true)
+
+      it('is offered at its role’s widths, as WebP, the original kept to fall back on', () => {
+        const sourced = webp('poster')
+        expect(sourced.src).toBe(`${stem}-480.webp`)
+        expect(sourced.srcSet).toBe(at([240, 480, 960]))
+        expect(sourced.avif).toBeUndefined()
+        expect(sourced.original).toBe(kept)
+        expect(webp('backdrop').srcSet).toBe(at([640, 1280, 1920]))
+        expect(webp('still').srcSet).toBe(at([320, 640]))
+        expect(webp('headshot').srcSet).toBe(at([120, 240]))
+      })
+
+      it('is never offered wider than 1920, the lightbox’s included', () => {
+        expect(webp('full').srcSet).toBe(at([640, 1280, 1920]))
+      })
+
+      it('is never offered wider than it is, and offered at its own width', () => {
+        const sourced = webp('card', { width: 680, height: 1000 })
+        expect(sourced.srcSet).toBe(at([240, 480, 680]))
+        expect([sourced.width, sourced.height]).toEqual([480, 706])
+        expect(webp('card', { width: 200, height: 300 }).srcSet).toBe(at([200]))
+      })
+
+      it('offers its AVIF copies where they reach as wide as the WebP', () => {
+        const poster = { width: 2000, height: 3000, avif: [480, 960] }
+        expect(webp('card', poster).avif).toBe(at([480, 960], 'avif'))
+        expect(webp('thumb', poster).avif).toBe(at([480], 'avif'))
+        // A background's 1280 would draw a dense screen's 1920 soft.
+        expect(webp('backdrop', { width: 3840, height: 2160, avif: [1280] }).avif).toBeUndefined()
+        expect(webp('backdrop', { width: 1280, height: 720, avif: [1280] }).avif).toBe(at([1280], 'avif'))
+      })
     })
 
-    it('is never offered wider than 1920, the lightbox’s included', () => {
-      expect(sized(kept, 'full').srcSet).toBe(at([640, 1280, 1920]))
-    })
+    describe('with the WebP copies off', () => {
+      const whole = (role: ImageRole, look?: Picture) => sized(kept, role, look, false)
 
-    it('is never offered wider than it is, and offered at its own width', () => {
-      const sourced = sized(kept, 'card', { width: 680, height: 1000 })
-      expect(sourced.srcSet).toBe(at([240, 480, 680]))
-      expect([sourced.width, sourced.height]).toEqual([480, 706])
-      expect(sized(kept, 'card', { width: 200, height: 300 }).srcSet).toBe(at([200]))
-    })
+      it('is the picture itself, its own size giving the box its proportions', () => {
+        expect(whole('poster', { width: 2000, height: 3000 })).toEqual({ src: kept, width: 2000, height: 3000, original: kept })
+        expect(whole('backdrop', { width: 3840, height: 2160 })).toEqual({ src: kept, width: 3840, height: 2160, original: kept })
+        expect(whole('card')).toEqual({ src: kept, original: kept })
+      })
 
-    it('offers its AVIF copies where they reach as wide as the WebP', () => {
-      const poster = { width: 2000, height: 3000, avif: [480, 960] }
-      expect(sized(kept, 'card', poster).avif).toBe(at([480, 960], 'avif'))
-      expect(sized(kept, 'thumb', poster).avif).toBe(at([480], 'avif'))
-      // A background's 1280 would draw a dense screen's 1920 soft.
-      expect(sized(kept, 'backdrop', { width: 3840, height: 2160, avif: [1280] }).avif).toBeUndefined()
-      expect(sized(kept, 'backdrop', { width: 1280, height: 720, avif: [1280] }).avif).toBe(at([1280], 'avif'))
+      it('is offered as AVIF over the picture where those copies reach as wide as its role is drawn', () => {
+        const poster = { width: 2000, height: 3000, avif: [480, 960] }
+        expect(whole('card', poster)).toEqual({
+          src: kept,
+          sizes: sized(kept, 'card', poster, true).sizes,
+          avif: at([480, 960], 'avif'),
+          width: 2000,
+          height: 3000,
+          original: kept,
+        })
+        expect(whole('thumb', poster).avif).toBe(at([480], 'avif'))
+        expect(whole('backdrop', { width: 1280, height: 720, avif: [1280] }).avif).toBe(at([1280], 'avif'))
+        // Not as wide: the picture alone, with no width to choose among.
+        const backdrop = whole('backdrop', { width: 3840, height: 2160, avif: [1280] })
+        expect(backdrop).toEqual({ src: kept, width: 3840, height: 2160, original: kept })
+      })
+
+      it('is what the server said last, where the caller does not say', () => {
+        expect(sized(kept, 'card').src).toBe(kept)
+        offerWebp(true)
+        try {
+          expect(sized(kept, 'card').srcSet).toBe(at([240, 480, 960]))
+        } finally {
+          offerWebp(false)
+        }
+        expect(sized(kept, 'card').srcSet).toBeUndefined()
+      })
     })
 
     it('is found by its address once a work has said what it looks like', () => {
@@ -80,8 +125,9 @@ describe('an image in a role', () => {
       const item = work({ images: [image('p', { url: `${stem}.jpg` })], pictures: { [`${stem}.jpg`]: look } })
       expect(poster(item)).toBe(`${stem}.jpg`)
       expect(lookOf(`${stem}.jpg`)).toEqual(look)
-      expect(sized(`${stem}.jpg`, 'card').srcSet).toBe(at([240, 480, 960]))
-      expect(sized(`${stem}.jpg`, 'poster').width).toBe(480)
+      expect(sized(`${stem}.jpg`, 'card', undefined, true).srcSet).toBe(at([240, 480, 960]))
+      expect(sized(`${stem}.jpg`, 'poster', undefined, true).width).toBe(480)
+      expect(sized(`${stem}.jpg`, 'poster', undefined, false).width).toBe(1000)
     })
   })
 

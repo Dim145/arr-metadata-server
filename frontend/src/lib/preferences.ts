@@ -1,11 +1,12 @@
 /**
- * What a person keeps of their own way of working in the administration —
+ * What a person keeps of their own way of working — in the administration,
  * the views of the catalogue they saved, which columns each table shows them
- * and how tightly it is set, whether the editor shows its preview — kept
- * with their account, so it follows them from one browser to the next
- * (`/account/preferences`).
+ * and how tightly it is set, whether the editor shows its preview; in the
+ * catalogue, whether the posters of works for adults are shown (see
+ * `adultPosters.ts`) — kept with their account, so it follows them from one
+ * browser to the next (`/account/preferences`).
  *
- * The whole set is read once and held for the administration: each
+ * The whole set is read once and held for every page: each
  * preference is read from that one answer, its last value kept in this
  * browser as well, so a page is drawn as it was left before the answer is
  * in, and written back a moment after it changes — the last of several

@@ -832,6 +832,9 @@ export const fr: Dict = {
       editor: 'Corrige aussi le catalogue : champs, imports, rafraîchissements, listes.',
       admin: 'Règle aussi tout le reste : comptes, accès, clés, réglages.',
     },
+    reading: 'Lecture',
+    adultPosters: 'Montrer les affiches des œuvres pour adultes',
+    adultPostersHint: 'Désactivé, elles restent floutées jusqu’à ce qu’on les touche. Le choix suit votre compte d’un navigateur à l’autre.',
     password: 'Mot de passe',
     passwordNone: 'Ce compte se connecte par son fournisseur d’identité et n’a pas de mot de passe ici.',
     sessions: 'Sessions',
@@ -1695,9 +1698,30 @@ export const fr: Dict = {
       peopleHint: 'Une par personne, et une fiche en nomme des dizaines : la plus grosse part de ce qui est stocké.',
       audio: 'Les musiques',
       audioHint: 'La musique de générique d’un Fan-Kai, quelques mégaoctets chacune.',
+      webp: 'Copies WebP pour les pages',
+      webpHint:
+        'Chaque image copiée aux largeurs où une page la dessine, à son stockage ou à la première demande d’une page\u202f: la copie d’une carte pèse le dixième de l’image. Désactivé, les pages reçoivent les images elles-mêmes, entières.',
       avif: 'Copies AVIF la nuit',
       avifHint:
-        'Une copie AVIF de chaque affiche et de chaque fond, faite chaque nuit à 3 h UTC : un tiers plus légère que le WebP que les pages reçoivent sinon, et une seconde ou deux de processeur à faire chacune.',
+        'Une copie AVIF de chaque affiche et de chaque fond, faite chaque nuit à 3 h UTC et donnée aux pages partout où elle existe\u202f: un tiers plus légère qu’une copie WebP de même largeur, et une seconde ou deux de processeur à faire chacune.',
+      turnOff: {
+        title: (format: string) => `Désactiver les copies ${format}`,
+        webp: (n: number, count: string, size: string) =>
+          plural(n, {
+            one: `Une copie WebP est stockée, qui pèse ${size}. La supprimer aussi\u202f? Gardée, elle resservira si les copies sont réactivées\u202f; d’ici là, les pages reçoivent les images elles-mêmes.`,
+            other: `${count} copies WebP sont stockées, qui pèsent ${size}. Les supprimer aussi\u202f? Gardées, elles resserviront si les copies sont réactivées\u202f; d’ici là, les pages reçoivent les images elles-mêmes.`,
+          }),
+        avif: (n: number, count: string, size: string) =>
+          plural(n, {
+            one: `Une copie AVIF est stockée, qui pèse ${size}. La supprimer aussi\u202f? Gardée, elle est toujours donnée aux pages, et aucune autre n’est faite.`,
+            other: `${count} copies AVIF sont stockées, qui pèsent ${size}. Les supprimer aussi\u202f? Gardées, elles sont toujours données aux pages, et aucune autre n’est faite.`,
+          }),
+        keep: (n: number) => plural(n, { one: 'Désactiver et la garder', other: 'Désactiver et les garder' }),
+        delete: (n: number) => plural(n, { one: 'Désactiver et la supprimer', other: 'Désactiver et les supprimer' }),
+        kept: (why: string) => `Désactivé, et les copies restent\u202f: ${why}`,
+        deleting: (n: number, count: string, format: string, size: string) =>
+          plural(n, { one: `Suppression de la copie ${format} (${size})…`, other: `Suppression de ${count} copies ${format} (${size})…` }),
+      },
       copies: 'Copies pour les pages',
       copiesLine: (webp: string, avif: string, squares: string) => `WebP : ${webp} · AVIF : ${avif} · carrés pour Plex : ${squares}`,
       copiesOf: (n: string, size: string) => `${n} (${size})`,
@@ -1706,9 +1730,15 @@ export const fr: Dict = {
           one: 'Une image stockée n’a encore ni esquisse ni première copie. Préparez-la maintenant, ou une page fait faire ses copies à mesure qu’elle les demande.',
           other: `${n} images stockées n’ont encore ni esquisse ni première copie. Préparez-les maintenant, ou une page fait faire ses copies à mesure qu’elle les demande.`,
         }),
+      unpreparedWhole: (n: number) =>
+        plural(n, {
+          one: 'Une image stockée n’a pas encore d’esquisse. Préparez-la maintenant, ou une page la dessine sans esquisse jusqu’à son arrivée.',
+          other: `${n} images stockées n’ont pas encore d’esquisse. Préparez-les maintenant, ou une page les dessine sans esquisse jusqu’à leur arrivée.`,
+        }),
       allPrepared: 'Toutes les images stockées sont préparées.',
       prepareNow: 'Préparer les images',
       preparing: 'Préparation des images en cours',
+      purging: 'Suppression des copies en cours',
       serve: 'Comment servir les médias d’un bucket',
       serveProxy: 'Par ce serveur',
       serveRedirect: 'Renvoyé vers l’adresse du bucket',
@@ -3400,8 +3430,8 @@ export const fr: Dict = {
         'export.nfo': 'Un document .nfo pour chaque œuvre, pour une bibliothèque que lisent Plex, Jellyfin ou Kodi.',
         'media.store': 'Chaque image et chaque musique que le catalogue référence et qui n’est pas encore stockée, récupérée maintenant, quelques-unes à la fois. Peut être arrêtée ; le reste se récupère au fil de l’eau.',
         'media.sweep': 'Les médias que plus rien ne référence — une fiche supprimée, une image abandonnée par sa source, un envoi retiré — oubliés et effacés.',
-        'media.variants': 'Chaque image stockée avant cette version — ou avant qu’il y ait des copies — préparée comme l’est une image stockée aujourd’hui : la couleur et l’esquisse qu’une page affiche pendant le chargement calculées, et la copie que son type demande en premier faite, 480 pixels de large pour une affiche et 1280 pour un fond. Quelques-unes à la fois ; on peut l’arrêter, et le passage suivant reprend là où elle s’est arrêtée. Jamais lancée d’elle-même : d’ici là, une page reçoit les copies qu’elle demande, faites à la demande.',
-        'media.avif': 'Une copie AVIF de chaque affiche, en 480 et 960 pixels de large, et de chaque fond, en 1280 — un tiers plus légère que le WebP que l’interface reçoit sinon, et une seconde ou deux de processeur à faire chacune. La nuit, une fois « Copies AVIF la nuit » activé sur la page Médias. Peut être arrêtée.',
+        'media.variants': 'Chaque image stockée avant cette version — ou avant qu’il y ait des copies — préparée comme l’est une image stockée aujourd’hui\u202f: la couleur et l’esquisse qu’une page affiche pendant le chargement calculées, et, tant que les copies WebP sont activées, la copie que son type demande en premier faite, 480 pixels de large pour une affiche et 1280 pour un fond. Quelques-unes à la fois\u202f; on peut l’arrêter, et le passage suivant reprend là où elle s’est arrêtée. Jamais lancée d’elle-même\u202f: d’ici là, une page dessine ces images sans esquisse.',
+        'media.avif': 'Une copie AVIF de chaque affiche, en 480 et 960 pixels de large, et de chaque fond, en 1280 et 1920 — un tiers plus légère qu’une copie WebP de même largeur, et une seconde ou deux de processeur à faire chacune. La nuit, une fois «\u202fCopies AVIF la nuit\u202f» activé sur la page Médias. Peut être arrêtée.',
         'tls.renew': 'Le certificat que présente la porte des clients, examiné chaque jour et réémis par l’autorité de ce serveur quand il lui reste moins de trente jours — chargé sans redémarrage.',
         'update.check': 'La dernière version de ce projet demandée à GitHub, une minute après le démarrage puis chaque jour — une requête anonyme, et seulement si la vérification est activée dans les réglages. Une version plus récente est signalée sur le tableau de bord, et annoncée une fois au webhook.',
         'arr.seed': 'Chaque série de votre Sonarr et chaque film de votre Radarr, importés ici s’ils n’y sont pas encore, l’un après l’autre — avant de les tourner vers ce serveur, ou plus tard pour ce qui est arrivé depuis. Peut être arrêté.',

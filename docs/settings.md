@@ -630,6 +630,7 @@ On the **Media** page, and read only when a store is configured (`AMS_MEDIA_STOR
 | [`media.serve`](#mediaserve) | `proxy` or `redirect` | `proxy` | server |
 | [`media.people`](#mediapeople) | `true` or `false` | `true` | server |
 | [`media.audio`](#mediaaudio) | `true` or `false` | `true` | server |
+| [`media.webp`](#mediawebp) | `true` or `false` | unset | server |
 | [`media.avif`](#mediaavif) | `true` or `false` | unset | server |
 
 ### `media.store`
@@ -650,12 +651,20 @@ The cast's photographs too: one per person, many per work.
 
 The themes: a Fan-Kai's, a few megabytes each.
 
+### `media.webp`
+
+Make the WebP copies the pages ask for, at the widths they ask for them — the first as a
+picture is stored, any other the first time a page asks — and give the pages those rather
+than the pictures themselves. Off until it is set, and the pages are given the originals,
+whole; the copies made while it was on are kept until an administrator deletes them. See
+[The copies the pages are given](media.md#the-copies-the-pages-are-given).
+
 ### `media.avif`
 
-Make an AVIF copy of every poster, at 480 and 960 pixels, and of every background, at 1280,
-each night at 03:00 UTC — the task `media.avif`, also run by hand from **Tasks**. A third
-lighter than the WebP the interface is given otherwise, and a second or two of a processor
-each to make: off until it is set. See [AVIF](media.md#avif).
+Make an AVIF copy of every poster, at 480 and 960 pixels, and of every background, at 1280
+and 1920, each night at 03:00 UTC — the task `media.avif`, also run by hand from **Tasks**.
+A third lighter than a WebP copy of the same width, and a second or two of a processor each
+to make: off until it is set. See [AVIF](media.md#avif).
 
 ## Cache
 

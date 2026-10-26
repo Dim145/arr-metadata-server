@@ -18,6 +18,7 @@ import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-quer
 import { createContext, Fragment, use, useEffect, useId, useLayoutEffect, useState } from 'react'
 import { Link, Outlet, useLocation, useNavigate, useSearchParams } from 'react-router'
 
+import { useAdultPosters } from '../lib/adultPosters'
 import { api, query } from '../lib/api'
 import { useSettled } from '../lib/debounce'
 import { feeds, webcal } from '../lib/feeds'
@@ -29,13 +30,7 @@ import { LanguageToggle } from './LanguageToggle'
 import { AdminLink, BrowseTab, Tab, TabBar } from './nav'
 import { lookup, providerName } from '../lib/labels'
 import { poster } from '../lib/media'
-import {
-  TEXT_LANGUAGES,
-  setTextLanguage,
-  showAdultPosters,
-  useAdultPostersShown,
-  useTextLanguage,
-} from '../lib/prefs'
+import { TEXT_LANGUAGES, setTextLanguage, useTextLanguage } from '../lib/prefs'
 import type { ItemPage, Me, Sources } from '../lib/types'
 import { CommandPalette, paletteShortcut } from './CommandPalette'
 import { KeysHelp, useShortcuts } from './KeysHelp'
@@ -240,7 +235,9 @@ function Wordmark() {
 
 /**
  * How the catalogue is read here: the interface's language, the language of
- * its texts, and whether the posters of works for adults are shown.
+ * its texts, and whether the posters of works for adults are shown — the one
+ * of the three kept with the account of whoever is signed in, as their own
+ * page has it too (see `adultPosters.ts`).
  *
  * Two languages, because they are two questions. The interface speaks the
  * few languages it is written in; the texts — titles, synopses, taglines —
@@ -255,7 +252,7 @@ function ReaderMenu() {
   const { t, lang, locale } = useI18n()
   const queryClient = useQueryClient()
   const texts = useTextLanguage()
-  const adult = useAdultPostersShown()
+  const [adult, showAdult] = useAdultPosters()
   const id = useId()
 
   // Each language named in the interface's, and sorted as their names are,
@@ -333,7 +330,7 @@ function ReaderMenu() {
 
       <div className="mt-5 flex items-center justify-between gap-3">
         <span className="text-sm text-bone">{t.reader.adult}</span>
-        <Toggle checked={adult} label={t.reader.adult} onChange={showAdultPosters} />
+        <Toggle checked={adult} label={t.reader.adult} onChange={showAdult} />
       </div>
       <p className="mt-1 text-caption leading-relaxed text-bone-faint">{t.reader.adultHint}</p>
     </Menu>

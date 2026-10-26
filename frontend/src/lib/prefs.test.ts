@@ -112,4 +112,39 @@ describe('the posters of works for adults', () => {
     const prefs = await fresh()
     expect(prefs.adultPostersShown()).toBe(true)
   })
+
+  it('are as the account signed in chose, over this browser, until nobody is', async () => {
+    local.kept.set('ams.adultPosters', 'shown')
+    const prefs = await fresh()
+
+    prefs.adoptAdultPosters(false)
+    expect(prefs.adultPostersShown()).toBe(false)
+
+    prefs.adoptAdultPosters(undefined)
+    expect(prefs.adultPostersShown()).toBe(true)
+  })
+
+  it('are shown for an account that asked, in a browser that never did, and the browser keeps nothing of it', async () => {
+    const prefs = await fresh()
+
+    prefs.adoptAdultPosters(true)
+    expect(prefs.adultPostersShown()).toBe(true)
+    expect(local.kept.has('ams.adultPosters')).toBe(false)
+
+    // Signed out: whoever uses the browser next sees them veiled.
+    prefs.adoptAdultPosters(undefined)
+    expect(prefs.adultPostersShown()).toBe(false)
+  })
+
+  it('keep the browser’s own choice, made while an account’s counted, for when it is gone', async () => {
+    const prefs = await fresh()
+
+    prefs.adoptAdultPosters(false)
+    prefs.showAdultPosters(true)
+    expect(prefs.adultPostersShown()).toBe(false)
+    expect(local.kept.get('ams.adultPosters')).toBe('shown')
+
+    prefs.adoptAdultPosters(undefined)
+    expect(prefs.adultPostersShown()).toBe(true)
+  })
 })

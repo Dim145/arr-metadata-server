@@ -317,6 +317,12 @@ export type SourceRule = Schema<'Laid'>
 /** How the media store stands. */
 export type MediaStatus = Schema<'MediaStatus'>
 
+/** A format whose copies can be deleted once they are no longer made: `webp` or `avif`. */
+export type MediaVariantFormat = Schema<'MediaVariantFormat'>
+
+/** What there was of a format's copies as their deletion began. */
+export type VariantsDeleted = Schema<'VariantsDeleted'>
+
 /** One medium kept, or in line to be. */
 export type MediaAsset = Schema<'Asset'>
 

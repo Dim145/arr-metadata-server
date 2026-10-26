@@ -7196,6 +7196,50 @@
         }
       }
     },
+    "/api/v1/media/variants/{format}": {
+      "delete": {
+        "tags": [
+          "Catalogue"
+        ],
+        "summary": "Delete every copy of a format: the WebP copies once `media.webp` is off,\nthe AVIF copies once `media.avif` is — the space they took, back.",
+        "description": "Answered at once, with what there was, and done in the background: each\ncopy's file taken from the store, then its row; the status says\n`purging` until it is over. The pictures themselves are not touched,\nnor the squares Plex is given. Turned on again meanwhile, the setting\nstops it where it is.",
+        "operationId": "media_delete_variants",
+        "parameters": [
+          {
+            "name": "format",
+            "in": "path",
+            "description": "The format whose copies are deleted",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/MediaVariantFormat"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VariantsDeleted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a format whose copies are deleted: `webp` or `avif`"
+          },
+          "403": {
+            "description": "The caller is not an administrator"
+          },
+          "409": {
+            "description": "The format's copies are still made — its setting is on — or the AVIF copies are being made, or copies are being deleted already"
+          },
+          "503": {
+            "description": "No media store is configured"
+          }
+        }
+      }
+    },
     "/api/v1/media/works": {
       "get": {
         "tags": [
@@ -11093,7 +11137,8 @@
         "required": [
           "site",
           "registration",
-          "passwordLogin"
+          "passwordLogin",
+          "webp"
         ],
         "properties": {
           "site": {
@@ -11117,6 +11162,10 @@
                 "type": "null"
               }
             ]
+          },
+          "webp": {
+            "type": "boolean",
+            "description": "Whether the pages are given WebP copies of the pictures this server\nkeeps (`media.webp`), rather than the pictures themselves: said here,\nwhere every page reads it before it draws one."
           }
         }
       },
@@ -17376,10 +17425,12 @@
           "counts",
           "variants",
           "unprepared",
+          "webp",
           "avif",
           "fetching",
           "sweeping",
-          "preparing"
+          "preparing",
+          "purging"
         ],
         "properties": {
           "backend": {
@@ -17415,6 +17466,10 @@
             "format": "int64",
             "description": "The pictures kept that this version has not prepared — no\nplaceholder, no first copy — which the task `media.variants` does."
           },
+          "webp": {
+            "type": "boolean",
+            "description": "Whether WebP copies are made and given to the pages (`media.webp`);\noff, the pages are given the pictures themselves."
+          },
           "avif": {
             "type": "boolean",
             "description": "Whether the night's task makes AVIF copies (`media.avif`)."
@@ -17429,8 +17484,20 @@
           "preparing": {
             "type": "boolean",
             "description": "Whether the pictures are being prepared, or their AVIF copies made."
+          },
+          "purging": {
+            "type": "boolean",
+            "description": "Whether every copy of a format is being deleted."
           }
         }
+      },
+      "MediaVariantFormat": {
+        "type": "string",
+        "description": "A format the copies of the pictures are written as, whose copies can be\ndeleted once they are no longer made.",
+        "enum": [
+          "webp",
+          "avif"
+        ]
       },
       "MediumStatus": {
         "type": "string",
@@ -23590,6 +23657,30 @@
           "jpegBytes": {
             "type": "integer",
             "format": "int64"
+          }
+        }
+      },
+      "VariantsDeleted": {
+        "type": "object",
+        "description": "What there was of a format's copies as their deletion began.",
+        "required": [
+          "format",
+          "copies",
+          "bytes"
+        ],
+        "properties": {
+          "format": {
+            "$ref": "#/components/schemas/MediaVariantFormat"
+          },
+          "copies": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many copies there were."
+          },
+          "bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "What they weighed, in bytes."
           }
         }
       },
