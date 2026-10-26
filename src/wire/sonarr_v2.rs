@@ -108,7 +108,8 @@ pub struct ShowResourceV2 {
     /// Who numbers the episodes: `tvdb`; `tmdb` for a series TMDB numbers —
     /// one TheTVDB does not list, under an id this server made for it (see
     /// [`ids`]), or one TheTVDB stopped answering for; `fankai` for a
-    /// Fan-Kai.
+    /// Fan-Kai; `local` for a series entered by hand that nothing elsewhere
+    /// names.
     pub metadata_source: String,
 }
 
@@ -603,7 +604,7 @@ fn formats(item: &MediaItem) -> Vec<String> {
 /// say — TMDB for a series it numbers while TheTVDB does not answer for it —
 /// and, where they say nothing, where the id Sonarr holds the series under
 /// comes from: TheTVDB, or this server's own ranges for a work TheTVDB does
-/// not list.
+/// not list — the catalogue itself, `local`, for one entered by hand.
 fn metadata_source(client_id: i64, orders: &[EpisodeOrder]) -> &'static str {
     match orders::aired(orders).map(|order| order.source.as_str()) {
         Some("tvdb") => return "tvdb",
@@ -615,6 +616,8 @@ fn metadata_source(client_id: i64, orders: &[EpisodeOrder]) -> &'static str {
         "fankai"
     } else if ids::from_synthetic(client_id).is_some() {
         "tmdb"
+    } else if ids::is_own(client_id) {
+        crate::db::repo::order::LOCAL
     } else {
         "tvdb"
     }

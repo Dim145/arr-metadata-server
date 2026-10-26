@@ -33,6 +33,25 @@ may change what the API or the configuration means, and says so here.
   pages turns them on, on the Media page. `media.variants` prepares the
   placeholders, and the first copies only while the WebP copies are on;
   `GET /api/v1/auth/options` says whether they are (`webp`).
+- The front page no longer offers an administrator to write a programmer's
+  note there: the administration's page writes it, as do the pages of a
+  selection, a genre, a network, a year and a decade.
+- Radarr's search leaves out the films it could not add, those without a
+  TMDB id that were not entered by hand. A `tvdb:` term from Sonarr resolves
+  every id this server gives, those made of a TMDB id or a Fankai one too.
+
+### Fixed
+
+- A work entered by hand reaches Sonarr and Radarr. It is given a number of
+  its own, from 1,000,000,000 up, worked out from its catalogue id so that it
+  never changes: Sonarr's searches list it under that number and its lookups
+  answer it, Radarr takes it as the film's `TmdbId`, and the change
+  notifications and the seeding find it by it. Fankai's numbers end at
+  999,999,999. Plex was given such a work whole already: an agent that also
+  lists Plex's own provider lets Plex guess it by its title, which
+  [docs/plex.md](docs/plex.md) explains.
+- Signing out, or changing one's password, shows a visitor at once: the bar
+  kept the account's *Admin* until the page was reloaded.
 
 ## [0.10.0] — 2026-10-25
 

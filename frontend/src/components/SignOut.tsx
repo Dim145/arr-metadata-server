@@ -14,7 +14,7 @@ import { useNavigate } from 'react-router'
 import { api } from '../lib/api'
 import { cn } from '../lib/cn'
 import { useI18n } from '../lib/i18n'
-import { forget } from '../lib/recent'
+import { endSession } from '../lib/session'
 import { Glyph } from './ui'
 
 export function SignOut({ className, iconOnly }: { className?: string; iconOnly?: boolean }) {
@@ -31,16 +31,15 @@ export function SignOut({ className, iconOnly }: { className?: string; iconOnly?
       onClick={async () => {
         // Whatever the server says, the session is over here: everything cached
         // was answered for somebody who is now gone, and so was the shelf of
-        // the works they opened. A server that cannot be reached is caught
-        // rather than left to reject — signing out still works, and an
-        // unhandled rejection would be the only trace of it.
+        // the works they opened (`endSession`). A server that cannot be
+        // reached is caught rather than left to reject — signing out still
+        // works, and an unhandled rejection would be the only trace of it.
         try {
           await api.post('/auth/logout')
         } catch {
           // Nothing to tell them: they are being signed out either way.
         } finally {
-          forget()
-          queryClient.clear()
+          endSession(queryClient)
           navigate('/login', { replace: true })
         }
       }}

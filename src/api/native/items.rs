@@ -771,6 +771,7 @@ async fn create(
     item.external_ids = request.external_ids;
     item.is_manual = true;
     item.slug = unique_slug(&state, kind, &title, request.year).await?;
+    item.id = id_of_its_own(&state, kind).await?;
 
     // An identifier another work goes by is refused where it is written, in
     // the work's own transaction: checked beforehand, two entries made at once
@@ -1647,6 +1648,25 @@ fn checked_by_hand(mut request: CreateRequest, kind: MediaKind) -> AppResult<Cre
         ids.imdb = Some(imdb);
     }
     Ok(request)
+}
+
+/// An id for a work entered by hand whose number — the id Sonarr or Radarr
+/// is handed for it while nothing elsewhere names it ([`service::ids::own`])
+/// — no other work entered by hand of its kind is handed already: two would
+/// lead a client to one work under one number. Each such work held makes a
+/// clash one chance in a little over a billion; another id is drawn when one
+/// comes.
+async fn id_of_its_own(state: &AppState, kind: MediaKind) -> AppResult<String> {
+    let taken = service::own_holders(state, kind).await?;
+    for _ in 0..16 {
+        let id = crate::db::new_id();
+        if !taken.contains_key(&service::ids::own(&id)) {
+            return Ok(id);
+        }
+    }
+    Err(AppError::Internal(anyhow::anyhow!(
+        "no id of a number of its own was drawn for a work entered by hand"
+    )))
 }
 
 /// The statuses a work may be given by hand, as its clients spell them:

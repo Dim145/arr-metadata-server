@@ -450,6 +450,14 @@ edited. Its identifiers are what Sonarr and Radarr find it by — TheTVDB's for 
 for a film — and where its links lead. An identifier that another entry already claims is
 refused with a `409`.
 
+Without those identifiers it is found all the same. Sonarr and Radarr find it by its title
+and keep it under a number this server makes of its id here, the same for good — see
+[Works entered by hand](sonarr-radarr.md#works-entered-by-hand). Plex matches it by its title
+and year, under the catalogue's own id; Plex's own provider, when the agent lists it beside
+this one, can only guess at it by its title, and lays what it guessed over it — see
+[A work entered by hand](plex.md#a-work-entered-by-hand). An identifier the work does have
+elsewhere is worth giving it: Plex's provider is then given the work itself.
+
 ## Duplicates
 
 Two records of one work turn up in a catalogue now and then: a film entered by hand before a

@@ -1579,12 +1579,16 @@ fn ratings(item: &MediaItem) -> Vec<PlexRating> {
 /// (`orders::client_names`).
 fn season_types(item: &MediaItem, orders: &[EpisodeOrder]) -> Vec<PlexSeasonType> {
     let ids = &item.external_ids;
+    // Without the orders — a match drawn from a search result — told as the
+    // catalogue tells the aired order's source: a work entered by hand is
+    // numbered here, `local`, unless TheTVDB lists it.
     let source = match orders::aired(orders) {
         Some(aired) => aired.source.clone(),
         None if ids.tvdb.is_some() => "tvdb".to_string(),
+        None if item.is_manual => crate::db::repo::order::LOCAL.to_string(),
         None if ids.tmdb.is_some() => "tmdb".to_string(),
         None if ids.fankai.is_some() => "fankai".to_string(),
-        None => "manual".to_string(),
+        None => crate::db::repo::order::LOCAL.to_string(),
     };
     const AIRED_TITLE: &str = "Aired order";
     let mut types = vec![PlexSeasonType {

@@ -166,6 +166,45 @@ pub async fn find_id_by_external(
         .map_err(Into::into)
 }
 
+/// The works of `kind` entered by hand — switched off, merged into another or
+/// not — the first entered first: what an id a client was handed for one,
+/// made of its catalogue id (`service::ids::own`), is looked for among.
+pub async fn made_by_hand(db: &Db, kind: MediaKind) -> Result<Vec<String>> {
+    let rows =
+        sqlx::query(db.sql(
+            "SELECT id FROM media_item WHERE kind = ? AND is_manual = 1 ORDER BY created_at, id",
+        ))
+        .bind(kind.as_str())
+        .fetch_all(db.pool())
+        .await?;
+
+    rows.iter()
+        .map(|row| row.text("id").map_err(Into::into))
+        .collect()
+}
+
+/// The films entered by hand that changed at `since` or after, as
+/// [`movies_changed_since`] tells a change: by their catalogue ids, which
+/// the ids Radarr was handed for them are made of.
+pub async fn films_by_hand_changed_since(db: &Db, since: &str) -> Result<Vec<String>> {
+    let rows = sqlx::query(db.sql(
+        "SELECT m.id FROM media_item m
+          WHERE m.kind = 'movie' AND m.is_manual = 1
+            AND (m.updated_at >= ? OR m.listed_at >= ?
+                 OR EXISTS (SELECT 1 FROM media_override o
+                             WHERE o.media_id = m.id AND o.updated_at >= ?))",
+    ))
+    .bind(since)
+    .bind(since)
+    .bind(since)
+    .fetch_all(db.pool())
+    .await?;
+
+    rows.iter()
+        .map(|row| row.text("id").map_err(Into::into))
+        .collect()
+}
+
 /// The TMDB ids of the films held that changed at `since` or after — an
 /// instant written as [`now`](crate::db::now) writes them — switched off or not: written
 /// again, listed again (which a lock put on, changed or lifted asks for, and

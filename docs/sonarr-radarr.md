@@ -49,7 +49,8 @@ reading: the same series, with what v5 reads besides.
   use (`tvdbId` and `metadataId`).
 - **Who numbers it.** `metadataSource` is `tvdb`, or `tmdb` for a series TMDB
   numbers — one TheTVDB does not list, or one it stopped answering for (see
-  [Who numbers a series](#who-numbers-a-series)) — or `fankai`.
+  [Who numbers a series](#who-numbers-a-series)) — or `fankai`, or `local` for a
+  series [entered by hand](#works-entered-by-hand) that nothing elsewhere names.
 
 The language is three letters, as Sonarr writes it (`eng`, `fra`). The series is
 answered in it when the catalogue holds it so; otherwise in the caller's own
@@ -133,6 +134,43 @@ Radarr is sent, on `/v1/movie/{id}`, `/v1/movie/imdb/{id}` and `/v1/movie/bulk`:
 `/v1/movie/changed` names the films changed here too — fetched again, a lock put
 on, changed or lifted — with or without TMDB.
 
+### Works entered by hand
+
+A work [entered by hand](editing.md#entering-a-work-by-hand) is found by the ids
+it was given elsewhere, as any other: TheTVDB's for a series — or a number made
+of TMDB's or Fankai's, as for a series TheTVDB does not list — and TMDB's for a
+film. One given none of them is handed an id of this server's own, and Sonarr
+and Radarr find it by its title, add it and refresh it like any other work:
+
+- **The id** is a number from 1 000 000 000 to 2 147 483 647, made of the work's
+  id in this catalogue: the same at every answer, after a restart, on every
+  instance, whatever is edited on the work — and above every number TheTVDB's
+  series, TMDB's films and series, and this server's other ranges fill. Sonarr
+  keeps it as the series' TheTVDB id, Radarr as the film's TMDB id. Both refuse
+  an id of nought or below for a work they add, which is why it is not negative
+  as an episode's own is (see [Orders](#orders)). `tvdb:` or `tmdb:` and the
+  number find the work too.
+- **Asked for by it**, on either edition of Sonarr's surface and on Radarr's
+  (`/v1/movie/{id}`, `/v1/movie/bulk`), the work is answered from the catalogue
+  alone, without asking a source, which none has: switched off or not, and
+  merged into another or not — then with the work it went into, as
+  [After a merge](#after-a-merge) says. A number whose work was deleted is a
+  `404` at once, as nothing will answer for it again; Sonarr and Radarr then take
+  it for deleted.
+- Sonarr v5 is sent `metadataSource` `local`. A film entered by hand is named
+  under it among the films changed (`/v1/movie/changed`) once one of its fields
+  is edited, as any film is once a lock is put on it, so that Radarr's scheduled
+  refresh reads it again; with [Tell them of a change](#telling-them-of-a-change)
+  on, either is told under this number.
+- Given an id elsewhere later — its TheTVDB entry, say — the work is handed that
+  one from then on, and still answered by the number to the client that added it
+  by it.
+
+Two works of one kind entered by hand could make one number: the one entered
+first keeps it, and the other is left out of the searches rather than offered
+under a number that would add the first. A work entered by hand now is given an
+id here whose number no other holds.
+
 ## Connecting your Sonarr and Radarr
 
 Open **Sonarr & Radarr** in the administration (`/admin/arr`; administrators
@@ -194,7 +232,8 @@ is asked to read the work again at once, after:
   client has the answer already.
 
 The work is found there by the id it is served under — TheTVDB's, or the synthetic
-id that a TMDB-only series or a Fan-Kai is handed, for Sonarr; TMDB's for Radarr —
+id that a TMDB-only series or a Fan-Kai is handed, for Sonarr; TMDB's for Radarr;
+the number a [work entered by hand](#works-entered-by-hand) is handed, for either —
 through `/api/v3/series?tvdbId=` or `/api/v3/movie?tmdbId=`. One command then asks
 for every work found, up to a hundred at a time: `RefreshSeries` with `seriesIds`,
 `RefreshMovie` with `movieIds` (`POST /api/v3/command`).
@@ -241,6 +280,11 @@ imports what is missing the way the import page does:
 - from Sonarr (`/api/v3/series`): by the id it holds the series under — TheTVDB's,
   or one this server made for a TMDB-only series or a Fan-Kai — then by IMDb's;
 - from Radarr (`/api/v3/movie`): by TMDB's id, then by IMDb's.
+
+A work held there under the number a [work entered by hand](#works-entered-by-hand)
+is handed is looked for in this catalogue alone, since no source has it: *already
+held here*, or *held there under no id to look it up by* once the catalogue no
+longer holds it.
 
 It starts by hand, from the panel *Fill the catalogue from their library* of the
 Sonarr & Radarr page or from the tasks on the **Jobs** page (`/admin/jobs`), and

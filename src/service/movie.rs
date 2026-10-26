@@ -25,7 +25,14 @@ const MAX_BULK: usize = 100;
 /// A film by its TMDB id: as it is held, or fetched again when it is due —
 /// and as it is held after all when nothing answers (see
 /// [`crate::service::or_held`]).
+///
+/// Or by the id Radarr was handed in its stead for a film entered by hand
+/// that TMDB does not name — see [`ids::own`]: the catalogue's alone, so
+/// TMDB is not asked for it.
 pub async fn by_tmdb_id(state: &AppState, tmdb_id: i64) -> Result<Option<MediaItem>> {
+    if ids::is_own(tmdb_id) {
+        return crate::service::by_own_id(state, MediaKind::Movie, tmdb_id).await;
+    }
     let value = tmdb_id.to_string();
     if let Some(item) = local(state, ExternalSource::TmdbMovie, &value).await? {
         return Ok(Some(item));
@@ -602,9 +609,37 @@ pub async fn changed_since(state: &AppState, since: DateTime<Utc>) -> Result<Vec
         }
     }
 
-    let held = repo::item::movies_changed_since(&state.db, &crate::db::to_rfc3339(since)).await?;
+    let since = crate::db::to_rfc3339(since);
+    let mut held = repo::item::movies_changed_since(&state.db, &since).await?;
+    // A film entered by hand under the id Radarr was handed for it, whether
+    // or not it has a TMDB id since.
+    held.extend(
+        repo::item::films_by_hand_changed_since(&state.db, &since)
+            .await?
+            .iter()
+            .map(|id| ids::own(id)),
+    );
 
     Ok(merged(listed, held))
+}
+
+/// The id Radarr is handed for a film: its TMDB id, or for a film entered by
+/// hand that TMDB does not name, one made of the catalogue's own id
+/// ([`ids::own`]). `None` for a film Radarr has no way to address.
+pub fn client_id(item: &MediaItem) -> Option<i64> {
+    ids::for_client(
+        MediaKind::Movie,
+        &item.id,
+        item.is_manual,
+        &item.external_ids,
+    )
+}
+
+/// The id Radarr is handed for each of `items`, as [`client_id`] gives it,
+/// in their order — a film entered by hand only under a number that leads
+/// back to it: see [`crate::service::addressed`].
+pub async fn client_ids(state: &AppState, items: &[MediaItem]) -> Result<Vec<Option<i64>>> {
+    crate::service::addressed(state, MediaKind::Movie, items, client_id).await
 }
 
 /// The instant `since` names: as Radarr writes it — `2026-10-09T11:45:00`,

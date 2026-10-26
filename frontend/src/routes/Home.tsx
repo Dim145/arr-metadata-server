@@ -91,8 +91,10 @@ export function Home() {
     <div className="pb-8">
       {featured ? <Featured item={featured} /> : null}
       {/* Why it is the work of the day, where somebody said so: under the
-          plate, which has no room to spare on a phone. */}
-      {featured ? <ProgrammersNote scope="work" id={featured.id} className="mt-8" /> : null}
+          plate, which has no room to spare on a phone. Nothing where nobody
+          did, for whoever may write one too: the administration's page of
+          notes is where one is begun, not the way in. */}
+      {featured ? <ProgrammersNote scope="work" id={featured.id} offer={false} className="mt-8" /> : null}
 
       <div className="mt-16 space-y-16">
         <ThisWeek />

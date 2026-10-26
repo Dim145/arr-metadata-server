@@ -129,7 +129,8 @@ were fetched, JPEG and PNG, never the WebP copies this server's own pages are gi
 A rating key names a work by the identifier it is best known by, so that it
 survives the work being fetched again, or a new database: a film by TMDB's id,
 then IMDb's; a series by TheTVDB's, then TMDB's, then Fankai's; either by the
-catalogue's own id when it has none of those, as an entry made by hand may.
+catalogue's own id when it has none of those, as an entry made by hand may (see
+[A work entered by hand](#a-work-entered-by-hand)).
 
 ```
 movie-tmdb-603                  show-tvdb-81189
@@ -171,6 +172,36 @@ not see.
 
 A season is matched by its series and its number; an episode by its series and
 its season and number, or by the day it aired.
+
+### A work entered by hand
+
+A work [entered by hand](editing.md#entering-a-work-by-hand) is matched by its
+title and year like any work the catalogue holds and, given none of the ids a
+[rating key](#rating-keys) is made of, keyed by the catalogue's own id:
+`show-id-01a17789-…`, `movie-id-…`, and its seasons' and episodes' keys after
+it. Plex Media Server takes them like any other — on 1.43.5, matched when the
+library is scanned and through *Fix Match*, with its record, its seasons and
+episodes and its pictures. Its `Guid` lists the ids it does have elsewhere, and
+nothing when it has none.
+
+With nothing to map it by, Plex's own provider cannot know it. An agent that
+lists *Plex Series* or *Plex Movie* beside this provider — Plex suggests it for
+the cast — has Plex look such a work up in its own catalogue by title and year
+alone, and take what it finds: in one test a series entered by hand came back as
+a talk show of a title close to its own, whose cast, studio, country, poster and
+background were laid over it — and its title too, with Plex's provider listed
+first. The item is linked to the work guessed, and an app that follows the link
+asks Plex Media Server for a work its library does not hold: its log then says
+`Invalid library metadata ID <24 hexadecimal digits> passed.`, the id being
+Plex's own for the guess, never one this server hands out. Nothing in this
+server's answer stops the guess — Plex maps
+another provider's work by IMDb's, TMDB's and TheTVDB's ids alone, and a work
+entered by hand has none of them to give.
+
+So give the work the ids it has elsewhere when it has some, and Plex's provider
+is given that very work; or keep Plex's own provider out of the agent of a
+library that holds works entered by hand. Once it is out, a refresh of the item
+in Plex puts this provider's record back.
 
 ## What Plex is given
 

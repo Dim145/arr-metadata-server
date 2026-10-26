@@ -3947,7 +3947,12 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** A movie by TMDB id, in Radarr's format. */
+        /**
+         * A movie by TMDB id, in Radarr's format.
+         * @description The id may also be the one a film entered by hand that TMDB does not name
+         *     is handed in TMDB's stead, from 1 000 000 000: such a film is answered
+         *     from the catalogue alone.
+         */
         get: operations["radarr_by_tmdb"];
         put?: never;
         post?: never;
@@ -4032,8 +4037,9 @@ export interface paths {
         /**
          * A series by TVDB id, in Skyhook's format.
          * @description The id may also be one this server synthesised for a work TMDB indexes and
-         *     TVDB does not; the response echoes back whichever id was asked for, because
-         *     Sonarr has already stored it.
+         *     TVDB does not, or for a series entered by hand that nothing elsewhere
+         *     names; the response echoes back whichever id was asked for, because Sonarr
+         *     has already stored it.
          *
          *     A series the catalogue holds is answered from the catalogue, as it was,
          *     when the sources do not answer. An id nobody holds is a 404 only when every
@@ -8734,7 +8740,8 @@ export interface components {
              * @description Who numbers the episodes: `tvdb`; `tmdb` for a series TMDB numbers —
              *     one TheTVDB does not list, under an id this server made for it (see
              *     [`ids`]), or one TheTVDB stopped answering for; `fankai` for a
-             *     Fan-Kai.
+             *     Fan-Kai; `local` for a series entered by hand that nothing elsewhere
+             *     names.
              */
             metadataSource: string;
         };
@@ -18404,7 +18411,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description TMDB movie id */
+                /** @description TMDB movie id, or the one a film entered by hand is handed */
                 tmdb_id: number;
             };
             cookie?: never;

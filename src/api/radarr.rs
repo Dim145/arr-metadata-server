@@ -97,18 +97,32 @@ fn served_with(
     items
         .iter()
         .enumerate()
-        .map(|(at, item)| match beside.get(at) {
-            Some(beside) => from_item_beside(item, beside),
-            None => from_item(item),
+        .map(|(at, item)| {
+            let mut resource = match beside.get(at) {
+                Some(beside) => from_item_beside(item, beside),
+                None => from_item(item),
+            };
+            // A film entered by hand that TMDB does not name, under the id
+            // Radarr is handed for it in TMDB's stead.
+            if resource.tmdb_id == 0
+                && let Some(id) = movie::client_id(item)
+            {
+                resource.tmdb_id = id;
+            }
+            resource
         })
         .collect()
 }
 
 /// A movie by TMDB id, in Radarr's format.
+///
+/// The id may also be the one a film entered by hand that TMDB does not name
+/// is handed in TMDB's stead, from 1 000 000 000: such a film is answered
+/// from the catalogue alone.
 #[utoipa::path(
     get, path = "/v1/movie/{tmdb_id}", tag = TAG,
     operation_id = "radarr_by_tmdb",
-    params(("tmdb_id" = i64, Path, description = "TMDB movie id")),
+    params(("tmdb_id" = i64, Path, description = "TMDB movie id, or the one a film entered by hand is handed")),
     responses(
         (status = 200, body = MovieResource),
         (status = 403, description = "The caller's address is not in the allowlist"),
@@ -184,6 +198,16 @@ async fn search(
     let term = query.q.unwrap_or_default();
 
     let items = movie::search(&state, &term, query.year).await?;
+    // A result Radarr cannot add is worse than none: it would show in the
+    // list and fail on add, Radarr refusing a film of TMDB id nought. A film
+    // entered by hand is listed under the number it is handed instead, when
+    // that number leads back to it (see `service::addressed`).
+    let ids = movie::client_ids(&state, &items).await?;
+    let items = items
+        .into_iter()
+        .zip(ids)
+        .filter_map(|(item, id)| id.map(|_| item))
+        .collect();
 
     Ok(Json(served(&state, &identity, items)))
 }

@@ -17,6 +17,11 @@ use crate::{
 /// One series, as the scene-mapping list needs it.
 #[derive(Clone, Debug, Default)]
 pub struct SeriesTitles {
+    /// The catalogue's id for it: what a series entered by hand that nothing
+    /// elsewhere names is handed its client id from.
+    pub id: String,
+    /// Whether it was entered by hand.
+    pub is_manual: bool,
     /// Its title, a locked one included.
     pub title: String,
     /// Whether that title is locked: served as it is, in every language.
@@ -50,7 +55,8 @@ pub async fn series_titles(db: &Db) -> Result<Vec<SeriesTitles>> {
     // would make the survivor its own homonym, and Sonarr would be served
     // the survivor's name with a year it never had.
     let rows = sqlx::query(db.sql(
-        "SELECT id, title, original_title, original_language, is_enabled, title_qualifier, year \
+        "SELECT id, title, original_title, original_language, is_enabled, title_qualifier, year, \
+         is_manual \
          FROM media_item \
          WHERE kind = 'series' AND merged_into IS NULL ORDER BY id",
     ))
@@ -62,6 +68,8 @@ pub async fn series_titles(db: &Db) -> Result<Vec<SeriesTitles>> {
         by_id.insert(
             id.clone(),
             SeriesTitles {
+                id,
+                is_manual: row.flag("is_manual")?,
                 title: row.text("title")?,
                 original_title: row.opt_text("original_title")?,
                 original_language: row.opt_text("original_language")?,
