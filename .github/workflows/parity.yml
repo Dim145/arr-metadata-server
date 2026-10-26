@@ -65,8 +65,13 @@ jobs:
         if: steps.keys.outputs.present == 'true'
         uses: ./.github/actions/rust-toolchain
 
+      # The cache of CI's end-to-end job, which builds the server as this
+      # does and keeps it: one cache for both rather than two alike.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: steps.keys.outputs.present == 'true'
+        with:
+          shared-key: server
+          save-if: false
 
       # As the end-to-end job builds it: the crate a debug build, its
       # dependencies optimised. The web UI is not built — the Sonarr surface

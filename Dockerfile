@@ -18,6 +18,17 @@ RUN npm run build
 
 
 # ── 2. Server ────────────────────────────────────────────────────────────────
+# The manifests the dependency tree is built from below, with this crate's own
+# version set to nought: a release changes nothing else in them, and must not
+# send six hundred crates to be compiled again — the layer is kept by the
+# content of these two files. The build of the sources takes the real ones.
+FROM rust:1.98-trixie AS manifests
+
+WORKDIR /m
+COPY Cargo.toml Cargo.lock ./
+RUN sed -i '0,/^version = /s/^version = .*/version = "0.0.0"/' Cargo.toml \
+ && sed -i '/^name = "arr-metadata-server"$/{n;s/^version = .*/version = "0.0.0"/}' Cargo.lock
+
 FROM rust:1.98-trixie AS server
 
 WORKDIR /src
@@ -56,12 +67,14 @@ ARG CARGO_PROFILE_RELEASE_LTO=fat
 # mutex was the ceiling under many searches at once — the same flag
 # `.cargo/config.toml` sets for a local build, which this stage does not copy.
 ENV LIBSQLITE3_FLAGS="-DSQLITE_DEFAULT_MEMSTATUS=0"
-COPY Cargo.toml Cargo.lock build.rs ./
+COPY --from=manifests /m/Cargo.toml /m/Cargo.lock ./
+COPY build.rs ./
 RUN mkdir -p src \
  && echo 'fn main() {}' > src/main.rs \
  && cargo auditable build --release --locked --features avif-asm \
  && rm -rf src
 
+COPY Cargo.toml Cargo.lock ./
 COPY src/ ./src/
 COPY migrations/ ./migrations/
 # Served to the clients as the way to trust the authority; embedded at

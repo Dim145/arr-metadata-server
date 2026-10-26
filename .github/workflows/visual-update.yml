@@ -44,7 +44,12 @@ jobs:
       - name: Install the toolchain
         uses: ./.github/actions/rust-toolchain
 
+      # The cache of CI's end-to-end job, which builds the server as this
+      # does and keeps it.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: server
+          save-if: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:

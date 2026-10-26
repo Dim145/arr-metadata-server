@@ -7,6 +7,13 @@ may change what the API or the configuration means, and says so here.
 
 ## [Unreleased]
 
+### Changed
+
+- Building the image keeps its compiled dependencies across a change of
+  version: the layer they are compiled in is made from `Cargo.toml` and
+  `Cargo.lock` with this project's own version set aside, so a release, or a
+  local build after one, no longer compiles six hundred crates again.
+
 ## [0.11.0] — 2026-10-26
 
 ### Added

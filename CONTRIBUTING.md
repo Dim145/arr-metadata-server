@@ -156,6 +156,15 @@ with no prefix (`git log` has the tone), and a body that says why when the diff
 cannot. The pull request template is a short checklist of the above; fill it in
 rather than delete it.
 
+CI checks a pull request in full, and a push to main too, but for code it has
+checked already: a pull request merged by rebase onto the main it was tested
+against lands the very tree its run passed with, and a release moves nothing
+past a checked commit but the version and the changelog. Its first job, *What
+to check*, says which it found; either is checked again in full when it changes
+the dependencies, or when main's caches have expired, so that those caches —
+which every pull request starts from — follow the dependencies and are there. A pull request that is behind main is therefore worth
+rebasing before it is merged: its merge is then not checked a second time.
+
 ## Releasing
 
 A release is a commit, a tag and a release page, in that order, each waiting
@@ -170,12 +179,16 @@ on the one before.
    an empty `## [Unreleased]` goes above it, and the compare links at the foot
    gain the new version's line, `[Unreleased]` now comparing from `vX`.
 3. **The commit**, "Release X", with a prose summary of what the release holds.
-   Push it and wait for CI, CodeQL and Audit to pass on that commit: CI's clippy
-   is the latest stable, which may know a lint yours does not.
+   Push it once CI has passed on the commit before it — CI's clippy is the latest
+   stable, which may know a lint yours does not. CI then sees nothing but the
+   version and the changelog moved, and checks nothing again; wait for CodeQL
+   and Audit.
 4. **The tag**, annotated: `git tag -a vX -m "arr-metadata-server X"`, then
    `git push origin vX`. The tag runs *Publish the image*
    (`.github/workflows/docker.yml`): amd64 and arm64, signed, tagged `X`, `X.Y`
-   and `latest`.
+   and `latest`. Each platform starts from the dependency layers the last
+   release left in the registry (`buildcache-amd64`, `buildcache-arm64`), which
+   a change of version alone does not invalidate.
 5. **The release page**, once the image is published and not before — a
    running server's update check reads the releases, and would announce a
    version with no image to pull: `gh release create vX --title X`, with the

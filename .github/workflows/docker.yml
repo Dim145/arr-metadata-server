@@ -81,9 +81,13 @@ jobs:
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
-          # The dependency layers, kept between runs, per platform.
-          cache-from: type=gha,scope=${{ matrix.platform }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
+          # The dependency layers, kept between releases, per platform, in the
+          # registry beside the image (`buildcache-amd64`, `buildcache-arm64`).
+          # Not in the Actions cache: what a tag writes there is that tag's
+          # alone, so the next release could never read it, and its gigabytes
+          # pushed the branches' caches out of the repository's ten.
+          cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache-${{ matrix.arch }}
+          cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache-${{ matrix.arch }},mode=max,image-manifest=true,oci-mediatypes=true
           # What the image is made of and how it was built, stored in the
           # registry beside it. The digest of the build is therefore that of an
           # index holding the image and these two, and the join below takes all
