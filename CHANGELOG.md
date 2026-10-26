@@ -7,6 +7,8 @@ may change what the API or the configuration means, and says so here.
 
 ## [Unreleased]
 
+## [0.11.1] — 2026-10-26
+
 ### Changed
 
 - Building the image keeps its compiled dependencies across a change of
@@ -2506,7 +2508,8 @@ and arm64.
 - End-to-end checks against a real Sonarr, against two instances, and a
   Playwright suite over the whole interface.
 
-[Unreleased]: https://github.com/Dim145/arr-metadata-server/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/Dim145/arr-metadata-server/compare/v0.11.1...HEAD
+[0.11.1]: https://github.com/Dim145/arr-metadata-server/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/Dim145/arr-metadata-server/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/Dim145/arr-metadata-server/compare/v0.8.3...v0.10.0
 [0.8.3]: https://github.com/Dim145/arr-metadata-server/compare/v0.8.2...v0.8.3
