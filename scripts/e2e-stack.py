@@ -14,6 +14,12 @@ says what it saw, and the run goes on to the next. The exit status is the
 number of failed checks, capped at 100; skipped checks (with the reason) are
 not failures.
 
+The series and the film entered by hand (HAND_SERIES, HAND_FILM) are made
+through the native API by the first phase that needs one, and found by the
+others in the catalogue: no phase counts on another having run. A phase that
+locks a title lifts the lock again — the push phase leaves its own, as the
+real works' are.
+
 Python 3.8 or later, the standard library and a `curl` on the path (the
 clients' door is reached by the names the clients call it by, which curl
 resolves with --resolve and Python's ssl would need a hosts file for).
@@ -57,6 +63,31 @@ OWN_TITLE = "E2E record of the order's own"  # an episode the order carries, the
 LOCKED = 81189  # the series, and film 603, a title is locked on
 FRENCH = {"id": 2, "name": "French"}  # Sonarr's Language.French
 ENGLISH = {"id": 1, "name": "English"}
+
+# Works entered by hand that nothing elsewhere names — a series with no
+# TheTVDB, TMDB or Fankai id, a film with no TMDB id — are handed a number of
+# the server's own, from 1 000 000 000 to 2 147 483 647, made of the work's id
+# in the catalogue. Sonarr keeps it as the series' TheTVDB id, Radarr as the
+# film's TMDB id. The titles are ones no real work bears, so that a search by
+# text finds these and not what a provider lists under a name like them;
+# scripts/e2e-stack.sh names the videos Plex scans after the same ones.
+HAND_SERIES = "Quenzabar Tides"
+HAND_SERIES_YEAR = 2024
+HAND_EPISODES = ((1, "The Tide Goes Out", "2024-01-10"), (2, "The Tide Comes Back", "2024-01-17"))
+# A spelling a release group might use. Sonarr's scene mapping takes it from
+# the catalogue; the title a series is served under is one Sonarr knows
+# already, so a series with no other title is mapped under none.
+HAND_ALTERNATIVE = "Tides of Quenzabar"
+HAND_FILM = "Brindlemoss Without Source"
+HAND_FILM_YEAR = 2019
+HAND_FILM_STUDIO = "Hand Films"
+# What the catalogue files them under: a lock on a title leaves the slug as it
+# was made, where the title itself shows the lock.
+HAND_SLUGS = {"series": "quenzabar-tides", "movie": "brindlemoss-without-source"}
+OWN_FIRST, OWN_LAST = 1_000_000_000, 2_147_483_647
+# What the seed says of a work its library holds under such a number once the
+# catalogue is new: nothing here is made of it, and no source could be asked.
+SEED_NO_ID = "held there under no id to look it up by"
 
 PLEX_IDENTIFIER = "tv.plex.agents.custom.arrmetadataserver"
 
@@ -261,6 +292,15 @@ class Native:
                 return item
         return None
 
+    def by_hand(self, kind):
+        """The series or the film entered by hand for these checks, if the
+        catalogue holds it: found by its slug, which a lock on its title leaves
+        as it was made."""
+        for item in self.items(kind):
+            if item.get("isManual") and item.get("slug", "").startswith(HAND_SLUGS[kind]):
+                return item
+        return None
+
     def lock_title(self, item_id, title):
         self.call("PUT", f"/items/{item_id}/overrides", {"field": "title", "value": title})
 
@@ -371,6 +411,58 @@ def settle(native, kind, key, wanted, label):
                 last += f"; refresh refused: {e}"
         time.sleep(4)
     raise Failure(f"{label}: the catalogue is not whole after six refreshes: {last}")
+
+
+# ── Works entered by hand ──────────────────────────────────────────────────
+
+
+def own_number(catalogue_id):
+    """The number the server hands a work entered by hand: its catalogue id's
+    FNV-1a hash on 64 bits, taken into the range (`own` in src/service/ids.rs).
+    It is worked out here as it is there because a client keeps the number for
+    good: were it made another way one day, every such work a Sonarr or a
+    Radarr holds would be under a number nobody answers for."""
+    hashed = 0xCBF29CE484222325
+    for byte in catalogue_id.encode():
+        hashed = ((hashed ^ byte) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+    return OWN_FIRST + hashed % (OWN_LAST - OWN_FIRST + 1)
+
+
+def entered_by_hand(native, kind):
+    """The series or the film entered by hand, made as the administration's own
+    editor makes it — *New entry*, and for a series an alternative title, a
+    season and its episodes — unless the catalogue holds it already: a phase
+    before, or a run before, made it, and each phase must find the one work
+    rather than make another of the same title, which would be handed another
+    number."""
+    held = native.by_hand(kind)
+    if held is not None:
+        return held
+    if kind == "movie":
+        return native.call("POST", "/items", {
+            "kind": "movie", "title": HAND_FILM, "year": HAND_FILM_YEAR, "status": "released",
+            "overview": "A film entered by hand, with no source behind it.", "runtime": 93,
+            "inCinemas": f"{HAND_FILM_YEAR}-05-01", "studio": HAND_FILM_STUDIO, "genres": ["Drama"],
+        })
+    made = native.call("POST", "/items", {
+        "kind": "series", "title": HAND_SERIES, "year": HAND_SERIES_YEAR, "status": "continuing",
+        "overview": "A series entered by hand, with no source behind it.", "network": "Hand TV",
+        "firstAired": HAND_EPISODES[0][2], "genres": ["Animation"],
+    })
+    native.call("POST", f"/items/{made['id']}/alternative-titles", {"title": HAND_ALTERNATIVE, "titleType": "working", "language": "en"})
+    native.call("POST", f"/items/{made['id']}/seasons", {"seasonNumber": 1})
+    for number, title, aired in HAND_EPISODES:
+        native.call("POST", f"/items/{made['id']}/episodes", {
+            "seasonNumber": 1, "episodeNumber": number, "title": title, "airDate": aired,
+            "overview": f"{title}, typed in.", "runtime": 24,
+        })
+    return made
+
+
+def lift_title(native, item_id):
+    """The lock on a work's title taken off again: the work is left as it was
+    typed, for the next phase and the next run to find."""
+    native.call("DELETE", f"/items/{item_id}/overrides/item/title")
 
 
 # ── Sonarr 4 and Sonarr 5 ──────────────────────────────────────────────────
@@ -504,9 +596,10 @@ def _kind_fits(value, kind):
     return True
 
 
-def contract_problems(show, five):
+def contract_problems(show, five, optional=()):
     """What of a served series Sonarr cannot read: a missing field it needs, a
-    field of another kind, in the series, its episodes and what they hold."""
+    field of another kind, in the series, its episodes and what they hold.
+    `optional` names the fields this series may lack."""
     problems = []
 
     def check(node, fields, where):
@@ -525,7 +618,7 @@ def contract_problems(show, five):
                         problems.append(f"{where}.{name}[{i}] is not an object")
 
     for name in _SHOW_NEEDED + (_SHOW_NEEDED_5 if five else ()):
-        if show.get(name) in (None, ""):
+        if name not in optional and show.get(name) in (None, ""):
             problems.append(f"the series has no {name}")
     check(show, _SHOW, "show")
     for i, episode in enumerate(show.get("episodes") or []):
@@ -706,6 +799,9 @@ def phase_sonarr(R, stack, arr):
             held = arr.get(f"{arr.api}/series/{ids[LOCKED]}")
             expect(held["title"] == text, f"Sonarr's title is {held['title']!r}, not {text!r}")
 
+    # ── A series entered by hand: no id anywhere, a number of the server's own ─
+    phase_sonarr_by_hand(R, stack, arr)
+
     # ── Scene mappings: Sonarr's own list, this catalogue's titles added ───
     phase_scene(R, stack, arr, ids)
 
@@ -863,6 +959,122 @@ def phase_frozen(R, stack, arr, ids):
             )
 
 
+def phase_sonarr_by_hand(R, stack, arr):
+    """A series entered by hand, which nothing elsewhere names: Sonarr finds it
+    by its title and by `tvdb:` and the number it was handed, adds it with the
+    season and the episodes it was given, and takes a title locked here at its
+    next refresh — under the same number throughout. A check whose work is
+    missing is skipped: the first one says why."""
+    label, v5, native = arr.label, arr.version.startswith("5."), stack.native
+    item = number = sonarr_id = None
+
+    with R.check(f"{label}: a series entered by hand is in the catalogue, with its season and episodes, and no id elsewhere"):
+        item = entered_by_hand(native, "series")
+        number = own_number(item["id"])
+        named = {k: v for k, v in (item.get("externalIds") or {}).items() if v}
+        expect(not named, f"it is named by {named}: not a series nothing elsewhere names")
+        R.note(f"{label}: catalogue id {item['id']}, which makes the number {number}")
+    with R.check(f"{label}: a search by its title lists the series entered by hand, under a number of the server's own"):
+        if item is None:
+            raise Skipped("no series entered by hand")
+        found = arr.get(f"{arr.api}/series/lookup?term={urllib.parse.quote(HAND_SERIES.lower())}")
+        listed = [s for s in found if s.get("title") == HAND_SERIES]
+        expect(listed, f"not among {[(s['title'], s['tvdbId']) for s in found[:6]]}")
+        expect(len(listed) == 1, f"listed {len(listed)} times, under {[s['tvdbId'] for s in listed]}")
+        expect(OWN_FIRST <= listed[0]["tvdbId"] <= OWN_LAST, f"listed under {listed[0]['tvdbId']}, which is not in the server's own range")
+        expect(listed[0]["tvdbId"] == number, f"listed under {listed[0]['tvdbId']}; its catalogue id makes {number}")
+    with R.check(f"{label}: a search by tvdb: and that number finds the series entered by hand, and it alone"):
+        if number is None:
+            raise Skipped("no series entered by hand")
+        found = arr.get(f"{arr.api}/series/lookup?term=tvdb:{number}")
+        expect(
+            len(found) == 1 and found[0]["tvdbId"] == number and found[0]["title"] == HAND_SERIES,
+            f"answered {[(s['title'], s['tvdbId']) for s in found[:4]]}",
+        )
+        # A number of the range no work was handed names nothing, and the
+        # server says so at once: no source has it to be asked.
+        unhanded = OWN_FIRST if number != OWN_FIRST else OWN_FIRST + 1
+        began = time.time()
+        found = arr.get(f"{arr.api}/series/lookup?term=tvdb:{unhanded}")
+        expect(not found, f"tvdb:{unhanded}, which no work was handed, found {[(s['title'], s['tvdbId']) for s in found[:4]]}")
+        expect(time.time() - began < 15, f"tvdb:{unhanded} took {time.time() - began:.0f}s to find nothing: was a source asked for it?")
+    with R.check(f"{label}: the server serves the series entered by hand under that number on both editions, with its episodes"):
+        if number is None:
+            raise Skipped("no series entered by hand")
+        for edition, path in (("v1", f"/v1/tvdb/shows/en/{number}"), ("v2", f"/v2/tvdb/shows/eng/{number}/official")):
+            shown = stack.door.get("skyhook.sonarr.tv", path)
+            expect(shown["tvdbId"] == number and shown["title"] == HAND_SERIES, f"{edition}: {shown['title']!r} as {shown['tvdbId']}")
+            expect(len(shown["episodes"]) == len(HAND_EPISODES), f"{edition}: {len(shown['episodes'])} episodes")
+            expect(all(e.get("tvdbShowId", number) == number for e in shown["episodes"]), f"{edition}: an episode is of another series")
+    with R.check(f"{label}: the series entered by hand is added"):
+        if number is None:
+            raise Skipped("no series entered by hand")
+        # A catalogue the seed phase replaced handed the series another number,
+        # and Sonarr, never told, still holds it under the old one, at the very
+        # path this add needs: that one goes, as a run that began afresh has none.
+        for stale in arr.get(f"{arr.api}/series"):
+            if OWN_FIRST <= stale["tvdbId"] <= OWN_LAST and stale["tvdbId"] != number:
+                arr.call("DELETE", f"{arr.api}/series/{stale['id']}?deleteFiles=false")
+        sonarr_id = add_series(stack, arr, number)
+        settle_commands(arr, SONARR_REFRESHES)
+    with R.check(f"{label}: the series entered by hand has the season and the episodes it was given, as the server serves them"):
+        if sonarr_id is None:
+            raise Skipped("the series entered by hand is not added")
+        held = arr.get(f"{arr.api}/series/{sonarr_id}")
+        episodes = arr.get(f"{arr.api}/episode?seriesId={sonarr_id}")
+        served = served_show(stack, arr, number)
+        expect(held["tvdbId"] == number, f"Sonarr holds it under {held['tvdbId']}, not {number}")
+        expect(held["title"] == served["title"] == HAND_SERIES, f"title {held['title']!r}, served {served['title']!r}")
+        seasons_here = sorted(s["seasonNumber"] for s in held["seasons"])
+        seasons_served = sorted(s["seasonNumber"] for s in served["seasons"])
+        expect(seasons_here == seasons_served == [1], f"seasons: Sonarr {seasons_here}, served {seasons_served}")
+        typed = {(1, n): (title, aired) for n, title, aired in HAND_EPISODES}
+        here = {key_of(e): (e["title"], e.get("airDate")) for e in episodes}
+        there = {key_of(e): (e["title"], e.get("airDate")) for e in served["episodes"]}
+        expect(here == typed, f"Sonarr holds {sorted(here.items())}; it was given {sorted(typed.items())}")
+        expect(here == there, f"Sonarr holds {sorted(here.items())}; served {sorted(there.items())}")
+        R.note(f"{label}: {held['title']!r} {held.get('year')}, {len(episodes)} episodes, status {held.get('status')}, path {held.get('path')}")
+    with R.check(f"{label}: the series entered by hand is served with every field Sonarr {arr.version[:1]} reads, as it reads it"):
+        if number is None:
+            raise Skipped("no series entered by hand")
+        # No source says which language a series entered by hand was made in,
+        # and nobody typed one: Sonarr 5 takes its own default for it.
+        problems = contract_problems(served_show(stack, arr, number), v5, optional=("originalLanguage",))
+        expect(not problems, "; ".join(problems))
+    if v5:
+        with R.check(f"{label}: Sonarr 5 is sent metadataSource local for the series entered by hand, in a search and when it asks for it"):
+            if number is None:
+                raise Skipped("no series entered by hand")
+            searched = stack.door.get("skyhook.sonarr.tv", f"/v2/tvdb/search?term={urllib.parse.quote(HAND_SERIES.lower())}&language=eng")
+            hit = [s for s in searched if s.get("tvdbId") == number]
+            expect(hit and hit[0].get("metadataSource") == "local", f"the search says {[(s.get('tvdbId'), s.get('metadataSource')) for s in searched[:4]]}")
+            source = served_show(stack, arr, number).get("metadataSource")
+            expect(source == "local", f"the series is served with metadataSource {source!r}")
+            # Sonarr may not show it back: what it holds is then the server's answer above.
+            held = arr.get(f"{arr.api}/series/{sonarr_id}") if sonarr_id else {}
+            if "metadataSource" in held:
+                expect(held["metadataSource"] == "local", f"Sonarr holds metadataSource {held['metadataSource']!r}")
+            else:
+                R.note(f"{label}: Sonarr's series resource shows no metadataSource; the server's own answer says local")
+    with R.check(f"{label}: a title locked on the series entered by hand appears in Sonarr after its refresh, and goes with the lock"):
+        if sonarr_id is None:
+            raise Skipped("the series entered by hand is not added")
+        text = f"Locked by the e2e stack ({label}, by hand)"
+        native.lock_title(item["id"], text)
+        try:
+            refresh_series(arr, sonarr_id)
+            held = arr.get(f"{arr.api}/series/{sonarr_id}")
+            expect(held["title"] == text, f"Sonarr's title is {held['title']!r}, not {text!r}")
+            expect(held["tvdbId"] == number, f"Sonarr holds it under {held['tvdbId']} after the refresh, not {number}")
+        finally:
+            lift_title(native, item["id"])
+        refresh_series(arr, sonarr_id)
+        held = arr.get(f"{arr.api}/series/{sonarr_id}")
+        expect(held["title"] == HAND_SERIES, f"Sonarr's title is {held['title']!r} after the lock was lifted")
+        episodes = arr.get(f"{arr.api}/episode?seriesId={sonarr_id}")
+        expect(len(episodes) == len(HAND_EPISODES), f"{len(episodes)} episodes after the refreshes")
+
+
 def phase_scene(R, stack, arr, ids):
     """Sonarr takes a release for a series by the titles of its scene-mapping
     list; this server adds the catalogue's. A Sonarr 5 skips a mapping that
@@ -885,6 +1097,23 @@ def phase_scene(R, stack, arr, ids):
                 misses.append((mapping["title"], mapping["tvdbId"], found))
         expect(not misses, f"{len(misses)} of {min(len(added), 6)} releases are not taken for their series: {misses[:3]}")
         R.note(f"{label}: {len(added)} mappings added by this catalogue, tried {min(len(added), 6)}")
+    with R.check(f"{label}: the scene mapping names the series entered by hand by its own number, and a release named so finds it"):
+        item = stack.native.by_hand("series")
+        if item is None:
+            raise Skipped("the catalogue holds no series entered by hand")
+        if not hasattr(stack, "scene_began"):
+            raise Skipped("Update Scene Mapping did not complete above")
+        number = own_number(item["id"])
+        added = scene_additions(stack, {number})
+        expect(added, f"this catalogue adds no mapping under {number}")
+        if series_by_tvdb(arr, number) is None:
+            raise Skipped("Sonarr does not hold the series entered by hand: its own phase adds it")
+        for mapping in added:
+            release = re.sub(r"[\W_]+", ".", mapping["title"]).strip(".") + ".S01E01.1080p.WEB.x264-GRP"
+            parsed = arr.get(f"/api/v3/parse?title={urllib.parse.quote(release)}")
+            found = (parsed.get("series") or {}).get("tvdbId")
+            expect(found == number, f"{release!r} is taken for tvdb:{found}, not {number}")
+        R.note(f"{label}: mapped as {[m['title'] for m in added]}")
     if arr.version.startswith("5."):
         with R.check(f"{label}: no scene mapping is skipped for want of a mappingId"):
             # Only what Sonarr logged since the command: the log of a stack kept
@@ -988,10 +1217,112 @@ def phase_radarr(R, stack, arr):
         expect(state.get("status") == "completed", f"RefreshMovie ended {state.get('status')}")
         movie = arr.get(f"/api/v3/movie/{held[603]}")
         expect(movie["title"] == text, f"Radarr's title is {movie['title']!r}, not {text!r}")
+
+    # ── A film entered by hand: no TMDB id, a number of the server's own ───
+    phase_radarr_by_hand(R, stack, arr)
+
+    # Last: it reads the whole of Radarr's log.
     with R.check(f"{label}: Radarr refused no certificate"):
         log = subprocess.run(["docker", "logs", "ams-e2e-radarr"], capture_output=True, text=True)
         lines = [l for l in (log.stdout + log.stderr).splitlines() if "RemoteCertificate" in l]
         expect(not lines, f"{len(lines)} refused certificates in Radarr's log: {lines[0][:160] if lines else ''}")
+
+
+def phase_radarr_by_hand(R, stack, arr):
+    """A film entered by hand, which has no TMDB id: Radarr finds it by its
+    title and by `tmdb:` and the number it was handed, adds it, holds it as the
+    server serves it, and takes a title locked here at its next refresh — under
+    the same number throughout. A check whose work is missing is skipped: the
+    first one says why."""
+    label, native = arr.label, stack.native
+    item = number = movie_id = None
+
+    with R.check(f"{label}: a film entered by hand is in the catalogue, with no id elsewhere"):
+        item = entered_by_hand(native, "movie")
+        number = own_number(item["id"])
+        named = {k: v for k, v in (item.get("externalIds") or {}).items() if v}
+        expect(not named, f"it is named by {named}: not a film nothing elsewhere names")
+        R.note(f"{label}: catalogue id {item['id']}, which makes the number {number}")
+    with R.check(f"{label}: a search by its title lists the film entered by hand, under a number of the server's own"):
+        if item is None:
+            raise Skipped("no film entered by hand")
+        found = arr.get(f"/api/v3/movie/lookup?term={urllib.parse.quote(HAND_FILM.lower())}")
+        listed = [m for m in found if m.get("title") == HAND_FILM]
+        expect(listed, f"not among {[(m['title'], m['tmdbId']) for m in found[:6]]}")
+        expect(len(listed) == 1, f"listed {len(listed)} times, under {[m['tmdbId'] for m in listed]}")
+        expect(OWN_FIRST <= listed[0]["tmdbId"] <= OWN_LAST, f"listed under {listed[0]['tmdbId']}, which is not in the server's own range")
+        expect(listed[0]["tmdbId"] == number, f"listed under {listed[0]['tmdbId']}; its catalogue id makes {number}")
+    with R.check(f"{label}: a search by tmdb: and that number finds the film entered by hand, and it alone"):
+        if number is None:
+            raise Skipped("no film entered by hand")
+        found = arr.get(f"/api/v3/movie/lookup?term=tmdb:{number}")
+        expect(
+            len(found) == 1 and found[0]["tmdbId"] == number and found[0]["title"] == HAND_FILM,
+            f"answered {[(m['title'], m['tmdbId']) for m in found[:4]]}",
+        )
+        # A number of the range no work was handed names nothing, and the
+        # server says so at once: no source has it to be asked.
+        unhanded = OWN_FIRST if number != OWN_FIRST else OWN_FIRST + 1
+        began = time.time()
+        found = arr.get(f"/api/v3/movie/lookup?term=tmdb:{unhanded}")
+        expect(not found, f"tmdb:{unhanded}, which no work was handed, found {[(m['title'], m['tmdbId']) for m in found[:4]]}")
+        expect(time.time() - began < 15, f"tmdb:{unhanded} took {time.time() - began:.0f}s to find nothing: was a source asked for it?")
+    with R.check(f"{label}: the film entered by hand is added"):
+        if number is None:
+            raise Skipped("no film entered by hand")
+        # One a catalogue the seed phase replaced handed another number is still
+        # held under the old one, at the very path this add needs: it goes.
+        for stale in arr.get("/api/v3/movie"):
+            if OWN_FIRST <= stale["tmdbId"] <= OWN_LAST and stale["tmdbId"] != number:
+                arr.call("DELETE", f"/api/v3/movie/{stale['id']}?deleteFiles=false")
+        existing = [m for m in arr.get("/api/v3/movie") if m.get("tmdbId") == number]
+        if existing:
+            movie_id = existing[0]["id"]
+        else:
+            body = [m for m in arr.get(f"/api/v3/movie/lookup?term=tmdb:{number}") if m.get("tmdbId") == number][0]
+            body.update(
+                qualityProfileId=1, rootFolderPath=RADARR_ROOT, monitored=False, minimumAvailability="released",
+                addOptions={"monitor": "none", "searchForMovie": False},
+            )
+            try:
+                movie_id = arr.call("POST", "/api/v3/movie", body)["id"]
+            except HttpError as e:
+                raise Failure(f"Radarr refused the add of tmdb:{number}: {e}") from None
+        settle_commands(arr, RADARR_REFRESHES)
+    with R.check(f"{label}: the film entered by hand is refreshed, and is what the server serves"):
+        if movie_id is None:
+            raise Skipped("the film entered by hand is not added")
+        state = arr.command("RefreshMovie", movieIds=[movie_id])
+        expect(state.get("status") == "completed", f"RefreshMovie ended {state.get('status')}: {state.get('message')}")
+        movie = arr.get(f"/api/v3/movie/{movie_id}")
+        served = stack.door.get("api.radarr.video", f"/v1/movie/{number}")
+        expect(movie["tmdbId"] == number == served["TmdbId"], f"Radarr holds it under {movie['tmdbId']}, served {served['TmdbId']}, made {number}")
+        expect(movie["title"] == served["Title"] == HAND_FILM, f"title {movie['title']!r}, served {served['Title']!r}")
+        expect(movie["year"] == served["Year"] == HAND_FILM_YEAR, f"year {movie['year']}, served {served['Year']}")
+        expect(movie["runtime"] == served["Runtime"] == 93, f"runtime {movie['runtime']}, served {served['Runtime']}")
+        expect((movie.get("studio") or "") == (served.get("Studio") or "") == HAND_FILM_STUDIO, f"studio {movie.get('studio')!r}, served {served.get('Studio')!r}")
+        expect(movie.get("overview") == served.get("Overview"), "the overview is not the served one")
+    with R.check(f"{label}: a title locked on the film entered by hand appears in Radarr after its refresh, and goes with the lock"):
+        if movie_id is None:
+            raise Skipped("the film entered by hand is not added")
+        text = f"Locked by the e2e stack ({label}, by hand)"
+        # An instant, UTC, a moment before the edit: what was changed since.
+        since = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(time.time() - 5))
+        native.lock_title(item["id"], text)
+        try:
+            changed = stack.door.get("api.radarr.video", f"/v1/movie/changed?since={since}")
+            expect(number in changed, f"the films changed since {since} are {len(changed)}, and not {number}")
+            state = arr.command("RefreshMovie", movieIds=[movie_id])
+            expect(state.get("status") == "completed", f"RefreshMovie ended {state.get('status')}: {state.get('message')}")
+            movie = arr.get(f"/api/v3/movie/{movie_id}")
+            expect(movie["title"] == text, f"Radarr's title is {movie['title']!r}, not {text!r}")
+            expect(movie["tmdbId"] == number, f"Radarr holds it under {movie['tmdbId']} after the refresh, not {number}")
+        finally:
+            lift_title(native, item["id"])
+        state = arr.command("RefreshMovie", movieIds=[movie_id])
+        expect(state.get("status") == "completed", f"RefreshMovie ended {state.get('status')}")
+        movie = arr.get(f"/api/v3/movie/{movie_id}")
+        expect(movie["title"] == HAND_FILM, f"Radarr's title is {movie['title']!r} after the lock was lifted")
 
 
 # ── The other way: the server asks Sonarr and Radarr ───────────────────────
@@ -1013,6 +1344,68 @@ def newest_command(arr, name, since_ids):
     return None
 
 
+def held_as(arr, kind, number):
+    """The series or the film a client holds under that id: its TheTVDB id for
+    a series, its TMDB id for a film."""
+    if kind == "series":
+        return series_by_tvdb(arr, number)
+    return next((m for m in arr.get("/api/v3/movie") if m.get("tmdbId") == number), None)
+
+
+def push_after_lock(R, native, arr, name, ids_field, kind, work):
+    """A lock put on a work sends the client its refresh — RefreshSeries or
+    RefreshMovie, for that work — and the server records the push. `work` is
+    the id the client holds the work under, TheTVDB's or TMDB's; of the series
+    or the film entered by hand, which nothing elsewhere names, it is None: the
+    client holds it under the number the server made of its catalogue id. The
+    lock is left on, as is the real work's: lifting it would send a second
+    command a moment later, to whichever client is connected by then."""
+    label, is_sonarr, by_hand = arr.label, kind == "series", work is None
+    held_by = f"the {kind} entered by hand" if by_hand else f"{kind} {work}"
+    skipped = False
+    with R.check(f"push: a lock put on the {kind} entered by hand sends {name} to {label}" if by_hand else f"push: a lock put in the catalogue sends {name} to {label}"):
+        if by_hand:
+            item = native.by_hand(kind)
+            work = own_number(item["id"]) if item else None
+        else:
+            item = native.item(kind, "tvdb" if is_sonarr else "tmdb", work)
+        find = held_as(arr, kind, work) if work else None
+        if find is None:
+            skipped = True
+            raise Skipped(f"{label} does not hold {held_by}: run its own phase first")
+        expect(item is not None, f"{held_by} is not in the catalogue")
+        before = {c["id"] for c in arr.get("/api/v3/command")}
+        text = f"Pushed to {label} at {int(time.time())}"
+        native.lock_title(item["id"], text)
+        found = None
+        # Ten seconds after the last change, or a minute after the first.
+        for _ in range(100):
+            command = newest_command(arr, name, before)
+            if command and find["id"] in (command.get("body") or {}).get(ids_field, []):
+                found = command
+                break
+            time.sleep(2)
+        expect(found, f"{label} was sent no {name} for its {kind} {find['id']} in 200 s")
+        for _ in range(120):
+            state = arr.get(f"/api/v3/command/{found['id']}")
+            if state.get("status") in ("completed", "failed", "aborted"):
+                break
+            time.sleep(1)
+        expect(state.get("status") == "completed", f"the command ended {state.get('status')}")
+        path = f"{arr.api}/series/{find['id']}" if is_sonarr else f"/api/v3/movie/{find['id']}"
+        held = arr.get(path)
+        expect(held["title"] == text, f"{label} holds the title {held['title']!r}, not the lock {text!r}")
+        expect((held["tvdbId"] if is_sonarr else held["tmdbId"]) == work, f"{label} holds it under another id than {work}")
+    with R.check(f"push: the server's own record of it, for {label}, the {kind} entered by hand" if by_hand else f"push: the server's own record of it, for {label}"):
+        if skipped:
+            raise Skipped(f"no lock was put on {held_by}")
+        app = "sonarr" if is_sonarr else "radarr"
+        sent = [p for p in native.call("GET", "/admin/arr").get("pushes", []) if p.get("app") == app and p.get("outcome") == "sent"]
+        expect(sent, f"the page lists no {app} work sent")
+        expect("lock" in sent[0].get("reasons", []), f"the latest send was for {sent[0].get('reasons')}, not for a lock")
+        R.note(f"push: {label}: {sent[0].get('title')!r} sent as {sent[0].get('detail')!r}")
+
+
 def phase_push(R, stack):
     native = stack.native
     pairs = []
@@ -1030,39 +1423,9 @@ def phase_push(R, stack):
             connect(native, sonarr, radarr, push=True)
             tested = native.call("POST", "/admin/arr/test", {"app": "sonarr" if is_sonarr else "radarr"})
             expect(tested.get("ok"), f"the test answered {tested}")
-        with R.check(f"push: a lock put in the catalogue sends {name} to {label}"):
-            find = series_by_tvdb(arr, work) if is_sonarr else next((m for m in arr.get("/api/v3/movie") if m.get("tmdbId") == work), None)
-            if find is None:
-                raise Skipped(f"{label} does not hold {kind} {work}: run its own phase first")
-            item = native.item("series" if is_sonarr else "movie", "tvdb" if is_sonarr else "tmdb", work)
-            expect(item is not None, f"{kind} {work} is not in the catalogue")
-            before = {c["id"] for c in arr.get("/api/v3/command")}
-            text = f"Pushed to {label} at {int(time.time())}"
-            native.lock_title(item["id"], text)
-            found = None
-            # Ten seconds after the last change, or a minute after the first.
-            for _ in range(100):
-                command = newest_command(arr, name, before)
-                if command and find["id"] in (command.get("body") or {}).get(ids_field, []):
-                    found = command
-                    break
-                time.sleep(2)
-            expect(found, f"{label} was sent no {name} for its {kind} {find['id']} in 200 s")
-            for _ in range(120):
-                state = arr.get(f"/api/v3/command/{found['id']}")
-                if state.get("status") in ("completed", "failed", "aborted"):
-                    break
-                time.sleep(1)
-            expect(state.get("status") == "completed", f"the command ended {state.get('status')}")
-            path = f"{arr.api}/series/{find['id']}" if is_sonarr else f"/api/v3/movie/{find['id']}"
-            title = arr.get(path)["title"]
-            expect(title == text, f"{label} holds the title {title!r}, not the lock {text!r}")
-        with R.check(f"push: the server's own record of it, for {label}"):
-            app = "sonarr" if is_sonarr else "radarr"
-            sent = [p for p in native.call("GET", "/admin/arr").get("pushes", []) if p.get("app") == app and p.get("outcome") == "sent"]
-            expect(sent, f"the page lists no {app} work sent")
-            expect("lock" in sent[0].get("reasons", []), f"the latest send was for {sent[0].get('reasons')}, not for a lock")
-            R.note(f"push: {label}: {sent[0].get('title')!r} sent as {sent[0].get('detail')!r}")
+        # A work of the catalogue, then the one entered by hand.
+        push_after_lock(R, native, arr, name, ids_field, kind, work)
+        push_after_lock(R, native, arr, name, ids_field, kind, None)
 
 
 def phase_seed(R, stack):
@@ -1072,12 +1435,25 @@ def phase_seed(R, stack):
     with R.check("seed: the catalogue begins empty of what the libraries hold"):
         held = [i for i in native.items("series") if i["externalIds"].get("tvdb") in stack.series]
         held += [i for i in native.items("movie") if i["externalIds"].get("tmdb") in stack.films]
+        # The works entered by hand in the catalogue this one replaced are gone with it.
+        held += [i for i in (native.by_hand("series"), native.by_hand("movie")) if i is not None]
         expect(not held, f"the catalogue already holds {[i['title'] for i in held]}: the server was not restarted on a fresh database")
     sources = [(stack.sonarr5 or stack.sonarr4), stack.radarr]
     with R.check("seed: Sonarr and Radarr are connected"):
         connect(native, sources[0], stack.radarr, push=False)
     expected_series = [t for t in stack.series if series_by_tvdb(sources[0], t)] if sources[0] else []
     expected_films = [m for m in stack.films if stack.radarr and any(x.get("tmdbId") == m for x in stack.radarr.get("/api/v3/movie"))]
+    # What the libraries hold under a number of the server's own: the works
+    # entered by hand in the catalogue the restart replaced. Nothing here can
+    # answer for those numbers any more, and no source ever could.
+    library = [("series", s) for s in (sources[0].get(f"{sources[0].api}/series") if sources[0] else [])]
+    library += [("movie", m) for m in (stack.radarr.get("/api/v3/movie") if stack.radarr else [])]
+    handed = [
+        f"{w['title']} ({w['year']})" if w.get("year") else w["title"]
+        for kind, w in library
+        if OWN_FIRST <= (w.get("tvdbId" if kind == "series" else "tmdbId") or 0) <= OWN_LAST
+    ]
+    job = run = None
     with R.check(f"seed: Seed from Sonarr and Radarr brings {len(expected_series)} series and {len(expected_films)} films"):
         expect(expected_series or expected_films, "the libraries hold none of the stack's works: run the sonarr and radarr phases first")
         started = native.call("POST", "/tasks/arr.seed/run")
@@ -1094,6 +1470,20 @@ def phase_seed(R, stack):
         missing = [t for t in expected_series if native.item("series", "tvdb", t) is None]
         missing += [m for m in expected_films if native.item("movie", "tmdb", m) is None]
         expect(not missing, f"not in the catalogue after the run: {missing}")
+    with R.check(f"seed: the {len(handed)} works entered by hand the libraries hold are not imported: reported held under no id to look them up by"):
+        if not handed:
+            raise Skipped("the libraries hold no work entered by hand: run the sonarr and radarr phases first")
+        if run is None:
+            raise Skipped("the run above did not end")
+        listed = native.call("GET", f"/jobs/{job}")
+        noted = [e for e in listed["entries"] if e.get("note") == SEED_NO_ID]
+        expect(sorted(e.get("title") for e in noted) == sorted(handed), f"reported held under no id: {sorted(e.get('title') for e in noted)}; held by hand: {sorted(handed)}")
+        expect(not any(e.get("outcome") == "imported" or e.get("mediaId") for e in noted), f"one was made here: {noted}")
+        # Nothing came of them but a note: the others are the run's own count, and the libraries' whole.
+        expect(
+            re.search(rf"\b{len(handed)} not found, 0 failed, of {len(library)}\b", run.get("detail") or ""),
+            f"the run says {run.get('detail')!r}; {len(handed)} works by hand, {len(library)} in the libraries",
+        )
     with R.check("seed: a second run finds everything held, and fetches nothing"):
         run = None
         job = native.call("POST", "/tasks/arr.seed/run")["jobId"]
@@ -1105,6 +1495,9 @@ def phase_seed(R, stack):
         expect(run["status"] == "succeeded", f"the run {run['status']}: {run.get('error')}")
         detail = run.get("detail") or ""
         expect(re.search(r"\b0 imported\b", detail), f"the second run says: {detail}")
+        # What cannot be held here is reported as often as it is asked.
+        if handed:
+            expect(re.search(rf"\b{len(handed)} not found, 0 failed\b", detail), f"the second run says: {detail}")
 
 
 # ── Plex ───────────────────────────────────────────────────────────────────
@@ -1357,6 +1750,87 @@ def phase_plex(R, stack):
         )
         expect(shows, "the French library holds nothing")
         expect(shows[0].get("summary") == french["summary"], "the French library's summary is not the French one the catalogue serves")
+    # ── A series and a film entered by hand: matched under the catalogue's own id ──
+    # Libraries of their own, on the same agent — this provider alone, with no
+    # Plex provider beside it to guess a match by title — and folders of their
+    # own: the checks above count what theirs hold. The works are made in the
+    # catalogue before the libraries are, so that the first scan finds them.
+    hand = {}
+    with R.check("plex: a library of series and one of films entered by hand are made on the agent that is this provider alone"):
+        series, film = entered_by_hand(native, "series"), entered_by_hand(native, "movie")
+        sections = {s.get("title"): s for s in plex_get(base, "/library/sections").findall("Directory")}
+        wanted = 0
+        for title, kind, scanner, location in (
+            ("Series by hand AMS", "2", "Plex TV Series", "/media/By hand/TV Shows"),
+            ("Films by hand AMS", "1", "Plex Movie", "/media/By hand/Movies"),
+        ):
+            if title not in sections:
+                wanted += 1
+                plex_post(base, "/library/sections", {
+                    "name": title, "type": kind, "scanner": scanner, "agent": PLEX_IDENTIFIER,
+                    "metadataAgentProviderGroupId": group_id, "language": "en-US", "location": location,
+                })
+        sections = {s.get("title"): s for s in plex_wait_scan(base, len(sections) + wanted)}
+        for title in ("Series by hand AMS", "Films by hand AMS"):
+            expect(title in sections, f"no library {title}")
+            expect(sections[title].get("agent") == PLEX_IDENTIFIER, f"{title} uses the agent {sections[title].get('agent')!r}")
+            expect(sections[title].get("metadataAgentProviderGroupId") == group_id, f"{title} is not on the group")
+        hand = {"series": series, "movie": film, "series_key": sections["Series by hand AMS"].get("key"), "film_key": sections["Films by hand AMS"].get("key")}
+    with R.check("plex: the series entered by hand is matched as show-id-…, with the title, summary, season and episodes the catalogue holds"):
+        if not hand:
+            raise Skipped("no library for the works entered by hand")
+        series = hand["series"]
+        shows = eventually(
+            lambda: plex_get(base, f"/library/sections/{hand['series_key']}/all").findall("Directory"),
+            lambda found: len(found) == 1 and found[0].get("guid", "").startswith(PLEX_IDENTIFIER) and found[0].get("summary"),
+        )
+        expect(len(shows) == 1, f"the library holds {len(shows)} series: {[(s.get('title'), s.get('guid')) for s in shows]}")
+        rating = f"show-id-{series['id']}"
+        ours = provider_json(f"/library/metadata/{rating}")
+        show = refreshed(shows[0].get("ratingKey"), "Directory", "title", ours["title"])
+        expect(show.get("guid") == f"{PLEX_IDENTIFIER}://show/{rating}", f"guid {show.get('guid')!r}")
+        expect(show.get("title") == ours["title"] == HAND_SERIES, f"title {show.get('title')!r}, served {ours['title']!r}")
+        expect(show.get("year") == str(ours["year"]) == str(HAND_SERIES_YEAR), f"year {show.get('year')!r}")
+        expect(show.get("summary") == ours["summary"] and ours["summary"], "the summary is not the catalogue's")
+        seasons = plex_get(base, f"/library/metadata/{show.get('ratingKey')}/children").findall("Directory")
+        expect(len(seasons) == 1 and seasons[0].get("index") == "1", f"Plex lists {len(seasons)} seasons: {[s.get('title') for s in seasons]}")
+        season_ours = provider_json(f"/library/metadata/season-id-{series['id']}-s1")
+        expect(seasons[0].get("title") == season_ours["title"], f"season title {seasons[0].get('title')!r}, served {season_ours['title']!r}")
+        episodes = eventually(
+            lambda: plex_get(base, f"/library/metadata/{seasons[0].get('ratingKey')}/children").findall("Video"),
+            lambda found: len(found) == len(HAND_EPISODES) and all(e.get("summary") for e in found),
+        )
+        expect(len(episodes) == len(HAND_EPISODES), f"Plex lists {len(episodes)} episodes")
+        typed = {str(n): title for n, title, _ in HAND_EPISODES}
+        for episode in episodes:
+            number = episode.get("index")
+            theirs = provider_json(f"/library/metadata/episode-id-{series['id']}-s1e{number}")
+            expect(episode.get("title") == theirs["title"] == typed.get(number), f"episode {number}: title {episode.get('title')!r}, served {theirs['title']!r}, typed {typed.get(number)!r}")
+            expect(episode.get("summary") == theirs.get("summary") and episode.get("summary"), f"episode {number}: the summary is not the catalogue's")
+        # Nothing elsewhere names it, so no id is listed for Plex to map it by: one made
+        # up for it would be taken for another work's.
+        named = [g.get("id") for g in show.findall("Guid")]
+        expect(not named, f"Plex lists the ids {named} for a series nothing elsewhere names")
+        R.note(f"plex: {show.get('title')}: {[e.get('title') for e in episodes]}")
+    with R.check("plex: the film entered by hand is matched as movie-id-…, with the title, year and summary the catalogue holds"):
+        if not hand:
+            raise Skipped("no library for the works entered by hand")
+        film = hand["movie"]
+        videos = eventually(
+            lambda: plex_get(base, f"/library/sections/{hand['film_key']}/all").findall("Video"),
+            lambda found: len(found) == 1 and found[0].get("guid", "").startswith(PLEX_IDENTIFIER) and found[0].get("summary"),
+        )
+        expect(len(videos) == 1, f"the library holds {len(videos)} films: {[(v.get('title'), v.get('guid')) for v in videos]}")
+        rating = f"movie-id-{film['id']}"
+        ours = provider_json(f"/library/metadata/{rating}")
+        node = refreshed(videos[0].get("ratingKey"), "Video", "title", ours["title"])
+        expect(node.get("guid") == f"{PLEX_IDENTIFIER}://movie/{rating}", f"guid {node.get('guid')!r}")
+        expect(node.get("title") == ours["title"] == HAND_FILM, f"title {node.get('title')!r}, served {ours['title']!r}")
+        expect(node.get("year") == str(ours["year"]) == str(HAND_FILM_YEAR), f"year {node.get('year')!r}")
+        expect(node.get("summary") == ours["summary"] and ours["summary"], "the summary is not the catalogue's")
+        named = [g.get("id") for g in node.findall("Guid")]
+        expect(not named, f"Plex lists the ids {named} for a film nothing elsewhere names")
+        R.note(f"plex: {node.get('title')} ({node.get('year')})")
     with R.check("plex: this server counted the calls Plex made, and refused none"):
         apis = {a["api"]: a for a in native.call("GET", "/admin/access")["apis"]}
         served = apis["plex"]["served"] - served_before
