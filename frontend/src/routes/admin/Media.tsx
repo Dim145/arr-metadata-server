@@ -40,9 +40,22 @@ import {
   type Column,
 } from '../../components/ui'
 import { ApiError, api, query } from '../../lib/api'
+import { cn } from '../../lib/cn'
 import * as fmt from '../../lib/format'
 import { useI18n } from '../../lib/i18n'
-import type { MediaAsset, MediaByWork, MediaStatus, TaskId } from '../../lib/types'
+import type { MediaAsset, MediaByWork, MediaStatus, MediaVariantFormat, TaskId, VariantsDeleted } from '../../lib/types'
+
+/** The switches that have a format's copies made, which can be deleted once they are off. */
+const FORMAT_OF: Partial<Record<string, MediaVariantFormat>> = { 'media.webp': 'webp', 'media.avif': 'avif' }
+const SETTING_OF: Record<MediaVariantFormat, string> = { webp: 'media.webp', avif: 'media.avif' }
+const FORMAT_NAME: Record<MediaVariantFormat, string> = { webp: 'WebP', avif: 'AVIF' }
+
+/** How many copies of a format are kept, and what they weigh. */
+function copiesOf(variants: MediaStatus['variants'], format: MediaVariantFormat): { copies: number; bytes: number } {
+  return format === 'webp'
+    ? { copies: variants.webp, bytes: variants.webpBytes }
+    : { copies: variants.avif, bytes: variants.avifBytes }
+}
 
 /** An address as a row shows it: its host, and the end of its path. */
 function shortAddress(origin: string): string {
@@ -63,12 +76,19 @@ export function Media() {
   // One line under the buttons says what the last action did.
   const [notice, setNotice] = useState<string | null>(null)
   const [asking, setAsking] = useState(false)
+  // The format being turned off while copies of it are kept, as the page
+  // asks what becomes of them; and the deletion the last answer started.
+  const [turningOff, setTurningOff] = useState<MediaVariantFormat | null>(null)
+  const [purged, setPurged] = useState<VariantsDeleted | null>(null)
 
   const status = useQuery({
     queryKey: ['media', 'status'],
     queryFn: () => api.get<MediaStatus>('/media/status'),
     // Live while something runs: the counts are the progress.
-    refetchInterval: (q) => (q.state.data?.fetching || q.state.data?.sweeping || q.state.data?.preparing ? 3_000 : 30_000),
+    refetchInterval: (q) => {
+      const now = q.state.data
+      return now?.fetching || now?.sweeping || now?.preparing || now?.purging ? 3_000 : 30_000
+    },
   })
   const on = status.data?.backend !== undefined && status.data.backend !== 'off'
 
@@ -83,12 +103,76 @@ export function Media() {
     void queryClient.invalidateQueries({ queryKey: ['media'] })
     void queryClient.invalidateQueries({ queryKey: ['tasks'] })
   }
+  // What a switch changes: the figures here, and — the WebP copies' — what
+  // this browser's pages are given, which the server's options say.
+  const changed = (key: string) => {
+    invalidate()
+    if (key === 'media.webp') void queryClient.invalidateQueries({ queryKey: ['auth', 'options'] })
+  }
 
   const set = useMutation({
     mutationFn: ({ key, value }: { key: string; value: string }) =>
       api.put('/settings/server/-', { key, value }),
-    onSuccess: invalidate,
+    onSuccess: (_, { key }) => changed(key),
   })
+
+  // Every copy of a format deleted, in the background on the server, which
+  // answers at once with what there was. Asked once more a second later
+  // when it is refused for now (409): of several instances, the one asked
+  // may not have heard yet that the format was turned off.
+  const purge = useMutation({
+    mutationFn: async (format: MediaVariantFormat) => {
+      const path = `/media/variants/${format}`
+      try {
+        return await api.delete<VariantsDeleted>(path)
+      } catch (error) {
+        if (!(error instanceof ApiError) || error.status !== 409) throw error
+        await new Promise((resolve) => window.setTimeout(resolve, 1_000))
+        return await api.delete<VariantsDeleted>(path)
+      }
+    },
+    onSuccess: (deleted) => {
+      setTurningOff(null)
+      setPurged(deleted)
+      invalidate()
+    },
+  })
+
+  // A format turned off from the dialog — the server deletes none of its
+  // copies while it is on — and then, where that was the answer, its
+  // copies deleted.
+  const turnOff = useMutation({
+    mutationFn: ({ format }: { format: MediaVariantFormat; purge: boolean }) =>
+      api.put('/settings/server/-', { key: SETTING_OF[format], value: 'false' }),
+    onSuccess: (_, { format, purge: deleting }) => {
+      changed(SETTING_OF[format])
+      if (deleting) purge.mutate(format)
+      else setTurningOff(null)
+    },
+  })
+
+  // A switch pressed. Turning a format's copies off while some are kept
+  // asks first whether to delete them — counted again before it asks, as
+  // the pages have copies made between two looks at the store; anything
+  // else is done at once.
+  const flip = (key: string, next: boolean) => {
+    const format = FORMAT_OF[key]
+    if (!format || next) {
+      set.mutate({ key, value: String(next) })
+      return
+    }
+    void status.refetch().then(({ data }) => {
+      if (data && copiesOf(data.variants, format).copies > 0) {
+        turnOff.reset()
+        purge.reset()
+        setTurningOff(format)
+      } else {
+        set.mutate({ key, value: 'false' })
+      }
+    })
+  }
+  const answering = turnOff.isPending || purge.isPending
+  const asked = turningOff && status.data ? { format: turningOff, ...copiesOf(status.data.variants, turningOff) } : null
 
   const run = useMutation({
     mutationFn: (id: TaskId) => api.post<{ jobId?: string }>(`/tasks/${id}/run`),
@@ -191,11 +275,12 @@ export function Media() {
                     )}
                   </span>
                 </p>
-                {(status.data.fetching || status.data.sweeping || status.data.preparing || !status.data.publicUrl) ? (
+                {(status.data.fetching || status.data.sweeping || status.data.preparing || status.data.purging || !status.data.publicUrl) ? (
                   <div className="space-y-2 border-t border-rule px-5 py-3 text-sm">
                     {status.data.fetching ? <Lamp tone="vermillion">{p.fetching}</Lamp> : null}
                     {status.data.sweeping ? <Lamp tone="vermillion">{p.sweeping}</Lamp> : null}
                     {status.data.preparing ? <Lamp tone="vermillion">{p.preparing}</Lamp> : null}
+                    {status.data.purging ? <Lamp tone="vermillion">{p.purging}</Lamp> : null}
                     {!status.data.publicUrl ? (
                       <p className="flex items-start gap-2 text-bone-dim">
                         <Glyph name="alert" className="mt-0.5 size-4 shrink-0 text-brass" />
@@ -229,6 +314,7 @@ export function Media() {
                       ['media.store', p.storeOn, p.storeOnHint, status.data.storing],
                       ['media.people', p.people, p.peopleHint, status.data.people],
                       ['media.audio', p.audio, p.audioHint, status.data.audio],
+                      ['media.webp', p.webp, p.webpHint, status.data.webp],
                       ['media.avif', p.avif, p.avifHint, status.data.avif],
                     ] as const
                   ).map(([key, label, hint, checked]) => (
@@ -243,8 +329,8 @@ export function Media() {
                         id={`media-${key}`}
                         checked={checked}
                         label={label}
-                        disabled={set.isPending}
-                        onChange={(next) => set.mutate({ key, value: String(next) })}
+                        disabled={set.isPending || answering}
+                        onChange={(next) => flip(key, next)}
                       />
                     </li>
                   ))}
@@ -267,6 +353,18 @@ export function Media() {
                     </li>
                   ) : null}
                 </ul>
+                {/* What the last deletion started on: the lamp above says
+                    while it runs, and the copies' line counts it down. */}
+                <p role="status" className={cn('px-5 text-sm text-bone-dim', purged && 'border-t border-rule py-3')}>
+                  {purged
+                    ? p.turnOff.deleting(
+                        purged.copies,
+                        fmt.count(purged.copies, locale),
+                        FORMAT_NAME[purged.format],
+                        fmt.bytes(purged.bytes, locale),
+                      )
+                    : ''}
+                </p>
                 {set.isError ? (
                   <p role="alert" className="border-t border-rule px-5 py-3 text-sm text-status-error">
                     {set.error instanceof ApiError ? set.error.message : t.common.actionFailed}
@@ -309,7 +407,11 @@ export function Media() {
                 <div className="flex flex-wrap items-center gap-3 border-t border-rule px-5 py-4">
                   {status.data.unprepared > 0 ? (
                     <>
-                      <p className="max-w-prose flex-1 text-sm leading-relaxed text-bone-dim">{p.unprepared(status.data.unprepared)}</p>
+                      {/* Without the WebP copies, preparing a picture is
+                          working out its placeholder alone. */}
+                      <p className="max-w-prose flex-1 text-sm leading-relaxed text-bone-dim">
+                        {status.data.webp ? p.unprepared(status.data.unprepared) : p.unpreparedWhole(status.data.unprepared)}
+                      </p>
                       <Button
                         disabled={run.isPending || status.data.preparing}
                         onClick={() => run.mutate('media.variants')}
@@ -346,6 +448,50 @@ export function Media() {
                 {reset.isError ? (
                   <p role="alert" className="mt-3 text-sm text-status-error">
                     {reset.error instanceof ApiError ? reset.error.message : t.common.actionFailed}
+                  </p>
+                ) : null}
+              </Dialog>
+
+              {/* A format's copies turned off while some are kept: kept, or
+                  deleted to have the space back. Cancelled, nothing changes. */}
+              <Dialog
+                open={asked !== null}
+                title={asked ? p.turnOff.title(FORMAT_NAME[asked.format]) : ''}
+                onClose={() => setTurningOff(null)}
+                footer={
+                  asked ? (
+                    <>
+                      <Button onClick={() => setTurningOff(null)}>{t.common.cancel}</Button>
+                      <Button disabled={answering} onClick={() => turnOff.mutate({ format: asked.format, purge: false })}>
+                        {turnOff.isPending && !turnOff.variables.purge ? <Spinner className="size-4" /> : null}
+                        {p.turnOff.keep(asked.copies)}
+                      </Button>
+                      <Button
+                        variant="danger"
+                        disabled={answering}
+                        onClick={() => turnOff.mutate({ format: asked.format, purge: true })}
+                      >
+                        {purge.isPending || (turnOff.isPending && turnOff.variables.purge) ? (
+                          <Spinner className="size-4" />
+                        ) : (
+                          <Glyph name="trash" className="size-4" />
+                        )}
+                        {p.turnOff.delete(asked.copies)}
+                      </Button>
+                    </>
+                  ) : null
+                }
+              >
+                {asked
+                  ? p.turnOff[asked.format](asked.copies, fmt.count(asked.copies, locale), fmt.bytes(asked.bytes, locale))
+                  : null}
+                {turnOff.isError ? (
+                  <p role="alert" className="mt-3 text-sm text-status-error">
+                    {turnOff.error instanceof ApiError ? turnOff.error.message : t.common.actionFailed}
+                  </p>
+                ) : purge.isError ? (
+                  <p role="alert" className="mt-3 text-sm text-status-error">
+                    {p.turnOff.kept(purge.error instanceof ApiError ? purge.error.message : t.common.actionFailed)}
                   </p>
                 ) : null}
               </Dialog>

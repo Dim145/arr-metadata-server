@@ -35,9 +35,10 @@ default: nothing is kept until it is asked for.
   pictures as they were fetched — JPEG and PNG, whole — at the copies'
   addresses when `AMS_PUBLIC_URL` is set, and at the providers' when it is
   not, since only this server's own pages can follow a path. This server's
-  own pages are given smaller copies instead: see below. A bucket's media
-  go through this server, or, with **Sent to the bucket's own address**, a
-  reader is redirected to a presigned address good for an hour.
+  own pages are given the same pictures, or smaller copies once those are
+  turned on: see below. A bucket's media go through this server, or, with
+  **Sent to the bucket's own address**, a reader is redirected to a
+  presigned address good for an hour.
 - **By hand.** From a work's page, a picture or a theme can be uploaded —
   read for what it is, never for what it is called; SVG is refused, since a
   document that can carry a script must not be served from here — and a
@@ -66,10 +67,10 @@ default: nothing is kept until it is asked for.
 
 A poster kept is two to three thousand pixels tall and a background up to
 four thousand wide: what a client that keeps one picture wants, and ten
-times what a card or a page draws. So this server's own pages are given
-copies, made of each picture at the widths it is drawn at, once and twice
-over for a dense screen, never wider than the picture and never wider than
-1920 pixels:
+times what a card or a page draws. So this server can give its own pages
+WebP copies instead, made of each picture at the widths it is drawn at,
+once and twice over for a dense screen, never wider than the picture and
+never wider than 1920 pixels:
 
 | A picture drawn as | Widths |
 |---|---|
@@ -79,6 +80,14 @@ over for a dense screen, never wider than the picture and never wider than
 | a logo | 400, 800 |
 | an episode's still | 320, 640 |
 | a photograph of the cast | 120, 240 |
+
+They are off until somebody turns them on — **WebP copies for the pages**
+on the Media page, the setting `media.webp` — and until then the pages are
+given the pictures themselves, whole, with the AVIF copies over them where
+the night made some (see [AVIF](#avif)): no WebP copy is made. A page
+learns which with the site's other options (`webp` in
+`GET /api/v1/auth/options`) — the catalogue's pages before they draw
+anything — and asks for the right files from its first picture.
 
 - **WebP.** Lossy, at quality 80, through libwebp's encoder — a poster's
   colours converted with its sharper method, so that thin lettering keeps
@@ -92,13 +101,22 @@ over for a dense screen, never wider than the picture and never wider than
   the original.
 - **Made once, when first asked for.** A copy is named by its picture's
   hash and its width — `/media/<hash>-480.webp` — and kept beside the
-  picture in the store, in a directory of its own. The copy a page asks for
-  first is made as the picture is stored: a poster's 480, a background's
-  1280. Any other is made the first time a page asks for it — a few hundred
-  milliseconds for a large background — and served from the store after.
-  A width no page asks for is refused, so a picture has a dozen copies at
-  the most. The thumbnails earlier versions made are still served; none is
-  made any more.
+  picture in the store, in a directory of its own. While the copies are
+  on, the copy a page asks for first is made as the picture is stored: a
+  poster's 480, a background's 1280. Any other is made the first time a
+  page asks for it — a few hundred milliseconds for a large background —
+  and served from the store after. A width no page asks for is refused, so
+  a picture has a dozen copies at the most. The thumbnails earlier versions
+  made are still served; none is made any more.
+- **Turned on.** The pages ask for the copies at once, and the pictures
+  kept already have theirs made as they are asked for: a catalogue's first
+  pages after the switch are a little slower to fill.
+- **Turned off.** The pages are given the pictures themselves again, and
+  no copy is made. A page opened before, which still asks for one, is
+  given the copy where it is kept, and sent to the picture where it is not,
+  for that time only. The copies made stay in the store, ready should they
+  be turned back on, until they are deleted: see
+  [Deleting the copies of a format](#deleting-the-copies-of-a-format).
 - **Read safely.** A picture is decoded in Rust, never by libwebp: a
   picture past 16,384 pixels a side or 100 million pixels is not decoded
   at all, nor one whose pixels would take more than 256 MB, and a decoder
@@ -121,14 +139,15 @@ proportions before a byte of it is there.
 
 ### Preparing what was kept before
 
-Pictures stored before this version have neither a placeholder nor their
-first copy. Their copies are made all the same, as pages ask for them; the
-task **Prepare the pictures** (`media.variants`, on **Tasks** and on the
-Media page, which says how many are left) works out their placeholders and
-makes their first copies, a few at a time. It runs only when somebody runs
-it — never at start: a catalogue's pictures are hours of decoding on a small
-machine. It can be stopped; each picture is noted as it is done, so the
-next run takes up where the last one stopped.
+Pictures stored before this version have no placeholder, and no first
+copy: a page draws them without one, and — while the WebP copies are on —
+has their copies made as it asks for them. The task **Prepare the
+pictures** (`media.variants`, on **Tasks** and on the Media page, which
+says how many are left) works out their placeholders and, while the WebP
+copies are on, makes their first copies, a few at a time. It runs only
+when somebody runs it — never at start: a catalogue's pictures are hours of
+decoding on a small machine. It can be stopped; each picture is noted as it
+is done, so the next run takes up where the last one stopped.
 
 ### AVIF
 
@@ -144,6 +163,13 @@ background's 1920 takes about a second and a half at night. No browser is asked
 what it reads: the addresses are fixed, and every browser the interface
 supports reads both.
 
+With the WebP copies off, a page offers the same AVIF copies over the
+picture itself, by the same rule: where they reach as wide as the role the
+picture is drawn in, a browser takes the AVIF of the width it needs rather
+than the whole picture, and where they do not, the picture. An AVIF whose
+file has gone is answered with the WebP of its width while those are on,
+and with the picture while they are off.
+
 Measured on fifty posters from TMDB, on one core of an Apple M-series
 processor, at quality 68 and rav1e's speed 6:
 
@@ -158,9 +184,36 @@ feature; NASM assembles it on x86_64); a build from source has it with
 `cargo build --release --features avif-asm`. Making them takes about 170 MB
 of memory at its peak.
 
+### Deleting the copies of a format
+
+Turning the WebP or the AVIF copies off on the Media page while some are
+kept asks what becomes of them, and says how many there are and what they
+weigh. **Cancel** changes nothing. **Turn off and keep them** turns them
+off and keeps the copies: a WebP copy is ready should they be turned back
+on, and an AVIF copy is still given to the pages, though no other is made.
+**Turn off and delete them** turns them off and deletes every copy of that
+format, to have the space back. With none kept, the switch simply turns
+off.
+
+The deletion runs in the background, a few hundred copies at a time — each
+file taken from the store, then its row — and the Media page says
+**Deleting copies now** until it is over. Turned on again meanwhile, the
+setting stops it where it is. The pictures themselves are never touched,
+nor the squares Plex is given.
+
+Through the API, an administrator's: `DELETE /api/v1/media/variants/webp`
+(or `avif`), once that format's setting is off. It answers at once, `202`,
+with how many copies there were and what they weighed (`copies`, `bytes`),
+and the store's status says `purging` while it runs
+(`GET /api/v1/media/status`). It is refused with `409` while the setting
+is still on, while the AVIF copies are being made, or while another
+deletion runs, and with `503` when no store is configured. Of several
+instances, the one asked may not have heard yet that the setting is off:
+the Media page asks once more a second later.
+
 The providers' terms still apply to what is kept: TMDB, TheTVDB and
 Fanart.tv each say what may be done with their pictures.
 
 The switches of the **Media** page — store, how a bucket's copies are served, the cast's
-photographs, the themes, the AVIF copies — are settings: see [Media](settings.md#media) in
-the settings reference.
+photographs, the themes, the WebP copies, the AVIF copies — are settings: see
+[Media](settings.md#media) in the settings reference.

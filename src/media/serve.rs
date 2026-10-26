@@ -10,7 +10,10 @@
 //!
 //! A copy of a picture — `<hash>-480.webp`, `<hash>-square.jpg` — is made
 //! the first time it is asked for and kept: see [`super::variants`]. An
-//! AVIF is the night's to make, never a request's.
+//! AVIF is the night's to make, never a request's. A WebP is made only
+//! while `media.webp` is on: off, one kept already is served, and a page
+//! that asks for one that is not is sent to the picture itself — for this
+//! time only, as they may be turned on again.
 
 use std::{ops::Range, sync::LazyLock, time::Duration};
 
@@ -255,12 +258,30 @@ async fn copy(
         return not_modified(&etag);
     }
     // Sent to the bucket itself, when that is how it is set and the copy
-    // is there already; one that is not is made, and answered from here.
+    // is there already; one that is not is made — a WebP only while they
+    // are on — and answered from here.
     if state.text("media.serve").as_deref() == Some("redirect")
         && store.exists(&key).await.unwrap_or(false)
         && let Ok(Some(url)) = store.presign(&key, method.clone(), PRESIGNED_FOR).await
     {
         return redirect(url.as_str(), "private, max-age=3000");
+    }
+
+    // The WebP copies off: one kept already is served, and none is made —
+    // the page is sent to the picture itself, and asks again next time.
+    if format == Format::Webp && !state.flag("media.webp", false) {
+        return match store.read(&key).await {
+            Ok(Some(bytes)) => whole(method, format_type(format), &key, &etag, bytes, IMMUTABLE),
+            Ok(None) => redirect(&state.media.url_for(&original), "no-cache"),
+            Err(e) => {
+                tracing::warn!(
+                    key,
+                    error = format_args!("{e:#}"),
+                    "could not read a medium"
+                );
+                redirect(&state.media.url_for(&original), "no-cache")
+            }
+        };
     }
 
     match kept_or_made(state, store, &original, asked.stem, made, format, &key).await {
@@ -279,8 +300,9 @@ async fn copy(
 
 /// An AVIF copy: the night's task makes them, and a page is offered one
 /// only where it exists. One whose file has gone — a store moved, a restore
-/// onto a new machine — is answered with the WebP of the same width, not
-/// kept for long, and forgotten, so that the next night makes it again.
+/// onto a new machine — is answered with the WebP of the same width, or,
+/// while the WebP copies are off, with the picture itself; not kept for
+/// long, and forgotten, so that the next night makes it again.
 #[allow(clippy::too_many_arguments)]
 async fn avif(
     state: &AppState,
@@ -315,6 +337,9 @@ async fn avif(
         if let Err(e) = repo::asset::delete_variant(&state.db, key).await {
             tracing::debug!(key, error = %e, "could not forget a copy whose file is gone");
         }
+    }
+    if !state.flag("media.webp", false) {
+        return redirect(&state.media.url_for(original), "no-cache");
     }
     let webp = file::made_key(stem, made, Format::Webp.ext());
     match kept_or_made(state, store, original, stem, made, Format::Webp, &webp).await {
@@ -719,5 +744,192 @@ mod tests {
         let response = unsatisfiable(1000);
         assert_eq!(response.status(), StatusCode::RANGE_NOT_SATISFIABLE);
         assert_eq!(response.headers()[header::CONTENT_RANGE], "bytes */1000");
+    }
+
+    /// The whole server, on a database of its own, keeping its media in
+    /// `dir`.
+    async fn server(dir: &std::path::Path) -> AppState {
+        let mut config = crate::config::Config::from_env().expect("a configuration");
+        config.mode = crate::config::Mode::Single;
+        config.database = crate::db::testing::database().await;
+        config.security.bootstrap_admin = None;
+        config.cache.redis_url = None;
+        config.media.storage = crate::config::MediaStorage::Filesystem;
+        config.media.dir = dir.to_path_buf();
+        config.clients = None;
+        config.tmdb.api_key = None;
+        config.tvdb.api_key = None;
+        config.tvdb.enabled = false;
+        AppState::bootstrap(config).await.expect("a server")
+    }
+
+    /// A poster kept, as the worker keeps one — in the store and in the
+    /// index — and no copy of it yet: its key and its hash. `shade` makes
+    /// it a picture of its own, whose copies no other test makes.
+    async fn kept(state: &AppState, shade: u8) -> (String, String) {
+        let mut bytes = Vec::new();
+        image::RgbImage::from_fn(600, 900, |x, y| {
+            image::Rgb([(x % 256) as u8, (y % 256) as u8, shade])
+        })
+        .write_to(
+            &mut std::io::Cursor::new(&mut bytes),
+            image::ImageFormat::Png,
+        )
+        .unwrap();
+        let (key, sha) = file::key_for(&bytes, "png");
+        state
+            .media
+            .store()
+            .unwrap()
+            .put(&key, Bytes::from(bytes), "image/png")
+            .await
+            .unwrap();
+        state.media.remember(
+            &format!("https://images.example/{sha}.png"),
+            &key,
+            repo::asset::Thumb::None,
+            "image/png",
+        );
+        (key, sha)
+    }
+
+    async fn asked(state: &AppState, key: &str) -> Response {
+        get(
+            State(state.clone()),
+            Method::GET,
+            Path(key.to_string()),
+            HeaderMap::new(),
+        )
+        .await
+    }
+
+    async fn webp_copies(state: &AppState, sha: &str) -> Vec<(String, i32)> {
+        repo::asset::variants_of(&state.db, sha)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|copy| copy.format == "webp")
+            .map(|copy| (copy.key, copy.width))
+            .collect()
+    }
+
+    async fn turn(state: &AppState, key: &str, on: bool) {
+        state
+            .settings
+            .set(
+                crate::settings::Scope::Server,
+                "",
+                key,
+                if on { "true" } else { "false" },
+                None,
+            )
+            .await
+            .unwrap();
+    }
+
+    /// While the WebP copies are off — as they are until somebody turns
+    /// them on — a page that asks for one is sent to the picture itself,
+    /// and asks again next time: nothing is made, and nothing noted. On,
+    /// one is made, kept and noted as it is asked for; off again, the copy
+    /// kept is still served, and no other is made.
+    #[tokio::test]
+    async fn a_webp_copy_is_made_only_while_they_are_on() {
+        let dir = crate::testing::scratch_path("serve-webp");
+        let state = server(&dir).await;
+        let store = state.media.store().unwrap().clone();
+        let (key, sha) = kept(&state, 31).await;
+        let copy = format!("{sha}-480.webp");
+
+        let answer = asked(&state, &copy).await;
+        assert_eq!(answer.status(), StatusCode::FOUND);
+        assert_eq!(answer.headers()[header::LOCATION], format!("/media/{key}"));
+        assert_eq!(answer.headers()[header::CACHE_CONTROL], "no-cache");
+        assert!(!store.exists(&copy).await.unwrap(), "nothing made");
+        assert!(webp_copies(&state, &sha).await.is_empty(), "nothing noted");
+        // A width no page asks for is refused all the same.
+        let refused = asked(&state, &format!("{sha}-481.webp")).await;
+        assert_eq!(refused.status(), StatusCode::NOT_FOUND);
+
+        turn(&state, "media.webp", true).await;
+        let answer = asked(&state, &copy).await;
+        assert_eq!(answer.status(), StatusCode::OK);
+        assert_eq!(answer.headers()[header::CONTENT_TYPE], "image/webp");
+        assert_eq!(answer.headers()[header::CACHE_CONTROL], IMMUTABLE);
+        assert!(store.exists(&copy).await.unwrap(), "made and kept");
+        assert_eq!(webp_copies(&state, &sha).await, [(copy.clone(), 480)]);
+
+        turn(&state, "media.webp", false).await;
+        let answer = asked(&state, &copy).await;
+        assert_eq!(answer.status(), StatusCode::OK, "the copy kept is served");
+        assert_eq!(answer.headers()[header::CONTENT_TYPE], "image/webp");
+        let other = format!("{sha}-240.webp");
+        let answer = asked(&state, &other).await;
+        assert_eq!(answer.status(), StatusCode::FOUND);
+        assert_eq!(answer.headers()[header::LOCATION], format!("/media/{key}"));
+        assert!(!store.exists(&other).await.unwrap());
+        assert_eq!(webp_copies(&state, &sha).await.len(), 1);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An AVIF of 480 of the picture of `sha`, noted and offered, whose
+    /// file is not there: a store moved, say. Its key.
+    async fn avif_without_its_file(state: &AppState, sha: &str) -> String {
+        let avif = format!("{sha}-480.avif");
+        repo::asset::add_variant(
+            &state.db,
+            &repo::asset::Variant {
+                key: avif.clone(),
+                stem: sha.to_string(),
+                width: 480,
+                height: 720,
+                format: "avif".into(),
+                bytes: 10,
+            },
+        )
+        .await
+        .unwrap();
+        state.media.add_avif(sha, 480);
+        avif
+    }
+
+    /// An AVIF whose file has gone is forgotten, and answered — while the
+    /// WebP copies are off — with the picture itself, not with a WebP made
+    /// for it; while they are on, with the WebP of its width, as before.
+    #[tokio::test]
+    async fn an_avif_gone_is_answered_with_the_picture_while_the_webp_copies_are_off() {
+        let dir = crate::testing::scratch_path("serve-avif");
+        let state = server(&dir).await;
+        let store = state.media.store().unwrap().clone();
+        let (key, sha) = kept(&state, 47).await;
+
+        let avif = avif_without_its_file(&state, &sha).await;
+        assert_eq!(state.media.keyed(&key).unwrap().look.avif, [480]);
+        let answer = asked(&state, &avif).await;
+        assert_eq!(answer.status(), StatusCode::FOUND);
+        assert_eq!(answer.headers()[header::LOCATION], format!("/media/{key}"));
+        assert_eq!(answer.headers()[header::CACHE_CONTROL], "no-cache");
+        assert!(state.media.keyed(&key).unwrap().look.avif.is_empty());
+        assert!(
+            repo::asset::variants_of(&state.db, &sha)
+                .await
+                .unwrap()
+                .is_empty(),
+            "forgotten, and no WebP made for it"
+        );
+        assert!(!store.exists(&format!("{sha}-480.webp")).await.unwrap());
+
+        turn(&state, "media.webp", true).await;
+        let avif = avif_without_its_file(&state, &sha).await;
+        let answer = asked(&state, &avif).await;
+        assert_eq!(answer.status(), StatusCode::OK);
+        assert_eq!(answer.headers()[header::CONTENT_TYPE], "image/webp");
+        assert_eq!(answer.headers()[header::CACHE_CONTROL], "no-cache");
+        assert_eq!(
+            webp_copies(&state, &sha).await,
+            [(format!("{sha}-480.webp"), 480)]
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

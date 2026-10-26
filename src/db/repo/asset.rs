@@ -1163,6 +1163,45 @@ pub async fn delete_variant(db: &Db, key: &str) -> Result<()> {
     Ok(())
 }
 
+/// The copies written as `format` — `webp`, `avif`, `jpeg` — after `after`
+/// in the order of their keys, `limit` of them at the most: what deleting
+/// every copy of a format takes, a few hundred at a time, walking them once.
+pub async fn variants_by_format(
+    db: &Db,
+    format: &str,
+    after: &str,
+    limit: i64,
+) -> Result<Vec<Variant>> {
+    let rows = sqlx::query(db.sql(
+        "SELECT key, stem, width, height, format, bytes FROM media_variant
+         WHERE format = ? AND key > ?
+         ORDER BY key
+         LIMIT ?",
+    ))
+    .bind(format)
+    .bind(after)
+    .bind(limit.clamp(1, 500))
+    .fetch_all(db.pool())
+    .await?;
+    rows.iter().map(map_variant).collect()
+}
+
+/// Forget these copies at once: their files are gone. How many were noted.
+pub async fn delete_variants(db: &Db, keys: &[String]) -> Result<u64> {
+    let mut deleted = 0;
+    // Asked in slices a bind list takes, as `by_origins` asks.
+    for slice in keys.chunks(400) {
+        let marks = vec!["?"; slice.len()].join(", ");
+        let mut query =
+            sqlx::query(db.sql(&format!("DELETE FROM media_variant WHERE key IN ({marks})")));
+        for key in slice {
+            query = query.bind(key);
+        }
+        deleted += query.execute(db.pool()).await?.rows_affected();
+    }
+    Ok(deleted)
+}
+
 /// Every AVIF copy made, by its picture's hash and its width: what the
 /// index in memory tells the pages, which offer one only where it exists.
 pub async fn avif_index(db: &Db) -> Result<Vec<(String, u32)>> {
@@ -1762,6 +1801,67 @@ mod tests {
             .await
             .unwrap();
         assert!(avif_index(&db).await.unwrap().is_empty());
+    }
+
+    /// A format's copies are walked once, a few at a time in the order of
+    /// their keys, and forgotten together; another format's are left as
+    /// they are.
+    #[tokio::test]
+    async fn a_formats_copies_are_walked_once_and_forgotten_together() {
+        let db = db().await;
+        for (made, format) in [
+            ("240.webp", "webp"),
+            ("480.webp", "webp"),
+            ("960.webp", "webp"),
+            ("480.avif", "avif"),
+            ("square.jpg", "jpeg"),
+        ] {
+            add_variant(
+                &db,
+                &Variant {
+                    key: format!("{SHA}-{made}"),
+                    stem: SHA.into(),
+                    width: 480,
+                    height: 720,
+                    format: format.into(),
+                    bytes: 10,
+                },
+            )
+            .await
+            .unwrap();
+        }
+        let keys = |copies: &[Variant]| -> Vec<String> {
+            copies.iter().map(|copy| copy.key.clone()).collect()
+        };
+
+        let first = variants_by_format(&db, "webp", "", 2).await.unwrap();
+        assert_eq!(
+            keys(&first),
+            [format!("{SHA}-240.webp"), format!("{SHA}-480.webp")]
+        );
+        let rest = variants_by_format(&db, "webp", &first[1].key, 2)
+            .await
+            .unwrap();
+        assert_eq!(keys(&rest), [format!("{SHA}-960.webp")]);
+        assert!(
+            variants_by_format(&db, "webp", &rest[0].key, 2)
+                .await
+                .unwrap()
+                .is_empty(),
+            "walked once"
+        );
+
+        let webp = [keys(&first), keys(&rest)].concat();
+        assert_eq!(delete_variants(&db, &webp).await.unwrap(), 3);
+        assert_eq!(
+            delete_variants(&db, &webp).await.unwrap(),
+            0,
+            "forgotten already"
+        );
+        assert_eq!(delete_variants(&db, &[]).await.unwrap(), 0);
+        let counts = variant_counts(&db).await.unwrap();
+        assert_eq!((counts.webp, counts.avif, counts.jpeg), (0, 1, 1));
+        assert_eq!(variants_of(&db, SHA).await.unwrap().len(), 2);
     }
 
     /// What a work has a picture as decides the copies made of it; the

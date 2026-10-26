@@ -1,11 +1,14 @@
 /**
  * The reader's own settings, kept in this browser as the interface's
  * language and the lamp are: the language the catalogue's texts are read in,
- * and whether the posters of works for adults are shown as they are.
+ * and whether the posters of works for adults are shown as they are — which
+ * an account signed in may have chosen for itself, and then its choice is
+ * the one that counts (see `adultPosters.ts`).
  *
  * Neither leaves the browser but as what it changes: the language rides on
  * every read of the catalogue as its `?language=` (see `api.ts`), and the
- * posters are the page's business alone.
+ * posters are the page's business alone — the account keeps its own choice,
+ * never this browser's.
  */
 
 import { useSyncExternalStore } from 'react'
@@ -123,21 +126,47 @@ export function useTextLanguage(): string | undefined {
 
 /* ── Posters for adults ───────────────────────────────────────────────────── */
 
+/** This browser's choice, as read from the storage once: `null` until it has been. */
 let adultPosters: boolean | null = null
 
 /**
+ * The choice of the account signed in, where it made one: nothing for a
+ * visitor, nor for an account that never chose. Held for the visit alone —
+ * the account keeps it, and puts it here again on the next.
+ */
+let accountPosters: boolean | undefined
+
+/**
  * Whether the reader asked to see the posters of works for adults as they
- * are. Not until they have: a catalogue shown on a living-room screen, or
- * over a shoulder, was showing one to whoever looked.
+ * are: as the account signed in chose, else as this browser did. Not until
+ * one of them has: a catalogue shown on a living-room screen, or over a
+ * shoulder, was showing one to whoever looked.
  */
 export function adultPostersShown(): boolean {
+  if (accountPosters !== undefined) return accountPosters
   if (adultPosters === null) adultPosters = read(ADULT_POSTERS_KEY) === 'shown'
   return adultPosters
 }
 
+/**
+ * This browser's choice: a visitor's, and that of anybody signed in whose
+ * account has not made one. Kept in the storage, for the next visit.
+ */
 export function showAdultPosters(shown: boolean) {
   adultPosters = shown
   write(ADULT_POSTERS_KEY, shown ? 'shown' : undefined)
+  told()
+}
+
+/**
+ * The choice of the account signed in, which counts over this browser's
+ * while it is there; `undefined` when nobody is signed in, or the account
+ * never chose, and this browser's counts again. Never written to the
+ * storage: whoever uses the browser next is not the account.
+ */
+export function adoptAdultPosters(shown: boolean | undefined) {
+  if (accountPosters === shown) return
+  accountPosters = shown
   told()
 }
 

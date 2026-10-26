@@ -14,6 +14,25 @@ may change what the API or the configuration means, and says so here.
   is made with wants some 4 GB at its last step, more than a Docker VM shared
   with other containers may have. A build from source takes the same
   variable; CI and the published image are unchanged.
+- A **Reading** panel on the profile page: whether the posters of works for
+  adults are shown as they are or veiled, kept with the account
+  (`reader.adultPosters`) so the choice follows it from one browser to the
+  next. The switch in the bar's *Language and reading* menu is the same
+  choice for whoever is signed in, and stays this browser's for a visitor.
+- Turning the WebP or the AVIF copies off, while some are kept, asks whether
+  to delete them too. `DELETE /api/v1/media/variants/{format}` deletes every
+  copy of a format once it is off, in the background, which the Media page
+  follows (`purging` in `GET /api/v1/media/status`).
+
+### Changed
+
+- The WebP copies are off until `media.webp` is set: the pages are given the
+  pictures themselves — with an AVIF `<source>` over them where the night's
+  copies reach as wide — and an address of a WebP copy answers the copy kept
+  or sends to the original, making none. A server that wants the lighter
+  pages turns them on, on the Media page. `media.variants` prepares the
+  placeholders, and the first copies only while the WebP copies are on;
+  `GET /api/v1/auth/options` says whether they are (`webp`).
 
 ## [0.10.0] — 2026-10-25
 

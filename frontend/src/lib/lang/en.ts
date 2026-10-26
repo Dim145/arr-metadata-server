@@ -843,6 +843,9 @@ export const en = {
       editor: 'Also corrects the catalogue: fields, imports, refreshes, lists.',
       admin: 'Also settles everything else: accounts, access, keys, settings.',
     } as Record<string, string>,
+    reading: 'Reading',
+    adultPosters: 'Show the posters of works for adults',
+    adultPostersHint: 'Off, they stay blurred until pressed. The choice follows your account from one browser to the next.',
     password: 'Password',
     passwordNone: 'This account signs in through its identity provider and has no password here.',
     sessions: 'Sessions',
@@ -1704,9 +1707,30 @@ export const en = {
       peopleHint: 'One per person, and a work names dozens: the largest share of what is kept.',
       audio: 'The themes',
       audioHint: 'A Fan-Kai’s theme music, a few megabytes each.',
+      webp: 'WebP copies for the pages',
+      webpHint:
+        'Each picture copied at the widths a page draws it, as it is stored or as a page first asks: a card’s copy weighs a tenth of the picture. Off, the pages are given the pictures themselves, whole.',
       avif: 'AVIF copies at night',
       avifHint:
-        'An AVIF copy of every poster and background, made each night at 03:00 UTC: a third lighter than the WebP the pages are given otherwise, and a second or two of a processor each to make.',
+        'An AVIF copy of every poster and background, made each night at 03:00 UTC and given to the pages wherever it exists: a third lighter than a WebP copy of the same width, and a second or two of a processor each to make.',
+      turnOff: {
+        title: (format: string) => `Turn off the ${format} copies`,
+        webp: (n: number, count: string, size: string) =>
+          plural(n, {
+            one: `One WebP copy is kept, weighing ${size}. Delete it too? Kept, it is used again should the copies be turned back on; until then the pages are given the pictures themselves.`,
+            other: `${count} WebP copies are kept, weighing ${size}. Delete them too? Kept, they are used again should the copies be turned back on; until then the pages are given the pictures themselves.`,
+          }),
+        avif: (n: number, count: string, size: string) =>
+          plural(n, {
+            one: `One AVIF copy is kept, weighing ${size}. Delete it too? Kept, it is still given to the pages, and no other is made.`,
+            other: `${count} AVIF copies are kept, weighing ${size}. Delete them too? Kept, they are still given to the pages, and no more are made.`,
+          }),
+        keep: (n: number) => plural(n, { one: 'Turn off and keep it', other: 'Turn off and keep them' }),
+        delete: (n: number) => plural(n, { one: 'Turn off and delete it', other: 'Turn off and delete them' }),
+        kept: (why: string) => `Turned off, and the copies are kept: ${why}`,
+        deleting: (n: number, count: string, format: string, size: string) =>
+          plural(n, { one: `Deleting the ${format} copy (${size})…`, other: `Deleting ${count} ${format} copies (${size})…` }),
+      },
       copies: 'Copies for the pages',
       copiesLine: (webp: string, avif: string, squares: string) => `WebP: ${webp} · AVIF: ${avif} · squares for Plex: ${squares}`,
       copiesOf: (n: string, size: string) => `${n} (${size})`,
@@ -1715,9 +1739,15 @@ export const en = {
           one: 'One picture kept has no placeholder and no first copy yet. Prepare it now, or a page has its copies made as it asks for them.',
           other: `${n} pictures kept have no placeholder and no first copy yet. Prepare them now, or a page has its copies made as it asks for them.`,
         }),
+      unpreparedWhole: (n: number) =>
+        plural(n, {
+          one: 'One picture kept has no placeholder yet. Prepare it now, or a page draws it with none until it arrives.',
+          other: `${n} pictures kept have no placeholder yet. Prepare them now, or a page draws them with none until they arrive.`,
+        }),
       allPrepared: 'Every picture kept is prepared.',
       prepareNow: 'Prepare the pictures',
       preparing: 'Preparing the pictures now',
+      purging: 'Deleting copies now',
       serve: 'How a bucket’s media are served',
       serveProxy: 'Through this server',
       serveRedirect: 'Sent to the bucket’s own address',
@@ -3398,8 +3428,8 @@ export const en = {
         'export.nfo': 'A .nfo document for every work, for a library Plex, Jellyfin or Kodi reads.',
         'media.store': 'Every picture and theme the catalogue points at that is not kept yet, fetched now and kept, a few at a time. It can be stopped; the rest are fetched as they come up.',
         'media.sweep': 'The media nobody points at any more — a work removed, a picture a provider dropped, an upload taken off — forgotten and deleted.',
-        'media.variants': 'Every picture kept before this version — or before there were copies at all — prepared as one kept now is: the colour and the sketch a page draws while it loads worked out, and the copy its kind is first asked for made, a poster’s 480 pixels wide and a background’s 1280. A few at a time; it can be stopped, and the next run takes up where it stopped. Never run on its own: until it is, a page is given the copies it asks for, made as it asks.',
-        'media.avif': 'An AVIF copy of every poster, 480 and 960 pixels wide, and of every background, 1280 — a third lighter than the WebP the interface is given otherwise, and a second or two of a processor each to make. At night, once “AVIF copies at night” is on, on the Media page. It can be stopped.',
+        'media.variants': 'Every picture kept before this version — or before there were copies at all — prepared as one kept now is: the colour and the sketch a page draws while it loads worked out, and, while the WebP copies are on, the copy its kind is first asked for made, a poster’s 480 pixels wide and a background’s 1280. A few at a time; it can be stopped, and the next run takes up where it stopped. Never run on its own: until it is, a page draws those pictures with no placeholder.',
+        'media.avif': 'An AVIF copy of every poster, 480 and 960 pixels wide, and of every background, 1280 and 1920 — a third lighter than a WebP copy of the same width, and a second or two of a processor each to make. At night, once “AVIF copies at night” is on, on the Media page. It can be stopped.',
         'tls.renew': 'The certificate the clients’ door shows, looked at daily and issued anew by this server’s authority when fewer than thirty days remain — loaded without a restart.',
         'update.check': 'GitHub asked for this project’s latest release, a minute after the start and then daily — one anonymous request, and only with the check turned on in the settings. A newer one is said on the dashboard, and told to the webhook once.',
         'arr.seed': 'Every series your Sonarr holds and every film your Radarr holds, imported here when it is not yet, one after the other — before pointing them at this server, or again later for what came since. It can be stopped.',

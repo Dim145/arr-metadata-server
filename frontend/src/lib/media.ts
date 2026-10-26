@@ -7,6 +7,8 @@
  * three different ways in three components.
  */
 
+import { useSyncExternalStore } from 'react'
+
 import * as fmt from './format'
 import type { Credit, Episode, Image, MediaItem, Rating } from './types'
 
@@ -173,35 +175,85 @@ export function lookOf(url: string): Picture | undefined {
 }
 
 /**
+ * Whether the server gives the pages WebP copies of the pictures it keeps
+ * (`media.webp`), as it said last: its options say so, and are told here
+ * before they are answered (see `useAuthOptions`). Off until it says
+ * otherwise, as the setting is, and the pages are then given the pictures
+ * themselves.
+ */
+let webpOffered = false
+const webpWatchers = new Set<() => void>()
+
+function watchWebp(watcher: () => void) {
+  webpWatchers.add(watcher)
+  return () => {
+    webpWatchers.delete(watcher)
+  }
+}
+
+/** What the server says of its WebP copies, told to every picture drawn. */
+export function offerWebp(on: boolean) {
+  if (webpOffered === on) return
+  webpOffered = on
+  for (const watcher of webpWatchers) watcher()
+}
+
+/**
+ * Whether the pictures kept are offered as WebP copies, for what draws one:
+ * drawn again when the server turns them on or off.
+ */
+export function useWebpOffered(): boolean {
+  return useSyncExternalStore(watchWebp, () => webpOffered, () => false)
+}
+
+/**
  * The right file for an image in a role.
  *
- * A copy this server keeps is offered at the widths of its role's ladder,
- * as WebP — and as AVIF where the night's copies reach as wide. TMDB gets
- * its ladder. TheTVDB publishes a thumbnail beside each artwork — the same
- * path with `_t` before the extension — which is used for the small roles,
- * with the original kept as a fallback because an old upload is not
- * guaranteed to have one. Anything else, including a URL somebody typed by
- * hand, is used as it is.
+ * A picture this server keeps is offered at the widths of its role's
+ * ladder, as WebP while the server makes those copies (`webp`: as it said
+ * last, unless the caller says) — and otherwise as itself, whole, in its
+ * own proportions; either way as AVIF too where the night's copies reach
+ * as wide. TMDB gets its ladder. TheTVDB publishes a thumbnail beside each
+ * artwork — the same path with `_t` before the extension — which is used
+ * for the small roles, with the original kept as a fallback because an old
+ * upload is not guaranteed to have one. Anything else, including a URL
+ * somebody typed by hand, is used as it is.
  */
-export function sized(url: string, role: ImageRole, look: Picture | undefined = lookOf(url)): Sourced {
+export function sized(
+  url: string,
+  role: ImageRole,
+  look: Picture | undefined = lookOf(url),
+  webp: boolean = webpOffered,
+): Sourced {
   const kept = KEPT.exec(url)
   if (kept) {
     const stem = `${kept[1]}${kept[2]}`
     const widths = keptWidths(role, look?.width)
-    const srcSet = widths.map((width) => `${stem}-${width}.webp ${width}w`).join(', ')
-    // The middle of the ladder for a browser that reads no `srcset`.
-    const src = `${stem}-${widths[Math.min(1, widths.length - 1)]}.webp`
-    const drawn = widths[Math.min(1, widths.length - 1)]!
-    // AVIF only where its copies reach as wide as the WebP ones: a source
-    // the browser picks is the only one it looks at, and a narrower one
-    // would draw a dense screen's picture soft.
+    // AVIF only where its copies reach as wide as the role is offered: a
+    // source the browser picks is the only one it looks at, and a narrower
+    // one would draw a dense screen's picture soft.
     const largest = widths[widths.length - 1]!
-    const avif = (look?.avif ?? []).filter((width) => width <= largest)
+    const covered = (look?.avif ?? []).filter((width) => width <= largest)
+    const avif = covered.includes(largest) ? covered.map((width) => `${stem}-${width}.avif ${width}w`).join(', ') : undefined
+
+    if (!webp) {
+      // The picture itself, its own size giving the box its proportions,
+      // under the AVIF copies where they reach as wide.
+      return {
+        src: url,
+        ...(avif ? { sizes: SIZES[role], avif } : {}),
+        ...(look?.width && look.height ? { width: look.width, height: look.height } : {}),
+        original: url,
+      }
+    }
+
+    // The middle of the ladder for a browser that reads no `srcset`.
+    const drawn = widths[Math.min(1, widths.length - 1)]!
     return {
-      src,
-      srcSet,
+      src: `${stem}-${drawn}.webp`,
+      srcSet: widths.map((width) => `${stem}-${width}.webp ${width}w`).join(', '),
       sizes: SIZES[role],
-      avif: avif.includes(largest) ? avif.map((width) => `${stem}-${width}.avif ${width}w`).join(', ') : undefined,
+      avif,
       ...(look?.width && look.height
         ? { width: drawn, height: Math.max(1, Math.round((look.height * drawn) / look.width)) }
         : {}),

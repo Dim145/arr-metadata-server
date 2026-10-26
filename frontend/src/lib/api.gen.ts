@@ -2958,6 +2958,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/media/variants/{format}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete every copy of a format: the WebP copies once `media.webp` is off,
+         *     the AVIF copies once `media.avif` is — the space they took, back.
+         * @description Answered at once, with what there was, and done in the background: each
+         *     copy's file taken from the store, then its row; the status says
+         *     `purging` until it is over. The pictures themselves are not touched,
+         *     nor the squares Plex is given. Turned on again meanwhile, the setting
+         *     stops it where it is.
+         */
+        delete: operations["media_delete_variants"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/media/works": {
         parameters: {
             query?: never;
@@ -4494,6 +4519,12 @@ export interface components {
             /** @description Whether the password form is offered to everyone. */
             passwordLogin: boolean;
             oidc?: components["schemas"]["OidcButton"] | null;
+            /**
+             * @description Whether the pages are given WebP copies of the pictures this server
+             *     keeps (`media.webp`), rather than the pictures themselves: said here,
+             *     where every page reads it before it draws one.
+             */
+            webp: boolean;
         };
         Authority: {
             subject: string;
@@ -6906,6 +6937,11 @@ export interface components {
              *     placeholder, no first copy — which the task `media.variants` does.
              */
             unprepared: number;
+            /**
+             * @description Whether WebP copies are made and given to the pages (`media.webp`);
+             *     off, the pages are given the pictures themselves.
+             */
+            webp: boolean;
             /** @description Whether the night's task makes AVIF copies (`media.avif`). */
             avif: boolean;
             /** @description Whether a fetch or a sweep is under way. */
@@ -6913,7 +6949,15 @@ export interface components {
             sweeping: boolean;
             /** @description Whether the pictures are being prepared, or their AVIF copies made. */
             preparing: boolean;
+            /** @description Whether every copy of a format is being deleted. */
+            purging: boolean;
         };
+        /**
+         * @description A format the copies of the pictures are written as, whose copies can be
+         *     deleted once they are no longer made.
+         * @enum {string}
+         */
+        MediaVariantFormat: "webp" | "avif";
         /**
          * @description What is kept of one address a work points at: where its asset stands,
          *     or that it has none.
@@ -9190,6 +9234,20 @@ export interface components {
             jpeg: number;
             /** Format: int64 */
             jpegBytes: number;
+        };
+        /** @description What there was of a format's copies as their deletion began. */
+        VariantsDeleted: {
+            format: components["schemas"]["MediaVariantFormat"];
+            /**
+             * Format: int64
+             * @description How many copies there were.
+             */
+            copies: number;
+            /**
+             * Format: int64
+             * @description What they weighed, in bytes.
+             */
+            bytes: number;
         };
         /** @description One work wanted, by its id at a source. */
         WantedWork: {
@@ -16139,6 +16197,56 @@ export interface operations {
             };
             /** @description The caller is not an administrator */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    media_delete_variants: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The format whose copies are deleted */
+                format: components["schemas"]["MediaVariantFormat"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VariantsDeleted"];
+                };
+            };
+            /** @description Not a format whose copies are deleted: `webp` or `avif` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The caller is not an administrator */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The format's copies are still made — its setting is on — or the AVIF copies are being made, or copies are being deleted already */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No media store is configured */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

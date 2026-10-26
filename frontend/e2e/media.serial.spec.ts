@@ -1,6 +1,6 @@
-import { deflateSync } from 'node:zlib'
-
 import { expect, test, type Page } from '@playwright/test'
+
+import { png } from './support/png'
 
 /**
  * The media kept: a picture put on a work by hand is stored and served from
@@ -21,39 +21,6 @@ async function signIn(page: Page) {
   await page.getByLabel(/password|mot de passe/i).fill(PASSWORD!)
   await page.getByRole('button', { name: /sign in|se connecter/i }).click()
   await page.waitForURL('**/admin')
-}
-
-/** A red 600×900 PNG, made here: nothing to fetch. */
-function png(width: number, height: number): Buffer {
-  const crc = (buf: Buffer) => {
-    let c = ~0
-    for (const byte of buf) {
-      c ^= byte
-      for (let k = 0; k < 8; k += 1) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1
-    }
-    return (~c >>> 0)
-  }
-  const chunk = (type: string, data: Buffer) => {
-    const length = Buffer.alloc(4)
-    length.writeUInt32BE(data.length)
-    const body = Buffer.concat([Buffer.from(type, 'ascii'), data])
-    const sum = Buffer.alloc(4)
-    sum.writeUInt32BE(crc(body))
-    return Buffer.concat([length, body, sum])
-  }
-  const header = Buffer.alloc(13)
-  header.writeUInt32BE(width, 0)
-  header.writeUInt32BE(height, 4)
-  header[8] = 8
-  header[9] = 2
-  const row = Buffer.concat([Buffer.from([0]), Buffer.alloc(width * 3, 0).map((_, i) => (i % 3 === 0 ? 180 : 40))])
-  const raw = Buffer.concat(Array.from({ length: height }, () => row))
-  return Buffer.concat([
-    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-    chunk('IHDR', header),
-    chunk('IDAT', deflateSync(raw)),
-    chunk('IEND', Buffer.alloc(0)),
-  ])
 }
 
 test.describe('the media kept', () => {

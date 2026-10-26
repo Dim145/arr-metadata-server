@@ -9,6 +9,11 @@
 //! one the interface asks for first — a poster's 480, a background's 1280 —
 //! as the picture is stored. A picture is never made larger than it is: a
 //! width past its own is its own width.
+//!
+//! The WebP copies are made only while `media.webp` is on: off, as it is
+//! until somebody sets it, the pages are given the pictures themselves, and
+//! no WebP is made — not as a picture is stored, not when one is asked for.
+//! The square Plex is given is made whatever it says.
 
 use std::{
     panic::AssertUnwindSafe,
@@ -50,9 +55,9 @@ pub const AVIF_BACKDROP_WIDTHS: [u32; 2] = [1280, 1920];
 pub const SQUARE_SIDE: u32 = 1080;
 
 /// What has been done to a picture as it was stored, by this version: its
-/// placeholder worked out, and the copy its kind is first asked for made.
-/// A picture prepared by an earlier version — or by none — is the task
-/// `media.variants`' to prepare.
+/// placeholder worked out, and — while the WebP copies are on — the copy
+/// its kind is first asked for made. A picture prepared by an earlier
+/// version — or by none — is the task `media.variants`' to prepare.
 pub const PREPARED: i64 = 1;
 
 /// The copy made of a picture as it is stored, by what the work it was
@@ -353,23 +358,24 @@ pub fn make(
     }
 }
 
-/// What preparing a picture as it is stored came to: its placeholder, the
-/// copy its kind is first asked for, and its size as decoded.
+/// What preparing a picture as it is stored came to: its placeholder, and
+/// the copy its kind is first asked for, when one was made.
 pub struct Prepared {
     pub placeholder: Option<Placeholder>,
     pub copies: Vec<Copy>,
 }
 
-/// Prepare a picture: its placeholder and, where its kind has one, its
-/// first copy — the picture decoded once for both. `cover` is what the
-/// picture is to its work, where that is known.
-pub fn prepare(bytes: &[u8], cover: Option<CoverType>) -> Result<Prepared> {
+/// Prepare a picture: its placeholder and, where its kind has one and
+/// `webp` says the WebP copies are on (`media.webp`), its first copy — the
+/// picture decoded once for both. `cover` is what the picture is to its
+/// work, where that is known.
+pub fn prepare(bytes: &[u8], cover: Option<CoverType>, webp: bool) -> Result<Prepared> {
     let decoded = Decoded::read(bytes)?;
     let placeholder = super::placeholder::of(&decoded)
         .inspect_err(|e| tracing::debug!(error = format_args!("{e:#}"), "no placeholder"))
         .ok();
     let mut copies = Vec::new();
-    if let Some(width) = eager_width(cover) {
+    if webp && let Some(width) = eager_width(cover) {
         copies.push(make(&decoded, Made::Width(width), Format::Webp, cover)?);
     }
     Ok(Prepared {
@@ -582,22 +588,38 @@ mod tests {
     #[test]
     fn a_picture_is_prepared_with_the_copy_its_kind_is_first_asked_for() {
         let poster = png(1000, 1500);
-        let prepared = prepare(&poster, Some(CoverType::Poster)).unwrap();
+        let prepared = prepare(&poster, Some(CoverType::Poster), true).unwrap();
         assert!(prepared.placeholder.is_some());
         assert_eq!(prepared.copies.len(), 1);
         assert_eq!(
             (prepared.copies[0].width, prepared.copies[0].height),
             (480, 720)
         );
+        assert_eq!(prepared.copies[0].format, Format::Webp);
 
         let backdrop = png(1600, 900);
-        let prepared = prepare(&backdrop, Some(CoverType::Fanart)).unwrap();
+        let prepared = prepare(&backdrop, Some(CoverType::Fanart), true).unwrap();
         assert_eq!(prepared.copies[0].width, 1280);
 
-        let still = prepare(&png(640, 360), Some(CoverType::Screenshot)).unwrap();
+        let still = prepare(&png(640, 360), Some(CoverType::Screenshot), true).unwrap();
         assert!(still.copies.is_empty() && still.placeholder.is_some());
 
-        assert!(prepare(b"not a picture", Some(CoverType::Poster)).is_err());
+        assert!(prepare(b"not a picture", Some(CoverType::Poster), true).is_err());
+    }
+
+    /// With the WebP copies off, a picture is prepared all the same — its
+    /// placeholder worked out — and no copy is made of it.
+    #[test]
+    fn a_picture_is_prepared_without_a_copy_while_the_webp_copies_are_off() {
+        for (picture, cover) in [
+            (png(1000, 1500), CoverType::Poster),
+            (png(1600, 900), CoverType::Fanart),
+        ] {
+            let prepared = prepare(&picture, Some(cover), false).unwrap();
+            assert!(prepared.placeholder.is_some(), "{cover:?}");
+            assert!(prepared.copies.is_empty(), "{cover:?}");
+        }
+        assert!(prepare(b"not a picture", Some(CoverType::Poster), false).is_err());
     }
 
     #[tokio::test]
