@@ -906,6 +906,14 @@ impl AppState {
         )
     }
 
+    /// What Sonarr or Radarr may be listed. Neither can say whether it wants
+    /// adult titles, so each is taken to ask for what the server shows — what
+    /// the TMDB half of their searches was always given — within its own
+    /// policy: an address rule or a key set to `deny` is listed none.
+    pub fn adult_for_arr(&self, client: Option<&str>, peer: Option<&str>) -> bool {
+        self.adult_for(client, peer, Some(self.adult_visible()))
+    }
+
     /// Forget every setting a key or a rule had, when it is deleted.
     pub async fn forget_settings(&self, scope: Scope, scope_id: &str) -> Result<()> {
         self.settings.forget(scope, scope_id).await
@@ -1342,5 +1350,22 @@ mod adult_tests {
         // Forced: what the client sent stops mattering.
         assert!(decide_adult(true, "inherit", true, Some(false)));
         assert!(decide_adult(true, "allow", true, Some(false)));
+    }
+
+    /// Sonarr and Radarr cannot ask, so they are taken to ask for what the
+    /// server shows (`AppState::adult_for_arr`): a policy of their own alone
+    /// says otherwise.
+    #[test]
+    fn sonarr_and_radarr_are_listed_what_the_server_shows_unless_told_no() {
+        let arr = |visible: bool, policy: &str, forced: bool| {
+            decide_adult(visible, policy, forced, Some(visible))
+        };
+        assert!(arr(true, "inherit", false));
+        assert!(arr(true, "allow", false));
+        assert!(!arr(true, "deny", false));
+        assert!(!arr(true, "deny", true));
+        for policy in ["inherit", "allow", "deny"] {
+            assert!(!arr(false, policy, true), "{policy}");
+        }
     }
 }

@@ -494,6 +494,12 @@ async fn local_search(state: &AppState, term: &str) -> Result<Vec<MediaItem>> {
         // would come first in the list Sonarr picks from.
         tolerance: Some(Vec::new()),
         limit: state.search_limit() as i64,
+        // The works for adults the server shows, as TMDB's half of the search
+        // is asked for them: the answer is cached for every caller alike, and
+        // each surface keeps what its caller may see (`adult_for_arr`). They
+        // were left out here whatever the server said, so a series for adults
+        // entered by hand, which TMDB cannot bring back, reached nobody.
+        include_adult: state.adult_visible(),
         ..Default::default()
     };
 

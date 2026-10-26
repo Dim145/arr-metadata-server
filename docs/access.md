@@ -121,6 +121,13 @@ Silence means no unless somebody said otherwise: a client that never mentions
 adult titles is not asking for them. The three settings are in the
 [settings reference](settings.md#adult-titles).
 
+Sonarr and Radarr cannot say either way, so their searches are taken to ask for
+what the server shows. With `visible`, they are listed the works for adults the
+catalogue holds — one entered by hand among them — as TMDB's half of the search
+lists those it knows; an address rule or a key whose policy is `deny` is listed
+none, TMDB's included. A work for adults one of them holds already is answered
+by its id all the same: a refusal would have it taken for deleted.
+
 ## Who may call, and who has tried
 
 Sonarr and Radarr have their metadata URLs compiled in and cannot attach an API

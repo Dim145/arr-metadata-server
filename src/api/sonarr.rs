@@ -155,6 +155,7 @@ async fn show(
 )]
 async fn search(
     State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
     Path(SearchPath { language }): Path<SearchPath>,
     Query(query): Query<SearchQuery>,
 ) -> AppResult<Json<Vec<ShowResource>>> {
@@ -162,6 +163,10 @@ async fn search(
     let term = query.term.unwrap_or_default();
 
     let mut items = series::search(&state, &term).await?;
+    // The works for adults the server shows, unless this caller's own policy
+    // refuses them.
+    let adult = state.adult_for_arr(identity.client_id(), identity.peer_id());
+    items.retain(|item| adult || !item.is_adult);
     let ids = series::client_ids(&state, &items).await?;
 
     // Only the work's own title here: fetching a season of episode text for
@@ -292,6 +297,9 @@ async fn search_v2(
     let callers = state.language(identity.client_id(), identity.peer_id());
 
     let mut items = series::search(&state, &term).await?;
+    // As the first edition's search keeps them.
+    let adult = state.adult_for_arr(identity.client_id(), identity.peer_id());
+    items.retain(|item| adult || !item.is_adult);
     let ids = series::client_ids(&state, &items).await?;
 
     let mut shows = Vec::with_capacity(items.len());
@@ -1041,6 +1049,7 @@ mod tests {
         );
         let Err(refused) = search(
             State(state.clone()),
+            Extension(Identity::Network(None)),
             Path(SearchPath {
                 language: "en".into(),
             }),

@@ -197,7 +197,11 @@ async fn search(
 ) -> AppResult<Json<Vec<MovieResource>>> {
     let term = query.q.unwrap_or_default();
 
-    let items = movie::search(&state, &term, query.year).await?;
+    let mut items = movie::search(&state, &term, query.year).await?;
+    // The films for adults the server shows, unless this caller's own policy
+    // refuses them.
+    let adult = state.adult_for_arr(identity.client_id(), identity.peer_id());
+    items.retain(|item| adult || !item.is_adult);
     // A result Radarr cannot add is worse than none: it would show in the
     // list and fail on add, Radarr refusing a film of TMDB id nought. A film
     // entered by hand is listed under the number it is handed instead, when

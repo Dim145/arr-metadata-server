@@ -14,6 +14,15 @@ may change what the API or the configuration means, and says so here.
   `Cargo.lock` with this project's own version set aside, so a release, or a
   local build after one, no longer compiles six hundred crates again.
 
+### Fixed
+
+- Sonarr's and Radarr's searches list the works for adults the catalogue holds
+  wherever the server shows adult titles (`adult.mode` set to `visible`), as
+  they always listed those TMDB knows: a series or a film for adults entered
+  by hand, which TMDB cannot bring back, was never listed. A client whose own
+  policy refuses adult titles (`adult.clientPolicy` set to `deny`) is now
+  listed none, TMDB's included.
+
 ## [0.11.0] — 2026-10-26
 
 ### Added

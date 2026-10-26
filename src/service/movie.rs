@@ -699,6 +699,9 @@ async fn local_search(state: &AppState, term: &str, year: Option<i32>) -> Result
         // would come first in the list Radarr picks from.
         tolerance: Some(Vec::new()),
         limit: state.search_limit() as i64,
+        // The works for adults the server shows, as for a series (see
+        // `series::local_search`): each surface keeps what its caller may see.
+        include_adult: state.adult_visible(),
         ..Default::default()
     };
 

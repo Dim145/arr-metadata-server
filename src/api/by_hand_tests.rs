@@ -391,3 +391,68 @@ async fn plex_matches_a_work_entered_by_hand_and_is_given_its_record_and_picture
     let (status, _) = get(&router, &format!("/plex/library/metadata/movie-id-{film}")).await;
     assert_eq!(status, StatusCode::OK);
 }
+
+/// Whether a search's answer lists the work under that id.
+fn listed(found: &Value, key: &str, id: i64) -> bool {
+    found
+        .as_array()
+        .is_some_and(|list| list.iter().any(|hit| hit[key] == id))
+}
+
+/// The user's case again: a series entered by hand and marked for adults
+/// never reached Sonarr's search, whatever the server said of such titles.
+/// The catalogue's half of the search left every one of them out, and TMDB,
+/// whose half brings the others back, has never heard of it. It is listed now
+/// wherever the server shows adult titles, as TMDB's are, and answered by its
+/// number either way; a film alike for Radarr.
+#[tokio::test]
+async fn a_work_for_adults_entered_by_hand_is_listed_where_the_server_shows_adult_titles() {
+    let state = server().await;
+    let router = surfaces(&state);
+    let series = entered_by_hand(&router, vicineko()).await;
+    let film = entered_by_hand(
+        &router,
+        json!({ "kind": "movie", "title": "Sans Source", "year": 2023 }),
+    )
+    .await;
+    for id in [&series, &film] {
+        let (status, _) = call(
+            &router,
+            "PUT",
+            &format!("/api/v1/items/{id}/overrides"),
+            Some(json!({ "field": "isAdult", "value": true })),
+        )
+        .await;
+        assert!(status.is_success(), "{status}");
+    }
+    let (show, movie) = (ids::own(&series), ids::own(&film));
+
+    // Hidden, as a server starts: listed to no client, and still answered by
+    // the number one that holds it asks by.
+    let (_, found) = get(&router, "/v1/tvdb/search/en?term=vicineko").await;
+    assert!(!listed(&found, "tvdbId", show), "{found}");
+    let (_, found) = get(&router, "/v2/tvdb/search?term=vicineko&language=eng").await;
+    assert!(!listed(&found, "tvdbId", show), "{found}");
+    let (_, found) = get(&router, "/v1/search?q=sans%20source&year=").await;
+    assert!(!listed(&found, "TmdbId", movie), "{found}");
+    let (status, _) = get(&router, &format!("/v1/tvdb/shows/en/{show}")).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = get(&router, &format!("/v1/movie/{movie}")).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Shown: listed by both editions of Sonarr's search, and by Radarr's.
+    let (status, _) = call(
+        &router,
+        "PUT",
+        "/api/v1/settings/server/-",
+        Some(json!({ "key": "adult.mode", "value": "visible" })),
+    )
+    .await;
+    assert!(status.is_success(), "{status}");
+    let (_, found) = get(&router, "/v1/tvdb/search/en?term=vicineko").await;
+    assert!(listed(&found, "tvdbId", show), "{found}");
+    let (_, found) = get(&router, "/v2/tvdb/search?term=vicineko&language=eng").await;
+    assert!(listed(&found, "tvdbId", show), "{found}");
+    let (_, found) = get(&router, "/v1/search?q=sans%20source&year=").await;
+    assert!(listed(&found, "TmdbId", movie), "{found}");
+}

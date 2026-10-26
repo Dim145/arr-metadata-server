@@ -165,6 +165,10 @@ and Radarr find it by its title, add it and refresh it like any other work:
 - Given an id elsewhere later — its TheTVDB entry, say — the work is handed that
   one from then on, and still answered by the number to the client that added it
   by it.
+- **Marked for adults**, it is listed where the server shows adult titles
+  (`adult.mode` set to `visible`), unless the client's own policy refuses them
+  (see [Adult titles](access.md#adult-titles)); asked for by its number, it is
+  answered either way.
 
 Two works of one kind entered by hand could make one number: the one entered
 first keeps it, and the other is left out of the searches rather than offered
