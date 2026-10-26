@@ -39,6 +39,10 @@ may change what the API or the configuration means, and says so here.
 - Radarr's search leaves out the films it could not add, those without a
   TMDB id that were not entered by hand. A `tvdb:` term from Sonarr resolves
   every id this server gives, those made of a TMDB id or a Fankai one too.
+- An administrator's own page among the accounts no longer offers to reset
+  their password, which the server refuses there, and points to their account
+  page instead. Closing every session of their own there asks first, since it
+  ends this one too.
 
 ### Fixed
 
@@ -51,7 +55,12 @@ may change what the API or the configuration means, and says so here.
   lists Plex's own provider lets Plex guess it by its title, which
   [docs/plex.md](docs/plex.md) explains.
 - Signing out, or changing one's password, shows a visitor at once: the bar
-  kept the account's *Admin* until the page was reloaded.
+  kept the account's *Admin* until the page was reloaded. So does closing
+  one's own sessions, or untying one's own account from the identity
+  provider, from the administration. A session that ends somewhere else — it
+  runs out, or is closed from another browser or by another administrator —
+  is noticed at the next request it is refused, or when who is signed in is
+  next asked: the interface then forgets the account and shows a visitor.
 
 ## [0.10.0] — 2026-10-25
 

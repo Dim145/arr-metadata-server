@@ -9,6 +9,7 @@ import { useAdultPostersFromAccount } from './lib/adultPosters'
 import { ApiError, api } from './lib/api'
 import { useAuthOptions } from './lib/hooks'
 import { I18nProvider } from './lib/i18n'
+import { sessionCaches } from './lib/session'
 import type { Me } from './lib/types'
 import { Browse } from './routes/Browse'
 import { Home } from './routes/Home'
@@ -76,7 +77,10 @@ const Styleguide =
     ? named(() => import('./routes/Styleguide'), 'Styleguide')
     : null
 
-const queryClient = new QueryClient({
+const queryClient: QueryClient = new QueryClient({
+  // What is refused for want of a credential, read or written, may be the
+  // session ending somewhere else (`sessionCaches`).
+  ...sessionCaches(() => queryClient),
   defaultOptions: {
     queries: {
       staleTime: 30_000,
