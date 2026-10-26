@@ -405,14 +405,23 @@ fn listed(found: &Value, key: &str, id: i64) -> bool {
 /// whose half brings the others back, has never heard of it. It is listed now
 /// wherever the server shows adult titles, as TMDB's are, and answered by its
 /// number either way; a film alike for Radarr.
+///
+/// Titled apart from the other tests' works: the homonyms Sonarr's titles are
+/// told apart by are kept for the whole process a minute at a time
+/// (`scene::has_homonym`), and a second "Vicineko" in a test beside this one
+/// made the first test's "Vicineko (2024)".
 #[tokio::test]
 async fn a_work_for_adults_entered_by_hand_is_listed_where_the_server_shows_adult_titles() {
     let state = server().await;
     let router = surfaces(&state);
-    let series = entered_by_hand(&router, vicineko()).await;
+    let series = entered_by_hand(
+        &router,
+        json!({ "kind": "series", "title": "Quokkaplume", "year": 2024 }),
+    )
+    .await;
     let film = entered_by_hand(
         &router,
-        json!({ "kind": "movie", "title": "Sans Source", "year": 2023 }),
+        json!({ "kind": "movie", "title": "Brindlemoss", "year": 2023 }),
     )
     .await;
     for id in [&series, &film] {
@@ -429,11 +438,11 @@ async fn a_work_for_adults_entered_by_hand_is_listed_where_the_server_shows_adul
 
     // Hidden, as a server starts: listed to no client, and still answered by
     // the number one that holds it asks by.
-    let (_, found) = get(&router, "/v1/tvdb/search/en?term=vicineko").await;
+    let (_, found) = get(&router, "/v1/tvdb/search/en?term=quokkaplume").await;
     assert!(!listed(&found, "tvdbId", show), "{found}");
-    let (_, found) = get(&router, "/v2/tvdb/search?term=vicineko&language=eng").await;
+    let (_, found) = get(&router, "/v2/tvdb/search?term=quokkaplume&language=eng").await;
     assert!(!listed(&found, "tvdbId", show), "{found}");
-    let (_, found) = get(&router, "/v1/search?q=sans%20source&year=").await;
+    let (_, found) = get(&router, "/v1/search?q=brindlemoss&year=").await;
     assert!(!listed(&found, "TmdbId", movie), "{found}");
     let (status, _) = get(&router, &format!("/v1/tvdb/shows/en/{show}")).await;
     assert_eq!(status, StatusCode::OK);
@@ -449,10 +458,10 @@ async fn a_work_for_adults_entered_by_hand_is_listed_where_the_server_shows_adul
     )
     .await;
     assert!(status.is_success(), "{status}");
-    let (_, found) = get(&router, "/v1/tvdb/search/en?term=vicineko").await;
+    let (_, found) = get(&router, "/v1/tvdb/search/en?term=quokkaplume").await;
     assert!(listed(&found, "tvdbId", show), "{found}");
-    let (_, found) = get(&router, "/v2/tvdb/search?term=vicineko&language=eng").await;
+    let (_, found) = get(&router, "/v2/tvdb/search?term=quokkaplume&language=eng").await;
     assert!(listed(&found, "tvdbId", show), "{found}");
-    let (_, found) = get(&router, "/v1/search?q=sans%20source&year=").await;
+    let (_, found) = get(&router, "/v1/search?q=brindlemoss&year=").await;
     assert!(listed(&found, "TmdbId", movie), "{found}");
 }
