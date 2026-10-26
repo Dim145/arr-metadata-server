@@ -53,15 +53,17 @@ test.describe('the media by work', () => {
 
     if (!isMobile) {
       // And by a column's head where the table is wide enough to show them.
-      const failed = page.waitForRequest((request) => request.url().includes('/api/v1/media/works') && request.url().includes('sort=failed'))
+      const failed = page.waitForResponse((response) => response.url().includes('/api/v1/media/works') && response.url().includes('sort=failed'))
       await table.getByRole('button', { name: /^given up on/i }).click()
-      await failed
+      const reordered = (await (await failed).json()) as Ranked
       await expect(panel.getByRole('radio', { name: /^the most given up on$/i })).toBeChecked()
 
-      // Enter on a row opens the work it is.
-      const row = table.locator('tbody tr[data-work]').first()
-      const id = await row.getAttribute('data-work')
-      await row.focus()
+      // Enter on a row opens the work it is — the first of the new order, once
+      // the table shows it: the rows of the last order stay until the answer
+      // is drawn, and one of them taken before then may be gone by the press.
+      const id = reordered.works[0]!.id
+      await expect(table.locator('tbody tr[data-work]').first()).toHaveAttribute('data-work', id)
+      await table.locator(`tbody tr[data-work="${id}"]`).focus()
       await page.keyboard.press('Enter')
       await page.waitForURL(`**/admin/catalogue/${id}`)
     }
