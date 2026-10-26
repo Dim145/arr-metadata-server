@@ -26,22 +26,43 @@
 #                      chosen at the add, the seasons' titles; a title locked
 #                      through the native API appears after a refresh; the
 #                      catalogue's scene-mapping titles take a release to its
-#                      series
+#                      series; and a series entered by hand, one nothing
+#                      elsewhere names — made through the native API, with an
+#                      alternative title and a season of two episodes: found by
+#                      its title and by tvdb: under a number of the server's
+#                      own (from 1 000 000 000, made of its catalogue id), a
+#                      number no work was handed finding nothing; added, its
+#                      season and episodes as served; a locked title after a
+#                      refresh; its alternative title in the scene mapping, a
+#                      release named by it taken for it; on Sonarr 5 its
+#                      metadataSource, local
 #   radarr             a search by text and by tmdb:; two films added (one in a
 #                      collection); title, year, runtime, studio and
 #                      classification as served; the collection; the
-#                      recommendations; a locked title after a refresh
+#                      recommendations; a locked title after a refresh; and a
+#                      film entered by hand, one with no TMDB id: found by its
+#                      title and by tmdb: under such a number; added, as
+#                      served; named among the films changed once edited; a
+#                      locked title after a refresh
 #   push               the server connected to each of them with its API key
 #                      (PUT /api/v1/admin/arr), a lock made here sends the
 #                      client a RefreshSeries / RefreshMovie, found in its own
-#                      history of commands
+#                      history of commands — for the series and the film
+#                      entered by hand too, which the client holds under their
+#                      numbers
 #   seed               the server restarted on a new, empty catalogue, then
 #                      Seed from Sonarr and Radarr: what their libraries hold
-#                      arrives, and a second run fetches nothing
+#                      arrives, and a second run fetches nothing; the works
+#                      entered by hand that they hold under their numbers are
+#                      reported held under no id to look them up by, none made
 #   plex               the provider added to Plex over its own API, an agent
 #                      made of it, a library of films, one of series, one of
 #                      series in French; the scan; the film, the series, its
-#                      season and its episodes as the catalogue has them
+#                      season and its episodes as the catalogue has them; and a
+#                      series and a film entered by hand, in libraries of their
+#                      own on the same agent, matched as show-id-… and
+#                      movie-id-…, with the catalogue's title, summary, season
+#                      and episodes, and no id elsewhere
 #   plexkey            the server restarted with AMS_PLEX_AUTH=apikey: /plex
 #                      refused without a key; Plex given /plex/<key> instead,
 #                      a lock reaching it there, a key never issued answered
@@ -278,6 +299,16 @@ if has_phase plex; then
   make_video "$WORK/media/Movies/The Matrix (1999)/The Matrix (1999).mp4"
   make_video "$WORK/media/TV Shows/Breaking Bad (2008)/Season 01/Breaking Bad (2008) - S01E01 - Pilot.mp4"
   make_video "$WORK/media/TV Shows/Breaking Bad (2008)/Season 01/Breaking Bad (2008) - S01E02 - Cat's in the Bag....mp4"
+  # And a series of two episodes and a film entered by hand, under the titles
+  # scripts/e2e-stack.py makes them with (HAND_SERIES, HAND_FILM, HAND_EPISODES).
+  # Their own folders, for libraries of their own: the checks of the real works
+  # count what theirs hold.
+  hand_series="$WORK/media/By hand/TV Shows/Quenzabar Tides (2024)/Season 01"
+  hand_film="$WORK/media/By hand/Movies/Brindlemoss Without Source (2019)"
+  mkdir -p "$hand_series" "$hand_film"
+  make_video "$hand_series/Quenzabar Tides (2024) - S01E01 - The Tide Goes Out.mp4"
+  make_video "$hand_series/Quenzabar Tides (2024) - S01E02 - The Tide Comes Back.mp4"
+  make_video "$hand_film/Brindlemoss Without Source (2019).mp4"
 fi
 
 step "the containers start (${SERVICES# })"
