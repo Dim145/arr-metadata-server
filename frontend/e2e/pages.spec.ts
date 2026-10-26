@@ -542,8 +542,13 @@ test.describe('related works', () => {
     await page.goto(`/work/${related!.id}`)
     await expect(page.getByText(/^(related works|œuvres liées)$/i)).toBeVisible()
 
+    // Looked for on the shelf of related works alone: an anime and the manga
+    // it was drawn from often share a title, and the work's own seasons,
+    // higher on the page, carry it too. The shelf keeps the order the work
+    // gives, so the first card of that name on it is the first relation's.
     const first = related!.relations[0]!
-    const card = page.getByRole('link', { name: first.title.slice(0, 24) }).first()
+    const shelf = page.getByRole('list', { name: /^(related works|œuvres liées)$/i })
+    const card = shelf.getByRole('link', { name: first.title.slice(0, 24) }).first()
     await expect(card).toBeVisible()
     if (first.workId) {
       await expect(card).toHaveAttribute('href', `/work/${first.workId}`)

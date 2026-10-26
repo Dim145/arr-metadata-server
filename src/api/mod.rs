@@ -8,6 +8,8 @@
 
 pub mod anilist;
 pub mod audit;
+#[cfg(test)]
+mod by_hand_tests;
 pub mod cursor;
 pub mod extract;
 pub mod merged;

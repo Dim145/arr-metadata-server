@@ -49,7 +49,7 @@ use unicode_properties::general_category::{
 
 use crate::{
     db::repo,
-    service::{language, series},
+    service::{ids, language, series},
     state::AppState,
 };
 
@@ -417,11 +417,18 @@ fn plain_title(s: &repo::scene::SeriesTitles, server: &str) -> String {
 fn homonyms_of(catalogue: &[repo::scene::SeriesTitles], plain: &[String]) -> Homonyms {
     let mut by_title: HashMap<String, HashSet<i64>> = HashMap::new();
     for (s, title) in catalogue.iter().zip(plain) {
-        if let Some(id) = series::client_id_of(s.tvdb, s.tmdb, s.fankai) {
+        if let Some(id) = client_id(s) {
             by_title.entry(clean_title(title)).or_default().insert(id);
         }
     }
     by_title
+}
+
+/// The id Sonarr keeps a series under, as [`series::client_id`] tells it: a
+/// series entered by hand that nothing elsewhere names is listed under the
+/// number made of its catalogue id, as it is served under it.
+fn client_id(s: &repo::scene::SeriesTitles) -> Option<i64> {
+    series::client_id_of(s.tvdb, s.tmdb, s.fankai).or_else(|| s.is_manual.then(|| ids::own(&s.id)))
 }
 
 /// Whether another series than `tvdb_id` is served the plain title `plain`.
@@ -520,7 +527,7 @@ pub fn held(
         .into_iter()
         .zip(plain)
         .filter_map(|(s, plain)| {
-            let tvdb_id = series::client_id_of(s.tvdb, s.tmdb, s.fankai)?;
+            let tvdb_id = client_id(&s)?;
             let served = served_title(&s, &plain, tvdb_id, &homonyms);
 
             let original = s.original_language.clone().unwrap_or_default();
@@ -1157,6 +1164,37 @@ mod tests {
         let mut work = stored("Nameless", false, &[]);
         work.tvdb = None;
         assert!(held(vec![work], "en", "en", true).is_empty());
+    }
+
+    /// A series entered by hand that nothing elsewhere names is mapped under
+    /// the number it is served under, and told apart from a homonym by its
+    /// year as one TheTVDB does not list is.
+    #[test]
+    fn a_series_entered_by_hand_is_mapped_under_the_number_it_is_handed() {
+        let mut by_hand = stored("Vicineko", false, &[]);
+        by_hand.id = "01a17789-b167-736d-8873-605960d7e943".into();
+        by_hand.is_manual = true;
+        by_hand.tvdb = None;
+        by_hand.year = Some(2024);
+        let mut listed = stored("Vicineko", false, &[]);
+        listed.tvdb = Some(81189);
+
+        let held = held(vec![by_hand, listed], "en-US", "en-US", true);
+
+        let mapped: Vec<(i64, &str)> = held
+            .iter()
+            .map(|h| (h.tvdb_id, h.served.as_str()))
+            .collect();
+        assert_eq!(
+            mapped,
+            [
+                (
+                    ids::own("01a17789-b167-736d-8873-605960d7e943"),
+                    "Vicineko (2024)"
+                ),
+                (81189, "Vicineko"),
+            ]
+        );
     }
 
     #[test]

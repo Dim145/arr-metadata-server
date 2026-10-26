@@ -5,8 +5,10 @@
 //! to reach them — or for somebody to press their refresh button. With
 //! `arr.pushRefresh` on, the change is told instead: the work is found there
 //! by the id it is served under (TheTVDB's, or the synthetic one a TMDB-only
-//! series or a Fan-Kai is handed, for Sonarr; TMDB's for Radarr) and asked to
-//! be read again, `RefreshSeries` or `RefreshMovie`.
+//! series or a Fan-Kai is handed, for Sonarr; TMDB's for Radarr; for a work
+//! entered by hand that nothing elsewhere names, the number made of its
+//! catalogue id, for either) and asked to be read again, `RefreshSeries` or
+//! `RefreshMovie`.
 //!
 //! What changes a work for its clients: a lock put on it, on one of its
 //! seasons or its episodes, changed or taken off; an edit of its seasons or
@@ -365,7 +367,7 @@ pub async fn send(state: &AppState, due: Vec<(String, Vec<Reason>)>) {
         };
         let client_id = match item.kind {
             MediaKind::Series => service::series::client_id(&item),
-            MediaKind::Movie => item.external_ids.tmdb,
+            MediaKind::Movie => service::movie::client_id(&item),
         };
         by_app.entry(App::of(item.kind)).or_default().push(Target {
             id,
@@ -786,6 +788,43 @@ mod tests {
         let before = seen.lock().len();
         send(&state, vec![(SERIES.to_string(), vec![Reason::Lock])]).await;
         assert_eq!(seen.lock().len(), before);
+    }
+
+    /// A film entered by hand that TMDB does not name is looked for in
+    /// Radarr under the number it is served under there, rather than said to
+    /// have no id Radarr could know it by.
+    #[tokio::test]
+    async fn a_film_entered_by_hand_is_looked_for_under_the_number_it_is_handed() {
+        let _turn = TURN.lock().await;
+        let (state, seen) = setting_up().await;
+        let mut film = MediaItem::empty(MediaKind::Movie);
+        film.title = "Sans Source".into();
+        film.slug = "sans-source".into();
+        film.is_manual = true;
+        crate::db::repo::item::upsert(
+            &state.db,
+            crate::db::repo::item::ItemWrite {
+                item: &film,
+                replace_children: true,
+            },
+        )
+        .await
+        .unwrap();
+        let handed = crate::service::ids::own(&film.id);
+
+        send(&state, vec![(film.id.clone(), vec![Reason::Edit])]).await;
+
+        let looked_for = format!("/api/v3/movie?tmdbId={handed}");
+        assert!(
+            seen.lock()
+                .iter()
+                .any(|s| s.method == "GET" && s.target == looked_for),
+            "Radarr was not asked for {looked_for}"
+        );
+        let pushes = history::latest(&state.db, 10).await.unwrap();
+        let radarr = pushes.iter().find(|p| p.app == App::Radarr).unwrap();
+        assert_eq!(radarr.client_id, Some(handed));
+        assert_eq!(radarr.outcome, Outcome::Absent);
     }
 
     const SECOND: &str = "0192aa52-8f62-7cc3-a1f1-6a1b2c3d4e61";

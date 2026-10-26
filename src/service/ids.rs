@@ -16,6 +16,19 @@
 //! Fankai's productions take a second range, from 200 000 000: a Fan-Kai is a
 //! recut TheTVDB and TMDB list nothing of, so its client id is Fankai's own id
 //! plus that offset, and the two ranges are told apart by size alone.
+//!
+//! A work entered by hand that nothing elsewhere names — a series with no
+//! TheTVDB, TMDB or Fankai id, a film with no TMDB id — takes a third range,
+//! from 1 000 000 000 to the top of the `int` both clients keep an id in: a
+//! number made of the catalogue's own id for the work ([`own`]), which nothing
+//! ever changes, so that the work is handed the same one at every answer, after
+//! a restart, on every instance. Radarr is handed it as the film's TMDB id, and
+//! TMDB's film ids are nowhere near a billion either. Neither client takes an
+//! id of nought or less for a work it adds, so the range is a positive one. A
+//! client asking by such an id is answered from the works entered by hand
+//! ([`crate::service::by_own_id`]); no source is asked, since none has it.
+
+use crate::domain::{ExternalIds, MediaKind};
 
 /// Start of the synthetic id range.
 pub const SYNTHETIC_OFFSET: i64 = 100_000_000;
@@ -26,8 +39,17 @@ pub const SYNTHETIC_OFFSET: i64 = 100_000_000;
 /// — never fill, so an id says which it is by its size.
 pub const FANKAI_OFFSET: i64 = 200_000_000;
 
-/// Largest id that still fits Sonarr's 32-bit column.
+/// Start of the range a work entered by hand is handed an id in, when nothing
+/// elsewhere names it. Above Fankai's, which its productions — a few hundred —
+/// never fill.
+pub const OWN_OFFSET: i64 = 1_000_000_000;
+
+/// Largest id that still fits Sonarr's 32-bit column, and Radarr's.
 const MAX_SONARR_ID: i64 = i32::MAX as i64;
+
+/// How many ids the range of works entered by hand holds: a little over a
+/// billion.
+const OWN_SPAN: u64 = (MAX_SONARR_ID - OWN_OFFSET + 1) as u64;
 
 /// Wrap a TMDB id as a synthetic TVDB id.
 ///
@@ -47,14 +69,69 @@ pub fn from_synthetic(id: i64) -> Option<i64> {
 }
 
 /// Wrap Fankai's id for a production as a client id.
+///
+/// `None` past the range's end, where a work entered by hand's begin.
 pub fn to_fankai(fankai_id: i64) -> Option<i64> {
     let encoded = FANKAI_OFFSET.checked_add(fankai_id)?;
-    (fankai_id > 0 && encoded <= MAX_SONARR_ID).then_some(encoded)
+    (fankai_id > 0 && encoded < OWN_OFFSET).then_some(encoded)
 }
 
 /// Recover Fankai's id from a client id made by [`to_fankai`].
 pub fn from_fankai(id: i64) -> Option<i64> {
-    (id >= FANKAI_OFFSET).then(|| id - FANKAI_OFFSET)
+    (FANKAI_OFFSET..OWN_OFFSET)
+        .contains(&id)
+        .then(|| id - FANKAI_OFFSET)
+}
+
+/// The id a client is handed for a work entered by hand that nothing
+/// elsewhere names: made of the catalogue's own id for it, which no refresh,
+/// restart or edit changes.
+///
+/// A hash, so two catalogue ids may make one number — a chance in a little
+/// over a billion for each two works: the one entered first keeps the number
+/// ([`crate::service::own_holders`]), and a work entered by hand now is given
+/// a catalogue id whose number no other holds.
+pub fn own(catalogue_id: &str) -> i64 {
+    // FNV-1a, as `own_episode` below, on 64 bits: stable across builds and
+    // platforms, and spread over the whole range.
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in catalogue_id.bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    // Below the span, so within an i64.
+    OWN_OFFSET + (hash % OWN_SPAN) as i64
+}
+
+/// Whether a client's id is one [`own`] makes: one only a work entered by
+/// hand is handed.
+pub fn is_own(id: i64) -> bool {
+    (OWN_OFFSET..=MAX_SONARR_ID).contains(&id)
+}
+
+/// The id Sonarr (a series) or Radarr (a film) keeps a work under: for a
+/// series TheTVDB's, else one made of TMDB's or of Fankai's; for a film
+/// TMDB's; and for a work entered by hand that none of those names, one made
+/// of the catalogue's own id for it ([`own`]). `None` for a work the client
+/// has no way to address.
+pub fn for_client(
+    kind: MediaKind,
+    catalogue_id: &str,
+    is_manual: bool,
+    ids: &ExternalIds,
+) -> Option<i64> {
+    let named = match kind {
+        MediaKind::Series => series_named(ids.tvdb, ids.tmdb, ids.fankai),
+        MediaKind::Movie => ids.tmdb,
+    };
+    named.or_else(|| is_manual.then(|| own(catalogue_id)))
+}
+
+/// The id Sonarr keeps a series under from what names it elsewhere:
+/// TheTVDB's, else one made of TMDB's, else one made of Fankai's.
+pub fn series_named(tvdb: Option<i64>, tmdb: Option<i64>, fankai: Option<i64>) -> Option<i64> {
+    tvdb.or_else(|| tmdb.and_then(to_synthetic))
+        .or_else(|| fankai.and_then(to_fankai))
 }
 
 /// The id an episode is served under when an order carries it as a record
@@ -142,6 +219,10 @@ mod tests {
         assert_eq!(from_fankai(100_001_396), None);
         assert_eq!(to_fankai(0), None);
         assert_eq!(to_fankai(i64::MAX), None);
+        // It ends where the works entered by hand begin.
+        assert_eq!(to_fankai(OWN_OFFSET - FANKAI_OFFSET), None);
+        assert_eq!(from_fankai(OWN_OFFSET), None);
+        assert_eq!(from_fankai(OWN_OFFSET - 1), Some(799_999_999));
     }
 
     #[test]
@@ -150,7 +231,58 @@ mod tests {
         for id in [1, 81189, 499_999, 1_000_000, 99_999_999] {
             assert_eq!(from_synthetic(id), None, "{id} should not look synthetic");
             assert_eq!(from_fankai(id), None, "{id} should not look like a Fan-Kai");
+            assert!(!is_own(id), "{id} should not look entered by hand");
         }
+    }
+
+    #[test]
+    fn a_work_entered_by_hand_takes_the_third_range_under_a_number_of_its_own_id() {
+        let id = "01a17789-b167-736d-8873-605960d7e943";
+        let handed = own(id);
+        // The same from one answer, one restart, one build to the next.
+        assert_eq!(handed, own(id));
+        assert_eq!(handed, 1_827_537_293);
+        assert!(is_own(handed));
+        // In no other range, and within the clients' column.
+        assert_eq!(from_synthetic(handed), None);
+        assert_eq!(from_fankai(handed), None);
+        assert!(handed <= i64::from(i32::MAX));
+        assert_eq!(own("01a17789-b191-73f2-9253-421af11df012"), 1_564_715_190);
+        // The top and the bottom of the range, and nothing past either.
+        assert!(is_own(OWN_OFFSET) && is_own(i64::from(i32::MAX)));
+        assert!(!is_own(OWN_OFFSET - 1) && !is_own(i64::from(i32::MAX) + 1));
+        assert!(!is_own(-5));
+    }
+
+    #[test]
+    fn a_client_is_handed_what_names_a_work_elsewhere_before_its_own_number() {
+        let named = ExternalIds {
+            tvdb: Some(81189),
+            tmdb: Some(1396),
+            ..Default::default()
+        };
+        let id = "01a17789-b167-736d-8873-605960d7e943";
+        assert_eq!(for_client(MediaKind::Series, id, true, &named), Some(81189));
+        assert_eq!(for_client(MediaKind::Movie, id, true, &named), Some(1396));
+
+        let nothing = ExternalIds::default();
+        // Entered by hand: its own number, for either client.
+        assert_eq!(
+            for_client(MediaKind::Series, id, true, &nothing),
+            Some(own(id))
+        );
+        assert_eq!(
+            for_client(MediaKind::Movie, id, true, &nothing),
+            Some(own(id))
+        );
+        // A work a source gave with none of them is no client's.
+        assert_eq!(for_client(MediaKind::Series, id, false, &nothing), None);
+        // An IMDb id alone names no series to Sonarr, nor a film to Radarr.
+        let imdb = ExternalIds {
+            imdb: Some("tt0903747".into()),
+            ..Default::default()
+        };
+        assert_eq!(for_client(MediaKind::Movie, id, true, &imdb), Some(own(id)));
     }
 
     #[test]

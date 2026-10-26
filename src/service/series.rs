@@ -20,8 +20,9 @@ const RESOLVING: &[&str] = &[names::TMDB, names::TVDB, names::SKYHOOK, names::FA
 
 /// Resolve a series by the id Sonarr asked for.
 ///
-/// The id is either a real TVDB id or one this server synthesised for a
-/// TMDB-only show or a Fan-Kai production — see [`crate::service::ids`].
+/// The id is either a real TVDB id or one this server made: for a TMDB-only
+/// show, a Fan-Kai production, or a series entered by hand that nothing
+/// elsewhere names — see [`crate::service::ids`].
 ///
 /// No language: a work is stored once, in the language the server fetches in,
 /// and [`crate::service::language`] overlays the one the caller asked for on
@@ -29,8 +30,14 @@ const RESOLVING: &[&str] = &[names::TMDB, names::TVDB, names::SKYHOOK, names::FA
 ///
 /// `None` only when every source that could resolve the id answered that
 /// there is no such series; an error when nothing is held and a source did
-/// not answer, which a client is told as a 502 (see [`resolved`]).
+/// not answer, which a client is told as a 502 (see [`resolved`]). The id of
+/// a series entered by hand is the catalogue's alone: `None` at once when no
+/// such series is held any more, since no source could answer for it.
 pub async fn by_client_id(state: &AppState, requested_id: i64) -> Result<Option<MediaItem>> {
+    if ids::is_own(requested_id) {
+        return crate::service::by_own_id(state, MediaKind::Series, requested_id).await;
+    }
+
     if let Some(fankai_id) = ids::from_fankai(requested_id) {
         return by_fankai_id(state, fankai_id).await;
     }
@@ -351,8 +358,10 @@ async fn by_anime_id(
 pub async fn search(state: &AppState, term: &str) -> Result<Vec<MediaItem>> {
     // A prefixed term is a lookup, not a search: answer with the one match.
     match ids::classify(term) {
+        // By whatever id Sonarr keeps a series under, as Sonarr itself looks
+        // a `tvdb:` term up: one this server made among them.
         ids::TermLookup::Tvdb(id) => {
-            return Ok(by_tvdb_id(state, id).await?.into_iter().collect());
+            return Ok(by_client_id(state, id).await?.into_iter().collect());
         }
         ids::TermLookup::Tmdb(id) => return Ok(by_tmdb_id(state, id).await?.into_iter().collect()),
         ids::TermLookup::Imdb(id) => {
@@ -598,11 +607,23 @@ fn same_id(a: Option<i64>, b: Option<i64>) -> bool {
 /// The id a client should be handed for this series.
 ///
 /// A real TVDB id when there is one; otherwise a synthetic id derived from
-/// TMDB's, or from Fankai's for a Fan-Kai. Returns `None` for a work the client
-/// has no way to address.
+/// TMDB's, or from Fankai's for a Fan-Kai; for a series entered by hand that
+/// none of those names, one made of the catalogue's own id ([`ids::own`]).
+/// Returns `None` for a work the client has no way to address.
 pub fn client_id(item: &MediaItem) -> Option<i64> {
-    let ids = &item.external_ids;
-    client_id_of(ids.tvdb, ids.tmdb, ids.fankai)
+    ids::for_client(
+        MediaKind::Series,
+        &item.id,
+        item.is_manual,
+        &item.external_ids,
+    )
+}
+
+/// The id Sonarr is handed for each of `items`, as [`client_id`] gives it,
+/// in their order — but a series entered by hand only under a number that
+/// leads back to it: see [`crate::service::addressed`].
+pub async fn client_ids(state: &AppState, items: &[MediaItem]) -> Result<Vec<Option<i64>>> {
+    crate::service::addressed(state, MediaKind::Series, items, client_id).await
 }
 
 /// The title Sonarr is given for a series: its own — a locked one exactly as
@@ -634,10 +655,10 @@ pub fn sonarr_title(
     }
 }
 
-/// [`client_id`], from the three ids it is chosen among.
+/// [`client_id`], from the three ids it is chosen among: what a series a
+/// source gave is handed.
 pub fn client_id_of(tvdb: Option<i64>, tmdb: Option<i64>, fankai: Option<i64>) -> Option<i64> {
-    tvdb.or_else(|| tmdb.and_then(ids::to_synthetic))
-        .or_else(|| fankai.and_then(ids::to_fankai))
+    ids::series_named(tvdb, tmdb, fankai)
 }
 
 #[cfg(test)]
@@ -726,6 +747,18 @@ mod tests {
     #[test]
     fn an_unaddressable_series_yields_nothing() {
         assert_eq!(client_id(&series(None, None)), None);
+    }
+
+    #[test]
+    fn a_series_entered_by_hand_that_nothing_names_is_handed_a_number_of_its_own() {
+        let mut item = series(None, None);
+        item.is_manual = true;
+        let handed = client_id(&item).expect("an id");
+        assert_eq!(handed, ids::own(&item.id));
+        assert!(ids::is_own(handed));
+        // Given an id elsewhere since, it is handed that one.
+        item.external_ids.tvdb = Some(81189);
+        assert_eq!(client_id(&item), Some(81189));
     }
 
     #[test]

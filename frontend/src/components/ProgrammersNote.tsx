@@ -8,7 +8,9 @@
  * last; the server says which, and the text carries that language for a
  * screen reader. Whoever may edit the catalogue writes it where it is read:
  * the note opens as a field in place, with what it will look like beneath it,
- * and is saved in the language of the interface they are using.
+ * and is saved in the language of the interface they are using. The front
+ * page offers none to write where none is (`offer`): its work changes every
+ * day, and a note on it is begun in the administration's page of notes.
  */
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -83,11 +85,14 @@ export function ProgrammersNote({
   scope,
   id,
   note: given,
+  offer = true,
   className,
 }: {
   scope: EditorialScope
   id: string
   note?: EditorialNote | null
+  /** Whether whoever may edit is offered a note to write where none is written. */
+  offer?: boolean
   className?: string
 }) {
   const { t, lang, locale } = useI18n()
@@ -117,8 +122,9 @@ export function ProgrammersNote({
   }
 
   if (!shown) {
-    // A visitor is shown nothing; whoever may edit is offered a note to write.
-    return editor ? (
+    // A visitor is shown nothing; whoever may edit is offered a note to
+    // write, where the page offers one.
+    return editor && offer ? (
       <div className={className}>
         <button
           type="button"

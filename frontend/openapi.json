@@ -9769,12 +9769,13 @@
           "Radarr compatibility"
         ],
         "summary": "A movie by TMDB id, in Radarr's format.",
+        "description": "The id may also be the one a film entered by hand that TMDB does not name\nis handed in TMDB's stead, from 1 000 000 000: such a film is answered\nfrom the catalogue alone.",
         "operationId": "radarr_by_tmdb",
         "parameters": [
           {
             "name": "tmdb_id",
             "in": "path",
-            "description": "TMDB movie id",
+            "description": "TMDB movie id, or the one a film entered by hand is handed",
             "required": true,
             "schema": {
               "type": "integer",
@@ -9929,7 +9930,7 @@
           "Sonarr compatibility"
         ],
         "summary": "A series by TVDB id, in Skyhook's format.",
-        "description": "The id may also be one this server synthesised for a work TMDB indexes and\nTVDB does not; the response echoes back whichever id was asked for, because\nSonarr has already stored it.\n\nA series the catalogue holds is answered from the catalogue, as it was,\nwhen the sources do not answer. An id nobody holds is a 404 only when every\nsource that could resolve it answered that there is no such series; when\none did not answer — a timeout, a 5xx, a refused connection — it is a 502,\nnever a 404: Sonarr takes a series for deleted on a 404, and keeps what it\nhas on anything else.",
+        "description": "The id may also be one this server synthesised for a work TMDB indexes and\nTVDB does not, or for a series entered by hand that nothing elsewhere\nnames; the response echoes back whichever id was asked for, because Sonarr\nhas already stored it.\n\nA series the catalogue holds is answered from the catalogue, as it was,\nwhen the sources do not answer. An id nobody holds is a 404 only when every\nsource that could resolve it answered that there is no such series; when\none did not answer — a timeout, a 5xx, a refused connection — it is a 502,\nnever a 404: Sonarr takes a series for deleted on a 404, and keeps what it\nhas on anything else.",
         "operationId": "sonarr_show",
         "parameters": [
           {
@@ -22302,7 +22303,7 @@
           },
           "metadataSource": {
             "type": "string",
-            "description": "Who numbers the episodes: `tvdb`; `tmdb` for a series TMDB numbers —\none TheTVDB does not list, under an id this server made for it (see\n[`ids`]), or one TheTVDB stopped answering for; `fankai` for a\nFan-Kai."
+            "description": "Who numbers the episodes: `tvdb`; `tmdb` for a series TMDB numbers —\none TheTVDB does not list, under an id this server made for it (see\n[`ids`]), or one TheTVDB stopped answering for; `fankai` for a\nFan-Kai; `local` for a series entered by hand that nothing elsewhere\nnames."
           }
         }
       },

@@ -218,6 +218,24 @@ pub enum Seeded {
 /// Import one work of the library unless it is held: what came of it, and
 /// whether a provider was asked.
 pub async fn seed_one(state: &AppState, app: App, held: &Held) -> (Seeded, bool) {
+    // A work entered by hand, under the number made of its id here: held
+    // here, or nowhere a source could be asked for it.
+    let client_id = match app {
+        App::Sonarr => held.tvdb_id,
+        App::Radarr => held.tmdb_id,
+    };
+    if let Some(client_id) = client_id.filter(|id| ids::is_own(*id)) {
+        let kind = match app {
+            App::Sonarr => MediaKind::Series,
+            App::Radarr => MediaKind::Movie,
+        };
+        return match service::by_own_id(state, kind, client_id).await {
+            Ok(Some(item)) => (Seeded::Here(item.id), false),
+            Ok(None) => (Seeded::NoId, false),
+            Err(e) => (Seeded::Failed(format!("{e:#}")), false),
+        };
+    }
+
     let ids = lookup(app, held);
     let Some((source, value)) = ids.first() else {
         return (Seeded::NoId, false);
@@ -379,6 +397,57 @@ mod tests {
             ]
         );
         assert!(lookup(App::Radarr, &held(5, None, Some(0), None)).is_empty());
+    }
+
+    /// A work entered by hand is held by Sonarr and Radarr under the number
+    /// made of its id here: found here by it, and no source asked — none
+    /// could have it, not even by the IMDb id it was typed in with.
+    #[tokio::test]
+    async fn a_work_entered_by_hand_is_found_here_by_the_number_it_was_handed() {
+        let state = crate::api::native::testing::server().await;
+        let mut made = Vec::new();
+        for kind in [MediaKind::Series, MediaKind::Movie] {
+            let mut work = MediaItem::empty(kind);
+            work.title = "Vicineko".into();
+            work.slug = format!("vicineko-{kind}");
+            work.is_manual = true;
+            repo::item::upsert(
+                &state.db,
+                repo::item::ItemWrite {
+                    item: &work,
+                    replace_children: true,
+                },
+            )
+            .await
+            .unwrap();
+            made.push(work.id);
+        }
+        let series = ids::own(&made[0]);
+        let film = ids::own(&made[1]);
+
+        let (seeded, asked) =
+            seed_one(&state, App::Sonarr, &held(1, Some(series), None, None)).await;
+        assert!(
+            matches!(&seeded, Seeded::Here(id) if *id == made[0]),
+            "{seeded:?}"
+        );
+        assert!(!asked);
+        let (seeded, asked) = seed_one(&state, App::Radarr, &held(2, None, Some(film), None)).await;
+        assert!(
+            matches!(&seeded, Seeded::Here(id) if *id == made[1]),
+            "{seeded:?}"
+        );
+        assert!(!asked);
+
+        // A film's number is no series': Sonarr holding it names nothing here.
+        let (seeded, asked) = seed_one(
+            &state,
+            App::Sonarr,
+            &held(3, Some(film), None, Some("tt0903747")),
+        )
+        .await;
+        assert!(matches!(seeded, Seeded::NoId), "{seeded:?}");
+        assert!(!asked);
     }
 
     #[tokio::test]

@@ -5,7 +5,8 @@ import { expect, test, type Page } from '@playwright/test'
  * The programmer's note: written in place by whoever maintains the catalogue,
  * in English and in French; read by a visitor in theirs, the other standing
  * in until it is written; listed in the administration, written again and
- * taken away there.
+ * taken away there. The front page offers none to write: a note on its work
+ * of the day is begun in the administration, and read under the plate.
  *
  * Serial: a note belongs to the catalogue, and every page of the genre reads
  * it — the other specs' genre pages among them. Each test takes its notes
@@ -128,5 +129,37 @@ test.describe('the programmer’s note', () => {
     await page.getByRole('button', { name: 'Take the note on 1999 (en) away' }).click()
     await page.getByRole('dialog').getByRole('button', { name: 'Take it away' }).click()
     await expect(page.getByText('The last year of the century.')).toHaveCount(0)
+  })
+
+  test('is not offered on the front page, and one begun in the administration is read there', async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem('ams.lang', 'en'))
+    await signIn(page)
+
+    // The work of the day, by the way to its page; who is looking is known by
+    // then — the bar offers the administration — and nothing under the plate
+    // offers a note to write.
+    await page.goto('/')
+    const open = page.getByRole('link', { name: 'See the details' })
+    await expect(open).toBeVisible()
+    await expect(page.getByRole('banner').getByRole('link', { name: 'Admin', exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Write a programmer’s note' })).toHaveCount(0)
+    const id = (await open.getAttribute('href'))?.replace(/^\/work\//, '')
+    expect(id).toBeTruthy()
+
+    try {
+      await page.goto('/admin/editorial')
+      await page.getByRole('button', { name: 'Write a note' }).click()
+      const form = page.locator('form').filter({ has: page.getByRole('button', { name: 'Save the note' }) })
+      await form.getByLabel('About').selectOption('work')
+      await form.getByLabel('Which one').fill(id!)
+      await form.getByLabel('The note', { exact: true }).fill('Why this one, *today*.')
+      await form.getByRole('button', { name: 'Save the note' }).click()
+      await expect(page.getByText('Why this one, today.')).toBeVisible()
+
+      await page.goto('/')
+      await expect(page.getByRole('complementary', { name: 'Programmer’s note' }).locator('em')).toHaveText('today')
+    } finally {
+      await page.request.delete(`/api/v1/editorial/work/${encodeURIComponent(id!)}/en`)
+    }
   })
 })

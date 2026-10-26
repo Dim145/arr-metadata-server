@@ -10,8 +10,7 @@
  * (`useAdultPostersFromAccount`), so a card costs no more than it did.
  */
 
-import { hashKey, useQueryClient } from '@tanstack/react-query'
-import { useCallback, useEffect, useReducer } from 'react'
+import { useCallback, useEffect } from 'react'
 
 import { useMe } from './hooks'
 import { usePreference } from './preferences'
@@ -19,9 +18,6 @@ import { adoptAdultPosters, showAdultPosters, useAdultPostersShown } from './pre
 
 /** The account's preference, under a name the server takes (`clean_preference_key`). */
 export const ADULT_POSTERS_PREFERENCE = 'reader.adultPosters'
-
-/** Who is signed in, as the cache holds the answer: under the key every page asks it by (`useMe`). */
-const ME = hashKey(['me'])
 
 /** What the account keeps, read as a choice: shown or veiled. Anything else is none. */
 export function readChoice(raw: unknown): boolean | undefined {
@@ -32,32 +28,21 @@ export function readChoice(raw: unknown): boolean | undefined {
  * Put the choice of the account signed in where every card reads it — and
  * take it away when nobody is, or the account never chose, so that this
  * browser's counts. Mounted once, above everything that shows a poster.
+ *
+ * Signing out, or changing one's password, takes the account's answers back
+ * (`endSession`) and says so to whoever reads them, this among them: nobody
+ * is signed in from then on, so the account's choice goes, and whoever signs
+ * in next is read afresh — their choice is the one put here, not the choice
+ * of the account that left.
  */
 export function useAdultPostersFromAccount() {
-  const queryClient = useQueryClient()
   const account = useMe().data?.user?.id
   const [kept] = usePreference<boolean | undefined>(ADULT_POSTERS_PREFERENCE, undefined, readChoice)
   const chosen = account ? kept : undefined
-  const [, reread] = useReducer((count: number) => count + 1, 0)
 
   useEffect(() => {
     adoptAdultPosters(chosen)
   }, [chosen])
-
-  // Signing out, or changing one's password, empties the whole cache
-  // (`SignOut`, `ChangePassword`) without a word to whoever reads it: the
-  // account's choice goes at once, before the page is drawn again, and the
-  // reads above are made afresh, so that whoever signs in next is the one
-  // whose choice is put here — not the account that left.
-  useEffect(
-    () =>
-      queryClient.getQueryCache().subscribe((event) => {
-        if (event.type !== 'removed' || event.query.queryHash !== ME) return
-        adoptAdultPosters(undefined)
-        reread()
-      }),
-    [queryClient],
-  )
 }
 
 /**

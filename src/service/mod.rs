@@ -1240,6 +1240,73 @@ async fn or_held(
     Ok(Some(item))
 }
 
+// ─── works entered by hand ───────────────────────────────────────────────────
+
+/// Which work entered by hand each number made of a catalogue id
+/// ([`ids::own`]) leads to, for the works of `kind`: the one entered first,
+/// should two catalogue ids make one number. Every one of them, switched off
+/// or merged into another: Sonarr and Radarr keep asking by the number they
+/// were handed.
+pub async fn own_holders(
+    state: &AppState,
+    kind: MediaKind,
+) -> Result<std::collections::HashMap<i64, String>> {
+    let mut holders = std::collections::HashMap::new();
+    for id in repo::item::made_by_hand(&state.db, kind).await? {
+        holders.entry(ids::own(&id)).or_insert(id);
+    }
+    Ok(holders)
+}
+
+/// The work entered by hand that Sonarr (a series) or Radarr (a film) keeps
+/// under `client_id`, a number made of its catalogue id: as it is held,
+/// switched off or not — a 404 would have the client take it for deleted —
+/// or the work a merge folded it into. No source is asked: none has it.
+pub async fn by_own_id(
+    state: &AppState,
+    kind: MediaKind,
+    client_id: i64,
+) -> Result<Option<MediaItem>> {
+    let Some(id) = own_holders(state, kind).await?.remove(&client_id) else {
+        return Ok(None);
+    };
+    Ok(load(state, &id).await?.filter(|item| item.kind == kind))
+}
+
+/// The id a client is handed for each of `items`, as `named` gives it, in
+/// their order — a work entered by hand only under a number that leads back
+/// to it. Two catalogue ids can make one number, and the work entered first
+/// keeps it: one entered later under the same number is left out, as a
+/// result the client could not add is, rather than offered under a number
+/// that would add the other. Works entered by hand now are given a catalogue
+/// id of a number of their own; one entered before may share it.
+pub async fn addressed(
+    state: &AppState,
+    kind: MediaKind,
+    items: &[MediaItem],
+    named: impl Fn(&MediaItem) -> Option<i64>,
+) -> Result<Vec<Option<i64>>> {
+    let mut holders = None;
+    let mut handed = Vec::with_capacity(items.len());
+    for item in items {
+        let id = match named(item) {
+            Some(id) if ids::is_own(id) => {
+                if holders.is_none() {
+                    holders = Some(own_holders(state, kind).await?);
+                }
+                holders
+                    .as_ref()
+                    .and_then(|holders| holders.get(&id))
+                    .filter(|holder| **holder == item.id)
+                    .map(|_| id)
+            }
+            other => other,
+        };
+        handed.push(id);
+    }
+    Ok(handed)
+}
+
 /// Serve from cache, or run `fetch` and cache its result.
 /// The key a search is cached under.
 ///
@@ -2129,5 +2196,162 @@ mod light_refresh_tests {
         let mut unscheduled = film(now, 200);
         unscheduled.refresh_after = None;
         assert!(due_light(&unscheduled, now));
+    }
+}
+
+#[cfg(test)]
+mod by_hand_tests {
+    use super::{testing::server, *};
+
+    /// Two catalogue ids that make one number: found by trying, since a
+    /// work entered by hand now is given an id of a number of its own. The
+    /// one entered first sorts after the other, so that it is the order they
+    /// were entered in that is seen to decide.
+    const FIRST: &str = "01a00000-0000-7000-8000-000000052148";
+    const LATER: &str = "01a00000-0000-7000-8000-000000011f4f";
+
+    async fn entered(state: &AppState, id: &str, kind: MediaKind, title: &str, at: &str) {
+        let mut work = MediaItem::empty(kind);
+        work.id = id.into();
+        work.title = title.into();
+        work.slug = crate::domain::make_slug(title, None);
+        work.is_manual = true;
+        work.created_at = at.into();
+        repo::item::upsert(
+            &state.db,
+            repo::item::ItemWrite {
+                item: &work,
+                replace_children: true,
+            },
+        )
+        .await
+        .expect("stored");
+    }
+
+    #[tokio::test]
+    async fn a_number_two_works_entered_by_hand_make_leads_to_the_first_and_no_source_is_asked() {
+        assert_eq!(ids::own(FIRST), ids::own(LATER));
+        let shared = ids::own(FIRST);
+        let (state, nowhere) = server().await;
+        // The later one stored first, and its id sorting first: what decides
+        // is when each was entered.
+        entered(
+            &state,
+            LATER,
+            MediaKind::Series,
+            "Later",
+            "2026-10-02T00:00:00.000Z",
+        )
+        .await;
+        entered(
+            &state,
+            FIRST,
+            MediaKind::Series,
+            "First",
+            "2026-10-01T00:00:00.000Z",
+        )
+        .await;
+
+        let found = series::by_client_id(&state, shared)
+            .await
+            .expect("answered")
+            .expect("found");
+        assert_eq!(found.id, FIRST);
+        assert_eq!(
+            nowhere.asked(),
+            0,
+            "a source was asked for a work entered by hand"
+        );
+
+        // Searched for, the later one is left out: under that number Sonarr
+        // would add the first.
+        let both = [
+            load(&state, LATER).await.unwrap().unwrap(),
+            load(&state, FIRST).await.unwrap().unwrap(),
+        ];
+        assert_eq!(
+            series::client_ids(&state, &both).await.unwrap(),
+            [None, Some(shared)]
+        );
+        // Nor is a film the series' number: each client's works apart.
+        assert!(
+            by_own_id(&state, MediaKind::Movie, shared)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(nowhere.asked(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_work_entered_by_hand_switched_off_or_merged_away_is_still_answered_by_its_number() {
+        let (state, nowhere) = server().await;
+
+        // Switched off: still Radarr's, as a film it holds.
+        entered(
+            &state,
+            FIRST,
+            MediaKind::Movie,
+            "Sans Source",
+            "2026-10-01T00:00:00.000Z",
+        )
+        .await;
+        assert!(
+            repo::item::set_enabled(&state.db, FIRST, false)
+                .await
+                .unwrap()
+        );
+        state.caches.touched(FIRST).await;
+        let found = movie::by_tmdb_id(&state, ids::own(FIRST))
+            .await
+            .expect("answered")
+            .expect("found");
+        assert_eq!(found.id, FIRST);
+        assert!(!found.is_enabled);
+
+        // Merged into a series its sources fill: Sonarr, which holds it
+        // under its number, is answered with the work it went into.
+        entered(
+            &state,
+            LATER,
+            MediaKind::Series,
+            "Vicineko",
+            "2026-10-02T00:00:00.000Z",
+        )
+        .await;
+        let mut kept = MediaItem::empty(MediaKind::Series);
+        kept.title = "Vicineko".into();
+        kept.slug = "vicineko-tvdb".into();
+        kept.external_ids.tvdb = Some(999_002);
+        repo::item::upsert(
+            &state.db,
+            repo::item::ItemWrite {
+                item: &kept,
+                replace_children: true,
+            },
+        )
+        .await
+        .expect("stored");
+        merge::merge(
+            &state,
+            &merge::Asker { by: None, ip: None },
+            LATER,
+            &kept.id,
+            Default::default(),
+        )
+        .await
+        .expect("asked")
+        .expect("merged");
+        let found = series::by_client_id(&state, ids::own(LATER))
+            .await
+            .expect("answered")
+            .expect("found");
+        assert_eq!(found.id, kept.id);
+        assert_eq!(found.external_ids.tvdb, Some(999_002));
+        assert_eq!(
+            nowhere.asked(),
+            0,
+            "a source was asked for a work entered by hand"
+        );
     }
 }

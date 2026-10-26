@@ -12,7 +12,7 @@ import { useNavigate } from 'react-router'
 
 import { ApiError, api } from '../../lib/api'
 import { useI18n } from '../../lib/i18n'
-import { forget } from '../../lib/recent'
+import { endSession } from '../../lib/session'
 import { Button, FormField, Glyph, Input, Spinner } from '../ui'
 
 export function ChangePassword() {
@@ -30,8 +30,7 @@ export function ChangePassword() {
     onSuccess: () => {
       // Signed out everywhere, this browser too: what it kept of the person
       // who was here goes with the rest.
-      forget()
-      queryClient.clear()
+      endSession(queryClient)
       navigate('/login', { replace: true })
     },
   })

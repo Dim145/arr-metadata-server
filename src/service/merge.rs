@@ -676,12 +676,17 @@ pub async fn merge(
             (
                 into.to_string(),
                 before.title.clone(),
-                client_id(before.kind, &survivor_ids),
+                client_id(before.kind, into, kept_card.is_manual, &survivor_ids),
             ),
             (
                 merged.to_string(),
                 gone.title.clone(),
-                client_id(gone_card.kind, &gone_card.external_ids),
+                client_id(
+                    gone_card.kind,
+                    merged,
+                    gone_card.is_manual,
+                    &gone_card.external_ids,
+                ),
             ),
         ],
     );
@@ -719,12 +724,10 @@ fn kept_values(item: &MediaItem, keep: &BTreeMap<String, Side>) -> BTreeMap<Stri
 }
 
 /// The id Sonarr or Radarr keeps a work under: TheTVDB's, or the one made
-/// for a series it does not list; TMDB's for a film.
-fn client_id(kind: MediaKind, ids: &ExternalIds) -> Option<i64> {
-    match kind {
-        MediaKind::Series => crate::service::series::client_id_of(ids.tvdb, ids.tmdb, ids.fankai),
-        MediaKind::Movie => ids.tmdb,
-    }
+/// for a series it does not list; TMDB's for a film; for a work entered by
+/// hand that nothing elsewhere names, the number made of its catalogue id.
+fn client_id(kind: MediaKind, id: &str, is_manual: bool, ids: &ExternalIds) -> Option<i64> {
+    crate::service::ids::for_client(kind, id, is_manual, ids)
 }
 
 /// The journal's line for the record merged in, or taken out again: its
@@ -1036,14 +1039,14 @@ pub async fn unmerge(
                 (
                     tombstone.into.clone(),
                     before.title.clone(),
-                    after
-                        .as_ref()
-                        .and_then(|after| client_id(after.kind, &after.external_ids)),
+                    after.as_ref().and_then(|after| {
+                        client_id(after.kind, &after.id, after.is_manual, &after.external_ids)
+                    }),
                 ),
                 (
                     merged.to_string(),
                     restored.title.clone(),
-                    client_id(restored.kind, &ids),
+                    client_id(restored.kind, merged, restored.is_manual, &ids),
                 ),
             ],
         );

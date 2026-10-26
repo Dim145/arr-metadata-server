@@ -70,8 +70,9 @@ struct SearchQueryV2 {
 /// A series by TVDB id, in Skyhook's format.
 ///
 /// The id may also be one this server synthesised for a work TMDB indexes and
-/// TVDB does not; the response echoes back whichever id was asked for, because
-/// Sonarr has already stored it.
+/// TVDB does not, or for a series entered by hand that nothing elsewhere
+/// names; the response echoes back whichever id was asked for, because Sonarr
+/// has already stored it.
 ///
 /// A series the catalogue holds is answered from the catalogue, as it was,
 /// when the sources do not answer. An id nobody holds is a 404 only when every
@@ -161,13 +162,14 @@ async fn search(
     let term = query.term.unwrap_or_default();
 
     let mut items = series::search(&state, &term).await?;
+    let ids = series::client_ids(&state, &items).await?;
 
     // Only the work's own title here: fetching a season of episode text for
     // each of ten search results would turn one search into dozens of calls.
-    for item in &mut items {
+    for (item, id) in items.iter_mut().zip(&ids) {
         language::apply_shallow(&state, item, &language);
-        if let Some(id) = series::client_id(item) {
-            name_for_sonarr(&state, item, id).await;
+        if let Some(id) = id {
+            name_for_sonarr(&state, item, *id).await;
         }
         state.media.for_clients(item);
     }
@@ -176,7 +178,8 @@ async fn search(
     // the list and then fail on add.
     let shows = items
         .iter()
-        .filter_map(|item| series::client_id(item).map(|id| from_item(item, id, &language)))
+        .zip(ids)
+        .filter_map(|(item, id)| id.map(|id| from_item(item, id, &language)))
         .collect();
 
     Ok(Json(shows))
@@ -289,12 +292,13 @@ async fn search_v2(
     let callers = state.language(identity.client_id(), identity.peer_id());
 
     let mut items = series::search(&state, &term).await?;
+    let ids = series::client_ids(&state, &items).await?;
 
     let mut shows = Vec::with_capacity(items.len());
-    for item in &mut items {
+    for (item, id) in items.iter_mut().zip(ids) {
         // A result Sonarr cannot address is worse than no result: it would
         // show in the list and then fail on add.
-        let Some(id) = series::client_id(item) else {
+        let Some(id) = id else {
             continue;
         };
         name_for_sonarr(&state, item, id).await;
