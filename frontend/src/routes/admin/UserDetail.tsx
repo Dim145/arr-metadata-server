@@ -5,6 +5,12 @@
  * A change to the role or the status is saved as it is made, and the server
  * has the last word: your own account, and the last administrator, are left
  * as they are with the reason said beside the choice.
+ *
+ * Your own page ends your session where what it does closes them all —
+ * closing them, or untying the account from the identity provider — and
+ * says so first: this one goes with the rest, and the page used to go on
+ * showing the administration to somebody the server no longer knew. Your own
+ * password is not given here at all (`OwnPassword`).
  */
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -32,6 +38,7 @@ import { describeAgent } from '../../lib/agent'
 import { api, segment } from '../../lib/api'
 import { dateTime, longDate } from '../../lib/format'
 import { useI18n } from '../../lib/i18n'
+import { endSession } from '../../lib/session'
 import type { AccountRole, AccountStatus, Me, User, UserDetail as Detail } from '../../lib/types'
 
 export function UserDetail() {
@@ -80,6 +87,13 @@ export function UserDetail() {
   const { user, keys, sessions } = detail.data
   const name = user.displayName || user.username
   const mine = me.data?.user?.id === user.id
+  // Your own name is also the one the administration's side bar shows.
+  const saved = mine
+    ? () => {
+        refresh()
+        void queryClient.invalidateQueries({ queryKey: ['me'] })
+      }
+    : refresh
 
   return (
     <div className="mx-auto max-w-5xl">
@@ -154,13 +168,13 @@ export function UserDetail() {
             </div>
           </Panel>
 
-          <ProfileEditor user={user} onSaved={refresh} />
-          <PasswordReset id={id} />
-          {user.oidcLinked ? <ProviderLink user={user} onChanged={refresh} /> : null}
+          <ProfileEditor user={user} onSaved={saved} />
+          {mine ? <OwnPassword /> : <PasswordReset id={id} />}
+          {user.oidcLinked ? <ProviderLink user={user} mine={mine} onChanged={refresh} /> : null}
         </div>
 
         <div className="space-y-6">
-          <SessionsPanel id={id} sessions={sessions} onChanged={refresh} />
+          <SessionsPanel id={id} sessions={sessions} mine={mine} onChanged={refresh} />
           <KeysPanel keys={keys} onChanged={refresh} />
 
           {mine ? null : (
@@ -296,16 +310,53 @@ function PasswordReset({ id }: { id: string }) {
   )
 }
 
-/** The tie to the identity provider, and the way to undo it. */
-function ProviderLink({ user, onChanged }: { user: User; onChanged: () => void }) {
+/**
+ * Your own password, which is not given from here. The server refuses it — a
+ * session left open must not be enough to lock its owner out — and the page
+ * offered it all the same, to answer with that refusal. It is changed from
+ * your account page, which asks for the current one first and signs you out
+ * everywhere once it is done.
+ */
+function OwnPassword() {
   const { t } = useI18n()
+
+  return (
+    <Panel label={t.account.password} className="rise" style={{ animationDelay: '100ms' }}>
+      <PanelHead title={t.account.password} />
+      <p className="flex flex-wrap items-center gap-x-3 gap-y-2 p-5 text-sm text-bone-dim">
+        {t.admin.people.resetOwn}
+        <Link
+          to="/admin/account"
+          className="inline-flex min-h-11 items-center gap-1.5 text-vermillion transition-colors duration-150 hover:text-vermillion-bright"
+        >
+          {t.admin.account}
+          <Glyph name="chevronRight" className="size-3.5" />
+        </Link>
+      </p>
+    </Panel>
+  )
+}
+
+/**
+ * The tie to the identity provider, and the way to undo it — which closes the
+ * account's sessions, and on your own account this one with them.
+ */
+function ProviderLink({ user, mine, onChanged }: { user: User; mine: boolean; onChanged: () => void }) {
+  const { t } = useI18n()
+  const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const [asking, setAsking] = useState(false)
 
   const unlink = useMutation({
     mutationFn: () => api.delete(`/users/${encodeURIComponent(user.id)}/oidc`),
     onSuccess: () => {
       setAsking(false)
-      onChanged()
+      if (mine) {
+        endSession(queryClient)
+        navigate('/login', { replace: true })
+      } else {
+        onChanged()
+      }
     },
   })
 
@@ -335,24 +386,47 @@ function ProviderLink({ user, onChanged }: { user: User; onChanged: () => void }
         }
       >
         <p className="text-sm leading-relaxed text-bone-dim">{t.admin.people.unlinkBody}</p>
+        {mine ? <p className="mt-2 text-sm leading-relaxed text-bone">{t.admin.people.unlinkOwn}</p> : null}
+        {unlink.isError ? (
+          <p role="alert" className="mt-2 text-sm text-status-error">
+            {unlink.error.message}
+          </p>
+        ) : null}
       </Dialog>
     </Panel>
   )
 }
 
+/**
+ * Where the account is signed in, and the way to close it all. On your own
+ * account that is this session too, so it is asked first and then signs you
+ * out here, as the way out does.
+ */
 function SessionsPanel({
   id,
   sessions,
+  mine,
   onChanged,
 }: {
   id: string
   sessions: Detail['sessions']
+  mine: boolean
   onChanged: () => void
 }) {
   const { t, locale } = useI18n()
+  const navigate = useNavigate()
+  const queryClient = useQueryClient()
+  const [asking, setAsking] = useState(false)
   const closeAll = useMutation({
     mutationFn: () => api.delete(`/users/${segment(id)}/sessions`),
-    onSuccess: onChanged,
+    onSuccess: () => {
+      if (mine) {
+        endSession(queryClient)
+        navigate('/login', { replace: true })
+      } else {
+        onChanged()
+      }
+    },
   })
 
   return (
@@ -361,7 +435,13 @@ function SessionsPanel({
         title={t.account.sessions}
         action={
           sessions.length ? (
-            <Button size="sm" variant="quiet" className="text-vermillion" onClick={() => closeAll.mutate()}>
+            <Button
+              size="sm"
+              variant="quiet"
+              className="text-vermillion"
+              disabled={closeAll.isPending}
+              onClick={() => (mine ? setAsking(true) : closeAll.mutate())}
+            >
               {t.admin.people.closeSessions}
             </Button>
           ) : null
@@ -383,6 +463,28 @@ function SessionsPanel({
       ) : (
         <EmptyState size="line" title={t.admin.people.noSessions} />
       )}
+
+      <Dialog
+        open={asking}
+        title={t.admin.people.closeOwnTitle}
+        onClose={() => setAsking(false)}
+        footer={
+          <>
+            <Button onClick={() => setAsking(false)}>{t.account.cancel}</Button>
+            <Button variant="danger" disabled={closeAll.isPending} onClick={() => closeAll.mutate()}>
+              {closeAll.isPending ? <Spinner className="size-4" /> : null}
+              {t.admin.people.closeOwnConfirm}
+            </Button>
+          </>
+        }
+      >
+        {t.admin.people.closeOwnBody}
+        {closeAll.isError ? (
+          <p role="alert" className="mt-2 text-status-error">
+            {closeAll.error.message}
+          </p>
+        ) : null}
+      </Dialog>
     </Panel>
   )
 }
