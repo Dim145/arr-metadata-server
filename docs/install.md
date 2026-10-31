@@ -6,7 +6,7 @@ be built from source.
 
 ## Requirements
 
-- Rust 1.94+ (only to build from source; a container image is provided)
+- Rust 1.95+ (only to build from source; a container image is provided)
 - SQLite (bundled, nothing to install) or PostgreSQL 14+
 - A TMDB API key, if you want it to fetch anything
 

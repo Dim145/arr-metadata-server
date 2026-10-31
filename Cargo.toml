@@ -2,7 +2,7 @@
 name = "arr-metadata-server"
 version = "0.11.1"
 edition = "2024"
-rust-version = "1.94"
+rust-version = "1.95"
 description = "Self-hosted, provider-agnostic metadata server compatible with the *arr stack, TMDB clients and manual curation."
 license = "MIT"
 repository = "https://github.com/Dim145/arr-metadata-server"
@@ -119,7 +119,7 @@ utoipa = { version = "6.0.0", features = ["axum_extras", "preserve_order"] }
 utoipa-axum = "0.3.0"
 utoipa-swagger-ui = { version = "10.0.2", features = ["axum", "vendored"] }
 dns-lookup = "4.0.1"
-parking_lot = "0.12.5"
+parking_lot = "0.13.0"
 url = "2.5.8"
 # Sonarr's own title cleaning takes accents off through a canonical
 # decomposition; the version sqlx's PostgreSQL driver already brings.
