@@ -7,6 +7,16 @@ may change what the API or the configuration means, and says so here.
 
 ## [Unreleased]
 
+### Fixed
+
+- On PostgreSQL, every query left its prepared statement in the session for
+  as long as the connection lived: the statement cache is off there — the
+  way around a fault of sqlx's in binding a missing number — and sqlx then
+  names each statement it prepares and never closes it. A library's import
+  grew each of PostgreSQL's connections to some 800 MB, and the simplest
+  statements waited minutes to be parsed; the statements are now let go of
+  as a connection returns to the pool.
+
 ## [0.11.1] — 2026-10-26
 
 ### Changed

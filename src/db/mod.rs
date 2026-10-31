@@ -180,6 +180,25 @@ fn uncached(url: &str) -> String {
     format!("{url}{joiner}statement-cache-capacity=0")
 }
 
+/// Let go of the statements a PostgreSQL session holds, as its connection
+/// goes back to the pool.
+///
+/// sqlx names every statement it prepares — a query is `persistent` unless
+/// told otherwise — and with its cache off ([`uncached`]) it neither keeps
+/// one to run again nor closes it: each query left its plan in the session
+/// for as long as the connection lived. A library's import ran some ninety
+/// thousand through one connection in minutes — 800 MB of PostgreSQL's
+/// memory for each connection of the pool, and the simplest statements
+/// waited minutes to be parsed. Nothing runs them again, the cache being
+/// off, so all of them go; the simple protocol says so without preparing
+/// one more.
+async fn forget_statements(conn: &mut sqlx::AnyConnection) -> sqlx::Result<()> {
+    sqlx::raw_sql(AssertSqlSafe("DEALLOCATE ALL"))
+        .execute(conn)
+        .await
+        .map(|_| ())
+}
+
 impl Db {
     pub async fn connect(cfg: &config::Database) -> Result<Self> {
         sqlx::any::install_default_drivers();
@@ -222,6 +241,14 @@ impl Db {
                         }
                     }
                     Ok(())
+                })
+            })
+            .after_release(move |conn, _meta| {
+                Box::pin(async move {
+                    if dialect == Dialect::Postgres {
+                        forget_statements(conn).await?;
+                    }
+                    Ok(true)
                 })
             })
             .connect(&url)
