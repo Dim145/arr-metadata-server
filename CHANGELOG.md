@@ -7,6 +7,8 @@ may change what the API or the configuration means, and says so here.
 
 ## [Unreleased]
 
+## [0.12.0] — 2026-10-31
+
 ### Added
 
 - What the process holds in memory, in the metrics: `ams_memory_heap_bytes`,
@@ -2591,7 +2593,8 @@ and arm64.
 - End-to-end checks against a real Sonarr, against two instances, and a
   Playwright suite over the whole interface.
 
-[Unreleased]: https://github.com/Dim145/arr-metadata-server/compare/v0.11.1...HEAD
+[Unreleased]: https://github.com/Dim145/arr-metadata-server/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/Dim145/arr-metadata-server/compare/v0.11.1...v0.12.0
 [0.11.1]: https://github.com/Dim145/arr-metadata-server/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/Dim145/arr-metadata-server/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/Dim145/arr-metadata-server/compare/v0.8.3...v0.10.0
