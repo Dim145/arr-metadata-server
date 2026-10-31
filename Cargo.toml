@@ -101,7 +101,7 @@ governor = "0.10.4"
 
 # ── Utilities ────────────────────────────────────────────────────────────────
 chrono = { version = "0.4.45", default-features = false, features = ["std", "clock", "serde"] }
-uuid = { version = "1.26.1", features = ["v4", "v7", "serde"] }
+uuid = { version = "1.29.0", features = ["v4", "v7", "serde"] }
 futures = "0.3.34"
 # IMDb publishes its datasets gzipped; already built for reqwest's own gzip.
 flate2 = "1.1.10"
@@ -117,7 +117,7 @@ utoipa = { version = "6.0.0", features = ["axum_extras", "preserve_order"] }
 # Collects handlers and their `#[utoipa::path]` annotations into one spec, so a
 # route cannot exist without appearing in the documentation.
 utoipa-axum = "0.3.0"
-utoipa-swagger-ui = { version = "10.0.0", features = ["axum", "vendored"] }
+utoipa-swagger-ui = { version = "10.0.2", features = ["axum", "vendored"] }
 dns-lookup = "4.0.1"
 parking_lot = "0.12.5"
 url = "2.5.8"
@@ -162,7 +162,7 @@ x509-parser = "0.18.1"
 # The authority checks what it issued the way rustls will judge it.
 rustls-webpki = { version = "0.103.15", features = ["aws-lc-rs", "std"] }
 rustls-pki-types = { version = "1.15.1", features = ["std"] }
-redis = { version = "1.7.1", features = ["tokio-comp", "connection-manager", "tokio-rustls-comp"] }
+redis = { version = "1.8.0", features = ["tokio-comp", "connection-manager", "tokio-rustls-comp"] }
 mimalloc = "0.1.52"
 arc-swap = "1.9.2"
 # The machine's name, to tell one instance from another among several.

@@ -10,17 +10,6 @@ ignore = [
     # provider's public key; this server holds no RSA private key, so there is
     # nothing for the timing to recover. No fixed release of `rsa` exists.
     "RUSTSEC-2023-0071",
-    # RUSTSEC-2026-0367, -0368 and -0369, in `zip`'s extraction: SUID and SGID
-    # bits kept, symbolic links led out of the destination, permissions applied
-    # through them. `zip` 8 is a build dependency of `utoipa-swagger-ui`, whose
-    # build script opens one archive — the Swagger UI vendored in
-    # `utoipa-swagger-ui-vendored`, a crate Cargo.lock pins by checksum, which
-    # nobody else supplies — and writes its files itself, by `enclosed_name`,
-    # never through `ZipArchive::extract`. The fixed `zip` 9 is not one that
-    # utoipa-swagger-ui 10.0.1, the latest, takes; drop these once it does.
-    "RUSTSEC-2026-0367",
-    "RUSTSEC-2026-0368",
-    "RUSTSEC-2026-0369",
     # RUSTSEC-2024-0436, `paste` unmaintained: a proc-macro rav1e — the AVIF
     # encoder of the night's copies — runs at build time to paste identifiers
     # together. Nothing of it is in the binary, it is finished rather than
