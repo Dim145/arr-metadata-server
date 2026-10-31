@@ -51,7 +51,11 @@ server directly; Prometheus keeps the history.
 | `ams_tls_expiry_seconds{certificate}` | Seconds left before a certificate ends — `interface`, `clients`, `authority` — below nought once it has. |
 | `ams_backup_age_seconds` | How long ago the newest archive was made, while the schedule is on and one exists. |
 | `ams_leader{ams_instance}`, `ams_instances` | Which instance runs the schedules, and how many were heard of lately. |
-| `ams_cache_*`, `ams_redis_*` | Each cache's entries, bytes, hits and misses by tier; the cache server's state. |
+| `ams_cache_*`, `ams_redis_*` | Each cache's entries, bytes, hits and misses by tier — `copies` is the pictures' copies made in the last minute; the cache server's state. |
+| `ams_memory_heap_bytes` | What the program holds from its allocator: its own data, without what the allocator keeps beside it for reuse. |
+| `ams_memory_resident_bytes{kind}`, `ams_memory_resident_peak_bytes`, `ams_process_threads` | What the kernel keeps resident for the process — `anonymous` (the heap, what the allocator keeps for reuse, the stacks), `file` (the binary's pages), `shared` — the most it ever held, and its threads. On Linux. |
+| `ams_cgroup_memory_bytes`, `ams_cgroup_memory_working_set_bytes`, `ams_cgroup_memory_limit_bytes` | What the container is charged, page cache included; the working set, which is what `docker stats` shows; and its ceiling, when it has one. On Linux. |
+| `ams_cgroup_memory_stat_bytes{kind}`, `ams_cgroup_memory_ceiling_hits_total` | The charge by kind, as `memory.stat` counts it (`anon`, `active_file`, `inactive_file`, `shmem`, `kernel`, `sock`, `file`), and how many times the container reached its ceiling and the kernel took memory back to stay under it. |
 | `ams_works`, `ams_episodes`, `ams_locks`, `ams_job_runs` | What the catalogue holds, and the jobs' runs. |
 
 With several instances (`AMS_MODE=multi`), scrape each one: the caches' first tier, the request

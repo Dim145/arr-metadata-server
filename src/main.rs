@@ -13,6 +13,7 @@ mod export;
 mod jobs;
 mod mcp;
 mod media;
+mod memory;
 mod merge;
 mod metrics;
 mod outbound;
@@ -31,11 +32,10 @@ mod wire;
 
 use clap::Parser as _;
 
-/// The allocator: a server of many small, short-lived allocations across
-/// many threads, which this one serves faster and with less fragmentation
-/// than the system's.
+/// The allocator: mimalloc, with what the program holds of it counted for
+/// the metrics (`memory`).
 #[global_allocator]
-static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+static ALLOCATOR: memory::Counting = memory::Counting;
 
 /// What `--help` says after the commands: how each is used, with the forms
 /// the distroless image needs. The commands themselves are in `cli`.
