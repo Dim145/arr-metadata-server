@@ -128,6 +128,7 @@ def add():
     movies = most_voted("movie", int(os.environ.get("MOVIES", "250")))
     workers = int(os.environ.get("WORKERS", "4"))
     print(f"  adding {len(series)} series and {len(movies)} films, {workers} at a time", flush=True)
+    began = time.time()
     failures = []
     with concurrent.futures.ThreadPoolExecutor(workers) as pool:
         jobs = [pool.submit(add_series, sonarr, t) for t in series]
@@ -137,7 +138,8 @@ def add():
                 failures.append(problem)
             if done % 50 == 0:
                 print(f"  {time.strftime('%H:%M:%S')} {done}/{len(jobs)} ({len(failures)} failed)", flush=True)
-    print(f"  added; {len(failures)} failed{': ' + ', '.join(failures[:10]) if failures else ''}", flush=True)
+    print(f"  added in {time.time() - began:.0f} s; {len(failures)} failed"
+          f"{': ' + ', '.join(failures[:10]) if failures else ''}", flush=True)
 
 
 def wait(limit=3600):
@@ -231,8 +233,9 @@ def summary(probe_path, scrape_path):
         return
     # The kernel counts a process's time in ticks of a hundredth of a second.
     cpu = (probe[-1].get("cpu_ticks", 0) - probe[0].get("cpu_ticks", 0)) / 100
+    pg_cpu = (probe[-1].get("pg_cpu_usec", 0) - probe[0].get("pg_cpu_usec", 0)) / 1e6
     print(f"{len(rows)} samples over {int(probe[-1]['t'] - probe[0]['t'])} s; "
-          f"{cpu:.0f} s of the server's CPU; "
+          f"{cpu:.0f} s of the server's CPU and {pg_cpu:.0f} s of PostgreSQL's; "
           f"the ceiling reached {int(probe[-1].get('ev_max', 0))} times, "
           f"{int(probe[-1].get('ev_oom_kill', 0))} killed for memory")
     print()
