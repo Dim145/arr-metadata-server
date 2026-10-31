@@ -43,8 +43,8 @@ services:
       AMS_TMDB_API_KEY: ${AMS_TMDB_API_KEY:?the TMDB key}
       AMS_TVDB_API_KEY: ${AMS_TVDB_API_KEY:-}
       AMS_FANART_API_KEY: ${AMS_FANART_API_KEY:-}
-      AMS_ADMIN_USERNAME: memory
-      AMS_ADMIN_PASSWORD: ${AMS_ADMIN_PASSWORD:?the administrator's password}
+      AMS_ADMIN_USERNAME: ${AMS_ADMIN_USERNAME:-memory}
+      AMS_ADMIN_PASSWORD: ${AMS_ADMIN_PASSWORD:?}
       AMS_ALLOWLIST: 0.0.0.0/0,::/0
       AMS_TMDB_AUTH: allowlist
       # The pictures are given under the server's own address on the stack's
