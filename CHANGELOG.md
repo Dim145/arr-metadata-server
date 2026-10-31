@@ -39,6 +39,9 @@ may change what the API or the configuration means, and says so here.
   PostgreSQL spent 30 % less CPU and held half the memory; sqlx's own
   hundred spared it no more, for 20 MB of the server's memory against 8.
   An address that says `statement-cache-capacity` keeps its own size.
+- The Rust crates are at their newest releases a week old or more, within
+  their ranges: `redis` 1.8, `uuid` 1.29 and `utoipa-swagger-ui` 10.0.2
+  among them.
 
 ### Fixed
 
@@ -57,6 +60,12 @@ may change what the API or the configuration means, and says so here.
 - The anime identifier list is read an element at a time: read whole as
   documents first, its seven and a half megabytes took the server's memory
   to 150 MB at every start it was due, where it now reaches 105.
+
+### Security
+
+- `utoipa-swagger-ui` 10.0.2 builds the Swagger UI with `zip` 9, past
+  RUSTSEC-2026-0367 to -0369: `cargo audit` and `cargo deny` no longer set
+  them aside.
 
 ## [0.11.1] — 2026-10-26
 
