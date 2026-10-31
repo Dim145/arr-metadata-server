@@ -32,16 +32,24 @@ may change what the API or the configuration means, and says so here.
   2000×3000 takes 0.7 MB to prepare where it took 42, a progressive backdrop
   half of what it took, for the same sketch. A picture a WebP copy is made
   of is decoded whole, as before.
+- On PostgreSQL, each connection keeps the two dozen statements it runs
+  most, prepared once, where every query was parsed and described anew: a
+  missing number is bound as the double PostgreSQL holds it as, the fault
+  of sqlx's the cache had been switched off for. Under a library's import
+  PostgreSQL spent 30 % less CPU and held half the memory; sqlx's own
+  hundred spared it no more, for 20 MB of the server's memory against 8.
+  An address that says `statement-cache-capacity` keeps its own size.
 
 ### Fixed
 
 - On PostgreSQL, every query left its prepared statement in the session for
-  as long as the connection lived: the statement cache is off there — the
-  way around a fault of sqlx's in binding a missing number — and sqlx then
-  names each statement it prepares and never closes it. A library's import
-  grew each of PostgreSQL's connections to some 800 MB, and the simplest
-  statements waited minutes to be parsed; the statements are now let go of
-  as a connection returns to the pool.
+  as long as the connection lived: with the statement cache off, as the
+  server had it, sqlx names each statement it prepares and never closes it.
+  A library's import grew each of PostgreSQL's connections to some 800 MB,
+  and the simplest statements waited minutes to be parsed. The cache is on
+  again (see Changed); an address that switches it off
+  (`statement-cache-capacity=0`) has its statements let go of as each
+  connection returns to the pool.
 - Storing a work held each provider's answer twice while it was merged and
   written: parsed, and a parsed copy for the snapshots. The snapshots are
   kept as the text they are written as, and the answers let go of: a series

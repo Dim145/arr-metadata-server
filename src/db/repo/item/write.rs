@@ -6,7 +6,7 @@ use sqlx::{Any, Arguments, Transaction, any::AnyArguments};
 
 use super::listed::{Listed, mark_changed};
 use crate::{
-    db::{Db, from_bool, new_id, now, text_list},
+    db::{Db, Double, from_bool, new_id, now, text_list},
     domain::{Credit, ExternalSource, MediaItem},
 };
 
@@ -341,7 +341,7 @@ async fn upsert_row(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaItem) ->
         .bind(&item.trailer_youtube_id)
         .bind(&item.theme_music)
         .bind(&item.title_qualifier)
-        .bind(item.popularity)
+        .bind(Double(item.popularity))
         .bind(text_list(&item.genres))
         .bind(text_list(&item.keywords))
         .bind(item.collection_tmdb_id)
@@ -362,7 +362,7 @@ async fn upsert_row(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaItem) ->
         .bind(&listed.status)
         .bind(&listed.language)
         .bind(&listed.release)
-        .bind(listed.score)
+        .bind(Double(listed.score))
         .bind(&item.tagline)
         .bind(&item.format)
         .bind(text_list(&item.production_countries))
@@ -564,7 +564,7 @@ async fn replace_children(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaIt
         .bind(&ep.image)
         .bind(ep.tvdb_id)
         .bind(ep.tmdb_id)
-        .bind(ep.rating.map(|r| r.value))
+        .bind(Double(ep.rating.map(|r| r.value)))
         .bind(ep.rating.map(|r| r.votes))
         .bind(&created)
         .bind(&created)
@@ -676,7 +676,7 @@ async fn replace_children(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaIt
         ))
         .bind(&item.id)
         .bind(&rating.source)
-        .bind(rating.value)
+        .bind(Double(rating.value))
         .bind(rating.votes)
         .bind(&rating.rating_type)
         .execute(&mut **tx)

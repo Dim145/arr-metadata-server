@@ -9,7 +9,7 @@ use sqlx::{Any, Arguments, Transaction, any::AnyArguments};
 
 use super::read::map_rating;
 use crate::{
-    db::{Db, RowExt, from_bool, now, text_list},
+    db::{Db, Double, RowExt, from_bool, now, text_list},
     domain::{MediaItem, Rating},
 };
 
@@ -183,7 +183,7 @@ pub async fn write_listed(db: &Db, listed: &[Relisted], imdb: bool, version: i64
         .bind(&values.status)
         .bind(&values.language)
         .bind(&values.release)
-        .bind(values.score)
+        .bind(Double(values.score))
         .bind(from_bool(imdb))
         .bind(version)
         .bind(*change)

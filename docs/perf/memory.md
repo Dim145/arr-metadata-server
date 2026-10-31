@@ -41,17 +41,21 @@ its own memory having gone from 330 MB to 503 MB in ten seconds.
 
 ## What held it
 
-**PostgreSQL's sessions.** The statement cache is off on PostgreSQL — the way
-around a fault of sqlx's `Any` driver, which binds a missing number as a
-single-precision one — and sqlx then names every statement it prepares and
-never closes one. Each query left its plan in the session for as long as the
-connection lived: ninety thousand in one connection after a few minutes of
-import, some 800 MB of PostgreSQL's memory for each connection of the pool.
-PostgreSQL took all eight CPUs, the simplest statements waited minutes to be
-parsed, and its connections were what the kernel killed first when the
-virtual machine ran short. The statements are let
-go of as each connection goes back to the pool (`DEALLOCATE ALL`, in the
-simple protocol, which prepares nothing).
+**PostgreSQL's sessions.** The statement cache was off on PostgreSQL — the
+way around a fault of sqlx's `Any` driver, which hands PostgreSQL a missing
+double as a single-precision null, where a statement keeps the types of its
+first run — and sqlx then names every statement it prepares and never closes
+one. Each query left its plan in the session for as long as the connection
+lived: ninety thousand in one connection after a few minutes of import, some
+800 MB of PostgreSQL's memory for each connection of the pool. PostgreSQL
+took all eight CPUs, the simplest statements waited minutes to be parsed, and
+its connections were what the kernel killed first when the virtual machine
+ran short. A missing number is now bound as the double it is (`db::Double`),
+and the cache is on again: a connection keeps the two dozen statements it
+runs most, each prepared once, where every query was parsed and described
+anew — see below for why two dozen. An address that switches the cache off
+(`statement-cache-capacity=0`) has its statements let go of as each
+connection goes back to the pool.
 
 **The allocator.** The program held some 70 MB; the process four times as
 much. The pictures' copies are made in buffers of tens of megabytes, freed
@@ -93,6 +97,28 @@ sketch is the same within what a JPEG's rounding moves.
 **The anime list.** Read whole as documents before its elements were, its
 seven and a half megabytes took the server to 150 MB at a start where the list
 was due; read an element at a time, to 105.
+
+## The placeholders and the statements, measured
+
+The same import, the image before both changes and after them, and after
+them with the statement cache sized by the address:
+
+| Run | `docker stats`, mean / max | Its own memory, mean | Its CPU | PostgreSQL's CPU | PostgreSQL's own memory, mean / max |
+|---|---:|---:|---:|---:|---:|
+| before, twice | 164–216 / 288–331 MB | 142–143 MB | 119–121 s | 91–92 s | 109–110 / 156–196 MB |
+| after, no statement kept | 166 / 193 MB | 144 MB | 105 s | 93 s | 113 / 243 MB |
+| after, two dozen kept | 172 / 207 MB | 152 MB | 89 s | 67 s | 63 / 85 MB |
+| after, a hundred kept, three times | 183–187 / 214–222 MB | 162–164 MB | 84–111 s | 62–66 s | 88 / 97–114 MB |
+
+What the server holds itself moves little either way: the heap is scraped
+every five seconds, between the pictures, and how many of those a run
+prepares are large posters and backdrops varies from one run to the next —
+the pictures alone are measured above. A statement kept keeps its metadata
+for as long as its connection lives, among the pages of everything else:
+sqlx's own hundred spared PostgreSQL no more of its CPU than two dozen did,
+for 20 MB of the server's memory where two dozen take 8. The server's CPU
+follows how many pictures a run got to — between 5 400 and 8 000 of them —
+more than anything else.
 
 ## What a deployment can change
 
