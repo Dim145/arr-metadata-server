@@ -491,6 +491,22 @@ async fn from_mal(state: &AppState, id: Option<i64>, kind: MediaKind) -> Asked {
     }
 }
 
+/// What each provider answered, as the text it is kept as, the document
+/// itself let go of: the merge reads the works made of the answers, not the
+/// answers. Parsed, a long series' answers weigh well over twice their text —
+/// near ninety megabytes for a soap's ten thousand episodes, some thirty as
+/// text — and a parsed copy of them was held through the merge and the write
+/// beside the originals.
+fn snapshots_of(answers: &mut [Answer]) -> Vec<(String, String)> {
+    answers
+        .iter_mut()
+        .map(|answer| {
+            let text = std::mem::take(&mut answer.payload).to_string();
+            (answer.provider.to_string(), text)
+        })
+        .collect()
+}
+
 /// Merge what came back and write it.
 ///
 /// When a provider did not answer, or not in full, what it said last time is
@@ -523,10 +539,13 @@ async fn store(state: &AppState, gathered: Gathered) -> Result<Option<MediaItem>
         return Ok(None);
     }
 
-    let snapshots: Vec<(String, Value)> = answers
+    // The episode groups TMDB lists, read before its answer is let go of:
+    // numbering by the group of the original air date wants them.
+    let tmdb_groups = answers
         .iter()
-        .map(|a| (a.provider.to_string(), a.payload.clone()))
-        .collect();
+        .find(|a| a.provider == names::TMDB)
+        .and_then(|a| tmdb_map::episode_groups(&a.payload));
+    let snapshots = snapshots_of(&mut answers);
 
     // Everything that did not answer in full: what is kept from before, and
     // what the log says.
@@ -557,7 +576,7 @@ async fn store(state: &AppState, gathered: Gathered) -> Result<Option<MediaItem>
     let mut tvdb_list: Vec<Episode> = Vec::new();
     let stored_episodes: &[Episode] = before.as_ref().map_or(&[], |(stored, _)| &stored.episodes);
     if numbering.by_tmdb {
-        number_by_air_date_group(state, &mut answers, stored_episodes).await;
+        number_by_air_date_group(state, &mut answers, tmdb_groups, stored_episodes).await;
         for answer in &mut answers {
             if merge::TVDB_NUMBERED.contains(&answer.provider) {
                 tvdb_list.append(&mut answer.item.episodes);
@@ -813,7 +832,12 @@ async fn frozen(state: &AppState, work: &str) -> bool {
 /// of the original air date cuts its fifth season in three, by the parts it
 /// aired in, where TMDB's own seasons keep it whole as TheTVDB does. A
 /// series known by no episode TMDB names is numbered by the group.
-async fn number_by_air_date_group(state: &AppState, answers: &mut [Answer], known: &[Episode]) {
+async fn number_by_air_date_group(
+    state: &AppState,
+    answers: &mut [Answer],
+    tmdb_groups: Option<Vec<crate::domain::EpisodeOrder>>,
+    known: &[Episode],
+) {
     let Some(answer) = answers.iter_mut().find(|a| a.provider == names::TMDB) else {
         return;
     };
@@ -822,7 +846,7 @@ async fn number_by_air_date_group(state: &AppState, answers: &mut [Answer], know
         .filter(|e| e.season_number > 0)
         .filter_map(|e| Some((e.tmdb_id?, (e.season_number, e.episode_number))))
         .collect();
-    let groups: Vec<String> = tmdb_map::episode_groups(&answer.payload)
+    let groups: Vec<String> = tmdb_groups
         .unwrap_or_default()
         .into_iter()
         .filter(|group| group.kind == OrderKind::Aired)
@@ -1485,10 +1509,7 @@ pub async fn resync(
         .find(|a| a.provider == names::TMDB)
         .and_then(|a| tmdb_map::episode_groups(&a.payload));
 
-    let snapshots: Vec<(String, Value)> = answers
-        .iter()
-        .map(|a| (a.provider.to_string(), a.payload.clone()))
-        .collect();
+    let snapshots = snapshots_of(&mut answers);
 
     let mut contributions: Vec<Contribution> = answers
         .into_iter()
@@ -2737,6 +2758,8 @@ mod tests {
                 item
             },
         )];
+        // Read off TMDB's answer before it is let go of, as `store` does.
+        let groups = tmdb_map::episode_groups(&answers[0].payload);
         routes.lock().insert(
             "/3/tv/episode_group/g1".into(),
             (
@@ -2744,7 +2767,7 @@ mod tests {
                 group(json!([entry(101, 0), entry(102, 1), entry(103, 2)])),
             ),
         );
-        number_by_air_date_group(&state, &mut answers, &[]).await;
+        number_by_air_date_group(&state, &mut answers, groups.clone(), &[]).await;
         assert_eq!(numbers(&answers[0].item), [(1, 1), (1, 2), (1, 3)]);
         assert_eq!(
             answers[0]
@@ -2775,7 +2798,7 @@ mod tests {
                 ])),
             ),
         );
-        number_by_air_date_group(&state, &mut answers, &[]).await;
+        number_by_air_date_group(&state, &mut answers, groups.clone(), &[]).await;
         assert_eq!(numbers(&answers[0].item), [(1, 1), (1, 2), (2, 1)]);
 
         // The same three again, for a series known as TMDB's own seasons cut
@@ -2795,10 +2818,10 @@ mod tests {
             })
         };
         let as_seasons = known([(1, 1, 101), (1, 2, 102), (2, 1, 103)]);
-        number_by_air_date_group(&state, &mut answers, &as_seasons).await;
+        number_by_air_date_group(&state, &mut answers, groups.clone(), &as_seasons).await;
         assert_eq!(numbers(&answers[0].item), [(1, 1), (1, 2), (2, 1)]);
         let as_group = known([(1, 1, 101), (1, 2, 102), (1, 3, 103)]);
-        number_by_air_date_group(&state, &mut answers, &as_group).await;
+        number_by_air_date_group(&state, &mut answers, groups, &as_group).await;
         assert_eq!(numbers(&answers[0].item), [(1, 1), (1, 2), (1, 3)]);
     }
 

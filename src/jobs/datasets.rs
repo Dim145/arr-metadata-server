@@ -618,6 +618,17 @@ struct TvdbPlace {
     tvdb: Option<i32>,
 }
 
+/// An element of the list: one this server reads, or anything else, skipped
+/// whole. Each is read on its own as the list is: read whole as documents
+/// first, the list's seven and a half megabytes took the server to 150 MB at
+/// a start it was due, where it now reaches 105.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum AnimeElement {
+    Record(AnimeRecord),
+    Other(serde::de::IgnoredAny),
+}
+
 /// The rows this server keeps from the list.
 ///
 /// An entry with neither an AniList nor a MyAnimeList id has nothing to look
@@ -625,13 +636,13 @@ struct TvdbPlace {
 /// looked up from. An entry filed under several TMDB films becomes a row for
 /// each. An element that does not read is skipped rather than failing the list.
 fn parse_anime(body: &[u8]) -> Result<Vec<Entry>> {
-    let elements: Vec<serde_json::Value> =
+    let elements: Vec<AnimeElement> =
         serde_json::from_slice(body).context("the anime list is not a JSON array")?;
 
     let mut entries = Vec::new();
 
     for element in elements {
-        let Ok(record) = serde_json::from_value::<AnimeRecord>(element) else {
+        let AnimeElement::Record(record) = element else {
             continue;
         };
 
