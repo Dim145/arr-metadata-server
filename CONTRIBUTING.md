@@ -134,7 +134,7 @@ starts it so. Then, from `frontend/`:
 ```bash
 docker run --rm --ipc=host --network host -v "$PWD/..:/work" -w /work/frontend \
   -e AMS_E2E_URL=http://127.0.0.1:8503 -e AMS_E2E_USER=admin -e AMS_E2E_PASSWORD \
-  mcr.microsoft.com/playwright:v1.64.0-noble \
+  mcr.microsoft.com/playwright:v1.64.1-noble \
   ./node_modules/.bin/playwright test --project visual
 ```
 
