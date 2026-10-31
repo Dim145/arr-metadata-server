@@ -18,11 +18,13 @@ pub struct Snapshot {
     pub etag: Option<String>,
 }
 
+/// Keep what `provider` answered for a work: `payload` is the document as
+/// JSON text, which is what is written.
 pub async fn put(
     db: &Db,
     media_id: &str,
     provider: &str,
-    payload: &Value,
+    payload: &str,
     etag: Option<&str>,
 ) -> Result<()> {
     sqlx::query(db.sql(
@@ -35,7 +37,7 @@ pub async fn put(
     ))
     .bind(media_id)
     .bind(provider)
-    .bind(serde_json::to_string(payload)?)
+    .bind(payload)
     .bind(now())
     .bind(etag)
     .execute(db.pool())

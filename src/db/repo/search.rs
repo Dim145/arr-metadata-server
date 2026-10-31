@@ -14,7 +14,7 @@ use anyhow::{Context, Result};
 use sqlx::{Any, Arguments, Transaction, any::AnyArguments};
 
 use crate::{
-    db::{Db, Dialect, RowExt},
+    db::{Db, Dialect, Double, RowExt},
     domain::fields::Child,
     search::{
         Kind,
@@ -363,7 +363,7 @@ async fn write_entries(
         });
         if behind {
             sqlx::query(db.sql("UPDATE search_doc SET popularity = ? WHERE work_id = ?"))
-                .bind(work.popularity)
+                .bind(Double(work.popularity))
                 .bind(&work.id)
                 .execute(&mut **tx)
                 .await
@@ -422,7 +422,7 @@ async fn insert(db: &Db, tx: &mut Transaction<'_, Any>, entries: &[&Entry]) -> R
             bind(&mut args, entry.lang.clone())?;
             bind(&mut args, entry.norm.clone())?;
             bind(&mut args, entry.text.clone())?;
-            bind(&mut args, entry.popularity)?;
+            bind(&mut args, Double(entry.popularity))?;
             bind(&mut args, entry.year)?;
         }
         sqlx::query_with(db.sql(&sql), args)
@@ -541,7 +541,7 @@ async fn write_people(db: &Db, tx: &mut Transaction<'_, Any>, ids: &[&String]) -
             && !same(*popularity, entry.popularity)
         {
             sqlx::query(db.sql("UPDATE search_doc SET popularity = ? WHERE id = ?"))
-                .bind(entry.popularity)
+                .bind(Double(entry.popularity))
                 .bind(entry.id)
                 .execute(&mut **tx)
                 .await?;

@@ -16,7 +16,7 @@
 use anyhow::Result;
 
 use crate::{
-    db::{Db, RowExt, new_id, now},
+    db::{Db, Double, RowExt, new_id, now},
     domain::{AlternativeTitle, CoverType, Credit, CreditType, Episode, Image, Season},
 };
 
@@ -113,7 +113,7 @@ pub async fn add_episode(db: &Db, media_id: &str, episode: &Episode) -> Result<S
     .bind(&episode.image)
     .bind(episode.tvdb_id)
     .bind(episode.tmdb_id)
-    .bind(episode.rating.map(|r| r.value))
+    .bind(Double(episode.rating.map(|r| r.value)))
     .bind(episode.rating.map(|r| r.votes))
     .bind(&at)
     .bind(&at)

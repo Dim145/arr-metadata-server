@@ -376,6 +376,8 @@ async fn metrics(
     };
     // The pool, the queues, the failed refreshes, the certificates.
     gauges.extend(crate::metrics::server(&state).await);
+    // What the process holds in memory, and what its container is charged.
+    gauges.extend(crate::metrics::memory());
     let c = &state.caches;
     let caches: [(&str, u64, u64, crate::cache::Tally, crate::cache::Tally); 4] = [
         (
@@ -407,13 +409,18 @@ async fn metrics(
             c.relay.l2_tally(),
         ),
     ];
+    // And the copies of pictures made in the last minute, kept beside them.
+    let (copies, copies_bytes) = crate::media::serve::made_kept();
     gauges.push(Metric {
         name: "ams_cache_entries",
         help: "Entries kept in each cache, in this process's memory.",
         samples: caches
             .iter()
             .map(|(name, entries, ..)| (format!("cache=\"{name}\""), *entries as f64))
-            .chain([("cache=\"sessions\"".to_string(), c.session_entries() as f64)])
+            .chain([
+                ("cache=\"sessions\"".to_string(), c.session_entries() as f64),
+                ("cache=\"copies\"".to_string(), copies as f64),
+            ])
             .collect(),
     });
     gauges.push(Metric {
@@ -422,6 +429,7 @@ async fn metrics(
         samples: caches
             .iter()
             .map(|(name, _, bytes, ..)| (format!("cache=\"{name}\""), *bytes as f64))
+            .chain([("cache=\"copies\"".to_string(), copies_bytes as f64)])
             .collect(),
     });
     let mut hits = Vec::new();
@@ -644,6 +652,16 @@ mod tests {
             assert_eq!(headers[0].1, "text/plain; version=0.0.4; charset=utf-8");
             assert!(body.contains("ams_uptime_seconds"), "{body}");
             assert!(body.contains("ams_works{"), "{body}");
+            // What the program holds, on every system; the kernel's figures
+            // where there is a /proc to read them from.
+            assert!(body.contains("\nams_memory_heap_bytes "), "{body}");
+            assert!(body.contains("ams_cache_bytes{cache=\"copies\"}"), "{body}");
+            if cfg!(target_os = "linux") {
+                assert!(
+                    body.contains("ams_memory_resident_bytes{kind=\"anonymous\"}"),
+                    "{body}"
+                );
+            }
         }
 
         for (case, identity) in [

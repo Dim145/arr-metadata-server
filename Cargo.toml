@@ -2,7 +2,7 @@
 name = "arr-metadata-server"
 version = "0.11.1"
 edition = "2024"
-rust-version = "1.94"
+rust-version = "1.95"
 description = "Self-hosted, provider-agnostic metadata server compatible with the *arr stack, TMDB clients and manual curation."
 license = "MIT"
 repository = "https://github.com/Dim145/arr-metadata-server"
@@ -101,7 +101,7 @@ governor = "0.10.4"
 
 # ── Utilities ────────────────────────────────────────────────────────────────
 chrono = { version = "0.4.45", default-features = false, features = ["std", "clock", "serde"] }
-uuid = { version = "1.26.1", features = ["v4", "v7", "serde"] }
+uuid = { version = "1.29.0", features = ["v4", "v7", "serde"] }
 futures = "0.3.34"
 # IMDb publishes its datasets gzipped; already built for reqwest's own gzip.
 flate2 = "1.1.10"
@@ -117,9 +117,9 @@ utoipa = { version = "6.0.0", features = ["axum_extras", "preserve_order"] }
 # Collects handlers and their `#[utoipa::path]` annotations into one spec, so a
 # route cannot exist without appearing in the documentation.
 utoipa-axum = "0.3.0"
-utoipa-swagger-ui = { version = "10.0.0", features = ["axum", "vendored"] }
+utoipa-swagger-ui = { version = "10.0.2", features = ["axum", "vendored"] }
 dns-lookup = "4.0.1"
-parking_lot = "0.12.5"
+parking_lot = "0.13.0"
 url = "2.5.8"
 # Sonarr's own title cleaning takes accents off through a canonical
 # decomposition; the version sqlx's PostgreSQL driver already brings.
@@ -148,12 +148,21 @@ libwebp-sys = "0.14.4"
 ravif = { version = "0.13.0", default-features = false }
 # What a picture is drawn as while it loads: a sketch in two dozen bytes.
 thumbhash = "0.1.0"
+# What a JPEG's placeholder is drawn from: the picture decoded small — an
+# eighth of its sides, or a quarter — by the inverse transform itself, where
+# `image`'s decoder draws it whole, tens of megabytes a picture for a sketch
+# of a hundred pixels (src/media/file.rs). Pure Rust like the others. With
+# rayon, on threads it is given: without it, it starts one for each of a
+# picture's colours and lets it go, every picture.
+jpeg-decoder = { version = "0.3", default-features = false, features = ["rayon"] }
+# The two threads it is given, made once; the version rav1e already brings.
+rayon = "1.12"
 rcgen = { version = "0.14.10", default-features = false, features = ["aws_lc_rs", "pem", "x509-parser"] }
 x509-parser = "0.18.1"
 # The authority checks what it issued the way rustls will judge it.
 rustls-webpki = { version = "0.103.15", features = ["aws-lc-rs", "std"] }
 rustls-pki-types = { version = "1.15.1", features = ["std"] }
-redis = { version = "1.7.1", features = ["tokio-comp", "connection-manager", "tokio-rustls-comp"] }
+redis = { version = "1.8.0", features = ["tokio-comp", "connection-manager", "tokio-rustls-comp"] }
 mimalloc = "0.1.52"
 arc-swap = "1.9.2"
 # The machine's name, to tell one instance from another among several.

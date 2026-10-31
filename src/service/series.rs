@@ -158,7 +158,7 @@ async fn ask_by_tvdb_id(state: &AppState, tvdb_id: i64) -> Result<Option<MediaIt
             Ok(Some((raw, show))) => {
                 let item = skyhook::to_item(&show);
                 let provenance = crate::merge::provenance::single(names::SKYHOOK, &item);
-                let snapshots = vec![(names::SKYHOOK.to_string(), raw)];
+                let snapshots = vec![(names::SKYHOOK.to_string(), raw.to_string())];
                 let stored = persist(state, item, &snapshots, provenance, None).await?;
                 return Ok(Some(stored));
             }

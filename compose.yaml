@@ -58,7 +58,7 @@ services:
   # A cache and nothing else: a memory ceiling, the least recently used
   # evicted, no persistence. See Administration › Cache.
   # cache:
-  #   image: valkey/valkey:8-alpine
+  #   image: valkey/valkey:9-alpine
   #   container_name: arr-metadata-cache
   #   restart: unless-stopped
   #   command: valkey-server --maxmemory 256mb --maxmemory-policy allkeys-lru --save "" --appendonly no

@@ -200,6 +200,16 @@ address the server fetches. See
 
 See [Caching](caching.md).
 
+### The memory
+
+The image sets two of the allocator's own variables, which it reads as the
+process starts: what is freed goes back to the system at once, and in pages
+of the system's own size. Under a library's import they halve what the
+server holds. [Memory](perf/memory.md) names them, says how to undo them,
+and what a server run from a binary sets in its own environment; the
+`ams_memory_*` and `ams_cgroup_memory_*` series in
+[Monitoring](monitoring/README.md) show what it holds.
+
 ### The media and the exports
 
 | Variable | Default | What it does |

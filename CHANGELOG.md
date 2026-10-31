@@ -7,6 +7,89 @@ may change what the API or the configuration means, and says so here.
 
 ## [Unreleased]
 
+### Added
+
+- What the process holds in memory, in the metrics: `ams_memory_heap_bytes`,
+  the bytes the program holds from its allocator, counted as they come and
+  go; `ams_memory_resident_bytes{kind}`, `ams_memory_resident_peak_bytes`
+  and `ams_process_threads`, what the kernel keeps resident for it; and its
+  cgroup's account, of which `ams_cgroup_memory_working_set_bytes` is the
+  figure `docker stats` shows, beside the ceiling, the charge by kind and how
+  many times the ceiling was reached. `ams_cache_bytes` counts the pictures'
+  copies made in the last minute too (`copies`). The kernel's figures are
+  read on Linux alone; see docs/monitoring.
+
+### Changed
+
+- The image has its allocator give back what it frees at once, and in pages
+  of the system's own size (`MIMALLOC_PURGE_DELAY=0`, `MIMALLOC_ALLOW_THP=0`):
+  under a library's import the server held half of what it did, for some
+  15 % more of its CPU. Either is undone on the container; see
+  docs/perf/memory.md.
+- A JPEG's placeholder is drawn from the picture decoded small — an eighth
+  of its sides or a quarter, by the decoder's inverse transform — where it
+  was decoded whole, then held again as RGBA: one of TMDB's posters of
+  2000×3000 takes 0.7 MB to prepare where it took 42, a progressive backdrop
+  half of what it took, for the same sketch. A picture a WebP copy is made
+  of is decoded whole, as before.
+- On PostgreSQL, each connection keeps the two dozen statements it runs
+  most, prepared once, where every query was parsed and described anew: a
+  missing number is bound as the double PostgreSQL holds it as, the fault
+  of sqlx's the cache had been switched off for. Under a library's import
+  PostgreSQL spent 30 % less CPU and held half the memory; sqlx's own
+  hundred spared it no more, for 20 MB of the server's memory against 8.
+  An address that says `statement-cache-capacity` keeps its own size.
+- The Rust crates are at their newest releases a week old or more, within
+  their ranges: `redis` 1.8, `uuid` 1.29 and `utoipa-swagger-ui` 10.0.2
+  among them.
+- So are the interface's `@tanstack/react-query` 5.104.5,
+  `typescript-eslint` 8.72 and Vite 8.3.5, the documentation site's Astro
+  7.4, which wants Node 22.22 at least, and the workflows' actions.
+  `react-router` stays at 8.4: 8.5.0 declares a `document.startViewTransition`
+  the DOM's own type cannot take, which 8.5.1 mends.
+- The image's interface is built on Node 26, the LTS line since 28 October
+  — Node 24 is in maintenance — and its server with Rust 1.99; CI runs
+  Node 26 too, and `@types/node` follows it.
+- Building from source takes Rust 1.95, where it took 1.94: `parking_lot`
+  0.13 asks for it, whose locks wake the thread waiting on them once they
+  are let go of, not before, and change hands sooner when several threads
+  want them. The crates that bring its 0.12 along — sqlx, moka,
+  object_store and governor among them — keep it until they move on.
+- `compose.multi.yaml` fronts the clients' door with HAProxy 3.4, the LTS
+  line maintained until 2031, keeps its cache in Valkey 9 and its media in
+  Garage v2.5.0. A Garage node that has run 2.5 cannot go back to an older
+  release, and a bucket's lifecycle is now read and changed with a key that
+  owns it alone — the server never asks for it. The Valkey that
+  `compose.yaml` and docs/caching.md describe is 9 as well.
+- `compose.integration.yaml` runs Seerr, which carries Jellyseerr on: the
+  `fallenbagel/jellyseerr` image is deprecated. Seerr moves a Jellyseerr
+  configuration over on its first start, and the stack keeps the volume's
+  name for it; the port is `SEERR_PORT`.
+
+### Fixed
+
+- On PostgreSQL, every query left its prepared statement in the session for
+  as long as the connection lived: with the statement cache off, as the
+  server had it, sqlx names each statement it prepares and never closes it.
+  A library's import grew each of PostgreSQL's connections to some 800 MB,
+  and the simplest statements waited minutes to be parsed. The cache is on
+  again (see Changed); an address that switches it off
+  (`statement-cache-capacity=0`) has its statements let go of as each
+  connection returns to the pool.
+- Storing a work held each provider's answer twice while it was merged and
+  written: parsed, and a parsed copy for the snapshots. The snapshots are
+  kept as the text they are written as, and the answers let go of: a series
+  of ten thousand episodes peaks at 123 MB where it took 210.
+- The anime identifier list is read an element at a time: read whole as
+  documents first, its seven and a half megabytes took the server's memory
+  to 150 MB at every start it was due, where it now reaches 105.
+
+### Security
+
+- `utoipa-swagger-ui` 10.0.2 builds the Swagger UI with `zip` 9, past
+  RUSTSEC-2026-0367 to -0369: `cargo audit` and `cargo deny` no longer set
+  them aside.
+
 ## [0.11.1] — 2026-10-26
 
 ### Changed

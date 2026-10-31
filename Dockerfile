@@ -1,11 +1,11 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.28
 #
 # Three stages: build the UI, build the server with the UI embedded in it, then
 # ship the single resulting binary on a distroless base — no shell, no package
 # manager, and a non-root user by default.
 
 # ── 1. Web UI ────────────────────────────────────────────────────────────────
-FROM node:24-trixie-slim AS ui
+FROM node:26-trixie-slim AS ui
 
 WORKDIR /ui
 
@@ -22,14 +22,14 @@ RUN npm run build
 # version set to nought: a release changes nothing else in them, and must not
 # send six hundred crates to be compiled again — the layer is kept by the
 # content of these two files. The build of the sources takes the real ones.
-FROM rust:1.98-trixie AS manifests
+FROM rust:1.99-trixie AS manifests
 
 WORKDIR /m
 COPY Cargo.toml Cargo.lock ./
 RUN sed -i '0,/^version = /s/^version = .*/version = "0.0.0"/' Cargo.toml \
  && sed -i '/^name = "arr-metadata-server"$/{n;s/^version = .*/version = "0.0.0"/}' Cargo.lock
 
-FROM rust:1.98-trixie AS server
+FROM rust:1.99-trixie AS server
 
 WORKDIR /src
 
@@ -117,6 +117,17 @@ ENV AMS_BIND_ADDRESS=0.0.0.0:8080 \
     AMS_TLS_DIR=/data/tls \
     AMS_MEDIA_DIR=/data/media \
     AMS_LOG=info
+
+# What the allocator frees goes back to the system at once, in pages of the
+# system's own size. The pictures' copies are made in buffers of tens of
+# megabytes, freed and made again all day; mimalloc kept what was freed a
+# second before giving it back, and where the kernel hands every process
+# huge pages (transparent_hugepage set to `always`, as Docker Desktop's is)
+# gave back nothing a block still sat in two megabytes of. Under a library's
+# import the server held twice what it does with neither, for the same
+# work: docs/perf/memory.md. Either is undone by setting it on the container.
+ENV MIMALLOC_PURGE_DELAY=0 \
+    MIMALLOC_ALLOW_THP=0
 
 EXPOSE 8080 443
 

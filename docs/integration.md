@@ -547,9 +547,9 @@ recorded responses:
 | Client | Version | What was checked |
 |---|---|---|
 | Sonarr | 4.x (linuxserver) | lookup, add, 71 episodes imported, refresh picking up a locked title, network and episode title |
-| Sonarr | 5.0.0.2635 (linuxserver `develop-version-5.0.0.2635`) | lookup by text, `tvdb:`, `tmdb:`, `imdb:`; add with French as the metadata language (title, overview and the episode titles in French), in the DVD order, with the seasons' own titles; refresh picking up a locked title; a release named by a title added here taken for its series |
+| Sonarr | 5.0.0.2701 (linuxserver `develop-version-5.0.0.2701`) | lookup by text, `tvdb:`, `tmdb:`, `imdb:`; add with French as the metadata language (title, overview and the episode titles in French), in the DVD order, with the seasons' own titles; refresh picking up a locked title; a release named by a title added here taken for its series |
 | Radarr | 6.4 | lookup, add, 26 credits stored, certification, refresh picking up a locked title, studio and runtime; 6.4.4: collection, recommendations |
-| Plex Media Server | 1.43.4 (`plexinc/pms-docker`) | the provider added over Plex's own API, an agent made of it, libraries of films and series, the scan: the film, the series, its season and its episodes with the catalogue's titles, summaries and pictures |
+| Plex Media Server | 1.43.5 (`plexinc/pms-docker`) | the provider added over Plex's own API, an agent made of it, libraries of films and series, the scan: the film, the series, its season and its episodes with the catalogue's titles, summaries and pictures |
 | Jellyseerr | latest | `/3/movie`, `/3/tv`, `/3/search/movie` and `/3/configuration` relayed, with local overrides applied |
 | Yamtrack | latest | signed in to TheTVDB with a key issued here through its own provider, read a series and an episode with the titles locked here written in, placed the series by its TMDB id, queried AniList through its request helper with the locked title written in — all by the services' names, in TLS, trusting the authority |
 

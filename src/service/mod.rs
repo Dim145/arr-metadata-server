@@ -29,7 +29,6 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use chrono::{DateTime, TimeDelta, Utc};
-use serde_json::Value;
 
 use crate::{
     db::{
@@ -477,7 +476,7 @@ fn keep_what_nobody_answered(item: &mut MediaItem, stored: MediaItem) {
 /// to Sonarr as *Rurouni Kenshin* — the other series' title, the clash it is
 /// kept to prevent — until a refresh they answered. When one of them did
 /// answer, what the merge made of it stands, none included.
-fn keep_title_qualifier(item: &mut MediaItem, stored: &MediaItem, snapshots: &[(String, Value)]) {
+fn keep_title_qualifier(item: &mut MediaItem, stored: &MediaItem, snapshots: &[(String, String)]) {
     let named = snapshots
         .iter()
         .any(|(provider, _)| crate::merge::TVDB_NAMED.contains(&provider.as_str()));
@@ -489,7 +488,8 @@ fn keep_title_qualifier(item: &mut MediaItem, stored: &MediaItem, snapshots: &[(
 /// The most of a failure kept on a work as its `refreshError`.
 pub const REFRESH_ERROR_CHARS: usize = 500;
 
-/// Store a freshly fetched work and its raw provider payload.
+/// Store a freshly fetched work and its raw provider payload: `snapshots`,
+/// each provider's answer as the text it is kept as.
 ///
 /// If the work already exists locally, its identity is preserved: the same row
 /// id, creation time and manual flag. Overwriting those would orphan every
@@ -503,7 +503,7 @@ pub const REFRESH_ERROR_CHARS: usize = 500;
 pub async fn persist(
     state: &AppState,
     item: MediaItem,
-    snapshots: &[(String, Value)],
+    snapshots: &[(String, String)],
     provenance: crate::merge::provenance::Provenance,
     failure: Option<&str>,
 ) -> Result<MediaItem> {
@@ -521,7 +521,7 @@ pub async fn persist(
 pub(crate) async fn persist_as(
     state: &AppState,
     mut item: MediaItem,
-    snapshots: &[(String, Value)],
+    snapshots: &[(String, String)],
     provenance: crate::merge::provenance::Provenance,
     failure: Option<&str>,
     renumbered: bool,
@@ -669,7 +669,7 @@ pub enum SyncWrite {
 pub async fn persist_sync(
     state: &AppState,
     mut item: MediaItem,
-    snapshots: &[(String, Value)],
+    snapshots: &[(String, String)],
     stored: &MediaItem,
     was: &crate::merge::provenance::Provenance,
     provenance: &crate::merge::provenance::Provenance,
@@ -868,7 +868,7 @@ async fn journal(state: &AppState, id: &str, changed: &[NewChange]) {
 async fn after_write(
     state: &AppState,
     id: &str,
-    snapshots: &[(String, Value)],
+    snapshots: &[(String, String)],
 ) -> Result<MediaItem> {
     // Every provider's raw answer is kept, so a mapping fix can be replayed
     // without spending the calls again.
@@ -1415,10 +1415,10 @@ mod keyed_tests {
 
     #[test]
     fn what_thetvdb_adds_to_the_name_stands_until_thetvdb_or_skyhook_answers_again() {
-        let answers = |providers: &[&str]| -> Vec<(String, Value)> {
+        let answers = |providers: &[&str]| -> Vec<(String, String)> {
             providers
                 .iter()
-                .map(|p| (p.to_string(), Value::Null))
+                .map(|p| (p.to_string(), "null".to_string()))
                 .collect()
         };
         let mut stored = MediaItem::empty(crate::domain::MediaKind::Series);

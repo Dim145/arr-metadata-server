@@ -15,6 +15,11 @@ use super::variants::Decoded;
 /// The largest side ThumbHash takes; a sketch larger gives it nothing more.
 const SKETCH_SIDE: u32 = 100;
 
+/// The side a picture is decoded at, at the least, for its sketch alone:
+/// twice the sketch's, so that each of its pixels is the average of four of
+/// the picture's at the least.
+pub const DRAWN_FROM: u32 = 2 * SKETCH_SIDE;
+
 /// A picture's placeholder.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Placeholder {

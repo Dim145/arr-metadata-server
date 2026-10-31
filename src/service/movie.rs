@@ -750,7 +750,7 @@ async fn from_radarr(
             let item = crate::wire::radarr::to_item(&movie);
             let provenance =
                 crate::merge::provenance::single(crate::providers::names::RADARR, &item);
-            let snapshots = vec![(crate::providers::names::RADARR.to_string(), raw)];
+            let snapshots = vec![(crate::providers::names::RADARR.to_string(), raw.to_string())];
 
             let stored = persist(state, item, &snapshots, provenance, None).await?;
             Ok(Some(stored))
@@ -949,7 +949,7 @@ mod tests {
         .await
         .expect("stored");
         for (provider, answer) in answers {
-            repo::snapshot::put(&state.db, &film.id, provider, answer, None)
+            repo::snapshot::put(&state.db, &film.id, provider, &answer.to_string(), None)
                 .await
                 .expect("kept");
         }

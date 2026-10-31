@@ -2,7 +2,7 @@
 //! provider said it was. How the copies made of a picture kept are named,
 //! and how a picture is read to make them.
 
-use std::io::Cursor;
+use std::{io::Cursor, sync::LazyLock};
 
 use anyhow::{Context as _, Result, bail};
 use sha2::{Digest as _, Sha256};
@@ -315,6 +315,84 @@ pub fn decode(bytes: &[u8]) -> Result<image::DynamicImage> {
     Ok(picture)
 }
 
+/// The threads a JPEG is drawn small on: `jpeg-decoder` hands each of a
+/// picture's colours to a thread, and without threads given it starts one
+/// for each and lets it go, every picture — whose leavings the allocator
+/// kept, some 20 MB more under a library's import. Two, made once: as many
+/// as pictures are decoded at once (`variants::AT_ONCE`). None if they
+/// could not be made, when rayon's own are drawn on.
+static DRAWING: LazyLock<Option<rayon::ThreadPool>> = LazyLock::new(|| {
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(2)
+        .thread_name(|n| format!("jpeg-{n}"))
+        .build()
+        .ok()
+});
+
+/// A picture's pixels, `side` or more on one of its sides where it can be
+/// drawn that small without being drawn whole first — and whole otherwise,
+/// within [`decode`]'s bounds either way.
+///
+/// A JPEG in colour or in grey is: its inverse transform draws it at half
+/// its sides, a quarter or an eighth, the smallest of those that keeps
+/// `side`. TMDB's poster of 2000×3000, drawn for its placeholder, took
+/// 42 MB to decode and to hold as RGBA, and takes 0.7 now; a progressive
+/// JPEG, whose every coefficient is read before any of it is drawn, half of
+/// what it took. Turned the way its EXIF orientation says, as [`decode`]
+/// turns it. Pure Rust too.
+pub fn decode_small(bytes: &[u8], side: u32) -> Result<image::DynamicImage> {
+    use jpeg_decoder::PixelFormat;
+
+    if image::guess_format(bytes).ok() != Some(image::ImageFormat::Jpeg) {
+        return decode(bytes);
+    }
+    let mut decoder = jpeg_decoder::Decoder::new(Cursor::new(bytes));
+    decoder
+        .read_info()
+        .context("the picture's header could not be read")?;
+    let info = decoder
+        .info()
+        .context("the picture's header could not be read")?;
+    let (width, height) = (u32::from(info.width), u32::from(info.height));
+    if width > MAX_SIDE
+        || height > MAX_SIDE
+        || u64::from(width) * u64::from(height) > DECODE_MAX_PIXELS
+    {
+        bail!("a picture of {width}×{height} is larger than this server decodes");
+    }
+    // CMYK, and twelve bits a channel, are read whole, as they always were.
+    if !matches!(info.pixel_format, PixelFormat::RGB24 | PixelFormat::L8) {
+        return decode(bytes);
+    }
+
+    let asked = u16::try_from(side).unwrap_or(u16::MAX);
+    let (drawn_w, drawn_h) = decoder
+        .scale(asked, asked)
+        .context("the picture could not be read")?;
+    decoder.set_max_decoding_buffer_size(usize::try_from(DECODE_MAX_ALLOC).unwrap_or(usize::MAX));
+    let pixels = match DRAWING.as_ref() {
+        Some(threads) => threads.install(|| decoder.decode()),
+        None => decoder.decode(),
+    }
+    .context("the picture could not be decoded")?;
+    let (drawn_w, drawn_h) = (u32::from(drawn_w), u32::from(drawn_h));
+    let mut picture = match info.pixel_format {
+        PixelFormat::RGB24 => {
+            image::RgbImage::from_raw(drawn_w, drawn_h, pixels).map(image::DynamicImage::from)
+        }
+        _ => image::GrayImage::from_raw(drawn_w, drawn_h, pixels).map(image::DynamicImage::from),
+    }
+    .context("the picture's pixels are not the size its header says")?;
+    // Read with the pixels, after them.
+    if let Some(orientation) = decoder
+        .exif_data()
+        .and_then(image::metadata::Orientation::from_exif_chunk)
+    {
+        picture.apply_orientation(orientation);
+    }
+    Ok(picture)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -505,5 +583,66 @@ mod tests {
         let picture = decode(&png(30, 20)).expect("decoded");
         assert_eq!((picture.width(), picture.height()), (30, 20));
         assert!(decode(b"not a picture at all").is_err());
+    }
+
+    fn jpeg(width: u32, height: u32) -> Vec<u8> {
+        let mut out = Vec::new();
+        image::RgbImage::from_fn(width, height, |x, _| {
+            image::Rgb(if x < width / 2 {
+                [20, 40, 90]
+            } else {
+                [230, 120, 30]
+            })
+        })
+        .write_to(&mut Cursor::new(&mut out), image::ImageFormat::Jpeg)
+        .unwrap();
+        out
+    }
+
+    /// The same JPEG, its EXIF saying it is shown turned a quarter clockwise:
+    /// an APP1 segment after the SOI, a little-endian TIFF header and an IFD
+    /// of one entry, the orientation (0x0112), a SHORT, 6.
+    fn turned(jpeg: &[u8]) -> Vec<u8> {
+        let mut exif = b"Exif\0\0II*\0\x08\0\0\0\x01\0".to_vec();
+        exif.extend_from_slice(&[0x12, 0x01, 3, 0, 1, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0]);
+        let length = u16::try_from(exif.len() + 2).unwrap().to_be_bytes();
+        let mut out = jpeg[..2].to_vec();
+        out.extend_from_slice(&[0xFF, 0xE1, length[0], length[1]]);
+        out.extend_from_slice(&exif);
+        out.extend_from_slice(&jpeg[2..]);
+        out
+    }
+
+    #[test]
+    fn a_jpeg_is_decoded_small_and_anything_else_whole() {
+        let side = |picture: image::DynamicImage| (picture.width(), picture.height());
+        // An eighth of its sides keeps 200 on both.
+        assert_eq!(
+            side(decode_small(&jpeg(3840, 2160), 200).unwrap()),
+            (480, 270)
+        );
+        // An eighth would leave both under 200: a quarter.
+        assert_eq!(
+            side(decode_small(&jpeg(1000, 1500), 200).unwrap()),
+            (250, 375)
+        );
+        // Smaller than asked already: as it is.
+        assert_eq!(
+            side(decode_small(&jpeg(150, 100), 200).unwrap()),
+            (150, 100)
+        );
+        // A PNG has no smaller drawing: whole.
+        assert_eq!(side(decode_small(&png(800, 600), 200).unwrap()), (800, 600));
+        assert!(decode_small(b"not a picture at all", 200).is_err());
+    }
+
+    #[test]
+    fn a_jpeg_decoded_small_is_turned_as_its_exif_says() {
+        let bytes = turned(&jpeg(1600, 800));
+        // As the whole decode turns it, which reads the same EXIF.
+        let whole = decode(&bytes).unwrap();
+        assert_eq!((whole.width(), whole.height()), (800, 1600));
+        let small = decode_small(&bytes, 200).unwrap();
+        assert_eq!((small.width(), small.height()), (100, 200));
     }
 }
