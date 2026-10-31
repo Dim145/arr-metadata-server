@@ -42,6 +42,15 @@ may change what the API or the configuration means, and says so here.
 - The Rust crates are at their newest releases a week old or more, within
   their ranges: `redis` 1.8, `uuid` 1.29 and `utoipa-swagger-ui` 10.0.2
   among them.
+- So are the interface's `@tanstack/react-query` 5.104.5,
+  `typescript-eslint` 8.72 and Vite 8.3.5, the documentation site's Astro
+  7.4, which wants Node 22.22 at least, and the workflows' actions.
+  `react-router` stays at 8.4: 8.5.0 declares a `document.startViewTransition`
+  the DOM's own type cannot take, which 8.5.1 mends.
+- The image's interface is built on Node 26, the LTS line since 28 October
+  — Node 24 is in maintenance — and its server with Rust 1.99; CI runs
+  Node 26 too, and `@types/node` follows it. The minimum Rust version stays
+  1.94.
 
 ### Fixed
 

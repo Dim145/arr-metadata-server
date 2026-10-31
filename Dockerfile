@@ -1,11 +1,11 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.28
 #
 # Three stages: build the UI, build the server with the UI embedded in it, then
 # ship the single resulting binary on a distroless base — no shell, no package
 # manager, and a non-root user by default.
 
 # ── 1. Web UI ────────────────────────────────────────────────────────────────
-FROM node:24-trixie-slim AS ui
+FROM node:26-trixie-slim AS ui
 
 WORKDIR /ui
 
@@ -22,14 +22,14 @@ RUN npm run build
 # version set to nought: a release changes nothing else in them, and must not
 # send six hundred crates to be compiled again — the layer is kept by the
 # content of these two files. The build of the sources takes the real ones.
-FROM rust:1.98-trixie AS manifests
+FROM rust:1.99-trixie AS manifests
 
 WORKDIR /m
 COPY Cargo.toml Cargo.lock ./
 RUN sed -i '0,/^version = /s/^version = .*/version = "0.0.0"/' Cargo.toml \
  && sed -i '/^name = "arr-metadata-server"$/{n;s/^version = .*/version = "0.0.0"/}' Cargo.lock
 
-FROM rust:1.98-trixie AS server
+FROM rust:1.99-trixie AS server
 
 WORKDIR /src
 
