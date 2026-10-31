@@ -684,10 +684,10 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-  # `rust-version` in Cargo.toml promises that 1.94 builds this, and nothing
-  # else ever tries it: a dependency, or a newer language feature, can break the
-  # promise without anyone noticing. The version installed is read from
-  # Cargo.toml, so when the promise moves, this moves with it.
+  # `rust-version` in Cargo.toml promises that the Rust it names builds this,
+  # and nothing else ever tries it: a dependency, or a newer language feature,
+  # can break the promise without anyone noticing. The version installed is
+  # read from Cargo.toml, so when the promise moves, this moves with it.
   msrv:
     name: Minimum Rust version
     needs: gate

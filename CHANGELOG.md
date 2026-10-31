@@ -49,8 +49,12 @@ may change what the API or the configuration means, and says so here.
   the DOM's own type cannot take, which 8.5.1 mends.
 - The image's interface is built on Node 26, the LTS line since 28 October
   — Node 24 is in maintenance — and its server with Rust 1.99; CI runs
-  Node 26 too, and `@types/node` follows it. The minimum Rust version stays
-  1.94.
+  Node 26 too, and `@types/node` follows it.
+- Building from source takes Rust 1.95, where it took 1.94: `parking_lot`
+  0.13 asks for it, whose locks wake the thread waiting on them once they
+  are let go of, not before, and change hands sooner when several threads
+  want them. The crates that bring its 0.12 along — sqlx, moka,
+  object_store and governor among them — keep it until they move on.
 - `compose.multi.yaml` fronts the clients' door with HAProxy 3.4, the LTS
   line maintained until 2031, keeps its cache in Valkey 9 and its media in
   Garage v2.5.0. A Garage node that has run 2.5 cannot go back to an older

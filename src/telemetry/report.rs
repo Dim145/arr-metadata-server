@@ -41,7 +41,7 @@ static CLIENT: ArcSwapOption<sentry::Client> = ArcSwapOption::const_empty();
 
 /// What that client was made from, so that a reload of the settings that
 /// changed nothing of it leaves it be.
-static MADE_FROM: Mutex<Option<Wanted>> = parking_lot::const_mutex(None);
+static MADE_FROM: Mutex<Option<Wanted>> = Mutex::new(None);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Wanted {
