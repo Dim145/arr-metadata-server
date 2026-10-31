@@ -51,6 +51,16 @@ may change what the API or the configuration means, and says so here.
   — Node 24 is in maintenance — and its server with Rust 1.99; CI runs
   Node 26 too, and `@types/node` follows it. The minimum Rust version stays
   1.94.
+- `compose.multi.yaml` fronts the clients' door with HAProxy 3.4, the LTS
+  line maintained until 2031, keeps its cache in Valkey 9 and its media in
+  Garage v2.5.0. A Garage node that has run 2.5 cannot go back to an older
+  release, and a bucket's lifecycle is now read and changed with a key that
+  owns it alone — the server never asks for it. The Valkey that
+  `compose.yaml` and docs/caching.md describe is 9 as well.
+- `compose.integration.yaml` runs Seerr, which carries Jellyseerr on: the
+  `fallenbagel/jellyseerr` image is deprecated. Seerr moves a Jellyseerr
+  configuration over on its first start, and the stack keeps the volume's
+  name for it; the port is `SEERR_PORT`.
 
 ### Fixed
 

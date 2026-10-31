@@ -41,7 +41,7 @@ and then:
 
 ```yaml
   cache:
-    image: valkey/valkey:8-alpine
+    image: valkey/valkey:9-alpine
     command: valkey-server --maxmemory 256mb --maxmemory-policy allkeys-lru --save "" --appendonly no
 ```
 

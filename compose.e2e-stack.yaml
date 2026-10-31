@@ -52,7 +52,7 @@ services:
   # The second pre-release line: linuxserver.io's `develop-version-…` tags
   # follow Sonarr's `develop` branch, which is v5 (v4 lives on v4-develop).
   sonarr5:
-    image: ${SONARR5_IMAGE:-lscr.io/linuxserver/sonarr:develop-version-5.0.0.2635}
+    image: ${SONARR5_IMAGE:-lscr.io/linuxserver/sonarr:develop-version-5.0.0.2701}
     container_name: ams-e2e-sonarr5
     environment:
       PUID: "1000"
