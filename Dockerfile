@@ -118,6 +118,17 @@ ENV AMS_BIND_ADDRESS=0.0.0.0:8080 \
     AMS_MEDIA_DIR=/data/media \
     AMS_LOG=info
 
+# What the allocator frees goes back to the system at once, in pages of the
+# system's own size. The pictures' copies are made in buffers of tens of
+# megabytes, freed and made again all day; mimalloc kept what was freed a
+# second before giving it back, and where the kernel hands every process
+# huge pages (transparent_hugepage set to `always`, as Docker Desktop's is)
+# gave back nothing a block still sat in two megabytes of. Under a library's
+# import the server held twice what it does with neither, for the same
+# work: docs/perf/memory.md. Either is undone by setting it on the container.
+ENV MIMALLOC_PURGE_DELAY=0 \
+    MIMALLOC_ALLOW_THP=0
+
 EXPOSE 8080 443
 
 # There is no shell here; the binary probes itself.

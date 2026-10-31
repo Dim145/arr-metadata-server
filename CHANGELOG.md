@@ -19,6 +19,14 @@ may change what the API or the configuration means, and says so here.
   copies made in the last minute too (`copies`). The kernel's figures are
   read on Linux alone; see docs/monitoring.
 
+### Changed
+
+- The image has its allocator give back what it frees at once, and in pages
+  of the system's own size (`MIMALLOC_PURGE_DELAY=0`, `MIMALLOC_ALLOW_THP=0`):
+  under a library's import the server held half of what it did, for some
+  15 % more of its CPU. Either is undone on the container; see
+  docs/perf/memory.md.
+
 ### Fixed
 
 - On PostgreSQL, every query left its prepared statement in the session for

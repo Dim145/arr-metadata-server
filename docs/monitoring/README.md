@@ -58,6 +58,16 @@ server directly; Prometheus keeps the history.
 | `ams_cgroup_memory_stat_bytes{kind}`, `ams_cgroup_memory_ceiling_hits_total` | The charge by kind, as `memory.stat` counts it (`anon`, `active_file`, `inactive_file`, `shmem`, `kernel`, `sock`, `file`), and how many times the container reached its ceiling and the kernel took memory back to stay under it. |
 | `ams_works`, `ams_episodes`, `ams_locks`, `ams_job_runs` | What the catalogue holds, and the jobs' runs. |
 
+The memory figures nest, each telling apart what the one before cannot.
+`ams_memory_heap_bytes` is the program's own data. The resident `anonymous`
+memory adds what the allocator keeps beside it for reuse and the threads'
+stacks: far above the heap, it is the allocator holding on to what was freed.
+The working set adds the page cache of the files the server reads — the
+pictures it serves above all — which the kernel takes back first when the
+container nears its ceiling; `ams_cgroup_memory_ceiling_hits_total` climbing
+says it does so all the time. [Memory](../perf/memory.md) has what was
+measured, and what holds the memory under a library's import.
+
 With several instances (`AMS_MODE=multi`), scrape each one: the caches' first tier, the request
 latencies, the pool and the uptime are each instance's own, while the cache server's figures and
 what the database holds are the same from every instance. `ams_leader{ams_instance="…"}` is 1 on

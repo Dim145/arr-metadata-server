@@ -1,0 +1,141 @@
+# The memory stack: the server in its image as compose.yaml deploys it — a
+# read-only root, /tmp on a tmpfs, a memory ceiling — on PostgreSQL, with
+# Sonarr and Radarr reaching it by the names they have compiled in, so that a
+# library added through them costs what it costs in a deployment.
+#
+# Not meant to be started by hand: scripts/load/memory.sh starts it with the
+# variables below, adds the library, measures, and removes everything.
+
+name: ams-memory
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    container_name: ams-memory-postgres
+    environment:
+      POSTGRES_USER: ams
+      POSTGRES_PASSWORD: ams
+      POSTGRES_DB: ams
+      POSTGRES_INITDB_ARGS: "--locale-provider=icu --icu-locale=und-x-icu"
+    volumes:
+      - pg:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ams -d ams"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    networks:
+      stack:
+        ipv4_address: 172.30.0.5
+
+  metadata:
+    image: ${AMS_IMAGE:-ghcr.io/dim145/arr-metadata-server:latest}
+    container_name: ams-memory-metadata
+    stop_grace_period: 20s
+    # What a run changes — the allocator's options, a cache's size — one
+    # variable a line; an empty file changes nothing.
+    env_file:
+      - ${AMS_MEMORY_ENV:-/dev/null}
+    environment:
+      AMS_BIND_ADDRESS: 0.0.0.0:8080
+      AMS_CLIENTS_BIND: 0.0.0.0:443
+      AMS_DATABASE_URL: postgres://ams:ams@172.30.0.5:5432/ams
+      AMS_TMDB_API_KEY: ${AMS_TMDB_API_KEY:?the TMDB key}
+      AMS_TVDB_API_KEY: ${AMS_TVDB_API_KEY:-}
+      AMS_FANART_API_KEY: ${AMS_FANART_API_KEY:-}
+      AMS_ADMIN_USERNAME: memory
+      AMS_ADMIN_PASSWORD: ${AMS_ADMIN_PASSWORD:?the administrator's password}
+      AMS_ALLOWLIST: 0.0.0.0/0,::/0
+      AMS_TMDB_AUTH: allowlist
+      # The pictures are given under the server's own address on the stack's
+      # network, which is where the clients fetch them from.
+      AMS_PUBLIC_URL: http://172.30.0.10:8080
+      AMS_PUBLIC_BROWSE: "true"
+      AMS_MEDIA_STORAGE: ${AMS_MEDIA_STORAGE:-filesystem}
+      AMS_TVMAZE_ENABLED: "true"
+      AMS_ANILIST_ENABLED: "true"
+      AMS_MAL_ENABLED: "true"
+      AMS_SONARR_SCENE_MAPPINGS: "true"
+      AMS_RATE_LIMIT_PER_MINUTE: "0"
+      AMS_LOG: info
+      TZ: UTC
+    volumes:
+      - metadata-data:/data
+    ports:
+      - "127.0.0.1:${AMS_MEMORY_PORT:-18480}:8080"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          memory: ${AMS_MEMORY_LIMIT:-512M}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      stack:
+        ipv4_address: 172.30.0.10
+
+  sonarr:
+    image: ${SONARR_IMAGE:-lscr.io/linuxserver/sonarr:latest}
+    container_name: ams-memory-sonarr
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: UTC
+    volumes:
+      - sonarr-config:/config
+      # The authority, read from the server's own volume (docker/trust-ca.sh's
+      # second way): nothing to fetch, nothing to pin.
+      - metadata-data:/arr-metadata:ro
+      - ./docker/trust-ca.sh:/custom-cont-init.d/10-trust-arr-metadata-ca:ro
+    extra_hosts:
+      - "skyhook.sonarr.tv:172.30.0.10"
+      - "services.sonarr.tv:172.30.0.10"
+    ports:
+      - "127.0.0.1:${SONARR_PORT:-18990}:8989"
+    depends_on:
+      metadata:
+        condition: service_healthy
+    networks:
+      stack:
+        ipv4_address: 172.30.0.20
+
+  radarr:
+    image: ${RADARR_IMAGE:-lscr.io/linuxserver/radarr:latest}
+    container_name: ams-memory-radarr
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: UTC
+    volumes:
+      - radarr-config:/config
+      - metadata-data:/arr-metadata:ro
+      - ./docker/trust-ca.sh:/custom-cont-init.d/10-trust-arr-metadata-ca:ro
+    extra_hosts:
+      - "api.radarr.video:172.30.0.10"
+    ports:
+      - "127.0.0.1:${RADARR_PORT:-17880}:7878"
+    depends_on:
+      metadata:
+        condition: service_healthy
+    networks:
+      stack:
+        ipv4_address: 172.30.0.21
+
+networks:
+  stack:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+
+volumes:
+  pg:
+  metadata-data:
+  sonarr-config:
+  radarr-config:
