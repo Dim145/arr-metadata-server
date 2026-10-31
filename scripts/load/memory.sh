@@ -91,7 +91,8 @@ while :; do
   m=$(awk '/^(anon|active_file|inactive_file|shmem) /{printf "%s=%s ", $1, $2}' "$CG/memory.stat")
   e=$(awk '/^(max|oom_kill) /{printf "ev_%s=%s ", $1, $2}' "$CG/memory.events")
   u=$(awk '{printf "cpu_ticks=%d", $14 + $15}' /proc/1/stat)
-  g=$(awk '/^anon /{printf "pg_anon=%s", $2}' "$PG/memory.stat" 2>/dev/null)
+  g=$(awk '/^anon /{printf "pg_anon=%s ", $2}' "$PG/memory.stat" 2>/dev/null)
+  g="$g$(awk '/^usage_usec /{printf "pg_cpu_usec=%s", $2}' "$PG/cpu.stat" 2>/dev/null)"
   echo "t=$(date +%s) $s $h current=$(cat "$CG/memory.current") $m $e $g $u"
   sleep "$I"
 done >> /work/probe.log
@@ -119,5 +120,9 @@ echo "  waiting for the clients' commands, then ${QUIET:-240} s of quiet"
 timeout "${WAIT:-900}" python3 -I "$ROOT/scripts/load/memory.py" wait || true
 sleep "${QUIET:-240}"
 echo "  $(( $(date +%s) - started )) s; the server: $(docker inspect -f 'oom-killed={{.State.OOMKilled}}, {{.State.Status}}' ams-memory-metadata)"
+# How far the pictures got meanwhile: a faster preparation stores more of
+# them in the same time.
+echo "  pictures: $(docker exec ams-memory-postgres psql -U ams -d ams -At -F= -c \
+  "SELECT status, count(*) FROM media_asset GROUP BY status ORDER BY status" | tr '\n' ' ')"
 echo
 python3 -I "$ROOT/scripts/load/memory.py" summary "$WORK/probe.log" "$WORK/scrape.log" | tee "$WORK/summary.md"
