@@ -28,6 +28,13 @@ may change what the API or the configuration means, and says so here.
   grew each of PostgreSQL's connections to some 800 MB, and the simplest
   statements waited minutes to be parsed; the statements are now let go of
   as a connection returns to the pool.
+- Storing a work held each provider's answer twice while it was merged and
+  written: parsed, and a parsed copy for the snapshots. The snapshots are
+  kept as the text they are written as, and the answers let go of: a series
+  of ten thousand episodes peaks at 123 MB where it took 210.
+- The anime identifier list is read an element at a time: read whole as
+  documents first, its seven and a half megabytes took the server's memory
+  to 150 MB at every start it was due, where it now reaches 105.
 
 ## [0.11.1] — 2026-10-26
 
