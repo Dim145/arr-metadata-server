@@ -73,6 +73,23 @@ let go of. What the program held, one series at a time:
 | One Piece | 1 242 | 49 MB | 32 MB |
 | Coronation Street | 9 973 | 210 MB | 123 MB |
 
+**The pictures' placeholders.** With the WebP copies off, as they are
+unless `media.webp` turns them on, a picture is decoded for its placeholder
+alone — a sketch of a hundred pixels — and it was decoded whole, then held
+again as RGBA. A JPEG is now drawn at an eighth of its sides or a quarter by
+the decoder's inverse transform (`jpeg-decoder`; `image`'s own draws whole).
+TMDB's originals, one at a time, in a release build:
+
+| Picture | Whole | Small |
+|---|---:|---:|
+| Poster, 2000×3000 | 20–26 ms, 42 MB | 13–20 ms, 0.7 MB |
+| Backdrop, 1920×1080 | 8.8 ms, 14.5 MB | 6.6 ms, 0.3 MB |
+| Backdrop, 3840×2160, progressive | 46 ms, 58 MB | 50 ms, 26 MB |
+
+A progressive JPEG has every coefficient read before any of it is drawn,
+which keeps half of what it took; the others keep under a megabyte. The
+sketch is the same within what a JPEG's rounding moves.
+
 **The anime list.** Read whole as documents before its elements were, its
 seven and a half megabytes took the server to 150 MB at a start where the list
 was due; read an element at a time, to 105.

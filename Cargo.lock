@@ -280,6 +280,7 @@ dependencies = [
  "imagesize",
  "infer",
  "ipnet",
+ "jpeg-decoder",
  "libwebp-sys",
  "log",
  "mimalloc",
@@ -293,6 +294,7 @@ dependencies = [
  "parking_lot",
  "quick-xml",
  "ravif",
+ "rayon",
  "rcgen",
  "redis",
  "reqwest",
@@ -2727,6 +2729,15 @@ checksum = "1c00acbd29eabad4a2392fa0e921c874934dbbf4194312ad20f04a0ed67a3cb3"
 dependencies = [
  "getrandom 0.4.3",
  "libc",
+]
+
+[[package]]
+name = "jpeg-decoder"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "00810f1d8b74be64b13dbf3db89ac67740615d6c891f0e7b6179326533011a07"
+dependencies = [
+ "rayon",
 ]
 
 [[package]]

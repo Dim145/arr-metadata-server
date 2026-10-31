@@ -148,6 +148,15 @@ libwebp-sys = "0.14.4"
 ravif = { version = "0.13.0", default-features = false }
 # What a picture is drawn as while it loads: a sketch in two dozen bytes.
 thumbhash = "0.1.0"
+# What a JPEG's placeholder is drawn from: the picture decoded small — an
+# eighth of its sides, or a quarter — by the inverse transform itself, where
+# `image`'s decoder draws it whole, tens of megabytes a picture for a sketch
+# of a hundred pixels (src/media/file.rs). Pure Rust like the others. With
+# rayon, on threads it is given: without it, it starts one for each of a
+# picture's colours and lets it go, every picture.
+jpeg-decoder = { version = "0.3", default-features = false, features = ["rayon"] }
+# The two threads it is given, made once; the version rav1e already brings.
+rayon = "1.12"
 rcgen = { version = "0.14.10", default-features = false, features = ["aws_lc_rs", "pem", "x509-parser"] }
 x509-parser = "0.18.1"
 # The authority checks what it issued the way rustls will judge it.
