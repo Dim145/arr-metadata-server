@@ -1,5 +1,5 @@
-# A worked example: Sonarr, Radarr and Jellyseerr all served by this metadata
-# server instead of by the public ones.
+# A worked example: Sonarr, Radarr and Seerr — Jellyseerr's successor — all
+# served by this metadata server instead of by the public ones.
 #
 # Prerequisites
 #   A .env with AMS_TMDB_API_KEY, AMS_ADMIN_USERNAME, AMS_ADMIN_PASSWORD
@@ -12,7 +12,7 @@
 # this server's address on the shared network (extra_hosts), and trusts the
 # authority the server made on its first start — fetched from the server over
 # the stack's own network as the client starts (Sonarr, Radarr), or mounted as
-# a file downloaded once from the administration page (Jellyseerr). Nothing in
+# a file downloaded once from the administration page (Seerr). Nothing in
 # the clients is reconfigured — they cannot be. See docs/integration.md.
 
 services:
@@ -48,7 +48,7 @@ services:
       # The list's first value only: after the first start it is edited on
       # the Access page, and this variable is not read again.
       AMS_ALLOWLIST: 172.31.0.20,172.31.0.21,172.31.0.22
-      # Jellyseerr compiles its TMDB key in and cannot be given one of ours, so
+      # Seerr compiles its TMDB key in and cannot be given one of ours, so
       # its surface is guarded by address like Sonarr's and Radarr's.
       AMS_TMDB_AUTH: allowlist
       TZ: ${TZ:-UTC}
@@ -146,9 +146,13 @@ services:
       stack:
         ipv4_address: 172.31.0.21
 
-  jellyseerr:
-    image: fallenbagel/jellyseerr:latest
-    container_name: jellyseerr
+  # Jellyseerr's image is deprecated: Seerr carries it on, and moves
+  # a Jellyseerr configuration over by itself on its first start. It runs as
+  # `node` (uid 1000), and has no init of its own.
+  seerr:
+    image: ghcr.io/seerr-team/seerr:latest
+    container_name: seerr
+    init: true
     restart: unless-stopped
     depends_on:
       metadata:
@@ -163,13 +167,15 @@ services:
       TZ: ${TZ:-UTC}
 
     volumes:
-      # Jellyseerr logs "the /app/config volume mount was not configured
-      # properly. All data will be cleared" on start. It is wrong here: it
-      # decides by looking for a DOCKER marker file that its image ships in this
-      # directory, and Docker copies an image's contents into a *named* volume
-      # when it creates one, marker included. The database does survive a
-      # restart — verified. A bind mount starts empty and silences the warning,
-      # at the cost of host permissions to get right.
+      # Seerr, as Jellyseerr did, warns that "the /app/config volume mount was
+      # not configured properly. All data will be cleared". It is wrong here:
+      # it decides by looking for a DOCKER marker file that its image ships in
+      # this directory, and Docker copies an image's contents into a *named*
+      # volume when it creates one, marker included. The database does survive
+      # a restart — verified with Jellyseerr. A bind mount starts empty and
+      # silences the warning, at the cost of host permissions to get right:
+      # uid 1000 must own it. The volume keeps Jellyseerr's name, so that a
+      # stack that ran it keeps its configuration.
       - jellyseerr-config:/app/config
       - ./arr-metadata-ca.crt:/etc/arr-metadata-ca.crt:ro
 
@@ -177,7 +183,7 @@ services:
       - "api.themoviedb.org:172.31.0.10"
 
     ports:
-      - "${JELLYSEERR_PORT:-5055}:5055"
+      - "${SEERR_PORT:-5055}:5055"
     networks:
       stack:
         ipv4_address: 172.31.0.22

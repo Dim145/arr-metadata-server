@@ -72,7 +72,7 @@ search is the same: nothing found while a source did not answer is a `502`, not
 the empty list Sonarr reads as "no such series", and a name the catalogue holds
 is answered whether or not the sources do. On both editions.
 
-Sonarr v5 is a pre-release: this was checked against 5.0.0.2635
+Sonarr v5 is a pre-release: this was checked against 5.0.0.2701
 ([Verified against](integration.md#verified-against)).
 [`scripts/e2e-skyhook-v2.sh`](../scripts/e2e-skyhook-v2.sh) sets the real
 service's second edition beside this server's for a few real series and tells

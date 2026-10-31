@@ -131,7 +131,7 @@ services:
   # here and passed on, connection by connection, to an instance that is
   # up. TLS is the instances' own — the same certificate on both.
   door:
-    image: haproxy:3.2-alpine
+    image: haproxy:3.4-alpine
     container_name: arr-metadata-door
     restart: unless-stopped
     configs:
@@ -176,7 +176,7 @@ services:
   # no persistence — nothing durable lives here. Sized so that it never
   # fills: a server evicting keys may forget who leads (see docs/instances.md).
   cache:
-    image: valkey/valkey:8-alpine
+    image: valkey/valkey:9-alpine
     container_name: arr-metadata-cache
     restart: unless-stopped
     command: valkey-server --maxmemory 256mb --maxmemory-policy allkeys-lru --save "" --appendonly no
@@ -193,7 +193,7 @@ services:
   # and drop this service. (MinIO no longer publishes the images this
   # example used to pull.)
   bucket:
-    image: dxflrs/garage:v2.3.0
+    image: dxflrs/garage:v2.5.0
     container_name: arr-metadata-bucket
     restart: unless-stopped
     command: ["/garage", "server", "--single-node", "--default-bucket"]
