@@ -111,8 +111,11 @@ jobs:
                   break
                 fi
               done
+              # A release moves none of the others, and grep, keeping no line,
+              # ends with 1, which the runner's `bash -e` would take for a
+              # failure and stop the run on.
               others=$(git diff --name-only "$BEFORE" HEAD \
-                | grep -vxE 'CHANGELOG\.md|Cargo\.(toml|lock)|frontend/package(-lock)?\.json|\.github/ISSUE_TEMPLATE/.*')
+                | { grep -vxE 'CHANGELOG\.md|Cargo\.(toml|lock)|frontend/package(-lock)?\.json|\.github/ISSUE_TEMPLATE/.*' || [ $? = 1 ]; })
               if [ "$full" = true ] && [ -z "$others" ] && passed "$BEFORE" push \
                 && same "$BEFORE" HEAD Cargo.toml && same "$BEFORE" HEAD frontend/package.json; then
                 full=false
