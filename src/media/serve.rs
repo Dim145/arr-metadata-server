@@ -198,6 +198,12 @@ static MADE: LazyLock<moka::future::Cache<String, Bytes>> = LazyLock::new(|| {
         .build()
 });
 
+/// The copies made in the last minute that are kept: how many, and their
+/// bytes.
+pub fn made_kept() -> (u64, u64) {
+    (MADE.entry_count(), MADE.weighted_size())
+}
+
 /// A copy of a picture kept: from the store, or made now and kept.
 async fn copy(
     state: &AppState,

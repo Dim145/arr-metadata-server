@@ -7,6 +7,18 @@ may change what the API or the configuration means, and says so here.
 
 ## [Unreleased]
 
+### Added
+
+- What the process holds in memory, in the metrics: `ams_memory_heap_bytes`,
+  the bytes the program holds from its allocator, counted as they come and
+  go; `ams_memory_resident_bytes{kind}`, `ams_memory_resident_peak_bytes`
+  and `ams_process_threads`, what the kernel keeps resident for it; and its
+  cgroup's account, of which `ams_cgroup_memory_working_set_bytes` is the
+  figure `docker stats` shows, beside the ceiling, the charge by kind and how
+  many times the ceiling was reached. `ams_cache_bytes` counts the pictures'
+  copies made in the last minute too (`copies`). The kernel's figures are
+  read on Linux alone; see docs/monitoring.
+
 ### Fixed
 
 - On PostgreSQL, every query left its prepared statement in the session for

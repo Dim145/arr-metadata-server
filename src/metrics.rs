@@ -542,6 +542,91 @@ pub async fn server(state: &crate::state::AppState) -> Vec<Metric> {
     gauges
 }
 
+/// What the process holds in memory, and what its cgroup is charged for it
+/// (see `memory`): the program's own bytes everywhere, the rest on Linux.
+pub fn memory() -> Vec<Metric> {
+    let gauge = |name, help, value: u64| Metric {
+        name,
+        help,
+        samples: vec![(String::new(), value as f64)],
+    };
+    let mut gauges = vec![gauge(
+        "ams_memory_heap_bytes",
+        "Bytes the program holds from its allocator: what it asked for and has not given back.",
+        crate::memory::heap_bytes(),
+    )];
+    if let Some(resident) = crate::memory::resident() {
+        gauges.push(Metric {
+            name: "ams_memory_resident_bytes",
+            help: "Memory the kernel keeps resident for the process, by kind: its own \
+                   (anonymous: the heap, what the allocator keeps for reuse, the stacks), the \
+                   files it maps (its binary among them), shared.",
+            samples: [
+                ("anonymous", resident.anonymous),
+                ("file", resident.file),
+                ("shared", resident.shared),
+            ]
+            .into_iter()
+            .map(|(kind, bytes)| (format!("kind=\"{kind}\""), bytes as f64))
+            .collect(),
+        });
+        gauges.push(gauge(
+            "ams_memory_resident_peak_bytes",
+            "The most memory the process held resident at once since it started.",
+            resident.peak,
+        ));
+        gauges.push(gauge(
+            "ams_process_threads",
+            "Threads the process runs.",
+            resident.threads,
+        ));
+    }
+    if let Some(charged) = crate::memory::charged() {
+        let inactive = charged
+            .kinds
+            .iter()
+            .find_map(|(kind, bytes)| (*kind == "inactive_file").then_some(*bytes))
+            .unwrap_or(0);
+        gauges.push(gauge(
+            "ams_cgroup_memory_bytes",
+            "Everything the process's cgroup — its container — is charged for, page cache \
+             included: memory.current.",
+            charged.current,
+        ));
+        gauges.push(gauge(
+            "ams_cgroup_memory_working_set_bytes",
+            "What docker stats shows: the cgroup's charge less the page cache the kernel takes \
+             back first (inactive_file).",
+            charged.current.saturating_sub(inactive),
+        ));
+        if let Some(limit) = charged.limit {
+            gauges.push(gauge(
+                "ams_cgroup_memory_limit_bytes",
+                "The cgroup's memory ceiling, when it has one: memory.max.",
+                limit,
+            ));
+        }
+        gauges.push(Metric {
+            name: "ams_cgroup_memory_stat_bytes",
+            help: "The cgroup's charge by kind, as memory.stat counts it: anon, the processes' \
+                   own; file, the page cache, active_file and inactive_file its two lists; \
+                   shmem, tmpfs; kernel; sock, the sockets' buffers. The kinds overlap.",
+            samples: charged
+                .kinds
+                .iter()
+                .map(|(kind, bytes)| (format!("kind=\"{kind}\""), *bytes as f64))
+                .collect(),
+        });
+        gauges.push(gauge(
+            "ams_cgroup_memory_ceiling_hits_total",
+            "Times the cgroup reached its ceiling and the kernel took memory back to stay \
+             under it: max in memory.events.",
+            charged.at_ceiling,
+        ));
+    }
+    gauges
+}
+
 /// What waits in each queue, by kind: `refresh`, the works whose refresh is
 /// due; `media`, the pictures and themes yet to be fetched; `webhooks`, the
 /// deliveries yet to be sent.
