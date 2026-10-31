@@ -26,6 +26,12 @@ may change what the API or the configuration means, and says so here.
   under a library's import the server held half of what it did, for some
   15 % more of its CPU. Either is undone on the container; see
   docs/perf/memory.md.
+- A JPEG's placeholder is drawn from the picture decoded small — an eighth
+  of its sides or a quarter, by the decoder's inverse transform — where it
+  was decoded whole, then held again as RGBA: one of TMDB's posters of
+  2000×3000 takes 0.7 MB to prepare where it took 42, a progressive backdrop
+  half of what it took, for the same sketch. A picture a WebP copy is made
+  of is decoded whole, as before.
 
 ### Fixed
 

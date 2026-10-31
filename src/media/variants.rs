@@ -132,19 +132,28 @@ pub struct Decoded {
 impl Decoded {
     /// Read a picture's bytes — see [`file::decode`] for the bounds.
     pub fn read(bytes: &[u8]) -> Result<Self> {
-        let picture = file::decode(bytes)?;
+        Ok(Self::of(file::decode(bytes)?))
+    }
+
+    /// Read a picture's bytes `side` or more on one of its sides, smaller
+    /// than it is where its format allows: see [`file::decode_small`].
+    pub fn read_small(bytes: &[u8], side: u32) -> Result<Self> {
+        Ok(Self::of(file::decode_small(bytes, side)?))
+    }
+
+    fn of(picture: image::DynamicImage) -> Self {
         let (width, height) = (picture.width(), picture.height());
         // An alpha channel that is opaque everywhere is a photograph like
         // any other; only real transparency is kept.
         if picture.color().has_alpha() {
             let rgba = picture.into_rgba8().into_raw();
             if rgba.as_chunks::<4>().0.iter().any(|p| p[3] < 255) {
-                return Ok(Self {
+                return Self {
                     pixels: rgba,
                     width,
                     height,
                     alpha: true,
-                });
+                };
             }
             let rgb = rgba
                 .as_chunks::<4>()
@@ -152,19 +161,19 @@ impl Decoded {
                 .iter()
                 .flat_map(|p| [p[0], p[1], p[2]])
                 .collect();
-            return Ok(Self {
+            return Self {
                 pixels: rgb,
                 width,
                 height,
                 alpha: false,
-            });
+            };
         }
-        Ok(Self {
+        Self {
             pixels: picture.into_rgb8().into_raw(),
             width,
             height,
             alpha: false,
-        })
+        }
     }
 
     fn as_pixels(&self) -> Pixels<'_> {
@@ -370,12 +379,18 @@ pub struct Prepared {
 /// picture decoded once for both. `cover` is what the picture is to its
 /// work, where that is known.
 pub fn prepare(bytes: &[u8], cover: Option<CoverType>, webp: bool) -> Result<Prepared> {
-    let decoded = Decoded::read(bytes)?;
+    let copy = eager_width(cover).filter(|_| webp);
+    // The placeholder alone, when no copy is made: drawn from the picture
+    // decoded small, whose sketch is the same for a fraction of the memory.
+    let decoded = match copy {
+        Some(_) => Decoded::read(bytes)?,
+        None => Decoded::read_small(bytes, super::placeholder::DRAWN_FROM)?,
+    };
     let placeholder = super::placeholder::of(&decoded)
         .inspect_err(|e| tracing::debug!(error = format_args!("{e:#}"), "no placeholder"))
         .ok();
     let mut copies = Vec::new();
-    if webp && let Some(width) = eager_width(cover) {
+    if let Some(width) = copy {
         copies.push(make(&decoded, Made::Width(width), Format::Webp, cover)?);
     }
     Ok(Prepared {
@@ -627,5 +642,47 @@ mod tests {
         let refused = off_thread(|| -> Result<()> { panic!("a decoder's bug") }).await;
         assert!(refused.unwrap_err().to_string().contains("gave up"));
         assert_eq!(off_thread(|| Ok(7)).await.unwrap(), 7);
+    }
+
+    #[test]
+    fn a_placeholder_drawn_from_a_small_decode_is_the_one_drawn_from_the_whole() {
+        // A poster: two thirds of a dark blue, a band of orange, as a JPEG.
+        let mut bytes = Vec::new();
+        image::RgbImage::from_fn(2000, 3000, |_, y| {
+            image::Rgb(if y < 2000 {
+                [20, 40, 90]
+            } else {
+                [230, 120, 30]
+            })
+        })
+        .write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::Jpeg)
+        .unwrap();
+
+        let small = Decoded::read_small(&bytes, super::super::placeholder::DRAWN_FROM).unwrap();
+        assert_eq!((small.width, small.height), (250, 375));
+        let small = super::super::placeholder::of(&small).unwrap();
+        let whole = super::super::placeholder::of(&Decoded::read(&bytes).unwrap()).unwrap();
+
+        // The colour within what a JPEG's rounding moves, the sketch's
+        // proportions and average alike.
+        let near = |a: u8, b: u8| a.abs_diff(b) <= 3;
+        assert!(
+            (0..3).all(|c| near(small.color[c], whole.color[c])),
+            "{:?} {:?}",
+            small.color,
+            whole.color
+        );
+        let ratio = |hash: &[u8]| thumbhash::thumb_hash_to_approximate_aspect_ratio(hash).unwrap();
+        assert!((ratio(&small.thumbhash) - ratio(&whole.thumbhash)).abs() < 0.01);
+        let average = |hash: &[u8]| thumbhash::thumb_hash_to_average_rgba(hash).unwrap();
+        let (sa, wa) = (average(&small.thumbhash), average(&whole.thumbhash));
+        assert!(
+            (sa.0 - wa.0).abs() < 0.02 && (sa.1 - wa.1).abs() < 0.02 && (sa.2 - wa.2).abs() < 0.02
+        );
+
+        // And what prepares a picture with no copy to make draws it so.
+        let prepared = prepare(&bytes, Some(CoverType::Poster), false).unwrap();
+        assert_eq!(prepared.placeholder, Some(small));
+        assert!(prepared.copies.is_empty());
     }
 }
