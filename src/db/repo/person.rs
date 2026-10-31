@@ -28,7 +28,7 @@ use anyhow::{Context, Result};
 use sqlx::{Any, Arguments, Transaction, any::AnyArguments};
 
 use crate::{
-    db::{Db, RowExt, from_bool, new_id, now},
+    db::{Db, Double, RowExt, from_bool, new_id, now},
     domain::{
         Credit, CreditType,
         person::{Alias, Job, Person, PersonRef},
@@ -822,7 +822,7 @@ async fn insert(db: &Db, tx: &mut Transaction<'_, Any>, people: &[Person]) -> Re
         .bind(&person.original_name)
         .bind(person.gender.map(i32::from))
         .bind(&person.image)
-        .bind(person.popularity)
+        .bind(Double(person.popularity))
         .bind(from_bool(person.is_manual))
         .bind(&person.created_at)
         .bind(&person.updated_at)
@@ -1912,7 +1912,7 @@ pub async fn write_details(db: &Db, id: &str, details: &Details) -> Result<()> {
         .bind(&photos)
         .bind(&details.known_for)
         .bind(&details.homepage)
-        .bind(details.popularity)
+        .bind(Double(details.popularity))
         .bind(now())
         .bind(now())
         .bind(id)
@@ -1954,7 +1954,7 @@ pub async fn write_details(db: &Db, id: &str, details: &Details) -> Result<()> {
         .bind(&photos)
         .bind(&details.known_for)
         .bind(&details.homepage)
-        .bind(details.popularity)
+        .bind(Double(details.popularity))
         .bind(now())
         .bind(now())
         .bind(id)

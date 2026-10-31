@@ -159,39 +159,80 @@ pub struct Db {
     lease: Option<std::sync::Arc<testing::Lease>>,
 }
 
-/// A PostgreSQL address with its statement cache switched off, unless the
-/// operator sized the cache themselves.
+/// A number that may be missing — a rating, a popularity — bound as the
+/// double PostgreSQL holds it as, missing or not.
 ///
-/// sqlx 0.9's `Any` driver binds a missing double as a single-precision null
-/// — `sqlx-core`'s `any/arguments.rs` has `Real` and `Double` the wrong way
-/// round — and PostgreSQL fixes a cached statement's parameter types the first
-/// time it is prepared. A statement first run with a missing rating is
-/// prepared for a four-byte float and refuses the eight bytes of the next real
-/// one: "incorrect binary data format", and the work is not stored. A Fan-Kai
-/// has no rating on any episode, so the series stored after one on the same
-/// connection failed. An unnamed statement is typed by each run's own values,
-/// which a null of either width satisfies.
-fn uncached(url: &str) -> String {
+/// sqlx 0.9's `Any` driver hands a missing `f64` to PostgreSQL as a
+/// single-precision null, and a missing `f32` as a double one —
+/// `sqlx-core`'s `any/arguments.rs` has `Real` and `Double` the wrong way
+/// round — and PostgreSQL types a statement by its first run, which sqlx's
+/// cache then keeps: one first run with a missing rating refused the eight
+/// bytes of every rating after it ("incorrect binary data format"), and the
+/// work was not stored. A Fan-Kai has no rating on any episode; the series
+/// stored after one on the same connection failed. A missing number goes
+/// out here as the `f32` it is not, and arrives as the double it is: every
+/// `Option<f64>` is bound through it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Double(pub Option<f64>);
+
+impl sqlx::Type<sqlx::Any> for Double {
+    fn type_info() -> sqlx::any::AnyTypeInfo {
+        <f64 as sqlx::Type<sqlx::Any>>::type_info()
+    }
+}
+
+impl sqlx::Encode<'_, sqlx::Any> for Double {
+    fn encode_by_ref(
+        &self,
+        buf: &mut <sqlx::Any as sqlx::Database>::ArgumentBuffer,
+    ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
+        match self.0 {
+            Some(number) => <f64 as sqlx::Encode<'_, sqlx::Any>>::encode_by_ref(&number, buf),
+            None => <Option<f32> as sqlx::Encode<'_, sqlx::Any>>::encode_by_ref(&None, buf),
+        }
+    }
+}
+
+/// How many statements a PostgreSQL connection keeps prepared, where the
+/// address does not say. The ones a server runs most fit in two dozen, at a
+/// fraction of the memory of sqlx's own hundred: under a library's import,
+/// 24 spared PostgreSQL as much of its CPU as a hundred did — 67 s against
+/// 64, and 93 with none — for 8 MB of the server's memory where a hundred
+/// took 20, metadata kept for as long as the connection lives.
+const STATEMENTS_KEPT: usize = 24;
+
+/// A PostgreSQL address with its statement cache sized [`STATEMENTS_KEPT`],
+/// unless the operator sized it themselves.
+fn sized(url: &str) -> String {
     if url.contains("statement-cache-capacity=") {
         return url.to_string();
     }
-
     let joiner = if url.contains('?') { '&' } else { '?' };
-    format!("{url}{joiner}statement-cache-capacity=0")
+    format!("{url}{joiner}statement-cache-capacity={STATEMENTS_KEPT}")
+}
+
+/// Whether sqlx leaves its statements behind in a PostgreSQL session: with
+/// its statement cache switched off in the address
+/// (`statement-cache-capacity=0`), it still names every statement it
+/// prepares — a query is `persistent` unless told otherwise — and neither
+/// keeps one to run again nor closes it. The server switched the cache off
+/// itself before [`Double`]: a library's import left some ninety thousand in
+/// one connection in minutes, 800 MB of PostgreSQL's memory for each
+/// connection of the pool, and the simplest statements waited minutes to be
+/// parsed.
+fn leaves_statements(url: &str) -> bool {
+    url::Url::parse(url).is_ok_and(|url| {
+        url.query_pairs().any(|(key, value)| {
+            key == "statement-cache-capacity" && value.trim().parse::<usize>() == Ok(0)
+        })
+    })
 }
 
 /// Let go of the statements a PostgreSQL session holds, as its connection
-/// goes back to the pool.
-///
-/// sqlx names every statement it prepares — a query is `persistent` unless
-/// told otherwise — and with its cache off ([`uncached`]) it neither keeps
-/// one to run again nor closes it: each query left its plan in the session
-/// for as long as the connection lived. A library's import ran some ninety
-/// thousand through one connection in minutes — 800 MB of PostgreSQL's
-/// memory for each connection of the pool, and the simplest statements
-/// waited minutes to be parsed. Nothing runs them again, the cache being
-/// off, so all of them go; the simple protocol says so without preparing
-/// one more.
+/// goes back to the pool, where sqlx would leave them
+/// ([`leaves_statements`]): nothing runs them again, the cache being off,
+/// so all of them go; the simple protocol says so without preparing one
+/// more.
 async fn forget_statements(conn: &mut sqlx::AnyConnection) -> sqlx::Result<()> {
     sqlx::raw_sql(AssertSqlSafe("DEALLOCATE ALL"))
         .execute(conn)
@@ -210,9 +251,10 @@ impl Db {
         }
 
         let url = match dialect {
-            Dialect::Postgres => uncached(&cfg.url),
+            Dialect::Postgres => sized(&cfg.url),
             Dialect::Sqlite => cfg.url.clone(),
         };
+        let forgets = dialect == Dialect::Postgres && leaves_statements(&url);
 
         let pool = AnyPoolOptions::new()
             // SQLite tolerates concurrent readers but a single writer; a wide pool
@@ -245,7 +287,7 @@ impl Db {
             })
             .after_release(move |conn, _meta| {
                 Box::pin(async move {
-                    if dialect == Dialect::Postgres {
+                    if forgets {
                         forget_statements(conn).await?;
                     }
                     Ok(true)
@@ -660,21 +702,63 @@ pub fn from_bool(v: bool) -> i64 {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn a_postgres_address_is_opened_without_a_statement_cache() {
-        use super::uncached;
+    fn a_postgres_address_keeps_two_dozen_statements_unless_it_says() {
+        use super::sized;
 
         assert_eq!(
-            uncached("postgres://ams@db/ams"),
+            sized("postgres://ams@db/ams"),
+            "postgres://ams@db/ams?statement-cache-capacity=24"
+        );
+        assert_eq!(
+            sized("postgres://ams@db/ams?sslmode=disable"),
+            "postgres://ams@db/ams?sslmode=disable&statement-cache-capacity=24"
+        );
+        // An operator who sized it keeps their size, nought included.
+        assert_eq!(
+            sized("postgres://ams@db/ams?statement-cache-capacity=0"),
             "postgres://ams@db/ams?statement-cache-capacity=0"
         );
-        assert_eq!(
-            uncached("postgres://ams@db/ams?sslmode=disable"),
-            "postgres://ams@db/ams?sslmode=disable&statement-cache-capacity=0"
-        );
-        // An operator who sized it keeps their size.
-        assert_eq!(
-            uncached("postgres://ams@db/ams?statement-cache-capacity=50"),
+    }
+
+    #[test]
+    fn statements_are_let_go_of_only_where_the_cache_is_off() {
+        use super::leaves_statements;
+
+        assert!(!leaves_statements("postgres://ams@db/ams"));
+        assert!(!leaves_statements(
             "postgres://ams@db/ams?statement-cache-capacity=50"
+        ));
+        assert!(leaves_statements(
+            "postgres://ams@db/ams?sslmode=disable&statement-cache-capacity=0"
+        ));
+        // Not a number that only begins with nought.
+        assert!(!leaves_statements(
+            "postgres://ams@db/ams?statement-cache-capacity=05x"
+        ));
+    }
+
+    #[test]
+    fn a_missing_double_is_bound_as_a_double() {
+        use sqlx::{Arguments as _, any::AnyArguments};
+
+        // What sqlx hands PostgreSQL is what the `Any` arguments say: a
+        // missing f32, which it turns into a missing f64.
+        let mut ours = AnyArguments::default();
+        ours.add(super::Double(None)).unwrap();
+        let mut f32s = AnyArguments::default();
+        f32s.add(None::<f32>).unwrap();
+        assert_eq!(
+            format!("{:?}", ours.values.0),
+            format!("{:?}", f32s.values.0)
+        );
+
+        let mut given = AnyArguments::default();
+        given.add(super::Double(Some(7.5))).unwrap();
+        let mut f64s = AnyArguments::default();
+        f64s.add(7.5_f64).unwrap();
+        assert_eq!(
+            format!("{:?}", given.values.0),
+            format!("{:?}", f64s.values.0)
         );
     }
 
