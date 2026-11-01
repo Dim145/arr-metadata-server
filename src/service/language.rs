@@ -630,33 +630,28 @@ async fn from_tmdb(state: &AppState, item: &MediaItem, language: &str) -> Fetche
     }
 }
 
-/// TMDB's text for the work's episodes, under the work's own numbers.
-///
-/// The regular seasons by number, as the merge pairs them. A special by the
-/// TMDB id the merge gave it, because TMDB numbers its specials its own way:
-/// by number alone, *Rurouni Kenshin*'s first special on TheTVDB — a 1997
-/// film — was named after TMDB's first, the series' last episode. A special
-/// the merge paired with none of TMDB's gets no text from it; TheTVDB is
-/// asked for that one instead.
+/// TMDB's text for the work's episodes, under the work's own numbers: each
+/// by the TMDB id the merge gave the episode it is, because TMDB numbers some
+/// series its own way. By number alone, *Rurouni Kenshin*'s first special on
+/// TheTVDB — a 1997 film — was named after TMDB's first, the series' last
+/// episode; and for a series TMDB cuts into more seasons, its 2×01 being
+/// TheTVDB's 1×13, every episode after the cut was named after another. An
+/// episode the merge paired with none of TMDB's gets no text from it;
+/// TheTVDB is asked for that one instead.
 fn tmdb_texts(item: &MediaItem, seasons: &[Season]) -> Vec<repo::translation::EpisodeText> {
-    let specials: HashMap<i64, i32> = item
+    let placed: HashMap<i64, (i32, i32)> = item
         .episodes
         .iter()
-        .filter(|e| e.season_number == 0)
-        .filter_map(|e| Some((e.tmdb_id?, e.episode_number)))
+        .filter_map(|e| Some((e.tmdb_id?, (e.season_number, e.episode_number))))
         .collect();
 
     seasons
         .iter()
         .flat_map(|s| s.episodes.iter())
         .filter_map(|e| {
-            let episode_number = if e.season_number == 0 {
-                *specials.get(&e.id?)?
-            } else {
-                e.episode_number
-            };
+            let (season_number, episode_number) = *placed.get(&e.id?)?;
             Some(repo::translation::EpisodeText {
-                season_number: e.season_number,
+                season_number,
                 episode_number,
                 // TMDB's "Episode 3" or "Épisode 3", which names an episode by
                 // TMDB's own number, is no text: taken, it replaced a real
@@ -1372,7 +1367,7 @@ mod tests {
         item.episodes = vec![
             stored(0, 1, None),
             stored(0, 2, Some(703204)),
-            stored(3, 32, None),
+            stored(3, 32, Some(703190)),
             stored(3, 33, None),
         ];
         let seasons = [
@@ -1392,7 +1387,7 @@ mod tests {
             .map(|t| (t.season_number, t.episode_number, t.title.as_deref()))
             .collect();
 
-        // The regular seasons go by number, as the merge pairs them.
+        // A regular season's episode by its id too: here, its own number.
         assert_eq!(
             placed,
             [
@@ -1400,6 +1395,32 @@ mod tests {
                 (3, 32, Some("The Elegy of Wind and Water")),
             ]
         );
+    }
+
+    #[test]
+    fn tmdbs_text_goes_where_the_merge_put_its_id_when_tmdb_cuts_the_seasons_otherwise() {
+        // TMDB makes a season of TheTVDB's last two episodes of the first: its
+        // 2×01 and 2×02 are TheTVDB's 1×03 and 1×04, which the merge paired by
+        // the day they aired. By number, TheTVDB's 2×01 was named after
+        // TMDB's; it gets no text from TMDB now, and TheTVDB is asked for it.
+        let mut item = MediaItem::empty(MediaKind::Series);
+        item.episodes = vec![
+            stored(1, 3, Some(3001)),
+            stored(1, 4, Some(3002)),
+            stored(2, 1, None),
+        ];
+        let seasons = [tmdb_season(
+            2,
+            &[(1, 3001, "The cut"), (2, 3002, "After it")],
+        )];
+
+        let texts = tmdb_texts(&item, &seasons);
+        let placed: Vec<(i32, i32, Option<&str>)> = texts
+            .iter()
+            .map(|t| (t.season_number, t.episode_number, t.title.as_deref()))
+            .collect();
+        assert_eq!(placed, [(1, 3, Some("The cut")), (1, 4, Some("After it"))]);
+        assert!(incomplete(&item, &texts), "TheTVDB is asked for its 2×01");
     }
 
     #[test]
@@ -1436,7 +1457,11 @@ mod tests {
         // dropped, the French one a server set to French holds went to an
         // English Sonarr. TheTVDB is asked for the two instead.
         let mut item = MediaItem::empty(MediaKind::Series);
-        item.episodes = vec![stored(2, 1, None), stored(2, 2, None), stored(2, 3, None)];
+        item.episodes = vec![
+            stored(2, 1, Some(4815162)),
+            stored(2, 2, Some(4815163)),
+            stored(2, 3, Some(4815164)),
+        ];
         let seasons = [tmdb_season(
             2,
             &[

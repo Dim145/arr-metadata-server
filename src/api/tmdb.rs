@@ -1346,19 +1346,25 @@ fn write_episode(
     changed
 }
 
-/// The catalogue's episode a TMDB episode is: a special by the TMDB id the
-/// merge gave it, since TMDB numbers its specials its own way; any other by
-/// its numbers, as the merge pairs them — unless the catalogue knows that
-/// one under another TMDB id, when it is another episode.
+/// The catalogue's episode a TMDB episode is: the one the merge gave its
+/// TMDB id, wherever the catalogue numbers it — TMDB numbers its specials its
+/// own way, and cuts some series into seasons of its own, its 2×01 being
+/// TheTVDB's 1×13. Failing that, an episode outside the specials by its
+/// numbers — unless the catalogue knows that one under another TMDB id, when
+/// it is another episode.
 fn catalogue_episode(
     item: &MediaItem,
     season: i64,
     number: i64,
     theirs: Option<i64>,
 ) -> Option<&Episode> {
+    if let Some(theirs) = theirs
+        && let Some(found) = item.episodes.iter().find(|e| e.tmdb_id == Some(theirs))
+    {
+        return Some(found);
+    }
     if season == 0 {
-        let theirs = theirs?;
-        return item.episodes.iter().find(|e| e.tmdb_id == Some(theirs));
+        return None;
     }
     item.episodes.iter().find(|e| {
         i64::from(e.season_number) == season
@@ -3801,10 +3807,16 @@ mod tests {
     }
 
     #[test]
-    fn an_episode_is_the_catalogues_by_its_numbers_and_a_special_by_its_id() {
+    fn an_episode_is_the_catalogues_by_its_tmdb_id_then_by_its_numbers() {
         let item = locked_season();
         assert_eq!(
             catalogue_episode(&item, 1, 1, Some(62085)).map(|e| e.id.as_str()),
+            Some("ep-1x1")
+        );
+        // TMDB's 2×01 that the merge gave the catalogue's 1×01: wherever TMDB
+        // numbers it, the episode its id was given to.
+        assert_eq!(
+            catalogue_episode(&item, 2, 1, Some(62085)).map(|e| e.id.as_str()),
             Some("ep-1x1")
         );
         // Known under another TMDB id: another episode.

@@ -218,6 +218,15 @@ may change what the API or the configuration means, and says so here.
 
 ### Fixed
 
+- A series TMDB numbers apart from TheTVDB — *One Piece*, many an anime split
+  by cour — had TMDB's episodes paired with TheTVDB's by number. Past the
+  first place they part, each episode took another's TMDB id, and with it
+  that episode's synopsis, still, rating and runtime where TheTVDB had none,
+  its texts in other languages, its place in TMDB's episode groups, and the
+  locks the TMDB relay writes into it. TMDB's episodes are now paired by the
+  day each aired where their numbers disagree with it: of *One Piece*'s
+  1,242 episodes, 1,201 take a TMDB id, every one the episode of its date,
+  where 1,194 of TMDB's are numbered otherwise.
 - The seasons and episodes asked with a series' TMDB document
   (`append_to_response=season/1,season/1/images,season/1/episode/2`) take the
   locks and lose the posters hidden here, as the same documents asked on

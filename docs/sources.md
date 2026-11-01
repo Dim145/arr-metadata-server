@@ -45,6 +45,17 @@ a show that has 1179.
 TMDB's numbering is not thrown away for all that: it is kept beside TheTVDB's, as
 an order a client can ask for — see [TMDB's own numbering](#tmdbs-own-numbering).
 
+What TMDB says of each episode — its id, its synopsis and still where TheTVDB has
+none, its text in other languages — goes to the episode it is, not to the one of
+its number. Where the two number a series apart (TMDB's 1×09 of *One Piece* is
+TheTVDB's 2×01), each of TMDB's episodes is paired by the day it aired:
+- with the one of its number when the two aired within a day of each other;
+- else with the one TheTVDB lists that day, by its rank in the day when both
+  list a double bill;
+- else with the one of the day before or after.
+
+One the day speaks against, and that nothing else claims, gives nothing.
+
 Measured against the live APIs with all four providers configured:
 
 | Series | Numbered episodes | With absolute numbers | With overviews |

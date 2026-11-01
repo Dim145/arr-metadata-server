@@ -163,17 +163,19 @@ pub fn combine(mut contributions: Vec<Contribution>, priority: &[String]) -> Opt
     // rarely has. Its own lists fold back in as a field source like any other.
     let displaced_seasons = std::mem::replace(&mut merged.seasons, seasons);
     let mut displaced_episodes = std::mem::replace(&mut merged.episodes, episodes);
-    if !numbered_alike(&first.provider) {
+    let by_day = !numbered_alike(&first.provider);
+    if by_day {
         align_specials(&merged.episodes, &mut displaced_episodes);
     }
     merge_seasons(&mut merged.seasons, displaced_seasons);
-    merge_episodes(&mut merged.episodes, displaced_episodes);
+    merge_episodes(&mut merged.episodes, displaced_episodes, by_day);
 
     for mut contribution in contributions {
-        if !numbered_alike(&contribution.provider) {
+        let by_day = !numbered_alike(&contribution.provider);
+        if by_day {
             align_specials(&merged.episodes, &mut contribution.item.episodes);
         }
-        fold(&mut merged, contribution.item);
+        fold(&mut merged, contribution.item, by_day);
     }
 
     apply_broadcast_times(&mut merged.episodes, broadcasts);
@@ -251,7 +253,10 @@ pub fn drop_own_title(item: &mut MediaItem) {
 }
 
 /// Take from `other` whatever `into` is missing.
-fn fold(into: &mut MediaItem, other: MediaItem) {
+/// Fold one more provider in: `by_day` when it numbers the series otherwise
+/// than the list does, so that its episodes are paired by the day they aired
+/// ([`merge_episodes`]).
+fn fold(into: &mut MediaItem, other: MediaItem, by_day: bool) {
     fill(&mut into.sort_title, other.sort_title);
     fill(&mut into.original_title, other.original_title);
     fill(&mut into.overview, other.overview);
@@ -351,7 +356,7 @@ fn fold(into: &mut MediaItem, other: MediaItem) {
     if into.episodes.is_empty() {
         into.episodes = other.episodes;
     } else {
-        merge_episodes(&mut into.episodes, other.episodes);
+        merge_episodes(&mut into.episodes, other.episodes, by_day);
     }
 }
 
@@ -648,8 +653,8 @@ fn merge_seasons(into: &mut [Season], other: Vec<Season>) {
 /// counts in season 3. Paired by number, the film took that episode's
 /// synopsis, its still and its TMDB id. The TMDB id kept here is also what
 /// places TMDB's text in another language (`service::language`). The regular
-/// seasons are left to their numbers: there the providers number alike, and
-/// their wording is wanted.
+/// seasons keep their numbers where the day each episode aired agrees with
+/// them, and are paired by that day where it does not ([`paired`]).
 ///
 /// What both sides can be checked against is the day a special came out:
 ///
@@ -709,18 +714,25 @@ fn align_specials(spine: &[Episode], other: &mut Vec<Episode>) {
     });
 }
 
-/// Merge episodes field by field, keyed by their numbering.
+/// Merge episodes field by field, keyed by their numbering — checked against
+/// the day each aired for a provider that numbers the series its own way
+/// (`by_day`).
 ///
 /// This is where a second provider earns its place: TVDB carries absolute
 /// numbering and air-order hints that TMDB has no field for, while TMDB carries
 /// overviews and stills that TVDB often lacks.
-fn merge_episodes(into: &mut [Episode], other: Vec<Episode>) {
-    for episode in other {
-        let existing = into.iter_mut().find(|e| {
-            e.season_number == episode.season_number && e.episode_number == episode.episode_number
-        });
-
-        if let Some(existing) = existing {
+///
+/// But TMDB cuts some series into seasons of its own — One Piece into 23 where
+/// TheTVDB has 21, an anime's second cour into a season of its own — and its
+/// 2×01 is then TheTVDB's 1×13. Paired by number alone, TheTVDB's 2×01 took
+/// that episode's TMDB id, and with it its synopsis, its still and the text
+/// read in another language by that id (`service::language`); TMDB's episode
+/// groups, and the TMDB relay's locks, placed by that id, followed it. See
+/// [`paired`] for how the day decides.
+fn merge_episodes(into: &mut [Episode], other: Vec<Episode>, by_day: bool) {
+    let pairs = paired(into, &other, by_day);
+    for (episode, pair) in other.into_iter().zip(pairs) {
+        if let Some(existing) = pair.map(|index| &mut into[index]) {
             if existing.title.trim().is_empty() {
                 existing.title = episode.title;
             }
@@ -750,6 +762,105 @@ fn merge_episodes(into: &mut [Episode], other: Vec<Episode>) {
                 .or(episode.aired_before_episode_number);
         }
     }
+}
+
+/// Which of the list's episodes each of another provider's is, by its index
+/// in the list: the one of its season and number — and, `by_day`, as the day
+/// it aired says:
+///
+/// * the one of its number, when the two aired within a day of each other —
+///   a broadcast across midnight, or two time zones apart;
+/// * else the list's only episode that aired that day; on a day the list has
+///   several, the one of its rank in the day, when both sides list as many
+///   that day — a double bill each numbers its own way;
+/// * else, the list having none that day, its only one of the day before or
+///   after;
+/// * else the one of its number, when that one has no day to tell by;
+/// * else none: an episode the day speaks against, and that nothing else
+///   claims, gives nothing.
+///
+/// An episode with no day of its own keeps its number: nothing says otherwise.
+fn paired(into: &[Episode], other: &[Episode], by_day: bool) -> Vec<Option<usize>> {
+    use std::collections::HashMap;
+
+    use chrono::NaiveDate;
+
+    fn day(episode: &Episode) -> Option<NaiveDate> {
+        let date = episode.air_date.as_deref()?.trim();
+        NaiveDate::parse_from_str(date.get(..10)?, "%Y-%m-%d").ok()
+    }
+
+    // A list's episodes by the day they aired, each day's in number order.
+    fn by_days(episodes: &[Episode]) -> HashMap<NaiveDate, Vec<usize>> {
+        let mut days: HashMap<NaiveDate, Vec<usize>> = HashMap::new();
+        for (index, episode) in episodes.iter().enumerate() {
+            if let Some(aired) = day(episode) {
+                days.entry(aired).or_default().push(index);
+            }
+        }
+        for indices in days.values_mut() {
+            indices.sort_by_key(|&i| (episodes[i].season_number, episodes[i].episode_number));
+        }
+        days
+    }
+
+    let numbers: HashMap<(i32, i32), usize> = into
+        .iter()
+        .enumerate()
+        .map(|(index, e)| ((e.season_number, e.episode_number), index))
+        .collect();
+    let by_number = |e: &Episode| numbers.get(&(e.season_number, e.episode_number)).copied();
+
+    if !by_day {
+        return other.iter().map(by_number).collect();
+    }
+
+    let ours = by_days(into);
+    let theirs = by_days(other);
+
+    other
+        .iter()
+        .enumerate()
+        .map(|(index, episode)| {
+            let numbered = by_number(episode);
+            let Some(aired) = day(episode) else {
+                return numbered;
+            };
+            let numbered_day = numbered.map(|i| day(&into[i]));
+            if let Some(Some(listed)) = numbered_day
+                && (listed - aired).num_days().abs() <= 1
+            {
+                return numbered;
+            }
+
+            if let Some(that_day) = ours.get(&aired) {
+                if let [only] = that_day.as_slice() {
+                    return Some(*only);
+                }
+                let mine = theirs.get(&aired)?;
+                return (mine.len() == that_day.len())
+                    .then(|| mine.iter().position(|&i| i == index))
+                    .flatten()
+                    .map(|rank| that_day[rank]);
+            }
+
+            let near: Vec<usize> = [aired.pred_opt(), aired.succ_opt()]
+                .into_iter()
+                .flatten()
+                .filter_map(|d| ours.get(&d))
+                .flatten()
+                .copied()
+                .collect();
+            if let [only] = near.as_slice() {
+                return Some(*only);
+            }
+
+            match numbered_day {
+                Some(None) => numbered,
+                _ => None,
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -1495,6 +1606,100 @@ mod tests {
     }
 
     /// A special as TheTVDB lists one: a number, the day it came out, a name.
+    /// One as a provider lists it: its numbers, the day it aired, and — from
+    /// TMDB — its id and a synopsis naming it.
+    fn aired(season: i32, number: i32, date: Option<&str>, tmdb_id: Option<i64>) -> Episode {
+        let mut e = episode(season, number);
+        e.air_date = date.map(String::from);
+        e.tmdb_id = tmdb_id;
+        e.overview = tmdb_id.map(|id| format!("TMDB's {id}."));
+        e
+    }
+
+    fn tmdb_ids(merged: &MediaItem) -> Vec<Option<i64>> {
+        merged.episodes.iter().map(|e| e.tmdb_id).collect()
+    }
+
+    #[test]
+    fn a_season_tmdb_cuts_otherwise_is_paired_by_the_day_each_episode_aired() {
+        // TMDB makes a season of TheTVDB's last two episodes of the first, so
+        // its 2×01 is TheTVDB's 1×03. By number, TheTVDB's 2×01 took TMDB's
+        // 2×01 — its id, its synopsis — and 1×03 took nothing. By the day,
+        // each takes its own; TMDB's 3×02, which aired on no day TheTVDB
+        // lists, gives nothing.
+        let mut tvdb = base("tvdb", "Cut");
+        tvdb.item.episodes = vec![
+            aired(1, 1, Some("2024-01-07"), None),
+            aired(1, 2, Some("2024-01-14"), None),
+            aired(1, 3, Some("2024-01-21"), None),
+            aired(1, 4, Some("2024-01-28"), None),
+            aired(2, 1, Some("2024-07-07"), None),
+        ];
+        let mut tmdb = base("tmdb", "Cut");
+        tmdb.item.episodes = vec![
+            aired(1, 1, Some("2024-01-07"), Some(101)),
+            aired(1, 2, Some("2024-01-14"), Some(102)),
+            aired(2, 1, Some("2024-01-21"), Some(103)),
+            aired(2, 2, Some("2024-01-28"), Some(104)),
+            aired(3, 1, Some("2024-07-07"), Some(105)),
+            aired(3, 2, Some("2024-07-31"), Some(106)),
+        ];
+
+        let merged = combine(vec![tmdb, tvdb], &priority()).unwrap();
+        assert_eq!(merged.episodes.len(), 5, "TheTVDB's list");
+        assert_eq!(
+            tmdb_ids(&merged),
+            [Some(101), Some(102), Some(103), Some(104), Some(105)]
+        );
+        assert_eq!(merged.episodes[2].overview.as_deref(), Some("TMDB's 103."));
+        assert_eq!(merged.episodes[4].overview.as_deref(), Some("TMDB's 105."));
+    }
+
+    #[test]
+    fn a_double_bill_numbered_otherwise_pairs_by_its_rank_in_the_day() {
+        // Two episodes aired one evening, TheTVDB's 1×01 and 1×02, TMDB's
+        // 2×05 and 2×06: each takes the one of its rank that day. Where TMDB
+        // lists one episode on a day TheTVDB lists two, nothing says which.
+        let mut tvdb = base("tvdb", "Double");
+        tvdb.item.episodes = vec![
+            aired(1, 1, Some("2024-03-01"), None),
+            aired(1, 2, Some("2024-03-01"), None),
+            aired(1, 3, Some("2024-03-08"), None),
+            aired(1, 4, Some("2024-03-08"), None),
+        ];
+        let mut tmdb = base("tmdb", "Double");
+        tmdb.item.episodes = vec![
+            aired(2, 5, Some("2024-03-01"), Some(205)),
+            aired(2, 6, Some("2024-03-01"), Some(206)),
+            aired(2, 7, Some("2024-03-08"), Some(207)),
+        ];
+
+        let merged = combine(vec![tmdb, tvdb], &priority()).unwrap();
+        assert_eq!(tmdb_ids(&merged), [Some(205), Some(206), None, None]);
+    }
+
+    #[test]
+    fn a_day_apart_or_no_day_at_all_lets_the_number_stand() {
+        // A broadcast across midnight, or in another time zone, is a day out:
+        // the same episode. An episode with no day of its own, or whose
+        // number TheTVDB lists with no day, has nothing to be checked by.
+        let mut tvdb = base("tvdb", "Night");
+        tvdb.item.episodes = vec![
+            aired(1, 1, Some("2024-01-07"), None),
+            aired(1, 2, Some("2024-01-14"), None),
+            aired(1, 3, None, None),
+        ];
+        let mut tmdb = base("tmdb", "Night");
+        tmdb.item.episodes = vec![
+            aired(1, 1, Some("2024-01-08"), Some(11)),
+            aired(1, 2, None, Some(12)),
+            aired(1, 3, Some("2024-01-21"), Some(13)),
+        ];
+
+        let merged = combine(vec![tmdb, tvdb], &priority()).unwrap();
+        assert_eq!(tmdb_ids(&merged), [Some(11), Some(12), Some(13)]);
+    }
+
     fn special(number: i32, date: Option<&str>, title: &str) -> Episode {
         let mut e = episode(0, number);
         e.air_date = date.map(String::from);
