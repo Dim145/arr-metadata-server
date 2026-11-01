@@ -30,6 +30,46 @@ pub trait Cached: Clone + Send + Sync + 'static {
     fn to_bytes(&self) -> Bytes;
     fn from_bytes(bytes: Bytes) -> Option<Self>;
     fn weight(&self) -> usize;
+
+    /// How long the value is worth holding, when it says less than its
+    /// space's time: a relayed refusal is of no use past its own end. None,
+    /// the space's time.
+    fn keep_for(&self) -> Option<Duration> {
+        None
+    }
+}
+
+/// How long a space's memory holds a value: its space's time, or less where
+/// the value says so — counted again from each write, as a time to live is.
+struct Lifetime {
+    most: Duration,
+}
+
+impl Lifetime {
+    fn of<V: Cached>(&self, value: &V) -> Duration {
+        value.keep_for().map_or(self.most, |own| own.min(self.most))
+    }
+}
+
+impl<V: Cached> moka::Expiry<String, V> for Lifetime {
+    fn expire_after_create(
+        &self,
+        _key: &String,
+        value: &V,
+        _created_at: std::time::Instant,
+    ) -> Option<Duration> {
+        Some(self.of(value))
+    }
+
+    fn expire_after_update(
+        &self,
+        _key: &String,
+        value: &V,
+        _updated_at: std::time::Instant,
+        _until_now: Option<Duration>,
+    ) -> Option<Duration> {
+        Some(self.of(value))
+    }
 }
 
 impl Cached for String {
@@ -82,7 +122,8 @@ impl<V: Cached> Space<V> {
     pub fn new(id: &'static str, capacity: u64, ttl: Duration, slot: RedisSlot) -> Self {
         let l1 = Moka::builder()
             .max_capacity(capacity.max(1))
-            .time_to_live(ttl)
+            // The space's time, or a value's own when it says less.
+            .expire_after(Lifetime { most: ttl })
             // Values are documents; weigh by byte length so a few huge series
             // with full episode lists cannot evict everything else.
             .weigher(|k: &String, v: &V| (k.len() + v.weight()).try_into().unwrap_or(u32::MAX))
@@ -112,6 +153,13 @@ impl<V: Cached> Space<V> {
     /// what it held stays until forgotten or expired.
     pub fn set_enabled(&self, on: bool) {
         self.enabled.store(on, Relaxed);
+    }
+
+    /// How long the server holds a value asked to be held `asked`: never
+    /// past the space's time, nor past the value's own ([`Cached::keep_for`]).
+    fn held_for(&self, value: &V, asked: Duration) -> Duration {
+        let most = asked.min(self.ttl);
+        value.keep_for().map_or(most, |own| own.min(most))
     }
 
     /// The server behind the space, when one is attached.
@@ -181,7 +229,11 @@ impl<V: Cached> Space<V> {
             && value.weight() <= L2_MAX_BYTES
         {
             redis
-                .set_ex(&redis.key(self.id, &key), value.to_bytes(), self.ttl)
+                .set_ex(
+                    &redis.key(self.id, &key),
+                    value.to_bytes(),
+                    self.held_for(&value, self.ttl),
+                )
                 .await;
         }
         if !current() {
@@ -193,8 +245,9 @@ impl<V: Cached> Space<V> {
     }
 
     /// Keep a value the server holds for `ttl` rather than the space's
-    /// time — a document whose kind says how long it stays good. The memory
-    /// keeps it the space's time at most; the caller judges the rest.
+    /// time — a document whose kind says how long it stays of use. The
+    /// memory keeps it the space's time at most, or the value's own when it
+    /// says less ([`Cached::keep_for`]); the caller judges the rest.
     pub async fn insert_for(&self, key: String, value: V, ttl: Duration) {
         if !self.enabled() {
             return;
@@ -204,7 +257,7 @@ impl<V: Cached> Space<V> {
         {
             let full = redis.key(self.id, &key);
             let bytes = value.to_bytes();
-            let ttl = ttl.min(self.ttl);
+            let ttl = self.held_for(&value, ttl);
             tokio::spawn(async move {
                 redis.set_ex(&full, bytes, ttl).await;
             });
@@ -266,7 +319,7 @@ impl<V: Cached> Space<V> {
                 {
                     let full = redis.key(id, &key);
                     let bytes = value.to_bytes();
-                    let ttl = self.ttl;
+                    let ttl = self.held_for(value, self.ttl);
                     tokio::spawn(async move {
                         redis.set_ex(&full, bytes, ttl).await;
                     });
@@ -375,6 +428,68 @@ mod tests {
         space.insert("c".into(), "three".into()).await;
         assert_eq!(space.invalidate_all().await, 0);
         assert!(space.get("c").await.is_none());
+    }
+
+    /// A value that says how long it is worth holding.
+    #[derive(Clone)]
+    struct Brief(Option<Duration>);
+
+    impl Cached for Brief {
+        fn to_bytes(&self) -> Bytes {
+            Bytes::new()
+        }
+        fn from_bytes(_: Bytes) -> Option<Self> {
+            None
+        }
+        fn weight(&self) -> usize {
+            1
+        }
+        fn keep_for(&self) -> Option<Duration> {
+            self.0
+        }
+    }
+
+    #[tokio::test]
+    async fn a_value_that_says_less_than_its_space_leaves_sooner() {
+        let space: Space<Brief> = Space::new(
+            "test",
+            1024 * 1024,
+            Duration::from_secs(60),
+            RedisSlot::default(),
+        );
+        space
+            .insert("brief".into(), Brief(Some(Duration::from_millis(60))))
+            .await;
+        space.insert("whole".into(), Brief(None)).await;
+        space
+            .insert("renewed".into(), Brief(Some(Duration::from_millis(60))))
+            .await;
+        assert!(space.get("brief").await.is_some());
+
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        // Written again, it is held as the new value says, from now.
+        space.insert("renewed".into(), Brief(None)).await;
+        tokio::time::sleep(Duration::from_millis(90)).await;
+        assert!(space.get("brief").await.is_none(), "gone at its own end");
+        assert!(space.get("whole").await.is_some(), "the space's time");
+        assert!(space.get("renewed").await.is_some());
+
+        // The server is told no more than either says.
+        assert_eq!(
+            space.held_for(
+                &Brief(Some(Duration::from_secs(5))),
+                Duration::from_secs(30)
+            ),
+            Duration::from_secs(5)
+        );
+        assert_eq!(
+            space.held_for(&Brief(None), Duration::from_secs(3600)),
+            Duration::from_secs(60)
+        );
+        assert_eq!(
+            space.held_for(&Brief(None), Duration::from_secs(10)),
+            Duration::from_secs(10)
+        );
     }
 
     #[test]

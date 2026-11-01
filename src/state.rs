@@ -458,6 +458,11 @@ impl AppState {
                 // still stands in: `server` is what either value did.
                 ("tmdb.relayCredential", "server".to_string()),
                 ("tvdb.relayCredential", "server".to_string()),
+                // On: when a service fails, what its relay kept answers
+                // rather than the failure.
+                (crate::api::relay::STALE_IF_ERROR, "true".to_string()),
+                // TMDB's own image server, as the relay always sent them to.
+                ("tmdb.images", "tmdb".to_string()),
                 ("oidc.enabled", "false".to_string()),
                 ("oidc.scopes", "openid profile email".to_string()),
                 ("oidc.autoRegister", "false".to_string()),

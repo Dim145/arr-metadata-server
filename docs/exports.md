@@ -288,6 +288,11 @@ Plex or Kodi library that holds those works alone.
   is TheTVDB's for a series, then TMDB's, then Fankai's; TMDB's for a film, then IMDb's;
   and the first the work has where none of those is known. An episode's is TheTVDB's,
   then TMDB's.
+- For a series or a film AniList or MyAnimeList knows, `<uniqueid type="anilist">` and
+  `<uniqueid type="mal">` after the others, and never the default: Jellyfin's AniList plugin
+  then reads that entry rather than searching by title. A work filed under several entries —
+  an anime's seasons often are one each — is given the oldest of each, the first season far
+  more often than not, since a reader keeps one id of a type. Episodes carry neither.
 - `<tagline>`, a `<country>` for each country the work was made in (by its English
   name) and a `<studio>` for each company that made it.
 - For a film that belongs to a TMDB collection, `<set>` with the collection's name and

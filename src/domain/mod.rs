@@ -852,8 +852,8 @@ pub struct Relation {
     pub id: String,
     /// How the other work stands to this one, as AniList names it: `SEQUEL`,
     /// `PREQUEL`, `PARENT`, `SIDE_STORY`, `SPIN_OFF`, `ALTERNATIVE`, `SUMMARY`,
-    /// `COMPILATION`, `CONTAINS`, `SOURCE`, `ADAPTATION`, `CHARACTER` or
-    /// `OTHER`.
+    /// `COMPILATION`, `CONTAINS`, `SOURCE`, `ADAPTATION`, `CHARACTER`,
+    /// `SAME_UNIVERSE` or `OTHER`.
     pub relation_type: String,
     /// Where the other work is filed — `anilist` — and its id there.
     pub source: String,

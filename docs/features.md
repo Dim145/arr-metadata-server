@@ -105,7 +105,11 @@ Sonarr's metadata service — and does what both did, from one catalogue.
   Protocol search the catalogue, read a work and its episodes, the week's
   schedule, the lists, where a value came from, the server's health and its
   errands — eight tools that only read, each call in the audit trail — with a
-  key of the `mcp` scope that opens nothing else. See
+  key of the `mcp` scope that opens nothing else. Switched on, it hands
+  agents — large language models — the catalogue, TMDB's data included: TMDB's
+  API terms forbid using its content in connection with an AI application
+  (§1.C) and count an LLM chatbot as commercial use (§2.A). The switch says so,
+  and the log warns at each start while it is on. See
   [The API](api.md#connecting-claude-code-or-open-webui).
 - **Languages of the interface.** English and French ship complete; a
   third language is one file and a registry entry, may start partial — what

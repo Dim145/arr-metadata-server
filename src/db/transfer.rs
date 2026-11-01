@@ -94,6 +94,8 @@ const TABLES: &[&str] = &[
     // the clients trust. Carried over, so the clients need not trust anew.
     "keystore",
     "search_cache",
+    // The reference lists the relays keep, carried like the rest.
+    "relay_document",
     "anime_mapping",
     "imdb_rating",
     // IMDb's titles by region and its episodes, for the works held here.

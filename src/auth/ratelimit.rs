@@ -299,10 +299,17 @@ pub async fn limit(
     request: Request,
     next: Next,
 ) -> AppResult<Response> {
-    // The guard runs first and leaves the resolved address behind; fall back to
-    // resolving it here for routes that are not behind a guard. A caller whose
-    // address is unknown is counted with every other unknown one.
-    let peer = request
+    let peer = peer_of(&state, &request);
+    spend(&state, peer, request.uri().path()).await?;
+    Ok(next.run(request).await)
+}
+
+/// What a request is counted under: its caller's network ([`ip::bucket`]).
+/// A guard that ran first leaves the address it resolved behind; a route
+/// behind none has it resolved here. A caller whose address is unknown is
+/// counted with every other unknown one.
+pub fn peer_of(state: &AppState, request: &Request) -> IpAddr {
+    request
         .extensions()
         .get::<ClientAddr>()
         .map(|c| c.0)
@@ -317,18 +324,24 @@ pub async fn limit(
                 &state.config.server.trusted_proxies,
             )
         })
-        .map_or(UNKNOWN_PEER, ip::bucket);
+        .map_or(UNKNOWN_PEER, ip::bucket)
+}
 
+/// Count one request of `peer`'s against its quota, `path` naming it in
+/// the log: refused, saying when to come back, once the quota is spent.
+/// What [`limit`] asks of every request; what the guard of TMDB's pictures
+/// asks only of those it turns away (see
+/// [`crate::auth::middleware::guard_tmdb_images`]).
+pub async fn spend(state: &AppState, peer: IpAddr, path: &str) -> AppResult<()> {
     if let Err(wait) = state.limiter.check(peer).await {
-        tracing::warn!(%peer, path = %crate::telemetry::redact_path(request.uri().path()), "rate limited");
+        tracing::warn!(%peer, path = %crate::telemetry::redact_path(path), "rate limited");
         return Err(AppError::RateLimited(Throttle::spent(
             state.limiter.per_minute,
             MINUTE,
             wait,
         )));
     }
-
-    Ok(next.run(request).await)
+    Ok(())
 }
 
 #[cfg(test)]

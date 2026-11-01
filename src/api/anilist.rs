@@ -11,9 +11,21 @@
 //! came: it is theirs, for AniList, and nothing of this server's. A key issued
 //! here, presented as a bearer token or a header, is this server's business
 //! and never leaves. An answer to a query that carried a token, to a
-//! mutation, or about somebody's lists is never kept: it is one person's.
+//! mutation, or about somebody — their lists, their profile, what they did —
+//! is never kept, never shared with another caller, and never stands in for
+//! AniList: it is one person's.
+//!
+//! Any other answer is kept an hour, half a day for the genre and tag lists
+//! asked alone; callers asking the same at once share one exchange; and when
+//! AniList fails — no answer, a 429, a 5xx, or the 403 of its API switched
+//! off — what it answered last stands in, for a day at the most
+//! ([`relay::answer`]). Nothing of it is written to the database. Every
+//! request goes through AniList's door here, the one the server's own
+//! fetches take: the same few at once, and the same pause after a 429,
+//! answered with a 429 that says when to come back when nothing kept can
+//! stand in.
 
-use std::{collections::HashMap, time::Instant};
+use std::collections::HashMap;
 
 use axum::{
     Json,
@@ -52,8 +64,10 @@ const REQUEST_LIMIT: usize = 1024 * 1024;
 /// relations runs to a few hundred kilobytes.
 const ANSWER_LIMIT: u64 = 16 * 1024 * 1024;
 
-/// The largest answer the relay keeps.
-const RELAY_MAX_BYTES: usize = 4 * 1024 * 1024;
+/// AniList's genres and its tags: a query that asks for them and nothing
+/// else is kept half a day ([`cache::ANILIST_COLLECTIONS`]), where any other
+/// is kept an hour.
+const COLLECTIONS: &[&str] = &["GenreCollection", "MediaTagCollection"];
 
 /// What a relayed request keeps of the caller's headers: what describes it.
 const ASKED_WITH: &[&str] = &["user-agent", "accept", "accept-language", "content-type"];
@@ -81,30 +95,58 @@ const ANIME_ONLY: &[&str] = &[
 /// What only a manga has a value for: an anime's are null.
 const MANGA_ONLY: &[&str] = &["chapters", "volumes"];
 
-/// The names in a document that make its answer one person's: a list, a
-/// user, what they did or were told. Never kept, even when nobody signed
-/// the query — a public list is still somebody's, read for its latest
-/// state.
+/// The names in a document that make its answer one person's: a user, what
+/// they keep, did, wrote or were told, or what is picked by them. Never
+/// kept, shared with another caller or served stale, even when nobody signed
+/// the query — a public list is still somebody's, read for its latest state.
+///
+/// Read off AniList's schema, by introspection, on 1 November 2026: every
+/// field a query can reach whose value is a user; every root and `Page`
+/// field whose entries are a person's doing; and the two filters by a user
+/// that roots of their own take. The other filters by one — `userName`,
+/// `userId_in`, `replyUserId`, `isFollowing` — only the roots named here
+/// take.
 const PERSONAL: &[&str] = &[
+    // A user.
+    "Viewer",
+    "User",
+    "user",
+    "users",
+    "Follower",
+    "Following",
+    "MutualFollower",
+    "followers",
+    "following",
+    "mutualFollowers",
+    "Like",
+    "likes",
+    "messenger",
+    "recipient",
+    "replyUser",
+    "submitter",
+    // What they keep, did, wrote or were told.
     "MediaListCollection",
     "MediaList",
     "mediaList",
     "mediaListEntry",
     "mediaListOptions",
-    "Viewer",
-    "User",
-    "user",
-    "Follower",
-    "Following",
-    "followers",
-    "following",
+    "favourites",
     "Activity",
     "activities",
+    "ActivityReply",
+    "activityReplies",
     "Notification",
     "notifications",
     "Thread",
+    "threads",
     "ThreadComment",
-    "favourites",
+    "threadComments",
+    "Review",
+    "reviews",
+    "AniChartUser",
+    // Picked by somebody: a user's, or the viewer's own list.
+    "userId",
+    "onList",
 ];
 
 pub fn router() -> OpenApiRouter<AppState> {
@@ -136,9 +178,9 @@ fn loop_refused() -> AppError {
     post, path = "/", tag = TAG,
     operation_id = "anilist_relay",
     responses(
-        (status = 200, description = "AniList's answer, with the fields locked here written into each entry that is a work of this catalogue. Reached by the name graphql.anilist.co on the clients' door; a GET with the query in the address is relayed too"),
+        (status = 200, description = "AniList's answer, with the fields locked here written into each entry that is a work of this catalogue. Reached by the name graphql.anilist.co on the clients' door; a GET with the query in the address is relayed too. When AniList fails — no answer, 429, 5xx, or 403 — its last answer to the same query stands in, with Age, a day old at the most; never for a query about somebody"),
         (status = 403, description = "The caller's address is not in the allowlist"),
-        (status = 429, description = "AniList's rate limit, handed back with its headers"),
+        (status = 429, description = "AniList's rate limit, handed back with its headers; or AniList's door here, shut after one, with the seconds left in Retry-After, when nothing kept stands in"),
         (status = 503, description = "The relay is off"),
     ),
     security(("apiKey" = []), ("bearer" = [])),
@@ -166,66 +208,37 @@ pub async fn relay(State(state): State<AppState>, request: Request) -> AppResult
         .filter(|_| !relay::authorization_carries_key_issued_here(&parts.headers))
         .and_then(|_| parts.headers.get(header::AUTHORIZATION).cloned());
 
-    // What AniList answered last time, for a query anybody may ask: one
-    // asked in somebody's name, one that changes something, or one about
-    // somebody's lists, is nobody else's.
+    // What AniList answered, kept for a query anybody may ask: one asked in
+    // somebody's name, one that changes something, or one about somebody,
+    // is nobody else's — asked alone, and never stood in for.
     let document = query_text(&parts.uri, &body);
-    let cache_key = (theirs.is_none()
+    let anybodys = theirs.is_none()
         && document
             .as_deref()
-            .is_some_and(|query| !has_mutation(query) && !is_personal(query)))
-    .then(|| relay_key(&state, &parts.method, &parts.uri, &body));
-    let remembered = match &cache_key {
-        Some(key) => state
-            .caches
-            .relay
-            .get(key)
-            .await
-            .filter(cache::Relayed::is_fresh),
-        None => None,
-    };
-
-    let (status, headers, bytes) = match remembered {
-        Some(hit) => {
-            let mut headers = HeaderMap::new();
-            if let Ok(value) = HeaderValue::from_str(&hit.content_type) {
-                headers.insert(header::CONTENT_TYPE, value);
-            }
-            (
-                StatusCode::from_u16(hit.status).unwrap_or(StatusCode::OK),
-                headers,
-                hit.body,
-            )
+            .is_some_and(|query| !has_mutation(query) && !is_personal(query));
+    let ask = relay::Ask {
+        service: relay::Service::Anilist,
+        key: anybodys.then(|| relay_key(&state, &parts.method, &parts.uri, &body)),
+        path: if document.as_deref().is_some_and(asks_collections_alone) {
+            cache::ANILIST_COLLECTIONS
+        } else {
+            cache::ANILIST_QUERY
         }
-        None => {
-            let (status, headers, bytes) = send(&state, &parts, body, theirs).await?;
-            if let Some(key) = cache_key
-                && let Some(ttl) = relay::kept_for(status, cache::ANILIST_QUERY)
-                && bytes.len() <= RELAY_MAX_BYTES
-            {
-                let content_type = headers
-                    .get(header::CONTENT_TYPE)
-                    .and_then(|v| v.to_str().ok())
-                    .unwrap_or("application/json")
-                    .to_string();
-                state
-                    .caches
-                    .relay
-                    .insert_for(
-                        key,
-                        cache::Relayed {
-                            status: status.as_u16(),
-                            content_type,
-                            expires_at: cache::now_secs() + ttl.as_secs(),
-                            body: bytes.clone(),
-                        },
-                        ttl,
-                    )
-                    .await;
-            }
-            (status, headers, bytes)
-        }
+        .to_string(),
+        // AniList's terms want nothing of it stored.
+        reference: None,
     };
+    let fetched = relay::answer(&state, ask, {
+        let (state, parts) = (state.clone(), parts.clone());
+        async move { send(&state, &parts, body, theirs).await }
+    })
+    .await?;
+    let relay::Fetched {
+        status,
+        headers,
+        body: bytes,
+        ..
+    } = fetched;
 
     if relay::is_json(&headers)
         && let Ok(mut answer) = serde_json::from_slice::<Value>(&bytes)
@@ -241,12 +254,18 @@ pub async fn relay(State(state): State<AppState>, request: Request) -> AppResult
 
 /// Ask AniList, and read what it answered — a refusal for its rate limit
 /// included, with the headers that say when to ask again.
+///
+/// Through AniList's door here, the one this server's own fetches take
+/// ([`crate::providers::anilist::AnilistClient::gate`]): its 429 shuts it for
+/// both, and a request that finds it shut is not sent — a 429 that says when
+/// it opens ([`relay::unsent`]). Never through their spacing: a client is
+/// waiting.
 async fn send(
     state: &AppState,
     parts: &axum::http::request::Parts,
     body: Bytes,
     theirs: Option<HeaderValue>,
-) -> AppResult<(StatusCode, HeaderMap, Bytes)> {
+) -> AppResult<relay::Fetched> {
     // AniList has one address; the query travels in the body, or in the
     // address. Whatever path the client spelt, that is where it goes, with
     // the query it carried.
@@ -270,19 +289,13 @@ async fn send(
         outbound = outbound.body(body);
     }
 
-    let started = Instant::now();
-    let response = crate::outbound::send("anilist", outbound).await;
-    crate::metrics::upstream(
-        "anilist",
-        started,
-        response.as_ref().ok().map(|r| r.status()),
-    );
-    let response = response.map_err(|e| {
-        AppError::UpstreamUnavailable(anyhow::anyhow!(
-            "AniList request failed: {}",
-            crate::providers::describe_request_error(&e)
-        ))
-    })?;
+    // Its place at the door is held until the answer is read.
+    let (response, _place) = state
+        .anilist
+        .gate()
+        .send_now(outbound)
+        .await
+        .map_err(|e| relay::unsent(relay::Service::Anilist, e))?;
 
     let status =
         StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
@@ -296,7 +309,7 @@ async fn send(
     let bytes = crate::providers::read_body(response, ANSWER_LIMIT)
         .await
         .map_err(|e| AppError::UpstreamUnavailable(e.context("AniList's answer")))?;
-    Ok((status, headers, Bytes::from(bytes)))
+    Ok(relay::Fetched::new(status, headers, Bytes::from(bytes)))
 }
 
 /// The GraphQL document asked: the body's `query`, or a GET's `query`
@@ -311,13 +324,27 @@ fn query_text(uri: &Uri, body: &[u8]) -> Option<String> {
         .map(|(_, value)| value.into_owned())
 }
 
-/// The names in a GraphQL document, each with how deep it stands — zero
-/// outside every selection, argument list and variable list — leaving out
-/// strings and comments.
-fn names(document: &str) -> Vec<(i32, &str)> {
+/// What the relay reads of a GraphQL document, piece by piece: its names,
+/// its brackets, and the marks that change what a name stands for. Strings
+/// and comments are left out, and everything else.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Token<'a> {
+    Name(&'a str),
+    /// `{`, `(` or `[`.
+    Open(u8),
+    Close,
+    /// After an alias.
+    Colon,
+    /// `...`: a fragment, spread or inline.
+    Spread,
+    /// Before a directive.
+    At,
+}
+
+/// The pieces of a GraphQL document: see [`Token`].
+fn tokens(document: &str) -> Vec<Token<'_>> {
     let bytes = document.as_bytes();
     let mut found = Vec::new();
-    let mut depth = 0i32;
     let mut i = 0;
     while i < bytes.len() {
         match bytes[i] {
@@ -344,25 +371,103 @@ fn names(document: &str) -> Vec<(i32, &str)> {
                     i += 1;
                 }
             }
-            b'{' | b'(' | b'[' => {
-                depth += 1;
+            open @ (b'{' | b'(' | b'[') => {
+                found.push(Token::Open(open));
                 i += 1;
             }
             b'}' | b')' | b']' => {
-                depth -= 1;
+                found.push(Token::Close);
                 i += 1;
+            }
+            b':' => {
+                found.push(Token::Colon);
+                i += 1;
+            }
+            b'@' => {
+                found.push(Token::At);
+                i += 1;
+            }
+            b'.' if bytes[i..].starts_with(b"...") => {
+                found.push(Token::Spread);
+                i += 3;
             }
             c if c.is_ascii_alphabetic() || c == b'_' => {
                 let start = i;
                 while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
                     i += 1;
                 }
-                found.push((depth, &document[start..i]));
+                found.push(Token::Name(&document[start..i]));
             }
             _ => i += 1,
         }
     }
     found
+}
+
+/// The names in a GraphQL document, each with how deep it stands — zero
+/// outside every selection, argument list and variable list — leaving out
+/// strings and comments.
+fn names(document: &str) -> Vec<(i32, &str)> {
+    let mut depth = 0i32;
+    let mut found = Vec::new();
+    for token in tokens(document) {
+        match token {
+            Token::Open(_) => depth += 1,
+            Token::Close => depth -= 1,
+            Token::Name(name) => found.push((depth, name)),
+            Token::Colon | Token::Spread | Token::At => {}
+        }
+    }
+    found
+}
+
+/// The fields every operation of a document asks for at its root, read
+/// through their aliases — or nothing, when the document asks in a way read
+/// no further here: a fragment, or a directive, among them, or a fragment
+/// defined beside them.
+fn root_fields(document: &str) -> Option<Vec<&str>> {
+    let tokens = tokens(document);
+    let mut fields = Vec::new();
+    // The brackets the reading stands in: one brace alone is an
+    // operation's own selection.
+    let mut within: Vec<u8> = Vec::new();
+    let mut at = 0;
+    while let Some(&token) = tokens.get(at) {
+        at += 1;
+        let at_root = matches!(within.as_slice(), [b'{']);
+        match token {
+            Token::Open(open) => within.push(open),
+            Token::Close => {
+                within.pop();
+            }
+            Token::Name("fragment") if within.is_empty() => return None,
+            Token::Spread | Token::At if at_root => return None,
+            Token::Name(name) if at_root => match tokens.get(at) {
+                // `alias: Field` — the field is what is asked.
+                Some(Token::Colon) => match tokens.get(at + 1) {
+                    Some(Token::Name(field)) => {
+                        fields.push(*field);
+                        at += 2;
+                    }
+                    _ => return None,
+                },
+                _ => fields.push(name),
+            },
+            Token::Name(_) | Token::Colon | Token::Spread | Token::At => {}
+        }
+    }
+    Some(fields)
+}
+
+/// Whether a document asks for AniList's genres or its tags, and nothing
+/// else: kept half a day ([`COLLECTIONS`]).
+fn asks_collections_alone(document: &str) -> bool {
+    root_fields(document).is_some_and(|fields| {
+        fields.iter().any(|field| COLLECTIONS.contains(field))
+            && fields
+                .iter()
+                .all(|field| COLLECTIONS.contains(field) || *field == "__typename")
+    })
 }
 
 /// Whether a GraphQL document changes something: any of its operations is a
@@ -677,6 +782,14 @@ fn write_entry(object: &mut serde_json::Map<String, Value>, item: &MediaItem) ->
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::Duration,
+    };
+
     use super::*;
     use crate::domain::MediaKind;
     use serde_json::json;
@@ -730,6 +843,407 @@ mod tests {
         assert!(!is_personal(
             "{ Page(page: 1) { media(search: \"user\") { id } } }"
         ));
+    }
+
+    /// Every name AniList's schema files a user under, or a person's doing,
+    /// or picks by one — read by introspection on 1 November 2026.
+    #[test]
+    fn whatever_the_schema_files_under_somebody_is_theirs() {
+        for somebodys in [
+            "{ Page { users(search: \"x\") { name } } }",
+            "{ MutualFollower(userId: 1) { id } }",
+            "{ Page { mutualFollowers(userId: 1) { name } } }",
+            "{ Like(likeableId: 1, type: THREAD) { name } }",
+            "{ Page { likes(likeableId: 1, type: ACTIVITY) { name } } }",
+            "{ ActivityReply(id: 1) { text } }",
+            "{ Page { activityReplies(activityId: 1) { text } } }",
+            "{ Page { threads(mediaCategoryId: 1) { title } } }",
+            "{ Page { threadComments(threadId: 1) { comment } } }",
+            "{ AniChartUser { settings } }",
+            "{ Review(mediaId: 1) { summary } }",
+            "{ Page { reviews(mediaId: 1) { summary } } }",
+            "{ Staff(id: 1) { name { full } submitter { id } } }",
+            "{ Thread(id: 1) { replyUser { id } } }",
+            "{ Page { recommendations(userId: 1) { rating } } }",
+            "{ Page { media(onList: true) { id } } }",
+        ] {
+            assert!(is_personal(somebodys), "{somebodys}");
+        }
+        // A media's recommendations and its staff are anybody's to ask.
+        assert!(!is_personal(
+            "{ Media(id: 1) { recommendations { nodes { mediaRecommendation { id } } } staff { nodes { name { full } } } } }"
+        ));
+        assert!(!is_personal("{ GenreCollection }"));
+    }
+
+    #[test]
+    fn the_genre_and_tag_lists_asked_alone_are_told_from_any_other_query() {
+        for alone in [
+            "{ GenreCollection }",
+            "# Kometa's\nquery { MediaTagCollection { name category isAdult } }",
+            "query Lists { genres: GenreCollection tags: MediaTagCollection(status: 0) { name } __typename }",
+            "query ($status: Int = 1) { MediaTagCollection(status: $status) { name } }",
+        ] {
+            assert!(asks_collections_alone(alone), "{alone}");
+        }
+        for other in [
+            "{ Media(id: 1) { id } GenreCollection }",
+            "{ Media(id: 1) { genres } }",
+            "{ Page { media(genre: \"GenreCollection\") { id } } }",
+            "query A { GenreCollection } query B { Media(id: 1) { id } }",
+            "{ __typename }",
+            "",
+            // Read no further: whatever they stand for.
+            "{ GenreCollection @include(if: true) }",
+            "{ ... on Query { GenreCollection } }",
+            "{ ...Lists } fragment Lists on Query { GenreCollection }",
+            "fragment Tag on MediaTag { name } query { MediaTagCollection { ...Tag } }",
+        ] {
+            assert!(!asks_collections_alone(other), "{other}");
+        }
+    }
+
+    // ─── the relay, before a stand-in for AniList ────────────────────────────
+
+    /// What the stand-in answers a request with, and after how long.
+    #[derive(Clone)]
+    struct Reply {
+        status: &'static str,
+        headers: &'static str,
+        body: &'static str,
+        after: Duration,
+    }
+
+    const fn reply(status: &'static str, body: &'static str) -> Reply {
+        Reply {
+            status,
+            headers: "",
+            body,
+            after: Duration::ZERO,
+        }
+    }
+
+    /// A stand-in for AniList: each request is answered with the next of
+    /// `replies`, the last again once they run out. And how many came.
+    async fn stand_in(replies: Vec<Reply>) -> (String, Arc<AtomicUsize>) {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let at = format!("http://{}", listener.local_addr().unwrap());
+        let asked = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&asked);
+        tokio::spawn(async move {
+            while let Ok((mut connection, _)) = listener.accept().await {
+                let turn = counted.fetch_add(1, Ordering::SeqCst);
+                let reply = replies[turn.min(replies.len() - 1)].clone();
+                tokio::spawn(async move {
+                    // The head, then as much body as it announces.
+                    let mut request = Vec::new();
+                    let mut chunk = [0u8; 4096];
+                    loop {
+                        let read = connection.read(&mut chunk).await.unwrap_or(0);
+                        if read == 0 {
+                            break;
+                        }
+                        request.extend_from_slice(&chunk[..read]);
+                        let Some(end) = request.windows(4).position(|w| w == b"\r\n\r\n") else {
+                            continue;
+                        };
+                        let length = String::from_utf8_lossy(&request[..end])
+                            .to_ascii_lowercase()
+                            .lines()
+                            .find_map(|line| {
+                                line.strip_prefix("content-length:")?.trim().parse().ok()
+                            })
+                            .unwrap_or(0usize);
+                        if request.len() >= end + 4 + length {
+                            break;
+                        }
+                    }
+                    tokio::time::sleep(reply.after).await;
+                    let answer = format!(
+                        "HTTP/1.1 {}\r\nContent-Type: application/json\r\n{}Content-Length: {}\r\n\
+                         Connection: close\r\n\r\n{}",
+                        reply.status,
+                        reply.headers,
+                        reply.body.len(),
+                        reply.body
+                    );
+                    let _ = connection.write_all(answer.as_bytes()).await;
+                    let _ = connection.shutdown().await;
+                });
+            }
+        });
+        (at, asked)
+    }
+
+    /// This server, relaying AniList to `at`.
+    async fn server(at: &str) -> AppState {
+        let mut config = crate::config::Config::from_env().expect("a configuration");
+        config.mode = crate::config::Mode::Single;
+        config.database = crate::db::testing::database().await;
+        config.security.bootstrap_admin = None;
+        config.cache.redis_url = None;
+        config.media.storage = crate::config::MediaStorage::Off;
+        config.clients = None;
+        config.tmdb.api_key = None;
+        config.tvdb.api_key = None;
+        config.tvdb.enabled = false;
+        config.anilist.upstream = at.to_string();
+        config.anilist.passthrough = true;
+        AppState::bootstrap(config).await.expect("a server")
+    }
+
+    /// What a client posts to ask `query`.
+    fn posted(query: &str) -> Vec<u8> {
+        serde_json::to_vec(&json!({ "query": query })).unwrap()
+    }
+
+    /// What the relay answers `query`, asked with somebody's own AniList
+    /// token when there is one.
+    async fn relayed(state: &AppState, query: &str, token: Option<&str>) -> Response {
+        let mut request = axum::http::Request::builder()
+            .method(Method::POST)
+            .uri("/")
+            .header(header::HOST, "graphql.anilist.co")
+            .header(header::CONTENT_TYPE, "application/json");
+        if let Some(token) = token {
+            request = request.header(header::AUTHORIZATION, format!("Bearer {token}"));
+        }
+        let request = request.body(Body::from(posted(query))).unwrap();
+        match relay(State(state.clone()), request).await {
+            Ok(response) => response,
+            Err(error) => error.into_response(),
+        }
+    }
+
+    async fn text(response: Response) -> String {
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        String::from_utf8(bytes.to_vec()).unwrap()
+    }
+
+    fn seconds(response: &Response, name: header::HeaderName) -> Option<u64> {
+        response.headers().get(name)?.to_str().ok()?.parse().ok()
+    }
+
+    /// What the relay space holds for `query`.
+    async fn kept(state: &AppState, query: &str) -> Option<cache::Relayed> {
+        let key = relay_key(state, &Method::POST, &Uri::from_static("/"), &posted(query));
+        state.caches.relay.get(&key).await
+    }
+
+    /// What was kept for `query`, made `seconds` old — as if AniList had
+    /// answered it then.
+    async fn aged(state: &AppState, query: &str, seconds: u64) {
+        let key = relay_key(state, &Method::POST, &Uri::from_static("/"), &posted(query));
+        let mut kept = state.caches.relay.get(&key).await.expect("kept");
+        kept.expires_at =
+            cache::now_secs() + cache::relay_ttl(cache::ANILIST_QUERY).as_secs() - seconds;
+        state.caches.relay.insert(key, kept).await;
+    }
+
+    #[tokio::test]
+    async fn when_anilist_fails_its_last_answer_stands_in_for_a_day() {
+        const KEPT: &str = r#"{"data":{"Media":{"id":9300001,"title":{"romaji":"Kept"}}}}"#;
+        let (at, asked) = stand_in(vec![
+            reply("200 OK", KEPT),
+            reply("500 Internal Server Error", "{}"),
+            reply("502 Bad Gateway", ""),
+            reply("503 Service Unavailable", ""),
+            reply("504 Gateway Timeout", ""),
+            // Its API switched off.
+            reply(
+                "403 Forbidden",
+                r#"{"errors":[{"message":"The API is temporarily disabled.","status":403}],"data":null}"#,
+            ),
+            reply("502 Bad Gateway", ""),
+            reply("429 Too Many Requests", "{}"),
+        ])
+        .await;
+        let state = server(&at).await;
+        let query = "{ Media(id: 9300001) { id title { romaji } } }";
+        assert_eq!(text(relayed(&state, query, None).await).await, KEPT);
+
+        // Two hours on: past the hour a query is good for, inside the day.
+        aged(&state, query, 2 * 3600).await;
+        for failure in ["500", "502", "503", "504", "403"] {
+            let stale = relayed(&state, query, None).await;
+            assert_eq!(stale.status(), StatusCode::OK, "{failure}");
+            let age = seconds(&stale, header::AGE).expect("its age");
+            assert!((2 * 3600..2 * 3600 + 60).contains(&age), "{failure}: {age}");
+            assert_eq!(text(stale).await, KEPT, "{failure}");
+        }
+
+        // A day and a minute: too old, and AniList's failure is handed on.
+        aged(&state, query, 86_400 + 60).await;
+        let failed = relayed(&state, query, None).await;
+        assert_eq!(failed.status(), StatusCode::BAD_GATEWAY);
+        assert!(failed.headers().get(header::AGE).is_none());
+
+        // Its 429 is stood in for too, while what was kept is young enough.
+        aged(&state, query, 2 * 3600).await;
+        let stale = relayed(&state, query, None).await;
+        assert_eq!(stale.status(), StatusCode::OK);
+        assert_eq!(text(stale).await, KEPT);
+        assert_eq!(
+            asked.load(Ordering::SeqCst),
+            8,
+            "every failure was AniList's"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_shut_door_is_answered_with_what_was_kept_or_a_429_that_says_when() {
+        const KEPT: &str = r#"{"data":{"Media":{"id":9300011}}}"#;
+        let (at, asked) = stand_in(vec![
+            reply("200 OK", KEPT),
+            Reply {
+                headers: "Retry-After: 30\r\n",
+                ..reply(
+                    "429 Too Many Requests",
+                    r#"{"errors":[{"message":"Too Many Requests.","status":429}],"data":null}"#,
+                )
+            },
+            reply("200 OK", "{}"),
+        ])
+        .await;
+        let state = server(&at).await;
+        let kept_query = "{ Media(id: 9300011) { id } }";
+        relayed(&state, kept_query, None).await;
+        aged(&state, kept_query, 2 * 3600).await;
+
+        // AniList's 429 is handed back as it came, and shuts the door.
+        let refused = relayed(&state, "{ Media(id: 9300012) { id } }", None).await;
+        assert_eq!(refused.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(seconds(&refused, header::RETRY_AFTER), Some(30));
+        assert!(text(refused).await.contains("Too Many Requests."));
+
+        // Shut, nothing is sent: what was kept stands in…
+        let stale = relayed(&state, kept_query, None).await;
+        assert_eq!(stale.status(), StatusCode::OK);
+        assert!(stale.headers().contains_key(header::AGE));
+        assert_eq!(text(stale).await, KEPT);
+        // …and where nothing was, a 429 says when it opens, for a query
+        // about somebody as for any other.
+        for (query, token) in [
+            ("{ Media(id: 9300013) { id } }", None),
+            ("{ Viewer { id } }", Some("their-anilist-token")),
+        ] {
+            let shut = relayed(&state, query, token).await;
+            assert_eq!(shut.status(), StatusCode::TOO_MANY_REQUESTS, "{query}");
+            let left = seconds(&shut, header::RETRY_AFTER).expect("when it opens");
+            assert!((1..=30).contains(&left), "{query}: {left}");
+        }
+        // This server's own fetches find it shut too.
+        let error = state
+            .anilist
+            .media(9_300_014, MediaKind::Series)
+            .await
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("left alone"), "{error:#}");
+        assert_eq!(asked.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn a_query_about_somebody_is_asked_alone_each_time_and_never_stood_in_for() {
+        const USERS: &str = r#"{"data":{"Page":{"users":[{"name":"somebody"}]}}}"#;
+        const LATE: Duration = Duration::from_millis(300);
+        let (at, asked) = stand_in(vec![
+            Reply {
+                after: LATE,
+                ..reply("200 OK", USERS)
+            },
+            Reply {
+                after: LATE,
+                ..reply("200 OK", USERS)
+            },
+            reply("200 OK", USERS),
+            reply("502 Bad Gateway", ""),
+            reply("200 OK", r#"{"data":{"Media":{"id":9300021}}}"#),
+            reply("502 Bad Gateway", ""),
+        ])
+        .await;
+        let state = server(&at).await;
+
+        // Asked by two callers at once: two exchanges.
+        let users = "{ Page { users(search: \"somebody\") { name } } }";
+        let (first, second) =
+            tokio::join!(relayed(&state, users, None), relayed(&state, users, None));
+        assert_eq!(first.status(), StatusCode::OK);
+        assert_eq!(second.status(), StatusCode::OK);
+        assert_eq!(asked.load(Ordering::SeqCst), 2, "one exchange each");
+        // Kept for nobody, and nothing stands in when AniList fails.
+        assert_eq!(relayed(&state, users, None).await.status(), StatusCode::OK);
+        assert!(kept(&state, users).await.is_none());
+        let failed = relayed(&state, users, None).await;
+        assert_eq!(failed.status(), StatusCode::BAD_GATEWAY);
+        assert!(failed.headers().get(header::AGE).is_none());
+        assert_eq!(asked.load(Ordering::SeqCst), 4);
+
+        // What anybody may ask, asked with somebody's own token, is theirs:
+        // what was kept for the others does not stand in for it.
+        let media = "{ Media(id: 9300021) { id } }";
+        relayed(&state, media, None).await;
+        aged(&state, media, 2 * 3600).await;
+        let theirs = relayed(&state, media, Some("their-anilist-token")).await;
+        assert_eq!(theirs.status(), StatusCode::BAD_GATEWAY);
+        assert!(theirs.headers().get(header::AGE).is_none());
+        assert_eq!(asked.load(Ordering::SeqCst), 6);
+    }
+
+    #[tokio::test]
+    async fn the_same_query_asked_at_once_is_one_exchange_with_anilist() {
+        const MEDIA: &str = r#"{"data":{"Media":{"id":9300031}}}"#;
+        let (at, asked) = stand_in(vec![Reply {
+            after: Duration::from_millis(300),
+            ..reply("200 OK", MEDIA)
+        }])
+        .await;
+        let state = server(&at).await;
+        let query = "{ Media(id: 9300031) { id } }";
+
+        let answers = futures::future::join_all((0..5).map(|_| relayed(&state, query, None))).await;
+        for answer in answers {
+            assert_eq!(answer.status(), StatusCode::OK);
+            assert_eq!(text(answer).await, MEDIA);
+        }
+        assert_eq!(asked.load(Ordering::SeqCst), 1);
+        // Kept: the next one is answered here.
+        assert_eq!(text(relayed(&state, query, None).await).await, MEDIA);
+        assert_eq!(asked.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn the_genre_and_tag_lists_asked_alone_are_kept_half_a_day() {
+        let (at, asked) = stand_in(vec![
+            reply(
+                "200 OK",
+                r#"{"data":{"GenreCollection":["Action","Drama"]}}"#,
+            ),
+            reply(
+                "200 OK",
+                r#"{"data":{"Media":{"id":9300041},"GenreCollection":["Action"]}}"#,
+            ),
+        ])
+        .await;
+        let state = server(&at).await;
+        let left = |kept: cache::Relayed| kept.expires_at - cache::now_secs();
+
+        let genres = "query { GenreCollection }";
+        relayed(&state, genres, None).await;
+        let kept_for = left(kept(&state, genres).await.expect("kept"));
+        assert!(kept_for > 11 * 3600 && kept_for <= 12 * 3600, "{kept_for}");
+
+        // Beside anything else, an hour.
+        let both = "{ Media(id: 9300041) { id } GenreCollection }";
+        relayed(&state, both, None).await;
+        let kept_for = left(kept(&state, both).await.expect("kept"));
+        assert!(kept_for <= 3600, "{kept_for}");
+
+        relayed(&state, genres, None).await;
+        assert_eq!(asked.load(Ordering::SeqCst), 2);
     }
 
     #[test]

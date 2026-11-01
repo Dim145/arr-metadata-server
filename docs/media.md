@@ -34,7 +34,12 @@ default: nothing is kept until it is asked for.
   Sonarr, Radarr, Plex, Kodi, Jellyfin and the NFO documents are given the
   pictures as they were fetched — JPEG and PNG, whole — at the copies'
   addresses when `AMS_PUBLIC_URL` is set, and at the providers' when it is
-  not, since only this server's own pages can follow a path. This server's
+  not, since only this server's own pages can follow a path. TMDB's own
+  clients can be sent here too: with `tmdb.images = server`, the TMDB relay's
+  configuration names `/tmdb-images/{size}/{file}` as TMDB's image server,
+  which serves a picture kept here from the store, whatever the size asked,
+  and hands any other on from TMDB — see
+  [The relays](relays.md#tmdbs-pictures-from-this-server). This server's
   own pages are given the same pictures, or smaller copies once those are
   turned on: see below. A bucket's media go through this server, or, with
   **Sent to the bucket's own address**, a reader is redirected to a

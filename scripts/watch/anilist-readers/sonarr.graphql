@@ -1,0 +1,22 @@
+# Sonarr — its AniList import list, in
+# src/NzbDrone.Core/ImportLists/AniList/AniListAPI.cs on develop, read on
+# 2026-11-01: a user's list, signed with their token, which the relay passes
+# on and never keeps.
+query ($id: String, $page: Int) {
+  Page(page: $page) {
+    pageInfo { currentPage lastPage hasNextPage }
+    mediaList(userName: $id, type: ANIME, status_in: [COMPLETED, CURRENT, DROPPED, PAUSED, PLANNING, REPEATING]) {
+      status
+      progress
+      media {
+        id
+        format
+        title { userPreferred romaji }
+        status
+        episodes
+        startDate { year month day }
+        endDate { year month day }
+      }
+    }
+  }
+}

@@ -363,12 +363,20 @@ anilist -o /dev/null -X POST "$ANILIST_DOOR/" -H 'content-type: application/json
 [ "$(asked_count /)" = "2" ] || fail "a mutation was served from the cache"
 ok
 
-step "AniList's rate limit is handed back with its headers"
+step "AniList's rate limit is handed back with its headers, and closes the door the relay shares with the source"
 curl -fsS -o /dev/null -X POST "$FAKE/_fake/ratelimit"
 HEADERS=$(anilist -D - -o /dev/null -X POST "$ANILIST_DOOR/" -H 'content-type: application/json' -d '{"query":"query { Media(id: 2) { id } }"}')
 printf '%s' "$HEADERS" | grep -q "^HTTP/.* 429" || fail "expected 429: ${HEADERS:0:200}"
 printf '%s' "$HEADERS" | grep -qi "^retry-after: 3" || fail "no Retry-After"
 printf '%s' "$HEADERS" | grep -qi "^x-ratelimit-remaining: 0" || fail "no X-RateLimit-Remaining"
+# While the door is closed, the relay answers for AniList, with the seconds
+# left, and asks it nothing.
+asked_reset
+HEADERS=$(anilist -D - -o /dev/null -X POST "$ANILIST_DOOR/" -H 'content-type: application/json' -d '{"query":"query { Media(id: 4) { id } }"}')
+printf '%s' "$HEADERS" | grep -q "^HTTP/.* 429" || fail "expected the closed door's 429: ${HEADERS:0:200}"
+printf '%s' "$HEADERS" | grep -qi "^retry-after: [1-3]" || fail "no Retry-After on the closed door's 429"
+[ "$(asked_count /)" = "0" ] || fail "AniList was asked while its door was closed"
+sleep 3
 ok
 
 step "a GET with the query in the address is relayed as one"

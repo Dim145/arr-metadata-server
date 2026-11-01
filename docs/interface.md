@@ -150,10 +150,13 @@ Loki, and the traces Tempo.
 
 *Administration › Access › Settings* (`/admin/settings`, for administrators) lists the server's
 settings — every one is described in the [settings reference](settings.md) — apart from those
-that have a page of their own: signing in, the APIs and whose key the
-relays ask with are on **Opening & APIs**, the order of the sources on **Sources**, the media
-store on **Media**, the cache's spaces on **Cache**, Sonarr's and Radarr's connections on
-**Sonarr & Radarr**, and the destinations of notifications on **Notifications**.
+that have a page of their own: signing in and the APIs are on **Opening & APIs**, the order of
+the sources on **Sources**, the media store on **Media**, the cache's spaces on **Cache**,
+Sonarr's and Radarr's connections on **Sonarr & Radarr**, and the destinations of notifications
+on **Notifications**. The relays' own settings — whose key they ask with, whether they answer
+with the last answer kept when their service fails (`relays.staleIfError`), where TMDB's clients
+fetch the pictures (`tmdb.images`) — are set on **Opening & APIs**, each with what it changes
+said under it, and listed here as well.
 
 - **Search.** A setting is found by its title, its key, a word of what explains it or the name
   of its group; every word typed has to be found. Accents and the ligatures œ and æ are folded:

@@ -1,0 +1,81 @@
+# Kometa — modules/anilist.py on master, read on 2026-11-01 (2.5.4). Its
+# address is a constant. Its search builds `Page.media` from the filters a
+# collection names: every filter it knows is written here at once, each
+# with one of the values it may send.
+query { GenreCollection }
+
+query { MediaTagCollection { name category } }
+
+query ($id: Int) { Media(id: $id) { id title { romaji english } } }
+
+query ($page: Int) {
+  Page(page: $page) {
+    pageInfo { hasNextPage }
+    media(
+      sort: [SCORE_DESC, POPULARITY_DESC, TRENDING_DESC]
+      type: ANIME
+      search: ""
+      season: FALL
+      seasonYear: 2026
+      isAdult: false
+      minimumTagRank: 60
+      source: LIGHT_NOVEL
+      countryOfOrigin: "JP"
+      startDate_lesser: 20261231
+      startDate_greater: 20260101
+      endDate_lesser: 20261231
+      endDate_greater: 20260101
+      format_in: [TV, TV_SHORT, MOVIE, SPECIAL, OVA, ONA, MUSIC]
+      format_not_in: [MUSIC]
+      status_in: [FINISHED, RELEASING, NOT_YET_RELEASED, CANCELLED, HIATUS]
+      status_not_in: [CANCELLED]
+      genre_in: ["Action"]
+      genre_not_in: ["Hentai"]
+      tag_in: ["Isekai"]
+      tag_not_in: ["Isekai"]
+      tagCategory_in: ["Theme"]
+      tagCategory_not_in: ["Theme"]
+      episodes_greater: 0
+      episodes_lesser: 100
+      duration_greater: 0
+      duration_lesser: 100
+      averageScore_greater: 0
+      averageScore_lesser: 100
+      popularity_greater: 0
+      popularity_lesser: 1000000
+    ) { id }
+  }
+}
+
+query ($page: Int, $id: Int) {
+  Studio(id: $id) {
+    name
+    media(page: $page) {
+      nodes { id type }
+      pageInfo { hasNextPage }
+    }
+  }
+}
+
+query ($id: Int) {
+  Media(id: $id) {
+    id
+    relations {
+      edges { node { id type } relationType }
+      nodes { id type }
+    }
+  }
+}
+
+query ($user: String) {
+  MediaListCollection(
+    userName: $user
+    type: ANIME
+    sort: [SCORE_DESC, STATUS_DESC, PROGRESS_DESC, UPDATED_TIME_DESC, ADDED_TIME_DESC, STARTED_ON_DESC, FINISHED_ON_DESC, MEDIA_POPULARITY_DESC]
+  ) {
+    lists {
+      name
+      entries { score(format: POINT_10) media { id } }
+    }
+  }
+}

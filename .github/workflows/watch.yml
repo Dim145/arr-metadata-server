@@ -1,0 +1,74 @@
+# Read by both GitHub Actions and Gitea/Forgejo Actions.
+name: Upstream watch
+
+# What this server imitates, relays or downloads, read once a week against
+# what it was when last looked at: AniList's schema, Skyhook's documents and
+# Sonarr's client of them, TheTVDB's API description, TMDB's reference, and
+# the anime list this server downloads with the database it is made from.
+# Those contracts move without a word — AniList deprecated `averageScore`,
+# Skyhook grew a route by TMDB id, TheTVDB readies a new version — and a
+# client breaking is otherwise how this server learns of it. The reading is
+# scripts/watch/watch.py's, the snapshots are beside it, and CONTRIBUTING.md
+# ("Upstream watch") says what to do when a run fails: it fails when
+# something moved, or when a list has not been updated for three weeks, and
+# its summary says which.
+on:
+  schedule:
+    # Monday, early, before the parity run: a week of the services' changes,
+    # read before the week's work.
+    - cron: '47 4 * * 1'
+  workflow_dispatch:
+
+# Least privilege: the run reads the repository and writes nothing — no
+# commit, no issue, no pull request. What it finds is in its summary.
+permissions:
+  contents: read
+
+# One reading at a time; a second would only repeat the first.
+concurrency:
+  group: watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    name: Upstream watch
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # A step for each check, so that the run lists which one moved, and
+      # each run whatever the one before it found. Python's standard library
+      # is all they need: the runner's python3 runs them.
+      - name: AniList's schema
+        run: python3 scripts/watch/watch.py anilist
+
+      # GitHub's API, which three checks read, allows sixty calls an hour
+      # to an address without a token, and runners share addresses. So the
+      # run's own token signs those calls, as read-only as the run — on
+      # GitHub only: on Forgejo, the run's token is the forge's, and is not
+      # GitHub's to see. The scripts send it to api.github.com alone.
+      - name: Skyhook and Sonarr's client of it
+        if: ${{ !cancelled() }}
+        env:
+          GITHUB_TOKEN: ${{ github.server_url == 'https://github.com' && github.token || '' }}
+        run: python3 scripts/watch/watch.py skyhook
+
+      - name: TheTVDB's API description
+        if: ${{ !cancelled() }}
+        env:
+          GITHUB_TOKEN: ${{ github.server_url == 'https://github.com' && github.token || '' }}
+        run: python3 scripts/watch/watch.py thetvdb
+
+      - name: TMDB's API reference
+        if: ${{ !cancelled() }}
+        run: python3 scripts/watch/watch.py tmdb
+
+      - name: The anime list and its source
+        if: ${{ !cancelled() }}
+        env:
+          GITHUB_TOKEN: ${{ github.server_url == 'https://github.com' && github.token || '' }}
+        run: python3 scripts/watch/watch.py datasets

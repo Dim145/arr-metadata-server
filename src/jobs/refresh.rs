@@ -411,6 +411,7 @@ pub async fn run(state: AppState) {
 
         prune_audit(&state).await;
         prune_changes(&state).await;
+        prune_relay_documents(&state).await;
         prune_jobs(&state).await;
         prune_callers(&state).await;
     }
@@ -889,6 +890,21 @@ async fn prune_changes(state: &AppState) {
         Ok(0) => {}
         Ok(removed) => tracing::info!(removed, retention_days = days, "pruned the works' journals"),
         Err(e) => tracing::warn!(error = %e, "could not prune the works' journals"),
+    }
+}
+
+/// Drop the reference lists the relays keep past six months, as TMDB's terms
+/// ask of anything kept: a read already passes them by, and a write purges
+/// as it goes, but a relay nobody calls any more would keep its rows.
+async fn prune_relay_documents(state: &AppState) {
+    let cutoff = repo::relay_document::cutoff();
+    match repo::relay_document::purge(&state.db, &cutoff).await {
+        Ok(0) => {}
+        Ok(removed) => tracing::info!(
+            removed,
+            "deleted the relays' reference lists past six months"
+        ),
+        Err(e) => tracing::warn!(error = %e, "could not delete the relays' old reference lists"),
     }
 }
 

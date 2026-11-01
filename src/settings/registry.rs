@@ -429,6 +429,24 @@ pub const REGISTRY: &[Definition] = &[
         scopes: SERVER_ONLY,
     },
     Definition {
+        // When TMDB, TheTVDB or AniList fails, what the relay kept answers
+        // instead: the last good answer to the same request, a week old at
+        // most — a day for AniList — or a reference list kept in the
+        // database. The whole server's, as the services' failures are.
+        key: crate::api::relay::STALE_IF_ERROR,
+        kind: Kind::Bool,
+        scopes: SERVER_ONLY,
+    },
+    Definition {
+        // Where the TMDB relay's `/3/configuration` sends its clients for
+        // pictures: TMDB's own server, or this one, from the media it keeps.
+        key: "tmdb.images",
+        kind: Kind::Choice {
+            options: &["tmdb", "server"],
+        },
+        scopes: SERVER_ONLY,
+    },
+    Definition {
         // Keys on the native API only: the interface goes through its session
         // whatever this says, or switching it off would lock the door on the
         // person who did.
@@ -888,6 +906,18 @@ mod tests {
         assert!(validate(def("imdb.regions"), "FR, BE, XWW").is_ok());
         assert!(validate(def("imdb.regions"), "France").is_err());
         assert!(validate(def("imdb.regions"), "").is_err());
+    }
+
+    #[test]
+    fn the_relays_stand_ins_and_tmdbs_pictures_are_the_server_s() {
+        let stale = def("relays.staleIfError");
+        assert!(matches!(stale.kind, Kind::Bool));
+        assert_eq!(stale.scopes, SERVER_ONLY);
+        let images = def("tmdb.images");
+        assert_eq!(images.scopes, SERVER_ONLY);
+        assert!(validate(images, "tmdb").is_ok());
+        assert!(validate(images, "server").is_ok());
+        assert!(validate(images, "fanart").is_err());
     }
 
     #[test]

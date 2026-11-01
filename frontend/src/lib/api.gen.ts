@@ -49,10 +49,13 @@ export interface paths {
          *     the one asked.
          *
          *     Every TMDB v3 path is accepted; see TMDB's own documentation for their
-         *     shapes. Patched: `/3/movie/{id}`, `/3/tv/{id}`, `/3/tv/{id}/season/{n}`,
-         *     `/3/tv/{id}/season/{n}/episode/{e}`, and the results of
-         *     `/3/search/{movie,tv,multi}`, `/3/trending/{movie,tv,all}/{window}` and
-         *     `/3/discover/{movie,tv}`.
+         *     shapes. Patched: `/3/movie/{id}`, `/3/tv/{id}` — with the seasons and
+         *     the episodes asked with it (`append_to_response=season/1,…`) —
+         *     `/3/tv/{id}/season/{n}`, `/3/tv/{id}/season/{n}/episode/{e}`, and the
+         *     results of `/3/search/{movie,tv,multi}`,
+         *     `/3/trending/{movie,tv,all}/{window}` and `/3/discover/{movie,tv}`.
+         *     `/3/configuration` gives this server's gate as the address of TMDB's
+         *     pictures where an administrator chose so (`tmdb.images = server`).
          */
         get: operations["tmdb_proxy"];
         put?: never;
@@ -3794,6 +3797,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/tmdb-images/{size}/{file}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One of TMDB's pictures, from this server.
+         * @description A picture this server keeps — TMDB's original, in the media store — is
+         *     served from the store whatever the size asked, the closest this version
+         *     has: it makes no smaller JPEG of a picture, its copies at a width being
+         *     the interface's WebP and AVIF, which a TMDB client is not known to read.
+         *     Any other picture is fetched from image.tmdb.org at the size asked and
+         *     handed on as it comes, kept nowhere. Only TMDB's sizes are taken —
+         *     those its configuration lists, and the crops its site and Seerr ask it
+         *     for — and only a picture's name as TMDB files it, `.jpg` or `.png`.
+         */
+        get: operations["tmdb_images_picture"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/list/imdb/{id}": {
         parameters: {
             query?: never;
@@ -4126,11 +4156,15 @@ export interface paths {
         /**
          * Sign a TheTVDB client in.
          * @description A key issued here is taken as the client's token: it is answered as it
-         *     came, and every call after carries it. Any other key is TheTVDB's to
-         *     judge, where the surface lets a caller through by address; under a key
-         *     policy nothing else is accepted. With each client's own key relayed
-         *     (`tvdb.relayCredential = client`), a key issued here is refused with a
-         *     401 that says why, and any other is signed in with at TheTVDB.
+         *     came, and every call after carries it — whether or not this server holds
+         *     a TheTVDB key of its own, since the pages answered here need none. Any
+         *     other key is TheTVDB's to judge, where the surface lets a caller through
+         *     by address: TheTVDB is asked with that key and its PIN alone, whatever
+         *     else the client wrote beside them. Under a key policy nothing else is
+         *     accepted. With each client's own key relayed (`tvdb.relayCredential =
+         *     client`), a key issued here is refused with a 401 that says why, and any
+         *     other is signed in with at TheTVDB. The key may be named `apikey`, as
+         *     TheTVDB documents it, or `apiKey`, as Seerr writes it.
          */
         post: operations["thetvdb_login"];
         delete?: never;
@@ -4158,6 +4192,11 @@ export interface paths {
          *     the operator's token, read with a client's own. With each client's own
          *     key relayed (`tvdb.relayCredential = client`), the operator's token is
          *     never used, and a key issued here is refused with a 401 that says why.
+         *
+         *     A page of episodes in an order this server keeps — a TMDB group's, one
+         *     made here, the aired order while another is frozen as it, `altdvd` and
+         *     `alttwo` that TheTVDB answers empty — is answered here, with or without
+         *     a TheTVDB key of the server's own.
          *
          *     Every v4 path is accepted; see TheTVDB's own documentation for their
          *     shapes. The documents about a work of this catalogue are the ones patched:
@@ -8226,8 +8265,8 @@ export interface components {
             /**
              * @description How the other work stands to this one, as AniList names it: `SEQUEL`,
              *     `PREQUEL`, `PARENT`, `SIDE_STORY`, `SPIN_OFF`, `ALTERNATIVE`, `SUMMARY`,
-             *     `COMPILATION`, `CONTAINS`, `SOURCE`, `ADAPTATION`, `CHARACTER` or
-             *     `OTHER`.
+             *     `COMPILATION`, `CONTAINS`, `SOURCE`, `ADAPTATION`, `CHARACTER`,
+             *     `SAME_UNIVERSE` or `OTHER`.
              */
             relationType: string;
             /** @description Where the other work is filed — `anilist` — and its id there. */
@@ -9107,7 +9146,10 @@ export interface components {
         };
         /** @description What a TheTVDB client signs in with. */
         TvdbLoginRequest: {
-            /** @description A key issued here, or the client's own TheTVDB key. */
+            /**
+             * @description A key issued here, or the client's own TheTVDB key. `apiKey` is read
+             *     as the same name: Seerr writes it so, and TheTVDB takes it.
+             */
             apikey: string;
             /** @description A subscriber's PIN, with the client's own key. */
             pin?: string | null;
@@ -9629,7 +9671,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description AniList's answer, with the fields locked here written into each entry that is a work of this catalogue. Reached by the name graphql.anilist.co on the clients' door; a GET with the query in the address is relayed too */
+            /** @description AniList's answer, with the fields locked here written into each entry that is a work of this catalogue. Reached by the name graphql.anilist.co on the clients' door; a GET with the query in the address is relayed too. When AniList fails — no answer, 429, 5xx, or 403 — its last answer to the same query stands in, with Age, a day old at the most; never for a query about somebody */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -9643,7 +9685,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description AniList's rate limit, handed back with its headers */
+            /** @description AniList's rate limit, handed back with its headers; or AniList's door here, shut after one, with the seconds left in Retry-After, when nothing kept stands in */
             429: {
                 headers: {
                     [name: string]: unknown;
@@ -9720,7 +9762,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Not a public list, or not a read */
+            /** @description Not a read; or not a public list — an account's lists, ratings and watchlist are not relayed — answered in TMDB's own error shape (`success: false`, `status_code: 3`) with a message naming this server */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -18208,6 +18250,64 @@ export interface operations {
             };
         };
     };
+    tmdb_images_picture: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description One of the sizes TMDB's configuration lists — `original`, `w500`, `h632`… — or a crop of TMDB's site such as `w600_and_h900_bestv2` */
+                size: string;
+                /** @description The picture's name, as TMDB's path gives it: `kqjL17yufvn9OVLyXYpvtyrFfak.jpg` */
+                file: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The picture: the copy kept here, or TMDB's own at the size asked */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not one of TMDB's sizes, or not a picture's name as TMDB gives one */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The caller's address is not on the list that guards the TMDB relay */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description TMDB has no such picture at that size */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description TMDB's pictures could not be reached */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The TMDB relay is switched off */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     radarr_imdb_list: {
         parameters: {
             query?: never;
@@ -18722,7 +18822,14 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The relay is off, or this server has no TheTVDB key to stand in with */
+            /** @description A client's own key, while TheTVDB's door here is shut after TheTVDB asked to be left alone, or full: Retry-After says when to come back */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The relay is off */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -18743,7 +18850,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description TheTVDB's answer, with the fields locked here written in where it is about a work of this catalogue */
+            /** @description TheTVDB's answer, with the fields locked here written in where it is about a work of this catalogue. When TheTVDB fails — no answer, 429, 5xx — its last answer to the same request made with this server's token stands in, with Age, a week old at the most, and a reference list from the database, six months; never for `updates` */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -18764,7 +18871,14 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The relay is off, or this server has no TheTVDB key to stand in with */
+            /** @description TheTVDB's own, handed back as it came; or TheTVDB's door here, shut after one, or full, with the seconds left in Retry-After, when nothing kept stands in */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The relay is off, or this server has no TheTVDB key to stand in with for a document it does not answer itself */
             503: {
                 headers: {
                     [name: string]: unknown;

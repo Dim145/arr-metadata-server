@@ -174,6 +174,13 @@ impl TvdbClient {
         self.token().await
     }
 
+    /// The door every exchange with TheTVDB goes through: this client's own,
+    /// and the relay's (`api::thetvdb`), which share its places and its
+    /// pause when TheTVDB asks to be left alone.
+    pub fn gate(&self) -> &crate::providers::Gate {
+        &self.gate
+    }
+
     /// TheTVDB refused `token`. Whether asking again is worth it: the token
     /// held is already another — somebody signed in meanwhile — or it is the
     /// one refused, which is then forgotten so that the next call signs in

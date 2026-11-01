@@ -14,6 +14,8 @@
 //! No key. Ninety calls a minute normally, thirty at the time of writing while
 //! AniList runs degraded; one call per work here, spaced to the lower figure.
 
+use std::sync::atomic::{AtomicU8, Ordering};
+
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -25,13 +27,16 @@ use crate::{
     providers::{PATIENCE, Pacer, alternative_title, plain_text},
 };
 
+/// One entry, whole. `{scores}` is where the [`SCORES`] go: see [`scored`].
+///
+/// Relations in their third version, which adds `SAME_UNIVERSE` to the second.
 const QUERY: &str = "query ($id: Int) {
   Media(id: $id, type: ANIME) {
     id idMal format
     title { romaji english native }
     synonyms
     description(asHtml: false)
-    averageScore
+    {scores}
     stats { scoreDistribution { score amount } }
     genres
     tags { name rank isMediaSpoiler isGeneralSpoiler }
@@ -41,7 +46,7 @@ const QUERY: &str = "query ($id: Int) {
     startDate { year }
     relations {
       edges {
-        relationType(version: 2)
+        relationType(version: 3)
         node {
           id idMal type format isAdult
           title { romaji english native }
@@ -64,6 +69,12 @@ const ENTRY: &str = "query ($id: Int) {
   }
 }";
 
+/// The scores [`QUERY`] asks for, in the order they are read: `weightedScore`,
+/// and `averageScore`, which AniList has since deprecated for it — the same
+/// figure under its former name, read when the first is missing, and asked
+/// for as long as AniList still knows it.
+const SCORES: [&str; 2] = ["weightedScore", "averageScore"];
+
 /// Tags ranked below this are ones a minority of voters agreed with.
 const TAG_RANK: i32 = 60;
 
@@ -76,6 +87,9 @@ pub struct AnilistClient {
     /// have it ask itself. See [`crate::providers::radarr::LOOP_HEADER`].
     instance: String,
     gate: crate::providers::Gate,
+    /// The [`SCORES`] AniList refused a query for, a bit each by their place
+    /// there: a field it no longer knows is not asked for again.
+    dropped: AtomicU8,
 }
 
 impl AnilistClient {
@@ -88,14 +102,46 @@ impl AnilistClient {
             instance,
             // Spaced already; this is for its `Retry-After`.
             gate: crate::providers::Gate::new("anilist", "AniList", 4),
+            dropped: AtomicU8::new(0),
         }
+    }
+
+    /// AniList's door here: the few requests in flight at once, and the
+    /// pause its 429 asks for. The relay goes through it too
+    /// ([`Gate::send_now`](crate::providers::Gate::send_now)), so that one
+    /// pause holds for both — but not through the spacing, which keeps this
+    /// server's own fetches, one per work, under AniList's limit.
+    pub fn gate(&self) -> &crate::providers::Gate {
+        &self.gate
     }
 
     /// One AniList entry, as a contribution to the work of `kind`. Returns the
     /// raw answer alongside the parsed one.
+    ///
+    /// A query refused because AniList no longer knows one of the [`SCORES`]
+    /// is sent again without it, and so is every one after: a deprecated
+    /// field going away must cost the figure it carried, not the entry.
     pub async fn media(&self, id: i64, kind: MediaKind) -> Result<Option<(Value, MediaItem)>> {
-        let Some(raw) = self.ask(QUERY, id).await? else {
-            return Ok(None);
+        let raw = loop {
+            let dropped = self.dropped.load(Ordering::Relaxed);
+            let error = match self.ask(&scored(dropped), id).await {
+                Ok(Some(raw)) => break raw,
+                Ok(None) => return Ok(None),
+                Err(error) => error,
+            };
+            // One this query did not ask for is not one to leave out.
+            let Some(unknown) = error
+                .downcast_ref::<UnknownScore>()
+                .filter(|u| dropped & u.bit() == 0)
+            else {
+                return Err(error);
+            };
+            if self.dropped.fetch_or(unknown.bit(), Ordering::Relaxed) & unknown.bit() == 0 {
+                tracing::warn!(
+                    field = SCORES[unknown.0],
+                    "AniList no longer knows this score; it is not asked for again"
+                );
+            }
         };
 
         let media = Media::deserialize(&raw["data"]["Media"])
@@ -146,6 +192,27 @@ impl AnilistClient {
         if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
             anyhow::bail!("AniList's rate limit was reached");
         }
+        if status == reqwest::StatusCode::BAD_REQUEST {
+            // A query GraphQL would not run, with its reasons.
+            let body =
+                crate::providers::read_body(response, crate::providers::ERROR_BODY_BYTES as u64)
+                    .await
+                    .unwrap_or_default();
+            if let Some(unknown) = serde_json::from_slice(&body)
+                .ok()
+                .and_then(|said: Value| unknown_score(&said))
+            {
+                return Err(unknown.into());
+            }
+            let reason = String::from_utf8_lossy(&body)
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            anyhow::bail!(
+                "AniList returned {status}: {}",
+                crate::providers::clip(&reason, crate::providers::MESSAGE_CHARS)
+            );
+        }
         if !status.is_success() {
             let reason = crate::providers::error_text(response).await;
             anyhow::bail!("AniList returned {status}: {reason}");
@@ -156,6 +223,9 @@ impl AnilistClient {
             .context("AniList returned a body this server could not read")?;
 
         if raw.pointer("/data/Media").is_none_or(Value::is_null) {
+            if let Some(unknown) = unknown_score(&raw) {
+                return Err(unknown.into());
+            }
             // GraphQL reports its errors in the body, with a 200 as often as not.
             if let Some(errors) = raw.get("errors") {
                 anyhow::bail!(
@@ -168,6 +238,59 @@ impl AnilistClient {
 
         Ok(Some(raw))
     }
+}
+
+/// [`QUERY`], asking for the [`SCORES`] whose bits are not in `dropped`.
+fn scored(dropped: u8) -> String {
+    let scores: Vec<&str> = SCORES
+        .iter()
+        .enumerate()
+        .filter(|(at, _)| dropped & (1 << at) == 0)
+        .map(|(_, field)| *field)
+        .collect();
+    QUERY.replace("{scores}", &scores.join(" "))
+}
+
+/// AniList refusing a query because it no longer knows one of the
+/// [`SCORES`]: the field's place there.
+#[derive(Debug)]
+struct UnknownScore(usize);
+
+impl UnknownScore {
+    /// The field's bit in [`AnilistClient::dropped`].
+    fn bit(&self) -> u8 {
+        1 << self.0
+    }
+}
+
+impl std::fmt::Display for UnknownScore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "AniList no longer knows the field {}", SCORES[self.0])
+    }
+}
+
+impl std::error::Error for UnknownScore {}
+
+/// The score a query was refused for, when GraphQL's errors in `answer` say
+/// AniList does not know one of the [`SCORES`] — in its own words, `Cannot
+/// query field "averageScore" on type "Media".`, whatever it suggests after.
+fn unknown_score(answer: &Value) -> Option<UnknownScore> {
+    answer
+        .get("errors")?
+        .as_array()?
+        .iter()
+        .filter_map(|error| error.get("message")?.as_str())
+        .filter_map(|message| {
+            let (field, rest) = message
+                .split_once("Cannot query field \"")?
+                .1
+                .split_once('"')?;
+            rest.trim_start()
+                .starts_with("on type \"Media\"")
+                .then_some(field)
+        })
+        .find_map(|field| SCORES.iter().position(|score| *score == field))
+        .map(UnknownScore)
 }
 
 // ─── the wire ────────────────────────────────────────────────────────────────
@@ -184,7 +307,11 @@ struct Media {
     #[serde(default)]
     synonyms: Vec<String>,
     description: Option<String>,
-    average_score: Option<i32>,
+    /// Out of a hundred. An `Int` in AniList's schema, read as a number: a
+    /// change of type must not make the whole entry unreadable.
+    weighted_score: Option<f64>,
+    /// The same figure under its former name: see [`SCORES`].
+    average_score: Option<f64>,
     stats: Option<Stats>,
     #[serde(default)]
     genres: Vec<String>,
@@ -327,9 +454,14 @@ fn to_item(media: &Media, kind: MediaKind) -> MediaItem {
         ..Default::default()
     };
 
-    // A mean out of a hundred, and no count of its own: the distribution's
+    // A mean out of a hundred — the weighted one, or under its former name
+    // when that is missing — and no count of its own: the distribution's
     // buckets add up to everyone who scored it.
-    if let Some(score) = media.average_score.filter(|s| *s > 0) {
+    if let Some(score) = [media.weighted_score, media.average_score]
+        .into_iter()
+        .flatten()
+        .find(|s| *s > 0.0)
+    {
         // Saturating: the counts are a stranger's numbers, and a sum past
         // `i64` panics in a debug build and wraps negative in a release one.
         let votes: i64 = media
@@ -342,7 +474,7 @@ fn to_item(media: &Media, kind: MediaKind) -> MediaItem {
 
         item.ratings = vec![Rating {
             source: "anilist".to_string(),
-            value: Some(f64::from(score) / 10.0),
+            value: Some(score / 10.0),
             votes: (votes > 0).then_some(votes),
             rating_type: Some("user".to_string()),
         }];
@@ -393,6 +525,9 @@ fn to_item(media: &Media, kind: MediaKind) -> MediaItem {
 /// The entries AniList files beside this one: prequels and sequels first, then
 /// the stories beside the main one, then what it was drawn from and the rest —
 /// each kind in order of year. An edge with no entry behind it is nothing.
+///
+/// A kind is kept as AniList names it, the third version's `SAME_UNIVERSE`
+/// too: the interface names the kinds it knows and calls the others related.
 fn relations(media: &Media) -> Vec<Relation> {
     let mut related: Vec<Relation> = media
         .relations
@@ -445,7 +580,8 @@ fn relation(node: &Node, relation_type: String) -> Option<Relation> {
     })
 }
 
-/// Where a kind of relation stands: the story's own line first.
+/// Where a kind of relation stands: the story's own line first, and a work
+/// that only shares its world just before the rest — a long franchise has many.
 fn relation_rank(relation_type: &str) -> u8 {
     match relation_type {
         "PREQUEL" => 0,
@@ -460,12 +596,17 @@ fn relation_rank(relation_type: &str) -> u8 {
         "SOURCE" => 9,
         "ADAPTATION" => 10,
         "CHARACTER" => 11,
-        _ => 12,
+        "SAME_UNIVERSE" => 12,
+        _ => 13,
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use parking_lot::Mutex;
+
     use super::*;
 
     fn attack_on_titan() -> Media {
@@ -475,6 +616,7 @@ mod tests {
             "title": { "romaji": "Shingeki no Kyojin", "english": "Attack on Titan", "native": "進撃の巨人" },
             "synonyms": ["SnK", "AoT", " "],
             "description": "Several hundred years ago, humans were nearly exterminated by titans.<br><br>\n(Source: Kodansha)",
+            "weightedScore": 85,
             "averageScore": 85,
             "stats": { "scoreDistribution": [
                 { "score": 10, "amount": 3175 }, { "score": 90, "amount": 196044 }, { "score": 100, "amount": 187249 }
@@ -502,6 +644,9 @@ mod tests {
                   "title": { "romaji": "Shingeki no Kyojin: Kuinaki Sentaku", "english": "Attack on Titan: No Regrets", "native": null },
                   "startDate": { "year": 2014 },
                   "coverImage": { "extraLarge": "http://insecure.example/x.jpg" } } },
+                { "relationType": "SAME_UNIVERSE", "node": { "id": 990001, "type": "ANIME", "format": "ONA",
+                  "title": { "romaji": "Kabe no Soto no Monogatari", "english": null, "native": null },
+                  "startDate": { "year": 2016 } } },
                 { "relationType": "OTHER", "node": null }
             ] }
         }))
@@ -575,10 +720,14 @@ mod tests {
             [
                 ("PREQUEL", 20811, "anime"),
                 ("SEQUEL", 20958, "anime"),
-                ("SOURCE", 53390, "manga")
+                ("SOURCE", 53390, "manga"),
+                // The third version's kind, kept as AniList names it.
+                ("SAME_UNIVERSE", 990_001, "anime")
             ],
             "an edge with no entry behind it is nothing to keep"
         );
+        assert_eq!(item.relations[3].title, "Kabe no Soto no Monogatari");
+        assert_eq!(item.relations[3].mal_id, None);
         let sequel = &item.relations[1];
         assert_eq!(sequel.title, "Attack on Titan Season 2");
         assert_eq!(sequel.year, Some(2017));
@@ -607,7 +756,31 @@ mod tests {
                 .iter()
                 .map(|r| r.sort_order)
                 .collect::<Vec<_>>(),
-            [0, 1, 2]
+            [0, 1, 2, 3]
+        );
+    }
+
+    #[test]
+    fn a_work_that_shares_the_world_comes_after_one_that_shares_a_character() {
+        let mut kinds = [
+            "OTHER",
+            "SAME_UNIVERSE",
+            "CHARACTER",
+            "A_KIND_TO_COME",
+            "SOURCE",
+            "SEQUEL",
+        ];
+        kinds.sort_by_key(|kind| relation_rank(kind));
+        assert_eq!(
+            kinds,
+            [
+                "SEQUEL",
+                "SOURCE",
+                "CHARACTER",
+                "SAME_UNIVERSE",
+                "OTHER",
+                "A_KIND_TO_COME"
+            ]
         );
     }
 
@@ -669,7 +842,172 @@ mod tests {
     #[test]
     fn an_unscored_entry_has_no_rating() {
         let mut media = attack_on_titan();
+        media.weighted_score = None;
         media.average_score = None;
         assert!(to_item(&media, MediaKind::Series).ratings.is_empty());
+    }
+
+    #[test]
+    fn the_weighted_score_is_read_and_its_former_name_stands_in_for_it() {
+        let score = |media: &Media| {
+            to_item(media, MediaKind::Series)
+                .rating("anilist")
+                .and_then(|r| r.value)
+        };
+        let mut media = attack_on_titan();
+        media.weighted_score = Some(86.0);
+        media.average_score = Some(85.0);
+        assert_eq!(score(&media), Some(8.6));
+
+        media.weighted_score = None;
+        assert_eq!(score(&media), Some(8.5), "missing, the former name answers");
+        media.weighted_score = Some(0.0);
+        assert_eq!(score(&media), Some(8.5), "nought is no score");
+    }
+
+    #[test]
+    fn both_scores_and_the_third_version_of_relations_are_asked_for() {
+        let query = scored(0);
+        assert!(query.contains("weightedScore averageScore"), "{query}");
+        assert!(query.contains("relationType(version: 3)"), "{query}");
+        assert!(!query.contains("{scores}"), "{query}");
+
+        let without = scored(UnknownScore(1).bit());
+        assert!(without.contains("weightedScore"), "{without}");
+        assert!(!without.contains("averageScore"), "{without}");
+
+        // Neither known any more: the entry is still asked for.
+        let neither = scored(UnknownScore(0).bit() | UnknownScore(1).bit());
+        assert!(!neither.contains("weightedScore") && !neither.contains("averageScore"));
+        assert!(neither.contains("relations"), "{neither}");
+    }
+
+    #[test]
+    fn a_score_anilist_no_longer_knows_is_told_from_any_other_refusal() {
+        // GraphQL's words, with the field it suggests in its place.
+        let refused = json!({ "errors": [{
+            "message": "Cannot query field \"averageScore\" on type \"Media\". Did you mean \"weightedScore\"?",
+            "status": 400,
+            "locations": [{ "line": 7, "column": 5 }]
+        }], "data": null });
+        assert_eq!(unknown_score(&refused).map(|u| u.0), Some(1));
+
+        for message in [
+            "Cannot query field \"popularity\" on type \"Media\".",
+            "Cannot query field \"averageScore\" on type \"MediaTrend\".",
+            "Not Found.",
+        ] {
+            let said = json!({ "errors": [{ "message": message }], "data": null });
+            assert!(unknown_score(&said).is_none(), "{message}");
+        }
+        assert!(unknown_score(&json!({ "data": { "Media": null } })).is_none());
+    }
+
+    /// An AniList that no longer knows `averageScore`: a query asking for it
+    /// is refused as GraphQL refuses one, with a 400, and the others are
+    /// answered with Attack on Titan. And the queries it was sent.
+    async fn without_the_former_score() -> (String, Arc<Mutex<Vec<String>>>) {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let at = format!("http://{}", listener.local_addr().unwrap());
+        let asked = Arc::new(Mutex::new(Vec::new()));
+        let seen = asked.clone();
+        tokio::spawn(async move {
+            while let Ok((mut connection, _)) = listener.accept().await {
+                // The head, then as much body as it announces.
+                let mut request = Vec::new();
+                let mut chunk = [0u8; 4096];
+                let body = loop {
+                    let read = connection.read(&mut chunk).await.unwrap_or(0);
+                    if read == 0 {
+                        break Vec::new();
+                    }
+                    request.extend_from_slice(&chunk[..read]);
+                    let Some(end) = request.windows(4).position(|w| w == b"\r\n\r\n") else {
+                        continue;
+                    };
+                    let length = String::from_utf8_lossy(&request[..end])
+                        .to_ascii_lowercase()
+                        .lines()
+                        .find_map(|line| line.strip_prefix("content-length:")?.trim().parse().ok())
+                        .unwrap_or(0usize);
+                    if request.len() >= end + 4 + length {
+                        break request[end + 4..end + 4 + length].to_vec();
+                    }
+                };
+                let query = serde_json::from_slice::<Value>(&body)
+                    .ok()
+                    .and_then(|b| b["query"].as_str().map(String::from))
+                    .unwrap_or_default();
+                let (status, answer) = if query.contains("averageScore") {
+                    (
+                        "400 Bad Request",
+                        json!({ "errors": [{
+                            "message": "Cannot query field \"averageScore\" on type \"Media\". Did you mean \"weightedScore\"?",
+                            "status": 400,
+                            "locations": [{ "line": 7, "column": 5 }]
+                        }], "data": null }),
+                    )
+                } else {
+                    (
+                        "200 OK",
+                        json!({ "data": { "Media": {
+                            "id": 16498,
+                            "title": { "romaji": "Shingeki no Kyojin" },
+                            "weightedScore": 86
+                        } } }),
+                    )
+                };
+                seen.lock().push(query);
+                let answer = answer.to_string();
+                let reply = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
+                     Connection: close\r\n\r\n{answer}",
+                    answer.len()
+                );
+                let _ = connection.write_all(reply.as_bytes()).await;
+                let _ = connection.shutdown().await;
+            }
+        });
+        (at, asked)
+    }
+
+    #[tokio::test]
+    async fn a_score_anilist_no_longer_knows_costs_one_refusal_and_never_the_entry() {
+        let (at, asked) = without_the_former_score().await;
+        let mut anilist = AnilistClient::new(
+            reqwest::Client::new(),
+            &config::Anilist {
+                upstream: at,
+                enabled: true,
+                passthrough: false,
+            },
+            "a test".into(),
+        );
+        // The stand-in has no limit to keep under.
+        anilist.pacer = Pacer::new(std::time::Duration::ZERO);
+
+        let (_, item) = anilist
+            .media(16498, MediaKind::Series)
+            .await
+            .unwrap()
+            .expect("the entry, asked again without the field");
+        assert_eq!(item.rating("anilist").and_then(|r| r.value), Some(8.6));
+        assert!(
+            anilist
+                .media(16498, MediaKind::Series)
+                .await
+                .unwrap()
+                .is_some()
+        );
+
+        let asked = asked.lock().clone();
+        assert_eq!(asked.len(), 3, "refused once, and only once: {asked:#?}");
+        assert!(asked[0].contains("weightedScore averageScore"));
+        for query in &asked[1..] {
+            assert!(query.contains("weightedScore"), "{query}");
+            assert!(!query.contains("averageScore"), "{query}");
+        }
     }
 }

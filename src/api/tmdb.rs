@@ -18,17 +18,22 @@
 //! here — a credit, a picture, an alternative title — is taken out of the
 //! lists TMDB answers with. The client sees TMDB's full response, with the
 //! operator's corrections applied.
+//!
+//! A series' seasons and their episodes asked with its own document
+//! (`append_to_response=season/1,season/1/images`) take the locks as the
+//! same documents asked on their own do. Of TMDB's v4 API only the public
+//! lists are relayed; anything else of it is refused in TMDB's own shape,
+//! naming this server. And where an administrator chose this server for
+//! TMDB's pictures (`tmdb.images = server`), TMDB's configuration sends its
+//! clients to this server's gate for them ([`super::tmdb_images`]).
 
-use std::{
-    collections::{HashMap, HashSet},
-    time::{Duration, Instant},
-};
+use std::collections::{HashMap, HashSet};
 
 use axum::{
     Json,
     body::{Body, Bytes},
     extract::{Request, State},
-    http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header, request::Parts},
+    http::{HeaderMap, Method, StatusCode, Uri, header, request::Parts},
     response::{IntoResponse, Response},
     routing::any,
 };
@@ -36,8 +41,10 @@ use serde_json::{Map, Value, json};
 use utoipa_axum::router::OpenApiRouter;
 
 use crate::{
-    api::relay::{self, RelayCredential, climbs},
-    cache,
+    api::{
+        relay::{self, RelayCredential, climbs},
+        tmdb_images,
+    },
     config::Surface,
     db::repo,
     domain::{CoverType, CreditType, Episode, ExternalSource, MediaItem, MediaKind},
@@ -96,10 +103,6 @@ const SESSION_PARAMS: &[&str] = &["session_id", "guest_session_id"];
 /// to a few megabytes.
 const ANSWER_LIMIT: u64 = 16 * 1024 * 1024;
 
-/// The largest document the relay keeps; TMDB's biggest run to a few
-/// hundred kilobytes.
-const RELAY_MAX_BYTES: usize = 4 * 1024 * 1024;
-
 /// The language TMDB answers in when none is asked.
 const TMDB_DEFAULT_LANGUAGE: &str = "en-US";
 
@@ -155,10 +158,13 @@ enum Asking {
 /// the one asked.
 ///
 /// Every TMDB v3 path is accepted; see TMDB's own documentation for their
-/// shapes. Patched: `/3/movie/{id}`, `/3/tv/{id}`, `/3/tv/{id}/season/{n}`,
-/// `/3/tv/{id}/season/{n}/episode/{e}`, and the results of
-/// `/3/search/{movie,tv,multi}`, `/3/trending/{movie,tv,all}/{window}` and
-/// `/3/discover/{movie,tv}`.
+/// shapes. Patched: `/3/movie/{id}`, `/3/tv/{id}` — with the seasons and
+/// the episodes asked with it (`append_to_response=season/1,…`) —
+/// `/3/tv/{id}/season/{n}`, `/3/tv/{id}/season/{n}/episode/{e}`, and the
+/// results of `/3/search/{movie,tv,multi}`,
+/// `/3/trending/{movie,tv,all}/{window}` and `/3/discover/{movie,tv}`.
+/// `/3/configuration` gives this server's gate as the address of TMDB's
+/// pictures where an administrator chose so (`tmdb.images = server`).
 #[utoipa::path(
     get, path = "/3/{path}", tag = TAG,
     operation_id = "tmdb_proxy",
@@ -184,10 +190,11 @@ pub async fn proxy(State(state): State<AppState>, request: Request) -> AppResult
     // this relay must not carry. Forwarding a caller's would relay a
     // credential; substituting the operator's would serve the operator's
     // account to every caller. Refused before any key is looked for, so the
-    // answer is the same whatever is configured.
+    // answer is the same whatever is configured — in TMDB's own shape, so
+    // that the client's log says who refused it and why.
     let v4 = request.uri().path().starts_with("/4/");
     if v4 && !v4_allowed(request.uri().path()) {
-        return Err(AppError::Forbidden);
+        return Ok(v4_refused(state.config.server.public_url.as_deref()));
     }
 
     // Whose key TMDB is asked with: this server's, in place of whatever the
@@ -252,6 +259,8 @@ pub async fn proxy(State(state): State<AppState>, request: Request) -> AppResult
     }
 
     let patchable = patch_target(parts.uri.path());
+    // A feed of changes, which the works changed here are laid beside.
+    let feed = changes::of(parts.uri.path());
 
     // What TMDB answered last time, while it is still good: a read that is
     // the same for every caller — never one that mints or uses a TMDB
@@ -261,81 +270,68 @@ pub async fn proxy(State(state): State<AppState>, request: Request) -> AppResult
     // shows at once whatever the cache holds. Only what the operator's key
     // was answered: what a client's own key was answered is that client's,
     // and a caller whose key TMDB would refuse must not be served what
-    // another's was told.
+    // another's was told. Callers asking the same at once share one
+    // exchange with TMDB, and what was kept stands in when TMDB fails — a
+    // reference list from the database when the memory holds nothing —
+    // but for a feed of changes, whose failure is handed on
+    // ([`relay::answer`]).
     let filed_as = (matches!(asking, Asking::Operator(_)) && may_keep(&parts.method, &parts.uri))
         .then(|| relay_key(&state, &parts.uri, &parts.headers));
-    let remembered = match &filed_as {
-        Some(key) => state
-            .caches
-            .relay
-            .get(key)
-            .await
-            .filter(cache::Relayed::is_fresh)
-            .filter(|hit| hit.status == StatusCode::OK.as_u16()),
-        None => None,
+    // The caller's validators travel only with a request answered for it
+    // alone and as TMDB wrote it: TMDB's "unchanged" is one caller's
+    // answer, about bytes this server does not hand on as they came.
+    let validators = filed_as.is_none() && patchable.is_none() && feed.is_none();
+    let ask = relay::Ask {
+        service: relay::Service::Tmdb,
+        key: filed_as.clone(),
+        path: parts.uri.path().to_string(),
+        reference: filed_as
+            .is_some()
+            .then(|| reference_key(&state, &parts.uri, &parts.headers)),
     };
-
-    let (status, headers, bytes) = match remembered {
-        Some(hit) => {
-            let mut headers = HeaderMap::new();
-            if let Ok(value) = HeaderValue::from_str(&hit.content_type) {
-                headers.insert(header::CONTENT_TYPE, value);
-            }
-            (StatusCode::OK, headers, hit.body)
-        }
-        None => {
-            let validators = filed_as.is_none() && patchable.is_none();
+    let fetched = relay::answer(&state, ask, {
+        let (state, parts, asking) = (state.clone(), parts.clone(), asking.clone());
+        let kept = filed_as.is_some();
+        async move {
             let (status, mut headers, bytes) =
                 send(&state, &parts, &target, &asking, validators).await?;
-            if let Some(key) = filed_as {
+            if kept {
                 // Asked without the caller's validators, the answer's own
                 // could never be answered "unchanged" by TMDB: this server's
-                // layer tags the body it serves instead, kept or not, the
-                // same for both.
+                // layer tags the body it serves instead — kept or not,
+                // shared or not, the same for all.
                 headers.remove(header::ETAG);
                 headers.remove(header::LAST_MODIFIED);
-                if let Some(ttl) = kept_for(status, parts.uri.path())
-                    && bytes.len() <= RELAY_MAX_BYTES
-                {
-                    let content_type = headers
-                        .get(header::CONTENT_TYPE)
-                        .and_then(|v| v.to_str().ok())
-                        .unwrap_or("application/json")
-                        .to_string();
-                    state
-                        .caches
-                        .relay
-                        .insert_for(
-                            key,
-                            cache::Relayed {
-                                status: status.as_u16(),
-                                content_type,
-                                expires_at: cache::now_secs() + ttl.as_secs(),
-                                body: bytes.clone(),
-                            },
-                            ttl,
-                        )
-                        .await;
-                }
             }
-            (status, headers, bytes)
+            Ok(relay::Fetched::new(status, headers, bytes))
         }
-    };
+    })
+    .await?;
+    let status = fetched.status;
+    let mut headers = fetched.headers;
+    let bytes = fetched.body;
 
-    // Only TMDB's own documents about the works it lists are worth
-    // inspecting; images, configuration, refusals and errors pass through
-    // untouched.
+    // Only TMDB's own documents about the works it lists, its configuration
+    // and its feeds of changes are worth inspecting; pictures, refusals and
+    // errors pass through untouched. What stood in for TMDB is written as
+    // what it answers is: the locks are this server's, and current.
     if status == StatusCode::OK
-        && let Some(target) = patchable
+        && (patchable.is_some() || feed.is_some())
         && relay::is_json(&headers)
         && let Ok(mut document) = serde_json::from_slice::<Value>(&bytes)
     {
-        let asked = asked_language(&parts.uri);
-        if patch(&state, &mut document, target, &asked).await? {
+        let mut changed = false;
+        if let Some(target) = patchable {
+            let asked = asked_language(&parts.uri);
+            changed |= patch(&state, &mut document, target, &asked).await?;
+        }
+        if let Some(kind) = feed {
+            changed |= with_changes_here(&state, &mut document, kind, &parts.uri).await?;
+        }
+        if changed {
             // TMDB's validators described TMDB's bytes; the patched document
             // is tagged by this server's own layer, and kept as long as it
             // says.
-            let mut headers = headers;
             relay::without_validators(&mut headers);
             return Ok((status, headers, Json(document)).into_response());
         }
@@ -344,8 +340,43 @@ pub async fn proxy(State(state): State<AppState>, request: Request) -> AppResult
     Ok((status, headers, Body::from(bytes)).into_response())
 }
 
+/// A page of TMDB's changes of a kind of work, the works changed here laid
+/// after TMDB's own ([`changes::with_here`]): those with a TMDB id of that
+/// kind whose journal took a change in the window asked
+/// ([`changes::window`]) — a lock put on or lifted, something added or
+/// taken out by hand, a refresh that changed a value — on the first page
+/// alone, which every client reads. An adult title only where this server
+/// shows them. Whether any was added.
+async fn with_changes_here(
+    state: &AppState,
+    document: &mut Value,
+    kind: MediaKind,
+    uri: &Uri,
+) -> AppResult<bool> {
+    if !changes::first_page(uri) {
+        return Ok(false);
+    }
+    let Some((from, to)) = changes::window(uri, chrono::Utc::now()) else {
+        return Ok(false);
+    };
+    let adult = state.adult_visible();
+    let here: Vec<(i64, bool)> =
+        relay::changed_here(state, ExternalSource::tmdb_for(kind), from, to)
+            .await?
+            .into_iter()
+            .filter(|work| adult || !work.adult)
+            .filter_map(|work| Some((work.external_id.parse().ok()?, work.adult)))
+            .collect();
+    Ok(changes::with_here(document, &here))
+}
+
 /// Ask TMDB, with the operator's credentials or the client's own, and read
-/// what it answered.
+/// what it answered — through TMDB's own door, the one this server's own
+/// fetches go through ([`crate::providers::tmdb::TmdbClient::gate`]): as
+/// many requests at once between them, and none while TMDB asked to be left
+/// alone. A relay never waits that out: a door closed, or full past a
+/// client's patience, is a `429` that says when to come back
+/// ([`relay::unsent`]), where nothing kept stands in.
 async fn send(
     state: &AppState,
     parts: &Parts,
@@ -354,7 +385,7 @@ async fn send(
     validators: bool,
 ) -> AppResult<(StatusCode, HeaderMap, Bytes)> {
     let mut upstream = state
-        .http
+        .tmdb
         .request(parts.method.clone(), target)
         .headers(forwarded_headers(&parts.headers, validators))
         // This name is one this server answers on: a resolver sending it
@@ -377,18 +408,16 @@ async fn send(
         }
     }
 
-    let started = Instant::now();
-    // The error would name the address it was sent to, a key in its query —
-    // the operator's, or the client's own; it is logged and answered, so
-    // what is kept of it is its kind and what lay under it.
-    let response = crate::outbound::send("tmdb", upstream).await.map_err(|e| {
-        anyhow::anyhow!(
-            "TMDB request failed: {}",
-            crate::providers::describe_request_error(&e)
-        )
-    });
-    crate::metrics::upstream("tmdb", started, response.as_ref().ok().map(|r| r.status()));
-    let response = response.map_err(AppError::UpstreamUnavailable)?;
+    // Counted as every exchange with TMDB is. The error says the kind of
+    // failure and what lay under it, never the address it was sent to,
+    // which carries a key in its query — the operator's, or the client's
+    // own. The place at the door is held until the body is read.
+    let (response, _place) = state
+        .tmdb
+        .gate()
+        .send_now(upstream)
+        .await
+        .map_err(|e| relay::unsent(relay::Service::Tmdb, e))?;
 
     let status =
         StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
@@ -452,22 +481,32 @@ fn in_a_session(uri: &Uri) -> bool {
     session_path || session_param
 }
 
-/// How long an answer of this status is kept, when it is: a whole document,
-/// for as long as its kind stays good, and nothing else. Another success —
-/// a fragment, "no content" — a redirect, "unchanged", a refusal, an error,
-/// and a "no such thing" too, are asked again.
-fn kept_for(status: StatusCode, path: &str) -> Option<Duration> {
-    (status == StatusCode::OK).then(|| cache::relay_ttl(path))
-}
-
 /// What a relayed document is filed under: what tells one answer of TMDB's
 /// from another ([`filed_under`]) — and the upstream, the word on adult
 /// titles this server adds, and the generation, so a settings change files
-/// what follows elsewhere.
+/// what follows elsewhere. Kept a while; and a whole document, the only
+/// answer of TMDB's that is ([`relay::answer`]).
 fn relay_key(state: &AppState, uri: &Uri, headers: &HeaderMap) -> String {
     format!(
-        "tmdb:{}:{}:{}:{}",
+        "tmdb:{}:{}",
         state.caches.generation(),
+        asked_of_tmdb(state, uri, headers)
+    )
+}
+
+/// What a reference list — TMDB's configuration, its genres, its
+/// certifications — is kept under in the database too ([`relay::Ask`]):
+/// what [`relay_key`] files it under, less the generation, which starts
+/// again with the process; a list kept before a restart is found after it.
+fn reference_key(state: &AppState, uri: &Uri, headers: &HeaderMap) -> String {
+    format!("tmdb:{}", asked_of_tmdb(state, uri, headers))
+}
+
+/// Where TMDB is asked, the word on adult titles this server adds, and
+/// what tells one answer of TMDB's from another ([`filed_under`]).
+fn asked_of_tmdb(state: &AppState, uri: &Uri, headers: &HeaderMap) -> String {
+    format!(
+        "{}:{}:{}",
         state.config.tmdb.upstream,
         state.config.tmdb.include_adult,
         filed_under(uri, headers)
@@ -551,7 +590,7 @@ fn upstream_url(base: &str, uri: &Uri, asking: &Asking, include_adult: bool) -> 
     responses(
         (status = 200, description = "TMDB's own response"),
         (status = 401, description = "With each client's own token relayed, a key issued here was presented"),
-        (status = 403, description = "Not a public list, or not a read"),
+        (status = 403, description = "Not a read; or not a public list — an account's lists, ratings and watchlist are not relayed — answered in TMDB's own error shape (`success: false`, `status_code: 3`) with a message naming this server"),
         (status = 503, description = "No TMDB v4 read token is configured to stand in with"),
     ),
 )]
@@ -562,6 +601,39 @@ pub async fn proxy_v4(state: State<AppState>, request: Request) -> AppResult<Res
 /// The v4 paths relayed: the public lists, and nothing of an account.
 fn v4_allowed(path: &str) -> bool {
     path.starts_with("/4/list/") && path.len() > "/4/list/".len()
+}
+
+/// TMDB's code for a request its key may not make: "You do not have
+/// permissions to access the service."
+const NOT_PERMITTED: i64 = 3;
+
+/// What a path of TMDB's v4 API other than a public list is answered: a
+/// `403` in TMDB's own shape — `success`, `status_code`, `status_message` —
+/// that a client logs as it logs any refusal of TMDB's, naming this server,
+/// its version and its public address when it has one, and saying what is
+/// not relayed. Nothing is made up in an account's place: an empty
+/// watchlist would read to Radarr as one emptied, and a library cleaned
+/// against that list would lose its films.
+fn v4_refused(public_url: Option<&str>) -> Response {
+    let server = match public_url {
+        Some(url) => format!("arr-metadata-server {} at {url}", env!("CARGO_PKG_VERSION")),
+        None => format!("arr-metadata-server {}", env!("CARGO_PKG_VERSION")),
+    };
+    let message = format!(
+        "{server} answers for api.themoviedb.org and does not relay TMDB accounts or their \
+         lists: of TMDB's v4 API, only public lists (/4/list/{{id}}) are relayed"
+    );
+    let mut response = (
+        StatusCode::FORBIDDEN,
+        Json(json!({
+            "success": false,
+            "status_code": NOT_PERMITTED,
+            "status_message": message,
+        })),
+    )
+        .into_response();
+    response.extensions_mut().insert(relay::RefusedHere);
+    response
 }
 
 /// The caller's headers as TMDB is asked with them: those that describe the
@@ -637,6 +709,9 @@ enum Target {
         tmdb_id: i64,
         part: Part,
     },
+    /// `/3/configuration`: where TMDB's pictures are fetched from, which an
+    /// administrator may have made this server ([`tmdb_images::base`]).
+    Configuration,
 }
 
 /// Which of a title's lists a document of it is.
@@ -650,14 +725,16 @@ enum Part {
 /// Recognise the documents patched, exactly: a title's, a season's, an
 /// episode's, a page of results, and the lists a title's sources gave it —
 /// its people, its pictures, its other titles, which a person may have hid
-/// some of. Any other sub-resource is left alone: its document carries
-/// nothing a lock addresses.
+/// some of — and TMDB's configuration, which says where its pictures are.
+/// Any other sub-resource is left alone: its document carries nothing a
+/// lock addresses.
 fn patch_target(path: &str) -> Option<Target> {
     let segments: Vec<&str> = path.trim_matches('/').split('/').collect();
     let id = |text: &str| text.parse::<i64>().ok();
     let number = |text: &str| text.parse::<i32>().ok().filter(|n| *n >= 0);
 
     match segments.as_slice() {
+        ["3", "configuration"] => Some(Target::Configuration),
         ["3", "tv", series] => Some(Target::Title {
             kind: MediaKind::Series,
             tmdb_id: id(series)?,
@@ -727,7 +804,8 @@ fn patch_target(path: &str) -> Option<Target> {
 /// catalogue's own language, the texts locked in it or in every language; in
 /// another, those locked in that language alone. What a person hid of what
 /// the sources gave is taken out of the lists the document carries
-/// ([`take_hidden`]).
+/// ([`take_hidden`]). A series' document takes its seasons' and their
+/// episodes' locks too, where they were asked with it ([`patch_appended`]).
 async fn patch(
     state: &AppState,
     document: &mut Value,
@@ -748,7 +826,10 @@ async fn patch(
                 return Ok(false);
             };
             let written = write_locked(map, &item, kind, in_its_language, &unlocalize);
-            Ok(take_hidden(map, &item, &unlocalize) | written)
+            let taken = take_hidden(map, &item, &unlocalize);
+            let appended =
+                kind == MediaKind::Series && patch_appended(map, tmdb_id, &item, &unlocalize);
+            Ok(written | taken | appended)
         }
         Target::Season { tmdb_id, season } => {
             let source = ExternalSource::tmdb_for(MediaKind::Series);
@@ -760,14 +841,8 @@ async fn patch(
             let Value::Object(map) = document else {
                 return Ok(false);
             };
-            let written = write_season(map, &item, season, &unlocalize);
-            // Its posters, where they were asked with it.
             let withheld = Withheld::of(&item, &unlocalize);
-            let taken = match map.get_mut("images") {
-                Some(Value::Object(images)) => take_pictures(images, &withheld),
-                _ => false,
-            };
-            Ok(written | taken)
+            Ok(patch_season(map, &item, season, &withheld, &unlocalize))
         }
         Target::Episode { tmdb_id } => {
             let source = ExternalSource::tmdb_for(MediaKind::Series);
@@ -803,7 +878,86 @@ async fn patch(
                 Part::Titles => take_titles(map, &withheld),
             })
         }
+        Target::Configuration => {
+            Ok(tmdb_images::base(state).is_some_and(|base| pictures_from(document, &base)))
+        }
     }
+}
+
+/// A season's document — asked on its own, or carried by its series' — with
+/// the season's locks and its episodes' written in, and the posters a
+/// person hid taken out of those asked with it.
+fn patch_season(
+    map: &mut Map<String, Value>,
+    item: &MediaItem,
+    number: i32,
+    withheld: &Withheld,
+    unlocalize: &dyn Fn(&str) -> String,
+) -> bool {
+    let written = write_season(map, item, number, unlocalize);
+    let taken = match map.get_mut("images") {
+        Some(Value::Object(images)) => take_pictures(images, withheld),
+        _ => false,
+    };
+    written | taken
+}
+
+/// What a series' own document carries of its seasons, asked with it
+/// (`append_to_response=season/1,season/1/images,season/1/episode/2`):
+/// each filed under its path below the series, and patched as the document
+/// at that path is when it is asked on its own ([`patch_target`]) — a season
+/// with its episodes, a season's posters, an episode. What else hangs off
+/// them — a season's or an episode's people, an episode's stills, ids,
+/// videos, where to watch — carries nothing a lock addresses, there as on
+/// its own. The work comes laid for the language the document is in.
+fn patch_appended(
+    map: &mut Map<String, Value>,
+    tmdb_id: i64,
+    item: &MediaItem,
+    unlocalize: &dyn Fn(&str) -> String,
+) -> bool {
+    if !map.keys().any(|key| key.starts_with("season/")) {
+        return false;
+    }
+    let withheld = Withheld::of(item, unlocalize);
+    let mut changed = false;
+    for (key, appended) in map.iter_mut() {
+        let Some(below) = key.strip_prefix("season/") else {
+            continue;
+        };
+        let Value::Object(document) = appended else {
+            continue;
+        };
+        changed |= match patch_target(&format!("/3/tv/{tmdb_id}/season/{below}")) {
+            Some(Target::Season { season, .. }) => {
+                patch_season(document, item, season, &withheld, unlocalize)
+            }
+            Some(Target::Episode { .. }) => write_episode(document, item, unlocalize),
+            Some(Target::Part {
+                part: Part::Pictures,
+                ..
+            }) => take_pictures(document, &withheld),
+            _ => false,
+        };
+    }
+    changed
+}
+
+/// TMDB's configuration, its pictures sent to this server's gate: the
+/// address a client puts a size and a picture's path after, as
+/// `images.base_url` and `images.secure_base_url` both — a client reads one
+/// or the other, and this server is reached by its public address whatever
+/// its scheme. The sizes stay TMDB's, which the gate answers. Whether it
+/// was written.
+fn pictures_from(document: &mut Value, base: &str) -> bool {
+    let Some(Value::Object(images)) = document.get_mut("images") else {
+        return false;
+    };
+    let mut written = false;
+    for key in ["base_url", "secure_base_url"] {
+        written |= put(images, key, Some(Value::String(base.to_string())));
+    }
+    written
 }
 
 /// The locks of every work of a page of results that this catalogue holds
@@ -1373,6 +1527,121 @@ fn tmdb_series_status(status: &str) -> Option<&'static str> {
     }
 }
 
+/// The works changed here, told beside TMDB's own changes:
+/// `/3/movie/changes` and `/3/tv/changes` list on their first page, after
+/// TMDB's ids, those of the works a lock was put on or lifted on here, a
+/// work added or taken out by hand, or a refresh changed, in the window
+/// asked ([`with_changes_here`]). A client that keeps itself in step by
+/// changes, as Yamtrack does, then fetches again a work corrected here
+/// without waiting for its own full refresh. When TMDB fails, the feed
+/// hands its failure on — neither what was kept nor this server's changes
+/// alone: a client moving a cursor along asks the same window again,
+/// rather than miss what TMDB changed meanwhile.
+///
+/// What a page becomes, and the window it asks about.
+mod changes {
+    use std::collections::HashSet;
+
+    use axum::http::Uri;
+    use chrono::{DateTime, NaiveDate, TimeDelta, Utc};
+    use serde_json::{Value, json};
+
+    use crate::domain::MediaKind;
+
+    /// The longest window TMDB lists changes over: a longer one is cut to
+    /// it.
+    pub const AT_MOST: TimeDelta = TimeDelta::days(14);
+
+    /// The window TMDB lists changes over when no start is asked: the last
+    /// day.
+    pub const BY_DEFAULT: TimeDelta = TimeDelta::hours(24);
+
+    /// The kind of work a path of TMDB's lists the changes of.
+    pub fn of(path: &str) -> Option<MediaKind> {
+        let segments: Vec<&str> = path.trim_matches('/').split('/').collect();
+        match segments.as_slice() {
+            ["3", "movie", "changes"] => Some(MediaKind::Movie),
+            ["3", "tv", "changes"] => Some(MediaKind::Series),
+            _ => None,
+        }
+    }
+
+    /// The last value of a parameter of the query, as TMDB reads one: none
+    /// for one not asked, or asked empty.
+    fn asked<'a>(uri: &'a Uri, name: &str) -> Option<std::borrow::Cow<'a, str>> {
+        url::form_urlencoded::parse(uri.query()?.as_bytes())
+            .filter(|(key, _)| key == name)
+            .last()
+            .map(|(_, value)| value)
+            .filter(|value| !value.trim().is_empty())
+    }
+
+    /// The window a request for changes asks about, as TMDB reads it, in
+    /// UTC: from the start of `start_date` to the end of `end_date`, or to
+    /// `now`; the last day before its end when no start is asked; never
+    /// longer than fourteen days, its start brought forward to fit. None
+    /// when a date asked is not one, or the window ends before it starts:
+    /// TMDB answers that as it sees fit, and nothing is added to it.
+    pub fn window(uri: &Uri, now: DateTime<Utc>) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
+        let day = |name: &str| -> Result<Option<NaiveDate>, ()> {
+            match asked(uri, name) {
+                None => Ok(None),
+                Some(text) => NaiveDate::parse_from_str(text.trim(), "%Y-%m-%d")
+                    .map(Some)
+                    .map_err(|_| ()),
+            }
+        };
+        let (start, end) = (day("start_date").ok()?, day("end_date").ok()?);
+        let until = match end {
+            Some(day) => day.succ_opt()?.and_hms_opt(0, 0, 0)?.and_utc(),
+            None => now,
+        };
+        let from = match start {
+            Some(day) => day.and_hms_opt(0, 0, 0)?.and_utc(),
+            None => until - BY_DEFAULT,
+        };
+        (from < until).then(|| (from.max(until - AT_MOST), until))
+    }
+
+    /// Whether the page asked is the first, the one the works changed here
+    /// are added to: no page asked, or `page=1`.
+    pub fn first_page(uri: &Uri) -> bool {
+        asked(uri, "page").is_none_or(|page| page.trim() == "1")
+    }
+
+    /// A page of TMDB's changes with the works changed here added after
+    /// TMDB's own: each by its TMDB id and whether it is for adults, as
+    /// TMDB lists one, and none twice — not one TMDB lists already. Its
+    /// count grows by as many, and a page that listed nothing is one page.
+    /// Whether any was added.
+    pub fn with_here(document: &mut Value, here: &[(i64, bool)]) -> bool {
+        let Some(Value::Array(results)) = document.get_mut("results") else {
+            return false;
+        };
+        let mut listed: HashSet<i64> = results
+            .iter()
+            .filter_map(|result| result.get("id").and_then(Value::as_i64))
+            .collect();
+        let before = results.len();
+        for (id, adult) in here {
+            if listed.insert(*id) {
+                results.push(json!({ "id": id, "adult": adult }));
+            }
+        }
+        let added = results.len() - before;
+        if added == 0 {
+            return false;
+        }
+        if let Some(total) = document.get("total_results").and_then(Value::as_u64) {
+            document["total_results"] = json!(total + added as u64);
+        }
+        if document.get("total_pages").and_then(Value::as_u64) == Some(0) {
+            document["total_pages"] = json!(1);
+        }
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -1419,6 +1688,9 @@ mod tests {
         // A dot inside a segment is just a character.
         assert!(!climbs("/3/configuration/countries.json"));
     }
+
+    use axum::http::HeaderValue;
+    use chrono::{DateTime, Utc};
 
     use super::*;
     use crate::{
@@ -1567,34 +1839,6 @@ mod tests {
         }
         // A HEAD is never kept, nor answered from what is.
         assert!(!may_keep(&Method::HEAD, &uri("/3/movie/550")));
-    }
-
-    #[test]
-    fn only_a_whole_document_is_kept() {
-        assert_eq!(
-            kept_for(StatusCode::OK, "/3/configuration"),
-            Some(Duration::from_secs(24 * 60 * 60))
-        );
-        assert_eq!(
-            kept_for(StatusCode::OK, "/3/movie/550"),
-            Some(cache::relay_ttl("/3/movie/550"))
-        );
-        for status in [
-            StatusCode::NON_AUTHORITATIVE_INFORMATION,
-            StatusCode::NO_CONTENT,
-            StatusCode::PARTIAL_CONTENT,
-            StatusCode::MOVED_PERMANENTLY,
-            StatusCode::FOUND,
-            StatusCode::NOT_MODIFIED,
-            StatusCode::BAD_REQUEST,
-            StatusCode::UNAUTHORIZED,
-            StatusCode::NOT_FOUND,
-            StatusCode::RANGE_NOT_SATISFIABLE,
-            StatusCode::TOO_MANY_REQUESTS,
-            StatusCode::INTERNAL_SERVER_ERROR,
-        ] {
-            assert_eq!(kept_for(status, "/3/configuration"), None, "{status}");
-        }
     }
 
     #[test]
@@ -1781,6 +2025,10 @@ mod tests {
             patch_target("/3/tv/1396/season/0/episode/3"),
             Some(Target::Episode { tmdb_id: 1396 })
         );
+        assert_eq!(
+            patch_target("/3/configuration"),
+            Some(Target::Configuration)
+        );
         for (path, kind) in [
             ("/3/search/movie", Some(MediaKind::Movie)),
             ("/3/search/tv", Some(MediaKind::Series)),
@@ -1811,7 +2059,11 @@ mod tests {
         assert_eq!(patch_target("/3/search/collection"), None);
         assert_eq!(patch_target("/3/trending/person/day"), None);
         assert_eq!(patch_target("/3/trending/all"), None);
-        assert_eq!(patch_target("/3/configuration"), None);
+        // The configuration's lists: no picture's address in them.
+        assert_eq!(patch_target("/3/configuration/countries"), None);
+        assert_eq!(patch_target("/3/configuration/languages"), None);
+        assert_eq!(patch_target("/3/movie/changes"), None);
+        assert_eq!(patch_target("/3/tv/changes"), None);
         assert_eq!(patch_target("/3/tv/not-a-number"), None);
         assert_eq!(patch_target("/3/tv"), None);
         assert_eq!(patch_target("/other/tv/1"), None);
@@ -2651,6 +2903,269 @@ mod tests {
             None
         );
     }
+
+    async fn refusal_of(response: Response) -> (StatusCode, Value) {
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (status, serde_json::from_slice(&body).unwrap())
+    }
+
+    #[tokio::test]
+    async fn the_rest_of_v4_is_refused_in_tmdbs_shape_naming_this_server() {
+        let version = env!("CARGO_PKG_VERSION");
+
+        let refused = v4_refused(None);
+        assert!(refused.extensions().get::<relay::RefusedHere>().is_some());
+        let (status, body) = refusal_of(refused).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(body["success"], json!(false));
+        assert_eq!(body["status_code"], json!(3));
+        let message = body["status_message"].as_str().unwrap();
+        assert!(
+            message.starts_with(&format!("arr-metadata-server {version} ")),
+            "{message}"
+        );
+        assert!(message.contains("TMDB accounts"), "{message}");
+        assert!(message.contains("/4/list/{id}"), "{message}");
+        // TMDB's shape and nothing else: no field a client would take for
+        // an account's data.
+        assert_eq!(body.as_object().unwrap().len(), 3);
+
+        let (_, body) = refusal_of(v4_refused(Some("https://ams.example"))).await;
+        let message = body["status_message"].as_str().unwrap();
+        assert!(
+            message.starts_with(&format!(
+                "arr-metadata-server {version} at https://ams.example "
+            )),
+            "{message}"
+        );
+    }
+
+    /// [`locked_season`], with a poster of its first season a person hid.
+    fn locked_season_with_a_poster_hidden() -> MediaItem {
+        let mut item = locked_season();
+        item.hidden.images.push(Image {
+            id: "hidden-season-poster".into(),
+            season_number: Some(1),
+            cover_type: CoverType::Poster,
+            url: "https://image.tmdb.org/t/p/original/hidden-season.jpg".into(),
+            language: None,
+            sort_order: 0,
+            source: Some("tmdb".into()),
+            is_manual: false,
+        });
+        item
+    }
+
+    #[test]
+    fn the_seasons_asked_with_a_series_take_their_locks_as_on_their_own() {
+        let item = locked_season_with_a_poster_hidden();
+        let credits = json!({ "id": 3572, "cast": [ { "id": 17419, "name": "Bryan Cranston" } ] });
+        let stills = json!({ "id": 62085, "stills": [ { "file_path": "/hidden-season.jpg" } ] });
+        let Value::Object(mut series) = json!({
+            "id": 1396,
+            "name": "Breaking Bad",
+            "season/1": Value::Object(season_document()),
+            "season/1/images": { "id": 3572, "posters": [
+                { "file_path": "/kept-season.jpg" }, { "file_path": "/hidden-season.jpg" } ] },
+            "season/1/episode/1": { "id": 62085, "season_number": 1, "episode_number": 1,
+                "name": "Pilot", "overview": "TMDB's", "air_date": "2008-01-20", "runtime": 59,
+                "still_path": "/upstream-still.jpg" },
+            "season/1/credits": credits,
+            "season/1/episode/1/images": stills,
+            "season/9": { "id": 9999, "season_number": 9, "name": "Saison 9", "episodes": [] },
+            "credits": { "cast": [] }
+        }) else {
+            unreachable!()
+        };
+
+        assert!(patch_appended(&mut series, 1396, &item, &as_is));
+
+        // A season, as `/3/tv/1396/season/1` takes its locks, its episodes
+        // theirs.
+        let season = &series["season/1"];
+        assert_eq!(season["name"], json!("Première saison"));
+        assert_eq!(season["overview"], json!("Le début."));
+        assert_eq!(season["poster_path"], json!("/season.jpg"));
+        assert_eq!(
+            season["episodes"][0]["name"],
+            json!("Épisode verrouillé 1x1")
+        );
+        assert_eq!(
+            season["episodes"][1]["name"],
+            json!("Épisode verrouillé 1x2")
+        );
+        assert_eq!(
+            season["episodes"][2]["name"],
+            json!("...And the Bag's in the River")
+        );
+        // Its posters, less the one hidden.
+        assert_eq!(
+            series["season/1/images"]["posters"],
+            json!([{ "file_path": "/kept-season.jpg" }])
+        );
+        // An episode, as `…/season/1/episode/1` takes its locks.
+        let episode = &series["season/1/episode/1"];
+        assert_eq!(episode["name"], json!("Épisode verrouillé 1x1"));
+        assert_eq!(episode["runtime"], json!(48));
+        assert_eq!(episode["still_path"], json!("/still.jpg"));
+        // What carries nothing a lock addresses stays as TMDB gave it: a
+        // season's people, an episode's stills, a season not held here.
+        assert_eq!(series["season/1/credits"], credits);
+        assert_eq!(series["season/1/episode/1/images"], stills);
+        assert_eq!(series["season/9"]["name"], json!("Saison 9"));
+        // The series' own fields are not this one's to write.
+        assert_eq!(series["name"], json!("Breaking Bad"));
+
+        // Nothing asked with it: nothing to do.
+        let mut bare = series_document();
+        assert!(!patch_appended(&mut bare, 1396, &item, &as_is));
+        assert_eq!(bare, series_document());
+    }
+
+    #[test]
+    fn the_configuration_sends_the_clients_to_the_gate_for_pictures() {
+        let tmdbs = json!({
+            "images": {
+                "base_url": "http://image.tmdb.org/t/p/",
+                "secure_base_url": "https://image.tmdb.org/t/p/",
+                "poster_sizes": ["w92", "w500", "original"],
+                "backdrop_sizes": ["w300", "w1280", "original"]
+            },
+            "change_keys": ["adult", "air_date"]
+        });
+        let mut document = tmdbs.clone();
+        assert!(pictures_from(
+            &mut document,
+            "https://ams.example/tmdb-images/"
+        ));
+        assert_eq!(
+            document["images"]["secure_base_url"],
+            json!("https://ams.example/tmdb-images/")
+        );
+        assert_eq!(
+            document["images"]["base_url"],
+            json!("https://ams.example/tmdb-images/")
+        );
+        // The sizes stay TMDB's, which the gate answers.
+        assert_eq!(
+            document["images"]["poster_sizes"],
+            tmdbs["images"]["poster_sizes"]
+        );
+        assert_eq!(document["change_keys"], tmdbs["change_keys"]);
+
+        // An answer of another shape is not given a field it lacks.
+        let mut refusal = json!({ "success": false, "status_code": 7 });
+        assert!(!pictures_from(
+            &mut refusal,
+            "https://ams.example/tmdb-images/"
+        ));
+        assert_eq!(refusal, json!({ "success": false, "status_code": 7 }));
+    }
+
+    fn at(text: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(text).unwrap().to_utc()
+    }
+
+    #[test]
+    fn the_window_of_changes_asked_is_tmdbs_reading_of_the_dates() {
+        let now = at("2026-11-01T10:00:00Z");
+        let window = |text: &str| changes::window(&uri(text), now);
+
+        // Nothing asked: the last day.
+        assert_eq!(
+            window("/3/movie/changes"),
+            Some((at("2026-10-31T10:00:00Z"), now))
+        );
+        // From the start of a day, to now or to the end of another.
+        assert_eq!(
+            window("/3/tv/changes?start_date=2026-10-29"),
+            Some((at("2026-10-29T00:00:00Z"), now))
+        );
+        assert_eq!(
+            window("/3/tv/changes?start_date=2026-10-20&end_date=2026-10-25&page=2"),
+            Some((at("2026-10-20T00:00:00Z"), at("2026-10-26T00:00:00Z")))
+        );
+        // The last day before an end asked alone.
+        assert_eq!(
+            window("/3/tv/changes?end_date=2026-10-25"),
+            Some((at("2026-10-25T00:00:00Z"), at("2026-10-26T00:00:00Z")))
+        );
+        // Fourteen days at the most: the start is brought forward.
+        assert_eq!(
+            window("/3/movie/changes?start_date=2026-09-01"),
+            Some((at("2026-10-18T10:00:00Z"), now))
+        );
+        // An empty date is none asked; one that is not a date, or a window
+        // that ends before it starts, adds nothing.
+        assert_eq!(
+            window("/3/movie/changes?start_date=&end_date="),
+            window("/3/movie/changes")
+        );
+        assert_eq!(window("/3/movie/changes?start_date=yesterday"), None);
+        assert_eq!(window("/3/movie/changes?end_date=2026-13-01"), None);
+        assert_eq!(
+            window("/3/movie/changes?start_date=2026-10-25&end_date=2026-10-20"),
+            None
+        );
+        assert_eq!(window("/3/movie/changes?start_date=2026-11-02"), None);
+    }
+
+    #[test]
+    fn the_works_changed_here_follow_tmdbs_on_its_first_page_once_each() {
+        assert_eq!(changes::of("/3/movie/changes"), Some(MediaKind::Movie));
+        assert_eq!(changes::of("/3/tv/changes"), Some(MediaKind::Series));
+        assert_eq!(changes::of("/3/person/changes"), None);
+        assert_eq!(changes::of("/3/movie/550/changes"), None);
+
+        assert!(changes::first_page(&uri("/3/movie/changes")));
+        assert!(changes::first_page(&uri("/3/movie/changes?page=1")));
+        assert!(changes::first_page(&uri("/3/movie/changes?page=")));
+        assert!(!changes::first_page(&uri("/3/movie/changes?page=2")));
+        assert!(!changes::first_page(&uri("/3/movie/changes?page=1&page=3")));
+
+        let mut page = json!({
+            "results": [ { "id": 550, "adult": false }, { "id": 551, "adult": false } ],
+            "page": 1, "total_pages": 3, "total_results": 250
+        });
+        // One TMDB lists already, one listed twice here, an adult one.
+        assert!(changes::with_here(
+            &mut page,
+            &[
+                (550, false),
+                (990_001, false),
+                (990_001, false),
+                (990_002, true)
+            ]
+        ));
+        assert_eq!(
+            page["results"],
+            json!([
+                { "id": 550, "adult": false }, { "id": 551, "adult": false },
+                { "id": 990_001, "adult": false }, { "id": 990_002, "adult": true }
+            ])
+        );
+        assert_eq!(page["total_results"], json!(252));
+        assert_eq!(page["total_pages"], json!(3));
+        // Nothing new: the page as it was.
+        let before = page.clone();
+        assert!(!changes::with_here(&mut page, &[(551, false)]));
+        assert_eq!(page, before);
+
+        // TMDB listing nothing: those changed here, on one page.
+        let mut empty = json!({ "results": [], "page": 1, "total_pages": 0, "total_results": 0 });
+        assert!(changes::with_here(&mut empty, &[(990_003, false)]));
+        assert_eq!(
+            empty,
+            json!({ "results": [ { "id": 990_003, "adult": false } ],
+                    "page": 1, "total_pages": 1, "total_results": 1 })
+        );
+        // An answer of another shape takes nothing.
+        let mut refusal = json!({ "success": false, "status_code": 7 });
+        assert!(!changes::with_here(&mut refusal, &[(990_005, false)]));
+    }
 }
 
 /// The relay as a client meets it, against a stand-in for TMDB that keeps
@@ -2660,7 +3175,8 @@ mod relayed {
     use axum::{
         body::Body,
         extract::{Request, State},
-        http::StatusCode,
+        http::{HeaderMap, StatusCode, Uri, header},
+        response::{IntoResponse, Response},
     };
     use serde_json::{Value, json};
 
@@ -2670,6 +3186,7 @@ mod relayed {
             self,
             testing::{self, Asked, OPERATOR_TMDB_KEY, StandIn},
         },
+        cache,
         config::{Surface, SurfacePolicy},
         domain::{Episode, MediaItem, MediaKind, Season},
         state::AppState,
@@ -3004,5 +3521,555 @@ mod relayed {
         let (status, refusal) = get(&state, "/3/tv/1396", &[]).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
         assert_eq!(refusal["status_code"], json!(7));
+    }
+
+    /// The TMDB id of the series the appended documents are about: one no
+    /// other test stores.
+    const APPENDED: i64 = 990_901;
+
+    /// TMDB as the stand-in answers a series asked with its first season,
+    /// that season's posters, its first episode and the season's people.
+    fn with_its_seasons(asked: &Asked) -> (StatusCode, Value) {
+        let episode = json!({ "id": 990_921, "season_number": 1, "episode_number": 1,
+                              "name": "Pilot D9", "overview": "TMDB's", "runtime": 58 });
+        match asked.path.as_str() {
+            "/3/tv/990901" => (
+                StatusCode::OK,
+                json!({
+                    "id": APPENDED, "name": "Appended Series D9", "overview": "TMDB's",
+                    "season/1": { "id": 990_911, "season_number": 1, "name": "Season 1",
+                                  "overview": "TMDB's", "episodes": [episode] },
+                    "season/1/images": { "id": 990_911, "posters": [
+                        { "file_path": "/kept-d9.jpg" }, { "file_path": "/hidden-d9.jpg" } ] },
+                    "season/1/episode/1": episode,
+                    "season/1/credits": { "id": 990_911,
+                        "cast": [ { "id": 17419, "name": "Bryan Cranston" } ] }
+                }),
+            ),
+            _ => (StatusCode::NOT_FOUND, json!({ "status_code": 34 })),
+        }
+    }
+
+    #[tokio::test]
+    async fn the_seasons_asked_with_a_series_take_their_locks() {
+        let stand_in = StandIn::start(with_its_seasons).await;
+        let state = testing::server(&stand_in).await;
+        let poster = |file: &str| crate::domain::Image {
+            id: crate::db::new_id(),
+            season_number: Some(1),
+            cover_type: crate::domain::CoverType::Poster,
+            url: format!("https://image.tmdb.org/t/p/original/{file}"),
+            language: None,
+            sort_order: 0,
+            source: Some("tmdb".into()),
+            is_manual: false,
+        };
+        let mut item = MediaItem::empty(MediaKind::Series);
+        item.title = "Série aux saisons ajoutées D9".into();
+        item.slug = "serie-aux-saisons-ajoutees-d9".into();
+        item.external_ids.tmdb = Some(APPENDED);
+        item.seasons = vec![Season {
+            id: crate::db::new_id(),
+            season_number: 1,
+            title: Some("Season 1".into()),
+            overview: None,
+            air_date: None,
+            tmdb_id: Some(990_911),
+            tvdb_id: None,
+            is_manual: false,
+            images: vec![poster("kept-d9.jpg"), poster("hidden-d9.jpg")],
+            primary_images: Default::default(),
+        }];
+        item.episodes = vec![Episode {
+            id: crate::db::new_id(),
+            season_number: 1,
+            episode_number: 1,
+            absolute_episode_number: None,
+            aired_after_season_number: None,
+            aired_before_season_number: None,
+            aired_before_episode_number: None,
+            title: "Pilot D9".into(),
+            overview: None,
+            air_date: None,
+            air_date_utc: None,
+            runtime: Some(58),
+            finale_type: None,
+            image: None,
+            tvdb_id: None,
+            tmdb_id: Some(990_921),
+            rating: None,
+            is_manual: false,
+        }];
+        testing::store(
+            &state,
+            &item,
+            &[
+                ("season:1", "title", "", json!("Première saison D9")),
+                ("episode:1x1", "title", "", json!("Le pilote D9")),
+                ("episode:1x1", "runtime", "", json!(61)),
+                (
+                    "image:https://image.tmdb.org/t/p/original/hidden-d9.jpg",
+                    "hidden",
+                    "",
+                    json!(true),
+                ),
+            ],
+        )
+        .await;
+
+        let asked = "/3/tv/990901?append_to_response=season/1,season/1/images,\
+                     season/1/episode/1,season/1/credits&language=fr-FR";
+        let (status, series) = get(&state, asked, &[]).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(series["season/1"]["name"], json!("Première saison D9"));
+        assert_eq!(
+            series["season/1"]["episodes"][0]["name"],
+            json!("Le pilote D9")
+        );
+        assert_eq!(series["season/1"]["episodes"][0]["runtime"], json!(61));
+        assert_eq!(series["season/1/episode/1"]["name"], json!("Le pilote D9"));
+        assert_eq!(
+            series["season/1/images"]["posters"],
+            json!([{ "file_path": "/kept-d9.jpg" }])
+        );
+        // A season's people are not the work's credits.
+        assert_eq!(
+            series["season/1/credits"]["cast"][0]["name"],
+            json!("Bryan Cranston")
+        );
+        // Nothing of the series itself was locked: TMDB's.
+        assert_eq!(series["name"], json!("Appended Series D9"));
+
+        // In another language, a text locked in every language is the
+        // catalogue's own, and TMDB's text stands; a runtime and a hidden
+        // poster hold in every language.
+        let (_, german) = get(
+            &state,
+            "/3/tv/990901?append_to_response=season/1,season/1/images,season/1/episode/1\
+             &language=de-DE",
+            &[],
+        )
+        .await;
+        assert_eq!(german["season/1"]["name"], json!("Season 1"));
+        assert_eq!(german["season/1/episode/1"]["name"], json!("Pilot D9"));
+        assert_eq!(german["season/1/episode/1"]["runtime"], json!(61));
+        assert_eq!(
+            german["season/1/images"]["posters"],
+            json!([{ "file_path": "/kept-d9.jpg" }])
+        );
+    }
+
+    #[tokio::test]
+    async fn the_rest_of_v4_is_refused_in_tmdbs_own_shape_and_tmdb_is_not_asked() {
+        let stand_in = StandIn::start(tmdb).await;
+        let state = server(&stand_in).await;
+
+        for refused in [
+            "/4/account/4bc889XXXXXXXXXX/movie/watchlist",
+            "/4/account/4bc889XXXXXXXXXX/lists",
+            "/4/auth/request_token",
+            "/4/list",
+        ] {
+            let (status, refusal) = get(&state, refused, &[]).await;
+            assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+            assert_eq!(refusal["success"], json!(false), "{refused}");
+            assert_eq!(refusal["status_code"], json!(3), "{refused}");
+            let message = refusal["status_message"].as_str().unwrap_or_default();
+            assert!(
+                message.contains(&format!(
+                    "arr-metadata-server {}",
+                    env!("CARGO_PKG_VERSION")
+                )),
+                "{message}"
+            );
+            assert!(stand_in.asked_at(refused).is_empty(), "{refused}");
+        }
+
+        // A public list is no refusal of this kind: the operator's v3 key
+        // cannot ask for it, and the relay says so as it did.
+        let list = Request::builder()
+            .uri("/4/list/8136")
+            .body(Body::empty())
+            .unwrap();
+        assert!(matches!(
+            proxy(State(state.clone()), list).await,
+            Err(crate::error::AppError::ProviderNotConfigured)
+        ));
+    }
+
+    /// TMDB's configuration, as the stand-in answers it.
+    fn configuration(asked: &Asked) -> (StatusCode, Value) {
+        match asked.path.as_str() {
+            "/3/configuration" => (
+                StatusCode::OK,
+                json!({
+                    "images": {
+                        "base_url": "http://image.tmdb.org/t/p/",
+                        "secure_base_url": "https://image.tmdb.org/t/p/",
+                        "poster_sizes": ["w92", "w500", "original"]
+                    },
+                    "change_keys": ["adult"]
+                }),
+            ),
+            "/3/configuration/countries" => (
+                StatusCode::OK,
+                json!([{ "iso_3166_1": "FR", "english_name": "France" }]),
+            ),
+            _ => (StatusCode::NOT_FOUND, json!({ "status_code": 34 })),
+        }
+    }
+
+    #[tokio::test]
+    async fn the_configuration_gives_this_servers_gate_when_it_was_chosen() {
+        use crate::api::tmdb_images::testing::{choose, server_keeping_media};
+
+        let stand_in = StandIn::start(configuration).await;
+        let (state, dir) = server_keeping_media(&stand_in, Some("https://ams.example")).await;
+
+        // TMDB's own, until this server is chosen.
+        let (_, document) = get(&state, "/3/configuration", &[]).await;
+        assert_eq!(
+            document["images"]["secure_base_url"],
+            json!("https://image.tmdb.org/t/p/")
+        );
+
+        choose(&state, "server").await;
+        let (status, document) = get(&state, "/3/configuration", &[]).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            document["images"]["secure_base_url"],
+            json!("https://ams.example/tmdb-images/")
+        );
+        assert_eq!(
+            document["images"]["base_url"],
+            json!("https://ams.example/tmdb-images/")
+        );
+        assert_eq!(
+            document["images"]["poster_sizes"],
+            json!(["w92", "w500", "original"])
+        );
+        // Its lists carry no picture's address.
+        let (_, countries) = get(&state, "/3/configuration/countries", &[]).await;
+        assert_eq!(countries[0]["iso_3166_1"], json!("FR"));
+
+        // Chosen back: TMDB's own again, from what is kept, at once.
+        choose(&state, "tmdb").await;
+        let (_, document) = get(&state, "/3/configuration", &[]).await;
+        assert_eq!(
+            document["images"]["secure_base_url"],
+            json!("https://image.tmdb.org/t/p/")
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn without_a_public_address_the_configuration_stays_tmdbs() {
+        use crate::api::tmdb_images::testing::{choose, server_keeping_media};
+
+        let stand_in = StandIn::start(configuration).await;
+        let (state, dir) = server_keeping_media(&stand_in, None).await;
+        choose(&state, "server").await;
+        let (_, document) = get(&state, "/3/configuration", &[]).await;
+        assert_eq!(
+            document["images"]["secure_base_url"],
+            json!("https://image.tmdb.org/t/p/")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ─── When TMDB fails, and what is shared ────────────────────────────────
+
+    /// TMDB as the stand-in answers it while it has trouble: an error of its
+    /// own for one film, "too many requests" for two others — which shuts
+    /// TMDB's door five seconds, saying no longer — and a list of genres and
+    /// a page of films' changes it answers whole. Anything else: down.
+    fn failing(asked: &Asked) -> (StatusCode, Value) {
+        match asked.path.as_str() {
+            "/3/movie/990941" => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({ "success": false, "status_code": 11 }),
+            ),
+            "/3/movie/990951" | "/3/movie/990961" => (
+                StatusCode::TOO_MANY_REQUESTS,
+                json!({ "success": false, "status_code": 25 }),
+            ),
+            "/3/genre/movie/list" => (
+                StatusCode::OK,
+                json!({ "genres": [ { "id": 28, "name": "Action D3" } ] }),
+            ),
+            "/3/movie/changes" => (
+                StatusCode::OK,
+                json!({ "results": [ { "id": 550, "adult": false } ],
+                        "page": 1, "total_pages": 1, "total_results": 1 }),
+            ),
+            _ => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!({ "success": false, "status_code": 9 }),
+            ),
+        }
+    }
+
+    /// The relay's answer, an error of this server's as it is told.
+    async fn answered(state: &AppState, target: &str) -> Response {
+        let request = Request::builder().uri(target).body(Body::empty()).unwrap();
+        match proxy(State(state.clone()), request).await {
+            Ok(answer) => answer,
+            Err(refusal) => refusal.into_response(),
+        }
+    }
+
+    async fn body_of(answer: Response) -> Value {
+        let body = axum::body::to_bytes(answer.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        serde_json::from_slice(&body).unwrap_or(Value::Null)
+    }
+
+    /// What the relay kept of TMDB's answer to `target`, as it is once its
+    /// time is up and it is still young enough to stand in: fetched a minute
+    /// and its kind's time ago.
+    async fn kept_a_while_ago(state: &AppState, target: &str, document: Value) {
+        let uri: Uri = target.parse().unwrap();
+        state
+            .caches
+            .relay
+            .insert_for(
+                super::relay_key(state, &uri, &HeaderMap::new()),
+                cache::Relayed {
+                    status: 200,
+                    content_type: "application/json;charset=utf-8".into(),
+                    expires_at: cache::now_secs() - 60,
+                    body: serde_json::to_vec(&document).unwrap().into(),
+                },
+                cache::RELAY_KEEP,
+            )
+            .await;
+    }
+
+    #[tokio::test]
+    async fn when_tmdb_fails_what_was_kept_stands_in_with_its_age_and_the_locks() {
+        let stand_in = StandIn::start(failing).await;
+        let state = testing::server(&stand_in).await;
+        let mut item = MediaItem::empty(MediaKind::Series);
+        item.title = "Série tombée en panne D2".into();
+        item.slug = "serie-tombee-en-panne-d2".into();
+        item.external_ids.tmdb = Some(990_931);
+        testing::store(
+            &state,
+            &item,
+            &[("item", "title", "", json!("Titre verrouillé D2"))],
+        )
+        .await;
+        let asked = "/3/tv/990931?language=fr-FR";
+        kept_a_while_ago(
+            &state,
+            asked,
+            json!({ "id": 990_931, "name": "Kept D2", "overview": "Kept overview" }),
+        )
+        .await;
+
+        // TMDB down: what was kept answers, saying how old it is, with the
+        // locks written in as they are into any answer.
+        let answer = answered(&state, asked).await;
+        assert_eq!(answer.status(), StatusCode::OK);
+        let age: u64 = answer.headers()[header::AGE]
+            .to_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!(age >= cache::relay_ttl("/3/tv/990931").as_secs(), "{age}");
+        let document = body_of(answer).await;
+        assert_eq!(document["name"], json!("Titre verrouillé D2"));
+        assert_eq!(document["overview"], json!("Kept overview"));
+        assert_eq!(stand_in.asked_at("/3/tv/990931").len(), 1);
+
+        // Turned off: TMDB's failure, as it came.
+        testing::choose(&state, relay::STALE_IF_ERROR, "false").await;
+        let answer = answered(&state, asked).await;
+        assert_eq!(answer.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(answer.headers().get(header::AGE).is_none());
+    }
+
+    #[tokio::test]
+    async fn callers_asking_the_same_at_once_share_one_exchange() {
+        let stand_in = StandIn::start(failing).await;
+        let state = testing::server(&stand_in).await;
+        let asked = "/3/movie/990941?language=fr-FR";
+
+        // Eight at once, while TMDB answers an error, which nothing keeps:
+        // one exchange for all of them.
+        let answers = futures::future::join_all((0..8).map(|_| answered(&state, asked))).await;
+        for answer in &answers {
+            assert_eq!(answer.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        }
+        assert_eq!(stand_in.asked_at("/3/movie/990941").len(), 1);
+
+        // Once it has ended, the next caller asks anew.
+        let answer = answered(&state, asked).await;
+        assert_eq!(answer.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(stand_in.asked_at("/3/movie/990941").len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_door_tmdb_shut_is_a_429_that_says_when_or_what_was_kept() {
+        let stand_in = StandIn::start(failing).await;
+        let state = testing::server(&stand_in).await;
+
+        // TMDB asks to be left alone: its refusal handed on, and its door
+        // shut for every exchange with it, this server's own fetches' too.
+        let answer = answered(&state, "/3/movie/990951").await;
+        assert_eq!(answer.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(state.tmdb.gate().quiet_for().is_some());
+
+        // Nothing kept: a 429 that says when to come back; TMDB is not
+        // asked, nor waited for.
+        let answer = answered(&state, "/3/movie/990952").await;
+        assert_eq!(answer.status(), StatusCode::TOO_MANY_REQUESTS);
+        let wait: u64 = answer.headers()[header::RETRY_AFTER]
+            .to_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!((1..=60).contains(&wait), "{wait}");
+        assert!(stand_in.asked_at("/3/movie/990952").is_empty());
+
+        // Something kept: it answers, with its age.
+        kept_a_while_ago(
+            &state,
+            "/3/movie/990953",
+            json!({ "id": 990_953, "title": "Kept D4" }),
+        )
+        .await;
+        let answer = answered(&state, "/3/movie/990953").await;
+        assert_eq!(answer.status(), StatusCode::OK);
+        assert!(answer.headers().contains_key(header::AGE));
+        assert_eq!(body_of(answer).await["title"], json!("Kept D4"));
+        assert!(stand_in.asked_at("/3/movie/990953").is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_reference_list_answers_from_the_database_when_the_memory_holds_nothing() {
+        use crate::db::repo::relay_document;
+
+        let stand_in = StandIn::start(failing).await;
+        let state = testing::server(&stand_in).await;
+        let asked = "/3/genre/movie/list?language=fr-FR";
+
+        let (status, genres) = get(&state, asked, &[]).await;
+        assert_eq!(status, StatusCode::OK);
+        // Kept in the database too, under a key no generation is part of.
+        let filed_as = super::reference_key(&state, &asked.parse().unwrap(), &HeaderMap::new());
+        assert!(
+            relay_document::read(&state.db, "tmdb", &filed_as, &relay_document::cutoff())
+                .await
+                .unwrap()
+                .is_some()
+        );
+
+        // The memory's keys move on, as they do at every start; and TMDB
+        // shuts its door.
+        state.caches.bump_generation().await;
+        let answer = answered(&state, "/3/movie/990961").await;
+        assert_eq!(answer.status(), StatusCode::TOO_MANY_REQUESTS);
+
+        let answer = answered(&state, asked).await;
+        assert_eq!(answer.status(), StatusCode::OK);
+        assert!(answer.headers().contains_key(header::AGE));
+        assert_eq!(body_of(answer).await, genres);
+        assert_eq!(stand_in.asked_at("/3/genre/movie/list").len(), 1);
+    }
+
+    /// Note a change of a work in its journal, as a lock put on its title
+    /// writes one.
+    async fn changed(state: &AppState, item: &MediaItem) {
+        use crate::db::repo::change::{self, Cause, NewChange};
+
+        testing::store(state, item, &[]).await;
+        change::record(
+            &state.db,
+            &item.id,
+            None,
+            &[NewChange {
+                cause: Cause::Lock,
+                scope: "item".into(),
+                field: "title".into(),
+                language: String::new(),
+                before: None,
+                after: Some(json!(item.title)),
+                provider: None,
+                was_locked: false,
+            }],
+        )
+        .await
+        .expect("the change is noted");
+    }
+
+    fn work(kind: MediaKind, tmdb_id: i64, title: &str) -> MediaItem {
+        let mut item = MediaItem::empty(kind);
+        item.title = title.into();
+        item.slug = crate::domain::make_slug(title, None);
+        item.external_ids.tmdb = Some(tmdb_id);
+        item
+    }
+
+    fn sorted_ids(results: &Value) -> Vec<i64> {
+        let mut ids: Vec<i64> = results
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["id"].as_i64().unwrap())
+            .collect();
+        ids.sort_unstable();
+        ids
+    }
+
+    #[tokio::test]
+    async fn changes_lay_the_works_changed_here_beside_tmdbs_and_fail_as_tmdb_does() {
+        let stand_in = StandIn::start(failing).await;
+        let state = testing::server(&stand_in).await;
+        changed(
+            &state,
+            &work(MediaKind::Movie, 990_971, "Film changé ici D11"),
+        )
+        .await;
+
+        let (status, page) = get(&state, "/3/movie/changes", &[]).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(page["results"][0], json!({ "id": 550, "adult": false }));
+        assert_eq!(page["results"][1], json!({ "id": 990_971, "adult": false }));
+        assert_eq!(page["total_results"], json!(2));
+
+        // A work changed since shows at once, though TMDB's page is kept.
+        changed(
+            &state,
+            &work(MediaKind::Movie, 990_972, "Second film changé ici D11"),
+        )
+        .await;
+        let (_, page) = get(&state, "/3/movie/changes", &[]).await;
+        assert_eq!(sorted_ids(&page["results"]), [550, 990_971, 990_972]);
+        assert_eq!(stand_in.asked_at("/3/movie/changes").len(), 1);
+        // Another page is TMDB's alone.
+        let (_, next) = get(&state, "/3/movie/changes?page=2", &[]).await;
+        assert_eq!(sorted_ids(&next["results"]), [550]);
+
+        // TMDB failing: its failure, handed on — neither what was kept of
+        // the feed nor the works changed here alone.
+        changed(
+            &state,
+            &work(MediaKind::Series, 990_973, "Série changée ici D11"),
+        )
+        .await;
+        kept_a_while_ago(
+            &state,
+            "/3/tv/changes",
+            json!({ "results": [ { "id": 1, "adult": false } ],
+                    "page": 1, "total_pages": 1, "total_results": 1 }),
+        )
+        .await;
+        let answer = answered(&state, "/3/tv/changes").await;
+        assert_eq!(answer.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(answer.headers().get(header::AGE).is_none());
+        assert!(body_of(answer).await.get("results").is_none());
     }
 }

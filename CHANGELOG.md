@@ -7,6 +7,141 @@ may change what the API or the configuration means, and says so here.
 
 ## [Unreleased]
 
+### Added
+
+- The relays stand in for a service that fails. When TMDB, TheTVDB or
+  AniList cannot be reached or does not answer in time, answers `429` or a
+  `500`, `502`, `503` or `504` — or, for AniList, `403`, its API switched
+  off; for TheTVDB, will not sign this server in — the last good answer
+  to the same request is served, with an `Age` header and the locks written
+  in: up to a week old for TMDB and TheTVDB, a day for AniList. TMDB's and
+  TheTVDB's reference lists — TMDB's configuration, genres and
+  certifications, TheTVDB's languages, genres, types and statuses — are kept
+  in the database too (migration 0047, `relay_document`), up to 180 days, and
+  answer when the memory holds nothing, after a restart for instance. Nothing
+  asked with a client's own key, nothing about somebody's account and no feed
+  of changes ever stands in. `relays.staleIfError`, on by default and set on
+  *Opening & APIs*, turns it off; `ams_relay_stale_total` counts what was
+  served so.
+- Requests a relay is asked the same at once share one exchange with the
+  service.
+- TMDB's pictures can come from this server: with `tmdb.images = server` on
+  *Opening & APIs*, the media store on and `AMS_PUBLIC_URL` set,
+  `/3/configuration` gives `{AMS_PUBLIC_URL}/tmdb-images/` as the address of
+  TMDB's pictures, and Jellyfin, Kodi, Kometa and Emby fetch them there; the
+  page says which is missing when `server` cannot take effect. The gate,
+  `GET /tmdb-images/{size}/{file}`, serves a picture the store keeps from the
+  store, and hands any other on from image.tmdb.org without keeping it; it
+  takes TMDB's sizes and its site's crops alone, and names of TMDB's pictures
+  alone. It is guarded as the TMDB relay is, `AMS_TMDB_AUTH=apikey` reading
+  as `allowlist` there since a picture's address carries no key; an address
+  it lets in is not held to `AMS_RATE_LIMIT_PER_MINUTE`, and a picture is not
+  counted as a call to TMDB's API. `tmdb` stays the default; see
+  docs/relays.md.
+- The relays' feeds of changes name the works changed here — a lock put on
+  or lifted, something added or taken out by hand, a refresh that changed a
+  value — after the service's own, on their first page: TMDB's
+  `/3/movie/changes` and `/3/tv/changes` by TMDB id, in the window asked;
+  TheTVDB's `updates` by TheTVDB id, as TheTVDB writes a record of it, since
+  the instant asked and fourteen days back at the most. A client that keeps in
+  step by them — Yamtrack by TMDB's, Jellyfin's plugin by TheTVDB's — fetches
+  a work corrected here at once rather than at its next full refresh. When
+  the service fails, the feed fails with it, so that the client asks the same
+  window again.
+- The NFO export writes an anime's AniList and MyAnimeList ids, as
+  `<uniqueid type="anilist">` and `<uniqueid type="mal">`, after the others
+  and never as the default: Jellyfin's AniList plugin then reads that entry
+  rather than searching by title. A work filed under several entries is
+  given the oldest of each, the first season far more often than not, since
+  a reader keeps one id of a type. Episodes carry neither.
+- `.github/workflows/watch.yml`: every Monday, and on demand, what this
+  server imitates, relays or downloads is read against a snapshot kept in
+  `scripts/watch/snapshots/` — AniList's schema (every field, argument and
+  value of the types this server's queries, its relay and six known clients
+  read, and all of `Query` and `Page`), the keys of Skyhook's documents under
+  `/v1/tvdb`, `/v2/tvdb` and `/v2/tmdb` and the last change to Sonarr's
+  client of it, the version of TheTVDB's swagger with the last commit and the
+  open pull requests of `thetvdb/v4-api`, the date and the OpenAPI definition
+  of each page of TMDB's reference, and the keys of the anime list's entries.
+  A run fails when one of them moved, or when the anime list or the database
+  it is made from has not been updated for 21 days, and its summary says
+  which, with the deprecated fields still read (`Media.averageScore`,
+  today). It reads with no secret, GitHub's API with the run's own token, and
+  writes nothing. `python3 scripts/watch/watch.py` runs it from a checkout;
+  CONTRIBUTING.md, "Upstream watch", says how to take a snapshot again.
+
+### Changed
+
+- The relays go through the server's own door to each service: as many
+  calls at once between them and the server's own fetches — sixteen to TMDB,
+  eight to TheTVDB, four to AniList — and one pause for all when the service
+  answers `429`, or `503` with `Retry-After`, whoever met it. A relay never
+  waits that pause out: it answers with what it kept, or `429` with the
+  seconds left in `Retry-After`, where it asked the service again. A
+  client's AniList query is never spaced out as the source's fetches are.
+- The relay space keeps a document a week, where it kept a day, so that it
+  can stand in for its service. What it serves as fresh is unchanged, but
+  for TMDB's feeds of changes, kept for hours by mistake and now a quarter of
+  an hour, and AniList's genre and tag lists asked alone, half a day where
+  they were an hour. A relayed document kept on the cache server by 0.12 is
+  forgotten at the upgrade.
+- A path of TMDB's v4 API other than a public list — an account's lists,
+  ratings and watchlist, which Radarr's *TMDb User* import list asks for — is
+  refused in TMDB's own shape, `{"success": false, "status_code": 3,
+  "status_message": …}`, the message naming this server, its version and its
+  public address, where it was this server's bare `403`. Nothing is made up
+  in an account's place.
+- A TheTVDB client signing in with its own key has TheTVDB asked with the
+  key and its PIN alone: what Kodi's scraper writes beside them — its user's
+  gender, year of birth and a device id — is no longer handed on.
+- With no TheTVDB key of its own, the server still signs in a client that
+  brings a key issued here, and answers the pages it answers itself — an
+  order kept here or frozen, `altdvd` and `alttwo` from what was read — where
+  it answered `503` to the sign-in and to every page. Whatever only TheTVDB
+  can answer is still `503`.
+- The TheTVDB relay hands a client's `If-None-Match` and
+  `If-Modified-Since` on only with the client's own token: a request asked
+  with the server's, kept and shared, goes without them.
+- AniList is asked for `weightedScore`, which replaces the deprecated
+  `averageScore` it is the same figure as; `averageScore` is read when the
+  first is missing. Should AniList stop knowing either field, the query it
+  refuses for it is sent again without it, and so is every later one, where
+  every AniList fetch would have failed.
+- AniList's relations are asked for in their third version, which adds
+  `SAME_UNIVERSE`: a work set in the same universe is kept under that kind,
+  shown as *Same universe* after the works sharing a character and before
+  the others.
+- The MCP server stays off until an administrator switches it on, and now
+  says why beside the switch: switched on, it hands agents — large language
+  models — the catalogue, TMDB's titles, overviews and credits included,
+  which TMDB's API terms forbid using in connection with an AI application
+  (§1.C) and count as commercial use in an LLM chatbot (§2.A). While it is
+  on, the server writes the same warning to its log at each start. The
+  documentation no longer says that nothing is handed to a model.
+- The documentation of the search says what the code does: a series search
+  merges the catalogue's results and TMDB's every time, and asks TheTVDB,
+  then Skyhook, only while nothing is found.
+
+### Fixed
+
+- The seasons and episodes asked with a series' TMDB document
+  (`append_to_response=season/1,season/1/images,season/1/episode/2`) take the
+  locks and lose the posters hidden here, as the same documents asked on
+  their own do: Kodi's TV scraper and Yamtrack read seasons that way, and
+  were given TMDB's text.
+- Seerr's TheTVDB option could not sign in through the relay: it names its
+  key `apiKey`, which was refused with `400`. Either name is taken; a
+  sign-in that names both is refused.
+- A page of episodes answered here linked to itself as `/v4/v4/…`; its
+  `self` is the path and query asked, less a key for this server.
+- The AniList relay kept an hour, and served to every caller, what AniList
+  answered about somebody when nobody signed the query: a page of users,
+  mutual followers, likes, activity replies, forum threads and comments,
+  reviews, a user's AniChart settings, who submitted a staff entry, and what
+  a user recommended or a viewer's own list picked. Checked against AniList's
+  schema, none of it is kept, shared with another caller or served stale any
+  more.
+
 ## [0.12.0] — 2026-10-31
 
 ### Added

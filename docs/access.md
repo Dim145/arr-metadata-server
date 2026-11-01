@@ -8,6 +8,7 @@ what they can send:
 | Native API and web UI | `/api/v1/*` | API key (header or query) |
 | Public browsing | a fixed subset of `/api/v1/*` | **off**, chosen on *Opening & APIs* |
 | TMDB-compatible | `/3/*`, and the public lists of `/4/list/*` | API key (`api_key` query parameter) |
+| TMDB's pictures, with `tmdb.images = server` | `/tmdb-images/*`, on the interface's door | the TMDB relay's, a key read as the IP allowlist |
 | TheTVDB-compatible | `/v4/*` | API key (a key issued here, as the client's TheTVDB key) |
 | AniList-compatible | `graphql.anilist.co`, on the clients' door | IP allowlist |
 | Sonarr / Radarr compatible | `/v1/*`, and Sonarr v5's `/v2/*`, including the IMDb lists Radarr imports from | IP allowlist |
@@ -70,6 +71,34 @@ read as "try again later". It also says whose key the TMDB and TheTVDB relays as
 their service with: this server's, or each client's own
 (`tmdb.relayCredential`, `tvdb.relayCredential`; see
 [The relays](relays.md)). Every switch is in the [settings reference](settings.md#opening-and-apis).
+
+Beside that choice are two more of the relays' own settings:
+
+- **When a service fails** ([`relays.staleIfError`](settings.md#relaysstaleiferror), on to
+  begin with): when TMDB, TheTVDB or AniList cannot be reached, takes too long, or answers
+  `429`, `500`, `502`, `503` or `504` — AniList's `403` too, its API switched off — a relay
+  answers with the last answer it kept for the same request, seven days old at most for TMDB
+  and TheTVDB and a day for AniList, with an `Age` header that says how old it is; TMDB's and
+  TheTVDB's reference lists — the configuration, the genres, the languages… — from the copy
+  the database keeps, 180 days old at most. Only what was asked with this server's key is
+  kept for that, and nothing tied to an account; a feed of changes (`/3/movie/changes`,
+  `/3/tv/changes`, `/v4/updates`) always hands its failure on. Off, the client is given the
+  failure. See [When a service fails](relays.md#when-a-service-fails).
+- **Where TMDB's clients fetch the pictures** ([`tmdb.images`](settings.md#tmdbimages)):
+  the image server the TMDB relay's `/3/configuration` names, which Jellyfin, Kodi, Kometa
+  and Emby build every picture's address from. `tmdb`, to begin with, names TMDB's own;
+  `server` names this server's, `/tmdb-images/…`, so that those clients fetch the pictures
+  here — the media store's copy where it keeps one, TMDB's picture handed on where it does
+  not — with nothing changed on their side. `server` takes the media store (`AMS_MEDIA_STORAGE`, see
+  [Media](media.md)) and `AMS_PUBLIC_URL`: without either the relay names TMDB's, and the page
+  says which is missing. The gate answers as the TMDB relay does — switched off with it, under
+  its policy — except that a policy asking for a key reads as the list of allowed addresses,
+  since a picture's address carries no key. An address the list lets in is not held to
+  `AMS_RATE_LIMIT_PER_MINUTE`, a library's scan asking for pictures in bursts; one it turns
+  away is counted as on any surface. A picture is no call to TMDB's API: *Opening & APIs*
+  does not count it among the TMDB relay's calls. Seerr and Yamtrack are not concerned: the
+  reader's browser loads their pictures, from TMDB, whatever is chosen. See
+  [TMDB's pictures, from this server](relays.md#tmdbs-pictures-from-this-server).
 
 `AMS_ADMIN_USERNAME` and `AMS_ADMIN_PASSWORD` open the first administrator. After
 that they are a way back in: when no active administrator is left, a restart

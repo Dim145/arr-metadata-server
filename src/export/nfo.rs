@@ -395,6 +395,19 @@ fn unique_ids(out: &mut String, item: &MediaItem) {
             escape(value)
         );
     }
+
+    // AniList's and MyAnimeList's, after the others and never the default:
+    // no library builds a work's identity from either, but Jellyfin's AniList
+    // plugin, handed one, reads that entry rather than searching by title.
+    // One of each: a reader keeps one id of a type, the last it reads, and a
+    // work filed under several entries — an anime's seasons often are one
+    // each — is given its oldest, the first season far more often than not,
+    // rather than whichever was stored last.
+    for (kind, all) in [("anilist", &ids.anilist), ("mal", &ids.mal)] {
+        if let Some(id) = all.iter().copied().filter(|id| *id > 0).min() {
+            let _ = writeln!(out, "  <uniqueid type=\"{kind}\">{id}</uniqueid>");
+        }
+    }
 }
 
 /// The word for a season in the languages the catalogue's providers name
@@ -1105,6 +1118,80 @@ mod tests {
             ),
             [("imdb=tt0959621".to_string(), true)]
         );
+    }
+
+    #[test]
+    fn an_anime_carries_its_anilist_and_mal_ids_and_neither_is_the_default() {
+        // A series filed under an entry a season, on both: the oldest of
+        // each, after the others, and TheTVDB's still the default.
+        let mut series = MediaItem::empty(MediaKind::Series);
+        series.title = "Attack on Titan (NFO anime ids)".into();
+        series.external_ids = ExternalIds {
+            tvdb: Some(267_440),
+            tmdb: Some(1429),
+            anilist: vec![99_147, 16_498, 20_958],
+            mal: vec![25_777, 35_760, 16_498],
+            ..Default::default()
+        };
+        assert_eq!(
+            identifiers(&for_item(&series), "tvshow"),
+            [
+                ("tvdb=267440".to_string(), true),
+                ("tmdb=1429".to_string(), false),
+                ("anilist=16498".to_string(), false),
+                ("mal=16498".to_string(), false),
+            ]
+        );
+
+        // A film the same way, TMDB's the default.
+        let mut film = MediaItem::empty(MediaKind::Movie);
+        film.title = "Your Name. (NFO anime ids)".into();
+        film.external_ids = ExternalIds {
+            tmdb: Some(372_058),
+            anilist: vec![21_519],
+            mal: vec![32_281],
+            ..Default::default()
+        };
+        assert_eq!(
+            identifiers(&for_item(&film), "movie"),
+            [
+                ("tmdb=372058".to_string(), true),
+                ("anilist=21519".to_string(), false),
+                ("mal=32281".to_string(), false),
+            ]
+        );
+
+        // Known by them alone, a work is given them and no default: neither
+        // is what a library builds a work's identity from. An id that is no
+        // id, 0, is left out.
+        let mut alone = MediaItem::empty(MediaKind::Series);
+        alone.title = "Entered by hand (NFO anime ids)".into();
+        alone.external_ids = ExternalIds {
+            anilist: vec![170_942],
+            mal: vec![0],
+            ..Default::default()
+        };
+        assert_eq!(
+            identifiers(&for_item(&alone), "tvshow"),
+            [("anilist=170942".to_string(), false)]
+        );
+    }
+
+    #[test]
+    fn an_episode_of_an_anime_carries_no_anilist_or_mal_id() {
+        let mut item = series();
+        item.external_ids.anilist = vec![16_498];
+        item.external_ids.mal = vec![16_498];
+        let mut episode = crate::db::repo::child::blank_episode(1, 1);
+        episode.tvdb_id = Some(4_561_217);
+
+        let nfo = for_episode(&item, &episode, &[], None);
+        assert_eq!(
+            identifiers(&nfo, "episodedetails"),
+            [("tvdb=4561217".to_string(), true)]
+        );
+        // The series' document has them.
+        assert!(for_item(&item).contains("<uniqueid type=\"anilist\">16498</uniqueid>"));
     }
 
     #[test]

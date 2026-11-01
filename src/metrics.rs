@@ -51,6 +51,14 @@ pub const PROVIDERS: [&str; 12] = [
 /// provider, failed on its side, or never reached.
 const OUTCOMES: [&str; 4] = ["ok", "refused", "failed", "unreachable"];
 
+/// The relays whose answers stand in for their service when it fails, in
+/// the order they are counted.
+pub const RELAYS: [&str; 3] = ["tmdb", "tvdb", "anilist"];
+
+/// Where a stale answer came from: the relay space's memory, or a reference
+/// list kept in the database.
+const STALE_FROM: [&str; 2] = ["memory", "database"];
+
 /// Status classes, `1xx` to `5xx`.
 const CLASSES: [&str; 5] = ["1xx", "2xx", "3xx", "4xx", "5xx"];
 
@@ -144,6 +152,9 @@ struct Registry {
     upstream_time: [Histogram; PROVIDERS.len()],
     /// How long each connection of the database's pool was waited for.
     pool_wait: Histogram,
+    /// Answers a relay gave from what it kept, its service failing: by
+    /// relay, and by where the answer came from.
+    relay_stale: [[AtomicU64; 2]; RELAYS.len()],
 }
 
 static REGISTRY: Registry = Registry {
@@ -153,6 +164,7 @@ static REGISTRY: Registry = Registry {
     upstream: [const { [const { AtomicU64::new(0) }; 4] }; PROVIDERS.len()],
     upstream_time: [const { Histogram::new() }; PROVIDERS.len()],
     pool_wait: Histogram::with(&WAIT_BOUNDS),
+    relay_stale: [const { [const { AtomicU64::new(0) }; 2] }; RELAYS.len()],
 };
 
 /// The index of a surface's name in [`SURFACES`].
@@ -182,7 +194,9 @@ pub fn surface_of(path: &str) -> usize {
         "tvdb"
     } else if path.starts_with("/api/") {
         "native"
-    } else if path.starts_with("/media/") {
+    } else if path.starts_with("/media/") || path.starts_with("/tmdb-images/") {
+        // The pictures kept here, and TMDB's served from here: a picture is
+        // no call to TMDB's API.
         "media"
     } else if path == "/ca.crt" || path == "/trust-ca.sh" {
         "ca"
@@ -251,6 +265,15 @@ pub fn upstream(provider: &str, started: Instant, status: Option<reqwest::Status
     };
     REGISTRY.upstream[index][outcome].fetch_add(1, Relaxed);
     REGISTRY.upstream_time[index].observe(started.elapsed());
+}
+
+/// Count an answer a relay gave stale: its service failed, and what the
+/// relay kept stood in — from the memory, or from the database's reference
+/// lists. Nothing is counted under a relay this does not know.
+pub fn relay_stale(relay: &str, from_database: bool) {
+    if let Some(index) = RELAYS.iter().position(|r| *r == relay) {
+        REGISTRY.relay_stale[index][usize::from(from_database)].fetch_add(1, Relaxed);
+    }
 }
 
 /// A value read at scrape time, with its samples: a label set and a number
@@ -358,6 +381,20 @@ pub fn render(gauges: &[Metric]) -> String {
             "ams_upstream_duration_seconds",
             &format!("provider=\"{provider}\""),
         );
+    }
+
+    out.push_str(
+        "# HELP ams_relay_stale_total Answers a relay gave stale, its service failing: what \
+         the memory kept, or a reference list kept in the database.\n",
+    );
+    out.push_str("# TYPE ams_relay_stale_total counter\n");
+    for (r, relay) in RELAYS.iter().enumerate() {
+        for (f, from) in STALE_FROM.iter().enumerate() {
+            out.push_str(&format!(
+                "ams_relay_stale_total{{relay=\"{relay}\",from=\"{from}\"}} {}\n",
+                REGISTRY.relay_stale[r][f].load(Relaxed)
+            ));
+        }
     }
 
     out.push_str(
@@ -775,6 +812,30 @@ mod tests {
             .collect::<Vec<_>>();
         let grown: Vec<u64> = after.iter().zip(&before).map(|(a, b)| a - b).collect();
         assert_eq!(grown, [2, 1, 1, 1]);
+    }
+
+    #[test]
+    fn a_stale_answer_is_counted_by_relay_and_by_where_it_came_from() {
+        let read = |r: usize, f: usize| REGISTRY.relay_stale[r][f].load(Relaxed);
+        // AniList's database count: nothing ever adds to it, AniList keeps
+        // nothing there.
+        let before = (read(1, 0), read(1, 1), read(2, 1));
+        relay_stale("tvdb", false);
+        relay_stale("tvdb", true);
+        relay_stale("tvdb", true);
+        relay_stale("nobody", true);
+        // At the least: the relays' own tests count theirs meanwhile.
+        assert!(read(1, 0) > before.0);
+        assert!(read(1, 1) >= before.1 + 2);
+        assert_eq!(read(2, 1), before.2);
+
+        let text = render(&[]);
+        assert!(
+            text.contains("# TYPE ams_relay_stale_total counter\n"),
+            "{text}"
+        );
+        assert!(text.contains("ams_relay_stale_total{relay=\"anilist\",from=\"memory\"} "));
+        assert!(text.contains("ams_relay_stale_total{relay=\"tmdb\",from=\"database\"} "));
     }
 
     #[test]

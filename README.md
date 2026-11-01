@@ -80,7 +80,8 @@ On the site, or in [`docs/`](docs/):
 - [Plex](docs/plex.md) — Plex Media Server taking its metadata from this server, as a custom
   metadata provider.
 - [The relays](docs/relays.md) — the TMDB, TheTVDB and AniList relays: whose key TMDB and
-  TheTVDB are asked with, what is written into the answers and what is taken out of them.
+  TheTVDB are asked with, what is written into the answers and what is taken out of them,
+  what answers when a service fails, and TMDB's pictures served from here.
 - [Where the data comes from](docs/sources.md) — the sources, how they are merged, whose
   episode numbering wins, and the further sources.
 - [Languages](docs/languages.md) — what each client is answered in.

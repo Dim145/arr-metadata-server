@@ -75,6 +75,20 @@ impl TmdbClient {
         self.api_key.is_some()
     }
 
+    /// The door every exchange with TMDB goes through: this client's own
+    /// fetches, and the TMDB relay's — at most [`MAX_CONCURRENT`] at once
+    /// between them, and none while TMDB asked to be left alone.
+    pub fn gate(&self) -> &Gate {
+        &self.gate
+    }
+
+    /// A request to TMDB at `url`, on this client's connections and with
+    /// nothing else of its own: what the TMDB relay sends through
+    /// [`Self::gate`], its credential and its headers its own.
+    pub fn request(&self, method: reqwest::Method, url: &str) -> reqwest::RequestBuilder {
+        self.http.request(method, url)
+    }
+
     /// Build an authenticated request.
     ///
     /// A v4 token is a JWT and goes in `Authorization`; a v3 key goes in the
@@ -567,7 +581,14 @@ impl TmdbClient {
         Ok((parsed.results, i64::from(page) < parsed.total_pages))
     }
 
-    /// Ids changed since `start_date` (`YYYY-MM-DD`), used to drive refreshes.
+    /// The ids TMDB lists as changed since `start_date` (`YYYY-MM-DD`), from
+    /// its first ten pages at most.
+    ///
+    /// One caller: Radarr's `/v1/movie/changed`
+    /// (`service::movie::changed_since`), which names these beside the films
+    /// changed here. Nothing refreshes by them — the refresh scheduler goes
+    /// by each work's own due date — and the TMDB relay hands TMDB's own
+    /// `/3/{movie,tv}/changes` on rather than asking through here.
     pub async fn changed_ids(&self, kind: MediaKind, start_date: &str) -> Result<Vec<i64>> {
         let segment = match kind {
             MediaKind::Series => "tv",

@@ -8,7 +8,10 @@
 //! would come under a switch and a scope of their own.
 //!
 //! - **Off** until `mcp.enabled` is on: switched off, `/mcp` answers `503`
-//!   with the code `mcp_disabled`, as a surface switched off does.
+//!   with the code `mcp_disabled`, as a surface switched off does. On, the
+//!   start says so in the log, with a warning: what agents read carries
+//!   TMDB's data, which TMDB's terms of use (§1.C, §2.A) keep from AI
+//!   applications — the panel that switches it says the same.
 //! - **A key with the `mcp` scope** is the one credential taken, in
 //!   `Authorization: Bearer` or `X-Api-Key`: never the session's cookie, which
 //!   a page elsewhere could ride on, nor a key in the address, which a proxy's
@@ -70,11 +73,28 @@ const LARGEST_REQUEST: usize = 64 * 1024;
 /// beside its timeout and its compression — and routed rather than nested,
 /// so that its trace and its count read `/mcp` whole.
 pub fn mounted(rest: Router, state: &AppState, stop: CancellationToken) -> Router {
+    warn_if_on(state);
     let mcp = router(state, stop).into_service::<axum::body::Body>();
     Router::new()
         .route_service("/mcp", mcp.clone())
         .route_service("/mcp/", mcp)
         .fallback_service(rest)
+}
+
+/// Said once, as the server starts, when agents are let in: what the tools
+/// hand them is the catalogue, and with it what TMDB gave it — which TMDB's
+/// terms of use speak to. Switched on later, the panel that switches it said
+/// so beside the switch.
+fn warn_if_on(state: &AppState) {
+    if state.flag(SETTING, false) {
+        tracing::warn!(
+            setting = SETTING,
+            "the MCP server is on: agents (LLMs) with a key read the catalogue at /mcp, TMDB's \
+             data included, which TMDB's terms of use restrict: no use of its content in \
+             connection with an AI application (§1.C), and an LLM chatbot counts as commercial \
+             use (§2.A). It is switched off on Keys & network"
+        );
+    }
 }
 
 /// The MCP server, as the door mounts it at `/mcp`: the SDK's service behind

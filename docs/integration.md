@@ -9,7 +9,7 @@ metadata source. The URLs are compiled into the applications:
 | Sonarr, for its alternate titles (optional) | `services.sonarr.tv` | the same file |
 | Radarr | `api.radarr.video` | `NzbDrone.Common/Cloud/RadarrCloudRequestBuilder.cs` |
 | Jellyseerr / Overseerr | `api.themoviedb.org` | the TMDB SDK it bundles |
-| Yamtrack, Jellyfin's TheTVDB plugin, Kodi's scraper | `api4.thetvdb.com` | the TheTVDB client each bundles |
+| Yamtrack, Jellyfin's TheTVDB plugin, Kodi's scraper, Seerr's TheTVDB option | `api4.thetvdb.com` | the TheTVDB client each bundles |
 | Yamtrack's imports, the anime trackers | `graphql.anilist.co` | the AniList client each bundles |
 
 Sonarr v4 asks `skyhook.sonarr.tv` under `/v1/`, Sonarr v5 under `/v2/` — the
@@ -305,14 +305,45 @@ left as they are rather than sent without an id. Seasons, episodes and the
 results of a search are written too, and a client's own key can be handed on
 to TMDB in place of this server's: see [The relays](relays.md).
 
-TMDB's answers are kept a while and shared by every client — a search a
-quarter of an hour, a title six hours, the configuration a day — and only
-whole documents (`200`): a refusal, an error or a fragment is asked again.
-TMDB is asked with the client's `User-Agent`, `Accept` and `Accept-Language`
-and nothing else it sent: no cookie, no key of this server's, no `Range`, no
-validator for an answer that is kept or patched. What mints or reads a TMDB
-session — `/3/authentication/…`, `/3/guest_session/…`, `/3/account/…`,
-anything asked with a `session_id` — is relayed but never kept.
+TMDB's answers are kept a while and shared by every client — a search or a
+page of changes a quarter of an hour, a title six hours, the configuration a
+day — and only whole documents (`200`): a refusal, an error or a fragment is
+asked again. TMDB is asked with the client's `User-Agent`, `Accept` and
+`Accept-Language` and nothing else it sent: no cookie, no key of this
+server's, no `Range`, no validator for an answer that is kept, patched or a
+page of changes. What mints or reads a TMDB session — `/3/authentication/…`,
+`/3/guest_session/…`, `/3/account/…`, anything asked with a `session_id` — is
+relayed but never kept. Requests asked the same at once share one exchange
+with TMDB, and every request goes through the door this server's own fetches
+from TMDB take — sixteen at a time between them, and a pause when TMDB answers
+`429` that the relay never waits out: what was kept answers, with an `Age`, or
+a `429` says when to come back. When TMDB fails, what was kept stands in too, a
+week old at the most. See [When a service fails](relays.md#when-a-service-fails).
+
+`/3/movie/changes` and `/3/tv/changes` name the works changed here too, after
+TMDB's own on their first page: a client that keeps in step by changes, as
+Yamtrack does, fetches a work corrected here at once rather than at its next
+full refresh. See [What is written into the answers](relays.md#what-is-written-into-the-answers).
+
+TMDB's pictures can come through this server as well. Jellyfin, Kodi, Kometa
+and Emby build every picture's address from the configuration TMDB answers;
+with the media store on and `AMS_PUBLIC_URL` set, choose **From this server**
+under *Where TMDB's clients fetch the pictures* on Opening & APIs
+(`tmdb.images = server`), and the configuration sends them to
+`{AMS_PUBLIC_URL}/tmdb-images/`: a picture kept here is served from the
+store, any other is fetched from TMDB and handed on. They must reach that
+address, on the interface's door, from one on the list. Seerr and Yamtrack are
+not concerned: the reader's browser loads their pictures from TMDB, whatever is
+chosen. See
+[TMDB's pictures, from this server](relays.md#tmdbs-pictures-from-this-server).
+
+Of TMDB's v4 API only the public lists are relayed. Radarr's *TMDb User*
+import list, which reads an account's watchlist and lists, is answered `403`
+in TMDB's own shape — `status_code` 3, with a message naming this server — and
+imports nothing, rather than an empty list Radarr would act on. Radarr carries
+no key issued here: the `403` reaches it where the surface is guarded by
+address (`AMS_TMDB_AUTH=allowlist`), and under the key policy it is refused
+with `401` first.
 
 ### TheTVDB and AniList clients
 
@@ -336,40 +367,65 @@ they carry on every call after. Two ways in:
   same key as the token, so every call after carries a credential this server
   knows; TheTVDB is asked with this server's own key (`AMS_TVDB_API_KEY`, the
   one its TheTVDB source uses) in the client's place, and the client's copy
-  never reaches it. Without a key of its own, the relay answers those clients
-  `503`. The documents answered with that key are the same for every caller,
-  and are kept a while, as the TMDB relay keeps TMDB's; the operator's own
-  account — `user`, its favourites — is nobody else's, and refused with it.
+  never reaches it. Without a key of its own, the relay still signs those
+  clients in, and answers the pages it answers itself — an order kept here or
+  frozen, `altdvd` and `alttwo` from what was read — and `503` to whatever only
+  TheTVDB can answer. The documents answered with that key are the same for
+  every caller, and are kept a while, as the TMDB relay keeps TMDB's; the
+  operator's own account — `user`, its favourites — is nobody else's, and
+  refused with it.
 - **The client's own TheTVDB key**, with `AMS_TVDB_AUTH=allowlist`: the sign-in
-  is relayed to TheTVDB as it came, and the token TheTVDB answers travels on
-  every call after, as the client's own. Nothing of a client's own token is
-  kept. A key issued here still stands in under this policy, and is judged as
-  under the other: a key revoked, run out or a member's is refused. Under the
-  key policy, a client that brings its own TheTVDB token sends this server's
-  key in `X-Api-Key`, since `Authorization` is the token's.
+  is relayed to TheTVDB with the key and its PIN alone — the key named
+  `apikey`, whether the client wrote `apikey` or, as Seerr does, `apiKey`; what
+  Kodi's scraper adds beside them, its user's gender, year of birth and a
+  device id, stays here — and the token TheTVDB answers travels on every call
+  after, as the client's own. Nothing of a client's own token is kept. Seerr's
+  TheTVDB option, which brings a key of its own, signs in this way. A key
+  issued here still stands in under this policy, and is judged as under the
+  other: a key revoked, run out or a member's is refused. Under the key policy,
+  a client that brings its own TheTVDB token sends this server's key in
+  `X-Api-Key`, since `Authorization` is the token's.
 
 Reads only: TheTVDB's one write, a user's favourites, is refused whoever asks.
 When TheTVDB refuses to sign this server in — a wrong or rotated key, a
 missing PIN, TheTVDB down — the calls made with its key are answered `503` for
 a minute rather than each signing in again, then two, up to ten while it
-keeps refusing; the first refusal is in the log.
+keeps refusing; the first refusal is in the log. What was kept of the same
+request answers instead while it is under a week old: see
+[When a service fails](relays.md#when-a-service-fails).
+
+Jellyfin's plugin can keep its library in step with TheTVDB's `updates`, a
+scheduled task off by default. The list it reads names, beside TheTVDB's own
+changes, the series and films that changed here — a lock set or lifted, a
+refresh that changed a value — so that a correction made here reaches it at
+its next sync rather than at its next full refresh. When TheTVDB fails, so does
+the list, and the plugin asks again at its next run. See [The relays](relays.md).
 
 **AniList** has no key at all, so nothing a client sends can be one of this
 server's: `AMS_ANILIST_AUTH=allowlist` is the default, and a key issued here
 would only serve a script of your own. A client reading somebody's private
 lists carries that person's own AniList token, which travels with the query as
 it came; an answer to a query that carried one, to a mutation, or about
-somebody's lists or account, is never kept — a public list is still
-somebody's, read for its latest state. An entry is recognised by AniList's
-id or by MyAnimeList's, whichever the client asked for: Yamtrack's import
-asks only the latter. MyAnimeList numbers anime and manga apart, in numbers
-that overlap, so an entry is matched by MyAnimeList's id only when it says it
-is an anime — its `type`, its `format`, or a count of episodes, a season or a
-duration; Yamtrack's manga list, and an anime still airing with no count of
-episodes yet, are left as AniList answered them. AniList's rate limit —
-ninety queries a minute, thirty while it runs degraded — is handed back as
-AniList answers it, `429` with `Retry-After`, and counts this server's own
-calls to AniList among them.
+somebody — their lists, their account, who they follow, what they liked,
+posted or reviewed — is never kept, never shared with another caller and never
+answered stale: a public list is still somebody's, read for its latest state.
+Any other answer is kept an hour, AniList's genre and tag lists asked alone
+half a day, and callers asking the same at once share one query. An entry is
+recognised by AniList's id or by MyAnimeList's, whichever the client asked
+for: Yamtrack's import asks only the latter. MyAnimeList numbers anime and
+manga apart, in numbers that overlap, so an entry is matched by MyAnimeList's
+id only when it says it is an anime — its `type`, its `format`, or a count of
+episodes, a season or a duration; Yamtrack's manga list, and an anime still
+airing with no count of episodes yet, are left as AniList answered them.
+AniList's rate limit —
+ninety queries a minute, thirty while it runs degraded — counts this server's
+own calls to AniList among the relay's, and both go through one door here:
+AniList's `429` shuts that door for as long as its `Retry-After` says, a
+minute at the most, and is handed back as it came when nothing was kept to
+answer with. Until the door opens, nothing is sent to AniList: the relay
+answers what it kept of the same query, a day old at the most, or `429` with
+the seconds left. A client's query is never spaced out as this server's own
+fetches are.
 
 Both relays are switches on **Opening & APIs** (`api.tvdb`, `api.anilist`),
 listed with the others; a member's key is kept off every relay until *Members
@@ -578,8 +634,8 @@ AniList relays against a stand-in for both services
 records what reaches it: the sign-in with a key issued here and with a
 client's own, which token travels and which never does, the locks written
 into a series, its translation, its episodes and an AniList entry, the cache,
-AniList's rate limit handed back, a loop refused, a relay switched off — under
-the default policies and with them swapped. It reaches nothing outside this
+AniList's rate limit handed back and the door it shuts, a loop refused, a
+relay switched off — under the default policies and with them swapped. It reaches nothing outside this
 host, and needs a built binary and python3.
 
 [`scripts/e2e-yamtrack.sh`](../scripts/e2e-yamtrack.sh) repeats the Yamtrack
@@ -681,8 +737,10 @@ A provider that answers `429` — or `503` with a `Retry-After` — is left
 alone for as long as it asks, a minute at most, by every request at once;
 one that asks for longer is gone without until then. TMDB is asked at most
 sixteen requests at a time, TheTVDB, Skyhook, Radarr's service and
-Fanart.tv eight, the sources spaced by a queue four or fewer. A TheTVDB key
-that is refused is not tried again for a minute.
+Fanart.tv eight, the sources spaced by a queue four or fewer. The TMDB,
+TheTVDB and AniList relays go through those same doors, but never wait at
+one: see [When a service fails](relays.md#when-a-service-fails). A TheTVDB
+key that is refused is not tried again for a minute.
 
 ## A note on languages
 
@@ -750,6 +808,11 @@ a `.nfo` that only carries image *URLs* leaves the fetching to the consumer, and
 Plex often will not. Copy or link this tree next to your media. Re-running the
 export rewrites the documents and leaves existing pictures alone, so it is cheap
 to repeat. Set `AMS_NFO_EXPORT_ARTWORK=false` for documents only.
+
+An anime's documents carry its AniList and MyAnimeList ids beside the others,
+`<uniqueid type="anilist">` and `<uniqueid type="mal">`, never as the default:
+Jellyfin's AniList plugin then goes straight to that entry rather than
+searching by title. See [Exports](exports.md#what-a-document-carries).
 
 The pictures are fetched as the media store fetches them, since the addresses
 are whatever someone who may edit put on a work: never from this machine, a

@@ -13,7 +13,8 @@ is in [Accounts and access](access.md), and publishing the interface in
 - **Of TMDB's v4 API, only the public lists are relayed** (`/4/list/{id}`), and
   only with a v4 read token configured: Radarr's TMDb list imports read them
   there. An account's own lists, ratings and watchlist need that account's
-  token, which the relay carries for nobody.
+  token, which the relay carries for nobody: they are refused with a `403` in
+  TMDB's own shape, which names this server.
 - **The settings, the job history and the audit trail need an administrator**,
   not merely a credential. A key issued to Jellyseerr cannot read which surface
   takes which credential or whether authentication is off.
@@ -39,8 +40,10 @@ is in [Accounts and access](access.md), and publishing the interface in
   proxy's — `Strict-Transport-Security` for a year.
 - **Every surface is rate limited**, the arr and TMDB ones included
   (`AMS_RATE_LIMIT_PER_MINUTE`, 600 by default, per address — an IPv6 address
-  by its /64); a refusal says when to come back in `Retry-After`, and the
-  per-address limit its quota in `RateLimit` and `RateLimit-Policy`. Signing
+  by its /64), save TMDB's pictures under `/tmdb-images/` for an address their
+  guard lets in, which a library's scan asks for in bursts; a refusal says
+  when to come back in `Retry-After`, and the per-address limit its quota in
+  `RateLimit` and `RateLimit-Policy`. Signing
   in has two brakes of its own: an account that failed
   `AMS_SIGNIN_FAILURES_PER_ACCOUNT` times (10) in fifteen minutes is refused
   without being checked until the window closes, from wherever the attempts
