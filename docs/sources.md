@@ -67,11 +67,17 @@ fires — the answer is already in hand, and a second call would buy it twice.
 Both are settings, changed under **Settings** without a restart; the `AMS_*`
 variables only seed them the first time the server starts.
 
-A search is a ladder rather than a fan-out, because search results are cheap to
-get and expensive to merge: what is already stored, then TMDB, then TheTVDB, then
-Skyhook — each rung tried only while the ones above it found nothing. So a series
-TMDB has never heard of is still found, and a deployment with no TMDB key at all
-still answers.
+A series search asks two sources every time and the others only while nothing is
+found. What is already stored and TMDB's results are both asked for and merged,
+the catalogue's first — TMDB is asked even when the catalogue holds the series —
+then, only while those two found nothing, TheTVDB (`tvdb.searchFallback`), then
+Skyhook (`skyhook.fallback`). So a series TMDB has never heard of is still found,
+and a deployment with no TMDB key at all still answers. Fankai's productions,
+with Fankai on, are searched beside the rest whatever they found. When nothing is
+found and a source that could have found it did not answer, the search fails with
+`502` rather than answer an empty list, which Sonarr would read as "no such
+series". A film search asks the catalogue, TMDB and, with `radarr.enrich` on,
+Radarr's own service, and merges all three.
 
 > If you redirect `skyhook.sonarr.tv` or `api.radarr.video` at this server
 > through your **resolver** rather than per container, it resolves those names
@@ -182,6 +188,11 @@ stored here. Neither site is ever used for numbering. Sonarr ignores
 alternative titles, so the romaji ones serve Radarr, which matches anime film
 releases against them, and this interface. For anime, their main studio
 replaces TMDB's, which is only the first production company TMDB lists.
+AniList's score is its `weightedScore`, out of a hundred, shown out of ten;
+`averageScore`, the same figure under the name AniList deprecated, stands in
+when it is missing, and is no longer asked for once AniList stops knowing it.
+Its relations are the third version of its list, `SAME_UNIVERSE` included: a
+work set in the same universe is shown after those sharing a character.
 
 **IMDb's rating** is what Sonarr is given for a series — Skyhook's rating is
 IMDb's, republished — and otherwise the rating with the most votes behind it.
@@ -288,12 +299,20 @@ within them. What this server does with a source's data is the same for every
 one: it keeps a copy of what the source answered for the works it holds — a
 work is fetched when a client or a person asks for it, never a catalogue
 wholesale — refreshes that copy on the schedule above, hands it to the clients
-it serves, and never feeds it to a model or uses it to train one. Since 0.8.0
+it serves, and never uses it to train a model. Since 0.8.0
 the TMDB, TheTVDB and AniList relays can also pass a client's own key through,
 so a client that holds one answers under its own agreement rather than the
 operator's. Every public page credits the sources that are on, with the
 notices TMDB and IMDb require; **Administration › Sources** names each source's
 terms with a link to them.
+
+One switch does hand the catalogue to models: the MCP server (`mcp.enabled`),
+off until an administrator turns it on, lets the agents — large language
+models — given a key read it, TMDB's titles, overviews and credits included.
+TMDB's API terms forbid using its content "in connection with" an AI
+application (§1.C) and count an LLM chatbot as commercial use (§2.A). The panel
+that switches it says so beside the switch, and the log warns at each start
+while it is on; see [The API](api.md#connecting-claude-code-or-open-webui).
 
 - **TMDB** allows non-commercial use with its notice shown to readers, and
   nothing kept for longer than six months. The refresh intervals can be set

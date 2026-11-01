@@ -1,0 +1,62 @@
+# this server's relay — src/api/anilist.rs sends no query of its own, but
+# reads the answers it passes on: how it tells an anime entry (`is_entry`,
+# `is_anime`, `ANIME_ONLY`, `MANGA_ONLY`), the fields it writes a lock into
+# (`write_entry`), and the names that make an answer somebody's, which it
+# never keeps (`PERSONAL`). Each is named here where AniList's schema has it,
+# so that one renamed or gone shows. Keep it in step with that file.
+query {
+  Media {
+    id
+    idMal
+    type
+    format
+    episodes
+    season
+    seasonYear
+    duration
+    nextAiringEpisode { id }
+    chapters
+    volumes
+    title { english userPreferred }
+    description
+    genres
+    coverImage { extraLarge large medium }
+    bannerImage
+    mediaListEntry { id }
+  }
+  MediaListCollection { user { id } }
+  MediaList { id }
+  Viewer { mediaListOptions { scoreFormat } favourites { anime { nodes { id } } } }
+  User { id }
+  Follower { id }
+  Following { id }
+  MutualFollower { id }
+  Like { id }
+  Activity {
+    __typename
+    ... on MessageActivity { messenger { id } recipient { id } }
+  }
+  ActivityReply { id }
+  Notification { __typename }
+  Thread { id replyUser { id } }
+  ThreadComment { id }
+  Review { id }
+  AniChartUser { user { id } }
+  Staff { submitter { id } }
+  Page {
+    mediaList { id }
+    followers { id }
+    following { id }
+    mutualFollowers { id }
+    users { id }
+    likes { id }
+    activities { __typename }
+    activityReplies { id }
+    notifications { __typename }
+    threads { id }
+    threadComments { id }
+    reviews { id }
+    recommendations(userId: 1) { id }
+    media(onList: true) { id }
+  }
+}

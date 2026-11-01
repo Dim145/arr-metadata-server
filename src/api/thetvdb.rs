@@ -20,19 +20,22 @@
 //! operator's is then never used, a key issued here is refused, and the
 //! address list guards the surface.
 //!
+//! What TheTVDB answers the operator's token is kept, as the other relays
+//! keep their services' answers (`relay::answer`): asked once for every
+//! caller asking the same at once, and standing in, with its `Age`, when
+//! TheTVDB fails — its reference lists from the database too. TheTVDB is
+//! asked through the door its client keeps, never waiting at it.
+//!
 //! Reads only. TheTVDB's one write is a user's favourites, and a relay that
 //! forwarded it would let any key issued here edit the operator's.
 
-use std::{
-    sync::atomic::{AtomicU64, Ordering},
-    time::Instant,
-};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use axum::{
     Extension, Json,
     body::{Body, Bytes},
     extract::{Request, State},
-    http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header, request::Parts},
+    http::{HeaderValue, Method, StatusCode, Uri, header, request::Parts},
     response::{IntoResponse, Response},
     routing::any,
 };
@@ -47,7 +50,7 @@ use crate::{
     cache,
     config::{Api, Surface, SurfacePolicy},
     domain::{CoverType, CreditType, Episode, ExternalSource, MediaItem, Season},
-    error::{AppError, AppResult},
+    error::{AppError, AppResult, Throttle},
     service::{self, language, orders},
     state::AppState,
 };
@@ -73,16 +76,11 @@ const LOGIN_LIMIT: usize = 16 * 1024;
 /// hundreds of artworks, run to a few megabytes.
 const ANSWER_LIMIT: u64 = 16 * 1024 * 1024;
 
-/// The largest document the relay keeps.
-const RELAY_MAX_BYTES: usize = 4 * 1024 * 1024;
-
 /// What a relayed request keeps of the caller's headers: what describes it.
 const ASKED_WITH: &[&str] = &["user-agent", "accept", "accept-language", "content-type"];
 
-/// The caller's validators, handed on only for a document this server does
-/// not patch: TheTVDB would answer "unchanged" for a body it never saw the
-/// final shape of, and a client that cached the document before a lock
-/// would keep the unlocked one for as long as TheTVDB's record stood still.
+/// The caller's validators, handed on only where they are that caller's
+/// alone to use ([`validators_travel`]).
 const VALIDATORS: &[&str] = &["if-none-match", "if-modified-since"];
 
 /// The order TheTVDB names the aired one by: the one this catalogue numbers
@@ -103,6 +101,11 @@ const TVDB_TYPES: &[&str] = &[
     "alttwo",
 ];
 
+/// The season types TheTVDB lists and answers with no episode, whatever the
+/// series (thetvdb/v4-api#340, #306): what this server read of them, season
+/// by season, is the only page of them there is.
+const ANSWERED_EMPTY: &[&str] = &["altdvd", "alttwo"];
+
 pub fn router() -> OpenApiRouter<AppState> {
     // The sign-in is a route of its own, so it is documented as what it is;
     // everything else is the wildcard, which `routes!` cannot collect and
@@ -118,14 +121,38 @@ pub fn router() -> OpenApiRouter<AppState> {
 // by name, and the second would overwrite the first.
 #[schema(as = TvdbLoginRequest)]
 pub struct LoginRequest {
-    /// A key issued here, or the client's own TheTVDB key.
+    /// A key issued here, or the client's own TheTVDB key. `apiKey` is read
+    /// as the same name: Seerr writes it so, and TheTVDB takes it.
+    // Both names in one sign-in are refused, as a field written twice is:
+    // which of the two keys was meant is not the relay's to guess.
+    #[serde(alias = "apiKey")]
     pub apikey: String,
     /// A subscriber's PIN, with the client's own key.
     #[serde(default)]
     pub pin: Option<String>,
 }
 
+/// What TheTVDB is asked to sign a client in with, its own key: that key
+/// and its PIN under the names TheTVDB documents, and nothing else the
+/// client wrote beside them. Seerr names the key `apiKey`; Kodi's scraper
+/// adds its user's gender, year of birth and a device id, which are the
+/// person's, and none of the relay's to hand on.
+fn their_sign_in(asked: &LoginRequest) -> Bytes {
+    let mut body = Map::new();
+    body.insert("apikey".into(), Value::from(asked.apikey.trim()));
+    if let Some(pin) = asked
+        .pin
+        .as_deref()
+        .map(str::trim)
+        .filter(|pin| !pin.is_empty())
+    {
+        body.insert("pin".into(), Value::from(pin));
+    }
+    Bytes::from(Value::Object(body).to_string())
+}
+
 /// Whose credential TheTVDB is asked with.
+#[derive(Clone)]
 enum Credential {
     /// The operator's token, in a client's place.
     Ours,
@@ -133,13 +160,6 @@ enum Credential {
     Theirs(HeaderValue),
     /// None: TheTVDB says so itself.
     None,
-}
-
-/// What TheTVDB answered.
-struct Answer {
-    status: StatusCode,
-    headers: HeaderMap,
-    body: Bytes,
 }
 
 fn loop_refused() -> AppError {
@@ -168,11 +188,15 @@ fn users_own(path: &str) -> bool {
 /// Sign a TheTVDB client in.
 ///
 /// A key issued here is taken as the client's token: it is answered as it
-/// came, and every call after carries it. Any other key is TheTVDB's to
-/// judge, where the surface lets a caller through by address; under a key
-/// policy nothing else is accepted. With each client's own key relayed
-/// (`tvdb.relayCredential = client`), a key issued here is refused with a
-/// 401 that says why, and any other is signed in with at TheTVDB.
+/// came, and every call after carries it — whether or not this server holds
+/// a TheTVDB key of its own, since the pages answered here need none. Any
+/// other key is TheTVDB's to judge, where the surface lets a caller through
+/// by address: TheTVDB is asked with that key and its PIN alone, whatever
+/// else the client wrote beside them. Under a key policy nothing else is
+/// accepted. With each client's own key relayed (`tvdb.relayCredential =
+/// client`), a key issued here is refused with a 401 that says why, and any
+/// other is signed in with at TheTVDB. The key may be named `apikey`, as
+/// TheTVDB documents it, or `apiKey`, as Seerr writes it.
 #[utoipa::path(
     post, path = "/v4/login", tag = TAG,
     operation_id = "thetvdb_login",
@@ -182,7 +206,8 @@ fn users_own(path: &str) -> bool {
         (status = 400, description = "Not a sign-in"),
         (status = 401, description = "The key is not one issued here, and the surface asks for one; or, with each client's own key relayed, it is one issued here"),
         (status = 403, description = "The key's holder may not use the relays"),
-        (status = 503, description = "The relay is off, or this server has no TheTVDB key to stand in with"),
+        (status = 429, description = "A client's own key, while TheTVDB's door here is shut after TheTVDB asked to be left alone, or full: Retry-After says when to come back"),
+        (status = 503, description = "The relay is off"),
     ),
     security(),
 )]
@@ -236,8 +261,7 @@ async fn sign_in(
                 "tvdb.relayCredential",
             ));
         }
-        let answer = send(state, &parts, body, &Credential::None).await?;
-        return Ok((answer.status, answer.headers, Body::from(answer.body)).into_response());
+        return signed_in_there(state, parts, &asked).await;
     }
 
     if secrets::is_issued_here(key) {
@@ -247,14 +271,15 @@ async fn sign_in(
         if holder.is_member() && !state.relay_for_members() {
             return Err(guards::members_kept_out());
         }
-        if !state.tvdb.is_configured() {
-            return Err(AppError::ProviderNotConfigured);
-        }
-        // A PIN goes with a subscriber's own key; with a key issued here, the
-        // operator's PIN is the one TheTVDB is signed in with.
+        // Signed in whether or not this server holds a TheTVDB key of its
+        // own: the pages answered here need none, and a call that has to ask
+        // TheTVDB says itself that it cannot. A PIN goes with a subscriber's
+        // own key; with a key issued here, the operator's PIN is the one
+        // TheTVDB is signed in with.
         tracing::debug!(
             client = %holder.label(),
             pin_sent = asked.pin.is_some(),
+            operators_key = state.tvdb.is_configured(),
             "a TheTVDB client signed in with a key issued here"
         );
         return Ok(Json(json!({ "status": "success", "data": { "token": key } })).into_response());
@@ -266,7 +291,29 @@ async fn sign_in(
     if relay::policy(state, Surface::Tvdb) == SurfacePolicy::ApiKey {
         return Err(AppError::Unauthorized);
     }
-    let answer = send(state, &parts, body, &Credential::None).await?;
+    signed_in_there(state, parts, &asked).await
+}
+
+/// Sign a client in at TheTVDB with its own key, and hand back what TheTVDB
+/// answered: asked with the key and the PIN alone ([`their_sign_in`]), as
+/// the JSON it is, through the same door as every read.
+async fn signed_in_there(
+    state: &AppState,
+    mut parts: Parts,
+    asked: &LoginRequest,
+) -> AppResult<Response> {
+    parts.headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    let answer = send(
+        state,
+        &parts,
+        their_sign_in(asked),
+        &Credential::None,
+        false,
+    )
+    .await?;
     Ok((answer.status, answer.headers, Body::from(answer.body)).into_response())
 }
 
@@ -283,6 +330,11 @@ async fn sign_in(
 /// key relayed (`tvdb.relayCredential = client`), the operator's token is
 /// never used, and a key issued here is refused with a 401 that says why.
 ///
+/// A page of episodes in an order this server keeps — a TMDB group's, one
+/// made here, the aired order while another is frozen as it, `altdvd` and
+/// `alttwo` that TheTVDB answers empty — is answered here, with or without
+/// a TheTVDB key of the server's own.
+///
 /// Every v4 path is accepted; see TheTVDB's own documentation for their
 /// shapes. The documents about a work of this catalogue are the ones patched:
 /// `series/{id}` and `movies/{id}`, both `/extended` — with the translations,
@@ -295,10 +347,11 @@ async fn sign_in(
     // Registered against axum as `/v4/{*path}`; see `router` above.
     params(("path" = String, Path, description = "A TheTVDB v4 path, e.g. `series/81189/extended` or `search?query=…`")),
     responses(
-        (status = 200, description = "TheTVDB's answer, with the fields locked here written in where it is about a work of this catalogue"),
+        (status = 200, description = "TheTVDB's answer, with the fields locked here written in where it is about a work of this catalogue. When TheTVDB fails — no answer, 429, 5xx — its last answer to the same request made with this server's token stands in, with Age, a week old at the most, and a reference list from the database, six months; never for `updates`"),
         (status = 401, description = "No credential this server or TheTVDB takes; or, with each client's own key relayed, a key issued here"),
         (status = 403, description = "Not a read, or the operator's own account asked for with a key issued here"),
-        (status = 503, description = "The relay is off, or this server has no TheTVDB key to stand in with"),
+        (status = 429, description = "TheTVDB's own, handed back as it came; or TheTVDB's door here, shut after one, or full, with the seconds left in Retry-After, when nothing kept stands in"),
+        (status = 503, description = "The relay is off, or this server has no TheTVDB key to stand in with for a document it does not answer itself"),
     ),
     security(("apiKey" = []), ("bearer" = [])),
 )]
@@ -365,20 +418,12 @@ pub async fn relay(
         },
     };
     let path = parts.uri.path().to_string();
-    if matches!(credential, Credential::Ours) {
-        if !state.tvdb.is_configured() {
-            return Err(AppError::ProviderNotConfigured);
-        }
-        if users_own(&path) {
-            return Err(AppError::Forbidden);
-        }
-    }
-
     let target = patch_target(&path);
 
     // A page of episodes in an order this server keeps and TheTVDB does
     // not, or in the aired order while an order is frozen as it: answered
-    // here, TheTVDB not asked.
+    // here, TheTVDB not asked — and so before this server's own TheTVDB key
+    // is asked for, which such a page does not need.
     if let Some(Target::Episodes {
         series,
         order,
@@ -398,64 +443,61 @@ pub async fn relay(
         return Ok(Json(page).into_response());
     }
 
-    // What TheTVDB answered last time, while it is still good: a document
-    // asked with the operator's token is the same for every caller, and is
-    // kept under the path and query asked; one asked with a client's own is
-    // not.
+    if matches!(credential, Credential::Ours) {
+        if !state.tvdb.is_configured() {
+            // TheTVDB cannot be asked at all. An order it answers with no
+            // episode is answered from what this server read of it, as it
+            // is once TheTVDB has answered it empty.
+            if let Some(Target::Episodes {
+                series,
+                order,
+                language,
+                ..
+            }) = &target
+                && ANSWERED_EMPTY.contains(&order.as_str())
+                && let Some(page) = answered_here(
+                    &state,
+                    *series,
+                    order,
+                    language.as_deref(),
+                    &parts.uri,
+                    true,
+                )
+                .await?
+            {
+                return Ok(Json(page).into_response());
+            }
+            return Err(AppError::ProviderNotConfigured);
+        }
+        if users_own(&path) {
+            return Err(AppError::Forbidden);
+        }
+    }
+
+    // What TheTVDB answers, as every relay is answered (`relay::answer`). A
+    // document asked with the operator's token is the same for every caller:
+    // it is kept under the path and query asked, asked once for all who ask
+    // it at once, and stands in for TheTVDB when TheTVDB fails — with its
+    // `Age`, the locks written in all the same. One asked with a client's own
+    // token is none of that. Either way TheTVDB is asked through the door its
+    // client keeps, never waiting for it to open.
     let cache_key = (parts.method == Method::GET && matches!(credential, Credential::Ours))
         .then(|| relay_key(&state, &parts.uri));
-    let remembered = match &cache_key {
-        Some(key) => state
-            .caches
-            .relay
-            .get(key)
-            .await
-            .filter(cache::Relayed::is_fresh),
-        None => None,
+    let validators = validators_travel(cache_key.is_some(), &path);
+    let ask = relay::Ask {
+        service: relay::Service::Tvdb,
+        reference: cache_key
+            .as_ref()
+            .filter(|_| relay::is_reference(&path))
+            .map(|_| filed_as(&state, &parts.uri)),
+        key: cache_key,
+        path: path.clone(),
     };
-
-    let answer = match remembered {
-        Some(hit) => {
-            let mut headers = HeaderMap::new();
-            if let Ok(value) = HeaderValue::from_str(&hit.content_type) {
-                headers.insert(header::CONTENT_TYPE, value);
-            }
-            Answer {
-                status: StatusCode::from_u16(hit.status).unwrap_or(StatusCode::OK),
-                headers,
-                body: hit.body,
-            }
-        }
-        None => {
-            let answer = send(&state, &parts, Bytes::new(), &credential).await?;
-            if let Some(key) = cache_key
-                && let Some(ttl) = relay::kept_for(answer.status, &path)
-                && answer.body.len() <= RELAY_MAX_BYTES
-            {
-                let content_type = answer
-                    .headers
-                    .get(header::CONTENT_TYPE)
-                    .and_then(|v| v.to_str().ok())
-                    .unwrap_or("application/json")
-                    .to_string();
-                state
-                    .caches
-                    .relay
-                    .insert_for(
-                        key,
-                        cache::Relayed {
-                            status: answer.status.as_u16(),
-                            content_type,
-                            expires_at: cache::now_secs() + ttl.as_secs(),
-                            body: answer.body.clone(),
-                        },
-                        ttl,
-                    )
-                    .await;
-            }
-            answer
-        }
-    };
+    let fetched = relay::answer(&state, ask, {
+        let (state, parts, credential) = (state.clone(), parts.clone(), credential.clone());
+        async move { send(&state, &parts, Bytes::new(), &credential, validators).await }
+    })
+    .await?;
 
     // An order TheTVDB answers no episode for, where the series has seasons
     // of it — `altdvd` and `alttwo` (thetvdb/v4-api#340) — and this server
@@ -466,9 +508,9 @@ pub async fn relay(
         language,
         ..
     }) = &target
-        && answer.status == StatusCode::OK
-        && relay::is_json(&answer.headers)
-        && serde_json::from_slice::<Value>(&answer.body).is_ok_and(|document| {
+        && fetched.status == StatusCode::OK
+        && relay::is_json(&fetched.headers)
+        && serde_json::from_slice::<Value>(&fetched.body).is_ok_and(|document| {
             document
                 .pointer("/data/episodes")
                 .and_then(Value::as_array)
@@ -488,23 +530,52 @@ pub async fn relay(
     }
 
     if let Some(target) = target
-        && relay::is_json(&answer.headers)
-        && let Ok(mut document) = serde_json::from_slice::<Value>(&answer.body)
+        && relay::is_json(&fetched.headers)
+        && let Ok(mut document) = serde_json::from_slice::<Value>(&fetched.body)
     {
         let renumbered = match target {
-            Target::Series(series) if answer.status == StatusCode::OK => {
+            Target::Series(series) if fetched.status == StatusCode::OK => {
                 renumber_frozen(&state, series, &mut document).await?
             }
             _ => false,
         };
         if patch(&state, &mut document, target).await? || renumbered {
-            let mut headers = answer.headers;
+            let mut headers = fetched.headers;
             relay::without_validators(&mut headers);
-            return Ok((answer.status, headers, Json(document)).into_response());
+            return Ok((fetched.status, headers, Json(document)).into_response());
         }
     }
 
-    Ok((answer.status, answer.headers, Body::from(answer.body)).into_response())
+    // `updates`: the series and films changed here since the instant asked,
+    // on TheTVDB's first page after its own records. TheTVDB failing, its
+    // failure is the answer — neither what was kept nor these alone — so
+    // that a client that moves a cursor along asks the same window again.
+    if let Some(asked) = updates::Asked::of(&parts.uri)
+        && fetched.status == StatusCode::OK
+        && relay::is_json(&fetched.headers)
+        && let Ok(mut document) = serde_json::from_slice::<Value>(&fetched.body)
+    {
+        let changed = updates::changed_here(&state, &asked).await?;
+        if updates::merge(&mut document, &changed, &asked) {
+            let mut headers = fetched.headers;
+            relay::without_validators(&mut headers);
+            return Ok((fetched.status, headers, Json(document)).into_response());
+        }
+    }
+
+    Ok((fetched.status, fetched.headers, Body::from(fetched.body)).into_response())
+}
+
+/// Whether the caller's validators (`If-None-Match`, `If-Modified-Since`)
+/// go to TheTVDB with its request: only where TheTVDB's answer is that
+/// caller's alone, and handed back as it came. Not with a request that is
+/// kept, or shared with others asking the same at once (`kept`): a "not
+/// modified" is one caller's answer. Not for a document this server writes
+/// into — a patched one, `updates` — which TheTVDB would call unchanged
+/// though it never saw its final shape: a client that held it before a lock
+/// would keep the unlocked one for as long as TheTVDB's record stood still.
+fn validators_travel(kept: bool, path: &str) -> bool {
+    !kept && patch_target(path).is_none() && path.trim_end_matches('/') != updates::PATH
 }
 
 /// A series' record that carries its episodes (`?meta=episodes`), while an
@@ -561,8 +632,18 @@ async fn renumber_frozen(state: &AppState, series: i64, document: &mut Value) ->
 /// generation, so a settings change files what follows elsewhere.
 fn relay_key(state: &AppState, uri: &Uri) -> String {
     format!(
-        "tvdb:{}:{}:{}?{}",
+        "tvdb:{}:{}",
         state.caches.generation(),
+        filed_as(state, uri)
+    )
+}
+
+/// What a reference list TheTVDB answered is kept under in the database
+/// ([`relay::Ask::reference`]): the request as [`relay_key`] files it,
+/// without the generation, which starts again at every start.
+fn filed_as(state: &AppState, uri: &Uri) -> String {
+    format!(
+        "{}:{}?{}",
         state.config.tvdb.upstream,
         uri.path(),
         relay::sorted_query(uri, relay::OUR_PARAMS)
@@ -594,22 +675,37 @@ fn target_of(state: &AppState, uri: &Uri) -> AppResult<String> {
     Ok(target)
 }
 
-/// Ask TheTVDB, and read what it answered. With the operator's token, once
+/// Ask TheTVDB, and read what it answered — with the caller's validators,
+/// `validators` ([`validators_travel`]). With the operator's token, once
 /// more after signing in anew when TheTVDB refused it: a token outlives its
 /// welcome after a month.
+///
+/// Through the door TheTVDB's client keeps ([`crate::providers::Gate`]): as
+/// many calls at once as the server's own, and its pause when TheTVDB asks
+/// to be left alone — a `429`, or a `503` that says when to come back —
+/// which TheTVDB's own answer here starts for every caller. A closed door
+/// is not waited at: nothing is sent, the operator is not signed in either,
+/// and the answer is a `429` that says when to come back.
 async fn send(
     state: &AppState,
     parts: &Parts,
     body: Bytes,
     credential: &Credential,
-) -> AppResult<Answer> {
+    validators: bool,
+) -> AppResult<relay::Fetched> {
     let target = target_of(state, &parts.uri)?;
     let mut asked = relay::asked_with(&parts.headers, ASKED_WITH);
-    if patch_target(parts.uri.path()).is_none() {
+    if validators {
         asked.extend(relay::asked_with(&parts.headers, VALIDATORS));
     }
+    let gate = state.tvdb.gate();
     let mut asked_again = false;
     loop {
+        // Before the operator's token: a sign-in through a closed door would
+        // wait at it, or be taken for TheTVDB refusing the operator's key.
+        if let Some(left) = gate.quiet_for() {
+            return Err(AppError::RateLimited(Throttle::after(left)));
+        }
         let mut outbound = relay::CLIENT
             .request(parts.method.clone(), &target)
             .headers(asked.clone())
@@ -633,15 +729,11 @@ async fn send(
             outbound = outbound.body(body.clone());
         }
 
-        let started = Instant::now();
-        let response = crate::outbound::send("tvdb", outbound).await;
-        crate::metrics::upstream("tvdb", started, response.as_ref().ok().map(|r| r.status()));
-        let response = response.map_err(|e| {
-            AppError::UpstreamUnavailable(anyhow::anyhow!(
-                "TheTVDB request failed: {}",
-                crate::providers::describe_request_error(&e)
-            ))
-        })?;
+        // Its place at the door is held until the body is read.
+        let (response, _place) = gate
+            .send_now(outbound)
+            .await
+            .map_err(|e| relay::unsent(relay::Service::Tvdb, e))?;
 
         let status =
             StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
@@ -673,11 +765,7 @@ async fn send(
                 .await
                 .map_err(|e| AppError::UpstreamUnavailable(e.context("TheTVDB's answer")))?
         };
-        return Ok(Answer {
-            status,
-            headers,
-            body: Bytes::from(body),
-        });
+        return Ok(relay::Fetched::new(status, headers, Bytes::from(body)));
     }
 }
 
@@ -1013,7 +1101,9 @@ async fn answered_here(
         },
         "links": {
             "prev": null,
-            "self": format!("{PREFIX}{}", uri.path()),
+            // The path already names `/v4`; the query, less a key for this
+            // server, as TheTVDB's own link carries it.
+            "self": relay::without_our_params(uri),
             "next": null,
             "total_items": total,
             "page_size": total,
@@ -1579,6 +1669,219 @@ fn write_episode_translations(
     );
     let title = write_translated(record, item, &scope, "title", stored);
     write_translated(record, item, &scope, "overview", stored) || title
+}
+
+/// `updates`: what changed at TheTVDB since an instant, a page at a time —
+/// with the series and the films of this catalogue that changed here beside
+/// it, by their TheTVDB ids: a lock set or lifted, something added or taken
+/// out by hand, a refresh that changed a value (the journal,
+/// `media_change`). A lock set here then reaches a client that syncs by
+/// this list, Jellyfin's plugin, at its next sync rather than at its next
+/// full refresh. Where TheTVDB fails, its failure is the answer: neither
+/// what was kept of the list nor the works changed here alone stand in for
+/// it, so that a client that moves a cursor along asks the same window
+/// again rather than miss what changed at TheTVDB meanwhile.
+mod updates {
+    use std::collections::HashSet;
+
+    use axum::http::Uri;
+    use chrono::{DateTime, TimeDelta, Utc};
+    use serde_json::{Value, json};
+
+    use crate::{api::relay, db, domain::ExternalSource, error::AppResult, state::AppState};
+
+    /// Where TheTVDB lists what changed since an instant, as a client asks.
+    pub(super) const PATH: &str = "/v4/updates";
+
+    /// How far back the works changed here are looked for, at the most: an
+    /// older instant is brought forward to it, as for TMDB's changes.
+    pub(super) const AT_MOST: TimeDelta = TimeDelta::days(14);
+
+    /// A kind of record this catalogue answers the changes of.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(super) enum Kind {
+        Series,
+        Movie,
+    }
+
+    impl Kind {
+        /// The name TheTVDB files the changes of such a record under: the
+        /// `type` a client asks for, the `entityType` each record carries.
+        pub(super) fn entity_type(self) -> &'static str {
+            match self {
+                Kind::Series => "series",
+                Kind::Movie => "movies",
+            }
+        }
+    }
+
+    /// A work of this catalogue that changed here, by its TheTVDB id.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(super) struct Changed {
+        pub kind: Kind,
+        pub tvdb_id: i64,
+        /// When it last changed, in seconds since the epoch.
+        pub at: i64,
+    }
+
+    /// What a client asked `updates` for.
+    #[derive(Debug, PartialEq, Eq)]
+    pub(super) struct Asked {
+        /// `since`, in seconds since the epoch.
+        pub since: i64,
+        /// `type`: `series`, `movies`, `episodes`…; every kind when none.
+        pub kind: Option<String>,
+        /// `action`: `update` or `delete`; both when none.
+        pub action: Option<String>,
+        /// Whether it is the first page — `page=0`, or none — the one the
+        /// works changed here are laid on.
+        pub first_page: bool,
+    }
+
+    impl Asked {
+        /// What a request for `updates` asks: `None` for another path, or
+        /// for one that names no instant, which TheTVDB refuses itself.
+        /// Each parameter as TheTVDB reads it, the first of its name;
+        /// `since` its number of seconds, which a client may write as a
+        /// decimal number; an empty one as none.
+        pub(super) fn of(uri: &Uri) -> Option<Self> {
+            if uri.path().trim_end_matches('/') != PATH {
+                return None;
+            }
+            let query = uri.query().unwrap_or_default();
+            let first = |name: &str| {
+                url::form_urlencoded::parse(query.as_bytes())
+                    .find(|(key, _)| key == name)
+                    .map(|(_, value)| value.trim().to_string())
+                    .filter(|value| !value.is_empty())
+            };
+            let since = first("since").and_then(|since| {
+                since.parse::<i64>().ok().or_else(|| {
+                    let seconds = since.parse::<f64>().ok()?;
+                    // Saturating, as a float cast is.
+                    seconds.is_finite().then(|| seconds.floor() as i64)
+                })
+            })?;
+            Some(Self {
+                since,
+                kind: first("type"),
+                action: first("action"),
+                first_page: first("page").is_none_or(|page| page == "0"),
+            })
+        }
+
+        /// Whether the changes made here to a work of `kind` belong on the
+        /// page asked: the first one, where updates are asked for, of that
+        /// kind or of every one.
+        pub(super) fn takes(&self, kind: Kind) -> bool {
+            self.first_page
+                && self
+                    .action
+                    .as_deref()
+                    .is_none_or(|action| action == "update")
+                && self
+                    .kind
+                    .as_deref()
+                    .is_none_or(|asked| asked == kind.entity_type())
+        }
+    }
+
+    /// One record of `updates` for a work changed here, as TheTVDB's
+    /// documentation describes one (`EntityUpdate`, swagger 4.7.10), every
+    /// field in its order and of its type: an update (`methodInt` 2, `method`
+    /// `update`) of the record `recordId` of the kind `entityType`, by nobody
+    /// TheTVDB knows (`userId` 0), at the instant it changed (`timeStamp`), merged
+    /// into nothing (`mergeToId` 0). `seriesId` is for an episode's record
+    /// alone, and left out; what the documentation does not say the meaning
+    /// of — `extraInfo`, `recordType`, `mergeToEntityType` — is empty. A
+    /// client that syncs by this list reads the record again, as after an
+    /// edit at TheTVDB, and meets the locks laid into it.
+    pub(super) fn record(changed: &Changed) -> Value {
+        json!({
+            "entityType": changed.kind.entity_type(),
+            "methodInt": 2,
+            "method": "update",
+            "extraInfo": "",
+            "userId": 0,
+            "recordType": "",
+            "recordId": changed.tvdb_id,
+            "timeStamp": changed.at,
+            "mergeToId": 0,
+            "mergeToEntityType": "",
+        })
+    }
+
+    /// Lay the works changed here on TheTVDB's page of `updates`, after its
+    /// own records: each once, none the page names already, and the count
+    /// of the whole list grown by as many. Whether any was laid.
+    pub(super) fn merge(document: &mut Value, changed: &[Changed], asked: &Asked) -> bool {
+        let Some(records) = document.get_mut("data").and_then(Value::as_array_mut) else {
+            return false;
+        };
+        let mut named: HashSet<(String, i64)> = records
+            .iter()
+            .filter_map(|record| {
+                Some((
+                    record.get("entityType")?.as_str()?.to_string(),
+                    record.get("recordId")?.as_i64()?,
+                ))
+            })
+            .collect();
+        let before = records.len();
+        for one in changed.iter().filter(|one| asked.takes(one.kind)) {
+            if named.insert((one.kind.entity_type().to_string(), one.tvdb_id)) {
+                records.push(record(one));
+            }
+        }
+        let laid = records.len() - before;
+        if laid == 0 {
+            return false;
+        }
+        if let Some(total) = document.pointer_mut("/links/total_items")
+            && let Some(count) = total.as_u64()
+        {
+            *total = Value::from(count + laid as u64);
+        }
+        true
+    }
+
+    /// The window the works changed here are looked for in: from the
+    /// instant asked — brought forward to [`AT_MOST`] before `now` — to
+    /// `now`. None when it is empty: an instant still to come.
+    pub(super) fn window(since: i64, now: DateTime<Utc>) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
+        let earliest = now - AT_MOST;
+        let from = DateTime::from_timestamp(since, 0).map_or(earliest, |at| at.max(earliest));
+        (from < now).then_some((from, now))
+    }
+
+    /// The series and films of this catalogue that changed here in the
+    /// window `asked` names, by their TheTVDB ids: of the kinds its page
+    /// takes, and none for a page that takes none.
+    pub(super) async fn changed_here(state: &AppState, asked: &Asked) -> AppResult<Vec<Changed>> {
+        let now = Utc::now();
+        let Some((from, to)) = window(asked.since, now) else {
+            return Ok(Vec::new());
+        };
+        let mut changed = Vec::new();
+        for (kind, source) in [
+            (Kind::Series, ExternalSource::TvdbSeries),
+            (Kind::Movie, ExternalSource::TvdbMovie),
+        ] {
+            if !asked.takes(kind) {
+                continue;
+            }
+            let works = relay::changed_here(state, source, from, to).await?;
+            changed.extend(works.into_iter().filter_map(|work| {
+                Some(Changed {
+                    kind,
+                    tvdb_id: work.external_id.parse().ok()?,
+                    at: db::parse_rfc3339(&work.changed_at)
+                        .map_or(now.timestamp(), |at| at.timestamp()),
+                })
+            }));
+        }
+        Ok(changed)
+    }
 }
 
 #[cfg(test)]
@@ -2365,17 +2668,203 @@ mod tests {
         assert_eq!(asked.pin.as_deref(), Some("ABCD"));
         assert!(serde_json::from_str::<LoginRequest>(r#"{"pin":"ABCD"}"#).is_err());
     }
+
+    /// Seerr names the key `apiKey`, and TheTVDB takes it so; a sign-in that
+    /// names two keys, one each way, is none: which was meant is not the
+    /// relay's to guess.
+    #[test]
+    fn a_sign_in_names_its_key_either_way_but_not_both() {
+        let asked: LoginRequest =
+            serde_json::from_str(r#"{"apiKey":"seerrs","pin":"ABCD"}"#).unwrap();
+        assert_eq!(asked.apikey, "seerrs");
+        assert_eq!(asked.pin.as_deref(), Some("ABCD"));
+        assert!(
+            serde_json::from_str::<LoginRequest>(r#"{"apikey":"one","apiKey":"another"}"#).is_err()
+        );
+    }
+
+    /// TheTVDB is signed in with the key and the PIN alone, under the names
+    /// it documents: not Kodi's profile of its user, and no blank PIN.
+    #[test]
+    fn thetvdb_is_asked_with_the_key_and_the_pin_alone() {
+        let sent = |body: &str| -> Value {
+            let asked: LoginRequest = serde_json::from_str(body).unwrap();
+            serde_json::from_slice(&their_sign_in(&asked)).unwrap()
+        };
+        assert_eq!(
+            sent(
+                r#"{"apikey": " kodis-key ", "pin": "1234", "gender": "Other", "birthYear": "1984", "uuid": "6f1c0d3e-0000-4000-8000-000000000000"}"#
+            ),
+            json!({ "apikey": "kodis-key", "pin": "1234" })
+        );
+        assert_eq!(
+            sent(r#"{"apiKey":"seerrs-key"}"#),
+            json!({ "apikey": "seerrs-key" })
+        );
+        assert_eq!(
+            sent(r#"{"apikey":"theirs","pin":" "}"#),
+            json!({ "apikey": "theirs" })
+        );
+    }
+
+    #[test]
+    fn what_updates_is_asked_for_is_read_from_its_query() {
+        let asked = |uri: &str| updates::Asked::of(&uri.parse().unwrap());
+        assert_eq!(
+            asked("/v4/updates?since=1761955200&type=series&action=update"),
+            Some(updates::Asked {
+                since: 1_761_955_200,
+                kind: Some("series".into()),
+                action: Some("update".into()),
+                first_page: true,
+            })
+        );
+        // Jellyfin's SDK writes the instant as a decimal number.
+        assert_eq!(
+            asked("/v4/updates?since=1761955200.0&page=0").map(|a| (a.since, a.first_page)),
+            Some((1_761_955_200, true))
+        );
+        assert_eq!(
+            asked("/v4/updates?page=1&since=1761955200").map(|a| a.first_page),
+            Some(false)
+        );
+        // The first of a name, as TheTVDB reads it; an empty one is none.
+        assert_eq!(
+            asked("/v4/updates?since=1761955200&since=1&page=&type=").map(|a| (
+                a.since,
+                a.first_page,
+                a.kind
+            )),
+            Some((1_761_955_200, true, None))
+        );
+        // No instant: TheTVDB's to refuse. Another path: not `updates`.
+        assert_eq!(asked("/v4/updates?type=series"), None);
+        assert_eq!(asked("/v4/updates?since=yesterday"), None);
+        assert_eq!(asked("/v4/series/81189?since=1761955200"), None);
+    }
+
+    /// The series and films changed here are laid on TheTVDB's first page,
+    /// after its own records, each once — none it names already — where
+    /// updates of their kind are asked for.
+    #[test]
+    fn the_works_changed_here_are_laid_on_thetvdbs_first_page() {
+        use updates::{Changed, Kind};
+        let changed = [
+            Changed {
+                kind: Kind::Series,
+                tvdb_id: 990_201,
+                at: 1_761_960_000,
+            },
+            Changed {
+                kind: Kind::Series,
+                tvdb_id: 81189,
+                at: 1_761_961_000,
+            },
+            Changed {
+                kind: Kind::Movie,
+                tvdb_id: 990_202,
+                at: 1_761_962_000,
+            },
+        ];
+        let theirs = || {
+            json!({
+                "status": "success",
+                "data": [
+                    { "recordType": "", "recordId": 81189, "methodInt": 2, "method": "update",
+                      "extraInfo": "", "userId": 1, "timeStamp": 1_761_958_000, "entityType": "series" },
+                    { "recordType": "", "recordId": 990_201, "methodInt": 2, "method": "update",
+                      "extraInfo": "", "userId": 1, "timeStamp": 1_761_958_500, "entityType": "episodes",
+                      "seriesId": 81189 }
+                ],
+                "links": { "prev": null, "self": "/v4/updates?since=1761955200", "next": null,
+                           "total_items": 2, "page_size": 1000 }
+            })
+        };
+        let laid = |uri: &str| {
+            let asked = updates::Asked::of(&uri.parse().unwrap()).unwrap();
+            let mut page = theirs();
+            let changed_any = updates::merge(&mut page, &changed, &asked);
+            (changed_any, page)
+        };
+
+        let (changed_any, page) = laid("/v4/updates?since=1761955200");
+        assert!(changed_any);
+        let records = page["data"].as_array().unwrap();
+        assert_eq!(records.len(), 4, "81189 is TheTVDB's already");
+        // Every field of the swagger's `EntityUpdate` but an episode's
+        // `seriesId`.
+        assert_eq!(
+            records[2],
+            json!({ "entityType": "series", "methodInt": 2, "method": "update",
+                    "extraInfo": "", "userId": 0, "recordType": "", "recordId": 990_201,
+                    "timeStamp": 1_761_960_000, "mergeToId": 0, "mergeToEntityType": "" })
+        );
+        assert_eq!(records[3]["entityType"], json!("movies"));
+        assert_eq!(records[3]["recordId"], json!(990_202));
+        assert_eq!(page["links"]["total_items"], json!(4));
+        assert_eq!(page["links"]["page_size"], json!(1000));
+
+        let kinds = |page: &Value| {
+            page["data"].as_array().unwrap()[2..]
+                .iter()
+                .map(|r| r["entityType"].as_str().unwrap().to_string())
+                .collect::<Vec<_>>()
+        };
+        let (_, series) = laid("/v4/updates?since=1761955200&type=series&action=update");
+        assert_eq!(kinds(&series), ["series"]);
+        let (_, movies) = laid("/v4/updates?since=1761955200&type=movies");
+        assert_eq!(kinds(&movies), ["movies"]);
+        for uri in [
+            "/v4/updates?since=1761955200&type=episodes",
+            "/v4/updates?since=1761955200&action=delete",
+            "/v4/updates?since=1761955200&page=1",
+        ] {
+            let (changed_any, page) = laid(uri);
+            assert!(!changed_any, "{uri}");
+            assert_eq!(page, theirs(), "{uri}");
+        }
+    }
+
+    /// The window of the works changed here: from the instant asked, two
+    /// weeks back at the most, to now; none for an instant to come.
+    #[test]
+    fn the_works_changed_here_are_looked_for_two_weeks_back_at_most() {
+        let now = chrono::DateTime::from_timestamp(1_762_000_000, 0).unwrap();
+        let hour_ago = now.timestamp() - 3600;
+        assert_eq!(
+            updates::window(hour_ago, now),
+            Some((chrono::DateTime::from_timestamp(hour_ago, 0).unwrap(), now))
+        );
+        assert_eq!(updates::window(0, now), Some((now - updates::AT_MOST, now)));
+        assert_eq!(updates::window(now.timestamp() + 60, now), None);
+    }
+
+    /// The caller's validators go to TheTVDB only with a request nobody
+    /// shares, for a document handed back as TheTVDB wrote it.
+    #[test]
+    fn the_validators_travel_with_a_request_of_the_callers_own() {
+        assert!(validators_travel(false, "/v4/search"));
+        assert!(validators_travel(false, "/v4/artwork/types"));
+        // Kept, or asked once for everybody asking the same at once.
+        assert!(!validators_travel(true, "/v4/search"));
+        // Written into here.
+        assert!(!validators_travel(false, "/v4/series/81189/extended"));
+        assert!(!validators_travel(false, "/v4/updates"));
+    }
 }
 
 /// The relay as a client meets it, against a stand-in for TheTVDB that
 /// keeps what it was asked.
 #[cfg(test)]
 mod relayed {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use axum::{
         Extension,
         body::Body,
         extract::{Request, State},
-        http::StatusCode,
+        http::{HeaderMap, StatusCode, Uri, header},
+        response::{IntoResponse, Response},
     };
     use serde_json::{Value, json};
 
@@ -2386,7 +2875,7 @@ mod relayed {
             testing::{self, Asked, OPERATOR_TVDB_KEY, StandIn},
         },
         auth::{Identity, secrets},
-        config::{Api, Surface, SurfacePolicy},
+        config::{Api, Config, Surface, SurfacePolicy},
         db::repo::client::{self, NewClient},
         domain::{MediaItem, MediaKind},
         state::AppState,
@@ -2488,14 +2977,20 @@ mod relayed {
     }
 
     async fn sign_in(state: &AppState, key: &str) -> (StatusCode, Value) {
+        signed_in_with(state, &json!({ "apikey": key }).to_string()).await
+    }
+
+    /// A sign-in with its body written as a client wrote it — an error
+    /// answered as the client meets it.
+    async fn signed_in_with(state: &AppState, body: &str) -> (StatusCode, Value) {
         let request = Request::post("/v4/login")
             .header("content-type", "application/json")
-            .body(Body::from(json!({ "apikey": key }).to_string()))
+            .body(Body::from(body.to_string()))
             .unwrap();
         answer(
             login(State(state.clone()), None, request)
                 .await
-                .expect("an answer"),
+                .unwrap_or_else(IntoResponse::into_response),
         )
         .await
     }
@@ -2504,22 +2999,78 @@ mod relayed {
         written_as(state, path, &format!("Bearer {token}")).await
     }
 
-    /// A read with `Authorization` written as a client wrote it.
+    /// A read with `Authorization` written as a client wrote it — an error
+    /// answered as the client meets it.
     async fn written_as(state: &AppState, path: &str, authorization: &str) -> (StatusCode, Value) {
+        answer(respond(state, path, authorization).await).await
+    }
+
+    /// A read with a token, as the client meets it, its headers and all.
+    async fn read(state: &AppState, path: &str, token: &str) -> (StatusCode, HeaderMap, Value) {
+        let response = respond(state, path, &format!("Bearer {token}")).await;
+        let headers = response.headers().clone();
+        let (status, body) = answer(response).await;
+        (status, headers, body)
+    }
+
+    /// The relay's answer to a read, an error answered as the client meets
+    /// it.
+    async fn respond(state: &AppState, path: &str, authorization: &str) -> Response {
         let request = Request::get(path)
             .header("authorization", authorization)
             .body(Body::empty())
             .unwrap();
         // Let through by address, as under either policy once judged.
-        let response = relay(
+        relay(
             State(state.clone()),
             Extension(Identity::Network(None)),
             None,
             request,
         )
         .await
-        .expect("an answer");
-        answer(response).await
+        .unwrap_or_else(IntoResponse::into_response)
+    }
+
+    /// What TheTVDB answered at `path`, kept as the relay keeps it, and gone
+    /// stale `late` seconds ago — kept that much longer ago than its kind
+    /// stays good.
+    async fn kept_stale(state: &AppState, path: &str, document: &Value, late: u64) {
+        let uri: Uri = path.parse().expect("a path");
+        state
+            .caches
+            .relay
+            .insert_for(
+                super::relay_key(state, &uri),
+                crate::cache::Relayed {
+                    status: 200,
+                    content_type: "application/json".into(),
+                    expires_at: crate::cache::now_secs() - late,
+                    body: document.to_string().into(),
+                },
+                std::time::Duration::from_secs(3600),
+            )
+            .await;
+    }
+
+    /// The seconds a header says.
+    fn seconds(headers: &HeaderMap, name: header::HeaderName) -> u64 {
+        headers
+            .get(&name)
+            .unwrap_or_else(|| panic!("no {name}"))
+            .to_str()
+            .unwrap()
+            .parse()
+            .unwrap()
+    }
+
+    /// The whole server as [`testing::server`] makes it, its configuration
+    /// changed by `change` — another policy, no TheTVDB key — on a database
+    /// of its own.
+    async fn server_with(stand_in: &StandIn, change: impl FnOnce(&mut Config)) -> AppState {
+        let mut config = testing::server(stand_in).await.config.clone();
+        config.database = crate::db::testing::database().await;
+        change(&mut config);
+        AppState::bootstrap(config).await.expect("a server")
     }
 
     /// TheTVDB as the stand-in answers for the orders of a series: its aired
@@ -2909,5 +3460,555 @@ mod relayed {
         assert_eq!(stand_in.asked_at("/v4/series/81189/extended").len(), 2);
         // The operator was never signed in.
         assert_eq!(stand_in.asked_at("/v4/login").len(), 1);
+    }
+
+    /// The sign-in TheTVDB was asked for, as the stand-in read its body.
+    fn signed_in_there(stand_in: &StandIn) -> Vec<Value> {
+        stand_in
+            .asked_at("/v4/login")
+            .iter()
+            .map(|asked| serde_json::from_str(&asked.body).expect("a JSON sign-in"))
+            .collect()
+    }
+
+    /// Seerr signs in with its own key named `apiKey`, a PIN when one is
+    /// set — its body as it writes it (`server/api/tvdb/index.ts`, v3.5.0) —
+    /// let through by address: TheTVDB is asked with the key under the name
+    /// it documents, and Seerr is answered its token. A key issued here,
+    /// named the same way, is answered here.
+    #[tokio::test]
+    async fn seerr_signs_in_with_its_key_named_in_camel_case() {
+        let stand_in = StandIn::start(tvdb).await;
+        let state = server_with(&stand_in, |config| {
+            config.security.tvdb_policy = SurfacePolicy::Allowlist;
+        })
+        .await;
+
+        for body in [
+            r#"{"apiKey":"seerrs-own-tvdb-key"}"#,
+            r#"{"apiKey":"seerrs-own-tvdb-key","pin":"SEERRPIN"}"#,
+        ] {
+            let (status, signed) = signed_in_with(&state, body).await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            assert_eq!(
+                signed["data"]["token"],
+                json!("token-for-seerrs-own-tvdb-key")
+            );
+        }
+        assert_eq!(
+            signed_in_there(&stand_in),
+            [
+                json!({ "apikey": "seerrs-own-tvdb-key" }),
+                json!({ "apikey": "seerrs-own-tvdb-key", "pin": "SEERRPIN" })
+            ]
+        );
+
+        let key = issued(&state).await;
+        let (status, signed) = signed_in_with(&state, &json!({ "apiKey": key }).to_string()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(signed["data"]["token"], json!(key));
+        assert_eq!(stand_in.asked_at("/v4/login").len(), 2);
+
+        // A key under each name: no sign-in, and nothing asked of TheTVDB.
+        let (status, _) = signed_in_with(
+            &state,
+            r#"{"apikey":"seerrs-own-tvdb-key","apiKey":"another-tvdb-key"}"#,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(stand_in.asked_at("/v4/login").len(), 2);
+    }
+
+    /// Kodi's scraper signs in with its own key, its PIN, and its user's
+    /// gender, year of birth and a device id — its body as `requests` writes
+    /// it: TheTVDB is asked with the key and the PIN alone, whether each
+    /// client's own key is relayed or the client is let through by address.
+    #[tokio::test]
+    async fn kodis_profile_of_its_user_stays_here_when_it_signs_in() {
+        const KODI: &str = r#"{"apikey": "kodis-own-tvdb-key", "pin": "KODIPIN", "gender": "Other", "birthYear": "1984", "uuid": "6f1c0d3e-0000-4000-8000-000000000000"}"#;
+        let stand_in = StandIn::start(tvdb).await;
+        let state = testing::server(&stand_in).await;
+        testing::choose(&state, "tvdb.relayCredential", "client").await;
+
+        let (status, signed) = signed_in_with(&state, KODI).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            signed["data"]["token"],
+            json!("token-for-kodis-own-tvdb-key")
+        );
+
+        let by_address = server_with(&stand_in, |config| {
+            config.security.tvdb_policy = SurfacePolicy::Allowlist;
+        })
+        .await;
+        let (status, _) = signed_in_with(&by_address, KODI).await;
+        assert_eq!(status, StatusCode::OK);
+
+        assert_eq!(
+            signed_in_there(&stand_in),
+            [
+                json!({ "apikey": "kodis-own-tvdb-key", "pin": "KODIPIN" }),
+                json!({ "apikey": "kodis-own-tvdb-key", "pin": "KODIPIN" })
+            ]
+        );
+    }
+
+    /// A server with no TheTVDB key of its own answers what it answers
+    /// itself all the same: a client signs in with a key issued here and
+    /// reads an order made here, and `altdvd` from what was read of it;
+    /// what TheTVDB alone could answer is a 503, and TheTVDB is asked
+    /// nothing — not even to sign the operator in.
+    #[tokio::test]
+    async fn the_orders_kept_here_are_answered_without_a_thetvdb_key() {
+        use crate::{
+            db::repo::{self, child::blank_episode},
+            domain::{EpisodeOrder, OrderKind, PlacedEpisode},
+        };
+
+        let stand_in = StandIn::start(tvdb_with_orders).await;
+        let state = server_with(&stand_in, |config| config.tvdb.api_key = None).await;
+        assert!(!state.tvdb.is_configured());
+        let key = issued(&state).await;
+
+        let mut item = MediaItem::empty(MediaKind::Series);
+        item.title = "The Keyless Lighthouse Keepers".into();
+        item.slug = "the-keyless-lighthouse-keepers".into();
+        item.external_ids.tvdb = Some(990_101);
+        for (number, id, title) in [(1, 990_111, "Departure"), (2, 990_112, "Landfall")] {
+            let mut episode = blank_episode(1, number);
+            episode.is_manual = false;
+            episode.tvdb_id = Some(id);
+            episode.title = title.into();
+            item.episodes.push(episode);
+        }
+        testing::store(&state, &item, &[]).await;
+        let order = |key: &str, source: &str, kind: OrderKind, episodes| EpisodeOrder {
+            key: key.into(),
+            kind,
+            source: source.into(),
+            source_ref: None,
+            label: key.into(),
+            is_default: false,
+            is_frozen: false,
+            announced: None,
+            updated_at: crate::db::now(),
+            episodes,
+        };
+        repo::order::replace_source(
+            &state.db,
+            &item.id,
+            "tvdb",
+            &[order(
+                "altdvd",
+                "tvdb",
+                OrderKind::TvdbAlt,
+                vec![
+                    PlacedEpisode::of_tvdb(990_111, 1, 1),
+                    PlacedEpisode::of_tvdb(990_112, 1, 2),
+                ],
+            )],
+        )
+        .await
+        .expect("TheTVDB's order, read when this server had a key");
+        repo::order::create(
+            &state.db,
+            &item.id,
+            &order(
+                "ams-landfall-first",
+                "local",
+                OrderKind::Custom,
+                vec![
+                    PlacedEpisode::of_tvdb(990_112, 1, 1),
+                    PlacedEpisode::of_tvdb(990_111, 1, 2),
+                ],
+            ),
+        )
+        .await
+        .expect("one made here");
+        let ids = |page: &Value| {
+            page["data"]["episodes"]
+                .as_array()
+                .expect("its episodes")
+                .iter()
+                .map(|e| (e["id"].clone(), e["number"].clone()))
+                .collect::<Vec<_>>()
+        };
+
+        let (status, signed) = sign_in(&state, &key).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(signed["data"]["token"], json!(key));
+
+        let (status, page) = get(
+            &state,
+            "/v4/series/990101/episodes/ams-landfall-first/eng",
+            &key,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            ids(&page),
+            [(json!(990_112), json!(1)), (json!(990_111), json!(2))]
+        );
+        let (status, page) = get(&state, "/v4/series/990101/episodes/altdvd", &key).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            ids(&page),
+            [(json!(990_111), json!(1)), (json!(990_112), json!(2))]
+        );
+
+        for path in [
+            "/v4/series/990101/episodes/official/eng",
+            "/v4/series/990101/episodes/dvd",
+            "/v4/series/990101/episodes/alttwo",
+            "/v4/series/990101/extended",
+        ] {
+            let (status, refusal) = get(&state, path, &key).await;
+            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{path}");
+            assert_eq!(refusal["error"], json!("provider_not_configured"), "{path}");
+        }
+        for path in [
+            "/v4/login",
+            "/v4/series/990101/episodes/ams-landfall-first/eng",
+            "/v4/series/990101/episodes/altdvd",
+            "/v4/series/990101/episodes/official/eng",
+            "/v4/series/990101/extended",
+        ] {
+            assert!(stand_in.asked_at(path).is_empty(), "{path}");
+        }
+    }
+
+    /// TheTVDB's `updates` as the stand-in answers it: on the first page, a
+    /// change of its own to a series this catalogue changed too, and one to
+    /// an episode; nothing on the next.
+    fn tvdb_with_updates(asked: &Asked) -> (StatusCode, Value) {
+        if asked.path != "/v4/updates" {
+            return tvdb(asked);
+        }
+        let data = if asked.query.contains("page=1") {
+            json!([])
+        } else {
+            json!([
+                { "recordType": "", "recordId": 990_301, "methodInt": 2, "method": "update",
+                  "extraInfo": "", "userId": 7, "timeStamp": 1_761_955_300, "entityType": "series" },
+                { "recordType": "", "recordId": 8_800_001, "methodInt": 2, "method": "update",
+                  "extraInfo": "", "userId": 7, "timeStamp": 1_761_955_400, "entityType": "episodes",
+                  "seriesId": 990_301 }
+            ])
+        };
+        (
+            StatusCode::OK,
+            json!({ "status": "success", "data": data, "links": {
+                "prev": null, "self": format!("/v4/updates?{}", asked.query), "next": null,
+                "total_items": 2, "page_size": 1000
+            } }),
+        )
+    }
+
+    /// TheTVDB as the stand-in answers it while `updates` is down.
+    fn tvdb_without_updates(asked: &Asked) -> (StatusCode, Value) {
+        if asked.path == "/v4/updates" {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!({ "status": "failure", "message": "Service Unavailable" }),
+            );
+        }
+        tvdb(asked)
+    }
+
+    /// Two series and a film, each with a TheTVDB id, a lock set on each
+    /// within the hour; a fourth series nobody touched.
+    async fn store_changed_here(state: &AppState) {
+        use crate::db::repo::change::{self, Cause, NewChange};
+
+        for (kind, title, tvdb, changed) in [
+            (MediaKind::Series, "The Updated Lighthouse", 990_301, true),
+            (MediaKind::Series, "The Quiet Harbour Watch", 990_302, true),
+            (MediaKind::Movie, "The Harbour Film of Tides", 990_303, true),
+            (MediaKind::Series, "The Unchanged Keep", 990_304, false),
+        ] {
+            let mut item = MediaItem::empty(kind);
+            item.title = title.into();
+            item.slug = crate::domain::make_slug(title, None);
+            item.external_ids.tvdb = Some(tvdb);
+            testing::store(state, &item, &[("item", "title", "", json!(title))]).await;
+            if changed {
+                let lock = NewChange {
+                    cause: Cause::Lock,
+                    scope: "item".into(),
+                    field: "title".into(),
+                    language: String::new(),
+                    before: Some(json!("Before")),
+                    after: Some(json!(title)),
+                    provider: None,
+                    was_locked: false,
+                };
+                change::record(&state.db, &item.id, Some("admin"), &[lock])
+                    .await
+                    .expect("the change is written");
+            }
+        }
+    }
+
+    /// The records a page of `updates` names, as `(entityType, recordId)`.
+    fn named(page: &Value) -> Vec<(String, i64)> {
+        page["data"]
+            .as_array()
+            .expect("its records")
+            .iter()
+            .map(|r| {
+                (
+                    r["entityType"].as_str().unwrap().to_string(),
+                    r["recordId"].as_i64().unwrap(),
+                )
+            })
+            .collect()
+    }
+
+    /// `updates` lists, after TheTVDB's own records on its first page, the
+    /// series and films that changed here since the instant asked, by their
+    /// TheTVDB ids — those of the kind asked, none TheTVDB lists already.
+    #[tokio::test]
+    async fn updates_lays_the_works_changed_here_beside_thetvdbs() {
+        let stand_in = StandIn::start(tvdb_with_updates).await;
+        let state = testing::server(&stand_in).await;
+        let key = issued(&state).await;
+        store_changed_here(&state).await;
+        let since = chrono::Utc::now().timestamp() - 3600;
+        let rec = |kind: &str, id: i64| (kind.to_string(), id);
+
+        let (status, page) = get(
+            &state,
+            &format!("/v4/updates?since={since}&type=series&action=update"),
+            &key,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            named(&page),
+            [
+                rec("series", 990_301),
+                rec("episodes", 8_800_001),
+                rec("series", 990_302)
+            ]
+        );
+        let ours = &page["data"][2];
+        assert_eq!(ours["methodInt"], json!(2));
+        assert_eq!(ours["method"], json!("update"));
+        assert!(ours["timeStamp"].as_i64().unwrap() >= since);
+        assert_eq!(page["links"]["total_items"], json!(3));
+
+        let (_, every_kind) = get(&state, &format!("/v4/updates?since={since}"), &key).await;
+        assert_eq!(
+            named(&every_kind)[2..],
+            [rec("series", 990_302), rec("movies", 990_303)]
+        );
+        // TheTVDB was asked as the client asked, with the operator's token.
+        let asked = stand_in.asked_at("/v4/updates");
+        assert_eq!(
+            asked[0].query,
+            format!("since={since}&type=series&action=update")
+        );
+        assert_eq!(
+            asked[0].authorization.as_deref(),
+            Some(format!("Bearer token-for-{OPERATOR_TVDB_KEY}").as_str())
+        );
+
+        // The next page, an episode's changes, a deletion: TheTVDB's alone.
+        for query in ["page=1", "type=episodes", "action=delete"] {
+            let (status, page) =
+                get(&state, &format!("/v4/updates?since={since}&{query}"), &key).await;
+            assert_eq!(status, StatusCode::OK, "{query}");
+            assert!(
+                named(&page)
+                    .iter()
+                    .all(|(_, id)| ![990_302, 990_303].contains(id)),
+                "{query}"
+            );
+        }
+        // An instant to come names nothing changed here.
+        let (_, ahead) = get(&state, &format!("/v4/updates?since={}", since + 7200), &key).await;
+        assert_eq!(named(&ahead).len(), 2);
+    }
+
+    /// Where TheTVDB fails `updates`, its failure is the answer: not the
+    /// works changed here alone, nor TheTVDB's list of a moment ago — a
+    /// client that moves a cursor along asks the same window again.
+    #[tokio::test]
+    async fn updates_hands_thetvdbs_failure_on() {
+        let stand_in = StandIn::start(tvdb_without_updates).await;
+        let state = testing::server(&stand_in).await;
+        let key = issued(&state).await;
+        store_changed_here(&state).await;
+        let path = format!(
+            "/v4/updates?since={}",
+            chrono::Utc::now().timestamp() - 3600
+        );
+        let earlier = json!({ "status": "success", "data": [], "links": {
+            "prev": null, "self": path, "next": null, "total_items": 0, "page_size": 1000
+        } });
+        kept_stale(&state, &path, &earlier, 60).await;
+
+        let (status, headers, failure) = read(&state, &path, &key).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(failure["message"], json!("Service Unavailable"));
+        assert!(!headers.contains_key(header::AGE));
+        assert_eq!(stand_in.asked_at("/v4/updates").len(), 1);
+    }
+
+    /// TheTVDB as the stand-in answers while it is down: the operator signed
+    /// in, and a 503 for everything else.
+    fn tvdb_down(asked: &Asked) -> (StatusCode, Value) {
+        if asked.method == "POST" && asked.path == "/v4/login" {
+            return tvdb(asked);
+        }
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({ "status": "failure", "message": "Service Unavailable" }),
+        )
+    }
+
+    /// TheTVDB failing, what was kept of the same request stands in, with
+    /// its `Age` and with the locks written in, as a fresh answer is; with
+    /// `relays.staleIfError` off, TheTVDB's failure is the answer.
+    #[tokio::test]
+    async fn a_record_kept_stands_in_with_its_age_and_its_locks_when_thetvdb_fails() {
+        let stand_in = StandIn::start(tvdb_down).await;
+        let state = server(&stand_in).await;
+        let key = issued(&state).await;
+        let path = "/v4/series/81189/extended";
+        let earlier =
+            json!({ "status": "success", "data": { "id": 81189, "name": "Breaking Bad" } });
+        kept_stale(&state, path, &earlier, 60).await;
+
+        let (status, headers, record) = read(&state, path, &key).await;
+        assert_eq!(status, StatusCode::OK);
+        // Kept six hours before it went stale a minute ago.
+        assert!(seconds(&headers, header::AGE) >= 6 * 3600 + 60);
+        assert_eq!(record["data"]["name"], json!("Mon titre"));
+        assert_eq!(stand_in.asked_at(path).len(), 1, "TheTVDB asked first");
+
+        testing::choose(&state, "relays.staleIfError", "false").await;
+        kept_stale(&state, path, &earlier, 60).await;
+        let (status, headers, _) = read(&state, path, &key).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert!(!headers.contains_key(header::AGE));
+    }
+
+    /// TheTVDB as the stand-in answers its genres: slowly, so that the
+    /// callers asking for them at once all ask while the first is under way.
+    fn tvdb_slow_genres(asked: &Asked) -> (StatusCode, Value) {
+        if asked.path == "/v4/genres" {
+            std::thread::sleep(std::time::Duration::from_millis(400));
+            return (
+                StatusCode::OK,
+                json!({ "status": "success", "data": [ { "id": 1, "name": "Soap", "slug": "soap" } ] }),
+            );
+        }
+        tvdb(asked)
+    }
+
+    /// Callers asking the same with the operator's token at once share one
+    /// exchange with TheTVDB: every one is answered, TheTVDB is asked once.
+    /// Several threads, so that the others ask while TheTVDB takes its time.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn the_same_request_at_once_is_asked_of_thetvdb_once() {
+        let stand_in = StandIn::start(tvdb_slow_genres).await;
+        let state = testing::server(&stand_in).await;
+        let key = issued(&state).await;
+
+        let answers =
+            futures::future::join_all((0..4).map(|_| get(&state, "/v4/genres", &key))).await;
+        for (status, genres) in answers {
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(genres["data"][0]["name"], json!("Soap"));
+        }
+        assert_eq!(stand_in.asked_at("/v4/genres").len(), 1);
+    }
+
+    /// TheTVDB as the stand-in answers while it is crowded: a series' record
+    /// is a 429, which closes the door.
+    fn tvdb_crowded(asked: &Asked) -> (StatusCode, Value) {
+        if asked.path.starts_with("/v4/series/") {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                json!({ "status": "failure", "message": "Too Many Requests" }),
+            );
+        }
+        tvdb(asked)
+    }
+
+    /// TheTVDB's 429 closes the door its client keeps, for the relay and the
+    /// server's own fetches alike. While it is closed, the relay does not
+    /// wait: what was kept stands in, and anything else is a 429 that says
+    /// when to come back — TheTVDB asked nothing.
+    #[tokio::test]
+    async fn a_closed_door_is_not_waited_at() {
+        let stand_in = StandIn::start(tvdb_crowded).await;
+        let state = testing::server(&stand_in).await;
+        let key = issued(&state).await;
+        let languages =
+            json!({ "status": "success", "data": [ { "id": "fra", "name": "French" } ] });
+        kept_stale(&state, "/v4/languages", &languages, 60).await;
+
+        let (status, _, _) = read(&state, "/v4/series/990401/extended", &key).await;
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "TheTVDB's own");
+        assert!(state.tvdb.gate().quiet_for().is_some());
+
+        let (status, headers, refusal) = read(&state, "/v4/search?query=lighthouse", &key).await;
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(refusal["error"], json!("rate_limited"));
+        assert!((1..=5).contains(&seconds(&headers, header::RETRY_AFTER)));
+        assert!(stand_in.asked_at("/v4/search").is_empty());
+
+        let (status, headers, kept) = read(&state, "/v4/languages", &key).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(kept, languages);
+        assert!(headers.contains_key(header::AGE));
+        assert!(stand_in.asked_at("/v4/languages").is_empty());
+    }
+
+    /// How often the stand-in below was asked for TheTVDB's languages.
+    static LANGUAGES_ASKED: AtomicUsize = AtomicUsize::new(0);
+
+    /// TheTVDB as the stand-in answers its languages: the first time, and a
+    /// 502 every time after.
+    fn tvdb_languages_once(asked: &Asked) -> (StatusCode, Value) {
+        if asked.path != "/v4/languages" {
+            return tvdb(asked);
+        }
+        if LANGUAGES_ASKED.fetch_add(1, Ordering::SeqCst) == 0 {
+            (
+                StatusCode::OK,
+                json!({ "status": "success", "data": [
+                    { "id": "fra", "name": "French", "nativeName": "Français", "shortCode": "fr" }
+                ] }),
+            )
+        } else {
+            (
+                StatusCode::BAD_GATEWAY,
+                json!({ "status": "failure", "message": "Bad Gateway" }),
+            )
+        }
+    }
+
+    /// A reference list TheTVDB answered is kept in the database too, and
+    /// answers from there when TheTVDB fails and the memory holds nothing —
+    /// after a restart.
+    #[tokio::test]
+    async fn a_reference_list_is_read_back_from_the_database() {
+        let stand_in = StandIn::start(tvdb_languages_once).await;
+        let state = testing::server(&stand_in).await;
+        let key = issued(&state).await;
+
+        let (status, headers, languages) = read(&state, "/v4/languages", &key).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(!headers.contains_key(header::AGE));
+
+        state.caches.flush("relay").await;
+        let (status, headers, again) = read(&state, "/v4/languages", &key).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(again, languages);
+        assert!(headers.contains_key(header::AGE));
+        assert_eq!(stand_in.asked_at("/v4/languages").len(), 2);
     }
 }

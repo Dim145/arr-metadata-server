@@ -23,6 +23,7 @@ pub mod order;
 pub mod override_field;
 pub mod person;
 pub mod preference;
+pub mod relay_document;
 pub mod release;
 pub mod scene;
 pub mod search;

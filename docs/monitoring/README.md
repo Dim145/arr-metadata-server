@@ -15,7 +15,8 @@ you ask for it:
 
 The server counts what it does and offers it at `/api/v1/admin/metrics`, in Prometheus's text
 format: requests by surface and by status, with their latency; calls made to each provider and
-how they ended; what every cache answered from each tier; the cache server's memory, evictions
+how they ended, and what the relays answered from what they kept when one failed; what every
+cache answered from each tier; the cache server's memory, evictions
 and round trip; the database's pool of connections and how long a connection was waited for;
 what waits in each queue; the catalogue's size, the works whose last refresh failed, the jobs'
 runs; when the certificates end and how old the newest archive is. The endpoint is
@@ -44,6 +45,7 @@ server directly; Prometheus keeps the history.
 | `ams_http_request_duration_seconds` | How long requests took, by surface; a histogram. |
 | `ams_upstream_requests_total{provider,outcome}` | Calls to each provider: `ok` (a 404 is an answer), `refused`, `failed`, `unreachable`. |
 | `ams_upstream_duration_seconds` | How long each provider took; a histogram. |
+| `ams_relay_stale_total{relay,from}` | Answers a relay — `tmdb`, `tvdb`, `anilist` — gave from what it kept because its service failed: `memory`, the last answer kept; `database`, a reference list. See [When a service fails](../relays.md#when-a-service-fails). |
 | `ams_db_pool_size`, `ams_db_pool_idle`, `ams_db_pool_max` | The database's connections: open, idle, and the most the pool opens. |
 | `ams_db_pool_wait_seconds` | How long each connection was waited for; a histogram. |
 | `ams_queue_depth{kind}` | What waits: `refresh`, works due for a refresh; `media`, pictures and themes to fetch; `webhooks`, deliveries to send. |
@@ -57,6 +59,12 @@ server directly; Prometheus keeps the history.
 | `ams_cgroup_memory_bytes`, `ams_cgroup_memory_working_set_bytes`, `ams_cgroup_memory_limit_bytes` | What the container is charged, page cache included; the working set, which is what `docker stats` shows; and its ceiling, when it has one. On Linux. |
 | `ams_cgroup_memory_stat_bytes{kind}`, `ams_cgroup_memory_ceiling_hits_total` | The charge by kind, as `memory.stat` counts it (`anon`, `active_file`, `inactive_file`, `shmem`, `kernel`, `sock`, `file`), and how many times the container reached its ceiling and the kernel took memory back to stay under it. |
 | `ams_works`, `ams_episodes`, `ams_locks`, `ams_job_runs` | What the catalogue holds, and the jobs' runs. |
+
+The `surface` is what a request was asked of: `sonarr` (Skyhook's two editions and the scene
+mappings), `radarr`, `plex`, `tmdb` (the TMDB relay, `/3/` and `/4/`), `tvdb`, `anilist`,
+`native` (`/api/`), `mcp`, `media`, `ca` (the authority and its script), `probe` (`/health`,
+`/ready`) and `ui`, the rest. `media` counts the pictures kept here (`/media/…`) and TMDB's
+pictures served from here (`/tmdb-images/…`), which are no calls to TMDB's API.
 
 The memory figures nest, each telling apart what the one before cannot.
 `ams_memory_heap_bytes` is the program's own data. The resident `anonymous`

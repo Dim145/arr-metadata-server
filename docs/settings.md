@@ -423,6 +423,8 @@ See [Accounts and access](access.md).
 | [`api.tmdbMembers`](#apitmdbmembers) | `true` or `false` | `false` | server |
 | [`tmdb.relayCredential`](#tmdbrelaycredential) | `server` or `client` | `server` | server |
 | [`tvdb.relayCredential`](#tvdbrelaycredential) | `server` or `client` | `server` | server |
+| [`relays.staleIfError`](#relaysstaleiferror) | `true` or `false` | `true` | server |
+| [`tmdb.images`](#tmdbimages) | `tmdb` or `server` | `tmdb` | server |
 
 ### `site.access`
 
@@ -486,7 +488,10 @@ away, whatever this says: switching it off cannot lock out the person who did.
 The MCP server, `/mcp`, which agents such as Claude Code and Open WebUI call: tools that
 read the catalogue and change nothing. Off, it answers `503` with the code `mcp_disabled`.
 It takes a key with the `mcp` scope, in a header; switched on **Keys & network**, and under
-**Settings › Everything else**. See [The API](api.md#connecting-claude-code-or-open-webui).
+**Settings › Everything else**. On, agents — large language models — read TMDB's data with
+the rest, which TMDB's API terms forbid in connection with an AI application (§1.C) and
+count as commercial use in an LLM chatbot (§2.A); the start says so in the log. See [The
+API](api.md#connecting-claude-code-or-open-webui).
 
 ### `api.tmdbMembers`
 
@@ -506,6 +511,24 @@ key the service is asked with](relays.md#whose-key-the-service-is-asked-with).
 The same for the TheTVDB relay: `server` asks TheTVDB with this server's key
 (`AMS_TVDB_API_KEY`); `client` has every client sign in with its own TheTVDB key, and
 refuses a key issued here.
+
+### `relays.staleIfError`
+
+When TMDB, TheTVDB or AniList fails — no answer in time, too many requests, a `500`, `502`,
+`503` or `504`, and AniList's `403` when its API is off — answer with what the relay kept of
+the same request, its age in an `Age` header: the last good answer, up to a week old for
+TMDB and TheTVDB and a day for AniList; else, for TMDB's and TheTVDB's reference lists — the
+configuration, the genres, the certifications, the languages, the types and statuses — the
+copy kept in the database, up to 180 days old. Only what was asked with this server's own
+keys is kept, and a lock is written into a stale answer as into any other. Off, the
+service's failure is handed on as it came. See [The relays](relays.md).
+
+### `tmdb.images`
+
+Where the TMDB relay sends its clients for pictures, through `/3/configuration`: `tmdb`,
+TMDB's own image server; `server`, this server, from the media it keeps — which takes a
+media store (`AMS_MEDIA_STORAGE`) and `AMS_PUBLIC_URL`. Without either, `server` does what
+`tmdb` does.
 
 ## Signing in through an identity provider
 

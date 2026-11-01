@@ -21,6 +21,7 @@ pub mod sonarr;
 pub mod sonarr_services;
 pub mod thetvdb;
 pub mod tmdb;
+pub mod tmdb_images;
 
 use axum::{
     Router,
@@ -147,6 +148,8 @@ pub fn build(state: AppState) -> (Router<AppState>, utoipa::openapi::OpenApi) {
 
     let (tmdb, tmdb_api) = tmdb::router().split_for_parts();
 
+    let (tmdb_images, tmdb_images_api) = tmdb_images::router().split_for_parts();
+
     let (thetvdb, thetvdb_api) = thetvdb::router().split_for_parts();
 
     let (plex, plex_api) = plex::router().split_for_parts();
@@ -157,6 +160,7 @@ pub fn build(state: AppState) -> (Router<AppState>, utoipa::openapi::OpenApi) {
         public_api,
         arr_api,
         tmdb_api,
+        tmdb_images_api,
         thetvdb_api,
         plex_api,
     ] {
@@ -182,6 +186,9 @@ pub fn build(state: AppState) -> (Router<AppState>, utoipa::openapi::OpenApi) {
         )))
         .merge(arr_surface(state.clone(), arr))
         .merge(tmdb_surface(state.clone(), tmdb))
+        // On this door only: TMDB's configuration gives its clients this
+        // server's public address for the pictures, never a name of TMDB's.
+        .merge(tmdb_images_surface(state.clone(), tmdb_images))
         .merge(thetvdb_surface(state.clone(), thetvdb))
         // On this door only: Plex is given an address, and has no name
         // compiled in for the clients' door to answer under.
@@ -273,6 +280,18 @@ fn tmdb_surface(state: AppState, tmdb: Router<AppState>) -> Router<AppState> {
         .layer(from_fn_with_state(state, crate::auth::ratelimit::limit))
 }
 
+/// TMDB's pictures, from this server: guarded as the TMDB relay is, but a
+/// key policy read as the address list — a picture's address, built by the
+/// client from TMDB's configuration, carries no key. Held to the limit of
+/// requests an address may make only where its guard turns the caller
+/// away: a library's scan asks for pictures in bursts no relay's caller
+/// makes ([`guards::guard_tmdb_images`]).
+fn tmdb_images_surface(state: AppState, images: Router<AppState>) -> Router<AppState> {
+    images
+        .layer(from_fn_with_state(state.clone(), guards::guard_tmdb_images))
+        .layer(from_fn_with_state(state, guards::reject_self_calls))
+}
+
 /// The TheTVDB relay's surface. Its name is one this server calls as a
 /// provider too, so a request that came round a loop is caught first.
 fn thetvdb_surface(state: AppState, thetvdb: Router<AppState>) -> Router<AppState> {
@@ -317,6 +336,7 @@ fn openapi_only() -> utoipa::openapi::OpenApi {
 
     let (_, arr_api) = arr_routers().split_for_parts();
     let (_, tmdb_api) = tmdb::router().split_for_parts();
+    let (_, tmdb_images_api) = tmdb_images::router().split_for_parts();
     let (_, thetvdb_api) = thetvdb::router().split_for_parts();
     let (_, plex_api) = plex::router().split_for_parts();
 
@@ -326,6 +346,7 @@ fn openapi_only() -> utoipa::openapi::OpenApi {
         public_api,
         arr_api,
         tmdb_api,
+        tmdb_images_api,
         thetvdb_api,
         plex_api,
     ] {
@@ -393,6 +414,7 @@ mod tests {
             "/v1/list/imdb/{id}",
             "/3/{path}",
             "/4/{path}",
+            "/tmdb-images/{size}/{file}",
             "/v4/login",
             "/v4/{path}",
             "/plex",
@@ -944,6 +966,8 @@ mod tests {
             "/v1/movie/{tmdb_id}",
             "/plex",
             "/plex/library/metadata/{rating_key}",
+            // A picture's address carries no key either.
+            "/tmdb-images/{size}/{file}",
         ] {
             assert_eq!(
                 json["paths"][path]["get"]["security"]

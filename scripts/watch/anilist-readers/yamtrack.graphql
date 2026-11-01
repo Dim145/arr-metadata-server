@@ -1,0 +1,48 @@
+# Yamtrack — AniList as a source of anime metadata, on main since 2026-10-17
+# and not in a release yet (v0.26.3 of 2026-08-23 does not have it). Written
+# from what note D §2 of IMPROVEMENT_RESEARCH.d/remplacement-sources-2026-11
+# records it asks, not from its code: where the note names a field and not
+# what is read below it, one subfield stands for the rest.
+query ($search: String) {
+  Page {
+    media(search: $search, type: ANIME, isAdult: false, sort: [SEARCH_MATCH]) {
+      id
+      title { romaji english }
+      coverImage { large }
+    }
+  }
+}
+
+query ($id: Int) {
+  Media(id: $id, type: ANIME) {
+    id
+    idMal
+    siteUrl
+    title { romaji english native }
+    coverImage { large }
+    description
+    format
+    status
+    startDate { year month day }
+    endDate { year month day }
+    season
+    seasonYear
+    episodes
+    duration
+    chapters
+    source
+    genres
+    averageScore
+    stats { scoreDistribution { score amount } }
+    studios(isMain: true) { nodes { name } }
+    nextAiringEpisode { episode airingAt }
+    relations { edges { relationType node { id type } } }
+    recommendations { nodes { mediaRecommendation { id } } }
+  }
+}
+
+query ($user: String) {
+  MediaListCollection(userName: $user, type: ANIME) {
+    lists { entries { media { id idMal } } }
+  }
+}

@@ -7,7 +7,10 @@
 //! stands in for and for what it writes into an answer; what they have in
 //! common is here: which headers travel, which never do, what a path may not
 //! say, whose credential the service is asked with, the work a document is
-//! patched for, and the text it is patched with in the language asked.
+//! patched for, and the text it is patched with in the language asked — and,
+//! for TMDB's, TheTVDB's and AniList's, what is kept of their answers: one
+//! exchange for every caller asking the same at once, and what was kept
+//! standing in when the service fails ([`answer`]).
 
 use std::{sync::LazyLock, time::Duration};
 
@@ -477,6 +480,1308 @@ pub fn key_issued_here_refused(service: &str, setting: &str) -> Response {
         .into_response();
     response.extensions_mut().insert(RefusedHere);
     response
+}
+
+// ─── What is kept of an answer, and what stands in when the service fails ───
+
+pub use kept::{Ask, Fetched, STALE_IF_ERROR, Service, answer, changed_here, is_reference, unsent};
+
+/// What is kept of an answer, and what stands in when its service fails:
+/// shared by TMDB's, TheTVDB's and AniList's relays ([`answer`]).
+mod kept {
+    use std::{
+        collections::HashMap,
+        future::Future,
+        sync::{
+            Arc,
+            atomic::{AtomicU64, Ordering},
+        },
+    };
+
+    use bytes::Bytes;
+    use chrono::{DateTime, Utc};
+    use futures::future::{BoxFuture, FutureExt as _, Shared, WeakShared};
+
+    use super::*;
+    use crate::{
+        db::repo::{change::ChangedHere, relay_document},
+        error::{AppError, Throttle},
+    };
+
+    /// A service whose answers its relay keeps: what it keeps, and what stands
+    /// in for it, depend on which.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum Service {
+        Tmdb,
+        Tvdb,
+        Anilist,
+    }
+
+    impl Service {
+        /// Its name in the metrics, the log and the database: `tmdb`, `tvdb`,
+        /// `anilist`.
+        pub const fn name(self) -> &'static str {
+            match self {
+                Self::Tmdb => "tmdb",
+                Self::Tvdb => "tvdb",
+                Self::Anilist => "anilist",
+            }
+        }
+
+        /// Its name in a message.
+        pub const fn label(self) -> &'static str {
+            match self {
+                Self::Tmdb => "TMDB",
+                Self::Tvdb => "TheTVDB",
+                Self::Anilist => "AniList",
+            }
+        }
+
+        /// Whether its relay keeps a "no such thing" a few minutes, as it keeps
+        /// a document: TheTVDB's and AniList's do; TMDB's asks again.
+        pub const fn keeps_not_found(self) -> bool {
+            !matches!(self, Self::Tmdb)
+        }
+
+        /// Whether its reference lists are kept in the database too
+        /// ([`is_reference`]): TMDB's and TheTVDB's; never AniList's, whose
+        /// terms want nothing stored.
+        pub const fn keeps_references(self) -> bool {
+            !matches!(self, Self::Anilist)
+        }
+
+        /// Whether a 403 is the service saying it is off — AniList's "API
+        /// disabled" — rather than refusing the request.
+        pub const fn forbids_when_down(self) -> bool {
+            matches!(self, Self::Anilist)
+        }
+    }
+
+    /// The setting that lets what a relay kept stand in for a service that
+    /// fails: on unless an administrator turns it off.
+    pub const STALE_IF_ERROR: &str = "relays.staleIfError";
+
+    /// The most of a document a relay keeps: anything larger is asked again.
+    pub const KEEP_MAX_BYTES: usize = 4 * 1024 * 1024;
+
+    /// Whether what the relays kept may stand in for a service that fails
+    /// ([`STALE_IF_ERROR`]).
+    pub fn stale_if_error(state: &AppState) -> bool {
+        state
+            .settings
+            .bool_at(STALE_IF_ERROR, None, None)
+            .unwrap_or(true)
+    }
+
+    /// Whether a service's status says it failed, and what was kept may stand
+    /// in: too many requests, an error of its own, a gateway in front of it that
+    /// got nothing — and AniList's 403, its API switched off. Not a refusal of
+    /// the request itself — 400, 401 — nor a "no such thing".
+    pub fn status_calls_for_stale(service: Service, status: StatusCode) -> bool {
+        matches!(status.as_u16(), 429 | 500 | 502 | 503 | 504)
+            || (status == StatusCode::FORBIDDEN && service.forbids_when_down())
+    }
+
+    /// Whether a relay's exchange that came to an error left the service
+    /// unheard, and what was kept may stand in: it could not be reached, said
+    /// nothing in time or nothing readable ([`AppError::UpstreamUnavailable`]),
+    /// its door was closed or full ([`AppError::RateLimited`], see [`unsent`]),
+    /// or it would not sign this server in a moment ago.
+    pub fn error_calls_for_stale(error: &AppError) -> bool {
+        matches!(
+            error,
+            AppError::UpstreamUnavailable(_)
+                | AppError::RateLimited(_)
+                | AppError::Disabled {
+                    code: "upstream_unavailable",
+                    ..
+                }
+        )
+    }
+
+    /// What a relay answers a request its provider's door did not let through
+    /// ([`crate::providers::Gate::send_now`]): a door closed by the service's
+    /// own 429 or 503 is a 429 that says when it opens; a door whose every
+    /// place stayed taken, a 429 that says a second; any other failure, the
+    /// service unheard — a 502.
+    pub fn unsent(service: Service, error: anyhow::Error) -> AppError {
+        if let Some(left) = crate::providers::closed_for(&error) {
+            return AppError::RateLimited(Throttle::after(left));
+        }
+        if crate::providers::is_busy(&error) {
+            return AppError::RateLimited(Throttle::after(Duration::from_secs(1)));
+        }
+        AppError::UpstreamUnavailable(error.context(format!("{} request failed", service.label())))
+    }
+
+    /// Where an answer that stands in for its service came from, and how old it
+    /// is, in seconds: what its `Age` says.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum StoodIn {
+        /// The relay space's last answer to the same request.
+        Memory { age: u64 },
+        /// A reference list kept in the database ([`is_reference`]).
+        Database { age: u64 },
+    }
+
+    impl StoodIn {
+        pub const fn age(self) -> u64 {
+            match self {
+                Self::Memory { age } | Self::Database { age } => age,
+            }
+        }
+    }
+
+    /// What a relay's service answered — or what stood in for it: its status,
+    /// the headers kept of it ([`kept`](fn@super::kept)), and its body, before any lock is
+    /// written in.
+    #[derive(Clone, Debug)]
+    pub struct Fetched {
+        pub status: StatusCode,
+        pub headers: HeaderMap,
+        pub body: Bytes,
+        stood_in: Option<StoodIn>,
+    }
+
+    impl Fetched {
+        /// What the service answered.
+        pub fn new(status: StatusCode, headers: HeaderMap, body: Bytes) -> Self {
+            Self {
+                status,
+                headers,
+                body,
+                stood_in: None,
+            }
+        }
+
+        /// Where it came from and how old it is, when it stood in for the
+        /// service's own answer.
+        #[cfg(test)]
+        pub fn stood_in(&self) -> Option<StoodIn> {
+            self.stood_in
+        }
+
+        /// What the relay space held, still good.
+        fn kept(hit: &cache::Relayed) -> Self {
+            let mut headers = HeaderMap::new();
+            if let Ok(value) = HeaderValue::from_str(&hit.content_type) {
+                headers.insert(header::CONTENT_TYPE, value);
+            }
+            Self::new(
+                StatusCode::from_u16(hit.status).unwrap_or(StatusCode::OK),
+                headers,
+                hit.body.clone(),
+            )
+        }
+
+        /// A whole document kept, standing in for the service: its type, and
+        /// its age as `Age` says it (RFC 9111 §5.1).
+        fn stale(content_type: &str, body: Bytes, stood_in: StoodIn) -> Self {
+            let mut headers = HeaderMap::new();
+            if let Ok(value) = HeaderValue::from_str(content_type) {
+                headers.insert(header::CONTENT_TYPE, value);
+            }
+            headers.insert(header::AGE, HeaderValue::from(stood_in.age()));
+            Self {
+                status: StatusCode::OK,
+                headers,
+                body,
+                stood_in: Some(stood_in),
+            }
+        }
+    }
+
+    /// The type an answer was written in, as it is kept: JSON when it says
+    /// none.
+    fn content_type_of(headers: &HeaderMap) -> String {
+        headers
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("application/json")
+            .to_string()
+    }
+
+    /// What a relay asks of [`answer`]: whose service, what the answer is
+    /// filed under, and the path its durations are read by.
+    #[derive(Clone, Debug)]
+    pub struct Ask {
+        pub service: Service,
+        /// What the answer is kept under: only a read asked with this server's
+        /// own credential, the same for every caller, has one. None: nothing is
+        /// kept, nothing shared, and nothing stands in.
+        pub key: Option<String>,
+        /// The path the durations are read by ([`cache::relay_ttl`],
+        /// [`cache::relay_stale_for`]): the request's own — `/3/movie/550`,
+        /// `/v4/series/81189` — or, for AniList, [`cache::ANILIST_QUERY`] or
+        /// [`cache::ANILIST_COLLECTIONS`].
+        pub path: String,
+        /// What the database keeps a reference list under ([`is_reference`]):
+        /// the key without the generation the memory's keys carry, which starts
+        /// again at every start. None for AniList, which keeps none.
+        pub reference: Option<String>,
+    }
+
+    /// Answer a request with what the service answers, as every relay with a
+    /// key to keep it under does:
+    ///
+    /// 1. a document the relay space holds, still good — a whole one, or a "no
+    ///    such thing" where the service's relay keeps those — and nothing else;
+    /// 2. otherwise one exchange, `fetch`, for every caller asking the same at
+    ///    once ([`together`]), its answer kept once ([`keep`]);
+    /// 3. and where the service failed ([`status_calls_for_stale`],
+    ///    [`error_calls_for_stale`]), what was kept stands in, unless
+    ///    `relays.staleIfError` is off ([`stand_in`]): the service's own answer,
+    ///    or its error, otherwise.
+    ///
+    /// Without a key, `fetch` alone. What the answer is patched with — the
+    /// locks — is the relay's own to write, on a stale answer as on any other.
+    /// `fetch` runs on its own, whoever asked first: it owns what it reads.
+    pub async fn answer<F>(state: &AppState, ask: Ask, fetch: F) -> AppResult<Fetched>
+    where
+        F: Future<Output = AppResult<Fetched>> + Send + 'static,
+    {
+        let Some(key) = ask.key.clone() else {
+            return fetch.await;
+        };
+        let held = state.caches.relay.get(&key).await;
+        if let Some(hit) = &held
+            && hit.is_fresh()
+            && (hit.status == 200 || (hit.status == 404 && ask.service.keeps_not_found()))
+        {
+            return Ok(Fetched::kept(hit));
+        }
+
+        let flight = {
+            let (state, ask) = (state.clone(), ask.clone());
+            async move {
+                let fetched = fetch.await?;
+                keep(&state, &ask, &fetched).await;
+                Ok(fetched)
+            }
+        };
+        match together(key, flight).await {
+            Ok(fetched) if status_calls_for_stale(ask.service, fetched.status) => {
+                let why = fetched.status.as_u16().to_string();
+                Ok(stand_in(state, &ask, held.as_ref(), &why)
+                    .await
+                    .unwrap_or(fetched))
+            }
+            Err(error) if error_calls_for_stale(&error) => {
+                match stand_in(state, &ask, held.as_ref(), &error.to_string()).await {
+                    Some(stale) => Ok(stale),
+                    None => Err(error),
+                }
+            }
+            other => other,
+        }
+    }
+
+    /// Keep what a relay's service answered, under the ask's key: a whole
+    /// document good for its path's time ([`cache::relay_ttl`]) and held for as
+    /// long as it may stand in after ([`cache::relay_stale_for`]); a "no such
+    /// thing", where the service's relay keeps those, five minutes. A reference
+    /// list goes to the database too ([`keep_reference`]). Nothing else is kept:
+    /// another success, a refusal, an error, what stood in, or anything past
+    /// [`KEEP_MAX_BYTES`].
+    pub async fn keep(state: &AppState, ask: &Ask, fetched: &Fetched) {
+        let Some(key) = &ask.key else { return };
+        let whole = fetched.status == StatusCode::OK;
+        if fetched.stood_in.is_some()
+            || fetched.body.len() > KEEP_MAX_BYTES
+            || !(whole
+                || (fetched.status == StatusCode::NOT_FOUND && ask.service.keeps_not_found()))
+        {
+            return;
+        }
+        let Some(fresh_for) = kept_for(fetched.status, &ask.path) else {
+            return;
+        };
+        let held_for = if whole {
+            fresh_for.max(cache::relay_stale_for(&ask.path))
+        } else {
+            fresh_for
+        };
+        state
+            .caches
+            .relay
+            .insert_for(
+                key.clone(),
+                cache::Relayed {
+                    status: fetched.status.as_u16(),
+                    content_type: content_type_of(&fetched.headers),
+                    expires_at: cache::now_secs() + fresh_for.as_secs(),
+                    body: fetched.body.clone(),
+                },
+                held_for,
+            )
+            .await;
+        if whole && let Some(filed_as) = &ask.reference {
+            keep_reference(state, ask.service, filed_as, &ask.path, fetched).await;
+        }
+    }
+
+    /// Let what was kept stand in for a service that failed, `why` saying how:
+    /// the relay space's last whole answer to the same request while it is
+    /// young enough ([`cache::Relayed::may_stand_in`]), otherwise a reference
+    /// list kept in the database ([`reread_reference`]). With its `Age`,
+    /// counted (`ams_relay_stale_total`) and said in the log. None when
+    /// `relays.staleIfError` is off, or nothing was kept.
+    pub async fn stand_in(
+        state: &AppState,
+        ask: &Ask,
+        held: Option<&cache::Relayed>,
+        why: &str,
+    ) -> Option<Fetched> {
+        if !stale_if_error(state) {
+            return None;
+        }
+        let stale = match held.filter(|hit| hit.may_stand_in(&ask.path)) {
+            Some(hit) => Fetched::stale(
+                &hit.content_type,
+                hit.body.clone(),
+                StoodIn::Memory {
+                    age: hit.age(&ask.path),
+                },
+            ),
+            None => {
+                let filed_as = ask.reference.as_deref()?;
+                reread_reference(state, ask.service, filed_as, &ask.path).await?
+            }
+        };
+        let stood_in = stale.stood_in?;
+        let from_database = matches!(stood_in, StoodIn::Database { .. });
+        crate::metrics::relay_stale(ask.service.name(), from_database);
+        tracing::info!(
+            relay = ask.service.name(),
+            path = %ask.path,
+            failure = why,
+            age_s = stood_in.age(),
+            from = if from_database { "database" } else { "memory" },
+            "the service failed; answered stale, with what was kept"
+        );
+        Some(stale)
+    }
+
+    /// Whether a path is a reference list a client cannot start without, which
+    /// TMDB's and TheTVDB's relays keep in the database too: TMDB's
+    /// configuration and what is under it, its genres, its certifications and
+    /// the countries it lists watch providers for; TheTVDB's languages,
+    /// countries, genres, ratings, and the types and statuses its records are
+    /// filed under. The path as the relay was asked it: `/3/…`, `/v4/…`.
+    pub fn is_reference(path: &str) -> bool {
+        const TMDB: &[&str] = &[
+            "/3/genre/movie/list",
+            "/3/genre/tv/list",
+            "/3/certification/movie/list",
+            "/3/certification/tv/list",
+            "/3/watch/providers/regions",
+        ];
+        const TVDB: &[&str] = &[
+            "languages",
+            "countries",
+            "genres",
+            "content/ratings",
+            "artwork/types",
+            "artwork/statuses",
+            "companies/types",
+            "entities",
+            "inspiration/types",
+            "sources/types",
+            "seasons/types",
+            "series/statuses",
+            "movies/statuses",
+            "people/types",
+            "genders",
+        ];
+        let path = path.trim_end_matches('/');
+        path == "/3/configuration"
+            || path.starts_with("/3/configuration/")
+            || TMDB.contains(&path)
+            || path
+                .strip_prefix("/v4/")
+                .is_some_and(|rest| TVDB.contains(&rest))
+    }
+
+    /// Keep a reference list a relay's service answered in the database, under
+    /// `filed_as` ([`Ask::reference`]): a whole document of a path
+    /// [`is_reference`] names, written as the service wrote it — TMDB's and
+    /// TheTVDB's alone. What is past keeping goes as it is written. A failure
+    /// is said in the log and costs the answer nothing.
+    pub async fn keep_reference(
+        state: &AppState,
+        service: Service,
+        filed_as: &str,
+        path: &str,
+        fetched: &Fetched,
+    ) {
+        if !service.keeps_references()
+            || fetched.status != StatusCode::OK
+            || fetched.stood_in.is_some()
+            || fetched.body.len() > KEEP_MAX_BYTES
+            || !is_reference(path)
+        {
+            return;
+        }
+        let Ok(body) = std::str::from_utf8(&fetched.body) else {
+            return;
+        };
+        let document = relay_document::Document {
+            content_type: content_type_of(&fetched.headers),
+            body: body.to_string(),
+            fetched_at: crate::db::now(),
+        };
+        if let Err(e) = relay_document::write(&state.db, service.name(), filed_as, &document).await
+        {
+            tracing::warn!(
+                relay = service.name(),
+                path,
+                error = format_args!("{e:#}"),
+                "a reference list could not be kept"
+            );
+            return;
+        }
+        if let Err(e) = relay_document::purge(&state.db, &relay_document::cutoff()).await {
+            tracing::warn!(
+                error = format_args!("{e:#}"),
+                "the reference lists past keeping could not be deleted"
+            );
+        }
+    }
+
+    /// The reference list a relay's service answered last under `filed_as`,
+    /// kept in the database, while it is under [`relay_document::KEEP_DAYS`]
+    /// old: what stands in when the memory holds nothing.
+    pub async fn reread_reference(
+        state: &AppState,
+        service: Service,
+        filed_as: &str,
+        path: &str,
+    ) -> Option<Fetched> {
+        if !service.keeps_references() || !is_reference(path) {
+            return None;
+        }
+        let document = match relay_document::read(
+            &state.db,
+            service.name(),
+            filed_as,
+            &relay_document::cutoff(),
+        )
+        .await
+        {
+            Ok(found) => found?,
+            Err(e) => {
+                tracing::warn!(
+                    relay = service.name(),
+                    path,
+                    error = format_args!("{e:#}"),
+                    "a reference list could not be read"
+                );
+                return None;
+            }
+        };
+        let age = crate::db::parse_rfc3339(&document.fetched_at)
+            .and_then(|at| u64::try_from((Utc::now() - at).num_seconds()).ok())
+            .unwrap_or(0);
+        Some(Fetched::stale(
+            &document.content_type,
+            Bytes::from(document.body),
+            StoodIn::Database { age },
+        ))
+    }
+
+    /// An exchange under way: what it comes to, the answer or the error.
+    type Exchange = BoxFuture<'static, Result<Fetched, Arc<AppError>>>;
+
+    /// What a flight comes to, shared by everyone who waited for it.
+    type Flight = Shared<Exchange>;
+
+    /// The exchanges under way, by what their answer is kept under — each with
+    /// its number, so that one ending removes itself and never one that came
+    /// after. Held weakly: a flight every caller gave up on ends there.
+    type Flights = parking_lot::Mutex<HashMap<String, (u64, WeakShared<Exchange>)>>;
+
+    static IN_FLIGHT: LazyLock<Flights> = LazyLock::new(Default::default);
+
+    /// The number the next flight takes.
+    static FLIGHTS: AtomicU64 = AtomicU64::new(0);
+
+    /// A flight's way out of [`IN_FLIGHT`]: dropped when its exchange ends, or
+    /// is given up on by every caller, it takes the flight's entry with it.
+    struct Landing {
+        key: String,
+        id: u64,
+    }
+
+    impl Drop for Landing {
+        fn drop(&mut self) {
+            let mut flights = IN_FLIGHT.lock();
+            if flights.get(&self.key).is_some_and(|(id, _)| *id == self.id) {
+                flights.remove(&self.key);
+            }
+        }
+    }
+
+    /// One exchange for every caller asking for `key` at once: the first runs
+    /// `fetch`, those that come while it runs wait for its answer — or its
+    /// error — rather than asking the service again. Once it has ended, the
+    /// next caller asks anew. A caller that gives up costs the others nothing;
+    /// the exchange stops only when every one of them has.
+    pub async fn together<F>(key: String, fetch: F) -> AppResult<Fetched>
+    where
+        F: Future<Output = AppResult<Fetched>> + Send + 'static,
+    {
+        let flight: Flight = {
+            let mut flights = IN_FLIGHT.lock();
+            match flights.get(&key).and_then(|(_, flight)| flight.upgrade()) {
+                Some(under_way) => under_way,
+                None => {
+                    let id = FLIGHTS.fetch_add(1, Ordering::Relaxed);
+                    let landing = Landing {
+                        key: key.clone(),
+                        id,
+                    };
+                    let flight = async move {
+                        let _landing = landing;
+                        fetch.await.map_err(Arc::new)
+                    }
+                    .boxed()
+                    .shared();
+                    if let Some(weak) = flight.downgrade() {
+                        flights.insert(key, (id, weak));
+                    }
+                    flight
+                }
+            }
+        };
+        flight
+            .await
+            .map_err(|shared| Arc::try_unwrap(shared).unwrap_or_else(|shared| again(&shared)))
+    }
+
+    /// The same error once more, for another caller that waited for it: what it
+    /// wraps carried over as text, which is what the log and the answer read of
+    /// it.
+    fn again(error: &AppError) -> AppError {
+        match error {
+            AppError::NotFound => AppError::NotFound,
+            AppError::BadRequest(message) => AppError::BadRequest(message.clone()),
+            AppError::Unauthorized => AppError::Unauthorized,
+            AppError::Forbidden => AppError::Forbidden,
+            AppError::Conflict(message) => AppError::Conflict(message.clone()),
+            AppError::Refused { code, message } => AppError::Refused {
+                code,
+                message: message.clone(),
+            },
+            AppError::Disabled { code, message } => AppError::Disabled {
+                code,
+                message: message.clone(),
+            },
+            AppError::UpstreamUnavailable(cause) => {
+                AppError::UpstreamUnavailable(anyhow::anyhow!("{cause:#}"))
+            }
+            AppError::ProviderNotConfigured => AppError::ProviderNotConfigured,
+            AppError::RateLimited(throttle) => AppError::RateLimited(*throttle),
+            AppError::LoopDetected => AppError::LoopDetected,
+            AppError::Internal(cause) => AppError::Internal(anyhow::anyhow!("{cause:#}")),
+            AppError::PayloadTooLarge(message) => AppError::PayloadTooLarge(message.clone()),
+            AppError::UnsupportedMediaType(message) => {
+                AppError::UnsupportedMediaType(message.clone())
+            }
+        }
+    }
+
+    // ─── What changed here, for the relays' feeds of changes ────────────────────
+
+    /// The works changed here at `from` or after and up to `to` that have an
+    /// id at `source`, one entry an id, the latest change first: what TMDB's
+    /// `/3/movie/changes` and `/3/tv/changes`, and TheTVDB's `/v4/updates`, add
+    /// to the service's own ([`crate::db::repo::change::changed_between`]).
+    ///
+    /// `to` is counted in, to the millisecond the journal keeps: a window
+    /// that ends now — the one asked without an end — holds what was
+    /// changed in this very millisecond, which an answer served from memory
+    /// can follow that closely.
+    pub async fn changed_here(
+        state: &AppState,
+        source: ExternalSource,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+    ) -> AppResult<Vec<ChangedHere>> {
+        Ok(crate::db::repo::change::changed_between(
+            &state.db,
+            source,
+            &crate::db::to_rfc3339(from),
+            &crate::db::to_rfc3339(to + chrono::TimeDelta::milliseconds(1)),
+        )
+        .await?)
+    }
+
+    /// What is kept of an answer, what is shared in flight, and what stands in
+    /// for a service that fails.
+    #[cfg(test)]
+    mod tests {
+        use std::sync::atomic::AtomicUsize;
+
+        use super::*;
+
+        fn document(body: &'static str) -> Fetched {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json;charset=utf-8"),
+            );
+            Fetched::new(StatusCode::OK, headers, Bytes::from_static(body.as_bytes()))
+        }
+
+        fn status(status: StatusCode) -> Fetched {
+            Fetched::new(status, HeaderMap::new(), Bytes::new())
+        }
+
+        fn unheard() -> AppError {
+            AppError::UpstreamUnavailable(anyhow::anyhow!("could not connect"))
+        }
+
+        fn ask(service: Service, key: &str, path: &str) -> Ask {
+            Ask {
+                service,
+                key: Some(key.into()),
+                path: path.into(),
+                reference: None,
+            }
+        }
+
+        /// An exchange that counts itself, and answers `with`.
+        fn counted(
+            calls: &Arc<AtomicUsize>,
+            with: fn() -> AppResult<Fetched>,
+        ) -> impl Future<Output = AppResult<Fetched>> + Send + 'static {
+            let calls = Arc::clone(calls);
+            async move {
+                calls.fetch_add(1, Ordering::SeqCst);
+                with()
+            }
+        }
+
+        /// A document the relay space held, fetched `age` seconds ago at `path`.
+        async fn held(state: &AppState, key: &str, path: &str, age: u64, body: &'static str) {
+            let fetched = cache::now_secs() - age;
+            state
+                .caches
+                .relay
+                .insert(
+                    key.into(),
+                    cache::Relayed {
+                        status: 200,
+                        content_type: "application/json".into(),
+                        expires_at: fetched + cache::relay_ttl(path).as_secs(),
+                        body: Bytes::from_static(body.as_bytes()),
+                    },
+                )
+                .await;
+        }
+
+        #[test]
+        fn the_reference_lists_are_those_a_client_starts_with() {
+            for path in [
+                "/3/configuration",
+                "/3/configuration/languages",
+                "/3/configuration/countries/",
+                "/3/genre/movie/list",
+                "/3/genre/tv/list",
+                "/3/certification/movie/list",
+                "/3/certification/tv/list",
+                "/3/watch/providers/regions",
+                "/v4/languages",
+                "/v4/countries",
+                "/v4/genres",
+                "/v4/content/ratings",
+                "/v4/artwork/types",
+                "/v4/artwork/statuses",
+                "/v4/companies/types",
+                "/v4/entities",
+                "/v4/inspiration/types",
+                "/v4/sources/types",
+                "/v4/seasons/types",
+                "/v4/series/statuses",
+                "/v4/movies/statuses",
+                "/v4/people/types",
+                "/v4/genders",
+            ] {
+                assert!(is_reference(path), "{path}");
+            }
+            for path in [
+                "/3/movie/550",
+                "/3/genre/movie",
+                "/3/watch/providers/movie",
+                "/3/configurations",
+                "/4/list/1",
+                "/v4/genres/12",
+                "/v4/series/81189",
+                "/v4/search",
+                cache::ANILIST_QUERY,
+                cache::ANILIST_COLLECTIONS,
+            ] {
+                assert!(!is_reference(path), "{path}");
+            }
+        }
+
+        #[test]
+        fn only_a_service_that_failed_calls_for_what_was_kept() {
+            for code in [429, 500, 502, 503, 504] {
+                let code = StatusCode::from_u16(code).unwrap();
+                for service in [Service::Tmdb, Service::Tvdb, Service::Anilist] {
+                    assert!(status_calls_for_stale(service, code), "{code}");
+                }
+            }
+            for code in [200, 304, 400, 401, 404, 501] {
+                let code = StatusCode::from_u16(code).unwrap();
+                assert!(!status_calls_for_stale(Service::Tmdb, code), "{code}");
+            }
+            // AniList's API switched off answers 403; TMDB's 403 is a refusal.
+            assert!(status_calls_for_stale(
+                Service::Anilist,
+                StatusCode::FORBIDDEN
+            ));
+            assert!(!status_calls_for_stale(
+                Service::Tmdb,
+                StatusCode::FORBIDDEN
+            ));
+            assert!(!status_calls_for_stale(
+                Service::Tvdb,
+                StatusCode::FORBIDDEN
+            ));
+
+            assert!(error_calls_for_stale(&unheard()));
+            assert!(error_calls_for_stale(&AppError::RateLimited(
+                Throttle::after(Duration::from_secs(3))
+            )));
+            assert!(error_calls_for_stale(&AppError::Disabled {
+                code: "upstream_unavailable",
+                message: "TheTVDB did not sign this server in".into(),
+            }));
+            for error in [
+                AppError::Disabled {
+                    code: "surface_disabled",
+                    message: "off".into(),
+                },
+                AppError::BadRequest("that is not a TMDB path".into()),
+                AppError::ProviderNotConfigured,
+                AppError::Forbidden,
+                AppError::Internal(anyhow::anyhow!("a bug")),
+            ] {
+                assert!(!error_calls_for_stale(&error), "{error}");
+            }
+        }
+
+        #[test]
+        fn a_door_that_did_not_let_a_relay_through_is_a_429_that_says_when() {
+            let closed = unsent(
+                Service::Tmdb,
+                anyhow::Error::new(crate::providers::Closed {
+                    label: "TMDB",
+                    left: Duration::from_secs(30),
+                }),
+            );
+            assert!(
+                matches!(closed, AppError::RateLimited(t) if t.retry_after == Duration::from_secs(30))
+            );
+            let busy = unsent(
+                Service::Anilist,
+                anyhow::Error::new(crate::providers::Busy("AniList")),
+            );
+            assert!(
+                matches!(busy, AppError::RateLimited(t) if t.retry_after == Duration::from_secs(1))
+            );
+            let failed = unsent(Service::Tvdb, anyhow::anyhow!("timed out"));
+            assert!(matches!(failed, AppError::UpstreamUnavailable(_)));
+            assert!(error_calls_for_stale(&failed));
+            let response = closed.into_response();
+            assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+            assert_eq!(response.headers().get(header::RETRY_AFTER).unwrap(), "30");
+        }
+
+        #[test]
+        fn an_error_shared_in_flight_is_the_same_error_for_each() {
+            let shared = AppError::UpstreamUnavailable(
+                anyhow::anyhow!("could not connect").context("TMDB request failed"),
+            );
+            let again = again(&shared);
+            assert!(matches!(&again, AppError::UpstreamUnavailable(cause)
+            if format!("{cause:#}") == "TMDB request failed: could not connect"));
+            assert!(matches!(
+                again_of(AppError::RateLimited(Throttle::after(Duration::from_secs(2)))),
+                AppError::RateLimited(t) if t.retry_after == Duration::from_secs(2)
+            ));
+            assert!(matches!(
+                again_of(AppError::Disabled {
+                    code: "upstream_unavailable",
+                    message: "later".into()
+                }),
+                AppError::Disabled {
+                    code: "upstream_unavailable",
+                    ..
+                }
+            ));
+        }
+
+        fn again_of(error: AppError) -> AppError {
+            again(&error)
+        }
+
+        #[tokio::test]
+        async fn callers_asking_the_same_at_once_share_one_exchange() {
+            let calls = Arc::new(AtomicUsize::new(0));
+            let gate = Arc::new(tokio::sync::Notify::new());
+            let key = "test:together:one exchange".to_string();
+            let fetch = || {
+                let (calls, gate) = (Arc::clone(&calls), Arc::clone(&gate));
+                async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    gate.notified().await;
+                    Ok(document(r#"{"once":true}"#))
+                }
+            };
+
+            let waiting: Vec<_> = (0..8)
+                .map(|_| tokio::spawn(together(key.clone(), fetch())))
+                .collect();
+            // Every caller is waiting before the exchange is let go.
+            while !IN_FLIGHT.lock().contains_key(&key) || calls.load(Ordering::SeqCst) == 0 {
+                tokio::task::yield_now().await;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            gate.notify_waiters();
+            for answer in futures::future::join_all(waiting).await {
+                let answer = answer.unwrap().unwrap();
+                assert_eq!(answer.status, StatusCode::OK);
+                assert_eq!(answer.body, Bytes::from_static(br#"{"once":true}"#));
+            }
+            assert_eq!(calls.load(Ordering::SeqCst), 1, "one exchange for all");
+            assert!(!IN_FLIGHT.lock().contains_key(&key), "cleared at the end");
+
+            // Once it has ended, the next caller asks anew.
+            let next = together(key.clone(), async { Ok(document("{}")) })
+                .await
+                .unwrap();
+            assert_eq!(next.body, Bytes::from_static(b"{}"));
+        }
+
+        #[tokio::test]
+        async fn an_error_in_flight_is_every_callers_and_a_flight_given_up_ends() {
+            let calls = Arc::new(AtomicUsize::new(0));
+            let key = "test:together:error".to_string();
+            let (first, second) = tokio::join!(
+                together(key.clone(), {
+                    let calls = Arc::clone(&calls);
+                    async move {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        tokio::time::sleep(Duration::from_millis(30)).await;
+                        Err(unheard())
+                    }
+                }),
+                together(key.clone(), counted(&calls, || Ok(document("{}")))),
+            );
+            assert!(matches!(first, Err(AppError::UpstreamUnavailable(_))));
+            assert!(matches!(second, Err(AppError::UpstreamUnavailable(_))));
+            assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+            // Everybody gave up: the exchange is dropped, and its entry with it.
+            let key = "test:together:given up".to_string();
+            let abandoned = tokio::time::timeout(
+                Duration::from_millis(20),
+                together(key.clone(), async {
+                    std::future::pending::<()>().await;
+                    Ok(document("{}"))
+                }),
+            )
+            .await;
+            assert!(abandoned.is_err());
+            assert!(!IN_FLIGHT.lock().contains_key(&key));
+            let fresh = together(key, async { Ok(document(r#"{"anew":1}"#)) })
+                .await
+                .unwrap();
+            assert_eq!(fresh.body, Bytes::from_static(br#"{"anew":1}"#));
+        }
+
+        #[tokio::test]
+        async fn a_document_kept_is_served_while_good_and_stands_in_when_the_service_fails() {
+            let state = crate::api::native::testing::server().await;
+            let calls = Arc::new(AtomicUsize::new(0));
+            let path = "/3/movie/9200001";
+            let key = "tmdb:test:/3/movie/9200001";
+
+            // Asked, kept, and served from memory the next time.
+            let first = answer(
+                &state,
+                ask(Service::Tmdb, key, path),
+                counted(&calls, || Ok(document(r#"{"id":9200001}"#))),
+            )
+            .await
+            .unwrap();
+            assert_eq!(first.stood_in(), None);
+            let again = answer(
+                &state,
+                ask(Service::Tmdb, key, path),
+                counted(&calls, || Ok(status(StatusCode::BAD_GATEWAY))),
+            )
+            .await
+            .unwrap();
+            assert_eq!(again.status, StatusCode::OK);
+            assert_eq!(again.body, first.body);
+            assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+            // Past its end: TMDB is asked, fails, and what was kept stands in,
+            // with its age.
+            held(&state, key, path, 7 * 3600, r#"{"id":9200001,"old":true}"#).await;
+            let failures: [fn() -> AppResult<Fetched>; 4] = [
+                || Ok(status(StatusCode::SERVICE_UNAVAILABLE)),
+                || Ok(status(StatusCode::TOO_MANY_REQUESTS)),
+                || Err(unheard()),
+                || {
+                    Err(AppError::RateLimited(Throttle::after(Duration::from_secs(
+                        20,
+                    ))))
+                },
+            ];
+            for failure in failures {
+                let stale = answer(
+                    &state,
+                    ask(Service::Tmdb, key, path),
+                    counted(&calls, failure),
+                )
+                .await
+                .unwrap();
+                assert_eq!(stale.status, StatusCode::OK);
+                assert_eq!(
+                    stale.body,
+                    Bytes::from_static(br#"{"id":9200001,"old":true}"#)
+                );
+                let age: u64 = stale.headers[header::AGE]
+                    .to_str()
+                    .unwrap()
+                    .parse()
+                    .unwrap();
+                assert!((7 * 3600..7 * 3600 + 60).contains(&age), "{age}");
+                assert!(matches!(stale.stood_in(), Some(StoodIn::Memory { .. })));
+                assert_eq!(
+                    stale.headers[header::CONTENT_TYPE],
+                    "application/json",
+                    "as it was kept"
+                );
+            }
+
+            // A refusal of the request itself is the service's answer.
+            let refused = answer(
+                &state,
+                ask(Service::Tmdb, key, path),
+                counted(&calls, || Ok(status(StatusCode::UNAUTHORIZED))),
+            )
+            .await
+            .unwrap();
+            assert_eq!(refused.status, StatusCode::UNAUTHORIZED);
+
+            // A good answer takes the old one's place.
+            let renewed = answer(
+                &state,
+                ask(Service::Tmdb, key, path),
+                counted(&calls, || Ok(document(r#"{"id":9200001,"new":true}"#))),
+            )
+            .await
+            .unwrap();
+            assert_eq!(renewed.stood_in(), None);
+            let kept = state.caches.relay.get(key).await.unwrap();
+            assert!(kept.is_fresh());
+            assert_eq!(kept.body, renewed.body);
+        }
+
+        #[tokio::test]
+        async fn nothing_stands_in_past_its_window_nor_when_switched_off() {
+            let state = crate::api::native::testing::server().await;
+            let calls = Arc::new(AtomicUsize::new(0));
+
+            // A week and an hour: too old for TMDB.
+            let (key, path) = ("tmdb:test:/3/tv/9200002", "/3/tv/9200002");
+            held(&state, key, path, 7 * 86_400 + 3600, "{}").await;
+            let failed = answer(
+                &state,
+                ask(Service::Tmdb, key, path),
+                counted(&calls, || Ok(status(StatusCode::BAD_GATEWAY))),
+            )
+            .await
+            .unwrap();
+            assert_eq!(failed.status, StatusCode::BAD_GATEWAY);
+            assert_eq!(failed.stood_in(), None);
+
+            // A day and an hour: too old for AniList, young enough for TheTVDB.
+            let day_and_hour = 86_400 + 3600;
+            let (anilist, query) = ("anilist:test:q", cache::ANILIST_QUERY);
+            held(&state, anilist, query, day_and_hour, "{}").await;
+            let failed = answer(
+                &state,
+                ask(Service::Anilist, anilist, query),
+                counted(&calls, || Err(unheard())),
+            )
+            .await;
+            assert!(matches!(failed, Err(AppError::UpstreamUnavailable(_))));
+            let (tvdb, series) = ("tvdb:test:/v4/series/9200003", "/v4/series/9200003");
+            held(&state, tvdb, series, day_and_hour, r#"{"data":{}}"#).await;
+            let stale = answer(
+                &state,
+                ask(Service::Tvdb, tvdb, series),
+                counted(&calls, || Err(unheard())),
+            )
+            .await
+            .unwrap();
+            assert!(matches!(stale.stood_in(), Some(StoodIn::Memory { .. })));
+
+            // AniList's API switched off is a failure of the service's: two
+            // hours, past the hour a query is good for, inside the day.
+            held(
+                &state,
+                anilist,
+                query,
+                2 * 3600,
+                r#"{"data":{"Media":null}}"#,
+            )
+            .await;
+            let stale = answer(
+                &state,
+                ask(Service::Anilist, anilist, query),
+                counted(&calls, || Ok(status(StatusCode::FORBIDDEN))),
+            )
+            .await
+            .unwrap();
+            assert_eq!(stale.status, StatusCode::OK);
+            assert!(matches!(stale.stood_in(), Some(StoodIn::Memory { .. })));
+
+            // Off: the failure is handed back as it came.
+            state
+                .settings
+                .set(
+                    crate::settings::Scope::Server,
+                    "",
+                    STALE_IF_ERROR,
+                    "false",
+                    None,
+                )
+                .await
+                .unwrap();
+            assert!(!stale_if_error(&state));
+            let failed = answer(
+                &state,
+                ask(Service::Tvdb, tvdb, series),
+                counted(&calls, || Ok(status(StatusCode::SERVICE_UNAVAILABLE))),
+            )
+            .await
+            .unwrap();
+            assert_eq!(failed.status, StatusCode::SERVICE_UNAVAILABLE);
+        }
+
+        #[tokio::test]
+        async fn a_feed_of_changes_hands_its_failure_on() {
+            let state = crate::api::native::testing::server().await;
+            let calls = Arc::new(AtomicUsize::new(0));
+            for (service, key, path) in [
+                (
+                    Service::Tmdb,
+                    "tmdb:test:/3/movie/changes",
+                    "/3/movie/changes",
+                ),
+                (Service::Tvdb, "tvdb:test:/v4/updates", "/v4/updates"),
+            ] {
+                // Twenty minutes old: past its quarter of an hour.
+                held(&state, key, path, 20 * 60, r#"{"results":[]}"#).await;
+                let failed = answer(
+                    &state,
+                    ask(service, key, path),
+                    counted(&calls, || Ok(status(StatusCode::BAD_GATEWAY))),
+                )
+                .await
+                .unwrap();
+                assert_eq!(failed.status, StatusCode::BAD_GATEWAY, "{path}");
+                assert_eq!(failed.stood_in(), None);
+            }
+        }
+
+        #[tokio::test]
+        async fn a_closed_door_with_nothing_kept_is_a_429_and_a_clients_own_request_stands_alone() {
+            let state = crate::api::native::testing::server().await;
+            let calls = Arc::new(AtomicUsize::new(0));
+            let closed = answer(
+                &state,
+                ask(
+                    Service::Tmdb,
+                    "tmdb:test:/3/movie/9200004",
+                    "/3/movie/9200004",
+                ),
+                counted(&calls, || {
+                    Err(unsent(
+                        Service::Tmdb,
+                        anyhow::Error::new(crate::providers::Closed {
+                            label: "TMDB",
+                            left: Duration::from_secs(12),
+                        }),
+                    ))
+                }),
+            )
+            .await;
+            assert!(
+                matches!(closed, Err(AppError::RateLimited(t)) if t.retry_after == Duration::from_secs(12))
+            );
+
+            // Without a key: asked every time, kept for nobody, and nothing
+            // stands in for it.
+            let theirs = Ask {
+                key: None,
+                ..ask(Service::Tmdb, "", "/3/movie/9200005")
+            };
+            for _ in 0..2 {
+                answer(
+                    &state,
+                    theirs.clone(),
+                    counted(&calls, || Ok(document("{}"))),
+                )
+                .await
+                .unwrap();
+            }
+            let failed = answer(&state, theirs, counted(&calls, || Err(unheard()))).await;
+            assert!(failed.is_err());
+            assert_eq!(calls.load(Ordering::SeqCst), 4);
+        }
+
+        #[tokio::test]
+        async fn a_no_such_thing_is_kept_by_the_relays_that_keep_one() {
+            let state = crate::api::native::testing::server().await;
+            let calls = Arc::new(AtomicUsize::new(0));
+            for (service, key, path, asked) in [
+                (
+                    Service::Tmdb,
+                    "tmdb:test:/3/movie/9200006",
+                    "/3/movie/9200006",
+                    2,
+                ),
+                (
+                    Service::Tvdb,
+                    "tvdb:test:/v4/movies/9200006",
+                    "/v4/movies/9200006",
+                    1,
+                ),
+            ] {
+                let before = calls.load(Ordering::SeqCst);
+                for _ in 0..2 {
+                    let missing = answer(
+                        &state,
+                        ask(service, key, path),
+                        counted(&calls, || Ok(status(StatusCode::NOT_FOUND))),
+                    )
+                    .await
+                    .unwrap();
+                    assert_eq!(missing.status, StatusCode::NOT_FOUND);
+                }
+                assert_eq!(calls.load(Ordering::SeqCst) - before, asked, "{service:?}");
+            }
+            // A "no such thing" kept leaves the memory at its end.
+            let kept = state
+                .caches
+                .relay
+                .get("tvdb:test:/v4/movies/9200006")
+                .await
+                .unwrap();
+            assert!(cache::Cached::keep_for(&kept).unwrap() <= Duration::from_secs(300));
+        }
+
+        #[tokio::test]
+        async fn a_reference_list_is_kept_in_the_database_and_stands_in_when_memory_has_nothing() {
+            let state = crate::api::native::testing::server().await;
+            let calls = Arc::new(AtomicUsize::new(0));
+            let path = "/3/configuration";
+            let filed_as = "https://tmdb.test:/3/configuration?#accept=";
+            let configuration = || Ask {
+                reference: Some(filed_as.into()),
+                ..ask(Service::Tmdb, "tmdb:7:test:/3/configuration", path)
+            };
+
+            answer(
+                &state,
+                configuration(),
+                counted(&calls, || Ok(document(r#"{"images":{"base_url":"x"}}"#))),
+            )
+            .await
+            .unwrap();
+            let kept = relay_document::read(&state.db, "tmdb", filed_as, &relay_document::cutoff())
+                .await
+                .unwrap()
+                .expect("kept in the database");
+            assert_eq!(kept.body, r#"{"images":{"base_url":"x"}}"#);
+            assert_eq!(kept.content_type, "application/json;charset=utf-8");
+
+            // A start later: the memory is empty, and TMDB is down.
+            state.caches.relay.invalidate_all().await;
+            let stale = answer(&state, configuration(), counted(&calls, || Err(unheard())))
+                .await
+                .unwrap();
+            assert_eq!(stale.status, StatusCode::OK);
+            assert_eq!(
+                stale.body,
+                Bytes::from_static(br#"{"images":{"base_url":"x"}}"#)
+            );
+            assert!(matches!(stale.stood_in(), Some(StoodIn::Database { .. })));
+            assert!(stale.headers.contains_key(header::AGE));
+
+            // A path that is no reference list is never written there, and
+            // AniList's never are.
+            for (service, key, path) in [
+                (
+                    Service::Tmdb,
+                    "tmdb:test:/3/movie/9200007",
+                    "/3/movie/9200007",
+                ),
+                (
+                    Service::Anilist,
+                    "anilist:test:genres",
+                    cache::ANILIST_COLLECTIONS,
+                ),
+            ] {
+                answer(
+                    &state,
+                    Ask {
+                        reference: Some(format!("{key}#ref")),
+                        ..ask(service, key, path)
+                    },
+                    counted(&calls, || Ok(document("{}"))),
+                )
+                .await
+                .unwrap();
+            }
+            let rows = sqlx::query(state.db.sql("SELECT relay, cache_key FROM relay_document"))
+                .fetch_all(state.db.pool())
+                .await
+                .unwrap();
+            assert_eq!(rows.len(), 1, "the configuration alone");
+        }
+
+        #[tokio::test]
+        async fn neither_a_stand_in_nor_a_document_past_its_size_is_kept() {
+            let state = crate::api::native::testing::server().await;
+            let path = "/3/movie/9200008";
+            let key = "tmdb:test:/3/movie/9200008";
+            let big = Fetched::new(
+                StatusCode::OK,
+                HeaderMap::new(),
+                Bytes::from(vec![b' '; KEEP_MAX_BYTES + 1]),
+            );
+            keep(&state, &ask(Service::Tmdb, key, path), &big).await;
+            assert!(state.caches.relay.get(key).await.is_none());
+
+            let stale = Fetched::stale(
+                "application/json",
+                Bytes::from_static(b"{}"),
+                StoodIn::Memory { age: 9 },
+            );
+            keep(&state, &ask(Service::Tmdb, key, path), &stale).await;
+            assert!(state.caches.relay.get(key).await.is_none());
+        }
+    }
 }
 
 // ─── The text a work is answered with, by language ──────────────────────────

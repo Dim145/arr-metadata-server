@@ -26,11 +26,19 @@ import {
 } from '../../components/ui'
 import { OidcSettings } from '../../components/account/OidcSettings'
 import { ListenersPanel } from '../../components/ListenersPanel'
+import { useServerValues } from '../../components/ScopeSettings'
 import { api } from '../../lib/api'
 import { cn } from '../../lib/cn'
 import { relative } from '../../lib/format'
 import { useI18n } from '../../lib/i18n'
-import type { AccessReport, AccountRole, ApiName, Registration, RelayCredentialState } from '../../lib/types'
+import type {
+  AccessReport,
+  AccountRole,
+  ApiName,
+  MediaStatus,
+  Registration,
+  RelayCredentialState,
+} from '../../lib/types'
 
 const REGISTRATIONS: Registration[] = ['closed', 'invite', 'approval', 'open']
 
@@ -287,6 +295,9 @@ export function Access() {
               />
             ))}
           </section>
+          {/* Beside whose key they ask with, what the relays do when their
+              service fails, and where TMDB's clients fetch the pictures. */}
+          <RelayFallbacks disabled={write.isPending} onChange={set} />
           <div className="space-y-2 border-t border-rule px-5 py-4 text-xs leading-relaxed text-bone-faint">
             <p>{a.offNote}</p>
             <p>
@@ -444,5 +455,102 @@ function RelayCredential({
         className="justify-self-start max-sm:flex max-sm:w-full max-sm:flex-col max-sm:rounded-card"
       />
     </div>
+  )
+}
+
+/** Whether the relays answer with the last answer kept when their service fails. */
+const STALE_SETTING = 'relays.staleIfError'
+
+/** Where the TMDB relay sends its clients for the pictures. */
+const IMAGES_SETTING = 'tmdb.images'
+
+/** What `tmdb.images` takes: TMDB's image server, or this server's. */
+const IMAGE_SOURCES = ['tmdb', 'server'] as const
+
+/**
+ * The relays' two other settings, read off the server's own: whether they
+ * answer with the last answer kept when their service fails, and where the
+ * TMDB relay's /3/configuration sends its clients for the pictures.
+ *
+ * This server's address for the pictures needs the media store and the
+ * public address. Both are named under the choice; with this server's
+ * chosen, the one missing is said, since until it is there the relay names
+ * TMDB's. A setting the server does not have is not drawn.
+ */
+function RelayFallbacks({
+  disabled,
+  onChange,
+}: {
+  disabled: boolean
+  onChange: (key: string, value: string) => void
+}) {
+  const { t } = useI18n()
+  const a = t.admin.access
+  const s = a.stale
+  const im = a.images
+  const values = useServerValues()
+  const media = useQuery({
+    queryKey: ['media', 'status'],
+    queryFn: () => api.get<MediaStatus>('/media/status'),
+    staleTime: 60_000,
+  })
+
+  const stale = values.data?.find((value) => value.key === STALE_SETTING)
+  const images = values.data?.find((value) => value.key === IMAGES_SETTING)
+  if (!stale && !images) return null
+
+  const source = images?.value === 'server' ? 'server' : 'tmdb'
+  // Nothing is said of the media store before it has answered.
+  const storeOff = media.data?.backend === 'off'
+  const noAddress = media.data !== undefined && !media.data.publicUrl
+  const missing = storeOff && noAddress ? im.missing.both : storeOff ? im.missing.store : noAddress ? im.missing.publicUrl : null
+
+  return (
+    <>
+      {stale ? (
+        <section aria-labelledby="relay-stale" className="border-t border-rule px-5 py-4">
+          <div className="flex items-center justify-between gap-4">
+            <div className="min-w-0">
+              <p id="relay-stale" className="text-sm font-medium text-bone">
+                {s.title}
+              </p>
+              <p className="mt-1 max-w-prose text-xs leading-relaxed text-bone-faint">{s.hint}</p>
+            </div>
+            <Toggle
+              checked={stale.value === 'true'}
+              label={s.toggle}
+              onChange={(next) => onChange(STALE_SETTING, String(next))}
+              disabled={disabled}
+            />
+          </div>
+        </section>
+      ) : null}
+      {images ? (
+        <section aria-labelledby="relay-images" className="border-t border-rule px-5 py-4">
+          <div className="grid gap-x-6 gap-y-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-start">
+            <div className="min-w-0">
+              <p id="relay-images" className="text-sm font-medium text-bone">
+                {im.title}
+              </p>
+              <p className="mt-1 max-w-prose text-xs leading-relaxed text-bone-faint">{im.lead}</p>
+              <Consequence>{im.consequence[source]}</Consequence>
+              {source === 'server' && missing ? <Caution>{missing}</Caution> : null}
+            </div>
+            <Segmented
+              label={im.label}
+              value={source}
+              options={IMAGE_SOURCES.map((value) => ({ value, label: im.options[value] }))}
+              onChange={(value) => onChange(IMAGES_SETTING, value)}
+              disabled={disabled}
+              // Where every client of the relay goes for its pictures is no
+              // choice to stumble on with an arrow key.
+              deliberate
+              className="justify-self-start max-sm:flex max-sm:w-full max-sm:flex-col max-sm:rounded-card"
+            />
+          </div>
+          <p className="mt-3 max-w-prose text-xs leading-relaxed text-bone-faint">{im.needs}</p>
+        </section>
+      ) : null}
+    </>
   )
 }

@@ -114,7 +114,9 @@ test.describe('the relays', () => {
 
       const answer = await bare.request.post('/v4/login', { data: { apikey: key } })
       if (answer.status() === 503) {
-        // The suite's server has no TheTVDB key of its own to stand in with.
+        // Only a relay switched off at start (AMS_TVDB_PASSTHROUGH=false): a
+        // key issued here signs in whether or not the server holds a TheTVDB
+        // key of its own.
         expect(((await answer.json()) as { error: string }).error).toBe('provider_not_configured')
       } else {
         expect(answer.status()).toBe(200)

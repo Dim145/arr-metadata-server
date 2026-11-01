@@ -1,0 +1,35 @@
+{
+  "taken": "2026-11-01",
+  "fribb": {
+    "commit": "c6012439e4d3ac1914e5624a953d01f079841693",
+    "date": "2026-10-27T17:04:42Z"
+  },
+  "cedya77": {
+    "release": "2026-43",
+    "date": "2026-10-19T11:17:03Z"
+  },
+  "keys": [
+    "anidb_id",
+    "anilist_id",
+    "anime-planet_id",
+    "animecountdown_id",
+    "animenewsnetwork_id",
+    "anisearch_id",
+    "episode_offset",
+    "episode_offset.tmdb",
+    "episode_offset.tvdb",
+    "imdb_id",
+    "kitsu_id",
+    "livechart_id",
+    "mal_id",
+    "season",
+    "season.tmdb",
+    "season.tvdb",
+    "simkl_id",
+    "themoviedb_id",
+    "themoviedb_id.movie",
+    "themoviedb_id.tv",
+    "tvdb_id",
+    "type"
+  ]
+}

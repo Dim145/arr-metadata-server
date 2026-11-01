@@ -1,0 +1,20 @@
+# MAL-Sync — its query for an entry, by AniList's id or MyAnimeList's
+# (0.12.5, 2026-09-02). Written from what note D §2 of
+# IMPROVEMENT_RESEARCH.d/remplacement-sources-2026-11 records it asks, not
+# from its code: where the note names a field and not what is read below
+# it, one subfield stands for the rest. Its list synchronisation is left out.
+query ($id: Int, $idMal: Int) {
+  Media(id: $id, idMal: $idMal, type: ANIME) {
+    id
+    idMal
+    averageScore
+    popularity
+    favourites
+    rankings { rank type allTime }
+    characters { edges { role node { id name { full } } } }
+    relations { edges { relationType node { id } } }
+    reviews { nodes { id } }
+    recommendations { nodes { mediaRecommendation { id } } }
+    studios { nodes { name } }
+  }
+}

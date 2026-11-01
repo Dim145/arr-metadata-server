@@ -241,11 +241,19 @@ Open WebUI and most agents speak. Its eight tools only read — none of them cha
 | `health` | The server's version and uptime, its instances, what it holds, its sources, its latest jobs and its last backup. |
 | `todo` | The catalogue's errands, counted — no poster, no overview, a failed refresh, a likely duplicate… — or one errand's works. |
 
+What the tools answer is the catalogue, and the catalogue carries TMDB's titles, overviews and
+credits. TMDB's API terms forbid using its content "in connection with" a machine-learning or AI
+application (§1.C), and count an interactive query-response system built on a large language
+model as commercial use (§2.A). So the MCP server is off until an administrator switches it on:
+the panel says so beside the switch, and while it is on the server writes a warning to its log at
+each start.
+
 To connect one:
 
 1. On **Keys & network**, in the panel **MCP, for agents**, switch on **Answer agents** — the
-   setting `mcp.enabled`, off until then — and make a key for the agent, or issue one above with
-   the `mcp` scope. Given that scope alone, a key opens `/mcp` and nothing else.
+   setting `mcp.enabled`, off until then, with TMDB's terms said beside it — and make a key for
+   the agent, or issue one above with the `mcp` scope. Given that scope alone, a key opens `/mcp`
+   and nothing else.
 2. Give the agent the address and the key. Claude Code takes them in one line, which the panel
    shows with the key filled in:
 

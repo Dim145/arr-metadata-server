@@ -397,6 +397,7 @@ export const fr: Dict = {
       SOURCE: 'Œuvre d’origine',
       ADAPTATION: 'Adaptation',
       CHARACTER: 'Personnage en commun',
+      SAME_UNIVERSE: 'Même univers',
       OTHER: 'Liée',
       ORIGINAL: 'Œuvre d’origine',
       RECUT: 'Fan-Kai',
@@ -1119,6 +1120,27 @@ export const fr: Dict = {
             `AMS_TMDB_AUTH demande une clé émise ici ; avec la clé de chaque client, ce sont les adresses autorisées qui gardent le relais — ${rules}.`,
           tvdb: (rules: string) =>
             `AMS_TVDB_AUTH demande une clé émise ici ; avec la clé de chaque client, ce sont les adresses autorisées qui gardent le relais — ${rules}.`,
+        },
+      },
+      stale: {
+        title: 'Quand un service est en panne',
+        toggle: 'Répondre avec la dernière réponse gardée quand le service est en panne',
+        hint: 'Quand TMDB, TheTVDB ou AniList est injoignable, tarde trop, ou répond 429, 500, 502, 503 ou 504, les relais répondent avec la dernière réponse gardée pour la même requête — de sept jours au plus pour TMDB et TheTVDB, d’un jour pour AniList —, avec un en-tête Age qui dit son âge ; les listes de référence de TMDB et de TheTVDB, comme les genres et les langues, avec la copie que garde la base, de 180 jours au plus. Seul ce qui a été demandé avec la clé de ce serveur est gardé pour cela. Coupé, la panne est transmise au client.',
+      },
+      images: {
+        title: 'Où les clients de TMDB prennent les images',
+        lead: 'Le serveur d’images que nomme le /3/configuration du relais TMDB, d’où ses clients tirent l’adresse de chaque image.',
+        label: 'Où les clients de TMDB prennent les images',
+        options: { tmdb: 'Chez TMDB', server: 'Chez ce serveur' },
+        consequence: {
+          tmdb: 'Celui de TMDB, comme TMDB le répond : les clients y prennent les images.',
+          server: 'Celui de ce serveur, /tmdb-images/… : Jellyfin, Kodi, Kometa et Emby y prennent les images — la copie du magasin de médias quand il en garde une, l’image de TMDB relayée sinon.',
+        },
+        needs: 'Celui de ce serveur demande le magasin de médias (AMS_MEDIA_STORAGE) et AMS_PUBLIC_URL ; sans l’un ou l’autre, le relais nomme celui de TMDB. Seerr et Yamtrack ne sont pas concernés : le navigateur du lecteur charge leurs images, chez TMDB, quel que soit le choix fait ici.',
+        missing: {
+          store: 'Le magasin de médias est éteint (AMS_MEDIA_STORAGE) : tant qu’il l’est, le relais nomme le serveur d’images de TMDB.',
+          publicUrl: 'AMS_PUBLIC_URL n’est pas défini : tant qu’il ne l’est pas, le relais nomme le serveur d’images de TMDB.',
+          both: 'Le magasin de médias est éteint (AMS_MEDIA_STORAGE) et AMS_PUBLIC_URL n’est pas défini : tant qu’il manque l’un ou l’autre, le relais nomme le serveur d’images de TMDB.',
         },
       },
       surface: 'API',
@@ -3380,6 +3402,9 @@ export const fr: Dict = {
       off: 'Éteint',
       onHint: 'Un agent muni d’une clé de portée MCP reçoit une réponse.',
       offHint: 'Éteint, /mcp répond 503 à tout agent.',
+      terms:
+        'Allumé, il remet aux agents — des grands modèles de langage — le catalogue, titres, synopsis et génériques de TMDB compris : un usage que visent les conditions de l’API TMDB, qui interdisent d’utiliser son contenu en lien avec une application d’IA (§1.C) et rangent un chatbot à LLM parmi les usages commerciaux (§2.A).',
+      termsLink: 'Les conditions d’utilisation de TMDB',
       address: 'L’adresse à donner à un agent',
       claude: 'La ligne qui connecte Claude Code',
       copy: 'Copier',
@@ -3945,6 +3970,8 @@ export const fr: Dict = {
       'api.plex': 'Fournisseur Plex',
       'api.native': 'API native, avec une clé',
       'mcp.enabled': 'Serveur MCP, pour les agents',
+      'relays.staleIfError': 'La dernière réponse des relais, quand un service est en panne',
+      'tmdb.images': 'Où les clients de TMDB prennent les images',
       'refresh.enabled': 'Rafraîchir en arrière-plan',
       'refresh.intervalSeconds': 'Entre deux passages',
       'refresh.batchSize': 'Œuvres par passage',
@@ -3993,7 +4020,12 @@ export const fr: Dict = {
       'fankai.enabled': 'Les productions Fan-Kai, depuis le service de métadonnées de Fankai : chaque anime remonté comme une série, ses arcs comme des saisons et ses films comme des épisodes, numérotés comme Fankai nomme ses fichiers — S02E08 est le huitième film en tout, dans le deuxième arc. Trouvées par leur titre, ou par « fankai: » suivi d’un identifiant, et récupérées seulement à la demande. Sonarr reçoit un identifiant propre à ce serveur, TheTVDB n’en ayant aucun pour elles. Sans clé ; Fankai est crédité sur chaque page. Désactivée, ce qui a été récupéré reste tel quel.',
       'fankai.wiki': 'La page de chaque Fan-Kai sur le wiki de la communauté Fankai, fan-kai.fandom.com : les entrées AniList et MyAnimeList dont il est tiré, et le Fan-Kai qui lui fait suite. La fiche d’un Fan-Kai mène alors à son anime, et celle de l’anime — une fois que Sonarr la détient — à ses Fan-Kai. Un appel par récupération d’un Fan-Kai, et seulement tant que Fankai est actif ; avec AniList actif, le titre, l’année et l’affiche de l’anime viennent de là. Sans clé ; son contenu est sous CC BY-SA et crédité sur chaque page.',
       'keys.maxPerUser': 'Combien de clés API un membre ou un éditeur peut créer pour lui-même. À 1, chacun a sa clé et la régénère ; à 0, seuls les administrateurs en créent. Les administrateurs, et les clés du serveur, ne comptent pas.',
-      'mcp.enabled': 'Des agents comme Claude Code lisent le catalogue à /mcp, avec une clé de portée MCP. Ses outils ne font que lire. Éteint, /mcp répond 503. L’adresse et une clé sont sur Clés & réseau.',
+      'mcp.enabled':
+        'Des agents comme Claude Code lisent le catalogue à /mcp, avec une clé de portée MCP. Ses outils ne font que lire. Éteint, /mcp répond 503. Allumé, il remet aux agents — des grands modèles de langage — les données de TMDB avec le reste, ce que visent les conditions de l’API TMDB (§1.C, §2.A). L’adresse et une clé sont sur Clés & réseau.',
+      'relays.staleIfError':
+        'Quand TMDB, TheTVDB ou AniList est injoignable, tarde trop, ou répond 429, 500, 502, 503 ou 504, les relais répondent avec la dernière réponse gardée pour la même requête — de sept jours au plus pour TMDB et TheTVDB, d’un jour pour AniList —, avec un en-tête Age qui dit son âge ; les listes de référence de TMDB et de TheTVDB avec la copie que garde la base, de 180 jours au plus. Seul ce qui a été demandé avec la clé de ce serveur est gardé pour cela. Aussi sur Ouverture & API.',
+      'tmdb.images':
+        'Le serveur d’images que nomme le /3/configuration du relais TMDB. Celui de TMDB, ou celui de ce serveur, /tmdb-images/…, où Jellyfin, Kodi, Kometa et Emby prennent alors les images — seulement avec le magasin de médias allumé et AMS_PUBLIC_URL défini ; sans l’un ou l’autre, celui de TMDB. Seerr et Yamtrack chargent les leurs dans le navigateur du lecteur, chez TMDB, dans les deux cas. Aussi sur Ouverture & API.',
       'refresh.enabled': 'Les œuvres stockées sont récupérées à nouveau, régulièrement, à mesure que ce qu’on en sait vieillit.',
       'refresh.intervalSeconds': 'En secondes. Une minute au minimum, une semaine au maximum.',
       'refresh.batchSize': 'Le nombre d’œuvres récupérées à nouveau à chaque réveil du planificateur.',
@@ -4032,6 +4064,8 @@ export const fr: Dict = {
       'backup.schedule.daily': 'Chaque jour',
       'backup.schedule.weekly': 'Chaque semaine',
       'backup.schedule.monthly': 'Chaque mois',
+      'tmdb.images.tmdb': 'Chez TMDB',
+      'tmdb.images.server': 'Chez ce serveur',
     },
     inherited: 'Hérité',
     inheritedHint: 'Suit la réponse du serveur.',

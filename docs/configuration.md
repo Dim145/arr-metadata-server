@@ -67,7 +67,7 @@ naming the variable. Flags take `true`, `false`, `1`, `0`, `yes`, `no`, `on` and
 | `AMS_MODE` | `single` | `single`, one instance; `multi`, several as one: see [Several instances](instances.md). |
 | `AMS_INSTANCE_NAME` | the host's name | What an instance is called among the others. |
 | `AMS_BIND_ADDRESS` (`BIND_ADDRESS`, `LISTEN_ADDR`) | `0.0.0.0:8080` | The interface's door: the interface, the native API, and the surfaces the clients call, as an address and a port. |
-| `AMS_PUBLIC_URL` | unset | The address the interface is reached at from outside, such as `https://metadata.example.com`: where the media kept are addressed for the clients, where a sign-in and an invitation lead back to, and an origin a change may be asked from. See [Behind a reverse proxy](reverse-proxy.md). |
+| `AMS_PUBLIC_URL` | unset | The address the interface is reached at from outside, such as `https://metadata.example.com`: where the media kept are addressed for the clients, where TMDB's clients are sent for its pictures with `tmdb.images = server` ([The relays](relays.md#tmdbs-pictures-from-this-server)), where a sign-in and an invitation lead back to, and an origin a change may be asked from. See [Behind a reverse proxy](reverse-proxy.md). |
 | `AMS_TLS_CERT`, `AMS_TLS_KEY` | unset | A certificate and its key, in PEM files: the interface's door then speaks TLS itself. Both or neither. |
 | `AMS_TRUSTED_PROXIES` | unset | The proxies whose forwarded headers are believed, as addresses or CIDR blocks separated by commas. See [Behind a reverse proxy](reverse-proxy.md). |
 | `AMS_ALLOWED_HOSTS` | unset, any name | The host names the interface's door answers to, separated by commas; another is answered `421`, but for `/health`, `/ready`, `/ca.crt` and `/trust-ca.sh`. |
@@ -125,7 +125,7 @@ OpenTelemetry collector. These are OpenTelemetry's own variables; see
 | `AMS_AUTH_DISABLED` | `false` | Opens every surface. For closed networks and a first setup only. |
 | `AMS_ALLOWLIST` (`AMS_ARR_ALLOWLIST`) | loopback and the private ranges | The first value of the list of allowed addresses, separated by commas; read against an empty list only. The default is `127.0.0.0/8`, `::1/128`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` and `fc00::/7`. |
 | `AMS_PUBLIC_BROWSE` | unset | `true` gives `site.access` the first value `public`; `false` keeps the site private whatever the setting says. |
-| `AMS_RATE_LIMIT_PER_MINUTE` | `600` | Requests a minute, per address — an IPv6 address by its /64. |
+| `AMS_RATE_LIMIT_PER_MINUTE` | `600` | Requests a minute, per address — an IPv6 address by its /64. TMDB's pictures under `/tmdb-images/` are not counted for an address their guard lets in. |
 | `AMS_SIGNIN_FAILURES_PER_ACCOUNT` | `10` | Failed sign-ins an account takes in fifteen minutes before it is refused unchecked until the window closes. |
 | `AMS_SIGNUPS_PER_HOUR` | `5` | Sign-ups without an invitation, per address and per hour. |
 | `AMS_SIGNUPS_PER_HOUR_TOTAL` | `100` | The same, for the whole server. |
@@ -138,13 +138,13 @@ OpenTelemetry collector. These are OpenTelemetry's own variables; see
 | Variable | Default | What it does |
 | --- | --- | --- |
 | `AMS_TMDB_API_KEY` (`TMDB_API_KEY`) | unset | TMDB's v3 key, or its v4 read token (`eyJ…`). Without one, TMDB is not asked — a search goes on to TheTVDB and Skyhook — and the TMDB relay, when it asks with this server's key, answers `503`. |
-| `AMS_TVDB_API_KEY` (`TVDB_API_KEY`) | unset | TheTVDB's key. Without one, TheTVDB is not asked, and the TheTVDB relay, when it asks with this server's key, answers `503`. |
+| `AMS_TVDB_API_KEY` (`TVDB_API_KEY`) | unset | TheTVDB's key. Without one, TheTVDB is not asked, and the TheTVDB relay, when it would ask with this server's key, answers `503` — a client still signs in with a key issued here, and reads the pages of episodes the relay answers itself. |
 | `AMS_TVDB_PIN` | unset | The PIN of a subscriber key; a project key sends none. |
 | `AMS_TVDB_ENABLED` | `true` | TheTVDB as a source; also the first value of `tvdb.searchFallback`. |
 | `AMS_FANART_API_KEY` (`FANARTTV_API_KEY`) | unset | Fanart.tv's key, for logos, clearart and banners. |
 | `AMS_FANART_ENABLED` | `true` | Fanart.tv as a source, once it has a key. |
 | `AMS_MAL_CLIENT_ID` (`MAL_CLIENT_ID`) | unset | MyAnimeList's client id: its own API is asked rather than Tenrai. |
-| `AMS_TMDB_PASSTHROUGH` | `true` | The TMDB relay, `/3/` and `/4/`: `false` answers `503` to all of it. |
+| `AMS_TMDB_PASSTHROUGH` | `true` | The TMDB relay, `/3/` and `/4/`, and TMDB's pictures under `/tmdb-images/`: `false` answers `503` to all of it. |
 | `AMS_TVDB_PASSTHROUGH` | `true` | The TheTVDB relay, `/v4/`: `false` answers `503` to all of it. |
 | `AMS_ANILIST_PASSTHROUGH` | `true` | The AniList relay, `graphql.anilist.co`: `false` answers `503` to all of it. |
 

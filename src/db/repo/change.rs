@@ -16,6 +16,7 @@ use utoipa::ToSchema;
 
 use crate::{
     db::{Db, RowExt, from_bool, new_id, now},
+    domain::{ExternalSource, MediaKind},
     merge::provenance::FieldChange,
 };
 
@@ -496,6 +497,62 @@ pub async fn count_diverging(db: &Db, include_adult: bool) -> Result<i64> {
     Ok(row.big("n")?)
 }
 
+/// A work changed here, as a relay's feed of changes names it — TMDB's
+/// `/3/movie/changes`, TheTVDB's `/v4/updates`: by its id at one source.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChangedHere {
+    pub media_id: String,
+    pub kind: MediaKind,
+    /// Its id at the source asked for, as the source writes it: `550`.
+    pub external_id: String,
+    /// Whether it is an adult title, which TMDB's feed says of each entry.
+    pub adult: bool,
+    /// When it last changed within the window, RFC 3339.
+    pub changed_at: String,
+}
+
+/// The works whose journal took a change at `from` or after and before
+/// `to` — instants written as [`now`] writes them — and that have an id at
+/// `source`: a lock set or lifted, something added or taken out by hand, a
+/// refresh or a sync that changed a value, a merge. One entry an id, the
+/// latest change first. Switched off or not, as `/v1/movie/changed` names
+/// them; never the tombstone a merge leaves, whose ids its survivor answers
+/// for.
+pub async fn changed_between(
+    db: &Db,
+    source: ExternalSource,
+    from: &str,
+    to: &str,
+) -> Result<Vec<ChangedHere>> {
+    let rows = sqlx::query(db.sql(
+        "SELECT e.value AS external_id, m.id AS media_id, m.kind AS kind,
+                m.is_adult AS is_adult, MAX(c.at) AS changed_at
+           FROM media_change c
+           JOIN media_item m ON m.id = c.media_id
+           JOIN media_external_id e ON e.media_id = m.id AND e.source = ?
+          WHERE c.at >= ? AND c.at < ? AND m.merged_into IS NULL
+          GROUP BY e.value, m.id, m.kind, m.is_adult
+          ORDER BY changed_at DESC, external_id",
+    ))
+    .bind(source.as_str())
+    .bind(from)
+    .bind(to)
+    .fetch_all(db.pool())
+    .await?;
+
+    rows.iter()
+        .map(|row| {
+            Ok(ChangedHere {
+                media_id: row.text("media_id")?,
+                kind: row.text("kind")?.parse()?,
+                external_id: row.text("external_id")?,
+                adult: row.flag("is_adult")?,
+                changed_at: row.text("changed_at")?,
+            })
+        })
+        .collect()
+}
+
 /// Delete changes older than `cutoff` (RFC 3339). Returns how many went.
 pub async fn prune(db: &Db, cutoff: &str) -> Result<u64> {
     let result = sqlx::query(db.sql("DELETE FROM media_change WHERE at < ?"))
@@ -893,6 +950,181 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(left.big("n").unwrap(), 0);
+    }
+
+    /// A work of `kind` with these ids — TMDB's, TheTVDB's — adult or not.
+    async fn identified(
+        db: &Db,
+        kind: MediaKind,
+        title: &str,
+        tmdb: Option<i64>,
+        tvdb: Option<i64>,
+        adult: bool,
+    ) -> String {
+        let mut item = MediaItem::empty(kind);
+        item.title = title.into();
+        item.slug = crate::domain::make_slug(title, None);
+        item.external_ids.tmdb = tmdb;
+        item.external_ids.tvdb = tvdb;
+        item.is_adult = adult;
+        repo::item::upsert(
+            db,
+            repo::item::ItemWrite {
+                item: &item,
+                replace_children: true,
+            },
+        )
+        .await
+        .expect("stored");
+        item.id
+    }
+
+    #[tokio::test]
+    async fn the_works_changed_here_are_named_by_a_sources_id_once_each() {
+        let db = db().await;
+        let film = identified(
+            &db,
+            MediaKind::Movie,
+            "Changed Here Film",
+            Some(9_100_001),
+            None,
+            true,
+        )
+        .await;
+        let series = identified(
+            &db,
+            MediaKind::Series,
+            "Changed Here Series",
+            Some(9_100_002),
+            Some(9_100_003),
+            false,
+        )
+        .await;
+        let unnamed = identified(
+            &db,
+            MediaKind::Movie,
+            "Changed Here Unnamed",
+            None,
+            None,
+            false,
+        )
+        .await;
+        let long_ago = identified(
+            &db,
+            MediaKind::Movie,
+            "Changed Long Ago",
+            Some(9_100_004),
+            None,
+            false,
+        )
+        .await;
+        let tombstone = identified(
+            &db,
+            MediaKind::Movie,
+            "Changed Then Merged",
+            Some(9_100_005),
+            None,
+            false,
+        )
+        .await;
+
+        let lock = |cause| change(cause, "item", "title", json!("A"), json!("B"));
+        record(&db, &film, Some("admin"), &[lock(Cause::Lock)])
+            .await
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(3)).await;
+        record(&db, &film, Some("admin"), &[lock(Cause::Unlock)])
+            .await
+            .unwrap();
+        record(&db, &series, None, &[lock(Cause::Refresh)])
+            .await
+            .unwrap();
+        record(&db, &unnamed, Some("admin"), &[lock(Cause::Edit)])
+            .await
+            .unwrap();
+        record(&db, &tombstone, Some("admin"), &[lock(Cause::Lock)])
+            .await
+            .unwrap();
+        sqlx::query(db.sql("UPDATE media_item SET merged_into = ? WHERE id = ?"))
+            .bind(&film)
+            .bind(&tombstone)
+            .execute(db.pool())
+            .await
+            .unwrap();
+        sqlx::query(db.sql(
+            "INSERT INTO media_change (id, media_id, at, cause, scope, field)
+             VALUES (?, ?, '2001-02-03T04:05:06.000Z', 'lock', 'item', 'title')",
+        ))
+        .bind(new_id())
+        .bind(&long_ago)
+        .execute(db.pool())
+        .await
+        .unwrap();
+
+        let hour = chrono::TimeDelta::hours(1);
+        let from = crate::db::to_rfc3339(chrono::Utc::now() - hour);
+        let to = crate::db::to_rfc3339(chrono::Utc::now() + hour);
+
+        let films = changed_between(&db, ExternalSource::TmdbMovie, &from, &to)
+            .await
+            .unwrap();
+        assert_eq!(films.len(), 1, "{films:?}");
+        let one = &films[0];
+        assert_eq!(
+            (
+                one.media_id.as_str(),
+                one.kind,
+                one.external_id.as_str(),
+                one.adult
+            ),
+            (film.as_str(), MediaKind::Movie, "9100001", true)
+        );
+        // The later of its two changes.
+        let journal = list(&db, &film, &Filter::default(), None, 10)
+            .await
+            .unwrap();
+        assert_eq!(one.changed_at, journal.entries[0].at);
+
+        let shows = changed_between(&db, ExternalSource::TmdbTv, &from, &to)
+            .await
+            .unwrap();
+        assert_eq!(shows.len(), 1);
+        assert_eq!(
+            (shows[0].external_id.as_str(), shows[0].adult),
+            ("9100002", false)
+        );
+        let tvdb = changed_between(&db, ExternalSource::TvdbSeries, &from, &to)
+            .await
+            .unwrap();
+        assert_eq!(tvdb.len(), 1);
+        assert_eq!(tvdb[0].media_id, series);
+        assert_eq!(tvdb[0].kind, MediaKind::Series);
+        assert_eq!(tvdb[0].external_id, "9100003");
+
+        // The window is the window: the long-ago change only in its own, and
+        // nothing at its end.
+        let then = changed_between(
+            &db,
+            ExternalSource::TmdbMovie,
+            "2001-01-01T00:00:00.000Z",
+            "2001-12-31T00:00:00.000Z",
+        )
+        .await
+        .unwrap();
+        assert_eq!(then.len(), 1);
+        assert_eq!(then[0].external_id, "9100004");
+        assert!(
+            changed_between(
+                &db,
+                ExternalSource::TmdbMovie,
+                "2001-01-01T00:00:00.000Z",
+                "2001-02-03T04:05:06.000Z",
+            )
+            .await
+            .unwrap()
+            .is_empty(),
+            "the end is not in it"
+        );
     }
 
     #[test]

@@ -15,6 +15,16 @@ and the audit trail are in the database — so it can be emptied at any time;
 a server that is down at start is attached when it answers, and one that
 stops answering is waited for while the memory carries on alone.
 
+What the relays were answered is kept a week at the most. A document is
+served as fresh only as long as its kind stays good — a quarter of an hour
+for a search or what changed lately, an hour for an AniList query or a TMDB
+list, half a day for AniList's genres and tags, six hours or a day for the
+rest — and for the rest of the week it is there to stand in when its service
+fails, a day at the most for AniList: see
+[When a service fails](relays.md#when-a-service-fails). The cache server
+holds it for as long as it may stand in; one that an earlier version kept
+there is forgotten rather than read.
+
 A page anyone may read, read by nobody in particular, carries
 `Cache-Control: public, max-age=60, stale-while-revalidate=300` and a `Vary`
 on the credentials, so a browser or a proxy in front — Caddy, nginx, a

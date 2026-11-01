@@ -1,0 +1,17 @@
+{
+  "taken": "2026-11-01",
+  "swagger": "https://raw.githubusercontent.com/thetvdb/v4-api/main/docs/swagger.yml",
+  "version": "4.7.10",
+  "main": {
+    "commit": "c1536e0b0109ad5349ec963fa8e9c4d778995390",
+    "date": "2024-05-11T18:58:03Z",
+    "subject": "Merge pull request #331 from thetvdb/absoluteNumber"
+  },
+  "pulls": {
+    "386": "docs(search): add primaryLanguage filter, bump to 4.8.0",
+    "379": "docs: fix broken Postman collection markdown link (#319)",
+    "370": "fixed /updates endpoint example",
+    "341": "Update seasonextendedrecord docs",
+    "325": "Set some fields to nullable in Link"
+  }
+}

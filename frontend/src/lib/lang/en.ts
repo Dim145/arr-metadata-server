@@ -392,6 +392,7 @@ export const en = {
       SOURCE: 'Source material',
       ADAPTATION: 'Adaptation',
       CHARACTER: 'Shares a character',
+      SAME_UNIVERSE: 'Same universe',
       OTHER: 'Related',
       ORIGINAL: 'Original',
       RECUT: 'Fan-Kai',
@@ -1124,6 +1125,27 @@ export const en = {
             `AMS_TMDB_AUTH asks for a key issued here; with each client’s own key, the listed addresses guard the relay instead — ${rules}.`,
           tvdb: (rules: string) =>
             `AMS_TVDB_AUTH asks for a key issued here; with each client’s own key, the listed addresses guard the relay instead — ${rules}.`,
+        },
+      },
+      stale: {
+        title: 'When a service fails',
+        toggle: 'Answer with the last answer kept when the service fails',
+        hint: 'When TMDB, TheTVDB or AniList cannot be reached, takes too long, or answers 429, 500, 502, 503 or 504, the relays answer with the last answer they kept for the same request — seven days old at most for TMDB and TheTVDB, a day for AniList — with an Age header that says how old it is; TMDB’s and TheTVDB’s reference lists, such as the genres and the languages, from the copy the database keeps, 180 days old at most. Only what was asked with this server’s key is kept for it. Off, the client is given the failure.',
+      },
+      images: {
+        title: 'Where TMDB’s clients fetch the pictures',
+        lead: 'The image server the TMDB relay’s /3/configuration names, which its clients build each picture’s address from.',
+        label: 'Where TMDB’s clients fetch the pictures',
+        options: { tmdb: 'From TMDB', server: 'From this server' },
+        consequence: {
+          tmdb: 'TMDB’s own, as TMDB answers: the clients fetch the pictures there.',
+          server: 'This server’s, /tmdb-images/…: Jellyfin, Kodi, Kometa and Emby fetch the pictures here — the media store’s copy where it keeps one, TMDB’s picture handed on where it does not.',
+        },
+        needs: 'Pictures from this server need the media store (AMS_MEDIA_STORAGE) and AMS_PUBLIC_URL; without either, the relay names TMDB’s image server. Seerr and Yamtrack are not concerned: the reader’s browser loads their pictures, from TMDB, whatever is chosen here.',
+        missing: {
+          store: 'The media store is off (AMS_MEDIA_STORAGE): until it is on, the relay names TMDB’s image server.',
+          publicUrl: 'AMS_PUBLIC_URL is not set: until it is, the relay names TMDB’s image server.',
+          both: 'The media store is off (AMS_MEDIA_STORAGE) and AMS_PUBLIC_URL is not set: until both are there, the relay names TMDB’s image server.',
         },
       },
       surface: 'API',
@@ -3378,6 +3400,9 @@ export const en = {
       off: 'Switched off',
       onHint: 'An agent with a key of the MCP scope is answered.',
       offHint: 'Switched off, /mcp answers 503 to every agent.',
+      terms:
+        'Switched on, it hands agents — large language models — the catalogue, TMDB’s titles, overviews and credits included: a use TMDB’s API terms speak to, as they forbid using its content in connection with an AI application (§1.C) and count an LLM chatbot as commercial use (§2.A).',
+      termsLink: 'TMDB’s terms of use',
       address: 'The address to give an agent',
       claude: 'The line that connects Claude Code',
       copy: 'Copy',
@@ -3950,6 +3975,8 @@ export const en = {
       'api.plex': 'Plex provider',
       'api.native': 'Native API, with a key',
       'mcp.enabled': 'MCP server, for agents',
+      'relays.staleIfError': 'The relays’ last answer, when a service fails',
+      'tmdb.images': 'Where TMDB’s clients fetch the pictures',
       'refresh.enabled': 'Refresh in the background',
       'refresh.intervalSeconds': 'Between sweeps',
       'refresh.batchSize': 'Works per sweep',
@@ -3998,7 +4025,12 @@ export const en = {
       'fankai.enabled': 'The Fan-Kai productions, from Fankai’s own metadata service: each recut anime as a series, its sagas as seasons and its films as episodes, numbered the way Fankai names its files — S02E08 is the eighth film overall, in the second saga. Found by title, or by ‘fankai:’ followed by an id, and fetched only when asked for. Sonarr is handed an id of this server’s own, TheTVDB having none for them. No key; Fankai is credited on every page. Switched off, what was fetched stays as it is.',
       'fankai.wiki': 'Each Fan-Kai’s page on the Fankai community’s wiki, fan-kai.fandom.com: the AniList and MyAnimeList entries it was cut from, and the Fan-Kai that follows it. A Fan-Kai’s page then leads to its anime, and the anime’s page — once Sonarr holds it — to its Fan-Kai. One call per Fan-Kai fetch, and only while Fankai is on; with AniList on, the anime’s title, year and poster come from there. No key; its content is CC BY-SA and credited on every page.',
       'keys.maxPerUser': 'How many API keys a member or an editor may make for themselves. At 1, each has their own key and regenerates it; at 0, only administrators make keys. Administrators, and the server’s own keys, are not counted.',
-      'mcp.enabled': 'Agents such as Claude Code read the catalogue at /mcp, with a key of the MCP scope. Its tools only read. Off, /mcp answers 503. The address and a key are on Keys & network.',
+      'mcp.enabled':
+        'Agents such as Claude Code read the catalogue at /mcp, with a key of the MCP scope. Its tools only read. Off, /mcp answers 503. On, agents — large language models — are handed TMDB’s data with the rest, which TMDB’s API terms speak to (§1.C, §2.A). The address and a key are on Keys & network.',
+      'relays.staleIfError':
+        'When TMDB, TheTVDB or AniList cannot be reached, takes too long, or answers 429, 500, 502, 503 or 504, the relays answer with the last answer they kept for the same request — seven days old at most for TMDB and TheTVDB, a day for AniList — with an Age header that says how old it is; TMDB’s and TheTVDB’s reference lists from the copy the database keeps, 180 days old at most. Only what was asked with this server’s key is kept for it. Also on Opening & APIs.',
+      'tmdb.images':
+        'The image server the TMDB relay’s /3/configuration names. TMDB’s own, or this server’s, /tmdb-images/…, which Jellyfin, Kodi, Kometa and Emby then fetch the pictures from — only with the media store on and AMS_PUBLIC_URL set; without either, TMDB’s. Seerr and Yamtrack load theirs in the reader’s browser, from TMDB, either way. Also on Opening & APIs.',
       'refresh.enabled': 'Stored works are fetched again on a schedule as what is known about them ages.',
       'refresh.intervalSeconds': 'In seconds. A minute at the least, a week at the most.',
       'refresh.batchSize': 'How many works are re-fetched each time the scheduler wakes.',
@@ -4037,6 +4069,8 @@ export const en = {
       'backup.schedule.daily': 'Daily',
       'backup.schedule.weekly': 'Weekly',
       'backup.schedule.monthly': 'Monthly',
+      'tmdb.images.tmdb': 'From TMDB',
+      'tmdb.images.server': 'From this server',
     },
     inherited: 'Inherited',
     inheritedHint: 'Following the server’s answer.',

@@ -1,0 +1,76 @@
+# Jellyfin's AniList plugin — its four queries, in
+# Jellyfin.Plugin.AniList/Providers/AniList/AniListApi.cs on master, read on
+# 2026-11-01 (v15). Its address is a constant: it reaches this server's relay
+# by name resolution only.
+query ($query: String) {
+  Page {
+    media(search: $query, type: ANIME) {
+      id
+      title { romaji english native }
+      coverImage { medium large extraLarge }
+      startDate { year month day }
+    }
+  }
+}
+
+query ($id: Int!) {
+  Media(id: $id, type: ANIME) {
+    id
+    title { romaji english native userPreferred }
+    startDate { year month day }
+    endDate { year month day }
+    coverImage { medium large extraLarge }
+    bannerImage
+    format
+    type
+    status
+    episodes
+    chapters
+    volumes
+    season
+    seasonYear
+    description
+    averageScore
+    meanScore
+    genres
+    synonyms
+    duration
+    tags { id name rank category isMediaSpoiler }
+    nextAiringEpisode { airingAt timeUntilAiring episode }
+    studios { edges { node { id name isAnimationStudio } isMain } }
+    characters(sort: [ROLE, FAVOURITES_DESC]) {
+      edges {
+        node { id name { first last full } image { medium large } }
+        role
+        voiceActors {
+          id
+          name { first last full native }
+          image { medium large }
+          language: languageV2
+        }
+      }
+    }
+  }
+}
+
+query ($query: String) {
+  Page {
+    staff(search: $query) {
+      id
+      name { first last full native }
+      image { large medium }
+    }
+  }
+}
+
+query ($id: Int!) {
+  Staff(id: $id) {
+    id
+    name { first last full native }
+    image { large medium }
+    description(asHtml: true)
+    homeTown
+    dateOfBirth { year month day }
+    dateOfDeath { year month day }
+  }
+}

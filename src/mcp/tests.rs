@@ -200,6 +200,58 @@ async fn mcp_is_off_until_an_administrator_turns_it_on() {
     assert!(!state.flag(super::SETTING, false));
 }
 
+/// What the log was told on this thread while `then` ran.
+fn logged(then: impl FnOnce()) -> String {
+    #[derive(Clone, Default)]
+    struct Buffer(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+    impl std::io::Write for Buffer {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("the buffer").extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Buffer {
+        type Writer = Buffer;
+        fn make_writer(&'a self) -> Buffer {
+            self.clone()
+        }
+    }
+
+    let written = Buffer::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(written.clone())
+        .with_ansi(false)
+        .finish();
+    tracing::subscriber::with_default(subscriber, then);
+    let bytes = written.0.lock().expect("the buffer").clone();
+    String::from_utf8(bytes).expect("UTF-8")
+}
+
+#[tokio::test]
+async fn a_server_that_lets_agents_in_says_so_as_it_starts() {
+    // On: the start warns that agents read the catalogue, TMDB's data
+    // with it, and names the clauses of TMDB's terms that speak to that.
+    let on = server(true).await;
+    let said = logged(|| {
+        let _ = door(&on);
+    });
+    assert!(said.contains("WARN"), "{said}");
+    assert!(said.contains("the MCP server is on"), "{said}");
+    for named in ["TMDB", "§1.C", "§2.A", "Keys & network"] {
+        assert!(said.contains(named), "{named}: {said}");
+    }
+
+    // Off, as a new server begins: nothing is said.
+    let off = server(false).await;
+    let said = logged(|| {
+        let _ = door(&off);
+    });
+    assert!(!said.contains("the MCP server is on"), "{said}");
+}
+
 #[tokio::test]
 async fn only_a_key_with_the_mcp_scope_in_a_header_is_let_in() {
     let state = server(true).await;

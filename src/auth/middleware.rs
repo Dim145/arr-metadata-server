@@ -53,6 +53,41 @@ pub async fn guard_tmdb(
     authorize(state, Surface::Tmdb, request, next).await
 }
 
+/// The guard of TMDB's pictures served from here (`/tmdb-images/…`): the
+/// TMDB surface's, with a key policy read as the address list — a client
+/// builds a picture's address from TMDB's configuration, and no key travels
+/// in it. Switched off with the relay, behind the same list.
+///
+/// A caller it lets in is not held to the limit of requests an address may
+/// make: a library's scan asks for a picture or three a work, a burst no
+/// relay's caller makes. One it turns away is counted as on any surface
+/// ([`crate::auth::ratelimit::spend`]), so a caller off the list asking
+/// again and again is told to wait. Nor is a picture a call to TMDB's API:
+/// the access page does not count it ([`TmdbPictures`]).
+pub async fn guard_tmdb_images(
+    State(state): State<AppState>,
+    mut request: Request,
+    next: Next,
+) -> AppResult<Response> {
+    let peer = crate::auth::ratelimit::peer_of(&state, &request);
+    let path = request.uri().path().to_string();
+    request.extensions_mut().insert(TmdbPictures);
+    match authorize(state.clone(), Surface::Tmdb, request, next).await {
+        Ok(answer) => Ok(answer),
+        Err(refusal) => {
+            crate::auth::ratelimit::spend(&state, peer, &path).await?;
+            Err(refusal)
+        }
+    }
+}
+
+/// Marks a request for one of TMDB's pictures served from here: no key
+/// travels in it, so the surface's key policy is read as the address list,
+/// and it is no call to TMDB's API, which the access page counts. Set by
+/// the guard, never by what a caller sends.
+#[derive(Clone, Copy)]
+struct TmdbPictures;
+
 pub async fn guard_arr(
     State(state): State<AppState>,
     request: Request,
@@ -136,10 +171,12 @@ async fn authorize(
     // What the access page counts as a call to an API: everything on Sonarr's,
     // Radarr's and the relays' surfaces, and what came with a key on the
     // native one. The interface's own requests are not API calls; a TheTVDB
-    // client's sign-in is counted by the relay, which judges it.
+    // client's sign-in is counted by the relay, which judges it; one of
+    // TMDB's pictures is no call to TMDB's API.
     let counted = (surface != Surface::Native
         || extract_key(request.headers(), request.uri().query()).is_some())
-        && !(surface == Surface::Tvdb && tvdb_login(&request));
+        && !(surface == Surface::Tvdb && tvdb_login(&request))
+        && request.extensions().get::<TmdbPictures>().is_none();
 
     let identity = match identify(&state, surface, api, peer, client_ip, &mut request).await {
         Ok(identity) => {
@@ -217,8 +254,12 @@ async fn identify(
     }
 
     // A relay asked with each client's own key reads a key policy as the
-    // address list: a key issued here is refused there.
-    let policy = crate::api::relay::policy(state, surface);
+    // address list: a key issued here is refused there. So does a route
+    // whose callers carry no key at all.
+    let mut policy = crate::api::relay::policy(state, surface);
+    if policy == SurfacePolicy::ApiKey && request.extensions().get::<TmdbPictures>().is_some() {
+        policy = SurfacePolicy::Allowlist;
+    }
 
     // An address of the Plex provider with a key in it, where the provider
     // asks for none: refused, rather than answered as though the key kept

@@ -216,3 +216,55 @@ generated types (`UPDATE_OPENAPI=1 cargo test openapi`, then `npm run types`),
 from the documentation, from whatever under `frontend/src` or `frontend/e2e`
 still read it, with a line under *Removed*. What Sonarr, Radarr and Plex read
 is never deprecated here: it goes when they stop reading it.
+
+## Upstream watch
+
+This server imitates or relays services that change without notice, and
+downloads an anime list every week. Every Monday, *Upstream watch*
+([`.github/workflows/watch.yml`](.github/workflows/watch.yml)) reads each of
+them and sets what it finds beside a snapshot, in `scripts/watch/snapshots/`:
+
+- **AniList's schema**, by one introspection: every field, argument and value
+  of the types read by this server's queries (read where they are, in
+  `src/providers/anilist.rs`), by its relay and by the known clients — a
+  GraphQL file each in `scripts/watch/anilist-readers/` — and all of `Query`
+  and `Page`. The deprecated fields still read are listed every week, and
+  the run's summary holds every field read, and by whom.
+- **Skyhook**: the keys, not the values, of Breaking Bad under `/v1/tvdb`,
+  `/v2/tvdb` and `/v2/tmdb` and of a search under `/v2/tmdb`, and the last
+  commit to Sonarr's client of it on `develop`.
+- **TheTVDB**: the version of the swagger in `thetvdb/v4-api`, the last commit
+  on its `main`, its open pull requests.
+- **TMDB**: each page of the v3 and v4 reference, as Markdown — its date and
+  a fingerprint of the OpenAPI definition it carries.
+- **The anime list** (`Fribb/anime-lists`) and the database it is made from
+  (`cedya77/anime-offline-database`): the age of the list's last commit and
+  of the database's last release, and the keys of the list's entries.
+
+A run fails when something is new, gone or changed since the snapshot, or
+when the list or its database has not moved for 21 days, which no snapshot
+excuses; its summary says which. It needs `python3` and the network, nothing
+else, and runs as well from a checkout:
+
+```bash
+python3 scripts/watch/watch.py                # every check
+python3 scripts/watch/watch.py anilist tmdb   # some of them
+```
+
+GitHub's API is read without a token, sixty calls an hour; set `GH_TOKEN` or
+`GITHUB_TOKEN` for more, which is sent to api.github.com and nowhere else.
+
+What moved is something to act on — a field this server reads, deprecated; a
+route of Skyhook's, gone — or a change that does not matter here. Either way,
+once it has been looked at, take the snapshot again and commit it, saying in
+the message what moved and what was done about it:
+
+```bash
+python3 scripts/watch/watch.py --update skyhook
+git diff scripts/watch/snapshots/
+```
+
+`--update` accepts whatever moved, so read the failed run first. The relay's
+fields (`ams-relay.graphql`) and the clients' queries are kept by hand: when
+`src/api/anilist.rs` looks for another field, or a client asks for others,
+its file follows, and the snapshot is taken again.

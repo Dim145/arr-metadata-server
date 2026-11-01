@@ -564,6 +564,9 @@ function PlexPanel() {
   )
 }
 
+/** TMDB's API terms of use, whose §1.C and §2.A the MCP panel names. */
+const TMDB_TERMS = 'https://www.themoviedb.org/api-terms-of-use'
+
 /**
  * The MCP server, for agents: the address to give one, the switch that
  * answers it, a key made for it, and the line that connects Claude Code.
@@ -571,7 +574,10 @@ function PlexPanel() {
  * The address is the public one when the deployment names it, else the one
  * this page was opened at: an agent is refused under a name the server was
  * not told it has, and this one it was. A key made here carries the `mcp`
- * scope alone, and is shown once, in the command it goes in.
+ * scope alone, and is shown once, in the command it goes in. Beside the
+ * switch, what switching it on hands over: the catalogue, TMDB's data with
+ * it, which TMDB's terms speak to — the server's log says it again at each
+ * start while it is on.
  */
 function McpPanel() {
   const { t } = useI18n()
@@ -660,6 +666,25 @@ function McpPanel() {
             disabled={!state || write.isPending}
           />
         </div>
+        {/* What switching it on hands over, said beside the switch before it
+            is pressed and while it is on: the catalogue, TMDB's part of it
+            included, which TMDB's terms keep from AI applications. */}
+        <p className="flex max-w-prose items-start gap-2 text-sm leading-relaxed text-brass">
+          <Glyph name="alert" className="mt-0.5 size-4 shrink-0" />
+          <span>
+            {m.terms}{' '}
+            {/* Underlined at rest: beside the warning's own colour, a colour
+                alone would not tell the link from the sentence. */}
+            <a
+              href={TMDB_TERMS}
+              target="_blank"
+              rel="noreferrer"
+              className="text-vermillion underline underline-offset-4 hover:text-vermillion-bright"
+            >
+              {m.termsLink}
+            </a>
+          </span>
+        </p>
         {write.isError ? (
           <p role="alert" className="flex items-center gap-2 text-xs text-status-error">
             <Glyph name="alert" className="size-3.5" />

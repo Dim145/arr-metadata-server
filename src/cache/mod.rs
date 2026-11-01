@@ -52,20 +52,39 @@ const LISTS_CAPACITY: u64 = 64 * 1024 * 1024;
 /// TMDB documents of a few kilobytes.
 const RELAY_CAPACITY: u64 = 32 * 1024 * 1024;
 
+/// The longest the relay space holds a document: what it may stand in for
+/// its service once the service fails ([`relay_stale_for`]). Whether it is
+/// still good is the document's own end, as [`relay_ttl`] set it.
+pub const RELAY_KEEP: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+
 /// How long a relay keeps a document, by what it is. Far under the six
 /// months TMDB's terms allow, and short where the answer moves: a search,
 /// a chart, what changed lately, a user's own favourites — those last not at
 /// all. TheTVDB's paths are the ones under `/v4`; an AniList query is filed
-/// under [`ANILIST_QUERY`].
+/// under [`ANILIST_QUERY`], or [`ANILIST_COLLECTIONS`] when it asks for the
+/// genres and tags alone.
+///
+/// The age a kept document is read with is its end less this
+/// ([`Relayed::fetched_at`]): a change here files what was kept before under
+/// another age, which is why the relayed bytes carry their shape's number.
 pub fn relay_ttl(path: &str) -> Duration {
     const MINUTE: u64 = 60;
     const HOUR: u64 = 60 * MINUTE;
     let secs = if path.starts_with("/3/configuration") {
         24 * HOUR
+    } else if path.starts_with("/3/") && is_change_feed(path) {
+        // What changed lately, which a client that syncs by difference
+        // reads every few minutes: as short as a search.
+        15 * MINUTE
     } else if path == ANILIST_QUERY {
         // Scores and popularity move daily; a lock shows at once whatever
         // is held, since the patch is applied on each serve.
         HOUR
+    } else if path == ANILIST_COLLECTIONS {
+        // AniList's genres and tags, which move a few times a year: half a
+        // day, so the day AniList's own answers may stand in for leaves
+        // room for one when AniList does not answer.
+        12 * HOUR
     } else if let Some(rest) = path.strip_prefix("/v4/") {
         if rest.starts_with("search") || rest.starts_with("updates") {
             15 * MINUTE
@@ -115,18 +134,60 @@ pub fn relay_ttl(path: &str) -> Duration {
 /// not by a path.
 pub const ANILIST_QUERY: &str = "/graphql.anilist.co";
 
+/// The path an AniList query that asks for nothing but `GenreCollection`
+/// and `MediaTagCollection` is filed under: kept a day, where any other
+/// query is kept an hour.
+pub const ANILIST_COLLECTIONS: &str = "/graphql.anilist.co/collections";
+
+/// How old a document may be and still stand in for its service's answer
+/// when the service fails — a time out, a refusal for going too fast, a
+/// 5xx: a week for TMDB and TheTVDB, far under the six months TMDB's terms
+/// allow; a day for AniList, whose terms want nothing stored. Nothing
+/// elsewhere — and nothing for a feed of changes ([`is_change_feed`]): a
+/// client that moves a cursor on along it would lose what changed upstream
+/// while the service was down, where an error has it ask the same window
+/// again.
+pub fn relay_stale_for(path: &str) -> Duration {
+    const DAY: u64 = 24 * 60 * 60;
+    if is_change_feed(path) {
+        Duration::ZERO
+    } else if path.starts_with(ANILIST_QUERY) {
+        Duration::from_secs(DAY)
+    } else if path.starts_with("/3/") || path.starts_with("/4/") || path.starts_with("/v4/") {
+        Duration::from_secs(7 * DAY)
+    } else {
+        Duration::ZERO
+    }
+}
+
+/// Whether a relayed path is a feed of what changed: TMDB's `…/changes`,
+/// the whole catalogue's or one work's, and TheTVDB's `updates`.
+pub fn is_change_feed(path: &str) -> bool {
+    let path = path.trim_end_matches('/');
+    (path.starts_with("/3/") && path.ends_with("/changes")) || path == "/v4/updates"
+}
+
 /// Every space, by the name the settings and the page use.
 pub const SPACES: [&str; 5] = ["items", "searches", "lists", "relay", "sessions"];
 
 /// A document a relay answered with, as it came from the service: its
 /// status, its type and its bytes, patched with the local overrides on each
 /// serve.
+///
+/// What it is worth is read from its end and the path it was asked at: good
+/// until its end ([`is_fresh`](Self::is_fresh)); fetched its path's time
+/// before that end ([`relay_ttl`]), which is its age; and, a whole document,
+/// fit to stand in for its service's failed answer while that age is under
+/// the path's window ([`relay_stale_for`]). The space holds it a week at
+/// the most ([`RELAY_KEEP`]); anything but a whole document leaves at its
+/// end, since nothing else stands in.
 #[derive(Clone, Debug)]
 pub struct Relayed {
     pub status: u16,
     pub content_type: String,
-    /// When it is no longer good, as seconds since the epoch: the memory
-    /// keeps it the space's time, the document's own kind says less.
+    /// When it is no longer good, as seconds since the epoch: the fetch
+    /// plus [`relay_ttl`] for a whole document, a few minutes for a "no
+    /// such thing".
     pub expires_at: u64,
     pub body: Bytes,
 }
@@ -135,7 +196,31 @@ impl Relayed {
     pub fn is_fresh(&self) -> bool {
         self.expires_at > now_secs()
     }
+
+    /// When a whole document was fetched, as seconds since the epoch: its
+    /// end less the time its path keeps one ([`relay_ttl`]).
+    pub fn fetched_at(&self, path: &str) -> u64 {
+        self.expires_at.saturating_sub(relay_ttl(path).as_secs())
+    }
+
+    /// How many seconds ago a whole document was fetched: what `Age` says
+    /// of it.
+    pub fn age(&self, path: &str) -> u64 {
+        now_secs().saturating_sub(self.fetched_at(path))
+    }
+
+    /// Whether it may stand in for its service's answer, the service having
+    /// failed: a whole document, younger than its path's window
+    /// ([`relay_stale_for`]).
+    pub fn may_stand_in(&self, path: &str) -> bool {
+        self.status == 200 && self.age(path) < relay_stale_for(path).as_secs()
+    }
 }
+
+/// The first line of a relayed document's bytes: the shape they are written
+/// in. Bytes of any other shape — an earlier version's, kept under other
+/// durations, whose age would be misread — are forgotten rather than read.
+const RELAYED_SHAPE: &str = "relayed/2";
 
 /// Seconds since the epoch, for what a document says of its own end.
 pub fn now_secs() -> u64 {
@@ -148,7 +233,7 @@ pub fn now_secs() -> u64 {
 impl Cached for Relayed {
     fn to_bytes(&self) -> Bytes {
         let head = format!(
-            "{}\n{}\n{}\n",
+            "{RELAYED_SHAPE}\n{}\n{}\n{}\n",
             self.status, self.expires_at, self.content_type
         );
         let mut out = Vec::with_capacity(self.body.len() + head.len());
@@ -161,16 +246,22 @@ impl Cached for Relayed {
     /// prefix can write these: a status that is not one, or a type that is
     /// not one of the documents the relays keep — JSON, or plain text — is no
     /// document of this server's, and is not served. A `text/html` filed
-    /// there would otherwise be served from this server's own origin.
+    /// there would otherwise be served from this server's own origin. Bytes
+    /// of another shape than this version's ([`RELAYED_SHAPE`]) are none
+    /// either, and the space forgets them.
     fn from_bytes(bytes: Bytes) -> Option<Self> {
         let mut cuts = bytes
             .iter()
             .enumerate()
             .filter(|(_, b)| **b == b'\n')
             .map(|(i, _)| i);
-        let (first, second, third) = (cuts.next()?, cuts.next()?, cuts.next()?);
+        let (shape, first, second, third) =
+            (cuts.next()?, cuts.next()?, cuts.next()?, cuts.next()?);
         let text = |from: usize, to: usize| std::str::from_utf8(&bytes[from..to]).ok();
-        let status: u16 = text(0, first)?.parse().ok()?;
+        if text(0, shape)? != RELAYED_SHAPE {
+            return None;
+        }
+        let status: u16 = text(shape + 1, first)?.parse().ok()?;
         let content_type = text(second + 1, third)?;
         if !(100..=599).contains(&status) || !is_relayed_type(content_type) {
             return None;
@@ -186,6 +277,13 @@ impl Cached for Relayed {
     fn weight(&self) -> usize {
         self.body.len() + self.content_type.len() + 24
     }
+
+    /// A whole document stays the space's week, to stand in for its
+    /// service; anything else is of no use past its end, and leaves then.
+    fn keep_for(&self) -> Option<Duration> {
+        (self.status != 200)
+            .then(|| Duration::from_secs(self.expires_at.saturating_sub(now_secs())))
+    }
 }
 
 pub struct Caches {
@@ -199,8 +297,10 @@ pub struct Caches {
     /// otherwise push out of memory. Bytes, handed out shared: a hit is a
     /// reference count, not a thirteen-megabyte copy.
     pub lists: Space<Bytes>,
-    /// What the TMDB relay answered, keyed by the path and query asked,
-    /// without the credential.
+    /// What the TMDB, TheTVDB and AniList relays answered, keyed by what was
+    /// asked, without the credential: held a week at the most, to stand in
+    /// for a service that fails, and served fresh only until each
+    /// document's own end.
     pub relay: Space<Relayed>,
     /// A session's token, hashed, to the person it belongs to: read on every
     /// authenticated request, so kept a few seconds rather than asked of the
@@ -267,13 +367,9 @@ impl Caches {
                 Duration::from_secs(24 * 60 * 60),
                 RedisSlot::default(),
             ),
-            // The relay's own TTL is by document; the space's is the longest.
-            relay: Space::new(
-                "relay",
-                RELAY_CAPACITY,
-                Duration::from_secs(24 * 60 * 60),
-                l2,
-            ),
+            // The relay's own TTL is by document; the space's is the longest
+            // a document may stand in for its service once that fails.
+            relay: Space::new("relay", RELAY_CAPACITY, RELAY_KEEP, l2),
             sessions: Moka::builder()
                 .max_capacity(10_000)
                 .time_to_live(cfg.session_ttl)
@@ -861,6 +957,83 @@ mod tests {
             .is_fresh()
         );
         assert!(Relayed::from_bytes(Bytes::from_static(b"nonsense")).is_none());
+
+        // What an earlier version wrote — no shape line, other durations — is
+        // forgotten rather than read with a wrong age.
+        let earlier = Bytes::from(format!("200\n{}\napplication/json\n{{}}", now_secs() + 60));
+        assert!(Relayed::from_bytes(earlier).is_none());
+        assert!(
+            Relayed::from_bytes(Bytes::from_static(
+                b"relayed/1\n200\n1\napplication/json\n{}"
+            ))
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn a_document_stands_in_for_its_service_while_young_enough() {
+        let fetched = |path: &str, status: u16, ago: u64| Relayed {
+            status,
+            content_type: "application/json".into(),
+            expires_at: now_secs() - ago + relay_ttl(path).as_secs(),
+            body: Bytes::from_static(b"{}"),
+        };
+        const HOUR: u64 = 3600;
+        const DAY: u64 = 24 * HOUR;
+
+        // Read back with its age, whatever the time its path keeps it.
+        let movie = fetched("/3/movie/550", 200, 7 * HOUR);
+        assert!(!movie.is_fresh());
+        assert!((7 * HOUR..7 * HOUR + 5).contains(&movie.age("/3/movie/550")));
+        assert!(movie.may_stand_in("/3/movie/550"));
+        let search = fetched("/3/search/movie", 200, 20 * 60);
+        assert!((20 * 60..20 * 60 + 5).contains(&search.age("/3/search/movie")));
+
+        // A week for TMDB and TheTVDB; a day for AniList.
+        assert!(fetched("/3/tv/1396", 200, 7 * DAY - HOUR).may_stand_in("/3/tv/1396"));
+        assert!(!fetched("/3/tv/1396", 200, 7 * DAY + 1).may_stand_in("/3/tv/1396"));
+        assert!(fetched("/4/list/1", 200, 6 * DAY).may_stand_in("/4/list/1"));
+        assert!(fetched("/v4/series/1", 200, 6 * DAY).may_stand_in("/v4/series/1"));
+        assert!(fetched(ANILIST_QUERY, 200, 23 * HOUR).may_stand_in(ANILIST_QUERY));
+        assert!(!fetched(ANILIST_QUERY, 200, DAY + 1).may_stand_in(ANILIST_QUERY));
+        assert!(!fetched(ANILIST_COLLECTIONS, 200, DAY + 1).may_stand_in(ANILIST_COLLECTIONS));
+        // Past its half day, still within the day: it stands in.
+        assert!(fetched(ANILIST_COLLECTIONS, 200, 13 * HOUR).may_stand_in(ANILIST_COLLECTIONS));
+
+        // A "no such thing" stands in for nothing, and leaves at its end.
+        let missing = Relayed {
+            status: 404,
+            expires_at: now_secs() + 300,
+            ..fetched("/v4/series/1", 200, 0)
+        };
+        assert!(!missing.may_stand_in("/v4/series/1"));
+        assert!(missing.keep_for().unwrap() <= Duration::from_secs(300));
+        assert!(
+            movie.keep_for().is_none(),
+            "a document stays the space's week"
+        );
+
+        assert_eq!(caches().relay.ttl(), RELAY_KEEP);
+        assert_eq!(
+            relay_stale_for("/v4/series/1"),
+            Duration::from_secs(7 * DAY)
+        );
+        assert_eq!(relay_stale_for("/elsewhere"), Duration::ZERO);
+
+        // A feed of changes never stands in: a client moving a cursor along
+        // it asks the same window again after an error.
+        for feed in [
+            "/3/movie/changes",
+            "/3/tv/changes/",
+            "/3/movie/550/changes",
+            "/v4/updates",
+        ] {
+            assert!(is_change_feed(feed), "{feed}");
+            assert_eq!(relay_stale_for(feed), Duration::ZERO, "{feed}");
+            assert!(!fetched(feed, 200, 60).may_stand_in(feed), "{feed}");
+        }
+        assert!(!is_change_feed("/3/movie/550"));
+        assert!(!is_change_feed("/v4/updates/x"));
     }
 
     #[test]
@@ -884,5 +1057,21 @@ mod tests {
             Duration::from_secs(86_400)
         );
         assert_eq!(relay_ttl(ANILIST_QUERY), Duration::from_secs(3600));
+        // AniList's genres and tags alone are kept half a day.
+        assert_eq!(relay_ttl(ANILIST_COLLECTIONS), Duration::from_secs(43_200));
+        // What changed lately, a quarter of an hour, a person's too.
+        for changes in [
+            "/3/movie/changes",
+            "/3/tv/changes",
+            "/3/person/changes",
+            "/3/movie/550/changes",
+            "/3/tv/episode/62085/changes/",
+        ] {
+            assert_eq!(relay_ttl(changes), Duration::from_secs(900), "{changes}");
+        }
+        assert_eq!(
+            relay_ttl("/3/genre/movie/list"),
+            Duration::from_secs(86_400)
+        );
     }
 }

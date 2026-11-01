@@ -144,6 +144,57 @@ pub fn timed_out(error: &anyhow::Error) -> bool {
     error.downcast_ref::<TimedOut>().is_some()
 }
 
+/// A door a provider closed — it answered 429, or 503 with a `Retry-After`
+/// — and how long it stays closed: the request was not sent.
+#[derive(Debug)]
+pub struct Closed {
+    /// The provider's name in a message.
+    pub label: &'static str,
+    pub left: std::time::Duration,
+}
+
+impl std::fmt::Display for Closed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} asked to be left alone for another {} s; this fetch goes without it",
+            self.label,
+            self.left.as_secs().max(1)
+        )
+    }
+}
+
+impl std::error::Error for Closed {}
+
+/// How long the door a request found closed stays so, when that is why it
+/// was not sent: see [`Closed`].
+pub fn closed_for(error: &anyhow::Error) -> Option<std::time::Duration> {
+    error.downcast_ref::<Closed>().map(|closed| closed.left)
+}
+
+/// A door whose every place stayed taken for longer than a client is kept
+/// waiting ([`PATIENCE`]): the request was not sent.
+#[derive(Debug)]
+pub struct Busy(pub &'static str);
+
+impl std::fmt::Display for Busy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "as many requests as {} is sent at once are under way; this one goes without it",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for Busy {}
+
+/// Whether a request was not sent for want of a place at its door: see
+/// [`Busy`].
+pub fn is_busy(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<Busy>().is_some()
+}
+
 tokio::task_local! {
     /// Set over a background task's fetches — a refresh, a seed — which
     /// nobody is waiting on, as against a client's request.
@@ -240,6 +291,11 @@ pub fn is_unhurried() -> bool {
 /// open when that is within [`PATIENCE`], as a paced source's caller waits
 /// for its turn, and goes without the provider otherwise. The request that
 /// was refused is sent once more after the wait, when the wait is that short.
+///
+/// A relay goes through the same door, with the same places and the same
+/// closing, but never waits for it to open, and never asks again on its own
+/// ([`send_now`](Self::send_now)): a client is waiting, and the relay has
+/// what it kept to answer with.
 pub struct Gate {
     /// The provider's name in the metrics: `tmdb`, `tvdb`…
     metric: &'static str,
@@ -321,6 +377,77 @@ impl Gate {
         }
     }
 
+    /// Send what `request` is now, or not at all: a relay's way through the
+    /// door. A closed door is an error at once, [`Closed`], saying how long
+    /// it stays so; a place is waited for [`PATIENCE`] at the most, and
+    /// [`Busy`] past that. A 429, or a 503 that says when to come back,
+    /// closes the door for every caller — the relays, the refreshes, the
+    /// seeds — and is handed back as it came: nothing is asked again. Counted
+    /// in the metrics, and noted for a [`noting`] caller, as
+    /// [`send`](Self::send) is. The permit returned is held until it is
+    /// dropped, after the body is read.
+    pub async fn send_now(
+        &self,
+        request: reqwest::RequestBuilder,
+    ) -> anyhow::Result<(reqwest::Response, tokio::sync::SemaphorePermit<'_>)> {
+        let sent = self.exchange_now(request).await;
+        match &sent {
+            Err(_) => went_unanswered(self.metric),
+            Ok((response, _)) if is_no_answer(response.status()) => went_unanswered(self.metric),
+            Ok(_) => {}
+        }
+        sent
+    }
+
+    /// [`send_now`](Self::send_now), before what it notes.
+    async fn exchange_now(
+        &self,
+        request: reqwest::RequestBuilder,
+    ) -> anyhow::Result<(reqwest::Response, tokio::sync::SemaphorePermit<'_>)> {
+        self.refuse_while_closed()?;
+        let permit = match tokio::time::timeout(PATIENCE, self.permits.acquire()).await {
+            Ok(Ok(permit)) => permit,
+            Ok(Err(_)) => anyhow::bail!("{} is shut", self.label),
+            Err(_) => return Err(anyhow::Error::new(Busy(self.label))),
+        };
+        // Closed while the place was waited for.
+        self.refuse_while_closed()?;
+
+        let started = std::time::Instant::now();
+        let sent = crate::outbound::send(self.metric, request).await;
+        crate::metrics::upstream(self.metric, started, sent.as_ref().ok().map(|r| r.status()));
+        let response = sent.map_err(|e| {
+            let said = describe_request_error(&e);
+            if e.is_timeout() {
+                anyhow::Error::new(TimedOut(said))
+            } else {
+                anyhow::anyhow!(said)
+            }
+        })?;
+        // Closed for everybody, if that is what it said; the caller reads
+        // the refusal itself.
+        self.back_off(&response);
+        Ok((response, permit))
+    }
+
+    /// How long the door stays closed, while it is.
+    pub fn quiet_for(&self) -> Option<std::time::Duration> {
+        let until = (*self.quiet_until.lock())?;
+        let now = tokio::time::Instant::now();
+        (until > now).then(|| until - now)
+    }
+
+    /// A [`Closed`] error while the door is.
+    fn refuse_while_closed(&self) -> anyhow::Result<()> {
+        match self.quiet_for() {
+            Some(left) => Err(anyhow::Error::new(Closed {
+                label: self.label,
+                left,
+            })),
+            None => Ok(()),
+        }
+    }
+
     /// Wait for the door to open, or say why not when that is too far off.
     async fn wait_out(&self) -> anyhow::Result<()> {
         let until = *self.quiet_until.lock();
@@ -330,11 +457,10 @@ impl Gate {
             return Ok(());
         }
         if until - now > PATIENCE {
-            anyhow::bail!(
-                "{} asked to be left alone for another {} s; this fetch goes without it",
-                self.label,
-                (until - now).as_secs().max(1)
-            );
+            return Err(anyhow::Error::new(Closed {
+                label: self.label,
+                left: until - now,
+            }));
         }
         tokio::time::sleep_until(until).await;
         Ok(())
@@ -727,6 +853,70 @@ mod tests {
         assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 1);
         let quiet = gate.quiet_until.lock().unwrap();
         assert!(quiet - tokio::time::Instant::now() <= MAX_BACKOFF);
+    }
+
+    #[tokio::test]
+    async fn a_relay_never_waits_for_a_closed_door_and_closes_it_for_everybody() {
+        const HALF_A_MINUTE: &str = "HTTP/1.1 429 Too Many Requests\r\nRetry-After: 30\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        let (at, asked) = answering(vec![HALF_A_MINUTE, FINE, FINE]).await;
+        let gate = Gate::new("tmdb", "TMDB", 4);
+        let http = reqwest::Client::new();
+
+        // Handed back as it came, and not asked again.
+        let (response, permit) = gate.send_now(http.get(&at)).await.unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::TOO_MANY_REQUESTS);
+        drop(permit);
+        assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let left = gate.quiet_for().expect("the door is closed");
+        assert!(left > std::time::Duration::from_secs(25) && left <= MAX_BACKOFF);
+
+        // The next relay call is refused at once, saying for how long.
+        let started = std::time::Instant::now();
+        let refused = gate.send_now(http.get(&at)).await.unwrap_err();
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        let said = closed_for(&refused).expect("refused for the closed door");
+        assert!(said > std::time::Duration::from_secs(25), "{said:?}");
+        assert!(!is_busy(&refused));
+
+        // A background fetch finds it closed too: one door for everybody.
+        let refused = gate.send(|| http.get(&at)).await.unwrap_err();
+        assert!(closed_for(&refused).is_some(), "{refused:#}");
+        assert!(refused.to_string().contains("left alone"), "{refused}");
+        assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn a_relay_is_not_asked_again_after_a_short_refusal_and_goes_through_when_open() {
+        const UNAVAILABLE: &str = "HTTP/1.1 503 Service Unavailable\r\nRetry-After: 1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        let (at, asked) = answering(vec![UNAVAILABLE, FINE]).await;
+        let gate = Gate::new("tvdb", "TheTVDB", 4);
+        let http = reqwest::Client::new();
+
+        // A second's wait is one `send` would sit out and ask again after;
+        // a relay hands the 503 back.
+        let (response, _permit) = gate.send_now(http.get(&at)).await.unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert!(closed_for(&gate.send_now(http.get(&at)).await.unwrap_err()).is_some());
+
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+        assert!(gate.quiet_for().is_none());
+        let (response, _permit) = gate.send_now(http.get(&at)).await.unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_relay_that_finds_every_place_taken_goes_without() {
+        let gate = Gate::new("anilist", "AniList", 1);
+        let _held = gate.permits.try_acquire().unwrap();
+        // Nothing is sent: the address is never reached.
+        let refused = gate
+            .send_now(reqwest::Client::new().get("http://127.0.0.1:9/"))
+            .await
+            .unwrap_err();
+        assert!(is_busy(&refused), "{refused:#}");
+        assert!(closed_for(&refused).is_none());
     }
 
     #[tokio::test]
